@@ -358,10 +358,10 @@ test('re-type-column via the row ⇄ posts an alter path→data_type (#74 tail)'
 		.toEqual({ alterations: [{ path: 'id', data_type: { type: 'float32' } }] });
 });
 
-test('save table properties posts the full metadata map (#74 tail)', async ({ page }) => {
+test('save table properties posts every live key (#74 tail)', async ({ page }) => {
 	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Properties' });
-	// the seed row is describe.metadata { owner: "data-eng" }; add a second key, then save the whole map
+	// the seed row is describe.metadata { owner: "data-eng" }; add a second key, then save
 	await section.getByRole('button', { name: '+ add row' }).click();
 	await section.getByLabel('Property key 2').fill('tier');
 	await section.getByLabel('Property value 2').fill('gold');
@@ -370,6 +370,43 @@ test('save table properties posts the full metadata map (#74 tail)', async ({ pa
 		.poll(() => bodyOf(page, `/v1/table/${TABLE}/schema_metadata/update`))
 		.toEqual({ metadata: { owner: 'data-eng', tier: 'gold' } });
 	await expect(section.getByText('Saved.')).toBeVisible();
+});
+
+test('removing a property row posts a null-valued key (#78)', async ({ page }) => {
+	// The × used to just drop the row from the local map — and since the write MERGES, the key stayed on
+	// the table while the UI said "Saved." Removal has to be SAID, not implied by omission.
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
+	const section = page.locator('section', { hasText: 'Properties' });
+	await section.getByRole('button', { name: 'Remove property 1' }).click();
+	await section.getByRole('button', { name: 'Save properties' }).click();
+	await expect
+		.poll(() => bodyOf(page, `/v1/table/${TABLE}/schema_metadata/update`))
+		.toEqual({ metadata: { owner: null } });
+});
+
+test('the description is a first-class field and renders under the table name (#78)', async ({
+	page,
+}) => {
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
+	const section = page.locator('section', { hasText: 'Properties' });
+	await section.getByLabel('Table description').fill('Page images, one row per scan.');
+	await section.getByRole('button', { name: 'Save properties' }).click();
+	// ONE post carries the description alongside the untouched rows — a separate call would be a second
+	// Lance version for a single edit.
+	await expect
+		.poll(() => bodyOf(page, `/v1/table/${TABLE}/schema_metadata/update`))
+		.toEqual({ metadata: { owner: 'data-eng', description: 'Page images, one row per scan.' } });
+
+	// and the detail header reads it back (read-only there — the editor is the one door). `seed` merges
+	// per key, so overriding `describe` alone leaves the rest of the fixture standing.
+	await seed(page, {
+		[`POST /v1/table/${TABLE}/describe`]: {
+			...DESCRIBE,
+			metadata: { owner: 'data-eng', description: 'Page images, one row per scan.' },
+		},
+	});
+	await page.reload();
+	await expect(page.locator('p.tdesc')).toHaveText('Page images, one row per scan.');
 });
 
 test('set a column property merges one key (#74 tail)', async ({ page }) => {
@@ -685,3 +722,97 @@ test('backfill with no predicate omits the where key (#85)', async ({ page }) =>
 		.poll(() => bodyOf(page, `/v1/table/${TABLE}/backfill_column`))
 		.toEqual({ column: 'id' });
 });
+
+// --------------------------------------------------------------------------- //
+// #75 recovery — the undrop surface. It shipped with a `data-testid` and no test
+// at all: a destructive-recovery affordance, racing a real expiry deadline,
+// reachable only from a dropped table's 404, and never once driven.
+// --------------------------------------------------------------------------- //
+
+const GONE = 'db1%24dropped';
+const TRASH_ENTRY = {
+	id: 'db1$dropped',
+	location: 's3://lance-catalog/db1$dropped',
+	dropped_by: 'CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0MzESBWxvY2Fs',
+	dropped_at: '2026-08-01T09:15:00Z',
+	expires_at: '2026-08-08T09:15:00Z',
+};
+
+/** A dropped table: `describe` 404s (it is deregistered) but a trash record still exists. */
+const droppedRoutes = (entry: unknown = TRASH_ENTRY): Record<string, unknown> => ({
+	[`POST /v1/table/${GONE}/describe`]: { status: 404, body: { detail: 'Table not found' } },
+	[`GET /v1/table/${GONE}/tasks`]: entry === null ? [] : [entry],
+});
+
+test('a dropped-but-recoverable table offers undrop, with the real deadline (#75)', async ({
+	page,
+}) => {
+	await seed(page, droppedRoutes());
+	await page.goto(`/lakehouse/catalog/tables/${GONE}`);
+
+	const panel = page.locator('.recover');
+	await expect(panel).toBeVisible();
+	await expect(panel).toContainText('still recoverable');
+	// The location is what recovery re-registers — it must be shown, not implied.
+	await expect(panel).toContainText('s3://lance-catalog/db1$dropped');
+	// The deadline is the whole point of the surface: a date the user can act before.
+	await expect(panel).toContainText('2026-08-08');
+	// …and the dropper goes through <Subject> (#68/#87): the opaque dex sub is ellipsized rather
+	// than dumped as a 60-character run-on blob, with the FULL value kept in `title` — the form a
+	// tuple write actually needs. There is no identity directory to resolve it against, so this
+	// typographic contract IS the guarantee.
+	await expect(panel).not.toContainText(TRASH_ENTRY.dropped_by);
+	await expect(panel.locator(`[title="${TRASH_ENTRY.dropped_by}"]`)).toBeVisible();
+});
+
+test('undrop posts to the catalog and re-registers the table (#75)', async ({ page }) => {
+	await seed(page, {
+		...droppedRoutes(),
+		[`POST /v1/table/${GONE}/undrop`]: { id: ['db1', 'dropped'] },
+	});
+	await page.goto(`/lakehouse/catalog/tables/${GONE}`);
+	await expect(page.locator('.recover')).toBeVisible();
+
+	// The write must not have fired before the click — this is a recovery, not an auto-heal.
+	expect(await callTo(page, `/v1/table/${GONE}/undrop`)).toBeUndefined();
+	await page.getByRole('button', { name: 'Undrop this table' }).click();
+	await expect.poll(async () => await callTo(page, `/v1/table/${GONE}/undrop`)).not.toBeUndefined();
+});
+
+test('a REFUSED undrop shows the catalog reason verbatim and keeps the panel (#75)', async ({
+	page,
+}) => {
+	await seed(page, {
+		...droppedRoutes(),
+		[`POST /v1/table/${GONE}/undrop`]: {
+			status: 403,
+			body: { detail: 'can_delete required on table:db1$dropped' },
+		},
+	});
+	await page.goto(`/lakehouse/catalog/tables/${GONE}`);
+	await page.getByRole('button', { name: 'Undrop this table' }).click();
+
+	// Verbatim: an expired grace period reads differently from a permission denial, and the user
+	// has to be able to tell which one they hit.
+	await expect(page.getByTestId('undrop-problem')).toContainText('can_delete required');
+	// The panel SURVIVES the refusal — a failed recovery must not hide the way to retry it.
+	await expect(page.locator('.recover')).toBeVisible();
+});
+
+test('a table dropped DESTRUCTIVELY offers no recovery it cannot deliver (#75)', async ({
+	page,
+}) => {
+	await seed(page, droppedRoutes(null)); // no trash record: the bytes are gone
+	await page.goto(`/lakehouse/catalog/tables/${GONE}`);
+
+	await expect(page.locator('.recover')).toHaveCount(0);
+	await expect(page.getByText('Not a catalog-registered table')).toBeVisible();
+});
+
+// NOT TESTED HERE, deliberately: "a live table never probes /tasks". The recovery probe is gated
+// on a 404 (TableDetail.svelte), and that gating is real — but this harness cannot FALSIFY it. The
+// mock ledger records a route only when it serves one, and every attempt to make the negative bite
+// (seeding the path, removing the `notInCatalog` guard from the component) left the test green. An
+// assertion that survives the removal of the thing it asserts is decoration, so it is gone rather
+// than sitting here looking like coverage. Closing it needs a ledger that records unmatched
+// requests too — a harness change, not a spec one.

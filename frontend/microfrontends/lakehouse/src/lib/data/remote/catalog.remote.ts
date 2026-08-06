@@ -377,10 +377,12 @@ export const setFieldMetadata = command(
 		}),
 );
 
-/** #74 tail — SET the table's schema-level metadata map (schema_metadata/update replaces the whole
- *  map, so the caller sends the full desired map). Writer-gated (can_write_data). */
+/** #78 — UPSERT the table's schema-level metadata. `schema_metadata/update` MERGES (the spec's
+ *  "Replace" wording does not match any backend), so an omitted key is left untouched and a `null`
+ *  value is what DELETES one — the table-level twin of `setFieldMetadata`'s dialect. Send only the
+ *  keys you mean to change: every call bumps a Lance version. Writer-gated (can_write_data). */
 export const setTableProperties = command(
-	v.object({ table: v.string(), metadata: v.record(v.string(), v.string()) }),
+	v.object({ table: v.string(), metadata: v.record(v.string(), v.nullable(v.string())) }),
 	async ({ table, metadata }): Promise<ApiResult<unknown>> =>
 		post(`/v1/table/${enc(table)}/schema_metadata/update`, { metadata }),
 );

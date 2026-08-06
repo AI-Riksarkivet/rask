@@ -7,11 +7,22 @@
 	// of truth, so a canvas reload restores the same unit.
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import type { MediaKind } from '$lib/viewer/types';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
 	import ProjectsLanding from '$lib/projects/ProjectsLanding.svelte';
 	import AnnotatorShell from '$lib/viewer/layout/AnnotatorShell.svelte';
+	import { exitHref } from '$lib/viewer/exit-target';
+	import { fetchMeViaBff } from '$lib/http';
+	import { listTasks } from '$lib/projects/remote/projects.remote';
+	import { claimedStream, streamPosition, type StreamTask } from '$lib/viewer/task-stream';
+
+	// `authEnabled` rides the LAYOUT data, which resolves it server-side. The canvas must not
+	// re-derive it from whether a session exists: a 404 on `capi/v1/me` means BOTH "auth is off" and
+	// "the identity lookup failed", and collapsing those two is what made the first cut of the label
+	// stream permanently empty on an ungoverned stack.
+	let { data }: { data: { authEnabled: boolean } } = $props();
 
 	function openFromParams(params: URLSearchParams): void {
 		const keys = params.get('keys');
@@ -54,17 +65,70 @@
 
 	const unit = $derived(reviewSelection.active);
 
-	// Exit keeps the dataset (the canvas's own contract); a task-opened canvas exits back
-	// to wherever the annotator came from — the landing serves both.
+	// Exit returns to WHERE YOU CAME FROM, which the URL has been carrying all along.
+	//
+	// This used to always go to `?dataset=…` — the corpus browser — with a comment claiming a
+	// task-opened canvas "exits back to wherever the annotator came from". It did not: finish an
+	// item from your labeling queue, press exit, and you land in a document gallery with the queue
+	// you were working through nowhere in sight. Reported from the running app.
 	function exit(): void {
-		const ds = reviewSelection.dataset;
-		void goto(ds ? `?dataset=${encodeURIComponent(ds)}` : '?', { keepFocus: true, noScroll: true });
+		void goto(exitHref(page.url.searchParams, base), { keepFocus: true, noScroll: true });
 	}
+
+	// THE LABEL STREAM — the items the canvas can walk while you work.
+	//
+	// Loaded HERE rather than in the shell because the shell is re-mounted per key (`{#key unit.key}`
+	// below) and the stream is a property of the QUEUE, not of the item on screen. Fetching it inside
+	// would re-read the whole task list on every page turn within a document.
+	//
+	// It is keyed on the PROJECT, not on the task: hopping to the next item changes `task=` but stays
+	// in the same queue, so the list is already correct and must not be re-fetched mid-hop.
+	//
+	// The svelte MCP autofixer flags the assignments below ("stateful variable assigned inside an
+	// $effect"). DECLINED, with reasons, rather than silently ignored:
+	//   * It cannot be `$derived` — this is an async read, and `$derived` is for synchronous
+	//     computation over already-held state.
+	//   * It cannot be `onMount` (the `AI assistance` page's fix) — the project can change without
+	//     this component remounting, and a stream that went stale on navigation is the bug.
+	//   * It should not be `load` in `+page.ts` — this route is `ssr = false` BECAUSE it is the Pixi
+	//     canvas, so a blocking load would delay the drawing surface on a queue read that only
+	//     decorates it. The canvas must paint first; the stream control appears when it resolves.
+	// The guard (`project === loadedProject`) is what keeps it from looping, which is the real hazard
+	// the warning is pointing at.
+	let me = $state<string | null>(null);
+	let queue = $state<StreamTask[]>([]);
+	let loadedProject = $state<string | null>(null);
+
+	const projectId = $derived(page.url.searchParams.get('project'));
+	const taskId = $derived(page.url.searchParams.get('task'));
+
+	$effect(() => {
+		const project = projectId;
+		// No project → this canvas came from the corpus browser and there is no queue behind it.
+		if (!project || project === loadedProject) return;
+		loadedProject = project;
+		void (async () => {
+			// The identity resolves once per canvas; the queue follows the project. Both are read
+			// before either is used, so a half-loaded stream never renders a wrong position.
+			const [subject, tasks] = await Promise.all([
+				me === null ? fetchMeViaBff().then((r) => r?.sub ?? null) : Promise.resolve(me),
+				// `details: true` — the bare listing is counts plus an id→state map, which cannot say
+				// WHO holds a task or which keys it points at, and the stream needs both.
+				listTasks({ projectId: project, details: true }),
+			]);
+			me = subject;
+			queue = tasks.ok ? (tasks.data.details ?? []) : [];
+		})();
+	});
+
+	const stream = $derived(
+		streamPosition(claimedStream(queue, me, data.authEnabled), taskId, projectId, base),
+	);
 </script>
 
 {#if unit}
 	{#key unit.key}
-		<AnnotatorShell {unit} onexit={exit} />
+		<AnnotatorShell {unit} onexit={exit} {stream} />
 	{/key}
 {:else}
 	<ProjectsLanding />

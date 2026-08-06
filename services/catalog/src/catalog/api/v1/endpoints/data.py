@@ -145,6 +145,11 @@ async def create_table(
     every FIRST write of a derived table was emitted with no pin and no facet — only later merges
     could carry provenance.
     """
+    # #118: this door had NO parent guard at all — require_parent lives in tables.py and this route
+    # lives here, so the Arrow create wrote real datasets into namespaces that do not exist, with a
+    # live owner grant and no parent edge. Checked BEFORE the write: a refusal leaves nothing.
+    await fga_deps.require_parent_exists(ns, "table", parse_identifier(id, settings.delimiter), delimiter=settings.delimiter)
+
     # #3-B governance (the security crux): validate BEFORE any write. An off-allowlist base is a client
     # error (400), never a silent write to an unapproved bucket.
     if data_base:

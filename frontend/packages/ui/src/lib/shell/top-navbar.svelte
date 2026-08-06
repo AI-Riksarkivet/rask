@@ -35,7 +35,7 @@
 	// `me` is the RESOLVED identity (null = signed out / lookup failed); `meLoading` renders the BASE
 	// entry titles as invisible text under skeleton pills instead — the same chrome classes and the
 	// same chevron reservation as the resolved entries, so loading and resolved states have IDENTICAL
-	// dimensions (no layout shift when /v1/me lands) and a zone streaming `fetchMe()` never flashes
+	// dimensions (no layout shift when /v1/me lands) and a zone whose `me` is server-resolved never flashes
 	// the non-admin entry set pretending to be the truth.
 	let {
 		pathname = '',
@@ -218,7 +218,11 @@
 					     listitem semantics, so a screen reader walking the list never meets an empty item
 					     between two real ones — exactly what a decorative spacer should do. -->
 					{#if i > 0 && entry.tier !== 'primary' && entries[i - 1]?.tier === 'primary'}
-						<li role="none" class="w-4 shrink-0 sm:w-6" data-slot="navbar-tier-gap"></li>
+						<li
+							role="none"
+							class={inMainMenu ? 'w-8 shrink-0 sm:w-14' : 'w-4 shrink-0 sm:w-6'}
+							data-slot="navbar-tier-gap"
+						></li>
 					{/if}
 					<NavigationMenu.Item>
 						{#if entry.groups}

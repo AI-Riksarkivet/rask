@@ -69,10 +69,20 @@
 	onDestroy(() => controller.setAssistProducer(null));
 </script>
 
-<!-- Same floating-card treatment as PageNav and the zoom cluster (card surface, rounded-lg,
-     shadow-sm) so the canvas overlays read as one family. -->
+<!-- INLINE, inside the toolbar — no longer a floating card over the canvas.
+     Reported: "why is not the ai stuff a part of the toolbar?". It was a separate overlay, which
+     said that asking a model for shapes is a different KIND of act from drawing them. It is not:
+     both produce annotations into the same task under the same ontology, and the only honest
+     difference — that one of them may be mocked — is already carried by the chip at the end.
+
+     It also collided. This bar and `TaskStreamNav` were both `absolute top-2 left-1/2`, so the two
+     drew on top of each other the moment a canvas was opened from a queue.
+
+     No surface of its own now (no card, no border, no shadow): it is a SEGMENT of the toolbar, and
+     giving it a card inside a bar would re-draw the same separation in a smaller box. `shrink-0`
+     because the toolbar scrolls horizontally rather than wrapping. -->
 <div
-	class="border-border bg-card/90 text-card-foreground pointer-events-auto absolute top-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-lg border p-1 shadow-sm backdrop-blur"
+	class="flex shrink-0 items-center gap-1.5"
 	data-testid="ai-assist"
 >
 	<div class="border-border flex overflow-hidden rounded-lg border p-0.5">

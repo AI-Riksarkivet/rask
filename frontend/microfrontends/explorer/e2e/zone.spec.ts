@@ -56,7 +56,25 @@ const DESCRIPTOR = {
 			filterable: [],
 			rerank: false,
 		},
-		atlas: [],
+		// The fixture DECLARES an atlas space, because six assertions below wait on the Atlas rail
+		// entry as their "the descriptor landed" signal.
+		//
+		// It used to be `atlas: []`, and that made the suite self-contradictory the moment #31 wired
+		// the rail to the descriptor: a corpus declaring no atlas correctly renders no Atlas link, so
+		// four specs failed waiting for one — and the failure read as a broken zone rather than a
+		// stale fixture. Bound to `chunks`, the row table this fixture already declares, because the
+		// Atlas gate is table-SENSITIVE (a space bound to another table is correctly hidden).
+		atlas: [
+			{
+				name: 'semantic',
+				x: 'umap_x',
+				y: 'umap_y',
+				cluster: 'cluster',
+				source_column: 'embedding',
+				table: 'chunks',
+				channels: [],
+			},
+		],
 		capabilities: {},
 	},
 };

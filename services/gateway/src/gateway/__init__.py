@@ -127,6 +127,9 @@ def _routes() -> list[Route]:
     # below points at `lance-ray`, a legacy app-id that no longer names anything about the service
     # it reaches (audit m1). A new row does not inherit that mistake.
     ingest = ("ingest", os.environ.get("RASK_INGEST_URL", "http://127.0.0.1:8830"))
+    # The studio flow-builder's server half (open_studio_flows.md "Backend"): the node catalog, graph
+    # validation, and run execution. Bare app-id, like `ingest` and for the same reason.
+    flows = ("flows", os.environ.get("RASK_FLOWS_URL", "http://127.0.0.1:8840"))
     # longest / most-specific prefixes first; the prefix itself is the catch-all.
     # The two deeper explorer rows MUST outrank /api/explorer. There is NO bare /api
     # catch-all since the R6/R20 wave (core-api/search-api/volumes-api retired):
@@ -150,6 +153,15 @@ def _routes() -> list[Route]:
         ("/api/train", "/train", *medallion),
         (f"{prefix}/ray", f"{prefix}/ray", *compute),
         (f"{prefix}/projects", f"{prefix}/projects", *controlplane),
+        # PREFIX-INTERPOLATED, not the literal "/api/flows", and that is the ingest row's lesson
+        # applied rather than restated: the flows service is composed by `make_service_app`, which
+        # mounts every router under `settings.api_prefix` — the SAME env var `_routes` reads at the top.
+        # So public and upstream track the prefix together and cannot drift apart, which is exactly what
+        # a hardcoded pair could do the moment RASK_API_PREFIX is not "/api". Under the chart's and
+        # dev-micro.sh's prefix this row IS "/api/flows" → "/api/flows".
+        # tests/test_routing.py pins the rewrite against the flows app's own openapi, not against a
+        # reading of it.
+        (f"{prefix}/flows", f"{prefix}/flows", *flows),
         ("/api/serve", "/api/serve", *compute),
     ]
 

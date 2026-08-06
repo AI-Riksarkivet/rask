@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import suppress
 
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
@@ -16,6 +17,7 @@ from lance_namespace import (
     DescribeTableResponse,
     DropNamespaceRequest,
     DropNamespaceResponse,
+    DropTableRequest,
     LanceNamespace,
     ListNamespacesRequest,
     ListNamespacesResponse,
@@ -25,6 +27,7 @@ from lance_namespace import (
     NamespaceNotFoundError,
     RegisterTableRequest,
     TableAlreadyExistsError,
+    TableNotFoundError,
 )
 
 from catalog.api import fga_deps
@@ -34,7 +37,7 @@ from catalog.core.config import Settings
 from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import native
+from catalog.services import native, warehouses
 from service_kit.governed import fga
 from service_kit.lakehouse import protection, trash
 
@@ -182,6 +185,35 @@ async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: CurrentT
         await run_in_threadpool(trash.put, settings.registry_root, so, record)
 
 
+async def _destroy_subtree(ns: LanceNamespace, segments: list[str], descendants: list[tuple[str, list[str]]]) -> None:
+    """Destroy the subtree BOTTOM-UP, ourselves (#117).
+
+    `drop_namespace(behavior=Cascade)` is not implemented by the `dir` backend the chart runs — it
+    answers `NamespaceNotEmpty` for EVERY casing (probed directly against the library). So the
+    destructive cascade this door has always documented never happened: with the shipped default
+    (`LANCE_TRASH_GRACE_DAYS=0`) a non-empty namespace could not be dropped at all, forced or not,
+    and `purge=true` — the documented destroy-now opt-out — was equally dead. Three guarded loops
+    below it (the force-path protection clear, the descendant revoke, the descendant protection
+    sweep) were unreachable code on that backend.
+
+    The fix is the same shape as `_trash_subtree`'s, minus the trash records: tables first (each
+    `drop_table` DELETES its bytes — this is the destructive path by definition), then namespaces
+    deepest-first so each is empty when its own drop runs, then the cascaded root. Not atomic, and
+    deliberately so: a mid-loop failure leaves a SMALLER subtree that the same call can finish on a
+    retry, which is strictly better than the all-or-nothing native call it replaces (that one simply
+    refused). An already-absent child is tolerated — drift, not an error, exactly as the warehouse
+    cascade treats a binding that outlived its namespace.
+    """
+    tables = [child for resource, child in descendants if resource == "table"]
+    child_namespaces = sorted((child for resource, child in descendants if resource == "namespace"), key=len, reverse=True)
+    for child in tables:
+        with suppress(TableNotFoundError):
+            await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=child))
+    for child in [*child_namespaces, segments]:
+        with suppress(NamespaceNotFoundError):
+            await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=child))
+
+
 async def _require_descendants_unprotected(settings: Settings, descendants: list[tuple[str, list[str]]], *, force: bool) -> None:
     """Refuse a cascade that would destroy a PROTECTED descendant, naming the first one found.
 
@@ -254,6 +286,10 @@ async def drop_namespace(
     if recoverable:
         await _trash_subtree(ns, settings, token, segments, descendants)
         response = DropNamespaceResponse()
+    elif cascade:
+        # The dir backend cannot cascade (#117) — we enumerate and destroy bottom-up ourselves.
+        await _destroy_subtree(ns, segments, descendants)
+        response = DropNamespaceResponse()
     else:
         response = await run_in_threadpool(native.call, ns, "drop_namespace", req)
     # The record dies with the object — a reused id must not inherit protection nobody set on it.
@@ -265,6 +301,14 @@ async def drop_namespace(
         for resource, child_segments in descendants:
             child_id = fga.canonical_object_id(child_segments, delimiter=settings.delimiter)
             await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), resource, child_id)
+    # The warehouse BINDING dies with a destroyed top-level namespace. `unbind_namespace` existed and
+    # only the warehouse-delete door called it, so every direct drop of a top-level namespace leaked
+    # its binding record — and the UI derives its namespace list from bindings, so the dropped
+    # namespace kept LISTING forever, indistinguishable from a live empty one (seen on the deployed
+    # estate: `casc9` survived its own successful cascade). Kept on a RECOVERABLE drop, exactly as the
+    # grants are: undrop rebuilds the subtree and the binding must still be there to route it.
+    if not recoverable and len(segments) == 1:
+        await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, settings.storage_options(), segments[0])
     # Revoke AFTER the drop commits (so a failed/restricted drop leaves the still-valid grants in place):
     # the namespace's own tuples, then every cascaded descendant's. NOT on a recoverable cascade (#96,
     # the #75 rule): the owner is the one person who needs to undrop it, and the grants die with the
@@ -372,6 +416,15 @@ async def undrop_namespace(
         extra={"namespaces": len(namespace_records), "tables": len(table_records) - skipped, "declared_only_skipped": skipped},
     )
     return response
+
+
+@router.get("/{id}/protection", response_model_exclude_none=True)
+async def get_namespace_protection(id: str, settings: SettingsDep) -> ProtectionResponse:
+    """Read the namespace's deletion-protection flag (#123) — the table door's read, one rung up."""
+    segments = parse_identifier(id, settings.delimiter)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    record = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
+    return ProtectionResponse(id=canonical, protected=bool(record), set_by=(record or {}).get("set_by"))
 
 
 @router.post("/{id}/protection", response_model_exclude_none=True)

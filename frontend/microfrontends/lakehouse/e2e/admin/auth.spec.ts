@@ -20,8 +20,10 @@ test('signed-out: a page navigation redirects to /auth/login?redirect=<original 
 	// move to /lakehouse/governance/*) silently invalidated: the request line was renamed and the
 	// expectation was not, so this pinned a route that no longer exists. Deriving it asserts the actual
 	// contract — makeSessionHandle echoes `url.pathname + url.search` percent-encoded (bff.ts:121) —
-	// and a future route rename cannot make the two halves disagree again.
-	const gated = '/lakehouse/governance/audit';
+	// and a future route rename cannot make the two halves disagree again. It has now survived a SECOND
+	// rename for free: #105 took `/lakehouse/governance/*` out of this zone entirely, and only the one
+	// literal below had to move with it.
+	const gated = '/lakehouse/admin/dlq';
 	const res = await page.request.get(gated, {
 		maxRedirects: 0,
 		headers: { accept: 'text/html' },
@@ -29,7 +31,7 @@ test('signed-out: a page navigation redirects to /auth/login?redirect=<original 
 	expect(res.status()).toBe(302);
 	expect(res.headers()['location']).toBe(`/auth/login?redirect=${encodeURIComponent(gated)}`);
 	// …and concretely, so the encoding itself is visible and not just re-computed by the assertion.
-	expect(res.headers()['location']).toBe('/auth/login?redirect=%2Flakehouse%2Fgovernance%2Faudit');
+	expect(res.headers()['location']).toBe('/auth/login?redirect=%2Flakehouse%2Fadmin%2Fdlq');
 });
 
 test('signed-out: API routes are EXEMPT — fetch clients get their status/JSON, never a redirect', async ({
@@ -45,11 +47,10 @@ test('signed-in: the shared nav-user shows the session identity when auth is ena
 }) => {
 	await signIn(context);
 	await mockMe(page); // estate-admin identity: the admin layout door opens
-	await page.route('**/api/audit**', (route) =>
-		route.fulfill({ status: 200, contentType: 'application/json', body: '{"events":[]}' }),
-	);
-	await page.goto('/lakehouse/governance/audit');
-	await expect(page.getByRole('heading', { name: 'Audit log' })).toBeVisible();
+	// Any gated page of this zone proves the seam; the audit trail used to be the specimen and left
+	// with #105. The DLQ is the cheapest surviving one — no observability upstream to stand in for.
+	await page.goto('/lakehouse/admin/dlq');
+	await expect(page.getByRole('heading', { name: 'Lineage DLQ' })).toBeVisible();
 	// The navbar profile dropdown renders the minted session's name — proof that the cookie session
 	// flowed session→user→AppShell→TopNavbar→nav-user and selected the signed-in branch.
 	await page.getByRole('button', { name: 'Account' }).click();

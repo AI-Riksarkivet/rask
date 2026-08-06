@@ -46,9 +46,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 E2E_DIR = "tests/e2e-py"
-# The live-suite count at wiring time (2026-07). Grows as suites are added; a DROP below
-# this floor means a suite stopped being collected — exactly the silent loss this gates.
-MIN_SUITE_FILES = 22
+# The live-suite count, RAISED to the actual number each time a suite lands (22 at wiring time,
+# 2026-07; 24 since test_maintenance_s3_e2e.py, #80). A floor left behind the real count is a floor
+# with slack in it — the estate had already drifted one suite above 22, so one could have stopped
+# collecting and this gate would still have passed. Grows as suites are added; a DROP below it means
+# a suite stopped being collected, which is exactly the silent loss this gates.
+MIN_SUITE_FILES = 24
 
 # Where pytest is invoked from. Globs rather than a fixed list, so a NEW ci workflow or ops
 # script is gated the day it lands instead of the day someone remembers to add it here.

@@ -41,6 +41,9 @@ import lance
 import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
+from maintenance.core.config import shared_lance_session
+from service_kit.lakehouse.features import unsupported_features, unsupported_features_from_open_error
+
 
 log = logging.getLogger(__name__)
 
@@ -144,6 +147,15 @@ def _kind_of(rel_path: str) -> str:
     }.get(head, "other")
 
 
+def open_dataset(dataset_uri: str, storage_options: dict[str, str] | None = None) -> lance.LanceDataset:
+    """The scan's ONE open per dataset — threading the shared bounded session (#102).
+
+    Split out of :func:`referenced_paths` so :func:`scan_dataset` can hold the handle and hand it to
+    the layout gate (which reads the manifest's feature flags) without a second open.
+    """
+    return lance.dataset(dataset_uri, storage_options=storage_options, session=shared_lance_session())  # ty: ignore[invalid-argument-type] — stub lacks session=, runtime verified
+
+
 def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = None) -> tuple[set[str], int, str | None]:
     """Every dataset-relative path referenced by ANY live version. Returns ``(paths, versions, note)``.
 
@@ -156,9 +168,13 @@ def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = 
     ``note`` is non-None when the version ceiling was hit, in which case the caller must treat the
     referenced set as INCOMPLETE and report nothing as an orphan from it.
     """
+    return referenced_paths_of(open_dataset(dataset_uri, storage_options), dataset_uri)
+
+
+def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[str], int, str | None]:
+    """:func:`referenced_paths` over an ALREADY-OPEN dataset. Same contract, no open."""
     referenced: set[str] = set()
     referenced_dirs: set[str] = set()
-    ds = lance.dataset(dataset_uri, storage_options=storage_options)
     versions = [v["version"] for v in ds.versions()]
     note = None
     if len(versions) > _MAX_VERSIONS:
@@ -166,7 +182,10 @@ def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = 
         versions = versions[-_MAX_VERSIONS:]
 
     for version in versions:
-        at = lance.dataset(dataset_uri, version=version, storage_options=storage_options)
+        # checkout_version, NOT a fresh lance.dataset(): the constructor mints a new cache pair per
+        # call — up to _MAX_VERSIONS times per dataset, the scan's real N+1 (#102) — while checkout
+        # reuses the open dataset's session (its documented contract, verified empirically).
+        at = ds.checkout_version(version)
         for fragment in at.get_fragments():
             for data_file in fragment.data_files():
                 referenced.add(f"{_DATA_DIR}/{data_file.path}")
@@ -183,11 +202,17 @@ def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = 
                 referenced_dirs.add(f"{_DATA_DIR}/{data_file.path.removesuffix('.lance')}")
             # OVERLAY FILES (feature flag 64). An overlay writes new values for a subset of cells to
             # `data/overlay-<uuid>.lance` — inside `data/`, where a false positive deletes real
-            # values — and is referenced from `DataFragment.overlays`, not `data_files()`. They are
-            # experimental and unwritable by this pylance, so any handling here would be untestable;
-            # the spec settles it: "a reader or writer that does not understand overlay files must
-            # REFUSE a dataset that uses them", because ignoring one returns stale base values, "a
-            # correctness bug rather than a degraded experience". Refusing is the conforming answer.
+            # values — and is referenced from `DataFragment.overlays`, not `data_files()`. The spec
+            # settles it: "a reader or writer that does not understand overlay files must REFUSE a
+            # dataset that uses them", because ignoring one returns stale base values, "a correctness
+            # bug rather than a degraded experience". Refusing is the conforming answer.
+            #
+            # Overlays ARE writable on pylance 9.0.0 (`LanceOperation.DataOverlay`, verified by
+            # committing one), but pylance then REFUSES to open the result — so on today's pylance
+            # this branch is unreachable and the refusal arrives via the manifest feature-flag gate
+            # instead (`_unscannable_reason`, `service_kit.lakehouse.features`). Kept as the second line
+            # of defence for the pylance that gains overlay READ support: that build opens the
+            # dataset, and this is the seam the walk would otherwise scan straight past.
             if getattr(fragment.metadata, "overlays", None):
                 raise _OverlaysPresent(dataset_uri)
             deletion = fragment.metadata.deletion_file
@@ -201,27 +226,39 @@ def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = 
     return referenced, len(versions), note
 
 
-def _unscannable_reason(fs: pafs.FileSystem, prefix: str, referenced: set[str]) -> str | None:
+def _unscannable_reason(fs: pafs.FileSystem, prefix: str, referenced: set[str], ds: lance.LanceDataset) -> str | None:
     """Why this dataset CANNOT be scanned safely, or ``None`` if it can.
 
-    Two layouts make the "list the prefix, subtract the referenced set" method produce false
-    positives on LIVE data. Both are refused rather than approximated, because the failure mode is a
+    Layouts that make the "list the prefix, subtract the referenced set" method produce false
+    positives on LIVE data. All are refused rather than approximated, because the failure mode is a
     reclaimer deleting a branch or another dataset's files.
+
+    **Unsupported manifest feature flags (#64) — checked FIRST.** The flags are the format's own
+    answer to "is this a layout you understand", and the spec requires a reader that does not know a
+    flag to refuse the dataset outright. Reading them (`service_kit.lakehouse.features`) catches the whole
+    class at once, including shapes with no observable consequence yet: `add_bases` registers a base
+    path that no DataFile resolves through, so the consequence check below sees nothing wrong and
+    this scan previously returned `checked=True` with orphans named on a multi-base dataset
+    (measured). The two checks are complementary, not redundant — see the base_paths note below.
 
     **Branches.** A branch is a shallow clone of its parent whose `_versions/`, `_transactions/`,
     `_deletions/` and `_indices/` live under `tree/{branch}/`. `lance.dataset(uri)` opens the MAIN
     branch, so nothing under `tree/` is ever in the referenced set — every file of every branch is
     unreferenced BY CONSTRUCTION. Measured: a two-commit branch made 6 of 7 findings branch files,
-    including the branch's own `data/*.lance`.
+    including the branch's own `data/*.lance`. Branching sets NO feature flag, so the directory probe
+    is the only thing that sees it.
 
     **Multi-base / shallow clones.** A manifest's `base_paths[]` lets a DataFile, DeletionFile or
-    index resolve under ANOTHER dataset root (feature flag 16). pylance does not expose `base_paths`,
-    so this is detected by its consequence instead, which is strictly more robust: if a path the
-    manifest REFERENCES is not present under this prefix, the dataset's files do not all live here.
-    A prefix listing therefore cannot be subtracted from a referenced set that spans roots. The
-    mirror hazard is worse and invisible from here — the SOURCE of a clone holds files that only the
-    CLONE's manifest still references, so scanning the source alone would name them garbage.
+    index resolve under ANOTHER dataset root (feature flag 16). The flag check above names it
+    directly; this consequence check — a referenced path that is not present under this prefix —
+    STAYS, because it is the broader of the two: it also catches a dataset whose files do not all
+    live here for a reason no flag records. The mirror hazard is worse and invisible from here — the
+    SOURCE of a clone holds files that only the CLONE's manifest still references, so scanning the
+    source alone would name them garbage, and the source carries no flag at all.
     """
+    if (refusal := unsupported_features(ds)) is not None:
+        return f"{prefix}: {refusal}"
+
     for directory, why in (
         (
             _TREE_DIR,
@@ -263,16 +300,23 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, prefix: str, storage_opt
     these files are referenced", which is the shape that would delete a live table.
     """
     try:
-        referenced, versions, note = referenced_paths(dataset_uri, storage_options)
+        ds = open_dataset(dataset_uri, storage_options)
+        referenced, versions, note = referenced_paths_of(ds, dataset_uri)
     except Exception as exc:
+        # pylance refuses a manifest whose feature flags IT does not know (measured: a committed data
+        # overlay, flag 64) — a REFUSAL, and it must read as one. Reported raw it is a Rust source
+        # path from a GitHub CI runner, which tells the report's reader nothing about why. An
+        # ordinary unopenable path keeps its existing `TypeName: message` shape.
+        refusal = unsupported_features_from_open_error(exc)
+        reason = f"{prefix}: {refusal}" if refusal is not None else f"{type(exc).__name__}: {exc}"
         log.warning("orphan_scan_unreadable", extra={"dataset": dataset_uri, "error": str(exc)})
-        return DatasetOrphanScan(dataset=dataset_uri, checked=False, reason=f"{type(exc).__name__}: {exc}")
+        return DatasetOrphanScan(dataset=dataset_uri, checked=False, reason=reason)
 
     if note:
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=note)
 
-    # Layout gate — refuse the two shapes whose false positives are LIVE data (see _unscannable_reason).
-    if (unscannable := _unscannable_reason(fs, prefix, referenced)) is not None:
+    # Layout gate — refuse every shape whose false positives are LIVE data (see _unscannable_reason).
+    if (unscannable := _unscannable_reason(fs, prefix, referenced, ds)) is not None:
         log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": unscannable})
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=unscannable)
 

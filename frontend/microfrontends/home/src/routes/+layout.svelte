@@ -38,6 +38,22 @@
 <!-- The same estate shell as every other zone (identical server-rendered chrome, so a cross-zone
      hop into "/" paints stable navbar + sidebar immediately). `me` resolved in the layout load —
      the navbar SSRs its final entry set, no skeleton pass on the landing. -->
+
+{#snippet projectRail()}
+	<!-- /projects/<id> is INSIDE a project (the two-level ruling), so it must carry the rail every
+	     zone carries — the rail is where the project SWITCHER lives, and the one page that IS the
+	     project losing the project control read as "the sidebar is gone" (user, 2026-08-05). The
+	     estate-level pages keep no rail: they have nothing to navigate. -->
+	<nav aria-label="Project" class="flex flex-col gap-0.5 px-2 py-1">
+		<span class="text-muted-foreground px-2 py-1 text-xs">Project</span>
+		<a
+			href="/projects"
+			class="text-muted-foreground hover:text-foreground hover:bg-accent/40 rounded-md px-2 py-1.5 text-sm transition-colors"
+			>All projects</a
+		>
+	</nav>
+{/snippet}
+
 <AppShell
 	pathname={page.url.pathname}
 	user={data.user}
@@ -46,6 +62,7 @@
 	zoneNav={HOME_ZONE_NAV}
 	me={data.me}
 	meLoading={false}
+	sidebarContent={/^\/projects\/./.test(page.url.pathname) ? projectRail : undefined}
 	{notifications}
 >
 	<div class="min-h-0 flex-1 overflow-y-auto">

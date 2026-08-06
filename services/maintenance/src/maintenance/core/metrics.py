@@ -27,10 +27,56 @@ _indices_optimized = _meter.create_counter(
     unit="{index}",
     description="Secondary indices (vector/scalar/FTS) re-optimized to cover new fragments.",
 )
+#: #64 — datasets the pass REFUSED because their manifest sets a feature flag it cannot correctly
+#: rewrite (base_paths / shallow clone, data overlays, anything unknown). Its own series, not a
+#: sub-case of an error counter: nothing failed, and the number that matters is the TREND. The
+#: supported-flag set is a whitelist, so a pylance upgrade that adds a legitimate flag shows up here
+#: as a step change — and nowhere else — while the sweep otherwise still reports a clean run.
+_refused = _meter.create_counter(
+    "compaction.datasets.refused",
+    unit="{dataset}",
+    description="Datasets refused by the maintenance pass because of an unsupported manifest feature flag.",
+)
+
+
+#: #79 reclamation. Separate series from the compaction counters above because they answer a different
+#: question: those say how much history was folded away, these say how many DROPPED objects had their
+#: bytes destroyed — the only irreversible thing this service does.
+_trash_purged = _meter.create_counter(
+    "maintenance.trash.purged",
+    unit="{record}",
+    description="Expired trash records whose bytes were deleted and whose grants were revoked.",
+)
+_trash_refused = _meter.create_counter(
+    "maintenance.trash.purge_refused",
+    unit="{record}",
+    description="Expired trash records the purge REFUSED (still registered, outside the maintained estate, "
+    "a control prefix, or a failed revoke) — a rising refusal rate is drift, not noise.",
+)
+_trash_bytes = _meter.create_counter(
+    "maintenance.trash.bytes_reclaimed",
+    unit="By",
+    description="Bytes reclaimed by the expired-trash purge.",
+)
+
+#: The record kinds a purge can see (#96 — a recoverable cascade trashes namespaces too). Both series are
+#: created on EVERY run so a dashboard has data from the first tick rather than reading "no data" until
+#: the first namespace record happens to expire.
+_KINDS = ("table", "namespace")
 
 
 def record_run() -> None:
     _runs.add(1)
+
+
+def record_trash_purge(purged_by_kind: dict[str, int], refused_by_kind: dict[str, int], bytes_reclaimed: int) -> None:
+    """Record one tick's reclamation. Always emits — adding 0 is a valid no-op that still CREATES the
+    series (the :func:`record_reclaimed` rule), and for a reclaimer the zero is the interesting number:
+    "nothing was purged this tick" and "the purge never ran" must not look identical on a dashboard."""
+    for kind in _KINDS:
+        _trash_purged.add(purged_by_kind.get(kind, 0), {"lance.maintenance.kind": kind})
+        _trash_refused.add(refused_by_kind.get(kind, 0), {"lance.maintenance.kind": kind})
+    _trash_bytes.add(bytes_reclaimed)
 
 
 def record_reclaimed(fragments_removed: int, versions_removed: int, indices_optimized: int = 0) -> None:
@@ -41,3 +87,12 @@ def record_reclaimed(fragments_removed: int, versions_removed: int, indices_opti
     _fragments_removed.add(fragments_removed)
     _versions_removed.add(versions_removed)
     _indices_optimized.add(indices_optimized)
+
+
+def record_refused(datasets: int) -> None:
+    """Record how many datasets this tick REFUSED on an unsupported manifest feature flag (#64).
+
+    Always emits, for the :func:`record_reclaimed` reason and one sharper one: a whitelist that
+    silently starts refusing the whole estate must be visible from the FIRST tick after the upgrade
+    that caused it, not from whenever someone reads a cron response body."""
+    _refused.add(datasets)

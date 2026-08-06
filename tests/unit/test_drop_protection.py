@@ -583,26 +583,36 @@ def test_a_recoverable_cascade_DETACHES_the_subtree_and_files_a_record_per_child
 
 
 def test_cascade_purge_true_still_destroys_natively_and_files_nothing(tmp_path: Any) -> None:
-    """The explicit opt-out, same word as the table door: purge means destroy the bytes now."""
+    """The explicit opt-out, same word as the table door: purge means destroy the bytes now.
+
+    It destroys BOTTOM-UP rather than forwarding `behavior=Cascade`: the `dir` backend the chart runs
+    does not implement the native cascade at all (#117), so this assertion used to pin a call that
+    answered NamespaceNotEmpty in production while the test passed against a fake that honoured it.
+    """
     from service_kit.lakehouse import trash
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _CascadableNamespace()
     _drop_namespace_cascade(settings, ns, purge=True)
-    assert "drop_namespace:bronze:cascade" in ns.calls
+    assert "drop_namespace:bronze:restrict" in ns.calls  # the root, once every child is gone
+    assert not any(c.endswith(":cascade") for c in ns.calls)
     assert not any(c.startswith("deregister_table:") for c in ns.calls)
     assert trash.list_all(settings.registry_root, settings.storage_options()) == []
 
 
 def test_cascade_with_grace_zero_is_the_shipped_default_and_unchanged(tmp_path: Any) -> None:
-    """Recoverable drops are opt-in (#75): without a grace period the cascade is exactly what it
-    always was — one destructive native call, no records."""
+    """Recoverable drops are opt-in (#75): without a grace period the cascade destroys, no records.
+
+    "Exactly what it always was" was the wrong bar — what it always was is a native cascade the
+    shipped `dir` backend refuses (#117). The destruction is now ours, bottom-up.
+    """
     from service_kit.lakehouse import trash
 
     settings = _settings(tmp_path, grace_days=0)
     ns: Any = _CascadableNamespace()
     _drop_namespace_cascade(settings, ns)
-    assert "drop_namespace:bronze:cascade" in ns.calls
+    assert "drop_namespace:bronze:restrict" in ns.calls
+    assert not any(c.endswith(":cascade") for c in ns.calls)
     assert trash.list_all(settings.registry_root, settings.storage_options()) == []
 
 
@@ -684,3 +694,52 @@ def test_the_undrop_suffixes_are_owner_gated_not_writer(tmp_path: Any) -> None:
     extends #75's table rule to the namespace rung)."""
     assert fga_deps._OWNER_SUFFIX_RELATION["table"]["undrop"] == "can_drop"  # noqa: SLF001
     assert fga_deps._OWNER_SUFFIX_RELATION["namespace"]["undrop"] == "can_delete"  # noqa: SLF001
+
+
+def test_a_destructive_drop_of_a_top_level_namespace_removes_its_WAREHOUSE_BINDING(tmp_path: Any) -> None:
+    """`unbind_namespace` existed and only the warehouse-delete door called it, so a direct drop of a
+    top-level namespace leaked its binding — and the UI derives its namespace list from bindings, so
+    the dropped namespace kept LISTING forever. Seen on the deployed estate: `casc9` survived its own
+    successful cascade as a phantom row."""
+    from catalog.services import warehouses
+
+    settings = _settings(tmp_path, grace_days=0)
+    so = settings.storage_options()
+    warehouses.bind_namespace(settings.registry_root, so, "bronze", "wh1", "s3://wh1-bucket")
+    assert warehouses.binding_for_namespace(settings.registry_root, so, "bronze") is not None
+
+    _drop_namespace_cascade(settings, _CascadableNamespace())
+    assert warehouses.binding_for_namespace(settings.registry_root, so, "bronze") is None, "the binding outlived the namespace"
+
+
+def test_a_RECOVERABLE_cascade_keeps_the_binding_for_the_undrop(tmp_path: Any) -> None:
+    """Same rule as the grants (#75): undrop rebuilds the subtree, and the binding must still be
+    there to route it — a recoverable drop that unbinds would undrop into an unroutable namespace."""
+    from catalog.services import warehouses
+
+    settings = _settings(tmp_path, grace_days=7)
+    so = settings.storage_options()
+    warehouses.bind_namespace(settings.registry_root, so, "bronze", "wh1", "s3://wh1-bucket")
+
+    _drop_namespace_cascade(settings, _CascadableNamespace())
+    assert warehouses.binding_for_namespace(settings.registry_root, so, "bronze") is not None, "the undrop's route died with the drop"
+
+
+def test_the_protection_flag_is_READABLE_on_both_rungs(tmp_path: Any) -> None:
+    """#123. The SET door shipped with no read at all — an operator could not arm-check, disarm-check,
+    or audit protection; they discovered it by eating a 409. The GET returns the flag AND who armed it."""
+    from catalog.api.v1.endpoints import namespaces as n_ep
+    from catalog.api.v1.endpoints import tables as t_ep
+
+    settings = _settings(tmp_path)
+    so = settings.storage_options()
+    protection.set_protection(settings.registry_root, so, {"kind": "table", "id": "db1$t", "protected": "true", "set_by": "user:alice"})
+
+    read = asyncio.run(t_ep.get_table_protection("db1$t", settings=settings))
+    assert (read.protected, read.set_by) == (True, "user:alice")
+    unarmed = asyncio.run(t_ep.get_table_protection("db1$other", settings=settings))
+    assert (unarmed.protected, unarmed.set_by) == (False, None)
+
+    protection.set_protection(settings.registry_root, so, {"kind": "namespace", "id": "bronze", "protected": "true", "set_by": "user:bob"})
+    ns_read = asyncio.run(n_ep.get_namespace_protection("bronze", settings=settings))
+    assert (ns_read.protected, ns_read.set_by) == (True, "user:bob")

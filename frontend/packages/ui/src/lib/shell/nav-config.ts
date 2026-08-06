@@ -48,6 +48,18 @@ export type ZoneNavLeaf = {
 	 *  them (or the parent) is active. One level only — a third tier is a sign the ZONE should have
 	 *  been split, not the menu. */
 	children?: ZoneNavLeaf[];
+	/** WHY this area cannot be opened for the thing currently in view — a short phrase, or absent
+	 *  when it can.
+	 *
+	 *  A leaf carrying this renders DISABLED rather than being dropped from the rail. The estate
+	 *  used to hide what a corpus could not do, which is fail-closed and defensible, and it reads to
+	 *  a user as "this product has no knowledge graph" rather than "THIS corpus has no knowledge
+	 *  graph" — two very different statements, and only the second is true. A greyed row with the
+	 *  reason in its tooltip says which.
+	 *
+	 *  It is not a substitute for authorization: a leaf someone may not SEE is still absent (the
+	 *  admin Settings precedent). This is for capability, not permission. */
+	unavailable?: string;
 };
 
 /** One labelled section of the sidebar — a `Sidebar.Group` with its own `GroupLabel`. */
@@ -161,7 +173,7 @@ export const under =
 export type TopNavItem = { title: string; href: string; description: string };
 
 /** A labelled column inside a navbar panel. A trigger that gathers SEVERAL concerns (Lakehouse:
- *  catalog + models + governance) needs its rows grouped under headings, or the panel is just a
+ *  catalog + models + lineage + operations) needs its rows grouped under headings, or the panel is just a
  *  long undifferentiated list — the multi-column NavigationMenu.Content shape. */
 export type TopNavGroup = { label: string; items: TopNavItem[] };
 
@@ -178,7 +190,7 @@ export type TopNavEntry = {
 	 *  this is the cross-zone jump list, not a mirror of in-zone navigation. */
 	items?: TopNavItem[];
 	/** Grouped alternative to `items` — rendered as labelled columns. Used by Lakehouse, whose panel
-	 *  spans the catalog, the model registry and the governance surfaces. */
+	 *  spans the catalog, the model registry, lineage and the operational surfaces. */
 	groups?: TopNavGroup[];
 	/** Visual weight in the bar. 'primary' is where the work happens — the lakehouse you govern and
 	 *  the compute that fills it — and those lead the bar. Everything else is a real zone but a
@@ -246,6 +258,15 @@ const LINEAGE_ITEMS: TopNavItem[] = [
 	},
 ];
 
+const ANNOTATE_ITEMS: TopNavItem[] = [
+	{ title: 'Canvas', href: '/annotator/', description: 'Label pages on the annotation canvas.' },
+	{
+		title: 'Browse',
+		href: '/annotator/browse',
+		description: 'The corpus, filtered to what needs labeling.',
+	},
+];
+
 const EXPLORER_ITEMS: TopNavItem[] = [
 	{ title: 'Search', href: '/explorer/', description: 'Semantic search over the corpus.' },
 	{ title: 'Atlas', href: '/explorer/atlas', description: 'The embedding map of the corpus.' },
@@ -261,37 +282,63 @@ const EXPLORER_ITEMS: TopNavItem[] = [
 	{ title: 'Workflow', href: '/explorer/workflow', description: 'The derivation pipeline.' },
 ];
 
+/** The MODELS zone's panel rows — one model's whole life.
+ *
+ *  These three were a COLUMN OF THE LAKEHOUSE PANEL (`/lakehouse/models/*`) until the surface itself
+ *  moved. They now name the zone's own routes, and the last two rows are what the move was for: the
+ *  registry that training produces and the playground that spends it finally sit in the same place as
+ *  the training that fills it, instead of one zone away from it. */
 const MODEL_ITEMS: TopNavItem[] = [
-	{ title: 'Registry', href: '/lakehouse/models', description: 'Candidate → blessed, per model.' },
+	{ title: 'Registry', href: '/models/', description: 'Candidate → blessed, per model.' },
 	{
 		title: 'Experiments',
-		href: '/lakehouse/models/experiments',
+		href: '/models/experiments',
 		description: 'Training runs and their metrics.',
 	},
 	{
 		title: 'Pipeline',
-		href: '/lakehouse/models/pipeline',
+		href: '/models/pipeline',
 		description: 'Train, validate, promote.',
+	},
+	{
+		title: 'Playground',
+		href: '/models/playground',
+		description: 'Run a page through HTR and read the ALTO.',
+	},
+	{
+		title: 'Training runs',
+		href: '/models/runs',
+		description: 'Every submitted run, live state first.',
 	},
 ];
 
-/** Governance + operations over the SAME estate the catalog and registry describe — so these ride
- *  in the Lakehouse panel rather than a separate top-level Admin entry. Estate-admin only. */
-const GOVERNANCE_ITEMS: TopNavItem[] = [
+// NO `STUDIO_ITEMS`. Studio briefly panelled (Apps + Flows) and is a plain link again, because the
+// launcher and the animation demo were deleted: the zone is ONE surface — the flow canvas at its
+// root — and a dropdown with one row in it is noise. Same rule, opposite direction.
+
+/** The PLATFORM panel — the Settings entry's rows. Each reads across every project and takes none,
+ *  which is why they are settings rather than a zone's feature, and why they are SERVED by the home
+ *  zone (#105): `/settings/access` and `/settings/audit` are its routes, `/projects` always was.
+ *
+ *  Deliberately the same three rows, in the same order and under the same names, as `/settings` itself
+ *  renders — the navbar panel and the page below it are two controls answering one question, and the
+ *  estate has been bitten before by letting them drift (see the lakehouse sidebar's own note). Estate-
+ *  admin only. */
+const PLATFORM_ITEMS: TopNavItem[] = [
 	{
-		title: 'Access',
-		href: '/lakehouse/governance/access',
-		description: 'The FGA workbench: check, tuples, graph.',
+		title: 'Users & roles',
+		href: '/settings/access',
+		description: 'Who may do what, platform-wide: check, tuples, graph.',
 	},
 	{
-		title: 'Tenants',
-		href: '/lakehouse/admin/tenants',
-		description: 'Warehouses per project, and who administers them.',
+		title: 'Projects',
+		href: '/projects',
+		description: 'Every project the platform knows, and who administers it.',
 	},
 	{
 		title: 'Audit',
-		href: '/lakehouse/governance/audit',
-		description: 'The compliance trail — who did what.',
+		href: '/settings/audit',
+		description: 'The platform trail — who did what.',
 	},
 ];
 
@@ -352,10 +399,10 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
 ];
 
 /**
- * The top-navbar IA. Seven zones — home, lakehouse, explorer, annotator, compute, train, studio — and
+ * The top-navbar IA. Seven zones — home, lakehouse, explorer, annotator, compute, models, studio — and
  * the bar carries an entry for EVERY one of them (R15: a zone missing from the shared navbar is a
  * defect, regardless of scaffold status). Lakehouse and Lineage stay two views of the ONE merged
- * estate zone rather than two apps — a hop from the catalog to the lineage graph, or to governance,
+ * estate zone rather than two apps — a hop from the catalog to the lineage graph, or to the DLQ,
  * is a soft navigation inside one router; every OTHER entry crosses a zone boundary and
  * hard-navigates. The sidebar renders the current zone's routes (`ZoneNav`).
  *
@@ -363,10 +410,10 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
  * a panel — so the estate's shape is reachable from any zone in one hop instead of landing on a
  * zone root and hunting through its sidebar. Zones with a single surface stay plain links.
  *
- * The Governance/Operations columns append ONLY for an estate admin (`me.estate_admin` from the
- * frozen `/v1/me` contract) — fail-closed: an unresolved/absent `me` renders the base entries.
- * Access is NOT a top-level entry: it lives inside the lakehouse admin area
- * (/lakehouse/governance/access), so it appears only as one row of the Governance column.
+ * The Operations column appends ONLY for an estate admin (`me.estate_admin` from the frozen `/v1/me`
+ * contract) — fail-closed: an unresolved/absent `me` renders the base entries. Access is NOT a
+ * top-level entry and never was: it is one row of the Settings panel (`/settings/access`), which is
+ * where the surface itself now lives.
  */
 /**
  * The MAIN MENU's bar, by ruling (2026-08-03): "we should only see 2 items in topnavbar — projects
@@ -423,10 +470,12 @@ export function isMainMenu(pathname: string): boolean {
 
 export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	// LAKEHOUSE gathers everything that describes or governs the one governed estate: the catalog
-	// (projects → warehouses → namespaces → tables), the model registry (models are catalog objects
-	// too — models$<model> carries the same rungs; R17 migrates this surface to the train zone,
-	// which owns the column once the routes physically move), and, for an estate admin, the
-	// governance and operations surfaces over it. Grouping by DOMAIN rather than by zone is what
+	// (projects → warehouses → namespaces → tables), the lineage over it, and, for an estate admin,
+	// the operational surfaces on top. The model registry used to be a column here — models ARE
+	// catalog objects (models$<model> carries the same rungs), which is why it sat here at all — but
+	// R17's migration has now happened: the routes physically moved, so the column moved with them and
+	// the MODELS zone owns it. A trigger claims a ZONE; it must not keep advertising another one's
+	// routes. Grouping by DOMAIN rather than by zone is what
 	// keeps a growing product from growing the bar: a new ROUTE becomes a row in a panel column —
 	// only a new ZONE earns a new entry (R15). The project switcher sits at the head of the bar on
 	// every zone (global context belongs in global chrome).
@@ -436,9 +485,12 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 		// under one area is what made it invisible from the others — the placement that was reverted.
 		{ label: 'Workspace', items: WORKSPACE_ITEMS },
 		{ label: 'Catalog', items: DATA_ITEMS },
-		{ label: 'Models', items: MODEL_ITEMS },
-		// Lineage is an AREA of this zone (/lakehouse/lineage), exactly like Models
-		// (/lakehouse/models) — so it is a column, not a trigger of its own. It used to be top-level,
+		// NO 'Models' COLUMN — the area left this zone for the MODELS zone, which is its own trigger
+		// below. What the lakehouse keeps is model LINEAGE (which run wrote which version), and that is
+		// already a Lineage row.
+		//
+		// Lineage is an AREA of this zone (/lakehouse/lineage) — so it is a column, not a trigger of
+		// its own. It used to be top-level,
 		// which forced the Lakehouse trigger to carve lineage out of its own match to stop both
 		// lighting up, and left a bar where one entry was a zone and another was an area inside it
 		// with no way for a reader to tell why. Trigger = zone, column = area; the bar is now
@@ -448,10 +500,11 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	// OPERATIONS stays with the lakehouse; GOVERNANCE does not — by ruling (2026-08-03): "governance
 	// and other setting stuff, more in terms of auth, should be part of the topnavbar when in main
 	// menu, but under settings". Running THIS estate — its streams, its events, its dead letters — is
-	// an operation on the lakehouse and belongs to the lakehouse. Who may do what — access, tenants,
-	// the audit trail — is not a lakehouse feature at all; it is estate-wide configuration, and it now
-	// lives under `Settings` below. It is in ONE place, not two: a Governance column here AND a
-	// Settings entry there would be the same duplication the projects ruling deleted.
+	// an operation on the lakehouse and belongs to the lakehouse. Who may do what — users & roles,
+	// projects, the audit trail — is not a lakehouse feature at all; it is PLATFORM configuration, and
+	// it lives under `Settings` below. It is in ONE place, not two: a Governance column here AND a
+	// Settings entry there would be the same duplication the projects ruling deleted. Since #105 the
+	// pages themselves are the home zone's too, so the row and the route finally agree.
 	if (estateAdmin) {
 		lakehouse.push({ label: 'Operations', items: OPERATIONS_ITEMS });
 	}
@@ -471,8 +524,8 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			title: 'Lakehouse',
 			href: '/lakehouse/catalog',
 			icon: Database,
-			// The whole merged zone — catalog, models, lineage, and (for an admin) governance and
-			// operations. No carve-out: every area is a column of this one trigger.
+			// The whole merged zone — catalog, models, lineage, and (for an admin) operations. No
+			// carve-out: every area is a column of this one trigger.
 			match: under('/lakehouse'),
 			groups: lakehouse,
 			tier: 'primary',
@@ -503,24 +556,34 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// ANNOTATE is its own microfrontend (/annotator) and its own job: the write plane over the
 			// same corpus Search reads. One trigger per zone is the rule, so it is a trigger — it was
 			// briefly a row inside Search's panel, which broke that rule and buried the labeling
-			// workflow one hover deep. A single surface, so a plain link rather than a panel.
+			// workflow one hover deep. It carries a PANEL since #113: the "single surface" premise
+			// expired when /browse landed — Canvas and Browse are two real destinations, and the
+			// consistency rule is that every multi-surface zone panels (only Studio remains a link).
 			title: 'Annotate',
 			href: '/annotator/',
 			icon: PenLine,
 			match: under('/annotator'),
+			items: [...ANNOTATE_ITEMS],
 		},
 		{
-			// TRAIN is its own zone again (R17): submit, watch, monitor and analyse training, plus the
-			// model registry that migrates over from Lakehouse. The zone is being scaffolded — the
-			// entry rides the bar NOW (R15: a zone missing from the navbar is a defect regardless of
-			// scaffold status); a plain link until its areas are real enough to panel.
-			title: 'Train',
-			href: '/train/',
+			// MODELS — the model-lifecycle zone. It began as R17's `train` (submit / runs / monitoring /
+			// analysis, all scaffold) and was a PLAIN LINK on the reasoning that a one-row dropdown is
+			// noise. It earns a panel now, because the migration R17 promised actually happened: the
+			// registry, experiments and pipeline moved out of the lakehouse, and the playground joined
+			// them, so the zone has five real destinations rather than four placeholders.
+			//
+			// The label is the JOB, not the directory — and here they agree. "Train" named one AREA of
+			// this zone and would now under-describe it: you come here to see what a model IS, not only
+			// to make one.
+			title: 'Models',
+			href: '/models/',
 			icon: Brain,
-			match: under('/train'),
+			match: under('/models'),
+			items: [...MODEL_ITEMS],
 		},
 		{
-			// STUDIO stays the sandbox/PoC zone (R17) — one experimental surface, so a plain link.
+			// STUDIO is the sandbox zone (R17) and a PLAIN LINK — one surface, the node-based flow
+			// canvas at the zone root, so there is nothing for a dropdown to list.
 			title: 'Studio',
 			href: '/studio/',
 			icon: FlaskConical,
@@ -540,9 +603,11 @@ const PROJECTS_ENTRY: TopNavEntry = {
 	tier: 'primary',
 };
 
-/** SETTINGS — estate configuration: notifications, the defaults a NEW project is created with, and
- *  auth/authz. A real home-zone route (`/settings`), which is why this no longer points at
- *  `/lakehouse/governance/access` — that was a placeholder for a page that did not exist.
+/** SETTINGS — PLATFORM configuration: notifications, the defaults a NEW project is created with, and
+ *  auth/authz. A real home-zone route (`/settings`), and since #105 so is every row of its panel —
+ *  this entry once pointed at `/lakehouse/governance/access`, a placeholder for a page that did not
+ *  exist, and then at the real page in another zone. Now the entry, the panel and the pages are one
+ *  app.
  *
  *  Estate-admin only, and ABSENT rather than disabled for everyone else — the fail-closed rule the
  *  Governance column had before it moved here: a non-admin's bar must not even NAME a surface they
@@ -551,11 +616,13 @@ const SETTINGS_ENTRY: TopNavEntry = {
 	title: 'Settings',
 	href: '/settings',
 	icon: Settings,
-	// Also lights on the governance routes the lakehouse still SERVES, so the bar agrees with itself
-	// while those pages live at their old addresses. Moving them behind `/settings/` is a separate
-	// change and needs redirects for anything already linking them.
-	match: under('/settings', '/lakehouse/governance'),
-	items: [...GOVERNANCE_ITEMS],
+	// `under('/settings')` ALONE now. It also matched `/lakehouse/governance` while the workbench and
+	// the audit trail were still served from there — the bar had to agree with itself across the seam.
+	// #105 closed the seam: those routes are `/settings/access` and `/settings/audit`, the lakehouse
+	// serves no `governance` segment at all, and a matcher for a path nothing serves is a claim that
+	// can only ever be wrong.
+	match: under('/settings'),
+	items: [...PLATFORM_ITEMS],
 };
 
 /**
@@ -612,4 +679,26 @@ export function prefetchOnIntent(href: string) {
 			el.removeEventListener('focus', warm);
 		};
 	};
+}
+
+
+/**
+ * zone directory segment -> the label the NAVBAR uses for it.
+ *
+ * Derived from `topNav()` rather than written out, so it cannot drift from the bar: the bar is the
+ * thing a person just read, and a breadcrumb that disagreed with it named the same zone twice on one
+ * screen ("Annotate" above, "Annotator" below). `annotator` -> `Annotate` is the deliberate
+ * label/directory split this exists for; every other zone happens to match, and would still be
+ * correct if one stopped matching tomorrow.
+ *
+ * `estateAdmin` is irrelevant to labels — Settings is the only admin-gated entry and is not a zone —
+ * so it is called with `false` and the result is stable.
+ */
+export function zoneLabels(): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const entry of topNav(false)) {
+		const seg = entry.href.split('/').filter(Boolean)[0];
+		if (seg) out[seg] = entry.title;
+	}
+	return out;
 }

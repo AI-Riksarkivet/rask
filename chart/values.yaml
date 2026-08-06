@@ -296,6 +296,16 @@ resources:
   default:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
+  # RUSTFS — the object store under the whole lakehouse, and the one component for which the app
+  # default was actively wrong. It named no tier, so it inherited `default`'s 512Mi and was
+  # OOMKilled 33 times on a dev estate while sitting at 370Mi IDLE (~72% of its ceiling doing
+  # nothing): any real listing, blob-tier scan or ingest burst tipped it. An OOM mid-write is
+  # exactly the partially-failed write the orphan scan exists to report, so this is a data-integrity
+  # setting, not a comfort one. 2Gi gives real headroom over the measured idle floor; raise it with
+  # the estate (values-prod should size it against actual object count, not this dev figure).
+  rustfs:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: "2", memory: 2Gi }
   # The assist model runner holds two warm torch models (~1.1 GB weights) and burns real CPU per
   # inference (multi-threaded GEMMs) — the request-pod default would OOM-kill it at load.
   assist:
@@ -459,9 +469,12 @@ frontend:
     # storage folded into lakehouse, overview into compute (R16); discover retires at P7.
     - {name: compute, path: /compute}
     - {name: studio, path: /studio}
-    # R17: train RETURNS as its own zone (supersedes R8's train→lakehouse fold) —
-    # submit/runs/monitoring/analysis/models; lakehouse's models area migrates there.
-    - {name: train, path: /train}
+    # The MODEL-LIFECYCLE zone. It began as R17's `train` (submit/runs/monitoring/
+    # analysis) and became `models` once lakehouse's models area physically migrated
+    # into it: registry + experiments + pipeline now sit beside training and the
+    # inference playground, so one zone answers everything about a model and the
+    # lakehouse keeps only its LINEAGE.
+    - {name: models, path: /models}
     # lance-ns zones. `lakehouse` is the MERGED estate zone: catalog + lineage + models + admin were
     # four separate zones on four Deployments, all reading the same catalog/lineage planes and all
     # shipped from one shared image tag — four SSR servers and a full document reload between them,
@@ -559,6 +572,14 @@ catalog:
   # Retry-After, shed before a body byte is buffered. 16 matches the code default; prod lowers it to fit
   # the catalog memory tier — values-prod.yaml states the sizing formula. 0 disables shedding.
   maxConcurrentWrites: 16
+  # #75/#96 RECOVERABLE DROPS — days a dropped table/namespace stays undroppable before the purge may
+  # reclaim it. The CODE default is 0 (off: a grace period changes what `drop_table` means for every
+  # caller, so the library never assumes it) — but the CHART defaults it ON, because the chart also
+  # ships `maintenance.trashPurge` and an undrop UI, and until 2026-08-05 it rendered this env var
+  # NOWHERE: ~500 lines of shipped, tested recovery code (undrop, /tasks, the recoverable cascade,
+  # the purge's whole input) were inert in every chart deployment while two chart comments discussed
+  # the knob as if it worked. 0 restores the old destroy-immediately behaviour.
+  trashGraceDays: 7
   # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /v1/warehouses provisions a
   # physically separate bucket per warehouse (Lakekeeper parity) and binds top-level namespaces to it, so a
   # table under a bound namespace lands in that warehouse's bucket. Additive + backward-compatible: an
@@ -775,6 +796,23 @@ maintenance:
   # also consider services.lineage.runRetentionDays > 0: a recovered dataset's FAIL Run node otherwise
   # persists in /runs indefinitely (the deterministic id means exactly one node per dataset).
   lineageEmit: false
+  # #79 RECLAMATION. When on, the reconcile tick DELETES the bytes of every trash record past its grace
+  # deadline and revokes that object's grants — gated on that same tick's drift report running clean
+  # (no findings, no unavailable category, no incomplete scan).
+  #
+  # OFF by default, and it should stay off until the drift report has run clean on THIS estate for a
+  # while: turning it on makes a `drop_table` past LANCE_TRASH_GRACE_DAYS permanently unrecoverable
+  # (`undrop` does not check expiry today — a record that survives is a recovery that still works). It
+  # is also the only irreversible thing this service does; compaction and version GC are bounded by
+  # policy, this destroys a whole dataset.
+  trashPurge: false
+  # Per-tick ceiling on purged records. The remainder is reported (`trash_purge.capped`) and drained on
+  # the next tick, so a backlog never becomes one unbounded delete storm against object storage.
+  trashPurgeMaxPerTick: 25
+  # Announce each reclamation on the catalog's control topic (catalog.control.v1). Requires
+  # dapr.sidecars — and the component's `scopes` must list this app-id, which the chart does below;
+  # without it the sidecar rejects every publish SILENTLY (emission is best-effort by design).
+  controlEmit: false
 
 # --- lance-media plane ----------------------------------------------------------------------------
 # The viewer/search/annotator services from the lance-audio checkout. All three share the catalog image
@@ -1116,6 +1154,13 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # proxy-body-size is load-bearing for the same reason proxy-read-timeout is: the DEFAULT is
+    # wrong for this estate. ingress-nginx caps a request body at 1m, and every image surface here
+    # is bigger than that — the inference playground's 2.2 MB page image was refused 413 at the
+    # INGRESS, before the zone server (whose own guard allows 25 MB) ever saw it, so the failure
+    # read as "inference is broken" rather than "the edge has a 1 MB cap". Also covers the
+    # annotator's Arrow import and the medallion's multi-image batch posts.
+    nginx.ingress.kubernetes.io/proxy-body-size: 64m
   tls: []          # e.g. [{ secretName: rask-tls, hosts: ["rask.example.com"] }]
 
 # ---- cluster infra foundation (subchart dependencies, Chart.yaml) ----------

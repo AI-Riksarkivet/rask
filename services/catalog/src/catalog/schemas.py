@@ -461,6 +461,37 @@ class PolicyDeleteResponse(BaseModel):
     id: str
 
 
+class ProjectPoliciesResponse(BaseModel):
+    """Every maintenance policy record governing data inside ONE project (#65) — the tenant-scoped VIEW.
+
+    ``set``/``describe``/``delete`` answer for a single object each; nothing could ever enumerate what is
+    actually in force across a tenant, so a project admin could not tell which of their namespaces or
+    tables carries a retention override without already knowing its id. This is that read.
+
+    ``buckets`` and ``namespaces`` are the SCOPE the listing was computed from — the project's warehouse
+    buckets and the top-level namespaces bound to those warehouses — reported so a surprising list can be
+    explained without a second call.
+
+    ``incomplete`` / ``skipped_bindings`` are load-bearing, not diagnostics. The namespace half of the
+    scope is derived from the namespace→warehouse bindings, so a binding record that cannot be read is a
+    namespace whose policies cannot be seen: a silently-narrowed list would read as "checked and clean",
+    which is the ``unbound_namespaces`` bug class. The listing still answers 200 (it is a read, not a
+    destructive door — see ``warehouses.namespaces_bound_to`` for the opposite posture) and SAYS it may
+    be short.
+
+    **Resolution is winner-takes-all** (``PolicyRequest``): a table record shadows a namespace record
+    shadows the project record, and the winner supplies EVERY field. These records are what EXISTS, not
+    what governs any one dataset — a surface that renders them as an effective, merged policy is lying.
+    """
+
+    project: str
+    buckets: list[str]
+    namespaces: list[str]
+    policies: list[PolicyResponse]
+    incomplete: bool = False
+    skipped_bindings: list[str] = Field(default_factory=list)
+
+
 # --------------------------------------------------------------------------- #
 # Model registry — candidate→blessed promotion (#17)
 # --------------------------------------------------------------------------- #
@@ -531,6 +562,12 @@ class CreateWarehouseRequest(BaseModel):
     # project's gold SERVING warehouse — the silver→gold mover's tenant target root when the chart's
     # medallion.goldWarehouse is on. Absent (default) = a WORK warehouse. Only "gold" is accepted for now.
     serving: str | None = None
+    # #123 deletion protection, ARMABLE at last. The guard (`require_not_protected` at the delete
+    # door) shipped a year before any API could set this flag — the only armed warehouses were ones
+    # whose registry JSON someone edited by hand, while both delete dialogs shipped an "Override
+    # deletion protection" checkbox for a 409 production could not produce. Absent (default) keeps
+    # pre-protection records byte-identical; a re-POST still carries an existing flag forward.
+    protected: bool = False
 
 
 class WarehouseResponse(BaseModel):
@@ -540,6 +577,9 @@ class WarehouseResponse(BaseModel):
     project: str
     status: str | None = None  # "active" / "deactivated" (P2.3 lifecycle); absent on pre-lifecycle records
     serving: str | None = None  # "gold" = the project's serving warehouse; absent = a work warehouse
+    # #123: the delete-door safety, finally OBSERVABLE — records carry "true" (string), coerced here.
+    # None on unprotected/pre-protection records (exclude_none keeps them byte-identical on the wire).
+    protected: bool | None = None
     created_at: str | None = None
 
 
@@ -636,6 +676,9 @@ class SetProtectionRequest(BaseModel):
 class ProtectionResponse(BaseModel):
     id: str
     protected: bool
+    # Who armed it (`user:<sub>`), from the record — None on an unprotected object and on the SET
+    # response (the caller knows who they are). A refused drop can then NAME the armer (#123).
+    set_by: str | None = None
 
 
 class TrashEntry(BaseModel):

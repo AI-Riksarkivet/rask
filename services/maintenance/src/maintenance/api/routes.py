@@ -9,10 +9,14 @@ Two bindings, not one route doing both:
 * the **sweep** (`binding_name`) compacts, cleans up old versions and optimizes indices — it REWRITES
   data files and is expensive;
 * the **reconcile** pass (`reconcile_binding_name`) reads three stores and reports their
-  disagreements — it mutates NOTHING and is cheap.
+  disagreements — cheap — and then, gated on THAT report running clean, reclaims expired trash (#79).
 
 One binding would force the cheap read onto the expensive write's schedule, which is exactly the
 constraint that keeps drift reports rare enough to be useless.
+
+The purge rides the reconcile binding rather than the sweep's precisely because its permission comes
+from the report: it consumes the report object the same tick produced, never a stored one. It is off by
+default (`MAINTENANCE_TRASH_PURGE_ENABLED`), so the shipped configuration is still report-only.
 """
 
 import asyncio
@@ -22,8 +26,9 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 
-from maintenance.api.dependencies import FgaClientDep, LineageEmitterDep, S3ClientDep, SettingsDep
+from maintenance.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, S3ClientDep, SettingsDep
 from maintenance.core.config import get_settings
+from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import reconcile
 from maintenance.services.sweep import emit_sweep_lineage, run_sweep, summarize
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -75,8 +80,8 @@ async def ack_binding() -> dict[str, str]:
 _reconcile_lock = asyncio.Lock()
 
 
-async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_client: S3ClientDep) -> dict[str, Any]:
-    """One cross-store drift REPORT, triggered by its own Dapr cron tick. Deletes nothing.
+async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_client: S3ClientDep, control: ControlEmitterDep) -> dict[str, Any]:
+    """One cross-store drift REPORT, then — gated on it — the #79 expired-trash purge.
 
     Separate binding from the sweep because the cadences differ by an order of magnitude: the sweep
     rewrites data files, this only reads three stores.
@@ -85,6 +90,12 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
     the sidecar's response goes nowhere a human looks, while the log lands in the OTLP stream where drift
     is actually noticed. `total` is logged at WARNING when non-zero so a clean estate stays quiet and a
     drifting one does not.
+
+    **The purge lives HERE, not on the sweep tick, and inside the SAME lock.** Its gate is "the drift
+    report ran clean", so it must consume the report THIS tick produced — a purge reading a stored or
+    previous report would certify a state that no longer exists. Reclamation is off by default
+    (`MAINTENANCE_TRASH_PURGE_ENABLED`), so on the shipped configuration this adds one report key and
+    deletes nothing.
     """
     if _reconcile_lock.locked():
         log.warning("reconcile_skipped", extra={"reason": "previous reconcile still running"})
@@ -112,6 +123,27 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
             log.warning("reconcile_drift", extra=summary)
         else:
             log.info("reconcile_clean", extra=summary)
+        purged = await purge_expired_trash(
+            settings,
+            report=report,
+            fga_client=client,
+            control=control,
+            control_root=settings.resolved_control_root,
+        )
+        payload["trash_purge"] = purged.model_dump(mode="json")
+        # Reclamation is irreversible, so a tick that destroyed something — or declined to — says so at
+        # WARNING. A quiet INFO would put the one irreversible thing this service does at the same
+        # volume as a no-op sweep.
+        if purged.purged or purged.refused or purged.capped:
+            log.warning(
+                "trash_purge_result",
+                extra={
+                    "purged": [f"{p.kind}:{p.id}" for p in purged.purged],
+                    "refused": [{"id": f"{r.kind}:{r.id}", "reason": r.reason} for r in purged.refused],
+                    "capped": purged.capped,
+                    "bytes_reclaimed": sum(p.bytes_deleted for p in purged.purged),
+                },
+            )
         return payload
 
 

@@ -166,9 +166,7 @@ export type WarehouseRecord = Warehouse & { serving?: string | null };
 /** The create body with the optional `serving: "gold"` class (same additive rationale). */
 export type CreateWarehouseBody = CreateWarehouse & { serving?: 'gold' };
 
-export type ProjectSummary = components['schemas']['ProjectResponse'];
-
-// The warehouse + project TRANSPORT (list / describe / create / activate / bind) lives in
+// The warehouse TRANSPORT (list / describe / create / activate / bind) lives in
 // `remote/warehouses.remote.ts` — the zone's remote-function dialect. This module keeps the table
 // surface plus the shared wire contracts, which a remote file may not export.
 

@@ -1,24 +1,20 @@
 import { env } from '$env/dynamic/private';
 import type { LayoutServerLoad } from './$types';
-import { zoneLayoutLoad } from '@rask/api/bff';
-import { fetchMe } from '@rask/api';
+import { makeZoneLayoutLoad } from '@rask/api/bff';
 
-const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
+const zoneLoad = makeZoneLayoutLoad(env);
 
-// Surface the signed-in identity + the auth-enabled flag to the shared shell. `user` is the
-// single-sourced sessionToUser projection ("auth is identical in every MFE"); `me` is the frozen
-// /v1/me contract fetched BFF-side with the session bearer — RESOLVED here (not streamed): the
-// landing page's own load awaits it anyway (the gallery derives from it), so streaming bought no
-// earlier paint, and a resolved `me` lets the navbar SSR its final entry set with zero
-// skeleton→resolved swap. Degrade, never hang: fetchMe times out internally and answers null
-// (signed out / catalog unreachable → base entries only, fail-closed on the admin surfaces).
-export const load: LayoutServerLoad = async ({ locals, cookies }) => ({
-	...zoneLayoutLoad({ locals, cookies }),
-	me: await fetchMe({ catalogUrl: CATALOG_API, accessToken: locals.session?.accessToken }),
-	// Whether a SESSION exists, separate from whether the catalog could confirm the identity.
-	// `me` is null for BOTH "signed out" and "signed in but /v1/me was unreachable / 401 / drifted",
-	// and those are opposite situations to a user: one is fixed by signing in, the other cannot be.
-	// Witnessed 2026-07-28 — a real Dex sign-in as alice showed her name in the navbar (which reads
-	// the session) while the page below told her to sign in (which read only `me`).
-	hasSession: Boolean(locals.session),
+// The estate-wide zone layout contract (identity, auth flag, active project, and the RESOLVED
+// /v1/me) — owned by @rask/api so all seven zones render one shell by construction, including the
+// active-project precedence (route param wins over the cookie on a project's first open, #103).
+//
+// Home adds ONE field the contract cannot carry: whether a SESSION exists, separate from whether
+// the catalog could confirm the identity. `me` is null for BOTH "signed out" and "signed in but
+// /v1/me was unreachable / 401 / drifted", and those are opposite situations to a user: one is
+// fixed by signing in, the other cannot be. Witnessed 2026-07-28 — a real Dex sign-in as alice
+// showed her name in the navbar (which reads the session) while the page below told her to sign in
+// (which read only `me`).
+export const load: LayoutServerLoad = async (event) => ({
+	...(await zoneLoad(event)),
+	hasSession: Boolean(event.locals.session),
 });

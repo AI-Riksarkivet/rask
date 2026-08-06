@@ -317,6 +317,17 @@ export class DatasetView {
 		return this.declared.display.metadata;
 	}
 
+	/** The TITLE fields this corpus declares, in preference order.
+	 *
+	 *  Exposed because `title()` cannot answer "does this corpus have a title at all" — it falls back
+	 *  to the doc id, so a caller asking it gets a string either way. A surface that renders a Title
+	 *  COLUMN needs the distinction: with nothing declared, that column repeats the id in a second
+	 *  place, which costs width and implies the data is missing rather than never declared.
+	 *  (`declared` is private, and reaching around it from a zone is what forced this getter.) */
+	get titleFields(): string[] {
+		return this.declared.display.title;
+	}
+
 	/** Resolved metadata rows for one hit (absent/empty values dropped). */
 	metadata(row: Row): { field: string; label: string; value: string }[] {
 		const out: { field: string; label: string; value: string }[] = [];

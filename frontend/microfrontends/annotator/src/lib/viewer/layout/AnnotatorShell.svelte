@@ -4,6 +4,8 @@
 	// controller; every child is dumb + controlled. The /annotator route re-mounts this
 	// per unit (via {#key}) so navigating a review selection loads each unit fresh.
 	import { viewerFor } from '$lib/viewer/registry';
+	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
+	import { onRemoteChange } from '../remote-change';
 	import type { MediaUnit } from '$lib/viewer/types';
 	import { AnnotatorController } from '$lib/viewer/annotator.svelte';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
@@ -11,14 +13,35 @@
 	import { fetchTask } from '$lib/projects/remote/tasks.remote';
 	import { ResizableSplit } from '@rask/ui/resizable-split';
 	import { Badge } from '@rask/ui/badge';
+	import { Button } from '@rask/ui/button';
 	import AnnotatorToolbar from './AnnotatorToolbar.svelte';
 	import AnnotationSidebar from './AnnotationSidebar.svelte';
 	import ZoomControls from './ZoomControls.svelte';
 	import PageNav from './PageNav.svelte';
+	import TaskStreamNav from './TaskStreamNav.svelte';
+	import Filmstrip from './Filmstrip.svelte';
+	import type { StreamPosition } from '../task-stream';
 	import AiAssistBar from './AiAssistBar.svelte';
 	import { TOOL_KEYS, isCvTool } from '../tool-defs';
 
-	let { unit, onexit }: { unit: MediaUnit; onexit?: () => void } = $props();
+	// `stream` is the LABEL STREAM position, computed by the route (which owns the queue read — the
+	// shell is re-mounted per key and would otherwise re-fetch the task list on every page turn).
+	// Optional so a canvas opened outside a queue, and every existing test that mounts this shell,
+	// keeps working with no stream control at all.
+	let {
+		unit,
+		onexit,
+		stream = {
+			position: 0,
+			total: 0,
+			prevHref: null,
+			nextHref: null,
+			active: false,
+			items: [],
+			taskId: null,
+			projectId: null,
+		},
+	}: { unit: MediaUnit; onexit?: () => void; stream?: StreamPosition } = $props();
 
 	const Viewer = $derived(viewerFor(unit.kind));
 	const controller = new AnnotatorController();
@@ -87,6 +110,41 @@
 		// burst of typing produces ONE write rather than one per keystroke.
 		void controller.dirty;
 		controller.scheduleAutosave();
+	});
+
+	/** #73 — the estate's FIRST cursor-driven Arrow read.
+	 *
+	 *  The annotations table was read once, at mount. Two annotators on the same page never saw each
+	 *  other's work, and neither did one person with the item open in two tabs — the second save then
+	 *  went out against a `base_version` from before the first, which is exactly the conflict OCC
+	 *  refuses, so their work was rejected AFTER they did it.
+	 *
+	 *  The CURSOR is a value and rides `query.live`; the BYTES stay on their own route and are simply
+	 *  re-fetched. That is the transport rule followed, not bent: Arrow never travels through a
+	 *  remote function, only the number that says it changed.
+	 *
+	 *  Remounting the viewer is the reload — `onready` re-runs `loadAnnotations` and re-attaches with
+	 *  the new version — so there is no second load path to keep in agreement with the first. */
+	let reloadNonce = $state(0);
+	let remoteNotice = $state<string | null>(null);
+
+	// `liveRead`'s FIRST read is unconditional by design (a surface must render without waiting for a
+	// stream). Here that first call would bump the nonce, remount the viewer, re-register liveRead,
+	// and fire again — an infinite remount. `primed` makes the first call mean "I have arrived",
+	// which is what it actually is; only a LATER advance is a change someone else made.
+	let primed = false;
+	liveRead(lineageTick, () => {
+		if (!primed) {
+			primed = true;
+			return;
+		}
+		const decision = onRemoteChange({
+			dirty: controller.dirty,
+			saving: controller.saving,
+			attached: controller.attached,
+		});
+		if (decision.action === 'reload') reloadNonce += 1;
+		else if (decision.action === 'warn') remoteNotice = decision.reason;
 	});
 
 	let status = $state('loading…');
@@ -185,52 +243,94 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<!-- h-full/w-full (not h-screen): the shell now sits under the estate navbar in the zone layout. -->
-<div class="flex h-full w-full">
-	<AnnotatorToolbar {controller} {spatial} {onexit} />
+<!-- COLUMN, not row (#68). The toolbar is a top bar now, so the three vertical things below it —
+     filmstrip, canvas, annotation sidebar — get the full height beneath it. Reported: "gallery of
+     itmes / bandroll on the left side in labeling canvas view and the sidebar toolbar horizonally
+     over the canvas".
+     h-full/w-full (not h-screen): the shell sits under the estate navbar in the zone layout. -->
+<div class="flex h-full w-full flex-col">
+	<AnnotatorToolbar {controller} {spatial} {onexit}>
+		{#snippet assist()}
+			{#if spatial && controller.canDraw}
+				<AiAssistBar {controller} taskId={reviewSelection.taskId} />
+			{/if}
+		{/snippet}
+	</AnnotatorToolbar>
 
-	<div class="min-w-0 flex-1">
-		<ResizableSplit storageKey="lance-media-annotate" initial={0.72} minLeft={420} minRight={320}>
-			{#snippet left()}
-				<div class="relative h-full w-full">
-					<!-- The load/status chip is a real Badge — secondary while healthy, destructive when
+	<div class="flex min-h-0 flex-1">
+		<!-- The items live on the LEFT edge, which is why the toolbar had to leave it. -->
+		<Filmstrip
+			items={stream.items}
+			activeTaskId={stream.taskId}
+			projectId={stream.projectId ?? ''}
+		/>
+
+		<div class="min-w-0 flex-1">
+			<ResizableSplit storageKey="lance-media-annotate" initial={0.72} minLeft={420} minRight={320}>
+				{#snippet left()}
+					<div class="relative h-full w-full">
+						<!-- The load/status chip is a real Badge — secondary while healthy, destructive when
 					     the unit failed to load — instead of a hand-rolled black pill that ignored the
 					     theme entirely (it stayed dark-on-white in light mode). It also moves off the
 					     TOP-left, where the centred assist bar painted over the tail of any message
 					     longer than a few words (a load failure, always, exactly when you need to read
 					     it); bottom-left is the one free corner — page nav is bottom-centre, zoom is
 					     bottom-right — so it can render its full text. -->
-					<Badge
-						variant={loadFailed ? 'destructive' : 'secondary'}
-						class="absolute bottom-2 left-2 z-10 font-mono shadow-sm backdrop-blur"
-						data-testid="annotate-status"
-					>
-						annotate · {unit.kind} · {status}{controller.saveStatus ? ` · ${controller.saveStatus}` : ''}
-					</Badge>
+						<Badge
+							variant={loadFailed ? 'destructive' : 'secondary'}
+							class="pointer-events-none absolute bottom-2 left-2 z-10 font-mono shadow-sm backdrop-blur"
+							data-testid="annotate-status"
+						>
+							annotate · {unit.kind} · {status}{controller.saveStatus ? ` · ${controller.saveStatus}` : ''}
+						</Badge>
+						{#key reloadNonce}
 					<Viewer
-						{unit}
-						{controller}
-						onload={(n) => {
+							{unit}
+							{controller}
+							onload={(n) => {
 	status = `${n} annotations from Lance`;
 	loadFailed = false;
 }}
-						onerror={(message) => {
+							onerror={(message) => {
 	status = `load failed — ${message}`;
 	loadFailed = true;
 }}
-					/>
-					{#if spatial && controller.canDraw}
-						<AiAssistBar {controller} taskId={reviewSelection.taskId} />
+						/>
+					{/key}
+						{#if remoteNotice}
+						<!-- A change someone else made, on a canvas that has unsaved work. NEVER reloaded
+						     over — the shapes on screen are theirs and cannot be got back. It names the
+						     consequence (the save will be refused) because "changed" alone leaves a person
+						     unable to decide. -->
+						<div
+							class="border-destructive/50 bg-card/95 text-card-foreground pointer-events-auto absolute top-2 left-1/2 z-20 flex max-w-md -translate-x-1/2 items-start gap-2 rounded-lg border p-2 shadow-sm backdrop-blur"
+							data-testid="remote-change-notice"
+						>
+							<p class="text-xs">{remoteNotice}</p>
+							<Button
+								variant="outline"
+								size="sm"
+								class="h-6 shrink-0 px-2 text-xs"
+								onclick={() => {
+	remoteNotice = null;
+	reloadNonce += 1;
+}}
+							>
+								Reload
+							</Button>
+						</div>
 					{/if}
-					<PageNav {pages} current={pageIndex} onNavigate={navigate} />
-					{#if spatial}
-						<ZoomControls {controller} />
-					{/if}
-				</div>
-			{/snippet}
-			{#snippet right()}
-				<AnnotationSidebar {controller} />
-			{/snippet}
-		</ResizableSplit>
+					<TaskStreamNav {stream} />
+						<PageNav {pages} current={pageIndex} onNavigate={navigate} />
+						{#if spatial}
+							<ZoomControls {controller} />
+						{/if}
+					</div>
+				{/snippet}
+				{#snippet right()}
+					<AnnotationSidebar {controller} />
+				{/snippet}
+			</ResizableSplit>
+		</div>
 	</div>
 </div>

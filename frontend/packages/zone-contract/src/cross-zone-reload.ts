@@ -10,14 +10,14 @@
  * style preference, so it moved to where the estate's other gates live and now runs on **Svelte's own
  * compiler** — the same parser that builds the component, rather than a second AST from a lint plugin.
  *
- * `lakehouse` is ONE zone spanning the data/lineage/models/admin AREAS: a link between those is
+ * `lakehouse` is ONE zone spanning the catalog/lineage/admin AREAS: a link between those is
  * same-zone and must NOT hard-navigate, or every area hop pays a document load again. Same-zone links
  * are written `{base}/…`, so their href starts with an opaque expression and is never a zone path.
  */
 import { parse } from 'svelte/compiler';
 
 /** The zones with a base path. `home` is the catch-all at '/' and owns no prefix. */
-export const ZONES = ['lakehouse', 'explorer', 'annotator', 'compute', 'studio', 'train'];
+export const ZONES = ['lakehouse', 'explorer', 'annotator', 'compute', 'studio', 'models'];
 
 /** A cross-zone path is domain-relative and single-segment-rooted: `/<zone>` or `/<zone>/…`. */
 const ZONE_PATH = new RegExp(`^\\/(${ZONES.join('|')})(?:\\/|$)`);

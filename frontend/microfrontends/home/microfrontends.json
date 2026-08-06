@@ -68,7 +68,7 @@
 				}
 			]
 		},
-		"train": {
+		"models": {
 			"development": {
 				"local": {
 					"port": 5178
@@ -76,7 +76,7 @@
 			},
 			"routing": [
 				{
-					"paths": ["/train", "/train/:path*"]
+					"paths": ["/models", "/models/:path*"]
 				}
 			]
 		}

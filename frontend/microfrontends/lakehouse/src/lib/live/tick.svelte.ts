@@ -1,13 +1,21 @@
-import { controlCursor, lineageFeed } from './feeds.remote';
+import { liveRead, type LiveCursor } from '@rask/api/live';
+import { lineageFeed } from './feeds.remote';
 
-// The MECHANISM moved to `@rask/ui/live-read` when a SECOND zone needed it — the moment a local
-// helper stops being local and starts being duplication. The four rules that make it correct (first
-// read unconditional, key tracked, cursor ARRIVAL is not a change, stream opened on mount) live with
-// it there, each one carrying the test that broke when it was wrong. Only the BINDINGS below are
-// per-zone, and they have to be: `query.live` must be declared inside an app to get its own endpoint.
-import type { LiveCursor } from '@rask/ui/live-read';
+/**
+ * This zone's live CURSORS. The reader itself — `liveRead`, and the four rules that make it not a
+ * timer — moved to `@rask/api/live`, because it had been written three times (home, lakehouse,
+ * models; 274 lines between them) and the three copies had already diverged: only one still carried
+ * the measurement behind the open-on-mount rule.
+ *
+ * What stays here is the half that CANNOT move: a cursor wraps this app's own `feeds.remote.ts`, and
+ * `query.live` is declared per app so it gets its own endpoint and can reach `getRequestEvent`. Same
+ * seam `@rask/api/runs-feed` already uses — share the body, keep the app-bound shim in the app.
+ *
+ * `liveRead` and `LiveCursor` are re-exported so the ~18 consumers keep importing from one place:
+ * a surface should ask its ZONE for liveness, not reach past it into a package.
+ */
+export { liveRead, type LiveCursor };
 
-export { liveRead, type LiveCursor } from '@rask/ui/live-read';
 
 /**
  * The lineage cursor, taken from the ONE shared `lineageFeed` stream — the feed the shell's notification
@@ -18,31 +26,16 @@ export { liveRead, type LiveCursor } from '@rask/ui/live-read';
  * Pass it (not a call of it) to `liveRead`, which opens it on mount:
  *
  *     liveRead(lineageTick, () => load());
+ *
+ * There is no `controlTick` wrapper any more: its one consumer was the FGA workbench, which #105 moved
+ * to the home zone (`/settings/access`). `controlCursor` itself STAYS — `WarehouseAdmin` passes it to
+ * `liveRead` directly, which is all a cursor with no `.current` unwrapping needs.
  */
 export function lineageTick(): LiveCursor {
 	const feed = lineageFeed();
 	return {
 		get current() {
 			return feed.current?.cursor;
-		},
-		get connected() {
-			return feed.connected;
-		},
-	};
-}
-
-/**
- * The CONTROL-plane cursor, same contract — for the surfaces whose changes are governance mutations
- * (grants, warehouses, tenants, promotions) rather than data movement. Those never touch a dataset, so
- * they never move the lineage cursor; the FGA workbench re-reads on this one instead. The stream is
- * shared with the admin console's own consumers, so a grant landing anywhere on the estate advances
- * every surface on the same number.
- */
-export function controlTick(): LiveCursor {
-	const feed = controlCursor();
-	return {
-		get current() {
-			return feed.current;
 		},
 		get connected() {
 			return feed.connected;

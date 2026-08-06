@@ -2,31 +2,30 @@
 	import { Badge } from '@rask/ui/badge';
 	import { Card } from '@rask/ui/card';
 	import {
-		ArrowUpRight,
 		Bell,
+		FolderKanban,
 		KeyRound,
 		ScrollText,
-		ShieldCheck,
 		SlidersHorizontal,
-		Building2,
+		Users,
 	} from '@lucide/svelte';
 	import type { PageData } from './$types';
 
-	// SETTINGS — what configures the ESTATE, as opposed to what any one zone does. The third place in
-	// the main menu, and estate-admin only: the gate is in `+page.server.ts`, because hiding the
-	// navbar entry is presentation, not authorization.
+	// SETTINGS — the PLATFORM level: what configures the whole installation, as opposed to what any one
+	// project or zone does. The third place in the main menu, and estate-admin only: the gate is in
+	// `+layout.server.ts` (it covers this page AND its children), because hiding the navbar entry is
+	// presentation, not authorization.
 	//
 	// Two kinds of row, and the difference is deliberate and VISIBLE on the row itself:
 	//
-	//   · AUTH/AUTHZ rows link to surfaces that already exist and are genuinely estate-scoped — the
-	//     FGA workbench reads the whole tuple store, Tenants IS the estate's project list, and the
-	//     audit trail is gated on estate-admin and takes no project. None of the three accepts a
-	//     project parameter, so none of them belongs inside a project. They are still SERVED by the
-	//     lakehouse app at their old addresses, which makes each one a cross-zone hop that swaps the
-	//     main menu for the lakehouse's own navigation — so each row SAYS SO, in the badge and in the
-	//     section's own copy. A settings page that teleports you into another app's chrome without a
-	//     word is the defect this text exists to close; re-basing the routes under `/settings/` is the
-	//     real fix and is a port, not a link change (see the note on the hrefs below).
+	//   · The PLATFORM surfaces — users & roles, projects, the audit trail — are genuinely
+	//     platform-scoped: each reads across every project and none of them accepts a project
+	//     parameter, so none belongs inside one. They are SERVED HERE now (#105): the FGA workbench is
+	//     `/settings/access` and the audit trail `/settings/audit`, both routes of this app, and the
+	//     projects list is `/projects`, which this app has always owned. All three are same-zone soft
+	//     navigations — no badge, no document load, no swap into another app's chrome. The lakehouse
+	//     keeps only its PER-OBJECT grants plane (the access tab on one table or namespace), which is a
+	//     different question at a different level.
 	//
 	//   · NOTIFICATIONS, NEW-PROJECT DEFAULTS and CREDENTIALS are named but NOT built, and say which
 	//     missing thing blocks each. They are deliberately not controls at all — no toggle, no field,
@@ -35,7 +34,7 @@
 	let { data }: { data: PageData } = $props();
 
 	/** Every lucide icon shares one component signature, so any icon's type fits. */
-	type IconComponent = typeof ShieldCheck;
+	type IconComponent = typeof Users;
 
 	type Unwired = { title: string; blurb: string; icon: IconComponent; needs: string };
 
@@ -62,33 +61,24 @@
 		},
 	];
 
-	const CROSS_ZONE_ROW =
+	const PLATFORM_ROW =
 		'hover:bg-accent/40 focus-visible:ring-ring flex items-center gap-3 rounded-lg border p-4 transition-colors focus-visible:outline-none focus-visible:ring-2';
 </script>
 
-<!-- The body of one cross-zone row. Only the CHROME is shared: each row's `<a href>` is written out
+<!-- The body of one platform row. Only the CHROME is shared: each row's `<a href>` is written out
      literally below, never `{row.href}` from a loop. That is not a style choice — `@rask/zone-contract`'s
-     cross-zone-reload gate reads hrefs off Svelte's own AST and renders any `{…}` expression as an
-     opaque placeholder, so a looped href is INVISIBLE to it and `data-sveltekit-reload` would once
-     again be correct only because a human remembered. Written literally, both gates see these three:
-     the reload gate proves they hard-navigate, and `link-targets` proves `/lakehouse` is a segment the
-     estate actually serves.
+     cross-zone-reload and link-targets gates read hrefs off Svelte's own AST and render any `{…}`
+     expression as an opaque placeholder, so a looped href is INVISIBLE to both, and the day one of these
+     leaves the zone again `data-sveltekit-reload` would be correct only because a human remembered.
 
-     Named for its ONE destination, not `crossZoneRow`: the badge text below is a literal, so a
-     generically-named snippet would invite the next row — to `/explorer`, say — to reuse it and
-     announce the wrong app. A second destination gets a second snippet, or a parameter. -->
-{#snippet lakehouseRow(Icon: IconComponent, title: string, blurb: string)}
+     No "Opens in Lakehouse" badge any more, and no snippet named for one destination: every row here is
+     a route this app serves, so there is no other app to announce. -->
+{#snippet platformRow(Icon: IconComponent, title: string, blurb: string)}
 	<Icon class="size-5 shrink-0" aria-hidden="true" />
 	<span class="flex min-w-0 flex-col">
 		<span class="font-medium">{title}</span>
 		<span class="text-muted-foreground text-xs">{blurb}</span>
 	</span>
-	<!-- Inside the link on purpose: it lands in the link's ACCESSIBLE NAME, so the destination is
-	     announced rather than only drawn. -->
-	<Badge variant="outline" class="ml-auto shrink-0">
-		<ArrowUpRight aria-hidden="true" />
-		Opens in Lakehouse
-	</Badge>
 {/snippet}
 
 <svelte:head><title>Settings · lance</title></svelte:head>
@@ -97,7 +87,8 @@
 	<header class="flex flex-col gap-1">
 		<h1 class="text-2xl font-semibold">Settings</h1>
 		<p class="text-muted-foreground text-sm">
-			Estate-wide configuration. Signed in as an estate admin — everything here affects every project.
+			Platform-wide configuration. Signed in as an estate admin — everything here affects every
+			project.
 		</p>
 	</header>
 
@@ -109,31 +100,29 @@
 			Access &amp; authorization
 		</h2>
 		<p class="text-muted-foreground text-xs">
-			Estate-scoped — each one reads across every project and none of them takes a project. They are
-			still <strong class="font-medium">served by the Lakehouse app</strong>, so opening one leaves
-			this page: the main menu is replaced by the Lakehouse navigation until you come back. Moving them
-			under <code class="text-[0.95em]">/settings/</code> is a port of the pages themselves, not a change
-			of link.
+			Platform-scoped — each one reads across every project and none of them takes a project. All three
+			are served by this app, so opening one keeps the main menu: they are ordinary in-app navigations,
+			not hops into another app's chrome.
 		</p>
-		<a href="/lakehouse/governance/access" data-sveltekit-reload class={CROSS_ZONE_ROW}>
-			{@render lakehouseRow(
-				ShieldCheck,
-				'Access',
-				'Who may do what — the FGA workbench over the estate’s whole tuple store.',
+		<a href="/settings/access" class={PLATFORM_ROW}>
+			{@render platformRow(
+				Users,
+				'Users & roles',
+				'Who may do what, platform-wide — the FGA workbench over the whole tuple store.',
 			)}
 		</a>
-		<a href="/lakehouse/admin/tenants" data-sveltekit-reload class={CROSS_ZONE_ROW}>
-			{@render lakehouseRow(
-				Building2,
-				'Tenants',
-				'Every project the estate knows, its warehouses and their effective admins.',
+		<a href="/projects" class={PLATFORM_ROW}>
+			{@render platformRow(
+				FolderKanban,
+				'Projects',
+				'Every project the platform knows, its warehouses and their effective admins.',
 			)}
 		</a>
-		<a href="/lakehouse/governance/audit" data-sveltekit-reload class={CROSS_ZONE_ROW}>
-			{@render lakehouseRow(
+		<a href="/settings/audit" class={PLATFORM_ROW}>
+			{@render platformRow(
 				ScrollText,
 				'Audit',
-				'What was done, by whom, and whether it was allowed.',
+				'The platform trail — what was done, by whom, and whether it was allowed.',
 			)}
 		</a>
 	</section>

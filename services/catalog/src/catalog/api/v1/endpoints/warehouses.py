@@ -199,6 +199,10 @@ async def create_warehouse(
     # `DELETE ?purge_bucket=true` would then take the bucket without ever asking for force=true. The field
     # stays ABSENT (not "false") on unprotected warehouses so pre-protection records remain byte-identical.
     protected = existing.get("protected") if existing is not None else None
+    if body.protected:
+        # #123: the flag is finally settable at the door that writes the record. String "true", the
+        # shape `require_not_protected` and the hand-armed records already use.
+        protected = "true"
     if protected:
         record["protected"] = protected
     await run_in_threadpool(warehouses.put_warehouse, settings.registry_root, so, record)

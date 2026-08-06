@@ -87,6 +87,54 @@ def test_ingest_row_reaches_the_ingest_plane_and_a_sibling_prefix_does_not_fall_
     assert legacy is None, "a sibling prefix must not fall into the /api/ingest row — it has no upstream, and 404 is the correct answer"
 
 
+def test_flows_rows_map_to_the_flows_service(gw) -> None:
+    routes = gw._routes()
+    picked = gw._pick_route("/api/flows/catalog", routes)
+    assert picked is not None
+    prefix, upstream_prefix, app_id, fallback = picked
+    assert app_id == "flows"
+    # Public and upstream are the same string: the flows app mounts its routers under
+    # RASK_API_PREFIX itself, so this row forwards unrewritten (the compute/controlplane shape).
+    assert prefix == upstream_prefix == "/api/flows"
+    assert fallback.endswith(":8840")
+    # The runs sub-resource rides the same row; nothing else claims the prefix.
+    assert gw._pick_route("/api/flows/runs/run-abc", routes)[2] == "flows"
+
+
+def test_the_flows_rewrite_lands_on_a_path_the_service_ACTUALLY_serves(monkeypatch) -> None:
+    """The flows row's rewrite, checked against the flows app's OWN openapi — the ingest lesson below,
+    applied to the new row rather than trusted not to recur.
+
+    Both modules are reloaded under the pinned prefix because both bake it at import: the gateway
+    builds its route table from `RASK_API_PREFIX`, and `flows.app` is a module-level singleton built by
+    `make_service_app`, which mounts every router under the same variable. Asserting one against the
+    other is the only form of this test that can fail when they disagree.
+    """
+    monkeypatch.setenv("RASK_API_PREFIX", "/api")
+    import importlib
+
+    import flows
+    import gateway
+
+    gw = importlib.reload(gateway)
+    served = set(importlib.reload(flows).app.openapi()["paths"])
+
+    rows = gw._routes()
+    for public, expected in (
+        ("/api/flows/catalog", "/api/flows/catalog"),
+        ("/api/flows/validate", "/api/flows/validate"),
+        ("/api/flows/runs", "/api/flows/runs"),
+        ("/api/flows/runs/{run_id}", "/api/flows/runs/{run_id}"),
+    ):
+        route = gw._pick_route(public, rows)
+        assert route is not None, f"no gateway row for {public}"
+        route_prefix, upstream_prefix, _, _ = route
+        rewritten = upstream_prefix + public[len(route_prefix) :]
+
+        assert rewritten == expected
+        assert rewritten in served, f"the gateway rewrites {public} to {rewritten}, which the flows app does not serve: {sorted(served)}"
+
+
 def test_the_ingest_rewrite_lands_on_a_path_the_service_ACTUALLY_serves(monkeypatch) -> None:
     """The gateway's rewritten path must exist in the ingest app, not merely look plausible.
 

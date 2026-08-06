@@ -16,7 +16,7 @@ import lance
 import pyarrow as pa
 import pytest
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services.optimize import compact_one
+from maintenance.services.optimize import Discovery, compact_one
 from maintenance.services.sweep import _policy_skip_reason
 
 from service_kit.lakehouse import maintenance_policies as mp
@@ -358,7 +358,9 @@ def _sweep_kwargs(monkeypatch: pytest.MonkeyPatch, settings: MaintenanceSettings
         return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
 
     monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
-    monkeypatch.setattr(sweep_mod, "discover_dataset_uris", lambda _fs, _bucket: [uri])
+    # `discover_datasets` returns a Discovery (uris + the prefixes the depth bound stopped at), not a
+    # bare list — the truncation must not be droppable, so the stub returns the model too.
+    monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket: Discovery(uris=[uri]))
     lance.dataset(uri).optimize.__class__.compact_files = _spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     try:
         sweep_mod.run_sweep(settings)

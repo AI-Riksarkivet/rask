@@ -1,63 +1,26 @@
 <script lang="ts">
-	import { base } from '$app/paths';
-	import { Shapes, Sparkles, ArrowRight } from '@lucide/svelte';
-
-	// Studio is the mini-apps playground. Each card is a self-contained experiment
-	// built on this project's data, models, or — like the first one — the platform's
-	// own UI tooling.
-	const apps = [
-		{
-			href: `${base}/animation`,
-			icon: Sparkles,
-			title: 'Animation A/B',
-			blurb: 'GSAP vs Svelte transitions — the same motion, two engines, side by side.',
-		},
-	];
+	/** Studio IS the flow builder — the node canvas is the zone root, not a page inside a launcher.
+	 *  It had a launcher grid and an animation A/B demo beside it; both are gone, because a sandbox
+	 *  zone whose landing is a menu of one real app spends its best surface on a redirect.
+	 *
+	 *  Three panes, and each owns a different question: the RAIL (shell `sidebarContent`) is the node
+	 *  library — what can I add; the CANVAS is the graph — how is it wired; the RIGHT panel is the
+	 *  inspector — what did the selected node actually produce. The split is resizable and its ratio
+	 *  persists, so a user who works mostly in the canvas keeps their layout. */
+	import { ResizableSplit } from '@rask/ui/resizable-split';
+	import FlowsCanvas from '$lib/flows/FlowsCanvas.svelte';
+	import FlowsInspector from '$lib/flows/FlowsInspector.svelte';
 </script>
 
-<svelte:head><title>Studio — RASK</title></svelte:head>
+<svelte:head><title>Flows — Studio — RASK</title></svelte:head>
 
-<div class="mx-auto flex w-full max-w-3xl flex-col gap-5 p-6">
-	<header class="flex items-center gap-3">
-		<div
-			class="bg-sidebar-primary text-sidebar-primary-foreground flex size-10 items-center justify-center rounded-xl"
-		>
-			<Shapes class="size-5" />
-		</div>
-		<div>
-			<h1 class="text-xl font-semibold tracking-tight">Studio</h1>
-			<p class="text-muted-foreground text-sm">
-				Mini-applications built on this project's data and models.
-			</p>
-		</div>
-	</header>
-
-	<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-		{#each apps as app (app.href)}
-			<a
-				href={app.href}
-				class="group bg-card hover:border-primary/50 flex flex-col rounded-xl border p-5 transition-colors"
-			>
-				<div
-					class="bg-muted text-foreground mb-3 flex size-10 items-center justify-center rounded-lg"
-				>
-					<app.icon class="size-5" />
-				</div>
-				<div class="font-medium">{app.title}</div>
-				<div class="text-muted-foreground text-sm">{app.blurb}</div>
-				<div
-					class="text-muted-foreground group-hover:text-foreground mt-4 flex items-center gap-1 text-sm"
-				>
-					Open <ArrowRight class="size-4" />
-				</div>
-			</a>
-		{/each}
-
-		<div
-			class="border-border text-muted-foreground flex min-h-[164px] flex-col items-center justify-center gap-1 rounded-xl border border-dashed text-sm"
-		>
-			<Shapes class="size-5" />
-			More mini-apps (soon)
-		</div>
-	</div>
+<div class="h-full min-h-0 w-full">
+	<ResizableSplit storageKey="studio-flow-split" initial={0.72} minLeft={420} minRight={280}>
+		{#snippet left()}
+			<FlowsCanvas />
+		{/snippet}
+		{#snippet right()}
+			<FlowsInspector />
+		{/snippet}
+	</ResizableSplit>
 </div>

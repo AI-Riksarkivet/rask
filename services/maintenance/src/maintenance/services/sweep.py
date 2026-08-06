@@ -22,10 +22,11 @@ from opentelemetry.trace import StatusCode
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
-from maintenance.core.metrics import record_reclaimed, record_run
-from maintenance.services.optimize import DatasetResult, compact_one, discover_dataset_uris
+from maintenance.core.metrics import record_reclaimed, record_refused, record_run
+from maintenance.services import purge
+from maintenance.services.optimize import DatasetResult, compact_one, discover_datasets
 from service_kit.governed import fga
-from service_kit.lakehouse import maintenance_policies, trash, warehouse_records
+from service_kit.lakehouse import maintenance_policies, warehouse_records
 from service_kit.lakehouse.objectfs import s3_filesystem
 
 
@@ -137,24 +138,35 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     except Exception as exc:  # noqa: BLE001 — a missing registry must not stop maintaining what we know
         log.warning("sweep_registry_unreadable", extra={"error": str(exc)})
     uris: list[str] = []
+    truncated: list[str] = []
     for bucket in buckets:
         try:
-            found = discover_dataset_uris(fs, bucket)
+            found = discover_datasets(fs, bucket)
         except Exception as exc:
             log.warning("compaction_bucket_skipped", extra={"bucket": bucket, "error": str(exc)})
             continue
-        log.info("compaction_bucket_discovered", extra={"bucket": bucket, "datasets": len(found)})
-        uris.extend(found)
-    # #75 trash expiry — REPORT ONLY, and staying that way until #79's gate opens. The sweep names
-    # which recoverable drops are past their grace deadline and deletes NOTHING: the estate's rule is
-    # that a reclaimer earns its delete permission by first proving its report runs clean, and this is
-    # the reclaimer whose false positive costs a table someone was still inside their window to undrop.
+        log.info(
+            "compaction_bucket_discovered",
+            extra={"bucket": bucket, "datasets": len(found.uris), "truncated": len(found.truncated)},
+        )
+        uris.extend(found.uris)
+        # A prefix the walk could not reach is UNMAINTAINED, and saying so is the whole point: a
+        # silent depth bound made "we maintained everything" and "we maintained what we could see"
+        # the same summary line.
+        truncated.extend(found.truncated)
+    # #75 trash expiry — REPORT ONLY **in the sweep**, permanently. #79's purge lives on the RECONCILE
+    # tick instead, because its gate is that tick's drift report: a reclaimer earns its delete permission
+    # by first proving the report runs clean, and the sweep does not produce that report. So the sweep
+    # keeps naming which recoverable drops are past their deadline and keeps deleting NOTHING.
     try:
         # The CONTROL root, not the policy root: the catalog writes `_trash/` under its registry root
         # (LANCE_CONTROL_ROOT). These default to the same bucket, so the mismatch was invisible — and
         # would have stayed invisible, because list_all uses allow_not_found=True and this whole block
         # is except-wrapped: a wrong root reports zero due records forever rather than failing.
-        due = trash.expired(trash.list_all(settings.resolved_control_root, options))
+        #
+        # Selection goes through `purge.due_records` so ONE rule decides what "expired" means: the set
+        # this logs and the set the purge deletes cannot be two different answers.
+        due = purge.due_records(settings.resolved_control_root, options)
         if due:
             log.info(
                 "trash_expiry_due_report_only",
@@ -231,6 +243,9 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
                         extra={"policy": policy.get("id"), "uri": uri, "error": str(exc)},
                     )
             results.append(result)
+            # #64 — a refusal is not an error, so it would otherwise be invisible in the trace too.
+            if result.refused is not None:
+                span.set_attribute("lance.refused", result.refused)
             # compact_one never raises (it captures the per-dataset error), so reflect a failure on the
             # span explicitly — else a failed dataset looks identical to a clean one in the trace.
             if result.error is not None:
@@ -243,6 +258,10 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
         versions_removed=sum(r.old_versions_removed for r in results),
         indices_optimized=sum(r.indices_optimized for r in results),
     )
+    # Always recorded, including 0 — the `record_reclaimed` rule. Here the zero carries the most
+    # weight of any counter in this service: `SUPPORTED` is a whitelist, so a rising refusal count
+    # after a pylance upgrade is the ONLY signal that maintenance quietly stopped covering the estate.
+    record_refused(sum(1 for r in results if r.refused))
     return results
 
 
@@ -265,6 +284,11 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
       this tick; before this, a persistently failing dataset surfaced only in OTel spans + a cron response
       body nobody reads).
     * ``open:``-errored → **no event** (unreadable / declared-only dir — transient non-dataset noise).
+    * **REFUSED** (#64, an unsupported manifest feature flag) → **no event**, by construction: a
+      refusal carries ``error=None`` and did no material work, so it falls through both branches
+      below. Deliberate — nothing FAILED, we declined before touching a byte, and a FAIL event would
+      claim a maintenance run went wrong. Its visibility is the WARNING log, the ``lance.refused``
+      span attribute, the ``compaction.datasets.refused`` counter and ``summarize``'s own line.
     * no error + material work → the **COMPLETE** event (unchanged); no-op ticks skipped.
     * URI not the catalog's ``<uuid>_<table_id>`` layout → skipped either way (no id to key on). This is
       the DOCUMENTED blind spot for the medallion-nested datasets (``s3://<bucket>/medallion/<ns>`` has no
@@ -321,6 +345,13 @@ def summarize(results: list[DatasetResult]) -> dict[str, Any]:
     return {
         "datasets": len(results),
         "skipped": sum(1 for r in results if r.skipped),
+        # #64 — a REFUSAL is its own line, never folded into `errors` or `skipped`. It is neither: a
+        # skip is "not this tick" and an error is "something failed", while a refusal is permanent and
+        # nothing failed. It also has to be LOUD, because `SUPPORTED` is a whitelist: a pylance
+        # upgrade that adds a legitimate flag would otherwise stop maintaining every dataset that
+        # sets it while this summary still reported a clean sweep.
+        "refused": sum(1 for r in results if r.refused),
+        "refusals": {r.uri: r.refused for r in results if r.refused},
         "fragments_removed": sum(r.fragments_removed for r in results),
         "indices_optimized": sum(r.indices_optimized for r in results),
         "versions_removed": sum(r.old_versions_removed for r in results),

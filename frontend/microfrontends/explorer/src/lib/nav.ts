@@ -75,13 +75,32 @@ const AREAS = [
 	},
 ] as const;
 
+/** Why an area cannot be opened for this corpus — the text a disabled row carries in its tooltip.
+ *
+ *  Phrased about THE CORPUS, never about the product: "this corpus declares no knowledge graph" is
+ *  actionable (build one, declare it), "unavailable" is not. */
+const WHY: Record<string, string> = {
+	Atlas: 'this corpus declares no atlas projection for the table in view',
+	Tree: 'this corpus declares no topic hierarchy (capability `topics`)',
+	Graph: 'this corpus declares no knowledge graph (capability `graph`)',
+};
+
 /**
  * This zone's sidebar for one dataset.
  *
- * `view` is null until the descriptor lands. Everything conditional is then ABSENT rather than
- * shown-and-broken: the estate's posture everywhere else (Settings is absent for a non-admin, not
- * disabled), and the honest one here — the layout already withholds the page itself until the
- * descriptor resolves, so a rail that briefly shows only what is certain matches the page beside it.
+ * EVERY area is always present. One that the corpus cannot do renders DISABLED, carrying the reason,
+ * rather than vanishing.
+ *
+ * This reverses the original ruling, and the reason is worth keeping: hiding was fail-closed and
+ * defensible, but it reads to a user as "this PRODUCT has no knowledge graph" when the true statement
+ * is "THIS CORPUS has none" — and only the second tells you what to change. A greyed row with its
+ * reason in the tooltip says which; an absent row is indistinguishable from a feature that was never
+ * built. (Authorization is still ABSENT-not-disabled — the admin Settings precedent — because there
+ * the very existence of the door is the sensitive part. Capability is not permission.)
+ *
+ * `view` is null until the descriptor lands, and then everything conditional is unavailable "while
+ * the descriptor loads": the rail shows its full shape immediately instead of growing rows as data
+ * arrives, which is what made the estate look broken whenever the viewer was down.
  *
  * Called from a `$derived` in the layout, so switching datasets recomputes the rail: a corpus with an
  * atlas and one without must not share a sidebar just because they were visited in the same session.
@@ -90,11 +109,19 @@ export function explorerZoneNav(
 	view: DatasetView | null,
 	activeRowTable: string | null = null,
 ): ZoneNav {
-	const explore = AREAS.filter(
-		(area) =>
+	const explore = AREAS.map(({ title, href, match, icon, ...area }) => {
+		const ok =
 			('always' in area && area.always) ||
-			(view !== null && 'available' in area && area.available(view, activeRowTable)),
-	).map(({ title, href, match, icon }) => ({ title, href, match, icon }));
+			(view !== null && 'available' in area && area.available(view, activeRowTable));
+		if (ok) return { title, href, match, icon };
+		return {
+			title,
+			href,
+			match,
+			icon,
+			unavailable: view === null ? 'loading the corpus descriptor…' : (WHY[title] ?? 'not available for this corpus'),
+		};
+	});
 
 	return {
 		title: 'Explorer',

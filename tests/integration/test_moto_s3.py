@@ -99,6 +99,19 @@ def test_catalog_roundtrip_on_moto_s3(moto_client: TestClient) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _create(client: TestClient, ident: str, rows: pa.Table, query: str = "") -> Any:
+    """Create a table THROUGH its parent — a table whose namespace does not exist is refused (#118).
+
+    Every test below used to post straight at the Arrow create door and get a 200, because that door
+    was the one create path with no parent guard on it. Creating the namespace first is what a real
+    caller has to do, so the tests do it too.
+    """
+    namespace = ident.rsplit("$", 1)[0]
+    made = client.post(f"/v1/namespace/{namespace}/create", json={})
+    assert made.status_code in {200, 409}, made.text
+    return client.post(f"/v1/table/{ident}/create{query}", content=_ipc(rows), headers=ARROW)
+
+
 def _merge(client: TestClient, table: str, rows: pa.Table) -> Any:
     return client.post(
         f"/v1/table/{table}/merge_insert?on=id&when_matched_update_all=true&when_not_matched_insert_all=true",
@@ -125,7 +138,7 @@ def test_merge_insert_builds_btree_on_the_merge_key_exactly_once(moto_client: Te
     import catalog.services.dataplane as dp
 
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": ["a", "b", "c"]})
-    assert moto_client.post("/v1/table/mk$t/create", content=_ipc(rows), headers=ARROW).status_code == 200
+    assert _create(moto_client, "mk$t", rows).status_code == 200
 
     builds: list[str] = []
     real_call = dp.native.call
@@ -156,7 +169,7 @@ def test_merge_insert_survives_index_ensure_failure(moto_client: TestClient, fai
 
     table = f"mf{failing_method[:4]}$t"
     rows = pa.table({"id": pa.array([1], pa.int64()), "v": ["a"]})
-    create = moto_client.post(f"/v1/table/{table}/create", content=_ipc(rows), headers=ARROW)
+    create = _create(moto_client, table, rows)
     assert create.status_code == 200, create.text
 
     real_call = dp.native.call
@@ -188,6 +201,9 @@ def test_create_compensates_when_the_owner_grant_fails(moto_client: TestClient) 
         raise ServiceUnavailableError("fga down mid-create")  # what a real FGA outage surfaces as
 
     rows = pa.table({"id": pa.array([1], pa.int64())})
+    # The parent lands BEFORE the outage: namespace create seeds ownership too, so creating it under
+    # the patch would fail the setup rather than the behaviour under test.
+    assert moto_client.post("/v1/namespace/comp/create", json={}).status_code == 200
     with pytest.MonkeyPatch.context() as mp:  # dedicated context — never the fixture's instance
         mp.setattr(data_ep.fga_deps, "seed_ownership", failing_seed)
         failed = moto_client.post("/v1/table/comp$t/create", content=_ipc(rows), headers=ARROW)
@@ -195,7 +211,7 @@ def test_create_compensates_when_the_owner_grant_fails(moto_client: TestClient) 
     # the compensation deleted the half-created table…
     assert moto_client.post("/v1/table/comp$t/describe", json={}).status_code == 404
     # …so, with FGA "recovered", the plain retry succeeds
-    retried = moto_client.post("/v1/table/comp$t/create", content=_ipc(rows), headers=ARROW)
+    retried = _create(moto_client, "comp$t", rows)
     assert retried.status_code == 200, retried.text
 
 
@@ -207,19 +223,19 @@ def test_create_existok_never_compensates_away_a_kept_table(moto_client: TestCli
     from lance_namespace import ServiceUnavailableError
 
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
-    assert moto_client.post("/v1/table/keep$t/create", content=_ipc(rows), headers=ARROW).status_code == 200
+    assert _create(moto_client, "keep$t", rows).status_code == 200
 
     async def failing_seed(*_a: object, **_kw: object) -> None:
         raise ServiceUnavailableError("fga down mid-create")
 
     with pytest.MonkeyPatch.context() as mp:  # dedicated context — never the fixture's instance
         mp.setattr(data_ep.fga_deps, "seed_ownership", failing_seed)
-        failed = moto_client.post("/v1/table/keep$t/create?mode=exist_ok", content=_ipc(rows), headers=ARROW)
+        failed = _create(moto_client, "keep$t", rows, "?mode=exist_ok")
     assert failed.status_code == 503, failed.text
     # the pre-existing table SURVIVED the failed ExistOk…
     assert int(moto_client.post("/v1/table/keep$t/count_rows", json={}).text) == 2
     # …and the ExistOk retry heals (grant re-runs against the kept table).
-    healed = moto_client.post("/v1/table/keep$t/create?mode=exist_ok", content=_ipc(rows), headers=ARROW)
+    healed = _create(moto_client, "keep$t", rows, "?mode=exist_ok")
     assert healed.status_code == 200, healed.text
 
 
@@ -248,7 +264,7 @@ def test_describe_at_tag_resolves_via_the_catalog(moto_client: TestClient) -> No
     tag describes the TAGGED version, unknown tag 404s (never silently the latest), tag+version 400s
     (spec: mutually exclusive)."""
     rows = pa.table({"id": pa.array([1], pa.int64())})
-    assert moto_client.post("/v1/table/dtag$t/create", content=_ipc(rows), headers=ARROW).status_code == 200
+    assert _create(moto_client, "dtag$t", rows).status_code == 200
     assert (
         moto_client.post(
             "/v1/table/dtag$t/insert?mode=append",
@@ -269,3 +285,41 @@ def test_describe_at_tag_resolves_via_the_catalog(moto_client: TestClient) -> No
     assert missing.status_code == 404, missing.text  # unknown tag is an ERROR, never silently latest
     both = moto_client.post("/v1/table/dtag$t/describe?tag=stable&version=2", json={})
     assert both.status_code == 400, both.text  # spec 0.9: tag and version are mutually exclusive
+
+
+# --------------------------------------------------------------------------- #
+# §4: every create door refuses a table whose namespace does not exist (#118)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("door", "post"),
+    [
+        ("arrow-create", lambda c: c.post("/v1/table/ghostns$t9/create", content=_ipc(pa.table({"id": [1]})), headers=ARROW)),
+        ("declare", lambda c: c.post("/v1/table/ghostns$t9/declare", json={"schema": {"fields": []}})),
+        ("register", lambda c: c.post("/v1/table/ghostns$t9/register", json={"location": "s3://lance-catalog/nope.lance"})),
+    ],
+)
+def test_no_create_door_admits_a_table_whose_NAMESPACE_does_not_exist(moto_client: TestClient, door: str, post: Any) -> None:
+    """Parametrized over the doors ON PURPOSE. The guard existed for three of four and the Arrow one
+    wrote real datasets into namespaces that were never created (#118) — a hole that survived because
+    the guard's tests drove the helper directly and never a door. These drive the HTTP surface, so
+    deleting the call from any single endpoint reds exactly one case.
+    """
+    refused = post(moto_client)
+    assert refused.status_code == 404, f"{door} admitted a parentless table: {refused.text}"
+    assert "ghostns" in refused.text, f"{door}'s refusal does not name the missing namespace"
+    # …and nothing was written: the table is not there to describe, nor listed under the ghost.
+    assert moto_client.post("/v1/table/ghostns$t9/describe", json={}).status_code == 404
+
+
+def test_the_rename_DESTINATION_must_have_a_real_namespace_too(moto_client: TestClient) -> None:
+    """Rename is a create at the destination — moving a table into a namespace that does not exist
+    orphans it exactly as creating it there would."""
+    rows = pa.table({"id": pa.array([1], pa.int64())})
+    assert _create(moto_client, "rn$t", rows).status_code == 200
+
+    moved = moto_client.post("/v1/table/rn$t/rename", json={"new_table_name": "t", "new_namespace_id": ["ghostdest"]})
+    assert moved.status_code == 404, moved.text
+    assert "ghostdest" in moved.text
+    assert moto_client.post("/v1/table/rn$t/describe", json={}).status_code == 200, "the source was lost"

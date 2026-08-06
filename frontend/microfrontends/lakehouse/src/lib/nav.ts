@@ -2,22 +2,17 @@ import { base } from '$app/paths';
 import {
 	Activity,
 	Boxes,
-	Building2,
 	Columns3,
 	Cpu,
 	Database,
-	FlaskConical,
+	Gauge,
 	HardDrive,
 	LayoutDashboard,
 	Inbox,
 	Layers,
 	Network,
-	Package,
 	Radio,
-	ScrollText,
-	ShieldCheck,
 	Warehouse,
-	Workflow,
 } from '@lucide/svelte';
 import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 
@@ -36,10 +31,28 @@ import { exact, seg, type ZoneNav } from '@rask/ui/shell';
  * exactly what the shadcn sidebar primitives (Group / GroupLabel / MenuSub) exist for, and they were
  * already vendored in @rask/ui — merely never used for structure.
  *
- * Governance is split out of admin deliberately: who-may-do-what (access, audit) is a different
- * question from operating the estate (tenants, streams, events, DLQ). Merging the two is what turned
- * "Admin" into a junk drawer.
+ * Governance is NOT here. Who-may-do-what (access, audit) is a different question from operating the
+ * estate (streams, events, DLQ) — merging the two is what turned "Admin" into a junk drawer — and it
+ * is also a different LEVEL: those surfaces read across every project and take none, so #105 re-based
+ * them under the home zone's `/settings/`. A zone rail names the zone's own routes.
  */
+/** The zone ROOT row — first leaf in the rail, above and outside every group (#109).
+ *
+ *  `/lakehouse` used to 307 into the catalog, so the rail's first entry was an AREA and the zone had
+ *  no landing at all. It has one now: the active project's overview — its hierarchy and the
+ *  warehouses claiming it. That is not a member of Catalog, Lineage, Models or Operations; it
+ *  summarises what all of them hang beneath, which is exactly what `ZoneNav.root` exists for (the
+ *  compute zone's Overview is the precedent, and it was moved out of "Cluster" for the same reason).
+ *
+ *  `exact`, not `seg`: `seg('/lakehouse')` matches every route in the zone and would light the
+ *  landing up from inside every area. */
+const LAKEHOUSE_ROOT: ZoneNav['root'] = {
+	title: 'Overview',
+	href: '/lakehouse',
+	match: exact('/lakehouse'),
+	icon: Gauge,
+};
+
 const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 	{
 		label: 'Catalog',
@@ -121,52 +134,14 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 			},
 		],
 	},
-	{
-		label: 'Models',
-		items: [
-			{
-				title: 'Registry',
-				href: '/lakehouse/models',
-				match: exact('/lakehouse/models'),
-				icon: Package,
-			},
-			{
-				title: 'Pipeline',
-				href: '/lakehouse/models/pipeline',
-				match: seg('/lakehouse/models/pipeline'),
-				icon: Workflow,
-			},
-			{
-				title: 'Experiments',
-				href: '/lakehouse/models/experiments',
-				match: seg('/lakehouse/models/experiments'),
-				icon: FlaskConical,
-			},
-		],
-	},
-	{
-		label: 'Governance',
-		items: [
-			{
-				title: 'Access',
-				href: '/lakehouse/governance/access',
-				match: seg('/lakehouse/governance/access'),
-				icon: ShieldCheck,
-			},
-			{
-				title: 'Tenants',
-				href: '/lakehouse/admin/tenants',
-				match: seg('/lakehouse/admin/tenants'),
-				icon: Building2,
-			},
-			{
-				title: 'Audit',
-				href: '/lakehouse/governance/audit',
-				match: seg('/lakehouse/governance/audit'),
-				icon: ScrollText,
-			},
-		],
-	},
+	// NO 'Models' GROUP. The registry, its experiments and its pipeline were `/lakehouse/models/*`
+	// until they moved to the MODELS zone, which now owns a model end to end — training, registry,
+	// blessing, inference. What stays here is model LINEAGE: which run wrote which version, and off
+	// which datasets. That is a lineage question about a graph this zone owns, so it is answered by
+	// the Lineage group above and not by a second models rail that would only ever be half the story.
+	// A cross-zone leaf pointing at /models was considered and rejected — the top navbar owns
+	// cross-zone hops (it is the one surface that applies `data-sveltekit-reload` itself), and the
+	// sidebar has been kept zone-local for exactly that reason.
 	{
 		// OPERATIONS, not "Admin", and without Tenants — by ruling (2026-08-03). The shared navbar's
 		// panel has said Governance = [Access, Tenants, Audit] and Operations = [Events, Streams, DLQ]
@@ -174,6 +149,12 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 		// answered the same question two different ways depending on which control you opened. Who may
 		// do what — access, TENANTS, audit — is governance; running the estate — events, streams, dead
 		// letters — is operations. The navbar was right, so the sidebar moves to it.
+		//
+		// The GOVERNANCE group that sat above this one is GONE (#105): Access and Audit are estate
+		// surfaces, not lakehouse ones — they read across every project and neither takes one — so they
+		// were re-based under the home zone's `/settings/`, and Tenants was retired outright because
+		// `/projects` already IS the estate's project list. This rail is a ZONE rail: a leaf pointing
+		// into another zone would be the sidebar advertising a hop the top navbar owns.
 		label: 'Operations',
 		// The operational drawer — real, but not what anyone opens the lakehouse for. Collapsed until
 		// you are actually inside it (the shell auto-expands whichever group holds the active route).
@@ -218,8 +199,15 @@ const LAKEHOUSE_FOOTER: ZoneNav['footer'] = {
 	],
 };
 
-/** Groups behind the estate-admin door — the ones `/lakehouse/admin/*` serves. */
-const PRIVILEGED_GROUPS = new Set(['Governance', 'Admin']);
+/** Groups behind the estate-admin door — the ones `/lakehouse/admin/*` serves.
+ *
+ *  The label has to MATCH the group's own `label`, and it did not: the set said `'Admin'` while the
+ *  group renamed itself to `'Operations'`, so the filter matched nothing on that side and the
+ *  operational drawer leaked to every identity in the sidebar (the navbar half was always correct —
+ *  `nav-config.ts` gates its Operations column on `estateAdmin`). It was masked while `'Governance'`
+ *  still matched something; #105 took that group away, which would have left this set filtering
+ *  literally nothing. Fixed with the group it belongs to. */
+const PRIVILEGED_GROUPS = new Set(['Operations']);
 
 /** The area segment right after this zone's base — `''` on the zone root. Still load-bearing: the
  *  root layout gates the admin door on it and sizes the lineage canvas with it. */
@@ -241,6 +229,7 @@ export function areaOf(pathname: string): string {
 export function lakehouseSidebar(estateAdmin: boolean): ZoneNav {
 	return {
 		title: 'Lakehouse',
+		root: LAKEHOUSE_ROOT,
 		groups: estateAdmin
 			? LAKEHOUSE_GROUPS
 			: LAKEHOUSE_GROUPS.filter((g) => !PRIVILEGED_GROUPS.has(g.label)),

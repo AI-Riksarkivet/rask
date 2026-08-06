@@ -38,17 +38,37 @@
 </script>
 
 {#snippet leafLink(leaf: ZoneNavLeaf, props: Record<string, unknown>)}
-	<a
-		href={leaf.href}
-		data-sveltekit-reload={leaf.reload ? '' : undefined}
-		{...props}
-		{@attach (el) => (leaf.reload ? prefetchOnIntent(leaf.href)(el) : undefined)}
-	>
-		{#if leaf.icon}
-			<leaf.icon />
-		{/if}
-		<span>{leaf.title}</span>
-	</a>
+	{#if leaf.unavailable}
+		<!-- SHOWN, not hidden — and not a link. Dropping the row reads as "this product has no
+		     knowledge graph"; greying it says "THIS corpus has none", which is the true statement and
+		     the one that tells you what to change. A <span> rather than a disabled <a>: an anchor with
+		     href is reachable by keyboard and by paste no matter how it is styled, and this must not
+		     navigate to a page that cannot render. `aria-disabled` + the reason as the tooltip carry
+		     it to a screen reader, which `pointer-events-none` alone would not. -->
+		<span
+			{...props}
+			aria-disabled="true"
+			title="{leaf.title} — {leaf.unavailable}"
+			class="cursor-not-allowed opacity-50 {(props['class'] as string) ?? ''}"
+		>
+			{#if leaf.icon}
+				<leaf.icon />
+			{/if}
+			<span>{leaf.title}</span>
+		</span>
+	{:else}
+		<a
+			href={leaf.href}
+			data-sveltekit-reload={leaf.reload ? '' : undefined}
+			{...props}
+			{@attach (el) => (leaf.reload ? prefetchOnIntent(leaf.href)(el) : undefined)}
+		>
+			{#if leaf.icon}
+				<leaf.icon />
+			{/if}
+			<span>{leaf.title}</span>
+		</a>
+	{/if}
 {/snippet}
 
 {#if nav}

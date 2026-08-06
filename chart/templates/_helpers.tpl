@@ -253,7 +253,7 @@ dapr.io/config: "lance-tracing"
      Every one of these is referenced by a grafted lance template (services.yaml, medallion.yaml,
      compaction.yaml, media.yaml, gateway.yaml, rustfs.yaml, openbao.yaml, dex.yaml, age-postgres.yaml,
      otel-collector.yaml, network-policy.yaml, ha.yaml, runners.yaml, …) or by a template still being
-     merged by another owner (frontends.yaml → "lance.frontendEnv"/"lance.frontendImage"). None of them
+     merged by another owner (frontends.yaml → "lance.frontendEnv"). None of them
      was renamed: no lance name collided with a rask name.
 
      VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
@@ -323,35 +323,22 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "lance.openbaoHost" -}}{{ .Release.Name }}-openbao{{- end -}}
 {{- define "lance.greptimeHost" -}}{{ .Release.Name }}-greptimedb-standalone{{- end -}}
 
-{{/* App image refs. required() fails the render LOUD if the tag is empty/unset — e.g. a prod overlay
-that forgot to set a release tag — instead of emitting an invalid `repo:` ref the kubelet only rejects
-later (InvalidImageName), bricking the pod with no obvious signal. */}}
+{{/* The catalog-family image (catalog, lineage, medallion movers, maintenance, explorer, the bootstrap
+job) — every one of them runs the SAME image with a different entrypoint.
+
+It DELEGATES to `rask.image`, which is the estate's one image contract: registry prefix, digest
+pinning, and the side-loaded (`image.localImages`) form. This helper used to render
+`printf "%s:%s" repository tag` on its own, which honoured NONE of them — so eleven containers came
+out as the bare `lance-rest-catalog:dev`, i.e. Docker Hub, on a chart that had been configured with a
+registry and a digest. That is not a cosmetic drift: it is why every deploy needed `kubectl set image`
+fix-ups afterwards, and why a GitOps reconciler could never own this release.
+
+`image.catalog.repository` survives as an OPTIONAL per-component name override (the component is not
+named after the chart), and the tag/digest/prefix rules are now whatever the rest of the estate uses. */}}
 {{- define "lance.catalogImage" -}}
-{{- $i := .Values.image.catalog -}}
-{{- printf "%s:%s" $i.repository (required "image.catalog.tag must be set (a release tag in prod; `dev` locally)" $i.tag) -}}
+{{- $name := (.Values.image.catalog).repository | default "lance-rest-catalog" -}}
+{{- include "rask.image" (list . $name) -}}
 {{- end -}}
-{{/* A micro-frontend zone image: lance-<zone>:<tag> (built from the ONE parametrized frontend.dockerfile
-via --build-arg APP=<zone>; `make frontend-images`). Call: include "lance.frontendImage" (list $root "data").
-
-MERGE NOTE (frontends.yaml owner): kept VERBATIM, so it still renders the `lance-` image prefix, while
-rask's frontends.yaml renders `"{{ .name }}:{{ $fe.image.tag }}"` (no prefix). The two image-naming schemes
-are a real conflict and it is NOT settled in this file — docs/architecture/lance-ns-merge.md rules the
-merged OBJECT names get the `rask-web-` prefix but says nothing about image names. Whoever merges
-frontends.yaml picks one; the part worth keeping from here is the per-zone `tag` override + `required()`. */}}
-{{- define "lance.frontendImage" -}}
-{{- $root := index . 0 -}}{{- $name := index . 1 -}}
-{{- /* A zone boundary costs a full document load, and the only thing it buys is INDEPENDENT DEPLOY —
-       which a single shared tag silently cancels: every zone ships together, so the zones are pure cost.
-       Per-zone `tag` in frontend.apps wins; frontend.image.tag remains the default so a whole-estate
-       release stays one value, and a single zone can be rolled forward or back on its own. */ -}}
-{{- $app := "" -}}
-{{- range $root.Values.frontend.apps }}{{- if eq .name $name }}{{- $app = . }}{{- end }}{{- end }}
-{{- $tag := "" -}}
-{{- if $app }}{{- $tag = $app.tag | default $root.Values.frontend.image.tag -}}
-{{- else }}{{- $tag = $root.Values.frontend.image.tag -}}{{- end }}
-{{- printf "lance-%s:%s" $name (required "frontend.image.tag must be set (a release tag in prod; `dev` locally), or a per-zone `tag` on the frontend.apps entry" $tag) -}}
-{{- end -}}
-
 {{/* The SHARED env every micro-frontend zone gets — the cross-cutting "auth/secret similar in every MFE"
 seam (mirrors the retired web pod's env, single-sourced here). Backend URLs the zones' BFF proxies target
 directly (CATALOG_API/LINEAGE_API/MEDALLION_API/GREPTIME_API), the in-cluster gateway for the SSR /api

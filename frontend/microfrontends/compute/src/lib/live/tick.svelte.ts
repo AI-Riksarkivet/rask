@@ -1,13 +1,13 @@
 import { lineageFeed } from './feeds.remote';
 
-// The MECHANISM (`liveRead`, `LiveCursor`) is `@rask/ui/live-read`, shared with every zone. Only the
+// The MECHANISM (`liveRead`, `LiveCursor`) is `@rask/api/live`, shared with every zone. Only the
 // BINDING is per-zone, and it has to be: `query.live` must be declared inside an app to get its own
 // endpoint, and `getRequestEvent` only exists there — which is the same reason `feeds.remote.ts` is
 // copied into all seven zones rather than shared. So a zone's cost of cursor-driven reads is the few
 // lines below, not a copy of the hook.
-import type { LiveCursor } from '@rask/ui/live-read';
+import type { LiveCursor } from '@rask/api/live';
 
-export { liveRead, type LiveCursor } from '@rask/ui/live-read';
+export { liveRead, type LiveCursor } from '@rask/api/live';
 
 /**
  * The lineage cursor, taken from the ONE shared `lineageFeed` stream — the same feed the shell's

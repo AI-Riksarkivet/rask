@@ -7,8 +7,9 @@ schedule — it is component config). Two bindings, two jobs:
   per dataset — ``compact_files()``, then ``cleanup_old_versions()``, then ``optimize_indices()``.
   The order is the reason these live in one service: compaction obsoletes files, so cleanup must
   follow it, and index optimization must follow that.
-* the **reconcile** pass reads OpenFGA, the control-root registries and object storage, and REPORTS
-  where they disagree. It mutates nothing.
+* the **reconcile** pass reads OpenFGA, the control-root registries and object storage and REPORTS where
+  they disagree — then, ONLY if that report ran clean, purges expired trash records (#79): revoke the
+  object's grants, delete the bytes the catalog recorded at drop time, clear the record. Off by default.
 
 Blocking Lance/S3 IO runs in the threadpool so the event loop stays free.
 Run: ``uvicorn maintenance.service:app``.
@@ -30,6 +31,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from maintenance.api.routes import router
 from maintenance.core.config import MaintenanceSettings, apply_dapr_secrets, get_settings
+from maintenance.core.control_emit import make_control_emitter
 from maintenance.core.lineage_emit import make_emitter
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import assert_app_token_configured
@@ -46,12 +48,23 @@ log = logging.getLogger(__name__)
 
 
 def _make_fga_client(settings: MaintenanceSettings) -> Any | None:  # noqa: ANN401 — OpenFgaClient, no protocol
-    """A READ-ONLY OpenFGA client for the drift reconciler, or ``None``.
+    """The OpenFGA client this service reads with — and, since #79, REVOKES with. Or ``None``.
 
-    ``None`` on every "not configured" path — FGA off, or the store/model ids unpinned. This service
-    only reads tuples, so unlike the catalog it must NOT provision a store when the ids are absent:
-    provisioning from a maintenance job would create an empty store and then cheerfully report every
-    real tenant as a ghost, which is worse than reporting the category unavailable.
+    Two consumers with different rights, and the difference is the whole point:
+
+    * the **drift reconciler** only READS tuples (`fga.read_tuples`);
+    * the **expired-trash purge** REVOKES an object's tuples (`fga.revoke_object_tuples`, origin
+      ``lifecycle_delete``) as the FIRST step of destroying it, because a grant that outlives the bytes
+      silently re-grants the old subjects if the id is ever reused. A revoke it cannot perform refuses
+      the record, so the client is a precondition for deleting, never a means of granting.
+
+    It holds **no grant-writing path at all** — no `write_tuples`, no `seed_ownership` — which is why it
+    needs no capability beyond what pins the store.
+
+    ``None`` on every "not configured" path — FGA off, or the store/model ids unpinned. This service must
+    NOT provision a store when the ids are absent: provisioning from a maintenance job would create an
+    empty store and then cheerfully report every real tenant as a ghost, which is worse than reporting
+    the category unavailable. With FGA enabled and this ``None``, the purge does not run at all.
 
     Never raises. A misconfigured authz endpoint degrades four categories; it must not stop the sweep.
     """
@@ -113,13 +126,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Lineage emission (opt-in, best-effort): build the Dapr pub/sub emitter so each materially-compacted
     # dataset records a maintenance run on the lineage graph (#7b). The Dapr client targets the local
     # sidecar, so it's cheap to construct and needs no broker reachability at boot; a no-op emitter when off.
-    dapr_client = DaprClient() if settings.lineage_emit_enabled else None
+    # ONE sidecar client for both emitters — lineage (data) and control (governance). Built when either
+    # is on; the sidecar is local, so construction is cheap and needs no broker reachability at boot.
+    dapr_client = DaprClient() if (settings.lineage_emit_enabled or settings.control_emit_enabled) else None
     app.state.lineage_emitter = make_emitter(
         enabled=settings.lineage_emit_enabled,
         dapr=dapr_client,
         pubsub=settings.lineage_pubsub,
         topic=settings.lineage_topic,
         job_namespace=settings.lineage_job_namespace,
+        timeout_seconds=settings.publish_timeout_seconds,
+    )
+    # #79: the expired-trash purge announces each reclamation on the catalog's control topic. A no-op
+    # when off — never a half-configured transport that looks like it publishes.
+    app.state.control_emitter = make_control_emitter(
+        enabled=settings.control_emit_enabled,
+        dapr=dapr_client,
+        pubsub=settings.control_pubsub,
         timeout_seconds=settings.publish_timeout_seconds,
     )
     # The reconciler's two read-only clients. Both are OPTIONAL by design: a missing one degrades its

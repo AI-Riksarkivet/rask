@@ -328,7 +328,33 @@ export class AnnotatorController {
 		this.allowedShapeTypes.length === 0 || this.allowedShapeTypes.includes('text'),
 	);
 
-	readonly canDraw = $derived(this.mode === 'edit');
+	/** Can this canvas actually accept a drawn shape?
+	 *
+	 *  Edit mode is NOT enough, and believing it was is the defect this replaces. `ImageViewer`
+	 *  loads the image, then the annotations, and only THEN calls `attach()` — so when the
+	 *  annotations read fails (a stale dataset #37, an FGA denial #44, a viewer that is down #64)
+	 *  the catch returns and `ctx` is never set. The controller is not bound to the engine and
+	 *  nothing you draw can be committed.
+	 *
+	 *  Refusing to edit there is CORRECT: saving over annotations you could not read would clobber
+	 *  them, and `attach` also carries the `version` that drives the OCC handshake. What was wrong
+	 *  is that the UI said nothing — every tool rendered enabled, the tool you clicked reported
+	 *  `aria-pressed=true`, the mode button read "Edit mode", the AI segment rendered (it gates on
+	 *  exactly this flag), and dragging silently did nothing. Verified in a browser: an annotator
+	 *  would draw a page of boxes before noticing.
+	 *
+	 *  `ctx` is the honest test because `attach()` is the only thing that sets it and `detach()` is
+	 *  the only thing that clears it — so this tracks the ACTUAL binding rather than a second flag
+	 *  that could drift from it. */
+	readonly canDraw = $derived(this.mode === 'edit' && this.ctx !== null);
+
+	/** Is this controller BOUND to an engine at all?
+	 *
+	 *  Distinct from `canDraw`, and the distinction is the point: `canDraw` is false in view mode
+	 *  too, and view mode is a deliberate choice rather than a failure. A surface warning about
+	 *  read-only-ness must fire only for the second case, or it cries wolf every time someone
+	 *  toggles to read. */
+	readonly attached = $derived(this.ctx !== null);
 	/** Rows queued to be INSERTED on the next save — read-only, so a test can assert that an undo
 	 *  actually removed a drawn shape from the payload rather than merely hiding it. */
 	readonly pendingInserts = $derived(this._inserts.length);

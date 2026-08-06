@@ -115,13 +115,10 @@ test('the landing is HOME — an honest scaffold, not the project gallery', asyn
 	// ABSENCE here so the two cannot quietly both render the list again.
 	await expect(page.getByText('You are not a member of any project yet')).toHaveCount(0);
 	await expect(page.getByText('sign-in is not configured on this stack')).toHaveCount(0);
-	// The one destination this PAGE offers every visitor. Addressed by its own data-slot rather than by
-	// role+name: the navbar carries a Projects link too, so a name-based locator matches both (a strict
-	// mode violation) and would happily pass on a page whose only Projects link lived in the chrome.
-	await expect(page.locator('[data-slot="home-projects-card"]')).toHaveAttribute(
-		'href',
-		'/projects',
-	);
+	// Navigation lives in the TOPNAVBAR alone (2026-08-05): the Projects/Settings cards this page
+	// used to render duplicated it — asserted as an ABSENCE so they cannot quietly return.
+	await expect(page.locator('[data-slot="home-projects-card"]')).toHaveCount(0);
+	await expect(page.locator('[data-slot="home-settings-card"]')).toHaveCount(0);
 	// authEnabled is false → the sign-in affordance is gated off entirely (no dead login link on an
 	// ungoverned stack) — neither a page prompt nor a navbar menu entry.
 	await expect(page.getByRole('link', { name: 'Sign out' })).toHaveCount(0);

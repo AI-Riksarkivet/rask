@@ -242,10 +242,14 @@ step "7/8 the outbox suite's Dapr app token"
 DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' | base64 -d)"
 [ -n "$DAPR_TOKEN" ] || { echo "!! no dapr app token"; exit 1; }
 
-step "8/8 run the five e2e suites against the live stack"
+step "8/8 run the guarded e2e suites against the live stack"
 export LANCE_E2E_S3=http://localhost:9900
 # The CAS suite reads LANCE_E2E_S3_ENDPOINT (a DIFFERENT name). It was never exported, so all 3 CAS tests
 # skipped on every run — the suite named in the goal has, until now, never actually executed.
+# The maintenance-on-real-S3 suite (#80) gates on the same variable. It is safe to run against the live
+# store precisely because it never READS one: it creates four uuid-suffixed buckets of its own, sweeps
+# only those, and deletes them — `run_sweep` compacts and GCs everything it discovers, so pointing it at
+# `lance-catalog` would rewrite the estate this job just seeded.
 export LANCE_E2E_S3_ENDPOINT=http://localhost:9900
 export LANCE_E2E_CATALOG_URL=http://localhost:2333
 export LANCE_E2E_LINEAGE_URL=http://localhost:18000
@@ -277,6 +281,7 @@ PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_multibase_e2e.py \
   tests/e2e-py/test_outbox_e2e.py \
   tests/e2e-py/test_outbox_crash_e2e.py \
+  tests/e2e-py/test_maintenance_s3_e2e.py \
   -v -rs -p no:cacheprovider | tee /tmp/e2e-stack.log
 
 # NO SILENT SKIPS. Every suite above is skip-guarded on "is the stack reachable?" — which is the right

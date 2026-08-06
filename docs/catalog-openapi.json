@@ -4156,6 +4156,11 @@
             "title": "Project",
             "type": "string"
           },
+          "protected": {
+            "default": false,
+            "title": "Protected",
+            "type": "boolean"
+          },
           "serving": {
             "anyOf": [
               {
@@ -7708,6 +7713,56 @@
         "title": "PolicyResponse",
         "type": "object"
       },
+      "ProjectPoliciesResponse": {
+        "description": "Every maintenance policy record governing data inside ONE project (#65) \u2014 the tenant-scoped VIEW.\n\n``set``/``describe``/``delete`` answer for a single object each; nothing could ever enumerate what is\nactually in force across a tenant, so a project admin could not tell which of their namespaces or\ntables carries a retention override without already knowing its id. This is that read.\n\n``buckets`` and ``namespaces`` are the SCOPE the listing was computed from \u2014 the project's warehouse\nbuckets and the top-level namespaces bound to those warehouses \u2014 reported so a surprising list can be\nexplained without a second call.\n\n``incomplete`` / ``skipped_bindings`` are load-bearing, not diagnostics. The namespace half of the\nscope is derived from the namespace\u2192warehouse bindings, so a binding record that cannot be read is a\nnamespace whose policies cannot be seen: a silently-narrowed list would read as \"checked and clean\",\nwhich is the ``unbound_namespaces`` bug class. The listing still answers 200 (it is a read, not a\ndestructive door \u2014 see ``warehouses.namespaces_bound_to`` for the opposite posture) and SAYS it may\nbe short.\n\n**Resolution is winner-takes-all** (``PolicyRequest``): a table record shadows a namespace record\nshadows the project record, and the winner supplies EVERY field. These records are what EXISTS, not\nwhat governs any one dataset \u2014 a surface that renders them as an effective, merged policy is lying.",
+        "properties": {
+          "buckets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "incomplete": {
+            "default": false,
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Namespaces",
+            "type": "array"
+          },
+          "policies": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyResponse"
+            },
+            "title": "Policies",
+            "type": "array"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "skipped_bindings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped Bindings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "project",
+          "buckets",
+          "namespaces",
+          "policies"
+        ],
+        "title": "ProjectPoliciesResponse",
+        "type": "object"
+      },
       "ProjectResponse": {
         "description": "A derived tenant: its name, the warehouses claiming it, and its effective FGA admins (``[]`` when\nFGA is off/unavailable \u2014 degraded, never fabricated).",
         "properties": {
@@ -7834,6 +7889,17 @@
           "protected": {
             "title": "Protected",
             "type": "boolean"
+          },
+          "set_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set By"
           }
         },
         "required": [
@@ -10246,6 +10312,17 @@
             "title": "Project",
             "type": "string"
           },
+          "protected": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protected"
+          },
           "root_uri": {
             "title": "Root Uri",
             "type": "string"
@@ -12240,6 +12317,52 @@
       }
     },
     "/v1/namespace/{id}/protection": {
+      "get": {
+        "description": "Read the namespace's deletion-protection flag (#123) \u2014 the table door's read, one rung up.",
+        "operationId": "get_namespace_protection_v1_namespace__id__protection_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Namespace Protection",
+        "tags": [
+          "namespace"
+        ]
+      },
       "post": {
         "description": "Set or clear deletion protection on namespace ``id`` (#73). Owner-gated by the router\n(``protection`` maps to ``can_delete`` \u2014 whoever may delete the namespace decides whether\ndeleting it needs a second thought). Same control-root record contract as the table door.",
         "operationId": "set_namespace_protection_v1_namespace__id__protection_post",
@@ -12714,6 +12837,54 @@
         "summary": "Create Project",
         "tags": [
           "projects"
+        ]
+      }
+    },
+    "/v1/projects/{id}/policies": {
+      "get": {
+        "description": "Every maintenance policy governing data inside this project (#65) \u2014 the tenant-scoped VIEW.\n\nAdmin-gated on ``project:<id>#can_administer``, exactly like ``describe_project_policy``: the trio\nalready set that bar, and a second (estate-observer) door for the same information would split the\ntier \u2014 a tenant admin could then be shown one of their records and denied the list of all of them.\n\nALL warehouse statuses count, not just active ones. ``set_project_policy`` filters to active because\nit is WRITING coverage (a policy over a bucket that no live warehouse serves could never match); this\nREADS coverage, and a deactivated warehouse's data \u2014 plus any policy still governing it \u2014 remains the\ntenant's. Narrowing here would hide exactly the retention record an operator is looking for while\noffboarding.\n\nTolerant like every other listing: an unreadable warehouse or policy record is skipped with a warning\nby the registry primitives themselves. An unreadable BINDING is different and is reported \u2014\n``read_bindings`` (not ``list_bindings``) so the skip list crosses the return boundary into\n``incomplete``/``skipped_bindings``. A binding you cannot read is a namespace you cannot see, and a\nquietly short list would read as checked-and-clean. It still answers 200: this is a listing, not the\ndestructive door ``namespaces_bound_to`` guards, where one corrupt object correctly refuses the whole\noperation.",
+        "operationId": "list_project_policies_v1_projects__id__policies_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPoliciesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Project Policies",
+        "tags": [
+          "policy"
         ]
       }
     },
@@ -16072,6 +16243,52 @@
       }
     },
     "/v1/table/{id}/protection": {
+      "get": {
+        "description": "Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:\nan operator could not arm, disarm-check, or audit protection \u2014 they discovered it by eating a\n409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the\nrecord's `set_by` comes back so a refused drop can name who armed it.",
+        "operationId": "get_table_protection_v1_table__id__protection_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Table Protection",
+        "tags": [
+          "table"
+        ]
+      },
       "post": {
         "description": "Set or clear deletion protection on the table at ``id`` (#73 \u2014 the warehouse contract on the\nrung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to ``can_drop``:\nwhoever may destroy the table decides whether destroying it needs a second thought). The flag is\na CONTROL-ROOT record, deliberately not schema metadata \u2014 control-plane state that emits a\ncontrol event and never creates a table version, readable even when the dataset is corrupted,\nand unreachable from the future properties write door (#78).",
         "operationId": "set_table_protection_v1_table__id__protection_post",
@@ -16477,7 +16694,7 @@
     },
     "/v1/table/{id}/schema_metadata/update": {
       "post": {
-        "description": "Set the table's schema-level metadata map \u2014 wraps ``update_table_schema_metadata``; emits an\nUPDATE_SCHEMA_METADATA event (the response omits the version, so it is read back best-effort).",
+        "description": "Upsert the table's schema-level metadata map \u2014 a ``null`` value DELETES that key; emits an\nUPDATE_SCHEMA_METADATA event (the response omits the version, so it is read back best-effort).\n\nThe op MERGES, whatever the spec's \"Replace\" wording says (probed against a real ``dir`` backend:\nposting ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing). Omitting a key therefore cannot\nremove it, and the spec's request model types ``metadata`` as a strict ``{str: str}`` that cannot carry\na null \u2014 so ``{\"key\": null}`` is a rask EXTENSION, routed to the dataplane's pylance\n``update_schema_metadata`` (the same ``None``-deletes dialect ``update_field_metadata`` already speaks).\nA body with no nulls stays on the native spec op, transaction id and all.",
         "operationId": "update_table_schema_metadata_v1_table__id__schema_metadata_update_post",
         "parameters": [
           {

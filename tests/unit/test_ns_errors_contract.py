@@ -13,9 +13,10 @@ of failing a client with a 500.
 
 from __future__ import annotations
 
-from lance_namespace import ErrorCode
+from lance_namespace import ErrorCode, ServiceUnavailableError, UnsupportedOperationError
+from lance_namespace.errors import InternalError
 
-from service_kit.lakehouse.ns_errors import _STATUS, status_for
+from service_kit.lakehouse.ns_errors import _STATUS, problem_detail, status_for
 
 
 def test_every_sdk_error_code_is_mapped() -> None:
@@ -37,3 +38,22 @@ def test_an_unknown_code_still_defaults_to_500() -> None:
     """The default survives for genuinely unknown codes — completeness must not make the map
     brittle against a FUTURE spec running ahead of this SDK pin."""
     assert status_for(9999) == 500
+
+
+def test_a_501_keeps_its_message_because_it_is_a_capability_answer() -> None:
+    """A 501's message names an operation and leaks nothing — it is the one thing that tells the caller to
+    stop asking. The blanket ``>= 500`` redaction replaced it with "Internal Server
+    Error", so a user pressing the lakehouse's backfill button was told the server had broken (#101)."""
+    status, body = problem_detail(UnsupportedOperationError("alter_table_backfill_columns not implemented"))
+    assert status == 501
+    assert body["detail"] == "alter_table_backfill_columns not implemented"
+    assert body["error"] == body["detail"]  # the spec-0.9 twin field carries the same text
+
+
+def test_every_other_5xx_is_still_redacted() -> None:
+    """The negative twin, and the reason the exemption is a SET rather than a ``!= 501``: a genuine fault's
+    message carries paths, DSNs and driver text. Exempting 501 must not open the class."""
+    for exc in (InternalError("psycopg: connection to 10.0.0.4:5432 failed"), ServiceUnavailableError("s3://rask-work unreachable")):
+        _, body = problem_detail(exc)
+        assert body["detail"] == "Internal Server Error", body
+        assert body["error"] == "Internal Server Error", body

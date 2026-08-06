@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	// Left tool rail — the primary command surface. Fully controlled: reads/writes
 	// the AnnotatorController facade, never the engine directly. (Ported from
 	// ra-anno Toolbar.svelte, trimmed to functional controls for our engine.)
@@ -24,10 +25,21 @@
 	// tools + pan + convert-to-polygon are hidden; mode/undo/redo/save/delete stay.
 	// `onexit` (optional) renders the back-to-selection button at the rail top.
 	let {
+		assist,
 		controller,
 		spatial = true,
 		onexit,
-	}: { controller: AnnotatorController; spatial?: boolean; onexit?: () => void } = $props();
+	}: {
+		controller: AnnotatorController;
+		spatial?: boolean;
+		onexit?: () => void;
+		/** The AI-assist segment, rendered INSIDE this bar rather than floating over the canvas.
+		 *
+		 *  A snippet rather than a component import, so the toolbar stays ignorant of what assist IS:
+		 *  it owns placement, the shell owns what goes there. That keeps the "AI is part of the
+		 *  toolbar" ruling from turning into a dependency from chrome onto the assist plane. */
+		assist?: Snippet;
+	} = $props();
 
 	// A DRAWING tool is offered only when the open task's ontology permits the shape it commits.
 	// `ProjectsLanding.svelte` claimed this already happened; it did not, so an annotator drew with
@@ -61,23 +73,33 @@
 	const bands = $derived(bandsOf(visible));
 </script>
 
-<!-- The rail wears the estate's SIDEBAR tokens, not card: it is this zone's left navigation
-     rail, so it should read as the same surface the data/admin sidebars occupy. -->
+<!-- HORIZONTAL, above the canvas — reported: "the sidebar toolbar horizonally over the canvas.
+     and why is not the ai stuff a part of the toolbar?"
+     Both halves of that are the same complaint. A vertical rail on the left competed with the
+     filmstrip for the edge the ITEMS belong on, and it pushed the AI actions out into a floating
+     bar of their own — which said that assisting is a different kind of act from drawing. It is
+     not: both produce annotations, and both belong on the one surface that produces annotations.
+     (The float also collided: `AiAssistBar` and `TaskStreamNav` were both `absolute top-2 left-1/2`.)
+
+     It keeps the estate's SIDEBAR tokens rather than card — it is still this zone's chrome, now a
+     top bar rather than a left one, and it should read as the same surface the other rails occupy.
+     `overflow-x-auto` because a wide ontology can outrun a narrow canvas, and a toolbar that
+     WRAPS moves the canvas down a row as tools appear. -->
 <div
-	class="border-sidebar-border bg-sidebar flex h-full w-11 shrink-0 flex-col items-center gap-1 border-r py-2"
+	class="border-sidebar-border bg-sidebar flex h-11 w-full shrink-0 items-center gap-1 overflow-x-auto border-b px-2"
 	data-testid="annotator-toolbar"
 >
 	{#if onexit}
 		<Button
 			variant="ghost"
 			size="icon-sm"
-			title="Back to document selection"
+			title="Leave the canvas — back to the queue you came from, or the corpus browser"
 			data-testid="exit-annotate"
 			onclick={onexit}
 		>
 			<LayoutGrid class="size-4" />
 		</Button>
-		<div class="bg-sidebar-border my-1 h-px w-6"></div>
+		<div class="bg-sidebar-border mx-1 h-6 w-px shrink-0"></div>
 	{/if}
 
 	<!-- Mode toggle -->
@@ -92,12 +114,12 @@
 	</Button>
 
 	{#if spatial}
-		<div class="bg-sidebar-border my-1 h-px w-6"></div>
+		<div class="bg-sidebar-border mx-1 h-6 w-px shrink-0"></div>
 
 		{#each bands as band, i (band.group)}
 			{#if i > 0}
 				<!-- Between bands only — never before the first, never after the last. -->
-				<div class="bg-sidebar-border my-1 h-px w-6" data-testid="tool-band-sep"></div>
+				<div class="bg-sidebar-border mx-1 h-6 w-px shrink-0" data-testid="tool-band-sep"></div>
 			{/if}
 			{#each band.tools as t (t.tool)}
 				{@const Icon = t.icon}
@@ -108,6 +130,7 @@
 					size="icon-sm"
 					title={`${t.label} (${t.key})${cvLoading ? ' — detecting corners…' : ''}`}
 					aria-pressed={controller.activeTool === t.tool}
+					disabled={!controller.canDraw && COMMITS_SHAPE.has(t.tool)}
 					data-cvready={t.cv ? controller.cvReady.has(t.tool) : undefined}
 					data-snapped={t.tool === 'magnetic' ? controller.magneticSnapped : undefined}
 					onclick={() => controller.setTool(t.tool)}
@@ -130,7 +153,32 @@
 		{/if}
 	{/if}
 
-	<div class="bg-sidebar-border my-1 h-px w-6"></div>
+	{#if assist}
+		<div class="bg-sidebar-border mx-1 h-6 w-px shrink-0"></div>
+		{@render assist()}
+	{/if}
+
+	{#if spatial && !controller.attached}
+		<!-- Say it WHERE THE TOOLS ARE. The status chip sits bottom-left and reads "load failed",
+		     which a person parses as "the picture didn't load" — not as "everything you draw here is
+		     discarded". This sits in the bar you just tried to use.
+
+		     `spatial &&` is not decoration. A TEMPORAL unit (audio) never attaches a PixiContext at
+		     all — the controller's own contract says spatial viewers attach one and a temporal viewer
+		     brings its own surface — so `attached` is legitimately false there. Without this guard the
+		     first cut of this notice cried "read-only — annotations unavailable" over a perfectly
+		     healthy waveform that had just reported "1 annotations from Lance". Caught by driving the
+		     AUDIO modality, which nothing else in this session had exercised. -->
+		<span
+			class="text-destructive ml-2 shrink-0 text-xs font-medium"
+			data-testid="canvas-readonly"
+			title="The annotations for this item could not be read, so editing is disabled — saving would overwrite work that was never loaded."
+		>
+			read-only — annotations unavailable
+		</span>
+	{/if}
+
+	<div class="bg-sidebar-border mx-1 h-6 w-px shrink-0"></div>
 
 	<!-- Undo / redo (field edits: relabel / accept / reject / text) -->
 	<Button
@@ -168,7 +216,7 @@
 		/>
 	</Button>
 
-	<div class="bg-sidebar-border my-1 h-px w-6"></div>
+	<div class="bg-sidebar-border mx-1 h-6 w-px shrink-0"></div>
 
 	<!-- Selection actions -->
 	{#if spatial}

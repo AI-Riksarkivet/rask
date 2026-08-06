@@ -1,8 +1,7 @@
 <script lang="ts">
 	import { Badge } from '@rask/ui/badge';
 	import { Card } from '@rask/ui/card';
-	import { Activity, Boxes, FolderKanban, Settings } from '@lucide/svelte';
-	import type { PageData } from './$types';
+	import { Activity, Boxes, FolderKanban } from '@lucide/svelte';
 
 	// HOME — the estate landing, and the first of the main menu's three places (Home · Projects ·
 	// Settings). It is NOT the project gallery any more: that surface is `/projects`, where its
@@ -14,7 +13,6 @@
 	// landed, what needs attention — but each needs a read that does not exist yet, and inventing
 	// plausible numbers on a landing page is worse than admitting there are none. Same treatment the
 	// `train` zone uses for the same reason: real structure, honest badge, no fabricated data.
-	let { data }: { data: PageData } = $props();
 
 	// The three questions this page will answer. Titles and destinations are real; the FIGURES are
 	// deliberately absent rather than mocked, and each panel names the read it is waiting on.
@@ -52,38 +50,10 @@
 		page will summarise what is happening across every project you can see.
 	</p>
 
-	<!-- The two real destinations from here. SAME-ZONE links: `/projects` and `/settings` are routes
-	     in this app, so they soft-navigate and must NOT carry data-sveltekit-reload. -->
-	<div class="grid gap-3 sm:grid-cols-2">
-		<a
-			href="/projects"
-			data-slot="home-projects-card"
-			class="hover:bg-accent/40 focus-visible:ring-ring flex items-center gap-3 rounded-lg border p-4 transition-colors focus-visible:outline-none focus-visible:ring-2"
-		>
-			<FolderKanban class="size-5 shrink-0" aria-hidden="true" />
-			<span class="flex flex-col">
-				<span class="font-medium">Projects</span>
-				<span class="text-muted-foreground text-xs">
-					{data.projects.length > 0
-						? `${data.projects.length} project${data.projects.length === 1 ? '' : 's'} you can open`
-						: 'Browse or create a project'}
-				</span>
-			</span>
-		</a>
-		{#if data.estateAdmin}
-			<a
-				href="/settings"
-				data-slot="home-settings-card"
-				class="hover:bg-accent/40 focus-visible:ring-ring flex items-center gap-3 rounded-lg border p-4 transition-colors focus-visible:outline-none focus-visible:ring-2"
-			>
-				<Settings class="size-5 shrink-0" aria-hidden="true" />
-				<span class="flex flex-col">
-					<span class="font-medium">Settings</span>
-					<span class="text-muted-foreground text-xs">Notifications, project defaults, access</span>
-				</span>
-			</a>
-		{/if}
-	</div>
+	<!-- Navigation lives in the TOPNAVBAR alone (2026-08-05 ruling): the Projects/Settings cards
+	     that sat here duplicated it — two ways to the same two places, and the duplicate was the
+	     one an admin gate could silently hide. This page is the estate insights landing, nothing
+	     else. -->
 
 	<!-- The insight panels. Each names WHAT it will show and WHICH read it waits on, so the page is a
 	     plan rather than a mystery — and so nobody mistakes an empty card for a broken one. -->

@@ -1411,6 +1411,59 @@ each must land as a **test in the same PR** as the behavior (§3.4's rule).
 
 ### Acceptance conditions (Definition of Done, each a named test)
 
+> **STATUS — re-audited 2026-08-05 against `ingest-plane` @ 0922124e: 5 PASS · 14 PARTIAL · 1 FAIL.**
+> (The previous audit said 0 / 10 / 10; it predated per-run sizing, the ack heartbeat,
+> `Nats-Msg-Id` dedupe, laminar staging, the empty-commit guard and the gateway header strip.)
+> Suites behind these numbers: ingest 209 passed / 7 skipped, the A15–A18 gate file 47 passed,
+> `services/ingest/tests` + `tests/unit` together 2307 passed / 7 skipped.
+>
+> | | verdict | the one thing that decides it |
+> |---|---|---|
+> | **A1** | PASS | enumeration is an ACTIVITY, so the handler is O(1) in units; the test asserts `202` **and** `elapsed<1s` **and** `len(dispatched)==1` — inlining the work regresses it. The "10k-unit source" clause is never actually exercised. |
+> | **A2** | PASS | asserted on dispatch COUNT, not id equality; backstopped by `Nats-Msg-Id`. Caveat: the dedupe store is process-local, so it holds only because the chart pins `replicas: 1`. |
+> | **A3** | PARTIAL | the convergence arithmetic is gated offline; the actual kill is a MANUAL script CI never runs. The "no tracker-DONE unit re-fetched" clause is moot — the tracker was dissolved. |
+> | **A4** | PARTIAL | append-not-overwrite and one-commit-per-run are real gates on both catalog branches. Clause 3 ("only declared maintenance/metadata commits") has **no gate anywhere**. |
+> | **A5** | PARTIAL | the drain-level test **SKIPS without a local NATS**, and *nothing* asserts a DLQ entry ever lands on `dlq.ingest.tasks`. |
+> | **A6** | PARTIAL | the FAIL half is gated. The COMPLETE half is **NOT IMPLEMENTED**: ingest passes bare `(namespace, name)` tuples, so no `datasetVersion` and no `outputStatistics.rowCount` facet is ever attached. |
+> | **A7** | PARTIAL | the core rule is gated against the REAL endpoint. Both crash windows are ungated — `_publish` reports a failure onto the run; there is no recover-from-the-ref path. |
+> | **A8** | PASS *(strengthened 2026-08-05)* | a real join over the provenance reader; `None` (unanswerable) deliberately is not a defect. A REFUSED read (401/403) is now its own answer and outranks the ordinary defect string — it used to be swallowed as an outage, so A8 certified provenance while every emit was rejected. 12 tests. |
+> | **A9** | PARTIAL | **untestable as written** — it asserts a property of a hypothetical DIFF. The available proxy (a grep gate on kind literals + a registry-driven form) exists and bites. |
+> | **A10** | PARTIAL | I3/I4 gates run in CI and are seeded-violation tested; the chart-render lane now carries a pinned helm. The "deploy-time transform-ref resolution test" does not exist. |
+> | **A11** | PARTIAL | the lane script is real and outcome-asserting, but runs **outside CI** and the scope cut is large. |
+> | **A12** | PARTIAL | four IIIF files deleted estate-wide; `rg -l iiif services/medallion` is **not** empty. |
+> | **A13** | PASS *(fixed 2026-08-05)* | `services/ingest/tests/test_poll_reason.py` walks every in-process sleep and demands a `POLL REASON:` marker, distinguishing POLLING (forbidden) from KEEPALIVE and BACKOFF. Proven by seeding a violation. The named anti-pattern is asserted absent, with its token assembled from parts so the gate is not its own offender. |
+> | **A14** | PARTIAL | the refusal is proven against real Lance — but only on `LocalCatalog`, so the **DEPLOYED** catalog path is ungated. The unenforced-PK half is admitted absent. |
+> | **A15** | PASS *(now ENFORCED, 2026-08-05)* | compares chart values directly — and the ceiling is finally READ: the parent workflow races its fan-out against `ctx.create_timer(hours=MAX_RUN_HOURS)`. It was asserted-but-unenforced (`grep MAX_RUN_HOURS services/ingest/src` returned nothing), i.e. a gate certifying a relation with one side implemented. |
+> | **A16** | PARTIAL | the cadence half is gated; the data half is not what A16 asks. |
+> | **A17** | PARTIAL | four clauses are real gates against the deployed `handle_stage` with real Lance. |
+> | **A18** | PARTIAL | gate-FAIL and version-equality are gated; the rollback/E5 clause is not. |
+> | **A19** | PASS on substance | both named assertions exist against real Lance — but in the dummy-runner suite, which **CI does not run**. |
+> | **A20** | PARTIAL | *route fixed 2026-08-05* (two tests navigated to `/compute/new`, deleted). Still outside CI — the spec skips without an env var. Browser-verified BY HAND this session: the ETL form, its registry-driven fields, the sizing block and its ceiling refusal, both nav surfaces, the breadcrumb, and the new `/compute/ingest` run list. NOT verified: a successful run appearing on that list — blocked by the catalog auth gap. |
+>
+> **MEASURED LIVE 2026-08-05 — the ingest plane has NO provenance at all.** From inside the ingest pod
+> against the running lineage service (OIDC+FGA armed, `LINEAGE_SERVICE_SUBJECTS=service-trainer,service-web`):
+>
+> | identity presented | result |
+> |---|---|
+> | *(none — what ingest sends today)* | **401** |
+> | `service-ingest` | **403** — token valid, identity not allowlisted |
+> | `service-web` | **200, runs=0** |
+>
+> So the credential pair is right and only the allowlist entry was missing — both halves are fixed in
+> the chart (5d420cda) but NOT yet deployed. `runs=0` is the cost: the graph is empty, so every ingest
+> run's provenance has been lost, silently, exactly as A8's false negative allowed.
+>
+> **The pattern, stated plainly:** the behaviour is usually present; the GATE is narrower than the
+> condition. And several gates that do exist (A11's lane script, A19's dummy-runner suite, A20's
+> Playwright spec) live **outside CI**, so they cannot fail a merge. Three defects deserve owner
+> attention above the rest: **A6's missing COMPLETE facets** (not implemented, not merely ungated),
+> **A14 enforced only on the non-deployed catalog path**, and **A13**, the sole outright FAIL.
+>
+> **This is not the same thing as CI being red.** No CI job runs this audit — grep `.github/workflows/`
+> for "acceptance" or "PARTIAL" and nothing matches. GitHub Actions is red on `ingest-plane` for
+> unrelated reasons, and **main is red on 9 of the same 10 checks**; exactly one gate is green on main
+> and red here (`ms-openapi`, a missing `make openapi` regen — fixed in 0922124e).
+
 - **A1** `POST /v1/ingests` returns 202 in <1s for a 10k-unit source; work proceeds after
   the HTTP connection closes.
 - **A2** Same `Idempotency-Key` + same spec → the same run resource; **zero** new unit
@@ -1587,6 +1640,34 @@ estate code file:line before implementing against them. Or stop after 25 turns.
 ```
 
 ## 7 · Open decisions
+
+> **STATUS — audited 2026-08-05 against the tree: 8 DECIDED · 4 genuinely OPEN.**
+> Only 7, 8, 9 and 10 are still live questions. The rest were settled and built; two were settled in
+> ways the list below does not yet say, and one was implemented AGAINST its own resolution:
+>
+> - **1 · Service name — DECIDED, but built against the ruling.** The resolution says the public
+>   gateway row stays `/api/etl`, the stream `ETL` and the DLQ `dlq.etl.tasks`. The code uses
+>   **`ingest` on all three**. Either the code or this line is wrong; they cannot both stand.
+> - **2 · Landing-zone / fragment-direct — DECIDED and built.** Fragment-direct is the write path,
+>   with a per-run staging prefix INSIDE the dataset as the pre-commit ledger, purged after commit.
+> - **3 · Tracker backend — DECIDED BY ELIMINATION, not by picking one.** Chunking made the
+>   workflow's own durable state the ledger, so `packages/tracker` gains no NATS-KV backend and has
+>   **zero consumers**. The question dissolved rather than being answered.
+> - **4 · Silver mover for the IIIF page lane — DECIDED in shape, unconfigured in fact.** It got a
+>   `bronze$pages → gold$htr` TERMINAL mover (`pages-to-gold-htr`), not a silver one.
+> - **5 · Worker transport — DECIDED AGAINST the recommendation below.** Raw `nats-py`, because four
+>   JetStream semantics the Dapr component cannot express are load-bearing here (`max_ack_pending`
+>   backpressure, `in_progress()` heartbeat, redelivery-count inspection, poison parking).
+> - **6 · Workflow engine — DECIDED (Dapr Workflow) and built.** Parent `ingest_run` + child
+>   `chunk_run` per ~1000 keys, `when_all` fan-in; units stay on the JetStream queue as ruled.
+> - **7 · Phase-2 format — OPEN.** No Fluss, RisingWave, Lakekeeper or Iceberg surface exists.
+> - **8 · R3′ contract-verification at the catalog — OPEN.** The only realized form is the MOVER-side
+>   quality gate's `requiredColumns` — a promotion-time check, not a catalog refusal.
+> - **9 · DuckDB-Lance blob-v2 — OPEN.** The DuckDB e2e suite has no blob coverage at all.
+> - **10 · Arroyo maintenance watch — OPEN/moot.** The estate took Option A; the trigger never fired.
+> - **11 · RustFS conditional put — DECIDED**, proven by a real e2e suite.
+> - **12 · branch-merge vs tag-advance — DECIDED (tag-advance) and built.** The FTS
+>   `format_version`/ICU sub-decision under it is still open.
 
 1. ~~Service name~~ **Resolved: `ingest`** (uv member, app-id, image, chart key);
    public gateway row stays `/api/etl`, stream `ETL`, DLQ `dlq.etl.tasks` — the plane is

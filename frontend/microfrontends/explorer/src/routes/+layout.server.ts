@@ -1,6 +1,7 @@
+import { env } from '$env/dynamic/private';
 import type { LayoutServerLoad } from './$types';
-import { zoneLayoutLoad } from '@rask/api/bff';
+import { makeZoneLayoutLoad } from '@rask/api/bff';
 
-// The estate-wide zone layout contract (identity + auth-enabled flag for the shared TopNavbar),
-// single-sourced in @rask/api/bff so every zone derives the SAME user.
-export const load: LayoutServerLoad = zoneLayoutLoad;
+// The estate-wide zone layout contract — identity, auth flag, active project AND the resolved
+// `me` — owned by @rask/api so every zone renders one shell by construction (#107).
+export const load: LayoutServerLoad = makeZoneLayoutLoad(env);

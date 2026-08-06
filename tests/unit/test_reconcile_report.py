@@ -505,18 +505,30 @@ def test_the_module_contains_no_mutating_call() -> None:
 
 
 def test_the_mutating_call_gate_is_not_vacuous() -> None:
-    """A gate nobody has seen fire is a gate nobody knows works — so fire it at the sibling module.
+    """A gate nobody has seen fire is a gate nobody knows works — so fire it at the sibling modules.
 
-    ``compaction.services.optimize`` is the reconciler's neighbour and it DOES mutate: it compacts
+    ``maintenance.services.optimize`` is the reconciler's neighbour and it DOES mutate: it compacts
     fragments and deletes old versions. Pointing the same checker at it must produce offenders. This
     is the assertion that would have caught the prefix list missing ``cleanup_old_versions`` — the
     most destructive call in this package — while ``test_the_module_contains_no_mutating_call`` stayed
     green and looked like proof.
+
+    ``purge.py`` (#79) is fired at for the OTHER half of the same claim. The reconciler and the
+    reclaimer now live in one package, and the split between them is the whole safety argument: the
+    report earns the delete permission, the purge spends it. One checker proving "the reporter cannot
+    delete" AND "the reclaimer really does" is what makes that split a fact rather than a filing
+    convention — a purge that had quietly stopped deleting would otherwise keep every test green while
+    reclaiming nothing.
     """
     sibling = Path(mod.__file__).with_name("optimize.py")
     offenders = sorted(name for name in _called_names(sibling.read_text()) if name.lower().startswith(_MUTATING_CALL_PREFIXES))
     assert "cleanup_old_versions" in offenders, f"the gate does not catch the sibling sweep's own destructive calls: {offenders}"
     assert "compact_files" in offenders
+
+    reclaimer = Path(mod.__file__).with_name("purge.py")
+    reclaims = sorted(name for name in _called_names(reclaimer.read_text()) if name.lower().startswith(_MUTATING_CALL_PREFIXES))
+    assert "delete_dir" in reclaims, f"the #79 purge no longer deletes bytes — the reclamation half is inert: {reclaims}"
+    assert "revoke_object_tuples" in reclaims, f"the #79 purge no longer revokes grants — they would outlive the bytes: {reclaims}"
 
 
 def _tree_fingerprint(root: Path) -> dict[str, str]:

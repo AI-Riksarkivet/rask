@@ -71,6 +71,10 @@ spec:
             # int_parsing crash), and the meaningful 0 (shedding off) must stay settable — Sprig's
             # default() treats 0 as empty.
             - { name: LANCE_MAX_CONCURRENT_WRITES, value: {{ hasKey .Values.catalog "maxConcurrentWrites" | ternary .Values.catalog.maxConcurrentWrites 16 | int | quote }} }
+            # #75/#96 the recoverable-drop grace period. hasKey+ternary for the same two reasons as
+            # above: `--reuse-values` with the key missing must render the default, and the meaningful
+            # 0 (recovery OFF, destroy immediately) must stay settable past Sprig's default().
+            - { name: LANCE_TRASH_GRACE_DAYS, value: {{ hasKey .Values.catalog "trashGraceDays" | ternary .Values.catalog.trashGraceDays 7 | int | quote }} }
             # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /v1/warehouses
             # provisions a bucket per warehouse + binds namespaces; an unbound namespace still routes to
             # LANCE_REST_ROOT (backward-compatible). The warehouse registry lives under LANCE_REST_ROOT

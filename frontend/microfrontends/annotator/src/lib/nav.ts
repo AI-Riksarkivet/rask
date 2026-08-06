@@ -1,4 +1,4 @@
-import { FolderKanban, Images } from '@lucide/svelte';
+import { Bot, FolderKanban, Layers, Scale, SlidersHorizontal } from '@lucide/svelte';
 import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 
 // The annotate zone's OWN sidebar routes.
@@ -16,6 +16,16 @@ import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 // ICON-COLLAPSED (see `sidebarOpen` in app-shell.svelte), so the drawing surface keeps its width and
 // the rail is one click away instead of gone.
 //
+// THE ROWS. Reported: "why is there labeling tasks and group data browse-corpus? and not labeling
+// tasks and bulk labeling, and LLM-as-a-judge, AI-assistance, Annotation settings". The old rail
+// named its rows after the SCREENS that happened to exist ("Data" → "Browse corpus") rather than
+// after the jobs this zone does — so the rail described the implementation, and the jobs that were
+// not yet screens were invisible, indistinguishable from a product that does not do them.
+//
+// `/annotator/browse` keeps its path: it IS still the corpus browser, and it is where a bulk send
+// starts (#42). Only the ROW is renamed, because "browse corpus" names the mechanism and "Bulk
+// labeling" names the job — and the job is why anyone opens it.
+//
 // Hrefs are absolute domain paths: the zone is served under its `/annotator` base both standalone
 // (dev/e2e) and behind the ingress. Every leaf is same-zone, so they all stay soft navs (no
 // `reload`).
@@ -32,13 +42,46 @@ export const ANNOTATOR_ZONE_NAV: ZoneNav = {
 	},
 	groups: [
 		{
-			label: 'Data',
+			// Two ways work reaches a labeler: one item at a time from a queue (the root), or in bulk
+			// by selecting a slice of a corpus and sending it.
+			label: 'Label',
 			items: [
 				{
-					title: 'Browse corpus',
+					title: 'Bulk labeling',
 					href: '/annotator/browse',
 					match: seg('/annotator/browse'),
-					icon: Images,
+					icon: Layers,
+				},
+			],
+		},
+		{
+			// Everything that judges or produces labels WITHOUT a person drawing them. Its own group
+			// because the blast radius differs: a bad model here quietly degrades every task in the
+			// zone, where a bad manual label degrades one item.
+			label: 'Automation',
+			items: [
+				{
+					title: 'LLM-as-a-judge',
+					href: '/annotator/judge',
+					match: seg('/annotator/judge'),
+					icon: Scale,
+				},
+				{
+					title: 'AI assistance',
+					href: '/annotator/assist',
+					match: seg('/annotator/assist'),
+					icon: Bot,
+				},
+			],
+		},
+		{
+			label: 'Configure',
+			items: [
+				{
+					title: 'Annotation settings',
+					href: '/annotator/settings',
+					match: seg('/annotator/settings'),
+					icon: SlidersHorizontal,
 				},
 			],
 		},

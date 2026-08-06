@@ -39,6 +39,7 @@ async def emit_measured_write(
     operation: str,
     authorization: str | None,
     pin_version: int | None = None,
+    branch: str | None = None,
     inputs: list[InputPin] | None = None,
     extra_run_facets: dict[str, Any] | None = None,
 ) -> None:
@@ -48,11 +49,15 @@ async def emit_measured_write(
     merge_insert); ``None`` for ops whose response carries only a ``transaction_id`` (insert, index
     build/drop, restore, schema-metadata) — those read the current snapshot instead.
 
+    ``branch`` is the ref the write COMMITTED TO (``None`` = main). It must follow the write: a branch has
+    its own version sequence and its own schema, so reading a branch write back off main pins the WROTE edge
+    to a version that never carried the change.
+
     ``inputs`` names the version-pinned source dataset(s) this write DERIVED FROM (a mover's merge from
     ``source@N``); ``extra_run_facets`` rides caller-supplied run facets (e.g. training ``params``) —
     both threaded verbatim to :func:`emit_write_event`, so the catalog stays un-opinionated about them.
     """
-    version, schema_fields = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, pin_version)
+    version, schema_fields = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, pin_version, branch)
     await emit_write_event(
         emitter,
         segments,

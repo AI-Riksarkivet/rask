@@ -748,6 +748,9 @@
 	// #74 tail — the table's schema-level metadata map (what schema_metadata/update sets), for the properties
 	// editor. `describe.metadata` is the current map; absent → an empty, still-editable map.
 	const tableMeta = $derived((detail?.describe.metadata ?? {}) as Record<string, string>);
+	// #78 — `description` is the reserved property: the table's own prose. Rendered here READ-ONLY, under
+	// the name; editing it stays in the Properties section, so there is one editor and one door.
+	const tableDescription = $derived((tableMeta.description ?? '').trim());
 	// Columns whose type is binary/blob — the ones the blob preview can read a cell from.
 	const blobColumns = $derived(
 		schemaFields
@@ -864,6 +867,9 @@
 			<span class="sub mono">v{detail.describe.version}</span>
 		{/if}
 	</header>
+	{#if tableDescription}
+		<p class="tdesc">{tableDescription}</p>
+	{/if}
 
 	{#if unauthorized}
 		<div class="empty">
@@ -1555,6 +1561,18 @@
 		align-items: baseline;
 		gap: 10px;
 		margin-bottom: 18px;
+	}
+	/* The description belongs TO the name, so it closes the gap under it rather than opening a second one. */
+	header:has(+ .tdesc) {
+		margin-bottom: 6px;
+	}
+	.tdesc {
+		margin: 0 0 18px;
+		max-width: 78ch;
+		color: var(--mut);
+		font-size: 13px;
+		line-height: 1.5;
+		white-space: pre-wrap;
 	}
 	h1 {
 		font-size: 18px;

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mockMe, signIn, TOKEN } from './session';
-import { STORES } from './access-fixtures';
+import { STORES } from './store-fixtures';
 import { MOCK_CATALOG } from '../ports';
 
 // The attach-store flow, end to end through the remote command — the regression fence for the 405

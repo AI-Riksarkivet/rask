@@ -153,3 +153,34 @@
 		-moz-osx-font-smoothing: grayscale;
 	}
 }
+
+/* CROSS-DOCUMENT view transitions (#107). A cross-ZONE nav is a real document swap — the browser
+   tears down one SvelteKit app and boots the next — so `onNavigate` + `startViewTransition`, which
+   three zone layouts already run, cannot reach it: that API only animates SOFT, same-document navs.
+   Without this rule the browser paints white between the two documents, which is the flash.
+
+   Those layouts' comments have said "cross-document MFE navs are handled by the `@view-transition`
+   rule" since #107 landed, and the rule existed nowhere in the estate — the mechanism was described
+   but never written. It lives HERE, in the one stylesheet all seven zones import, because the opt-in
+   must be present in BOTH the outgoing and incoming document or the browser skips the transition;
+   putting it in a zone would make the animation depend on which pair you navigated between.
+
+   Same-origin is satisfied: every zone is served under one ingress origin. `navigation: auto` opts
+   into browser-driven navigations only (link clicks, back/forward) — never programmatic replaces. */
+@view-transition {
+	navigation: auto;
+}
+
+/* The estate's flash was a white PAINT, not a missing animation, so the default cross-fade is the
+   whole fix; a slide would be decoration. Kept short enough not to feel like latency. */
+::view-transition-old(root),
+::view-transition-new(root) {
+	animation-duration: 180ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	::view-transition-old(root),
+	::view-transition-new(root) {
+		animation: none;
+	}
+}

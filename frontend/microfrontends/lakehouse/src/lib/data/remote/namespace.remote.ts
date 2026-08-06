@@ -75,6 +75,21 @@ function parsed<T>(result: ApiResult<unknown>, schema: v.GenericSchema<unknown, 
 	}
 }
 
+/** The tables under ONE namespace — the namespace→table rung of the zone Overview's hierarchy view
+ *  (#109). The spec's list_tables through the catalog's GET route, reader-gated like every other read
+ *  here.
+ *
+ *  Deliberately NOT `catalog.remote.ts`'s `fetchTables`: that one reads the whole estate's registry in
+ *  `<ns>$<table>` canonical form for the tables PAGE, so drawing a per-namespace rung from it would
+ *  mean pulling every table in the estate to render one branch — and it would answer for namespaces
+ *  this caller cannot read, which the hierarchy must show as "unreadable" rather than as empty. */
+const NamespaceTablesSchema = v.object({ tables: v.array(v.string()) });
+export const fetchNamespaceTables = query(
+	v.string(),
+	async (namespace): Promise<ApiResult<{ tables: string[] }>> =>
+		parsed(await catalogJSON(`/v1/namespace/${enc(namespace)}/table/list`), NamespaceTablesSchema),
+);
+
 /** What a CALLER supplies to set a policy — the PolicyRequest wire body, every bound optional
  *  (absent = "the global default applies"), which is why the form omits an empty field rather than
  *  sending null. */

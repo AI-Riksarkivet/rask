@@ -8,12 +8,14 @@
 	// t_start/t_end). One annotations table + Save path with images + audio segments.
 	import { onDestroy } from 'svelte';
 	import { loadAnnotations } from '@rask/labeling/annotations-client';
-	import { Pause, Play } from '@lucide/svelte';
+	
 	import type { PixiContext } from '@rask/engine';
 	import { Button } from '@rask/ui/button';
 	// @rask/ui has no slider yet, so the seek bar keeps the @rask/ui primitive — it is already
 	// token-styled, so it themes with the rest of the transport.
 	import { Slider } from '@rask/ui/slider';
+	import TransportBar from './layout/TransportBar.svelte';
+	import { clampTime, keyAction, nextRate, skip as skipBy, stepFrame, transportShouldHandle } from './transport';
 	import PixiCanvas from './PixiCanvas.svelte';
 	import type { ViewerProps } from './types';
 
@@ -96,6 +98,44 @@
 		requestAnimationFrame(pump);
 	}
 
+	/** Playback rate, and an fps ESTIMATE.
+	 *
+	 *  HTML5 exposes no frame rate — `requestVideoFrameCallback` reports one only while playing, and
+	 *  a paused annotator never triggers it. 25 is the archive's own default and is stated rather
+	 *  than hidden, so a wrong step is diagnosable instead of mysterious. */
+	let rate = $state(1);
+	const FPS = 25;
+
+	function setRate(): void {
+		rate = nextRate(rate);
+		if (video) video.playbackRate = rate;
+	}
+
+	function seekTo(seconds: number): void {
+		if (!video) return;
+		video.currentTime = clampTime(seconds, duration);
+	}
+
+	/** Frame stepping PAUSES first. Stepping while playing sets `currentTime` and playback
+	 *  immediately overwrites it, so the frame you asked for flashes past — which reads as the
+	 *  button not working. */
+	function frameStep(direction: 1 | -1): void {
+		if (!video) return;
+		if (!video.paused) video.pause();
+		seekTo(stepFrame(video.currentTime, direction, FPS, duration));
+	}
+
+	function onKeydown(e: KeyboardEvent): void {
+		if (!transportShouldHandle(e.target)) return;
+		const action = keyAction(e.key, { shift: e.shiftKey, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey });
+		if (!action) return;
+		e.preventDefault();
+		if (action.kind === 'playPause') togglePlay();
+		else if (action.kind === 'skip') seekTo(skipBy(video?.currentTime ?? 0, action.delta, duration));
+		else if (action.kind === 'frame') frameStep(action.direction);
+		else setRate();
+	}
+
 	function togglePlay(): void {
 		if (!video) return;
 		if (video.paused) void video.play();
@@ -119,6 +159,10 @@
 	});
 </script>
 
+<!-- The transport keys. On the WINDOW, because the canvas takes focus while drawing and the
+     video element never has it — a listener on either would answer only some of the time. -->
+<svelte:window onkeydown={onKeydown} />
+
 <div class="flex h-full w-full flex-col">
 	<!-- Hidden decode source: the frame is rendered through the Pixi overlay, not here. -->
 	<!-- svelte-ignore a11y_media_has_caption -->
@@ -141,25 +185,20 @@
 		<PixiCanvas {onready} />
 	</div>
 
-	<div class="border-border bg-card flex items-center gap-3 border-t px-3 py-2">
-		<Button
-			variant="outline"
-			size="sm"
-			disabled={!ready}
-			onclick={togglePlay}
-			aria-label={playing ? 'Pause' : 'Play'}
-		>
-			{#if playing}
-				<Pause class="size-4" />
-			{:else}
-				<Play class="size-4" />
-			{/if}
-		</Button>
-		<span class="text-muted-foreground w-20 shrink-0 text-xs tabular-nums">
-			{fmt(currentTime)} / {fmt(duration)}
-		</span>
+	<TransportBar
+		{playing}
+		{currentTime}
+		{duration}
+		{rate}
+		{ready}
+		fps={FPS}
+		onplaypause={togglePlay}
+		onskip={(d) => seekTo(skipBy(video?.currentTime ?? 0, d, duration))}
+		onframe={frameStep}
+		onrate={setRate}
+	>
 		<Slider
-			class="flex-1"
+			class="ml-2 min-w-[8rem] flex-1"
 			value={currentTime}
 			min={0}
 			max={Math.max(duration, 0.001)}
@@ -167,5 +206,5 @@
 			onValueChange={seek}
 			aria-label="Seek"
 		/>
-	</div>
+	</TransportBar>
 </div>

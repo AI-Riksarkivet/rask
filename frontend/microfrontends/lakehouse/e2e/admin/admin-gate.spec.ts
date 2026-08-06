@@ -45,15 +45,19 @@ test('a non-estate-admin sees ForbiddenPage on every admin route + no admin nav 
 }) => {
 	await signIn(context, { token: TOKEN.member });
 	await mockMe(page, ME_MEMBER);
+	// Every route the door covers, and it covers exactly the `admin` area now: #105 took the access
+	// workbench and the audit trail to the home zone (`/settings/*`, behind ITS own layout gate) and
+	// retired the tenants page, so `governance` is not a segment this zone serves at all.
 	for (const path of [
-		'/lakehouse/admin/tenants',
-		'/lakehouse/governance/audit',
 		'/lakehouse/admin/dlq',
+		'/lakehouse/admin/streams',
+		'/lakehouse/admin/events',
 	]) {
 		await page.goto(path);
 		await expect(page.getByText('Admin is estate-admin only')).toBeVisible();
 		// The route's own content never renders behind the door.
-		await expect(page.getByRole('heading', { name: 'Audit log' })).toHaveCount(0);
+		await expect(page.getByRole('heading', { name: 'Lineage DLQ' })).toHaveCount(0);
+		await expect(page.getByRole('heading', { name: 'Streams' })).toHaveCount(0);
 	}
 	// The navbar hides the admin surfaces from a non-admin (fail-closed IA, not just the door).
 	const nav = page.getByRole('navigation', { name: 'Zones' });
@@ -91,11 +95,8 @@ test("an estate admin passes the door and gets Lakehouse's governance columns", 
 }) => {
 	await signIn(context, { token: TOKEN.admin });
 	await mockMe(page, ME_ADMIN);
-	await page.route('**/api/projects*', (route) =>
-		route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
-	);
-	await page.goto('/lakehouse/admin/tenants');
-	await expect(page.getByRole('heading', { name: 'Tenants' })).toBeVisible();
+	await page.goto('/lakehouse/admin/dlq');
+	await expect(page.getByRole('heading', { name: 'Lineage DLQ' })).toBeVisible();
 	const nav = page.getByRole('navigation', { name: 'Zones' });
 	// The non-admin's three zone triggers (Lakehouse, Compute, Search) PLUS Settings — the ONE entry
 	// privilege earns, and it earns it because estate-wide configuration is not a zone's feature
@@ -147,7 +148,7 @@ test('an unresolvable identity (catalog outage) fails CLOSED, never open', async
 	await page.route('**/capi/v1/me', (route) =>
 		route.fulfill({ status: 502, contentType: 'application/json', body: '{"detail":"down"}' }),
 	);
-	await page.goto('/lakehouse/admin/tenants');
+	await page.goto('/lakehouse/admin/dlq');
 	await expect(page.getByText('Admin is estate-admin only')).toBeVisible();
 });
 
@@ -160,7 +161,7 @@ test('the SERVER door refuses even when the browser claims to be an admin', asyn
 	// never asked the browser.
 	await signIn(context, { token: TOKEN.member });
 	await mockMe(page, ME_ADMIN);
-	const res = await page.goto('/lakehouse/admin/tenants');
+	const res = await page.goto('/lakehouse/admin/dlq');
 	expect(res?.status()).toBe(403);
-	await expect(page.getByRole('heading', { name: 'Tenants' })).toHaveCount(0);
+	await expect(page.getByRole('heading', { name: 'Lineage DLQ' })).toHaveCount(0);
 });

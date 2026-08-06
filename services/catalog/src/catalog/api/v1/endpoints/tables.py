@@ -158,7 +158,7 @@ async def declare_table(
     """Declare a new (empty) table at ``id`` via ``declare_table``, then seed the caller's FGA ownership
     and emit a versionless DECLARE_TABLE marker (the table's first provenance — who reserved it + where)."""
     segments = parse_identifier(id, settings.delimiter)
-    fga_deps.require_parent("table", segments, delimiter=settings.delimiter)
+    await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
     req = body or DeclareTableRequest()
     req.id = reconcile_body_id(segments, req.id)
     response: DeclareTableResponse = await run_in_threadpool(native.call, ns, "declare_table", req)
@@ -413,7 +413,7 @@ async def register_table(
     """Register an existing table location at ``id`` via ``register_table``, then seed the caller's FGA
     ownership and emit a REGISTER_TABLE marker (who attached it + where)."""
     segments = parse_identifier(id, settings.delimiter)
-    fga_deps.require_parent("table", segments, delimiter=settings.delimiter)
+    await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments)
@@ -440,6 +440,18 @@ async def register_table(
         extra={"location": response.location},
     )
     return response
+
+
+@router.get("/{id}/protection", response_model_exclude_none=True)
+async def get_table_protection(id: str, settings: SettingsDep) -> ProtectionResponse:
+    """Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:
+    an operator could not arm, disarm-check, or audit protection — they discovered it by eating a
+    409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the
+    record's `set_by` comes back so a refused drop can name who armed it."""
+    segments = parse_identifier(id, settings.delimiter)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    record = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    return ProtectionResponse(id=canonical, protected=bool(record), set_by=(record or {}).get("set_by"))
 
 
 @router.get("/{id}/tasks", response_model_exclude_none=True)
@@ -582,7 +594,7 @@ async def rename_table(
     # A rename can MINT an orphan as surely as a create: `new_namespace_id: []` moves the table to a
     # parentless id. Same rule, same door — checked before the native call, so a refused rename leaves
     # the source exactly where it was.
-    fga_deps.require_parent("table", new_segments, delimiter=settings.delimiter)
+    await fga_deps.require_parent_exists(ns, "table", new_segments, delimiter=settings.delimiter)
     # Renaming INTO a namespace is a create in that namespace: authorize can_create_table on the DESTINATION
     # parent BEFORE the (destructive, relocating) rename — else a source-table owner could plant their table
     # into a namespace/tenant they have no create rights on. (authorize already gated can_drop on the source.)

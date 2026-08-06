@@ -103,14 +103,26 @@ describe('a zone with nothing to navigate renders no rail', () => {
 	// `annotator` (NAVLESS) is exempt on the rule's own principle: it renders its own annotation
 	// panel and ships no nav.ts at all, because a two-row rail beside that panel read as two sidebars
 	// competing for one job. Its opt-out is enforced above by the zoneNav={null} assertion.
+	//
+	// The assertion reads the SHELL's actual condition, which is
+	// `zoneNavLeaves(zoneNav).length > 1 || sidebarContent !== undefined` (app-shell.svelte) — not the
+	// leaf count alone. A zone that passes `sidebarContent` renders a rail at ANY leaf count, so
+	// demanding two leaves of it would force a second route row to exist purely to satisfy a test
+	// whose stated reason ("would silently render no sidebar") is false for that zone. `studio` is the
+	// case: one route (the flow canvas at its root) and a rail whose substance is the injected NODE
+	// LIBRARY. The invariant this file actually protects — no zone silently loses its rail — is
+	// unchanged, and is now checked against the thing that decides it.
+	const injectsRailContent = (zone: string) =>
+		/sidebarContent[=\s]/.test(readFileSync(layoutPath(zone), 'utf8'));
+
 	for (const zone of ZONES.filter((z) => z !== 'home' && !NAVLESS.has(z))) {
-		it(`${zone} declares more than one leaf, so its rail renders`, () => {
+		it(`${zone} renders a rail — more than one leaf, or its own sidebarContent`, () => {
 			const leaves = countLeaves(readFileSync(navPath(zone), 'utf8'));
 			expect(
-				leaves,
-				`${zone} has ${leaves} leaf(s); the shell hides a rail below 2, so this zone would ` +
-					`silently render no sidebar`,
-			).toBeGreaterThan(1);
+				leaves > 1 || injectsRailContent(zone),
+				`${zone} has ${leaves} leaf(s) and passes no sidebarContent; the shell hides a rail ` +
+					`below 2, so this zone would silently render no sidebar`,
+			).toBe(true);
 		});
 	}
 });

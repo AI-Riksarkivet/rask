@@ -197,7 +197,7 @@
 		if (busy) return;
 		busy = `${task.task_id}:${event}`;
 		notice = null;
-		const result = await fireTaskEvent({ taskId: task.task_id, event, ...opts });
+		const result = await fireTaskEvent({ taskId: task.task_id, event, projectId, ...opts });
 		busy = null;
 		if (result.ok) {
 			onchanged();
@@ -247,7 +247,7 @@
 		notice = null;
 		const failures: string[] = [];
 		for (const task of items) {
-			const result = await fireTaskEvent({ taskId: task.task_id, event: 'assign', assignee: to });
+			const result = await fireTaskEvent({ taskId: task.task_id, event: 'assign', assignee: to, projectId });
 			if (!result.ok) failures.push(`${task.source.keys[0] ?? task.task_id}: ${result.detail}`);
 		}
 		bulkBusy = false;
@@ -292,7 +292,7 @@
 		notice = null;
 		const failures: string[] = [];
 		for (const task of targets) {
-			const result = await fireTaskEvent({ taskId: task.task_id, event });
+			const result = await fireTaskEvent({ taskId: task.task_id, event, projectId });
 			if (!result.ok) failures.push(`${task.source.keys[0] ?? task.task_id}: ${result.detail}`);
 		}
 		bulkBusy = false;
@@ -345,7 +345,10 @@
 	function canvasHref(task: TaskDetail): string {
 		const keys = task.source.keys.join(',');
 		const dataset = task.source.where ? `dataset=${encodeURIComponent(task.source.where)}&` : '';
-		return `${base}/?${dataset}keys=${encodeURIComponent(keys)}&task=${task.task_id}`;
+		// `project` rides along beside `task`: the canvas's exit needs to address the QUEUE PAGE, and
+		// a task id alone cannot — building /projects/<task_id> from it would 404. Without this the
+		// exit fell back to the corpus browser and the queue you were working through vanished.
+		return `${base}/?${dataset}keys=${encodeURIComponent(keys)}&task=${task.task_id}&project=${encodeURIComponent(projectId)}`;
 	}
 
 	/** The task's own legal events, minus `save_draft` (that belongs to the canvas). `assign`

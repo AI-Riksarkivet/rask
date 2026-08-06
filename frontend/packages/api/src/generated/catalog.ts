@@ -722,7 +722,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get Namespace Protection
+         * @description Read the namespace's deletion-protection flag (#123) — the table door's read, one rung up.
+         */
+        get: operations["get_namespace_protection_v1_namespace__id__protection_get"];
         put?: never;
         /**
          * Set Namespace Protection
@@ -915,6 +919,44 @@ export interface paths {
          *     like any other ACL change, only when it was actually written.
          */
         post: operations["create_project_v1_projects_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{id}/policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Project Policies
+         * @description Every maintenance policy governing data inside this project (#65) — the tenant-scoped VIEW.
+         *
+         *     Admin-gated on ``project:<id>#can_administer``, exactly like ``describe_project_policy``: the trio
+         *     already set that bar, and a second (estate-observer) door for the same information would split the
+         *     tier — a tenant admin could then be shown one of their records and denied the list of all of them.
+         *
+         *     ALL warehouse statuses count, not just active ones. ``set_project_policy`` filters to active because
+         *     it is WRITING coverage (a policy over a bucket that no live warehouse serves could never match); this
+         *     READS coverage, and a deactivated warehouse's data — plus any policy still governing it — remains the
+         *     tenant's. Narrowing here would hide exactly the retention record an operator is looking for while
+         *     offboarding.
+         *
+         *     Tolerant like every other listing: an unreadable warehouse or policy record is skipped with a warning
+         *     by the registry primitives themselves. An unreadable BINDING is different and is reported —
+         *     ``read_bindings`` (not ``list_bindings``) so the skip list crosses the return boundary into
+         *     ``incomplete``/``skipped_bindings``. A binding you cannot read is a namespace you cannot see, and a
+         *     quietly short list would read as checked-and-clean. It still answers 200: this is a listing, not the
+         *     destructive door ``namespaces_bound_to`` guards, where one corrupt object correctly refuses the whole
+         *     operation.
+         */
+        get: operations["list_project_policies_v1_projects__id__policies_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2010,7 +2052,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get Table Protection
+         * @description Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:
+         *     an operator could not arm, disarm-check, or audit protection — they discovered it by eating a
+         *     409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the
+         *     record's `set_by` comes back so a refused drop can name who armed it.
+         */
+        get: operations["get_table_protection_v1_table__id__protection_get"];
         put?: never;
         /**
          * Set Table Protection
@@ -2158,8 +2207,15 @@ export interface paths {
         put?: never;
         /**
          * Update Table Schema Metadata
-         * @description Set the table's schema-level metadata map — wraps ``update_table_schema_metadata``; emits an
+         * @description Upsert the table's schema-level metadata map — a ``null`` value DELETES that key; emits an
          *     UPDATE_SCHEMA_METADATA event (the response omits the version, so it is read back best-effort).
+         *
+         *     The op MERGES, whatever the spec's "Replace" wording says (probed against a real ``dir`` backend:
+         *     posting ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing). Omitting a key therefore cannot
+         *     remove it, and the spec's request model types ``metadata`` as a strict ``{str: str}`` that cannot carry
+         *     a null — so ``{"key": null}`` is a rask EXTENSION, routed to the dataplane's pylance
+         *     ``update_schema_metadata`` (the same ``None``-deletes dialect ``update_field_metadata`` already speaks).
+         *     A body with no nulls stays on the native spec op, transaction id and all.
          */
         post: operations["update_table_schema_metadata_v1_table__id__schema_metadata_update_post"];
         delete?: never;
@@ -4648,6 +4704,11 @@ export interface components {
             id: string;
             /** Project */
             project: string;
+            /**
+             * Protected
+             * @default false
+             */
+            protected: boolean;
             /** Serving */
             serving?: string | null;
         };
@@ -6210,6 +6271,46 @@ export interface components {
             target_rows_per_fragment?: number | null;
         };
         /**
+         * ProjectPoliciesResponse
+         * @description Every maintenance policy record governing data inside ONE project (#65) — the tenant-scoped VIEW.
+         *
+         *     ``set``/``describe``/``delete`` answer for a single object each; nothing could ever enumerate what is
+         *     actually in force across a tenant, so a project admin could not tell which of their namespaces or
+         *     tables carries a retention override without already knowing its id. This is that read.
+         *
+         *     ``buckets`` and ``namespaces`` are the SCOPE the listing was computed from — the project's warehouse
+         *     buckets and the top-level namespaces bound to those warehouses — reported so a surprising list can be
+         *     explained without a second call.
+         *
+         *     ``incomplete`` / ``skipped_bindings`` are load-bearing, not diagnostics. The namespace half of the
+         *     scope is derived from the namespace→warehouse bindings, so a binding record that cannot be read is a
+         *     namespace whose policies cannot be seen: a silently-narrowed list would read as "checked and clean",
+         *     which is the ``unbound_namespaces`` bug class. The listing still answers 200 (it is a read, not a
+         *     destructive door — see ``warehouses.namespaces_bound_to`` for the opposite posture) and SAYS it may
+         *     be short.
+         *
+         *     **Resolution is winner-takes-all** (``PolicyRequest``): a table record shadows a namespace record
+         *     shadows the project record, and the winner supplies EVERY field. These records are what EXISTS, not
+         *     what governs any one dataset — a surface that renders them as an effective, merged policy is lying.
+         */
+        ProjectPoliciesResponse: {
+            /** Buckets */
+            buckets: string[];
+            /**
+             * Incomplete
+             * @default false
+             */
+            incomplete: boolean;
+            /** Namespaces */
+            namespaces: string[];
+            /** Policies */
+            policies: components["schemas"]["PolicyResponse"][];
+            /** Project */
+            project: string;
+            /** Skipped Bindings */
+            skipped_bindings?: string[];
+        };
+        /**
          * ProjectResponse
          * @description A derived tenant: its name, the warehouses claiming it, and its effective FGA admins (``[]`` when
          *     FGA is off/unavailable — degraded, never fabricated).
@@ -6269,6 +6370,8 @@ export interface components {
             id: string;
             /** Protected */
             protected: boolean;
+            /** Set By */
+            set_by?: string | null;
         };
         /**
          * PublishRequest
@@ -7315,6 +7418,8 @@ export interface components {
             id: string;
             /** Project */
             project: string;
+            /** Protected */
+            protected?: boolean | null;
             /** Root Uri */
             root_uri: string;
             /** Serving */
@@ -8485,6 +8590,37 @@ export interface operations {
             };
         };
     };
+    get_namespace_protection_v1_namespace__id__protection_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     set_namespace_protection_v1_namespace__id__protection_post: {
         parameters: {
             query?: never;
@@ -8754,6 +8890,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_project_policies_v1_projects__id__policies_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectPoliciesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10381,6 +10548,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_table_protection_v1_table__id__protection_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectionResponse"];
                 };
             };
             /** @description Validation Error */

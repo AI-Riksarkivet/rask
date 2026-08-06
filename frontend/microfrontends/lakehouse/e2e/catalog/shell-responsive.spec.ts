@@ -177,16 +177,19 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 		'/lakehouse/catalog',
 		'/lakehouse/catalog/tables',
 		'/lakehouse/catalog/warehouses',
-		'/lakehouse/models',
 		'/lakehouse/lineage',
 		'/lakehouse/lineage/runs',
 		'/lakehouse/lineage/columns',
+		// The MODELS zone's root — a zone entry in this bar now, not a `/lakehouse/models` row. Zone
+		// roots carry the trailing slash for the same 308 reason as the two below.
+		'/models/',
 		// Zone-root hrefs carry the TRAILING SLASH — load-bearing (a bare /explorer costs a 308 per hop;
 		// nav-config.test pins it). The old bare forms predated that convention landing here.
 		'/explorer/',
 		'/annotator/',
 		// GOVERNANCE is not in this bar at either width any more — it moved to the main menu's Settings
-		// entry with the two-level ruling, so `/lakehouse/governance/access` is unreachable from inside
+		// entry with the two-level ruling, and #105 moved the page itself to `/settings/access` in the
+		// home zone — so the access workbench is unreachable from inside
 		// a zone by design. Operations DID stay (running the estate is an operation on the lakehouse),
 		// which is why its DLQ row is still expected right below.
 		'/lakehouse/admin/dlq',
@@ -243,7 +246,6 @@ test('the wide Lakehouse panel carries NO filler self-row — its sub-area rows 
 		'/lakehouse/catalog/tables',
 		'/lakehouse/catalog/namespaces',
 		'/lakehouse/catalog/warehouses',
-		'/lakehouse/models',
 		'/lakehouse/lineage',
 	]) {
 		await expect(panel.locator(`a[href="${href}"]`)).toHaveCount(1);

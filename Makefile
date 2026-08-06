@@ -210,7 +210,7 @@ dev-micro:
 # `make k3s-build`/`k3s-import` (one image per zone via --build-arg APP=$z) and
 # sync-favicons; the zone-contract deploy-path gate pins this list to the zone
 # directories that actually exist, so add/retire a zone HERE too.
-ZONES ?= home lakehouse explorer annotator compute studio train
+ZONES ?= home lakehouse explorer annotator compute studio models
 
 dev-frontends:        # build the ui + api libs once, then all zones + :3024 proxy
 	# Build the libs FIRST so the zones read a complete dist/. Running `turbo run dev`
@@ -431,6 +431,16 @@ k3s-import: ## Side-load :dev images into k3s containerd
 	  docker save $$s:dev | sudo k3s ctr images import - || exit 1; \
 	done
 
+# The MEDIA PLANE is on by default here, and it has to be: `frontend.apps` always includes the
+# `explorer` and `annotator` zones, and both proxy /<zone>/api/* to VIEWER_API — env the chart only
+# injects when `explorer.enabled`. That value DEFAULTS TO FALSE, so a k3s-up without this flag
+# deployed two zones with no upstream at all; their BFF fell back to a localhost dev default that
+# does not exist in-cluster and /annotator/api/datasets answered 502. Observed live on release
+# revision 25, where `explorer` had simply never been set — the zones rendered fine, which is why
+# nobody noticed. `make k3s-up EXPLORER=false` is still available for a fleet that genuinely does
+# not want the corpus volume mounted.
+EXPLORER ?= true
+
 k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait for the gateway
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ -z "$$HF_TOKEN" ] && [ -r "$${HF_HOME:-$$HOME/.cache/huggingface}/token" ]; then \
@@ -441,6 +451,7 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m \
 	  --take-ownership \
 	  --set image.localImages=true \
+	  --set explorer.enabled=$(EXPLORER) \
 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN} \
 	  $${AWS_ACCESS_KEY_ID:+--set-string rustfs.accessKey=$$AWS_ACCESS_KEY_ID} \
 	  $${AWS_SECRET_ACCESS_KEY:+--set-string rustfs.secretKey=$$AWS_SECRET_ACCESS_KEY}

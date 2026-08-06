@@ -700,3 +700,48 @@ def test_an_unreadable_binding_refuses_rather_than_reporting_an_empty_warehouse(
     assert "silver.json" in str(exc.value)
     # …and the tolerant listing still serves, because a broken binding must not black out enumeration.
     assert [b["top_ns"] for b in warehouses.list_bindings(root, so)] == ["bronze"]
+
+
+def test_a_warehouse_created_PROTECTED_actually_refuses_its_delete(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#123. `require_not_protected` shipped at the warehouse delete door a YEAR before any API could
+    arm it — the only protected warehouses were hand-edited registry JSON, while both delete dialogs
+    shipped an "Override deletion protection" checkbox for a 409 production could not produce. This
+    drives arm-at-create through to the refusal: the checkbox's 409 is now real.
+    """
+    from catalog.schemas import CreateWarehouseRequest
+    from lance_namespace import NamespaceNotEmptyError
+
+    settings = _governed_settings(tmp_path)
+    _FakeStore(estate_admins=("alice",)).install(monkeypatch)
+    monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
+    _create_project_as(settings, "alice", "acme")
+    created = _create_as(settings, "alice", CreateWarehouseRequest(id="safe-wh", project="acme", protected=True))
+    assert created.protected is True, "the create dropped the flag — observability half"
+
+    from catalog.api import fga_deps
+    from catalog.services import warehouses as wh_svc
+
+    record = wh_svc.get_warehouse(settings.registry_root, settings.storage_options(), "safe-wh")
+    assert record is not None and record.get("protected") == "true", "the flag never reached the registry record"
+    with pytest.raises(NamespaceNotEmptyError, match="protect"):
+        fga_deps.require_not_protected(record, kind="warehouse", obj_id="safe-wh", force=False)
+    # force=true turns exactly this lock — the dialogs' override checkbox, now honest.
+    fga_deps.require_not_protected(record, kind="warehouse", obj_id="safe-wh", force=True)
+
+
+def test_an_UNPROTECTED_create_stays_byte_identical_on_the_wire(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The default must not stamp `protected: "false"` onto every record — pre-protection records
+    stay byte-identical, and the response omits the field (exclude_none)."""
+    from catalog.schemas import CreateWarehouseRequest
+
+    settings = _governed_settings(tmp_path)
+    _FakeStore(estate_admins=("alice",)).install(monkeypatch)
+    monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
+    _create_project_as(settings, "alice", "acme")
+    created = _create_as(settings, "alice", CreateWarehouseRequest(id="plain-wh", project="acme"))
+    assert created.protected is None
+
+    from catalog.services import warehouses as wh_svc
+
+    record = wh_svc.get_warehouse(settings.registry_root, settings.storage_options(), "plain-wh")
+    assert record is not None and "protected" not in record

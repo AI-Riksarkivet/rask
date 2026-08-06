@@ -37,6 +37,7 @@
 			"types": "./src/lineage/index.ts",
 			"default": "./src/lineage/index.ts"
 		},
+		"./live": "./src/live.svelte.ts",
 		"./observability": {
 			"types": "./src/observability.ts",
 			"default": "./src/observability.ts"
@@ -48,6 +49,10 @@
 		"./runs-feed": {
 			"types": "./src/runs-feed.ts",
 			"default": "./src/runs-feed.ts"
+		},
+		"./serve-proxy": {
+			"types": "./src/serve-proxy.ts",
+			"default": "./src/serve-proxy.ts"
 		}
 	},
 	"scripts": {

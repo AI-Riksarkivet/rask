@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from typing import Any
@@ -51,6 +51,7 @@ from lance_namespace import (
     GetTableTagVersionResponse,
     InvalidInputError,
     LanceNamespace,
+    LanceNamespaceError,
     ListTableBranchesRequest,
     ListTableBranchesResponse,
     ListTableIndicesRequest,
@@ -90,12 +91,22 @@ def _table_id(req: object) -> list[str]:
     return table_id
 
 
-def _version(ns: LanceNamespace, so: StorageOptions, table_id: list[str]) -> int:
-    """Return the table's current dataset version after an in-place mutation."""
-    return open_dataset(ns, so, table_id).version
+def _version(ns: LanceNamespace, so: StorageOptions, table_id: list[str], branch: str | None = None) -> int:
+    """Return the table's current dataset version after an in-place mutation.
+
+    ``branch`` MUST be the one the mutation targeted: a branch has its own version sequence, so reading it
+    off main would answer a branch write with main's (unchanged) version — a wrong number that looks right.
+    """
+    return open_dataset(ns, so, table_id, branch=branch).version
 
 
-def read_version_and_schema(ns: LanceNamespace, so: StorageOptions, table_id: list[str], pin_version: int | None = None) -> tuple[int | None, SchemaFields]:
+def read_version_and_schema(
+    ns: LanceNamespace,
+    so: StorageOptions,
+    table_id: list[str],
+    pin_version: int | None = None,
+    branch: str | None = None,
+) -> tuple[int | None, SchemaFields]:
     """The ``(version, schema-facet fields)`` pair for stamping lineage after a committed write.
 
     ONE dataset open serves both reads, so the version and the schema can never come from two different
@@ -104,11 +115,15 @@ def read_version_and_schema(ns: LanceNamespace, so: StorageOptions, table_id: li
     response reported, so the schema is exactly that version's; without it (ops whose response carries
     only a ``transaction_id`` — insert/index/restore/schema-metadata) both come from the current snapshot.
 
+    ``branch`` must name the ref the write COMMITTED TO. Reading a branch write back off main pins the WROTE
+    edge to main's version and main's schema — the lineage graph would then record the evolution as having
+    happened on a version that never carried it.
+
     Entirely best-effort: the write is already committed, so a readback failure must degrade the lineage
     enrichment (``(pin_version, [])`` — versionless when unpinned), never fail the request.
     """
     try:
-        dataset = open_dataset(ns, so, table_id, version=pin_version)
+        dataset = open_dataset(ns, so, table_id, version=pin_version, branch=branch)
         version = pin_version if pin_version is not None else int(dataset.version)
     except Exception as exc:
         log.warning("lineage_readback_failed", extra={"table": table_id, "error": str(exc)})
@@ -851,6 +866,18 @@ _USER_INPUT_MARKER = "Invalid user input"
 _RUST_SOURCE_SUFFIX = re.compile(r",\s*/\S+\.rs:\d+:\d+\s*\.?\s*$")
 
 
+def _clean_lance_message(message: str) -> str:
+    """Lance's own text, minus the two things a caller must never receive.
+
+    The ``Invalid user input`` prefix is replaced by our own action wording, and the Rust source location
+    (``, /home/runner/work/lance/…/planner.rs:1019:20``) is trimmed: it is useful in a server log, noise in
+    an API response, and it publishes the build path of a vendored library to every caller. Everything else
+    survives — Lance frequently names the columns that DO exist, which is the whole value of the message.
+    """
+    body = message.split(_USER_INPUT_MARKER, 1)[1].lstrip(": ") if _USER_INPUT_MARKER in message else message
+    return _RUST_SOURCE_SUFFIX.sub("", body).strip()
+
+
 @contextmanager
 def _user_sql(action: str) -> Iterator[None]:
     """Translate Lance's expression-parse failures into a 4xx instead of letting them escape as a 500.
@@ -877,9 +904,66 @@ def _user_sql(action: str) -> Iterator[None]:
             raise  # a storage / IO failure: a real 5xx, and it stays one
         # Keep Lance's text — it names the columns that do exist — minus its prefix, which we replace, and
         # minus the Rust source location, which the caller can do nothing with.
-        detail = _RUST_SOURCE_SUFFIX.sub("", message.split(_USER_INPUT_MARKER, 1)[1].lstrip(": ")).strip()
+        detail = _clean_lance_message(message)
         log.info("user_sql_rejected", extra={"action": action, "error": message})
         raise InvalidInputError(f"{action}: {detail}") from exc
+
+
+#: A column op names a column that is not there. Lance says it four ways across three exception classes —
+#: ``Column nope does not exist in the dataset`` (drop, ValueError), ``Invalid user input: Column "nope"
+#: does not exist in the dataset`` (rename, OSError), ``Field 'nope' not found.\nAvailable fields: ['id']``
+#: (update_field_metadata, OSError) — and the SPEC has a code for exactly this: 12 TableColumnNotFound (404).
+#: Matched against pylance 9.0.0's real messages (probed, not guessed), so a pylance bump that rewords them
+#: reds a test rather than silently reverting these paths to 500s.
+_COLUMN_NOT_FOUND = re.compile(r"does not exist in the dataset|field '[^']*' not found", re.IGNORECASE)
+
+#: Client mistakes Lance reports WITHOUT its ``Invalid user input`` marker. Both are refusals of a
+#: well-formed request the caller got wrong, i.e. 400 — never a server fault.
+_COLUMN_BAD_REQUEST = re.compile(r"cannot drop all columns", re.IGNORECASE)
+
+#: Messages that already enumerate the schema for the caller; appending our own list would just repeat it.
+_LISTS_FIELDS = re.compile(r"valid fields|available fields", re.IGNORECASE)
+
+
+@contextmanager
+def _column_op(action: str, fields: Sequence[str] = ()) -> Iterator[None]:
+    """Translate a schema-evolution failure the CALLER caused into the spec's 4xx, not a 500.
+
+    The sibling of :func:`_user_sql` for the four column ops (add / alter / drop / update_field_metadata).
+    It is a separate translator rather than a widening of ``_user_sql`` because ``_user_sql``'s single
+    ``Invalid user input`` marker test is load-bearing for update/delete and would miss half of these:
+    ``drop_columns`` raises an unmarked ``ValueError`` for both of its user errors. Seven distinct client
+    mistakes answered 500 ``InternalError`` with detail "Internal Server Error" before this (#101) — the
+    lakehouse UI renders that detail verbatim, so a user who typed a wrong column name read that the server
+    had broken.
+
+    Classification, in order:
+
+    * ``LanceNamespaceError`` — already typed (``TableBranchNotFound`` out of ``open_dataset``, our own
+      ``InvalidInput`` for an unsupported cast target): re-raised untouched.
+    * a message naming a MISSING column → ``TableColumnNotFoundError`` (code 12 → 404). ``fields`` is the
+      live schema, appended when Lance's own text does not already list it, so the answer always tells the
+      caller both what was missing and what is there.
+    * Lance's ``Invalid user input`` marker, or an unmarked message on the known-bad-request list →
+      ``InvalidInputError`` (400).
+    * anything else propagates — an object-store outage stays a 5xx instead of being blamed on the caller.
+    """
+    try:
+        yield
+    except LanceNamespaceError:
+        raise
+    except (ValueError, OSError) as exc:
+        message = str(exc)
+        detail = _clean_lance_message(message)
+        if _COLUMN_NOT_FOUND.search(message):
+            if fields and not _LISTS_FIELDS.search(detail):
+                detail = f"{detail}. Valid fields are {', '.join(fields)}"
+            log.info("column_op_rejected", extra={"action": action, "error": message})
+            raise TableColumnNotFoundError(f"{action}: {detail}") from exc
+        if _USER_INPUT_MARKER in message or _COLUMN_BAD_REQUEST.search(message):
+            log.info("column_op_rejected", extra={"action": action, "error": message})
+            raise InvalidInputError(f"{action}: {detail}") from exc
+        raise  # not attributable to the request: a real 5xx, and it stays one
 
 
 def update_table(ns: LanceNamespace, so: StorageOptions, req: UpdateTableRequest) -> UpdateTableResponse:
@@ -917,8 +1001,10 @@ def add_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAddColumn
     transforms = {c.name: c.expression for c in columns if c.expression}
     if not transforms:
         raise InvalidInputError("add_columns requires a name and SQL expression per column")
-    open_dataset(ns, so, table_id).add_columns(transforms)
-    return AlterTableAddColumnsResponse(version=_version(ns, so, table_id))
+    dataset = open_dataset(ns, so, table_id, branch=req.branch)
+    with _column_op("add_columns", dataset.schema.names):
+        dataset.add_columns(transforms)
+    return AlterTableAddColumnsResponse(version=_version(ns, so, table_id, req.branch))
 
 
 def alter_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAlterColumnsRequest) -> AlterTableAlterColumnsResponse:
@@ -936,17 +1022,21 @@ def alter_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAlterCo
             # data_type is a JsonArrowDataType dict; pylance needs a real pa.DataType, not the JSON dict.
             alteration["data_type"] = _json_arrow_to_pa_type(dt if isinstance(dt, dict) else dt.model_dump())
         alterations.append(alteration)
-    # pylance accepts plain dict alterations at runtime; its stub types them as
-    # AlterColumn (a TypedDict), which ty can't match from dict[str, object].
-    open_dataset(ns, so, table_id).alter_columns(*alterations)  # ty: ignore[invalid-argument-type]
-    return AlterTableAlterColumnsResponse(version=_version(ns, so, table_id))
+    dataset = open_dataset(ns, so, table_id, branch=req.branch)
+    with _column_op("alter_columns", dataset.schema.names):
+        # pylance accepts plain dict alterations at runtime; its stub types them as
+        # AlterColumn (a TypedDict), which ty can't match from dict[str, object].
+        dataset.alter_columns(*alterations)  # ty: ignore[invalid-argument-type]
+    return AlterTableAlterColumnsResponse(version=_version(ns, so, table_id, req.branch))
 
 
 def drop_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableDropColumnsRequest) -> AlterTableDropColumnsResponse:
     """Drop the named columns from the table."""
     table_id = _table_id(req)
-    open_dataset(ns, so, table_id).drop_columns(list(req.columns or []))
-    return AlterTableDropColumnsResponse(version=_version(ns, so, table_id))
+    dataset = open_dataset(ns, so, table_id, branch=req.branch)
+    with _column_op("drop_columns", dataset.schema.names):
+        dataset.drop_columns(list(req.columns or []))
+    return AlterTableDropColumnsResponse(version=_version(ns, so, table_id, req.branch))
 
 
 def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[str]) -> dict[str, str]:
@@ -966,6 +1056,26 @@ def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[
             continue
         out[key] = v.decode() if isinstance(v, bytes) else str(v)
     return out
+
+
+def update_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[str], values: dict[str, str | None]) -> dict[str, str]:
+    """Upsert the table's schema-level metadata; a ``None`` value DELETES that key.
+
+    The table-level twin of :func:`update_field_metadata`'s dialect, and the only way to REMOVE a table
+    property: the spec's ``update_table_schema_metadata`` merges (probed against a real ``dir`` backend —
+    ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing, despite the spec text saying "Replace"),
+    and its wire model types ``metadata`` as a strict ``{str: str}``, so a null cannot ride the native op
+    at all. Omitting a key is therefore a no-op, which made the properties editor's remove button a silent
+    lie until this existed.
+
+    NEVER ``replace=True``. The map a caller holds came from :func:`read_schema_metadata`, which EXCLUDES
+    the internal ``lineage.*`` keys — so replacing would silently drop the #21 coordinates that make the
+    Lance file self-describing. Merge + explicit null-delete is the only shape that can't destroy them.
+
+    Returns the table's new full map with ``lineage.*`` filtered out, matching what the read twin reports.
+    """
+    result = open_dataset(ns, so, table_id).update_schema_metadata(values)
+    return {k: v for k, v in result.items() if not k.startswith("lineage.")}
 
 
 def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[str], data: bytes) -> bytes:
@@ -997,15 +1107,23 @@ def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[s
     return sink.getvalue().to_pybytes()
 
 
-def update_field_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[str], updates: list[dict[str, Any]]) -> UpdateFieldMetadataResponse:
+def update_field_metadata(
+    ns: LanceNamespace,
+    so: StorageOptions,
+    table_id: list[str],
+    updates: list[dict[str, Any]],
+    branch: str | None = None,
+) -> UpdateFieldMetadataResponse:
     """Merge/replace per-field metadata for the given field paths."""
     field_updates = {u["path"]: dict(u.get("metadata") or {}) for u in updates if u.get("path")}
     replace = any(bool(u.get("replace")) for u in updates)
-    open_dataset(ns, so, table_id).update_field_metadata(field_updates, replace=replace)
+    dataset = open_dataset(ns, so, table_id, branch=branch)
+    with _column_op("update_field_metadata", dataset.schema.names):
+        dataset.update_field_metadata(field_updates, replace=replace)
     # A None value is the key-deletion signal for the backend; drop those from the
     # echoed map since the response model's field values are non-nullable strings.
     fields = {path: {k: v for k, v in meta.items() if v is not None} for path, meta in field_updates.items()}
-    return UpdateFieldMetadataResponse(version=_version(ns, so, table_id), fields=fields)
+    return UpdateFieldMetadataResponse(version=_version(ns, so, table_id, branch), fields=fields)
 
 
 #: Per-operation fields worth surfacing in a commit log, keyed by the pylance operation class name. Read

@@ -8,8 +8,6 @@
 	import { AppShell, ForbiddenPage } from '@rask/ui/shell';
 	import { base } from '$app/paths';
 	import { onMount, type Snippet } from 'svelte';
-	import type { Me } from '@rask/api';
-	import { fetchMeViaBff } from '$lib/http';
 	import { areaOf, lakehouseSidebar } from '$lib/nav';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import type { LayoutData } from './$types';
@@ -17,19 +15,13 @@
 	let { children, data }: { children: Snippet; data: LayoutData } = $props();
 
 	// The frozen /v1/me identity for the navbar, fetched browser-side through this zone's
-	// bearer-forwarding BFF (skeleton pills while in flight; null = signed out / unreachable →
-	// base entries only, fail-closed on the admin surfaces).
-	let me = $state<Me | null>(null);
-	let meLoading = $state(true);
-	onMount(async () => {
-		me = await fetchMeViaBff();
-		meLoading = false;
-	});
+	const me = $derived(data.me);
 
 	const area = $derived(areaOf(page.url.pathname));
-	// Both areas behind the estate-admin door. Governance (access, audit) split out of admin so the
-	// breadcrumb would stop contradicting the rail — it must NOT split out of the door with it.
-	const PRIVILEGED_AREAS = new Set(['admin', 'governance']);
+	// The area behind the estate-admin door. `governance` was the other one until #105 moved Access and
+	// Audit to the home zone's `/settings/` — this zone no longer serves that segment at all, so listing
+	// it here would gate a path that cannot be reached.
+	const PRIVILEGED_AREAS = new Set(['admin']);
 
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
 	// the surface and never fetches — the zone owns the transport — so this is the transport: the ONE
@@ -61,16 +53,13 @@
 	// every panel's own 401 handling. Scoped to the area, so merging admin into this zone did not widen
 	// the gate over the catalog, lineage or models routes.
 	const forbidden = $derived(
-		PRIVILEGED_AREAS.has(area) && data.authEnabled && !meLoading && !(me?.estate_admin ?? false),
+		PRIVILEGED_AREAS.has(area) && data.authEnabled && !(me?.estate_admin ?? false),
 	);
-	const checking = $derived(PRIVILEGED_AREAS.has(area) && data.authEnabled && meLoading);
 	// Don't advertise the admin area's routes to an identity the door refuses (or before the verdict)
 	// — but hide only THOSE groups. Nulling the whole sidebar (what this did while each area had its
 	// own) would now blank catalog, lineage and models too, punishing a user for visiting a URL they
 	// were denied.
-	const zoneNav = $derived(
-		lakehouseSidebar(!data.authEnabled || (!meLoading && (me?.estate_admin ?? false))),
-	);
+	const zoneNav = $derived(lakehouseSidebar(!data.authEnabled || (me?.estate_admin ?? false)));
 
 	// The lineage area's Graph and Columns canvases set height:100% and must fill a SIZED flex item
 	// rather than scroll inside an auto-height one; every other area wants the plain scroll wrapper.
@@ -108,7 +97,6 @@
 	project={data.activeProject ? { name: data.activeProject } : undefined}
 	{zoneNav}
 	{me}
-	{meLoading}
 	{notifications}
 >
 	{#if forbidden}
@@ -117,11 +105,6 @@
 			message="These surfaces span every tenant. Your identity does not hold the estate-admin privilege (can_observe_events on the FGA root)."
 			home="/"
 		/>
-	{:else if checking}
-		<!-- Fail-closed while the identity resolves: no admin content before the verdict. -->
-		<div class="text-muted-foreground flex flex-1 items-center justify-center text-sm">
-			Checking access…
-		</div>
 	{:else if canvasArea}
 		<div class="zone-scroll">
 			{@render children()}

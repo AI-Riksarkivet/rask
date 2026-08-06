@@ -43,8 +43,8 @@ import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from maintenance.core.config import MaintenanceSettings
-from maintenance.services.optimize import discover_dataset_uris
+from maintenance.core.config import MaintenanceSettings, shared_lance_session
+from maintenance.services.optimize import discover_datasets
 from maintenance.services.orphans import OrphanFile, scan_datasets
 from service_kit.governed import fga
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
@@ -74,7 +74,10 @@ _TUPLE_PAGE_SIZE = 100
 #: The namespace spec's own object index, one per root: ``object_id``/``object_type`` rows recording
 #: every namespace and table. It is the ONLY place a namespace exists — namespaces are not directories
 #: — so the unbound-namespace scan reads this rather than listing prefixes.
-_MANIFEST_DIR = "__manifest"
+#: Public because the #79 purge re-reads the SAME index to re-check liveness before it deletes anything.
+#: One constant rather than two copies: a purge looking at the wrong path would find no live objects and
+#: happily destroy every one of them.
+MANIFEST_DIR = "__manifest"
 _MANIFEST_NAMESPACE_TYPE = "namespace"
 
 #: The drift categories, in report order. `counts` carries exactly the ones that were CHECKED — an
@@ -271,10 +274,10 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions, delimiter:
     fs, base = fs_and_base(root, storage_options)
     # Probe first so the fresh-estate case never rides an exception: an absent dataset raises, and a
     # raise here would report the category unavailable on a brand-new estate.
-    if fs.get_file_info(f"{base}/{_MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
+    if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
         return []
-    manifest_uri = f"s3://{base}/{_MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{_MANIFEST_DIR}"
-    dataset = lance.dataset(manifest_uri, storage_options=storage_options)
+    manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
+    dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())  # ty: ignore[invalid-argument-type] — stub lacks session=, runtime verified
     table = dataset.to_table(columns=["object_id", "object_type"])
     return sorted(
         {
@@ -651,10 +654,16 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
     datasets: list[tuple[str, str]] = []
     for bucket in _scannable_buckets(report, settings, sources):
         try:
-            for uri in discover_dataset_uris(fs, bucket):
-                datasets.append((uri, uri.removeprefix("s3://")))
+            found = discover_datasets(fs, bucket)
         except Exception as exc:
             report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"dataset discovery failed: {exc}"))
+            continue
+        datasets.extend((uri, uri.removeprefix("s3://")) for uri in found.uris)
+        # The depth bound is a REAL gap in coverage, so it becomes a real incomplete-scan note: a
+        # dataset nested deeper than the walk reaches was never opened, and `report_is_clean` — the
+        # gate the #79 purge waits on — must not certify an estate whose file layer we only partly saw.
+        for prefix in found.truncated:
+            report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"depth limit reached at {prefix} — datasets under it were not scanned"))
     scan = scan_datasets(fs, datasets, settings.storage_options())
     report.orphan_files = scan.orphans
     report.counts["orphan_files"] = len(scan.orphans)

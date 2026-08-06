@@ -84,7 +84,7 @@ func extraArgs(kv []string) []dagger.BuildArg {
 // runner, assist-runner, cnpg-age-ext.
 func (m *Rask) Image(
 	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo",
-	//          ".localbin", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
+	//          ".localbin", ".playwright-cli", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
 	//          "**/coverage", "**/storybook-static", "**/build"]
 	// +defaultPath="/"
 	src *dagger.Directory,
@@ -114,7 +114,7 @@ func (m *Rask) Image(
 // `make frontend-images` passed it to docker buildx before this module took the build over.
 func (m *Rask) ZoneImage(
 	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo",
-	//          ".localbin", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
+	//          ".localbin", ".playwright-cli", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
 	//          "**/coverage", "**/storybook-static", "**/build"]
 	// +defaultPath="/"
 	src *dagger.Directory,
