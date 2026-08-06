@@ -165,6 +165,19 @@ def _ensure_partition_index(dataset: Any) -> None:  # noqa: ANN401 — LanceData
     reachable moment is its own commit — and an index over zero rows would be built and immediately
     stale anyway.
 
+    CREATE ONCE, MAINTAIN ELSEWHERE — and that is the format's own division, not a shortcut. An index
+    SEGMENT records which fragments it covers in its `fragment_bitmap`
+    (`lance_docs/file_format.md:1200`), and the engine filters out row addresses that are not in it
+    (`:1239`). So an index built at commit N covers commit N's fragments and no later ones: results
+    stay correct as the tier grows, but new fragments are served by scan until something folds them
+    in. That something is `services/maintenance`'s `optimize_indices()`, which is exactly what it does
+    and all it does. Re-creating the index here on every commit would duplicate that work and make a
+    routine append cost more as the tier grows.
+
+    BITMAP is the format's own recommendation for this shape: `lance_docs/file_format.md`'s
+    `index/scalar/bitmap.md` — "extremely fast query performance for LOW-CARDINALITY columns", which
+    is one distinct value per IIIF volume or S3 folder.
+
     Never fatal: a run that landed its data must not fail because an optimisation could not be built.
     Same reasoning as I8 for lineage, and the index is recoverable at any later commit.
     """
