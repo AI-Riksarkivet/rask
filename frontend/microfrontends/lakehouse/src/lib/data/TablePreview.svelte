@@ -17,6 +17,7 @@
 	import { untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { tableFromIPC } from 'apache-arrow';
+	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
 	import { queryTableRows } from './catalog';
 
 	let { table }: { table: string } = $props();
@@ -86,6 +87,16 @@
 		// clobber the user's typed limit back to the default) on every limit keystroke.
 		untrack(() => load());
 	});
+
+	// #73: the Arrow preview was read ONCE per table and never again, so a compaction, a mover run or
+	// anyone else's write left it showing rows that no longer exist — silently, because a stale table
+	// looks exactly like a fresh one. It rides the SAME `lineageFeed` the shell's bell does, so the
+	// preview and the notification above it can never disagree about when the estate changed.
+	//
+	// `load()` alone, deliberately NOT the reset `$effect` above: a cursor tick is not a table change,
+	// so re-running the reset would clobber a limit the user typed back to the default while they were
+	// reading. Same latest-wins guard applies — `load()` drops its own stale response.
+	liveRead(lineageTick, () => load());
 
 	/** Human form of one Arrow cell value. BigInt (int64), Date (timestamps) and typed-array /
 	 * arrow-Vector cells (embeddings, lists) all reach here — a vector prints its first few

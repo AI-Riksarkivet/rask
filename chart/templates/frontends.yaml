@@ -157,8 +157,18 @@ spec:
             - name: STUDIO_SERVE_URL
               value: {{ $serveOrigin | quote }}
             # #131: inference moved models -> compute (it is a compute concern, not a registry one).
+            #
+            # GATED so this does not collide with the ray-enabled block further down, which sets the
+            # SAME name for the SAME zone with the ray-head address. Rendering both put
+            # COMPUTE_SERVE_URL in the env list TWICE, and helm's strategic-merge-patch refuses a
+            # duplicated list key — `The order in patch list … doesn't match $setElementOrder`. That
+            # aborted a real upgrade on 2026-08-06 AFTER it had partially applied, taking ~20
+            # deployments to ImagePullBackOff. The ray block is the more specific and more correct
+            # address, so it wins whenever it renders; this is the fallback for a ray-less estate.
+            {{- if not (and $root.Values.ray.enabled (eq .name "compute")) }}
             - name: COMPUTE_SERVE_URL
               value: {{ printf "%s/%s" (trimSuffix "/" $serveOrigin) (trimPrefix "/" ($root.Values.ray.serveRoutePrefix | default "/htrflow")) | quote }}
+            {{- end }}
             # SSR load/remote functions reach the gateway server-side via an absolute base
             # URL; client code uses the relative /api/* Ingress route. Both names are live:
             # the api package's gateway client reads RASK_GATEWAY_URL, the BFF reads
