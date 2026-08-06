@@ -1140,3 +1140,31 @@ def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -
     # A digest is a CONTENT pin — a reconciler's, typically — so no tag may undo it.
     both = _helm_template("image.localImages=false", "image.repository=reg.example", "image.tags.gateway=IGNORED", "image.digests.gateway=sha256:abc")
     assert 'image: "reg.example/gateway@sha256:abc"' in both, "a per-component tag overrode a digest"
+
+
+@pytest.mark.parametrize("ray_enabled", ["true", "false"])
+def test_no_env_var_is_rendered_TWICE_on_any_workload(ray_enabled: str) -> None:
+    """A duplicated env NAME is not a cosmetic defect — it makes the release unupgradable.
+
+    Kubernetes' strategic-merge-patch keys the env list by `name`, so a duplicate makes the patch's
+    element order disagree with `$setElementOrder` and helm refuses with
+    `The order in patch list … doesn't match`. On 2026-08-06 `COMPUTE_SERVE_URL` was rendered twice
+    for the compute zone — once ungated, once in the ray-enabled block — and the resulting upgrade
+    aborted AFTER partially applying, taking ~20 deployments to ImagePullBackOff.
+
+    Parametrized over ray because that is precisely the toggle that produced the collision: the pair
+    only overlapped when ray was on, so a single-mode check would have passed while the estate that
+    matters broke.
+    """
+    rendered = _helm_template(f"ray.enabled={ray_enabled}")
+    offenders: list[str] = []
+    for doc in yaml.safe_load_all(rendered):
+        if not doc or doc.get("kind") not in {"Deployment", "StatefulSet", "Job", "CronJob"}:
+            continue
+        spec = doc["spec"]["template"]["spec"] if doc["kind"] != "CronJob" else doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+        for container in spec.get("containers", []) + spec.get("initContainers", []):
+            names = [e["name"] for e in container.get("env", [])]
+            dupes = {n for n in names if names.count(n) > 1}
+            if dupes:
+                offenders.append(f"{doc['metadata']['name']}/{container['name']}: {sorted(dupes)}")
+    assert offenders == [], f"duplicated env names make the release unupgradable: {offenders}"

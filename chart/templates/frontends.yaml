@@ -136,7 +136,18 @@ spec:
             # 413 is anonymous. The zone-level knob is the outer bound, not the policy.
             - name: BODY_SIZE_LIMIT
               value: {{ $root.Values.frontend.bodySizeLimit | default "32M" | quote }}
-            {{- $serveOrigin := $root.Values.frontend.serveUrl | default (printf "http://%s-ray-serve-svc:8000" (include "rask.fullname" $root)) }}
+            {{- /* DERIVED from ray.dashboardUrl, not defaulted to the in-cluster Service — discovery and
+                   INVOCATION must name the same cluster or the builder lists apps it cannot call.
+                   `compute` reads that dashboard for /api/serve, and its comment says the quiet part:
+                   "rask's Ray is managed outside this repo, so an external address is the normal case".
+                   Defaulting to `<release>-ray-serve-svc` (as this line first did) pointed inference at
+                   the chart's OWN KubeRay, which serves only `htrflow` — so a Model node aimed at
+                   `gemma-31b` got Ray Serve's own "Path '/gemma-31b/v1/chat/completions' not found",
+                   twice, because a re-render silently replaced a hand-set env. Verified 2026-08-06: the
+                   dashboard host also serves the Serve apps (`dev-kuberay.ra.se/gemma-31b/v1/...`
+                   answers), which is what makes deriving it correct rather than merely convenient.
+                   `frontend.serveUrl` still wins when Serve genuinely lives somewhere else. */}}
+            {{- $serveOrigin := $root.Values.frontend.serveUrl | default $root.Values.ray.dashboardUrl | default (printf "http://%s-ray-serve-svc:8000" (include "rask.fullname" $root)) }}
             # Ray Serve's HTTP INGRESS — a different endpoint from the dashboard the compute service
             # reads for `/api/serve` discovery, and nothing routes to it: inference is the one call the
             # gateway cannot carry (its `/api/serve` row is GET-only by design, because Ray's dashboard
@@ -146,8 +157,18 @@ spec:
             - name: STUDIO_SERVE_URL
               value: {{ $serveOrigin | quote }}
             # #131: inference moved models -> compute (it is a compute concern, not a registry one).
+            #
+            # GATED so this does not collide with the ray-enabled block further down, which sets the
+            # SAME name for the SAME zone with the ray-head address. Rendering both put
+            # COMPUTE_SERVE_URL in the env list TWICE, and helm's strategic-merge-patch refuses a
+            # duplicated list key — `The order in patch list … doesn't match $setElementOrder`. That
+            # aborted a real upgrade on 2026-08-06 AFTER it had partially applied, taking ~20
+            # deployments to ImagePullBackOff. The ray block is the more specific and more correct
+            # address, so it wins whenever it renders; this is the fallback for a ray-less estate.
+            {{- if not (and $root.Values.ray.enabled (eq .name "compute")) }}
             - name: COMPUTE_SERVE_URL
               value: {{ printf "%s/%s" (trimSuffix "/" $serveOrigin) (trimPrefix "/" ($root.Values.ray.serveRoutePrefix | default "/htrflow")) | quote }}
+            {{- end }}
             # SSR load/remote functions reach the gateway server-side via an absolute base
             # URL; client code uses the relative /api/* Ingress route. Both names are live:
             # the api package's gateway client reads RASK_GATEWAY_URL, the BFF reads

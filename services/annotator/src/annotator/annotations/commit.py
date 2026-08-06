@@ -27,11 +27,42 @@ if TYPE_CHECKING:
     from service_kit.media.config import Settings
 
 
-def check_base_version_value(current: int, base_version: int | None) -> None:
+def check_base_version_value(current: int, base_version: int | None, *, required: bool = False) -> None:
     """Optimistic concurrency, source-agnostic: 409 if the table advanced past the
     version the client loaded — ``current`` may be a direct ``ds.version`` or the
-    catalog's version primitive. ``None`` skips it (last-write-wins per id)."""
-    if base_version is not None and base_version != current:
+    catalog's version primitive.
+
+    ``required`` is decided by WHAT THE WRITE CAN DESTROY, not by uniformity (#50):
+
+    * The per-unit review save (``save.py``) commits a ``merge_upsert`` — matched rows are
+      UPDATED, so it can overwrite another annotator's fields. There the precondition is
+      required: an optional precondition is not a precondition, and while ``None`` was
+      accepted any caller could opt out of concurrency control by simply omitting the field.
+      Two people on one page, or one person in two tabs, then silently overwrite each other —
+      the exact outcome this check exists to prevent. The project actor answered the identical
+      question the same way for drafts (``projects/actor.py``: "An OPTIONAL precondition is
+      not a precondition").
+    * The tag batch (``tags.py``) commits ``merge_insert_only`` — matched rows are left AS-IS,
+      so an add cannot clobber anything by construction. Its OCC is also table-GLOBAL across a
+      cross-unit batch, so requiring it would make any unrelated save anywhere in the table
+      fail an entire bulk tagging run, buying no safety for the cost. It stays optional, and
+      that is a reasoned exemption rather than an oversight.
+
+    There is NO first-write exemption on the required path: ``table_dataset`` raises
+    ``NotFoundError`` when the annotations table is absent, so by the time this runs the table
+    always exists and always has a version — and the client always has one, because the GET
+    that served it the annotations carried it (``X-Annotations-Version``).
+
+    Both refusals are 409 rather than 400 so one client error path covers them: the caller's
+    remedy is identical (re-read, rebuild, re-send) and the client already handles 409.
+    """
+    if base_version is None:
+        if not required:
+            return
+        raise ConflictError(
+            f"this save did not state the version it was built from; the table is at v{current}. Re-read the annotations and send that version as base_version."
+        )
+    if base_version != current:
         raise ConflictError(f"annotations changed on the server (loaded v{base_version}, now v{current})")
 
 

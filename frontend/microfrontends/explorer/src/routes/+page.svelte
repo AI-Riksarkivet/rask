@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
 	import { page } from '$app/state';
+	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
 	import {
 		search,
 		listDocuments,
@@ -594,6 +595,39 @@
 			if (seq === searchSeq) loadingHits = false;
 		}
 	}
+
+	/**
+	 * Re-read the CURRENT search because the ESTATE changed (#73) — not because the user asked.
+	 *
+	 * Deliberately NOT `runSearch(spec)`. That function resets paging, clears the map selection,
+	 * empties `mapHits` and leaves voice mode, all of which are correct for a NEW search and
+	 * destructive for a background refresh: a lasso someone spent a minute drawing would vanish
+	 * because a mover run finished somewhere else in the estate. Same ruling the annotator's half of
+	 * this task already made — a change you did not make must never discard work you did.
+	 *
+	 * It also YIELDS to the user: `searchSeq` is read, never bumped, so a search or `loadMore` the
+	 * user starts while this is in flight wins and this result is dropped. A failed refresh leaves
+	 * the hits on screen rather than blanking a list someone is reading.
+	 */
+	async function refreshHits(): Promise<void> {
+		if (loadingHits || loadingMore) return; // a real read is already in flight — it will be current
+		if (!spec.q && !spec.image && !spec.topic) return; // nothing searched yet; nothing to restate
+		const seq = searchSeq;
+		try {
+			const result = await search(spec);
+			if (seq !== searchSeq) return; // the user started something newer — theirs wins
+			hits = result;
+		} catch {
+			// Stale-but-present beats empty: the estate moved, the re-read failed, and the results
+			// already on screen are still the best answer we have.
+		}
+	}
+
+	// The explorer had `lineageFeed` but only the shell's BELL read it, so the zone could tell you the
+	// estate had changed while every surface under that notification went on showing the state from
+	// before it. Stale search results are worse than a stale table: the next thing done with them is
+	// SEND them to a labelling project.
+	liveRead(lineageTick, () => refreshHits());
 
 	/** Load PAGE_STEP more hits by re-running the search with a larger limit. */
 	async function loadMore() {
