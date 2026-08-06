@@ -15,7 +15,7 @@
 	import { Button } from '@rask/ui/button';
 	import { ChevronLeft, ChevronRight, ExternalLink, X } from '@lucide/svelte';
 
-	import { predictedLabels } from './item-columns';
+	import { datasetVersionText, predictedLabels } from './item-columns';
 	import { EVENT_LABELS, taskStateVariant } from './presentation.js';
 	import { neighbours } from './quick-view';
 	import { taskImageUrl } from './queue-view';
@@ -85,9 +85,21 @@
 					<X class="size-4" />
 				</Button>
 			</div>
+			<!-- WHERE THIS CAME FROM (#83). The dataset was already here; the VERSION was not, because
+			     the wire schema dropped it — the server has always sent it. It is the reproducibility
+			     pin a publish records, and it was invisible to the person doing the work: you could
+			     not tell whether the item you are labelling came from the corpus as it is now or as
+			     it was three movers ago. `@v` rather than the bare number so it cannot read as part
+			     of the dataset name. -->
 			<p class="text-muted-foreground text-sm">
 				{nav.position} of {nav.total} in view
-				{#if task.source.where}· <span class="font-mono">{task.source.where}</span>{/if}
+				{#if task.source.where}
+					· <span class="font-mono">{task.source.where}</span>{#if datasetVersionText(task)}<span
+							class="font-mono"
+							title="the source dataset's version at send time — the reproducibility pin a publish records"
+							>@{datasetVersionText(task)}</span
+						>{/if}
+				{/if}
 			</p>
 		</div>
 

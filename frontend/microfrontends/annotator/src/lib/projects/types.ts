@@ -194,6 +194,14 @@ export const TaskDetailSchema = v.object({
 		kind: v.string(),
 		keys: v.optional(v.array(v.string()), []),
 		where: v.nullish(v.string()),
+		/** The source dataset's version AT SEND TIME — the reproducibility pin (#83).
+		 *
+		 *  The server has always sent this: `Task.source` is a full `ItemSource`, which carries
+		 *  `dataset_version`. This schema did not declare it, and `v.object` STRIPS undeclared keys,
+		 *  so it was discarded at the boundary and no surface could render it. That is the whole
+		 *  shape of the origin problem in miniature — the fact travels, the contract drops it, and
+		 *  the omission is invisible because nothing errors. */
+		dataset_version: v.nullish(v.number()),
 	}),
 	media: v.object({
 		kind: v.string(),
