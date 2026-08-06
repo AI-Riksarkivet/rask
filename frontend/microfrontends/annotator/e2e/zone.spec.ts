@@ -143,7 +143,11 @@ test('S9: the landing is PROJECTS; /browse hosts the data selection → canvas f
 	await page.goto('/annotator/browse');
 	await expect(page.getByTestId('data-selection')).toBeVisible();
 	await expect(page.getByTestId('dataset-id')).toHaveText('demo');
-	await page.getByTestId('doc-tile').click();
+	// `doc-row`, not `doc-tile`: browse opens as a TABLE now (#70) with the gallery on a toggle,
+	// because a bulk-labeling surface is filtered and sorted to a set before anything is picked —
+	// a gallery answers "what does this look like" and the job here asks "which of these match".
+	// The tile still exists and is exercised below via the gallery toggle.
+	await page.getByTestId('doc-row').first().click();
 	await expect(page.getByTestId('chunk-picker')).toBeVisible();
 	// Open one chunk in the canvas: the URL carries the ?keys= deep link and the shell
 	// boots, loading the unit through the zone-based BFF paths.
@@ -188,10 +192,25 @@ test('unreachable annotations surface on the status chip (no silent loading hang
 	await expect(page.getByTestId('annotate-status')).toContainText('load failed');
 });
 
-test('AI assist is labeled mocked while no model runner is deployed', async ({ page }) => {
+test('AI assist is NOT offered on a canvas that cannot accept shapes', async ({ page }) => {
+	// This spec stubs the annotations GET to 404 for every test (see the status-chip test above), so
+	// the canvas here is always read-only. Assist WRITES predicted shapes, so offering it on a
+	// surface that would discard them is the same defect #72 fixed for the drawing tools — the bar is
+	// gated on `controller.canDraw`, and the honesty chip lives inside it.
+	//
+	// This assertion replaced "AI assist is labeled mocked while no model runner is deployed", which
+	// asserted that chip VISIBLE on this very page. That test could only ever have passed before the
+	// gate existed; after it, its premise (a read-only canvas showing an assist affordance) is the
+	// thing we now deliberately prevent. The mock-chip assertion belongs where the canvas is
+	// writable — the runner-backed spec this file's own footer points at — and is tracked in #85.
 	await page.goto(`/annotator/?keys=${KEY}`);
-	await expect(page.getByTestId('assist-mock-chip')).toBeVisible();
-	await expect(page.getByTestId('assist-mock-chip')).toContainText('mocked — needs runner');
+
+	// The canvas really did mount and really is read-only — otherwise "absent" proves nothing.
+	await expect(page.getByTitle('Redo (Ctrl+Shift+Z)')).toBeVisible();
+	await expect(page.getByTestId('annotate-status')).toContainText('load failed');
+
+	await expect(page.getByTestId('assist-mock-chip')).toHaveCount(0);
+	await expect(page.getByTestId('ai-assist')).toHaveCount(0);
 });
 
 // The FAIL-HONEST chip test and the real-runner Detect flow both need a server where a runner IS

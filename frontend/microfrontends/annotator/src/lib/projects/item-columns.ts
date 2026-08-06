@@ -44,6 +44,15 @@ export function corpusText(task: TaskDetail): string {
 	return task.source.where ?? '';
 }
 
+/** The source dataset's VERSION at send time — the reproducibility pin (#83).
+ *
+ *  Kept out of `corpusText` deliberately, even though they render together: that string is what the
+ *  corpus column FILTERS on, and folding a version into it would make a search for `2` match every
+ *  item whose corpus happens to be at v2. A pin is provenance, not a search key. */
+export function datasetVersionText(task: TaskDetail): string {
+	return task.source.dataset_version != null ? `v${task.source.dataset_version}` : '';
+}
+
 /** The modality. Already on every task (`media.kind`) and never shown. */
 export function mediaText(task: TaskDetail): string {
 	return task.media.kind ?? '';

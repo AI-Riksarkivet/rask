@@ -459,6 +459,11 @@
 			id: 'corpus',
 			accessorFn: corpusText,
 			header: sortableHeader('corpus'),
+			// The version pin deliberately does NOT render here, though it belongs to this column's
+			// subject. Showing it needs a `renderSnippet` cell, and every such call is currently one
+			// more instance of the estate-wide Snippet type split (#84) — adding to a known-broken
+			// class for a decoration is not worth it. It renders in the review pane instead, which is
+			// where someone actually asks "as of when was this the corpus".
 			meta: { cellClass: 'font-mono text-xs whitespace-nowrap' },
 		},
 		{
