@@ -40,12 +40,28 @@ describe('cross-document view transitions', () => {
 		expect(missing).toEqual([]);
 	});
 
+	it('the SHELL CHROME is named, so it carries across the swap instead of cross-fading', () => {
+		// The opt-in alone leaves the default WHOLE-document cross-fade: the navbar fades into an
+		// identical navbar, the sidebar into an identical sidebar. Every pixel animates while nothing
+		// moved, which is what "everything flashes, even the sidebar and topnavbar" describes. A
+		// `view-transition-name` makes the browser treat them as ONE element across documents.
+		const css = readFileSync(TOKENS, 'utf8');
+		for (const name of ['rask-shell-header', 'rask-shell-sidebar', 'rask-shell-main']) {
+			expect(css).toContain(`view-transition-name: ${name}`);
+		}
+		// …and naming alone is not enough: a named element still cross-fades unless told not to.
+		const held = css.slice(css.indexOf('::view-transition-old(rask-shell-header)'));
+		expect(held).toMatch(/animation:\s*none/);
+	});
+
 	it('honours prefers-reduced-motion', () => {
 		// A full-page cross-fade is exactly the class of motion the setting exists to suppress, and a
 		// browser-driven transition does not consult it on our behalf.
 		const css = readFileSync(TOKENS, 'utf8');
+		// The WILDCARD, not `(root)`: once the shell chrome carries its own names, a root-only rule
+		// would leave every named element still animating for a user who asked for no motion.
 		const reduced = css.slice(css.indexOf('prefers-reduced-motion'));
-		expect(reduced).toMatch(/::view-transition-(old|new)\(root\)/);
+		expect(reduced).toMatch(/::view-transition-(group|old|new)\(\*\)/);
 		expect(reduced).toMatch(/animation:\s*none/);
 	});
 });
