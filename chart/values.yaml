@@ -139,6 +139,20 @@ services:
     frontDoor: true
     waitFor: []
     rayClient: true # dashboard introspection + /api/serve proxy => gets the RAY_AUTH_* pair when ray.auth.enabled
+  # The studio flow-builder's server half: the node catalog, graph validation, and runs on two lanes
+  # (inline, or the Dapr Workflow orchestrator when a sidecar is injected). It needs NOTHING to boot —
+  # no store, no cluster — so it is part of the default install: the builder's client-side lane works
+  # without it, but "engine offline" is what a user sees, and durable runs are unreachable.
+  #
+  # `frontDoor: true` because the gateway carries /api/flows and a front-door-only install still serves
+  # the studio zone. Serve is reached from the ZONE (bytes ride its own +server.ts), never from here, so
+  # this service needs no Serve URL of its own.
+  flows:
+    module: "flows:app"
+    port: 8840
+    replicas: 1
+    frontDoor: true
+    waitFor: []
   gateway:
     module: "gateway:app"
     port: 8888
@@ -909,6 +923,14 @@ stateStore:
     # (media.enabled: false) — DAPR-AUDIT.md:273. Removing an app-id from this list is NOT safe the
     # same way; it needs `kubectl rollout restart` for every scoped app.
     - ingest
+    # ── `flows` is here for STATE, and it is the one entry that genuinely provisions workflows. ──────
+    # The studio flow-builder's durable lane IS Dapr Workflow (`flows/workflow.py`), which stores its
+    # orchestration state through the ACTOR runtime — so without this scope the sidecar cannot load the
+    # component and `create_workflow_instance` fails with "the state store is not configured to use the
+    # actor runtime", pointing at a component that declares `actorStateStore: "true"` and is simply not
+    # visible to this app-id. Measured live 2026-08-06: the service booted healthy, served its catalog,
+    # and 500'd on the first POST /runs — the scope is the whole difference.
+    - flows
 
 # --- Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
 # managed/operator path (CloudNativePG for AGE, rustfs-operator for S3 — the rask deployment), DISABLE these

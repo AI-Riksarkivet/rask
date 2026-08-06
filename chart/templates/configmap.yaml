@@ -22,6 +22,10 @@ data:
   # R6/R20 media wave — their capabilities serve from the media plane below.
   RASK_COMPUTE_URL: {{ printf "http://%s-compute:8804" (include "rask.fullname" .) | quote }}
   RASK_CONTROLPLANE_URL: {{ printf "http://%s-controlplane:8820" (include "rask.fullname" .) | quote }}
+  # The studio flow-builder's server half. Without this the gateway's /api/flows row falls back to its
+  # code default (127.0.0.1:8840 — the gateway pod itself) and every call 502s, which the builder shows
+  # as "engine offline": graceful, but it means no server-side or durable runs at all.
+  RASK_FLOWS_URL: {{ printf "http://%s-flows:%v" (include "rask.fullname" .) .Values.services.flows.port | quote }}
   # lance-plane gateway upstreams (lance-ns-merge.md P1 gateway fold + P4): the fleet gateway carries
   # /api/catalog, /api/lineage, /api/produce, /api/train and the /api/explorer/* namespace. Service names
   # use lance.fullname — that is what services.yaml/medallion.yaml/explorer.yaml name their Services.

@@ -7,6 +7,7 @@ which is exactly what the gateway's `/api/flows` row forwards unrewritten. A rou
 gateway would 404; that trap has already been paid for once in this estate (the ingest row's `/v1`).
 """
 
+import logging
 import uuid
 from http import HTTPStatus
 
@@ -28,6 +29,8 @@ from flows.models import (
 )
 from service_kit.exceptions import PROBLEM_JSON, NotFoundError
 
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/flows", tags=["flows"])
 
@@ -82,6 +85,7 @@ async def create_run(
 
     run_id = f"run-{uuid.uuid4().hex[:12]}"
 
+    state: RunState | None = None
     if scheduler is not None:
         job = RunJob(
             graph=request.graph,
@@ -89,12 +93,26 @@ async def create_run(
             serve_url=settings.serve_url,
             serve_timeout=settings.serve_timeout,
         )
-        await scheduler.schedule(run_id, job.model_dump())
-        # `running`, with no node states yet: the engine owns the run from here. Reading the live
-        # per-node state back out of the workflow history is the follow-up (open_studio_flows.md
-        # defers streaming per-node progress) — v0 proves the seam, it does not stream it.
-        state = RunState(run_id=run_id, status="running")
-    else:
+        try:
+            await scheduler.schedule(run_id, job.model_dump())
+        except Exception:
+            # DEGRADE to the inline lane rather than 500. A sandbox run must not fail because the
+            # DURABLE lane is unavailable — the graph is perfectly runnable here and now, and a 500
+            # tells the user nothing they can act on. Measured live 2026-08-06: a sidecar was injected
+            # (so the runtime started and this branch was taken) while `lance-statestore` was not
+            # SCOPED to app-id `flows`, so `create_workflow_instance` raised
+            # "the state store is not configured to use the actor runtime" — a component the estate
+            # does declare with `actorStateStore: "true"`, just not visibly to this app. Logged at
+            # exception level because a silently-inline run is the thing an operator must be able to
+            # find; the caller still gets a completed run.
+            log.exception("durable lane unavailable for %s — falling back to the inline executor", run_id)
+        else:
+            # `running`, with no node states yet: the engine owns the run from here. Reading the live
+            # per-node state back out of the workflow history is the follow-up (open_studio_flows.md
+            # defers streaming per-node progress) — v0 proves the seam, it does not stream it.
+            state = RunState(run_id=run_id, status="running")
+
+    if state is None:
         state = await executor.execute(
             request.graph,
             request.seeds,
