@@ -158,3 +158,68 @@ def test_an_UNREACHABLE_queue_says_UNKNOWN_rather_than_fine() -> None:
     down = QueueHealth(reachable=False, detail="connection refused")
 
     assert down.stranded is None
+
+
+# ── releasing what a dead run left queued ────────────────────────────────────
+
+
+def test_the_release_NEVER_fails_a_run_even_with_no_broker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The property the first version of this claimed and did not have.
+
+    `release_run` already swallowed its purge and delete failures, so the docstring said "best-effort
+    by construction" — but `WorkQueue.connect()` sat OUTSIDE that guard, and an unreachable broker
+    raised `NoServersError` straight out of the terminal activity. That fails a run which has already
+    committed its data, for the sake of tidying up after it.
+
+    Caught by an existing test, not by review: `test_run_chain`'s A6 chain went red the moment the
+    call was wired in.
+    """
+    import asyncio
+
+    from ingest.runtime import release_run_units
+
+    monkeypatch.setenv("RASK_NATS_URL", "nats://127.0.0.1:1")  # nothing listens
+
+    assert asyncio.run(release_run_units("run-42")) == 0, "an unreachable broker must report zero released, not raise"
+
+
+def test_the_release_is_BOUNDED_so_a_terminal_run_cannot_hang(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A terminal run must not wait on a broker to finish terminating.
+
+    Measured in this plane: a nats connect to a dead address had still not returned after 60 seconds
+    with `connect_timeout`, `allow_reconnect=False` and `max_reconnect_attempts=0` ALL set — the
+    client does not honour its own deadline, so `asyncio.wait_for` around the whole thing is the only
+    reliable bound. Wiring this call in without one took the ingest suite from 21s to 150s, which is
+    the cheap version of the same failure: in production it is a run that never reports.
+    """
+    import asyncio
+    import time
+
+    from ingest.runtime import RELEASE_TIMEOUT_SECONDS, release_run_units
+
+    monkeypatch.setenv("RASK_NATS_URL", "nats://127.0.0.1:1")
+
+    started = time.monotonic()
+    asyncio.run(release_run_units("run-42"))
+    elapsed = time.monotonic() - started
+
+    assert elapsed < RELEASE_TIMEOUT_SECONDS * 3, f"the release took {elapsed:.1f}s — the deadline is not bounding the connect"
+
+
+def test_the_release_runs_on_the_TERMINAL_path_not_in_a_sweep() -> None:
+    """Structural, and it is the design rather than a detail.
+
+    A sweep would have to re-derive "this run has no live workflow" from outside — the same inference
+    `/queue`'s `stranded` flag exists because two readers got it wrong on the same day. The workflow
+    does not infer: `emit_terminal` KNOWS the run is ending, so it releases what the run published.
+
+    Move this into a cron or a reconciler and the inference comes back.
+    """
+    import inspect
+
+    from ingest.workflow import emit_terminal
+
+    assert "release_run_units" in inspect.getsource(emit_terminal), (
+        "the terminal activity stopped releasing its queued units — a run that dies between "
+        "publish_units and drain_chunk now strands them behind a consumer that was never created"
+    )

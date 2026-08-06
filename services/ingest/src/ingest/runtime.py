@@ -12,6 +12,8 @@ for.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 import tempfile
@@ -239,6 +241,42 @@ async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
         return outcome.model_dump()
     finally:
         await queue.close()
+
+
+#: A terminal run must not wait on a broker to finish terminating. Measured earlier in this plane: a
+#: nats connect to a dead address had still not returned after 60s with `connect_timeout`,
+#: `allow_reconnect=False` and `max_reconnect_attempts=0` ALL set, so `asyncio.wait_for` around the
+#: whole thing is the only reliable bound. Without it this call took the ingest suite from 21s to 150s.
+RELEASE_TIMEOUT_SECONDS = 5.0
+
+
+async def release_run_units(run_id: str) -> int:
+    """Drop whatever this run left queued. Returns the count released, 0 if it could not.
+
+    Lives here rather than in the workflow because I3 confines the broker client to `ingest.queue` —
+    the activity calls this, this calls the seam.
+
+    NEVER RAISES, and the CONNECT is inside the guard. `release_run` already swallows its purge and
+    delete failures, and the first version of this stopped there — which left `connect()` outside,
+    so an unreachable broker raised `NoServersError` straight out of the terminal activity and failed
+    a run that had already landed its data. A test caught it; the docstring above it had claimed
+    "best-effort by construction" while the code was not.
+
+    That is the I8 shape exactly: tidying up must never fail the thing it is tidying up after.
+    """
+    from ingest.queue import WorkQueue
+
+    queue = None
+    try:
+        queue = await asyncio.wait_for(WorkQueue.connect(nats_url()), timeout=RELEASE_TIMEOUT_SECONDS)
+        return await asyncio.wait_for(queue.release_run(run_id), timeout=RELEASE_TIMEOUT_SECONDS)
+    except Exception:
+        _log.warning("could not release queued units for run %s — they may remain on the stream", run_id, exc_info=True)
+        return 0
+    finally:
+        if queue is not None:
+            with contextlib.suppress(Exception):
+                await queue.close()
 
 
 async def reconcile_from_queue(chunk: ChunkSpec) -> dict[str, Any]:

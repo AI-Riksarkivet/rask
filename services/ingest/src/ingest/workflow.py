@@ -450,6 +450,26 @@ def emit_terminal(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None
     """
     spec = RunSpec.model_validate(payload["spec"])
     outcome = RunOutcome.model_validate(payload["outcome"])
+
+    # RELEASE WHAT THIS RUN LEFT QUEUED, on every terminal path.
+    #
+    # `publish_units` runs in one activity and `drain_chunk` in a LATER one, and the drain is what
+    # creates the durable consumer — so a run that dies between them strands its units behind a
+    # consumer that was never BORN. WORK_QUEUE retention makes that permanent: a message leaves only
+    # when acked, no consumer for that run id is ever created again, and nothing sweeps the stream.
+    # The live estate sat at `messages: 1, consumers: 0` for hours with every other signal green.
+    #
+    # HERE rather than in a sweep, and that is the whole design. A sweep would have to re-derive
+    # "this run has no live workflow" from outside — the same inference `/queue`'s `stranded` flag
+    # exists because two readers got it wrong on the same day. The workflow does not infer: it knows
+    # it is ending, and it releases what it published.
+    #
+    # Best-effort by construction (`release_run` never raises): tidying up must not turn a run that
+    # landed its data into a run that failed. Same reasoning as I8 for lineage.
+    from ingest.runtime import release_run_units
+
+    _run_async(release_run_units(spec.run_id))
+
     _lineage().terminal(
         spec.run_id,
         outcome.status,

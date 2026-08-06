@@ -202,6 +202,45 @@ class WorkQueue:
             ),
         )
 
+    async def release_run(self, run_id: str) -> int:
+        """Drop everything this run left on the queue. Returns the number of units released.
+
+        THE STRAND THIS CLOSES, and it is not the one it looks like. A run publishes its units
+        (`publish_units`) and drains them in a LATER activity — and `drain_chunk` is what creates the
+        durable. So a run that dies in between leaves units behind with a consumer that was never
+        BORN, which is why the live estate sat at `messages: 1, consumers: 0` for hours. Nothing was
+        lost from a consumer; nothing had ever been bound.
+
+        WORK_QUEUE retention is what makes it permanent: a message leaves only when it is ACKED, no
+        consumer will ever be created for that run id again, and nothing sweeps the stream. Every
+        other signal stays green.
+
+        Called from the workflow's TERMINAL path, which is the whole point. A sweep would have to
+        re-derive "this run has no live workflow" from outside — the same inference the `stranded`
+        flag exists because two readers got wrong. The workflow does not infer: it knows it is
+        ending, and it releases what it published.
+
+        Both operations are best-effort and logged, never raised. This runs while a run is already
+        terminating, and a failure to tidy up must not turn a run that landed its data into a run that
+        failed — the same reasoning as I8 for lineage.
+        """
+        released = 0
+        try:
+            info = await self._js.purge_stream(STREAM, subject=unit_subject(run_id))
+            released = int(getattr(info, "purged", 0) or 0)
+        except Exception:
+            logger.warning("could not purge %s for run %s — units may remain queued", STREAM, run_id, exc_info=True)
+
+        # The durable too, and AFTER the purge: deleting it first would leave the messages with
+        # nothing bound and no name to find them by. Absent is the normal case — a run that died
+        # before its drain never created one.
+        with contextlib.suppress(Exception):
+            await self._js.delete_consumer(STREAM, f"ingest-{run_id}".replace(".", "-")[:64])
+
+        if released:
+            logger.info("released %d undrained unit(s) for run %s", released, run_id)
+        return released
+
     async def park_poison(self, task: UnitTask, reason: str) -> None:
         """Park a unit that exhausted its deliveries, so it is visible rather than merely gone."""
         await self._js.publish(
