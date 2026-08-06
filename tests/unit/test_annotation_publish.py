@@ -444,21 +444,61 @@ def _replica_task(task_id: str, replica_of: str, labels: list[str]) -> tuple[Tas
 
 
 def test_the_facet_reports_consensus_counts_never_a_fabricated_merge() -> None:
-    """Two groups of two replicas: one agrees (equal label multisets), one does not. The facet
-    counts; every replica's rows still land (annotated_by distinguishes) — no invented merge."""
+    """Two groups of two replicas: one agrees, one does not. The facet counts; every replica's rows
+    still land (annotated_by distinguishes) — no invented merge.
+
+    The facet is GEOMETRY-AWARE since #55, so `perfect_agreement_groups` is gone and
+    `unanimous_groups` replaces it. That is a RENAME, not an alias: the old key meant "identical
+    label multisets" and the new one means "the same objects, labelled the same", and a consumer
+    silently reading a stronger number under the old name is drift a published metric cannot afford.
+
+    Both replicas here draw at IDENTICAL coordinates, so g1's two boxes are ambiguous to geometry
+    alone — `person`/`ship` against `ship`/`person`. They agree, and the label tie-break is what
+    makes that come out right rather than depending on enumeration order.
+    """
     project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa", consensus_n=2)
     pairs = [
         _replica_task("g1-r1", "g1", ["person", "ship"]),
-        _replica_task("g1-r2", "g1", ["ship", "person"]),  # same multiset, different order → agrees
+        _replica_task("g1-r2", "g1", ["ship", "person"]),  # same objects, same labels → agrees
         _replica_task("g2-r1", "g2", ["person"]),
-        _replica_task("g2-r2", "g2", ["signature"]),  # disagrees
+        _replica_task("g2-r2", "g2", ["signature"]),  # one object, two names → disagrees
     ]
     plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
     facet = project_facet(project, plan)
 
-    assert facet["consensus"] == {"n": 2, "groups": 2, "perfect_agreement_groups": 1}
+    consensus = facet["consensus"]
+    assert consensus["n"] == 2
+    assert consensus["groups"] == 2
+    assert consensus["unanimous_groups"] == 1
+    assert "perfect_agreement_groups" not in consensus
+    # Three objects across the two groups: two in g1, one in g2.
+    assert consensus["objects"] == 3
+    # The threshold rides WITH the number — an agreement figure is unreadable without it.
+    assert consensus["iou_threshold"] == 0.5
     # All four replicas' shapes are rows — 2+2+1+1.
     assert len(plan.rows) == 6
+
+
+def test_the_same_labels_in_DIFFERENT_PLACES_are_no_longer_agreement() -> None:
+    """The headline regression #55 fixes, and the reason the metric was replaced rather than tuned.
+
+    Two annotators drew one box each, both labelled `person`, nowhere near each other. The old
+    scorer compared label multisets — `['person'] == ['person']` — and reported PERFECT agreement
+    for two people who did not mark the same thing at all. For a detection task that is the entire
+    question.
+    """
+    project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa", consensus_n=2)
+    here, there = _replica_task("g1-r1", "g1", ["person"]), _replica_task("g1-r2", "g1", ["person"])
+    # Move the second annotator's box far away; everything else about the pair is identical.
+    for shape in there[1].shapes:
+        shape.x, shape.y = 500.0, 500.0
+
+    plan = build_plan(project, [here, there], publish_id="tok", published_at=NOW)
+    consensus = project_facet(project, plan)["consensus"]
+
+    assert consensus["unanimous_groups"] == 0
+    # Two distinct objects, each seen by exactly one annotator — not one object they agreed on.
+    assert consensus["objects"] == 2
 
 
 def test_no_consensus_facet_when_the_task_has_no_replicas() -> None:

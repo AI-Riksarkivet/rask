@@ -23,6 +23,7 @@ dependencies = [
     # `_schemaURL` envelope stays in step with every other emitter in the estate. Inlining that
     # envelope instead would be the drift this dependency exists to prevent.
     "lineage-kit",
+    "shapely>=2.0",
 ]
 
 [build-system]
