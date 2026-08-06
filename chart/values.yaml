@@ -247,6 +247,21 @@ image:
   # Set to pin the deployed artifact by content rather than by a mutable tag. WINS over `tag`.
   # This is what an image-automation controller (Argo Image Updater, Flux) writes back into git.
   digest: ""
+  # PER-COMPONENT pins (#135) — the reason a `helm upgrade` stopped being destructive.
+  #
+  # One `tag` above cannot describe this fleet. A real estate runs a catalog tag across 11 services,
+  # a different tag on gateway/compute/controlplane, a third across the 7 zones, and an ingest
+  # DIGEST. Rendering all of them from one value overwrites every image with a tag that is not on
+  # the node — observed twice on 2026-08-06, once taking the whole fleet to ImagePullBackOff.
+  #
+  # Keys are the COMPONENT name the template passes to `rask.image` (`gateway`, `compute`,
+  # `lance-rest-catalog`, `web-lakehouse`, …) — the same string that appears in the rendered
+  # reference. `digests` beats `tags`, exactly as the global `digest` beats the global `tag`.
+  #
+  #   tags:    { lance-rest-catalog: be-256ca0da, web-lakehouse: zone-14d8882d }
+  #   digests: { rask-ingest: "sha256:834d2e23…" }
+  tags: {}
+  digests: {}
   # Opt-in for side-loaded images (`make k3s-build` + `k3s-import`, `kind load`): renders a bare
   # `<component>:<tag>` that the node must ALREADY hold. Never set this for a remote cluster.
   localImages: false

@@ -1120,3 +1120,23 @@ def test_the_chart_REFUSES_to_render_oidc_without_a_session_secret() -> None:
     )
     assert result.returncode != 0, "a bare render succeeded — it must refuse without a sessionSecret"
     assert "sessionSecret" in result.stderr, f"it refused for the wrong reason: {result.stderr[-300:]}"
+
+
+def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -> None:
+    """#135 — the chart must be able to describe a fleet that is NOT one tag.
+
+    One `image.tag` could not: a live estate ran a catalog tag across 11 services, a different tag on
+    gateway/compute/controlplane, a third across the 7 zones, and an ingest DIGEST. Rendering all of
+    that from one value is what made `helm upgrade` destructive — every image rewritten to a tag the
+    node did not hold, whole fleet ImagePullBackOff, recovered by hand. Observed twice on 2026-08-06.
+
+    Precedence is asserted end to end, because a pin that is merely ACCEPTED and then overridden is
+    worse than no pin: it reads as safety while the deploy still rewrites the image.
+    """
+    pinned = _helm_template("image.localImages=false", "image.repository=reg.example", "image.tags.gateway=PINNED")
+    assert 'image: "reg.example/gateway:PINNED"' in pinned, "a per-component tag did not reach the render"
+    assert 'image: "reg.example/compute:dev"' in pinned, "the pin leaked onto a component that did not ask for it"
+
+    # A digest is a CONTENT pin — a reconciler's, typically — so no tag may undo it.
+    both = _helm_template("image.localImages=false", "image.repository=reg.example", "image.tags.gateway=IGNORED", "image.digests.gateway=sha256:abc")
+    assert 'image: "reg.example/gateway@sha256:abc"' in both, "a per-component tag overrode a digest"

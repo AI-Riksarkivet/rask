@@ -496,6 +496,10 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 seed-corpus: ## Seed the demo corpus into the volume the media plane actually READS
 	./scripts/seed-corpus.sh
 
+k3s-pins: ## Capture what the cluster is RUNNING into chart/values-live-pins.yaml (#135)
+	@KUBECONFIG=$(KUBECONFIG) KUBECTL=$(KUBECTL) ./scripts/k3s-pins.sh chart/values-live-pins.yaml
+	@echo ">> now: helm upgrade rask ./chart -f chart/values-live-pins.yaml   (changes only what you meant to)"
+
 k9s: bootstrap ## Browse the k3s cluster in k9s (the chart's NOTES.txt points here)
 	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/k9s
 
