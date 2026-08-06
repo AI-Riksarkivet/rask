@@ -1,69 +1,24 @@
-import { onMount, untrack } from 'svelte';
+import { liveRead, type LiveCursor } from '@rask/api/live';
 import { controlCursor } from './feeds.remote';
 
-/** The shape of a `query.live` instance this zone consumes as a cursor — see `feeds.remote.ts`. */
-export interface LiveCursor {
-	readonly current: number | undefined;
-	readonly connected: boolean;
-}
-
 /**
- * Read once, then re-read on every advance of a live cursor. This is the replacement for the
- * `$effect(() => { load(); const t = setInterval(load, POLL_MS); return () => clearInterval(t) })`
- * that the estate carried before the live cursors landed.
+ * This zone's live CURSORS. The reader itself — `liveRead`, and the four rules that make it not a
+ * timer — lives in `@rask/api/live`.
  *
- * Four rules, and the last two are each here because getting them wrong broke a test:
+ * `home` kept a LOCAL 89-line copy through the consolidation that moved lakehouse, models, compute
+ * and annotator onto the shared one, and nothing noticed: both compile, both work, and they diverge
+ * only on whichever rule the copy stops carrying. That is how the three pre-consolidation copies had
+ * already drifted — only one still explained the open-on-mount measurement. Found by
+ * `@rask/zone-contract`'s `transport-contract.test.ts`, which exists because two sessions extracted
+ * this helper independently on the same day.
  *
- *  - The first read is UNCONDITIONAL, so a surface renders immediately rather than waiting for a stream
- *    to connect (and a surface whose cursor never connects at all still shows its data and its own
- *    honest offline state).
- *  - `key` — a route parameter or a selection — stays TRACKED, so a navigation re-reads at once instead
- *    of waiting for the estate to change. Its value is passed to `read` so a loader can drop a response
- *    that a later navigation superseded.
- *  - The cursor's ARRIVAL is not a change. `.current` is undefined until the stream delivers its first
- *    value, and treating `undefined → 137` as an advance makes every page load read twice — once eagerly
- *    and once when the stream lands, for no new information. Only a cursor that moves after that means
- *    the estate did something.
- *  - The stream is OPENED ON MOUNT, never at component init, so it does not exist during SSR. A live
- *    query touched while rendering makes the server hold the render until the generator's first value —
- *    which for these cursors is a round trip to the catalog on the critical path of every page. A page
- *    whose HTML waits on a *liveness probe* is strictly worse than the timers this replaced. A live feed
- *    is a client concern; the server's job is to render the page.
+ * What stays here is the half that CANNOT move: a cursor wraps this app's own `feeds.remote.ts`, and
+ * `query.live` is declared per app so it gets its own endpoint and can reach `getRequestEvent`.
  *
- * The read is `untrack`ed (the AuditViewer convention): a loader assigns the `$state` it also reads, so
- * tracking it would re-enter.
- *
- * Nothing here is a timer. An idle surface issues exactly one request and then stays quiet.
+ * Re-exported so this zone's consumers keep importing from one place — a surface asks its ZONE for
+ * liveness rather than reaching past it into a package.
  */
-export function liveRead<K = void>(
-	open: () => LiveCursor,
-	read: (key: K) => unknown,
-	key?: () => K,
-): void {
-	let cursor = $state<LiveCursor | null>(null);
-	onMount(() => {
-		cursor = open();
-	});
-
-	let started = false;
-	let lastCursor: number | undefined;
-	let lastKey: K | undefined;
-
-	$effect(() => {
-		const seq = cursor?.current;
-		const current = key?.() as K;
-		const keyChanged = current !== lastKey;
-		const cursorMoved = lastCursor !== undefined && seq !== lastCursor;
-		lastKey = current;
-		lastCursor = seq;
-
-		if (started && !keyChanged && !cursorMoved) return;
-		started = true;
-		untrack(() => {
-			void read(current);
-		});
-	});
-}
+export { liveRead, type LiveCursor };
 
 /**
  * The CONTROL-plane cursor — for the surfaces whose changes are governance mutations (grants,
