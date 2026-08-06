@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.oidc import OIDCVerifier
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.media.middleware import register_middleware
 from service_kit.media.state import AppState, dataset_handle
 from service_kit.obs import configure_app_logging
@@ -87,6 +88,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="lance-media viewer", lifespan=lifespan)
 register_handlers(app)
+# `register_handlers` maps `DomainError` only. The OIDC verifier raises `lance_namespace`'s
+# `UnauthenticatedError` (a `LanceNamespaceError`), so an expired or wrong-audience bearer escaped
+# unmapped and FastAPI answered 500 — which a zone renders as "unreachable", sending everyone to look
+# at networking for what is really "sign in again". Same installer the catalog has always used.
+install_problem_handlers(app, logger)
 register_middleware(app, get_viewer_settings())
 app.include_router(probes_router)
 app.include_router(api_router)

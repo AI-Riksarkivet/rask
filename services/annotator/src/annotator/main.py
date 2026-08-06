@@ -23,6 +23,7 @@ from annotator.projects.tenant_actor import TenantProjectsActor
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.oidc import OIDCVerifier
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.media.middleware import register_middleware
 from service_kit.media.state import AppState, dataset_handle
 from service_kit.obs import configure_app_logging
@@ -111,6 +112,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="lance-media annotator", lifespan=lifespan)
 register_handlers(app)
+# `register_handlers` maps `DomainError` only. The OIDC verifier raises `lance_namespace`'s
+# `UnauthenticatedError`, which is a `LanceNamespaceError` and NOT a `DomainError` — so an expired or
+# wrong-audience bearer escaped unmapped and FastAPI answered 500. The zone renders that as "The
+# annotation service is unreachable", which sends everyone to look at networking and the deployment
+# for what is really "sign in again". Measured live: `security.py:55 authenticate` ->
+# `oidc.py:260 verify` -> raise -> 500 on a request from a signed-in user.
+#
+# This is the SAME installer the catalog has used since the merge (`catalog/main.py`); it was simply
+# never added to the three media services, all of which authenticate the same way.
+install_problem_handlers(app, logger)
 register_middleware(app, get_annotator_settings())
 
 # Mount the actor HTTP surface the sidecar calls back on (/dapr/config, /actors/...). Constructing
