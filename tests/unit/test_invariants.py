@@ -1168,3 +1168,43 @@ def test_no_env_var_is_rendered_TWICE_on_any_workload(ray_enabled: str) -> None:
             if dupes:
                 offenders.append(f"{doc['metadata']['name']}/{container['name']}: {sorted(dupes)}")
     assert offenders == [], f"duplicated env names make the release unupgradable: {offenders}"
+
+
+def test_the_INGEST_stream_has_ONE_definition_and_the_chart_agrees_with_the_code() -> None:
+    """Two definitions of one stream, reconciled only by "whoever creates it first wins".
+
+    `services/ingest/.../queue.py` declares `RetentionPolicy.WORK_QUEUE` and BUILDS ON it — "a message
+    is REMOVED once acked … which is why this plane needs no side ledger" is the reasoning that
+    dissolved the tracker. The chart created the same stream with `--retention limits`, and in-cluster
+    the Job wins. Measured on the live stream 2026-08-06: retention=limits, deny_purge=true,
+    deny_delete=true, max_age=168h — so acked messages were RETAINED and `messages` was not
+    outstanding work. The design claim was false exactly where it shipped.
+
+    Three assertions because there were three statements and two were false:
+      1. the chart's `--retention` for INGEST matches the code's RetentionPolicy;
+      2. the chart does not contradict ITSELF (it described the stream as WorkQueuePolicy while
+         creating it as limits, twenty-seven lines apart);
+      3. `--deny-purge` / `--deny-delete` are absent on the work-queue path — they protect a retained
+         RECORD, which a work queue does not have, and their only measured effect was making the
+         plane's own `release_run -> purge_stream` return an inert 0 while the server refused it.
+    """
+    job = (REPO / "chart/templates/nats-stream-job.yaml").read_text()
+    queue = (REPO / "services/ingest/src/ingest/queue.py").read_text()
+
+    code_is_workqueue = "RetentionPolicy.WORK_QUEUE" in queue
+    assert code_is_workqueue, "queue.py stopped declaring WORK_QUEUE — update this gate WITH the design change, not after it"
+
+    # (1) The creation call INGEST actually uses.
+    ingest_call = next((ln for ln in job.splitlines() if "INGEST" in ln and "_if_missing" in ln), "")
+    assert ingest_call, "no creation call for INGEST — it is created somewhere this gate cannot see"
+    fn = ingest_call.strip().split()[0]
+    body = job.split(f"{fn}() {{", 1)[1].split("\n              }", 1)[0]
+    assert "--retention work" in body, f"INGEST is created by {fn}() with a retention the code does not declare: {body.strip()[:200]}"
+
+    # (3) …and without the flags that only make sense for a retained log.
+    for flag in ("--deny-purge", "--deny-delete"):
+        assert flag not in body, f"{flag} on a work queue protects a record it does not have, and breaks purge-based reclamation"
+
+    # (2) The chart must not describe the stream as something it does not create.
+    if "WorkQueuePolicy" in job:
+        assert "--retention work" in body, "the chart calls INGEST a WorkQueuePolicy stream while creating it otherwise"
