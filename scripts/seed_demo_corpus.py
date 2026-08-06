@@ -303,8 +303,19 @@ def _make_world_readable(root: Path) -> None:
     found"** — a not-found error for a file that is right there. That misdirection cost a long
     debugging detour: the index looked corrupt or version-skewed when it was merely unreadable.
     """
-    for path in [root, *root.rglob("*")]:
+    # The CONTENTS are ours and must be readable — a failure here is the real defect and still raises.
+    for path in root.rglob("*"):
         path.chmod(0o755 if path.is_dir() else 0o644)
+
+    # `root` itself is usually NOT ours. Seeding into a PersistentVolumeClaim mounts a root-owned
+    # directory and the Job runs as uid 1000, so this chmod raises EPERM — after every dataset has
+    # been written correctly. The seed then reports failure for a corpus that is complete and
+    # readable, which is a worse lie than the permission it was trying to fix. The mount root's mode
+    # is the volume's business (fsGroup/mountOptions), so it is best-effort with a visible warning.
+    try:
+        root.chmod(0o755)
+    except PermissionError:
+        print(f"  note: left {root} as-is (not owned by this process — normal on a mounted volume)")
 
 
 def main() -> None:
