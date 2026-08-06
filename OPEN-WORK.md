@@ -3378,3 +3378,79 @@ unauthenticated client could trigger on demand, by sending requests it already k
 If a breaker is ever wanted back, it needs a failure signal that means *unavailable* (transport
 errors, timeouts, 5xx). Until Dapr can express that, `invokeTimeout` plus status-matched retries are
 the honest bound.
+
+## Studio flow builder — what shipped, and what it left open
+
+`open_studio_flows.md` is RETIRED here (2026-08-06): the builder shipped, is deployed, and was driven
+end to end against the live cluster. Its design rationale did not need summarising into bullets — it
+went into the code as comments (`lib/flows/*`, `services/flows/*`) and into the two skills
+(`rask-frontend`'s studio row, `rask-services-fleet`'s flows row). What remains is below.
+
+**What the zone is now.** `/studio` IS the builder — the canvas is the zone root; the mini-app
+launcher and the GSAP animation A/B are deleted. Three panes: the rail is the node library (live Ray
+Serve deployments first, each dropping a Model node preset to that app), the canvas is the graph, the
+right pane is the per-node inspector, and a bottom drawer carries Logs / Flows / API. Eleven node
+kinds, of which `dataset` and `mcp` are openly SCAFFOLD — they refuse at run time rather than
+emitting plausible data. `services/flows` (:8840, gateway row `/api/flows`) is the server half: the
+declared node catalog, graph validation sharing the frontend's vocabulary, and runs on two lanes.
+
+### `/htr` is healthy on dev-kuberay and not routed by its ingress
+
+The app is RUNNING with a GPU replica (`HTRFlow`, 1/1, `num_gpus: 1`, on `gpu-a5000-worker-*`), and
+`runners/htr/scripts/deploy_htr.py:8` states its contract: `POST /htr/transcribe`, raw image bytes in,
+ALTO XML out. But `https://dev-kuberay.ra.se/htr/transcribe` answers `text/plain 404: Not Found` —
+byte-identical to a path that does not exist, and with no `x-request-id`, where the routed vLLM apps
+answer `application/json {"detail":"Not Found"}` WITH one. Port 8000 on that host is closed. So the
+Serve HTTP ingress for that prefix is not exposed; the vLLM apps got explicit routes
+(`dev-kuberay.ra.se/gemma-31b/v1` is hardcoded in-repo), `htr` did not. **Closing it is an ingress
+change on that cluster, not a code change** — studio already calls it with `app=htr, path=/transcribe`
+once the route exists.
+
+### Discovery and callability are different questions, and the library conflates them
+
+The node library lists what the Ray DASHBOARD reports (`/api/serve/applications/` via the compute
+service), and marks each `RUNNING`. Reachability depends on the INGRESS, which the dashboard knows
+nothing about — so `htr` appears callable and is not. Either probe each app and mark the unreachable
+ones, or stop implying callability. Same root cause as the next entry: two clusters.
+
+### Two Ray clusters, and only one of them is this chart's
+
+`RAY_DASHBOARD_URL: https://dev-kuberay.ra.se` (fleet ConfigMap) is the EXTERNAL GPU cluster —
+`gemma-31b`, `qwen3-embed`, `qwen3-rerank`, `htr`. The chart's own KubeRay `rask-ray` is a different
+cluster serving only `htrflow`, CPU-only by design (`ray.gpuCount: 0`, correct for a laptop/CI
+install). `frontend.serveUrl` is the override that points the inference zones at the external one;
+`MODELS_SERVE_URL` still points at the in-cluster CPU `htrflow`. Anyone debugging "why is inference
+slow / 404" should read that env var FIRST — a session was spent GPU-patching the wrong cluster.
+
+### The zones cannot see `auth.enabled`, so inference is anonymous on a governed estate
+
+`auth.enabled: true` with `frontend.oidc.enabled: false` renders zones with no OIDC env, so
+`locals.authEnabled` is false, so `@rask/api/serve-proxy`'s 401 guard never fires — anonymous callers
+reach GPU inference while the backends demand bearers. The chart's own values warn about this pair.
+Two ways to close: enable the zones' OIDC (the intended state), or inject `auth.enabled` into the
+zones and fail closed on it. Not done because failing closed breaks a working UI until OIDC is
+configured — a deliberate decision, not an oversight.
+
+### Uploads pass through the zone pod's memory
+
+`proxyServeInfer` does `await request.arrayBuffer()`, so every byte is buffered in a SvelteKit pod
+sized for rendering HTML. `BODY_SIZE_LIMIT=32M` bounds the damage; it does not fix the shape, and it
+rules out audio/video entirely. The estate already does this properly elsewhere — `PageLoaderActor`
+is an S3 read-through cache — so the honest lane is a scratch bucket with a TTL, presigned PUT
+straight from the browser to RustFS (creds from the Dapr secret store, never env), and an
+`objectRef` payload kind. Needed for the bucket-attach and video/audio cases.
+
+### Not built: IIIF loader, bucket attach, streaming
+
+- **IIIF node** — the loader that actually fits this archive: manifest → canvas → image, no upload at
+  all. Needs an allowlisted fetch proxy (`iiifintern-ai.ra.se` is the host the repo already knows).
+- **Bucket attach** — load from and upload to a bucket; loading can ride the governed
+  `/api/explorer/object*` read, uploading needs the presigned lane above.
+- **Streaming** — every run is one-shot. A long generation shows nothing until it completes, which
+  reads as "nothing happens" (measured: a CPU HTR page took 66 s of silence). Needs SSE on
+  `services/flows` and a progress surface per node.
+- **Durable lane unproven** — runs take the inline executor. The sidecar now holds the actor runtime
+  (`lance-statestore` is scoped to app-id `flows`), but the Dapr Workflow path has not been observed
+  end to end.
+- **Server-declared palette** — `services/flows` declares the node catalog and the frontend still
+  ships its own registry; the seam exists and is unused.

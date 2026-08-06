@@ -48,7 +48,7 @@ function failureMessage(
  *  text payload (htrflow answers ALTO XML). Throws with a human message on any
  *  failure — the executor records it on the node. */
 export async function invokeServe(req: InvokeRequest): Promise<FlowPayload> {
-	const qs = new URLSearchParams({ app: req.app, name: req.name });
+	const qs = new URLSearchParams({ app: req.app, name: req.name, path: req.path });
 	const res = await fetch(`${base}/api/infer?${qs}`, {
 		method: 'POST',
 		headers: { 'content-type': req.payload.mime },

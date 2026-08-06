@@ -28,6 +28,7 @@ export function nodeFingerprint(id: string, config: NodeConfig, edges: readonly 
 		text: config.text,
 		app: config.app,
 		requestName: config.requestName,
+		modelPath: config.modelPath,
 		bodyMode: config.bodyMode,
 		// Only when it is the mode in play — editing a template you are not sending must not
 		// invalidate a perfectly good cached output.

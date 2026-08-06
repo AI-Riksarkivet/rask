@@ -8,6 +8,10 @@
 	import { page } from '$app/state';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
+	// NAMESPACE import, the estate's convention for a multi-part component (the same reason
+	// QuickView documents for Sheet): the barrel also exports `Root as Tabs`, so `import { Tabs }`
+	// compiles and then renders a bare Root where `Tabs.Content` was meant.
+	import * as Tabs from '@rask/ui/tabs';
 	import { ArrowLeft, Inbox, Pencil, RefreshCw } from '@lucide/svelte';
 
 	import { fetchMeViaBff } from '$lib/http';
@@ -218,73 +222,30 @@
 				<p class="mt-1 whitespace-pre-line">{project.instructions}</p>
 			</div>
 		{/if}
-		<!-- ONE block, because there is one document. This used to be two: a "Task type" chip fed by
-		     `template` and a "Labeling" row fed by `label_schema`, which nothing cross-checked — so
-		     the page could show a taxonomy the enforcement had never heard of. -->
-		{#if project.ontology.kind}
-			<div class="flex items-center gap-1.5 text-sm" data-testid="task-kind-chip">
-				<span class="text-muted-foreground text-xs">Task type:</span>
-				<Badge>{project.ontology.kind}</Badge>
-			</div>
-		{/if}
-		{#if project.ontology.classes.length > 0}
-			<div class="flex flex-wrap items-center gap-1.5 text-sm" data-testid="label-taxonomy">
-				<span class="text-muted-foreground text-xs">Labeling:</span>
-				{#each project.ontology.classes as labelClass (labelClass.name)}
-					<Badge variant={labelClass.required ? 'default' : 'outline'}>
-						{labelClass.name}
-						{#if labelClass.tools.length > 0}
-							<span class="text-muted-foreground">· {labelClass.tools.join('/')}</span>
-						{/if}
-						{#if labelClass.required}
-							<!-- Per class, and only where it was actually declared. The create dialog used
-							     to fill a project-level `required_labels` from EVERY class name, so adding a
-							     third class silently made all three mandatory on every item. -->
-							<span class="text-muted-foreground">· required</span>
-						{/if}
-					</Badge>
-				{/each}
-			</div>
-		{/if}
-		{#if stillMutable}
-			<div>
-				<Button
-					variant="outline"
-					size="sm"
-					data-testid="edit-ontology-trigger"
-					onclick={() => (ontologyOpen = true)}
-				>
-					<Pencil class="size-3.5" />
-					{project.ontology.classes.length > 0
-						? 'Edit the labeling task'
-						: 'Define the labeling task'}
-				</Button>
-			</div>
-		{/if}
-		{#if project.ontology.relations.length > 0}
-			<div class="flex flex-wrap items-center gap-1.5 text-sm" data-testid="relations">
-				<span class="text-muted-foreground text-xs">Relations:</span>
-				{#each project.ontology.relations as rel (rel.name)}
-					<Badge variant="outline">{rel.name}</Badge>
-				{/each}
-			</div>
-		{/if}
 		{#if notice}
 			<p class="text-destructive text-sm">{notice}</p>
 		{/if}
 
-		<!-- TWO EXPLICIT COLUMNS, not four auto-placed children.
-		     The grid had `AnnotatorMetrics · MembersPanel · TaskQueue · <side stack>` as siblings and
-		     let CSS auto-placement sort them. `AnnotatorMetrics` renders nothing when it has nothing to
-		     say, so everything shifted by one: the members panel took the 1536px main column and THE
-		     TASK QUEUE — the surface the whole page exists for — landed in the 20rem sidebar. Measured
-		     at 1920px: main child 1536px, queue 320px. That is the "squashed table", and no amount of
-		     `w-full` on the table could fix it, because its column was 320px.
-		     Wrapping each column makes a child that renders nothing unable to move its siblings. -->
-		<div class="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-			<!-- The WORK. `min-w-0` so a wide table scrolls inside its own container instead of forcing
-			     the grid column wider than its track (the default `min-width:auto` on a grid item). -->
-			<div class="flex min-w-0 flex-col gap-4">
+		<!-- THREE TABS, one per JOB: doing the labelling, configuring it, shipping it.
+		     Reported: "why is this setting here? Access user:CiQwOGE4Njg0Yi1kYjg4… Should there not be
+		     3 tabs.. labeling, task settings, publish". The page used to put the queue in one column and
+		     stack Access + Publish + Adjudication in a 20rem sidebar beside it, so three unrelated
+		     concerns shouted at once next to the work — and the taxonomy and its edit button sat in the
+		     header above them, a fourth. None of those three is something you do WHILE labelling.
+		     Tabbing them also retires the sidebar column that made the queue's table narrow: the queue
+		     now owns the full width, which is the same defect the deleted comment below described
+		     fixing once already by a different route (auto-placement putting the queue in a 320px
+		     track). One surface per tab, and the surface you are on is the whole page. -->
+		<Tabs.Root value="labeling">
+			<Tabs.List>
+				<Tabs.Trigger value="labeling" data-testid="tab-labeling">Labeling</Tabs.Trigger>
+				<Tabs.Trigger value="settings" data-testid="tab-settings">Task settings</Tabs.Trigger>
+				<Tabs.Trigger value="publish" data-testid="tab-publish">Publish</Tabs.Trigger>
+			</Tabs.List>
+
+			<!-- THE WORK. `min-w-0` so a wide table scrolls inside its own container rather than forcing
+			     the panel wider than its parent (a flex/grid item's default `min-width:auto`). -->
+			<Tabs.Content value="labeling" class="flex min-w-0 flex-col gap-4">
 				<AnnotatorMetrics tasks={listing?.details ?? []} />
 				<TaskQueue
 					{projectId}
@@ -295,10 +256,69 @@
 					adjudications={project?.adjudications ?? {}}
 					onchanged={() => void load()}
 				/>
-			</div>
-			<!-- ABOUT the project rather than the work in it: who has access, publishing, adjudication. -->
-			<div class="flex flex-col gap-3">
+			</Tabs.Content>
+
+			<!-- WHAT the labelling job IS, and who may do it. The taxonomy moved here from the page
+			     header: it is the task's DEFINITION, which is exactly what "task settings" names, and
+			     leaving it up top meant the header carried settings while the sidebar carried more. -->
+			<Tabs.Content value="settings" class="flex max-w-3xl flex-col gap-4">
+				<!-- ONE block, because there is one document. This used to be two: a "Task type" chip fed
+				     by `template` and a "Labeling" row fed by `label_schema`, which nothing cross-checked
+				     — so the page could show a taxonomy the enforcement had never heard of. -->
+				{#if project.ontology.kind}
+					<div class="flex items-center gap-1.5 text-sm" data-testid="task-kind-chip">
+						<span class="text-muted-foreground text-xs">Task type:</span>
+						<Badge>{project.ontology.kind}</Badge>
+					</div>
+				{/if}
+				{#if project.ontology.classes.length > 0}
+					<div class="flex flex-wrap items-center gap-1.5 text-sm" data-testid="label-taxonomy">
+						<span class="text-muted-foreground text-xs">Labeling:</span>
+						{#each project.ontology.classes as labelClass (labelClass.name)}
+							<Badge variant={labelClass.required ? 'default' : 'outline'}>
+								{labelClass.name}
+								{#if labelClass.tools.length > 0}
+									<span class="text-muted-foreground">· {labelClass.tools.join('/')}</span>
+								{/if}
+								{#if labelClass.required}
+									<!-- Per class, and only where it was actually declared. The create dialog used
+									     to fill a project-level `required_labels` from EVERY class name, so adding a
+									     third class silently made all three mandatory on every item. -->
+									<span class="text-muted-foreground">· required</span>
+								{/if}
+							</Badge>
+						{/each}
+					</div>
+				{/if}
+				{#if stillMutable}
+					<div>
+						<Button
+							variant="outline"
+							size="sm"
+							data-testid="edit-ontology-trigger"
+							onclick={() => (ontologyOpen = true)}
+						>
+							<Pencil class="size-3.5" />
+							{project.ontology.classes.length > 0
+								? 'Edit the labeling task'
+								: 'Define the labeling task'}
+						</Button>
+					</div>
+				{/if}
+				{#if project.ontology.relations.length > 0}
+					<div class="flex flex-wrap items-center gap-1.5 text-sm" data-testid="relations">
+						<span class="text-muted-foreground text-xs">Relations:</span>
+						{#each project.ontology.relations as rel (rel.name)}
+							<Badge variant="outline">{rel.name}</Badge>
+						{/each}
+					</div>
+				{/if}
 				<MembersPanel {projectId} />
+			</Tabs.Content>
+
+			<!-- SHIPPING it. Adjudication sits here rather than under Labeling because picking the
+			     canonical replica is the gate publish waits on, not something an annotator does. -->
+			<Tabs.Content value="publish" class="flex max-w-3xl flex-col gap-3">
 				<PublishPanel {project} {listing} {canPublish} onchanged={() => void load()} />
 				<AdjudicationPanel
 					{projectId}
@@ -312,8 +332,8 @@
 						them.
 					</p>
 				{/if}
-			</div>
-		</div>
+			</Tabs.Content>
+		</Tabs.Root>
 	</div>
 
 	<SendItemsDialog {projectId} bind:open={sendOpen} onsent={() => void load()} />

@@ -4,6 +4,13 @@ import { MOCK_ANNOTATOR } from './ports';
 // Hermetic coverage for the annotation task-management surfaces (OPEN-WORK.md § Design — annotation
 // projects; the A1–A4 surfaces). The backend's OWN contracts (FGA doors, machine tables, saga
 // idempotency, template enforcement at submit) are pinned by tests/unit/*.
+//
+// THE PROJECT PAGE IS TABBED — labeling / task settings / publish. It used to put the queue in one
+// column and stack Access + Publish + Adjudication in a sidebar beside it, so three unrelated
+// concerns shouted at once next to the work, none of which you do WHILE labelling. Each panel now
+// lives in its tab, so a test that drives one OPENS that tab first
+// (`getByTestId('tab-settings' | 'tab-publish')`) right after `page.goto`. That is navigation, not a
+// relaxed assertion: everything asserted after the click is exactly what was asserted before it.
 // What THIS layer proves: the UI renders the transitions the backend supplies, drives the right
 // endpoints with the right bodies, keeps the three review actions distinct, states what a publish
 // lands before firing it, narrates a running publish, and surfaces a server 403 as the refusal it is.
@@ -320,6 +327,7 @@ test('A4: the confirm step states what lands and whose names travel; a running p
 	await snapshot(page, { project: project('frozen'), legal_events: LEGAL.frozen }, done);
 
 	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('tab-publish').click();
 
 	await page.getByRole('button', { name: 'Publish…' }).click();
 	// The confirm step BEFORE anything runs: counts, sentinel honesty, and the names.
@@ -581,6 +589,7 @@ test('adjudication: the manager picks a canonical replica; the pick PUTs and the
 	await snapshot(page, detail({}), replicas);
 
 	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('tab-publish').click();
 
 	const panel = page.getByTestId('adjudication-panel');
 	await expect(panel.getByText('Adjudication')).toBeVisible();
@@ -603,9 +612,16 @@ test('adjudication: the manager picks a canonical replica; the pick PUTs and the
 	await expect.poll(() => bodies(page)).toContainEqual({ task_id: 'g1-r1' });
 	// The refetched pick marks the replica in BOTH surfaces: the panel and the queue row.
 	await expect(panel.getByText('canonical', { exact: true })).toBeVisible();
-	await expect(page.getByRole('table').getByText('canonical')).toBeVisible();
 	// The runner-up stays re-pickable — a pick is pre-publish metadata, not a ratchet.
 	await expect(panel.getByRole('button', { name: 'Re-pick' })).toBeVisible();
+
+	// The queue row is the SECOND surface, and it now lives in the Labeling tab — so this walks
+	// there rather than dropping the assertion. Worth keeping precisely because the two surfaces are
+	// no longer visible at once: a chip that agreed only because both were rendered from the same
+	// screen would be a weaker fact than one that survives a tab change and a re-render.
+	await page.getByTestId('tab-labeling').click();
+	await expect(page.getByRole('table').getByText('canonical')).toBeVisible();
+	await page.getByTestId('tab-publish').click();
 
 	// Withdraw (the un-wedge path): DELETE clears the pick and the chips go with it.
 	await seed(page, {
@@ -631,6 +647,7 @@ test('adjudication: non-accepted replicas offer no Pick at all', async ({ page }
 	);
 
 	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('tab-publish').click();
 
 	const panel = page.getByTestId('adjudication-panel');
 	await expect(panel.getByText('g1')).toBeVisible();
@@ -653,6 +670,7 @@ test('adjudication: a stale-pick 409 from the server surfaces verbatim', async (
 	});
 
 	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('tab-publish').click();
 	await page
 		.getByTestId('adjudication-panel')
 		.getByRole('button', { name: 'Pick', exact: true })
@@ -837,6 +855,7 @@ test('ontology: a manager edits the taxonomy after create, and the PATCH carries
 	await seed(page, { 'PATCH /projects/p1/ontology': project('labeling') });
 
 	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('edit-ontology-trigger').click();
 
 	// The form opens SEEDED from the stored ontology — an edit surface that starts blank is a
@@ -893,6 +912,7 @@ test('ontology: the editor REFUSES to flatten structure it cannot express', asyn
 	);
 
 	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('edit-ontology-trigger').click();
 
 	await expect(page.getByTestId('ontology-too-rich')).toContainText('relation');
@@ -909,6 +929,7 @@ test('ontology: the edit button is ABSENT once the project is frozen', async ({ 
 	await snapshot(page, { project: project('frozen'), legal_events: LEGAL.labeling }, listing([]));
 
 	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('tab-settings').click();
 	await expect(page.getByTestId('edit-ontology-trigger')).toHaveCount(0);
 });
 
@@ -1217,6 +1238,7 @@ test('membership lists direct grants and grants a new one', async ({ page }) => 
 	});
 
 	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('load-members').click();
 	await expect(page.getByTestId('member-row')).toHaveCount(1);
 
@@ -1249,6 +1271,7 @@ test('revoking the LAST administrator is refused, and the refusal is shown', asy
 	});
 
 	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('load-members').click();
 	await page.getByTestId('revoke-member').click();
 
@@ -1267,6 +1290,7 @@ test('a non-manager is told WHY, not shown an empty list', async ({ page }) => {
 	});
 
 	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('load-members').click();
 
 	await expect(page.getByTestId('members-error')).toContainText('lacks can_manage');

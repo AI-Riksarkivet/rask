@@ -21,6 +21,7 @@ const ConfigSchema = v.object({
 	text: v.fallback(v.string(), ''),
 	app: v.fallback(v.string(), 'htrflow'),
 	requestName: v.fallback(v.string(), ''),
+	modelPath: v.fallback(v.string(), ''),
 	bodyMode: v.fallback(v.picklist(BODY_MODES), 'upstream'),
 	bodyTemplate: v.fallback(v.string(), DEFAULT_JSON_BODY),
 	promptTemplate: v.fallback(v.string(), DEFAULT_PROMPT),

@@ -22,6 +22,14 @@ const SERVE_ORIGIN = env.STUDIO_SERVE_URL ?? 'http://localhost:8000';
 /** One path segment, lowercase slug — matches how deploy_serve.py names apps. */
 const APP_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
+/** The path WITHIN the app. A Serve `route_prefix` reaches only the app root, and every
+ *  OpenAI-compatible deployment on the cluster puts its endpoints under `/v1/...` — so without a
+ *  path, that whole class of app is uncallable (measured: POST /gemma-31b 404s,
+ *  POST /gemma-31b/v1/chat/completions answers). Constrained rather than free-form: slashed segments
+ *  only, no `..`, no scheme and no authority, so this cannot become an open proxy into the cluster —
+ *  the same reason `app` is a slug and not a URL. */
+const PATH_RE = /^(\/[A-Za-z0-9._~-]+)*\/?$/;
+
 export const POST: RequestHandler = (event) => {
 	const app = event.url.searchParams.get('app') ?? 'htrflow';
 	if (!APP_RE.test(app)) {
@@ -29,5 +37,11 @@ export const POST: RequestHandler = (event) => {
 			json({ reason: 'bad_app', detail: `Not a Serve app name: ${app}` }, { status: 400 }),
 		);
 	}
-	return proxyServeInfer(event, { target: `${SERVE_ORIGIN}/${app}` });
+	const path = event.url.searchParams.get('path') ?? '';
+	if (path !== '' && !PATH_RE.test(path)) {
+		return Promise.resolve(
+			json({ reason: 'bad_path', detail: `Not a Serve app path: ${path}` }, { status: 400 }),
+		);
+	}
+	return proxyServeInfer(event, { target: `${SERVE_ORIGIN}/${app}${path}` });
 };
