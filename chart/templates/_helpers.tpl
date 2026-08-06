@@ -865,3 +865,46 @@ GITOPS IS THE FIRST-CLASS CONSUMER of this chart, and that decides the two rules
 - { name: {{ $p }}_FGA_MODEL_ID, value: {{ . | quote }} }
 {{- end }}
 {{- end -}}
+
+{{/* ---------------------------------------------------------------------------------------------
+     THE CORPUS VOLUME — one definition, because a writer and a reader that disagree are INVISIBLE.
+
+     Measured 2026-08-06, and it had been true for three days: `job/rask-seed-corpus` really did
+     seed a corpus (10 chunk rows, 3 documents, an FTS index over chunks.text) and the viewer really
+     did answer `{"datasets": []}`. Neither was broken. They mounted a volume with the same NAME and
+     a different SOURCE:
+
+         seed job                  corpus -> hostPath /home/blackwell/media-corpus
+         viewer/search/annotator   corpus -> emptyDir {}          (explorer.corpus.mode default)
+
+     A THIRD path was in play: explorer.corpus.hostPath defaults to /var/media-corpus, so even
+     flipping mode=hostPath would have missed the seeded bytes. Three paths, one volume name.
+
+     Nothing could catch it. The seed exits 0 (it wrote its files). The viewer is 1/1 Ready and
+     answers 200 (it read its directory). `helm template` renders. Every probe is green and the
+     product is empty — the failure only exists in the RELATION between two manifests, which is
+     exactly the thing no single manifest can assert.
+
+     So the volume source is defined ONCE, here, and every mount site includes it. A new writer
+     cannot pick its own source without deleting this call, which is a visible edit rather than a
+     silent divergence.
+
+     Modes are unchanged (emptyDir | pvc | hostPath) and so is their rationale — see values.yaml
+     `explorer.corpus`. What changes is that they are no longer transcribed per site.
+     --------------------------------------------------------------------------------------------- */}}
+{{- define "lance.corpusVolume" -}}
+{{- $corpus := .Values.explorer.corpus | default dict -}}
+{{- $mode := $corpus.mode | default "emptyDir" -}}
+{{- if not (has $mode (list "emptyDir" "pvc" "hostPath")) -}}
+{{- fail (printf "rask chart: explorer.corpus.mode=%q is not one of emptyDir|pvc|hostPath" $mode) -}}
+{{- end -}}
+- name: corpus
+{{- if eq $mode "pvc" }}
+  persistentVolumeClaim:
+    claimName: {{ $corpus.claimName | default (printf "%s-media-corpus" (include "lance.fullname" .)) | quote }}
+{{- else if eq $mode "hostPath" }}
+  hostPath: { path: {{ $corpus.hostPath | default "/var/media-corpus" | quote }}, type: DirectoryOrCreate }
+{{- else }}
+  emptyDir: {}
+{{- end }}
+{{- end -}}

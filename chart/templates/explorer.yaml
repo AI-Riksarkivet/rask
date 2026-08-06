@@ -224,16 +224,13 @@ spec:
              a kubelet event as the only clue — on a fresh cluster that is the FIRST thing explorer.enabled
              does. `emptyDir` starts every pod cleanly anywhere (the corpus datasets are then loaded into
              the pod, or read from the catalog); `pvc` is the prod posture; `hostPath` stays available for
-             the node-staged corpus but is now opt-in AND DirectoryOrCreate, so it cannot wedge. */}}
-        - name: corpus
-        {{- if eq $corpusMode "pvc" }}
-          persistentVolumeClaim:
-            claimName: {{ $corpus.claimName | default (printf "%s-media-corpus" (include "lance.fullname" $root)) | quote }}
-        {{- else if eq $corpusMode "hostPath" }}
-          hostPath: { path: {{ $corpus.hostPath | default "/var/media-corpus" | quote }}, type: DirectoryOrCreate }
-        {{- else }}
-          emptyDir: {}
-        {{- end }}
+             the node-staged corpus but is now opt-in AND DirectoryOrCreate, so it cannot wedge.
+
+             The source itself lives in `lance.corpusVolume` (_helpers.tpl) and is INCLUDED, not
+             transcribed: the readers here and the seed writer must resolve to the same volume, and
+             when they did not, the seed wrote a corpus to a hostPath while these three read an
+             emptyDir — green probes on both sides, an empty product, for three days. */}}
+        {{- include "lance.corpusVolume" $root | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service

@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check audit scan-config scan-secrets scan-image scan-zone-image
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check audit scan-config scan-secrets scan-image scan-zone-image seed-corpus
 
 help:
 	@echo "Targets:"
@@ -441,6 +441,28 @@ k3s-import: ## Side-load :dev images into k3s containerd
 # not want the corpus volume mounted.
 EXPLORER ?= true
 
+# The corpus volume, same story one value along — and it cost three days. The chart defaults
+# `explorer.corpus.mode` to `emptyDir` so that a FRESH cluster comes up with zero node preparation,
+# which is right for an arbitrary consumer of the chart and wrong for this deploy: an emptyDir is
+# per-pod scratch, so the media plane can never hold a corpus across a restart, and a seed written
+# into one is invisible to the very pod that mounts it. On 2026-08-06 exactly that was live — a real
+# seeded corpus on a hostPath, three media pods reading an emptyDir, `{"datasets": []}`, green
+# probes on both sides. `pvc` is the chart's own prod posture and the claim carries
+# `helm.sh/resource-policy: keep`, so the corpus outlives the release.
+# `make k3s-up CORPUS=emptyDir` restores the chart default for a fleet that wants no corpus storage.
+CORPUS ?= pvc
+
+# And the access mode has to come with it. The chart defaults the corpus claim to ReadWriteMany
+# because three services read it, and values.yaml claims a single-node dev cluster "will still bind
+# an RWX claim because every pod lands on the one node — but that is luck, not a contract."
+# That is not luck and it is not true: k3s's local-path provisioner REFUSES outright —
+#   failed to provision volume with StorageClass "local-path":
+#   NodePath only supports ReadWriteOnce and ReadWriteOncePod (1.22+) access modes
+# so the claim sits Pending forever and all three media pods sit Pending behind it. RWO is correct
+# here and loses nothing: RWO restricts a volume to one NODE, not to one pod, so all three still
+# mount it on this single-node cluster. Prod (a real RWX class) keeps the chart default.
+CORPUS_ACCESS_MODE ?= ReadWriteOnce
+
 k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait for the gateway
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ -z "$$HF_TOKEN" ] && [ -r "$${HF_HOME:-$$HOME/.cache/huggingface}/token" ]; then \
@@ -452,12 +474,17 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	  --take-ownership \
 	  --set image.localImages=true \
 	  --set explorer.enabled=$(EXPLORER) \
+	  --set explorer.corpus.mode=$(CORPUS) \
+	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) \
 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN} \
 	  $${AWS_ACCESS_KEY_ID:+--set-string rustfs.accessKey=$$AWS_ACCESS_KEY_ID} \
 	  $${AWS_SECRET_ACCESS_KEY:+--set-string rustfs.secretKey=$$AWS_SECRET_ACCESS_KEY}
 	$(KUBECTL) rollout status deploy/rask-gateway --timeout=300s
 	@echo "UI → http://<node-ip>/   (catch-all ingress; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 	@echo "API → http://<node-ip>/api/ray/health"
+
+seed-corpus: ## Seed the demo corpus into the volume the media plane actually READS
+	./scripts/seed-corpus.sh
 
 k9s: bootstrap ## Browse the k3s cluster in k9s (the chart's NOTES.txt points here)
 	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/k9s
