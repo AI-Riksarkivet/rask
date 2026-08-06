@@ -5,7 +5,6 @@ import {
 	ListChecks,
 	Package,
 	Rocket,
-	ScanText,
 	Workflow,
 } from '@lucide/svelte';
 import { exact, seg, type ZoneNav } from '@rask/ui/shell';
@@ -60,17 +59,6 @@ export const MODELS_ZONE_NAV: ZoneNav = {
 					href: '/models/pipeline',
 					match: seg('/models/pipeline'),
 					icon: Workflow,
-				},
-			],
-		},
-		{
-			label: 'Inference',
-			items: [
-				{
-					title: 'Playground',
-					href: '/models/playground',
-					match: seg('/models/playground'),
-					icon: ScanText,
 				},
 			],
 		},
