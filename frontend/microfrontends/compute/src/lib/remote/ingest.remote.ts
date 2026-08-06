@@ -1,6 +1,15 @@
 import * as v from 'valibot';
-import { query, getRequestEvent } from '$app/server';
-import { getIngestRun, listIngestSources, type IngestRun, type SourceDescriptor } from '@rask/api';
+import { command, query, getRequestEvent } from '$app/server';
+import { env } from '$env/dynamic/private';
+import { lineageAuthHeaders } from '@rask/api/runs-feed';
+import {
+	getIngestRun,
+	listIngestSources,
+	startIngest as postIngest,
+	type IngestAccepted,
+	type IngestRun,
+	type SourceDescriptor,
+} from '@rask/api';
 
 // The ingest plane's READ surface for the compute zone (open_ingest.md A20).
 //
@@ -14,8 +23,25 @@ import { getIngestRun, listIngestSources, type IngestRun, type SourceDescriptor 
 // during SSR (a bare global `fetch` has no origin on the server) and inlines the response into the
 // SSR payload, so the first frame is rendered rather than fetched after mount.
 
+
+/** The signed-in caller's bearer, for the governed doors.
+ *
+ *  SvelteKit's request-scoped `fetch` forwards COOKIES but attaches no `Authorization` header — that
+ *  is the BFF proxy's job on the client path, and there is no proxy in front of a remote function. So
+ *  without this every call here arrives at the ingest door carrying only the gateway's own Dapr
+ *  app-token, and the door correctly refuses it ("'gateway' is a public front door"). The estate's
+ *  reference for this is `lakehouse/src/lib/admin/remote/access.remote.ts:47-50`. */
+function bearerHeaders(): Record<string, string> {
+	const { locals } = getRequestEvent();
+	const bearer = locals.session?.accessToken;
+	return bearer ? { authorization: `Bearer ${bearer}` } : {};
+}
+
 /** A run id. Parsed at the boundary so a malformed id is refused before it reaches the gateway. */
 const RunId = v.pipe(v.string(), v.trim(), v.minLength(1));
+
+/** Same default as this zone's notification feed — one zone, one lineage endpoint. */
+const LINEAGE_API = env.LINEAGE_API ?? 'http://localhost:8001';
 
 /**
  * One ingest run's live status.
@@ -29,7 +55,7 @@ const RunId = v.pipe(v.string(), v.trim(), v.minLength(1));
  * the first run's cached answer for every id.
  */
 export const getIngestRunStatus = query(RunId, async (runId): Promise<IngestRun> => {
-	return getIngestRun(runId, getRequestEvent().fetch);
+	return getIngestRun(runId, getRequestEvent().fetch, bearerHeaders());
 });
 
 /**
@@ -45,5 +71,129 @@ export const getIngestRunStatus = query(RunId, async (runId): Promise<IngestRun>
  * and cannot change under a running pod.
  */
 export const getIngestSources = query(async (): Promise<SourceDescriptor[]> => {
-	return listIngestSources(getRequestEvent().fetch);
+	return listIngestSources(getRequestEvent().fetch, bearerHeaders());
+});
+
+/** What the form sends. Parsed at the boundary, so a malformed request is refused here rather than
+ *  becoming a 422 from FastAPI that the UI has to interpret. */
+const IngestInput = v.object({
+	kind: v.pipe(v.string(), v.trim(), v.minLength(1)),
+	project: v.pipe(v.string(), v.trim(), v.minLength(1)),
+	dataset: v.pipe(v.string(), v.trim(), v.minLength(1)),
+	options: v.optional(v.record(v.string(), v.unknown()), {}),
+	// Per-run write partitioning. Every field optional — unset means the deployment default. The
+	// DOOR is what refuses an out-of-range value (a `fragment_rows` at or above the queue's
+	// max_ack_pending would hang the drain), so this only checks shape, never policy: duplicating
+	// the ceiling here would be a second copy of a rule that can drift.
+	sizing: v.optional(v.record(v.string(), v.pipe(v.number(), v.integer(), v.minValue(1))), {}),
+	idempotencyKey: v.optional(v.string()),
+});
+
+/**
+ * Accept an ingest run — a `command()`, and it has to be one.
+ *
+ * This was called CLIENT-side, straight from the form, against the relative `/api/ingest/ingests`
+ * URL. That request carries cookies but no `Authorization` header, so on an auth-enabled estate it
+ * reached the door as the GATEWAY's own identity with no user behind it — and the door correctly
+ * refused it:
+ *
+ *     'gateway' is a public front door: its Dapr app-token authenticates the proxy, not the caller
+ *
+ * Found by pressing the button in a browser; every unit test passed throughout, because none of them
+ * has a session. The gateway's Dapr app-token proves the PROXY, never the human, which is the whole
+ * point of the public-caller rule — so the fix is not to loosen the door but to call it from
+ * somewhere that holds the user's bearer.
+ *
+ * A remote command runs on the ZONE SERVER, where `getRequestEvent().fetch` carries the session
+ * established by the OIDC BFF. Same seam the read queries above already use, and the estate's stated
+ * direction for every JSON value surface.
+ *
+ * WHY `command` AND NOT `form`, since SvelteKit's docs prefer `form` for its graceful degradation:
+ * this form's FIELDS ARE NOT STATIC. They are rendered from `GET /v1/ingests/sources` at runtime —
+ * `local-dir` asks for a directory and a glob, `iiif` for a volume and a page cap, and a source kind
+ * added tomorrow brings its own — which is invariant I1's whole point, and precisely what keeps
+ * adding a source a backend-only diff. `form()` derives its fields from a schema declared at build
+ * time, so expressing a registry-driven form through it would mean restating every adapter's options
+ * in TypeScript: the exact weld this page was rewritten to remove. The no-JS fallback is not worth
+ * re-welding the sources into the frontend to buy.
+ *
+ * No single-flight refresh is attached: the two queries beside this one are the source REGISTRY
+ * (immutable for the life of the pod) and a per-RUN status keyed by an id that does not exist until
+ * this call returns. There is nothing on screen that this mutation staleness-invalidates — and when
+ * a runs LIST lands, that is the query this command should refresh.
+ */
+export const startIngest = command(IngestInput, async (input): Promise<IngestAccepted> => {
+	return postIngest(input, getRequestEvent().fetch, bearerHeaders());
+});
+
+/** One ingest run as the LIST renders it — deliberately fewer fields than the detail page. */
+export interface IngestRunRow {
+	run_id: string;
+	state: string | null;
+	progress_done: number | null;
+	progress_total: number | null;
+	error_message: string | null;
+	started_at: string | null;
+	updated_at: string | null;
+}
+
+/** The lineage job name every ingest run shares (`ingest.lineage.JOB_NAME`). Correlation is by run
+ *  id; the NAME is what groups the lane, and it is the only server-side handle for "runs of this
+ *  plane" — the lineage board is estate-wide and carries catalog drops, movers and training runs. */
+const INGEST_JOB = 'ingest.run';
+
+/** How many rows the list shows. Trimmed on the SERVER, and that is not a nicety: `/runs` measured
+ *  330_103 bytes for 875 runs on the live estate (`@rask/api/runs-feed:156`). Shipping that to a
+ *  browser to filter it there would send a third of a megabyte to render twenty rows. */
+const WINDOW = 50;
+
+/**
+ * The ingest plane's RUN LIST.
+ *
+ * It reads LINEAGE, not the ingest service, and that is the whole reason this exists at all: the
+ * ingest service cannot list its own runs. It has three routes (`/sources`, `POST /ingests`,
+ * `GET /ingests/{run_id}`) and its `RunStore` has only `get`/`put` — and the production store is
+ * `InMemoryRunStore`, a per-pod dict that is DELIBERATELY not durable ("run truth is the workflow's,
+ * not this cache"). So there is no index to add a `list()` to; the durable record of which runs
+ * exist is the lineage graph, which every ingest run writes to at START and again at COMPLETE/FAIL.
+ *
+ * The trade is worth naming: lineage rows are generic runs, so this list carries state and progress
+ * but NOT the ingest-specific half (committed version, the §D2 publication fields, per-unit errors).
+ * Those live on the detail page, which reads the ingest door directly. A list that lies about having
+ * them would be worse than one that links to where they are.
+ *
+ * Auth prefers the USER's bearer and falls back to the zone's read-only service identity, exactly
+ * like the notification feed — so a signed-in operator sees what they are entitled to and an
+ * anonymous page load still renders the read-only board.
+ */
+export const listIngestRuns = query(async (): Promise<IngestRunRow[]> => {
+	const { fetch, locals } = getRequestEvent();
+	const res = await fetch(`${LINEAGE_API}/runs`, {
+		headers: lineageAuthHeaders({
+			accessToken: locals.session?.accessToken,
+			serviceToken: env.LINEAGE_SERVICE_TOKEN,
+			serviceId: env.LINEAGE_SERVICE_ID,
+		}),
+	});
+	// A governed refusal and an outage are both "no board" to this page, and neither is worth
+	// throwing across the remote boundary — the caller renders an empty list with its own honest
+	// message rather than a boundary error over a feed that is merely unavailable.
+	if (!res.ok) return [];
+
+	const body: unknown = await res.json();
+	const rows = (body as { runs?: unknown[] })?.runs ?? [];
+	return rows
+		.filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
+		.filter((r) => r.job === INGEST_JOB)
+		.slice(0, WINDOW)
+		.map((r) => ({
+			run_id: String(r.run_id ?? ''),
+			state: (r.state as string) ?? null,
+			progress_done: (r.progress_done as number) ?? null,
+			progress_total: (r.progress_total as number) ?? null,
+			error_message: (r.error_message as string) ?? null,
+			started_at: (r.started_at as string) ?? null,
+			updated_at: (r.updated_at as string) ?? null,
+		}))
+		.filter((r) => r.run_id);
 });

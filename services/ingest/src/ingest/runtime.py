@@ -12,6 +12,8 @@ for.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 import tempfile
@@ -93,6 +95,32 @@ if TYPE_CHECKING:
 # the medallion writer's, so the movers' generic carry-forward keeps gold rows traceable to the
 # exact page bytes they were read from whichever head landed them (pinned by
 # tests/unit/test_bronze_writers_compat.py).
+#
+# `partition_key` is how this plane answers "partition at volume level / at folder level". It is a
+# COLUMN, not a fragment boundary, and that choice is measured rather than preferred:
+#
+#   * Lance has no table-level partitioning. `lance_docs/ns_catalog/partitioning-spec.md:4` —
+#     "Lance tables do not natively support partitioning, instead promoting clustering to achieve
+#     similar performance benefits." `write_fragments` takes no partition key; its only splitting
+#     levers are size-based.
+#   * Grouping units into key-pure FRAGMENTS does not survive. Measured against pylance 9.0.0: five
+#     fragments each holding one distinct key, committed, then `services/maintenance`'s default
+#     `compact_files()` → ONE fragment holding all five. Compaction is opt-OUT and sweeps every
+#     discovered dataset, so the merge is the default, not an edge case.
+#   * A column plus a scalar index DOES survive: after that same compaction, a BITMAP index on the
+#     column made `partition_key = 'x'` answer as an index-served `ScalarIndexQuery` rather than a
+#     scan.
+#
+# NULLABLE on purpose. A source that has no meaningful grouping writes nulls rather than inventing
+# one, and a run predating this column is not retroactively wrong. The value comes from the ADAPTER
+# (`sources.partition_of`), never from parsing the URI in the worker — the worker resolves units by
+# scheme and knows nothing about volumes or prefixes, and teaching it would re-weld the source into
+# the worker, which is precisely what I1 removed.
+#
+# NOTE FOR EXISTING DATASETS: appending a fragment carrying this column into a dataset created
+# WITHOUT it raises `OSError: Append with different schema` (measured). Bronze is reproducible from
+# source by design, but an existing dataset needs an `add_columns` alter before this plane can write
+# to it again.
 BRONZE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.int64()),
@@ -100,6 +128,7 @@ BRONZE_SCHEMA = pa.schema(
         blob_field("payload", nullable=False),
         pa.field("sha256", pa.string()),
         pa.field("stage", pa.string()),
+        pa.field("partition_key", pa.string(), nullable=True),
     ]
 )
 
@@ -153,7 +182,7 @@ def ensure_dataset_at(spec: RunSpec) -> str:
     "no hardcoded dataset paths", which exists because two callers composing the same logical table
     from different env is how volume B overwrote volume A.
     """
-    return _catalog().ensure(spec.project, spec.dataset)
+    return _catalog().ensure(spec.namespace, spec.dataset)
 
 
 async def publish_chunk_units(chunk: ChunkSpec) -> int:
@@ -163,7 +192,21 @@ async def publish_chunk_units(chunk: ChunkSpec) -> int:
     queue = await WorkQueue.connect(nats_url())
     try:
         await queue.ensure_stream()
-        tasks = [UnitTask(run_id=chunk.run_id, chunk_id=chunk.chunk_id, key=key, dataset_uri=chunk.dataset_uri) for key in chunk.keys]
+        # The partition label is computed HERE, at publish, where the run's SourceSpec is still in
+        # hand — the worker only ever sees a URI and a scheme.
+        from ingest.sources import SourceSpec, partition_key_for
+
+        spec = SourceSpec(kind=chunk.kind, project=chunk.project, dataset=chunk.dataset, options=chunk.options)
+        tasks = [
+            UnitTask(
+                run_id=chunk.run_id,
+                chunk_id=chunk.chunk_id,
+                key=key,
+                dataset_uri=chunk.dataset_uri,
+                partition_key=partition_key_for(spec, key),
+            )
+            for key in chunk.keys
+        ]
         return await queue.publish_units(tasks)
     finally:
         await queue.close()
@@ -189,11 +232,51 @@ async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
     queue = await WorkQueue.connect(nats_url())
     try:
         await queue.ensure_stream()
-        worker = Worker(queue, UriFetcher(), PayloadValidator(), name=chunk.chunk_id)
+        # The RUN's sizing, resolved at accept and carried on the chunk — never re-read from env here.
+        # Re-reading would let a rolling restart change fragment size under a live fan-out, so two
+        # chunks of one run could write different layouts and the operator would have no record of
+        # which numbers the run actually used.
+        worker = Worker(queue, UriFetcher(), PayloadValidator(), name=chunk.chunk_id, sizing=chunk.sizing)
         outcome = await worker.drain_chunk(chunk.run_id, chunk.chunk_id, len(chunk.keys), chunk.dataset_uri)
         return outcome.model_dump()
     finally:
         await queue.close()
+
+
+#: A terminal run must not wait on a broker to finish terminating. Measured earlier in this plane: a
+#: nats connect to a dead address had still not returned after 60s with `connect_timeout`,
+#: `allow_reconnect=False` and `max_reconnect_attempts=0` ALL set, so `asyncio.wait_for` around the
+#: whole thing is the only reliable bound. Without it this call took the ingest suite from 21s to 150s.
+RELEASE_TIMEOUT_SECONDS = 5.0
+
+
+async def release_run_units(run_id: str) -> int:
+    """Drop whatever this run left queued. Returns the count released, 0 if it could not.
+
+    Lives here rather than in the workflow because I3 confines the broker client to `ingest.queue` —
+    the activity calls this, this calls the seam.
+
+    NEVER RAISES, and the CONNECT is inside the guard. `release_run` already swallows its purge and
+    delete failures, and the first version of this stopped there — which left `connect()` outside,
+    so an unreachable broker raised `NoServersError` straight out of the terminal activity and failed
+    a run that had already landed its data. A test caught it; the docstring above it had claimed
+    "best-effort by construction" while the code was not.
+
+    That is the I8 shape exactly: tidying up must never fail the thing it is tidying up after.
+    """
+    from ingest.queue import WorkQueue
+
+    queue = None
+    try:
+        queue = await asyncio.wait_for(WorkQueue.connect(nats_url()), timeout=RELEASE_TIMEOUT_SECONDS)
+        return await asyncio.wait_for(queue.release_run(run_id), timeout=RELEASE_TIMEOUT_SECONDS)
+    except Exception:
+        _log.warning("could not release queued units for run %s — they may remain on the stream", run_id, exc_info=True)
+        return 0
+    finally:
+        if queue is not None:
+            with contextlib.suppress(Exception):
+                await queue.close()
 
 
 async def reconcile_from_queue(chunk: ChunkSpec) -> dict[str, Any]:
@@ -230,25 +313,92 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
     from ingest.staging import discover_staged, purge_staged
 
     catalog = _catalog()
-    uri = catalog.ensure(spec.project, spec.dataset)
-    # STORAGE TRUTH, not the workflow's carried value. Fragments staged by a drain attempt that died
-    # before returning are still on the store and still uncommitted — invisible to `fragments`, which
-    # only holds what the surviving attempts handed back. Reading the staging prefix is what turns a
-    # mid-run pod death from silent row loss into a slower run (A3). The union is order-preserving
-    # and deduplicated, so a fragment reported through both paths commits exactly once.
-    staged = discover_staged(uri, spec.run_id)
-    seen: set[str] = set()
-    all_fragments = [f for f in [*staged, *fragments] if not (f in seen or seen.add(f))]
+    uri = catalog.ensure(spec.namespace, spec.dataset)
+    # STORAGE TRUTH, and it is the ONLY truth. Fragments staged by a drain attempt that died before
+    # returning are still on the store and still uncommitted — invisible to `fragments`, which holds
+    # only what the surviving attempts handed back. Reading the staging prefix is what turns a mid-run
+    # pod death from silent row loss into a slower run (A3).
+    #
+    # `discover_staged` does not merely LIST: it searches for an EXACT COVER of the run's units and
+    # deliberately DESELECTS a fragment whose rows another fragment already covers. This used to be
+    # unioned with the workflow's carried list — `[*staged, *fragments]`, deduplicated by string —
+    # and that silently overruled the selection. Every carried fragment was staged first
+    # (`worker.py`: `stage_fragments(...)` is the line immediately before `outcome.fragments.extend`),
+    # so the carried list can contribute exactly one thing the selection does not already account
+    # for: a fragment the selection SUPERSEDED. Adding it back commits both, which is the "four units
+    # in, six rows out" duplication `tests/test_partial_ack_duplication.py` closed — reintroduced one
+    # layer above the layer that closed it.
+    all_fragments = discover_staged(uri, spec.run_id)
+    if not all_fragments and fragments:
+        # Staging returned nothing while the workflow is holding fragments. That is not the ordinary
+        # empty case (no work), it means the staging prefix was unreadable or its manifests were all
+        # truncated — the run's own record of what it wrote is gone. Committing the carried list is
+        # the loss-avoiding choice, but it is NOT the exact cover, so say so loudly rather than let a
+        # silent fallback look like the normal path.
+        _log.warning(
+            "ingest_staging_unreadable_using_carried_fragments",
+            extra={"run_id": spec.run_id, "dataset_uri": uri, "carried": len(fragments)},
+        )
+        seen: set[str] = set()
+        all_fragments = [f for f in fragments if not (f in seen or seen.add(f))]
+
+    if not all_fragments:
+        # NOTHING TO COMMIT IS A NO-OP, NOT A COMMIT OF NOTHING — and this guard exists because the
+        # catalog branch below skipped the one `Lander.commit_fragments` has always had
+        # (`lander.py:95-100`: "a run whose every unit failed should leave no version behind to
+        # explain"). It POSTed `{"fragments": []}`, which the catalog refuses with 400 "no fragments
+        # to commit" (`catalog/services/dataplane.py:598`).
+        #
+        # DEPLOYED, that 400 is a crash, not a message: `RASK_INGEST_USE_CATALOG: "true"`
+        # (chart/values.yaml), so the 400 raises out of the `finalize` ACTIVITY, burns its four
+        # ACTIVITY_RETRY attempts against a permanently-failing input, and kills the workflow BEFORE
+        # `emit_terminal` (workflow.py) — so the run's own FAIL never reaches the lineage graph and
+        # the START emitted at accept is orphaned forever. The run reports FAILED with an empty
+        # `errors` dict and no operator-readable reason.
+        #
+        # STRUCTURALLY INVISIBLE TO THE SUITE: this branch runs only when the catalog has `commit`,
+        # and `LocalCatalog` — the default with `RASK_INGEST_USE_CATALOG` unset, which is what every
+        # test uses — does not. No local test could take it. That is the argument for the guard
+        # sitting here rather than inside either catalog implementation.
+        #
+        # TWO ordinary paths reach it: a source that enumerated zero units, and a run whose every
+        # unit failed validation.
+        result = Lander(catalog).commit_fragments(uri, all_fragments, run_id=spec.run_id)
+        # STILL PURGED. A run whose staged manifests were all truncated (`staging.py` skips those)
+        # arrives here with an empty list and would strand its staged bytes with nothing left to
+        # collect them.
+        purge_staged(uri, spec.run_id)
+        return {
+            # NOT `result.version`. That is the version the dataset ALREADY had — the previous run's,
+            # or the empty v1 `ensure_dataset` created — and reporting it is the "committed_version
+            # it did not produce" half of this defect.
+            "committed_version": None,
+            "rows": 0,
+            "dataset_rows": result.rows,
+            "errors": errors,
+            # UNCHANGED derivation, deliberately: `test_run_chain.py` drives exactly
+            # `finalize_run(spec, [], {...})` and pins COMPLETE_WITH_ERRORS under "a run that
+            # delivered 9,997 of 10,000 pages did not FAIL". Refusing a genuinely EMPTY SOURCE is a
+            # different decision at a different seam (enumeration), not this one.
+            "status": "COMPLETE_WITH_ERRORS" if errors else "COMPLETE",
+            # No publication: there is no version to gate, and `_publish` would move `published`
+            # onto a version this run did not write.
+            "published": None,
+            "from_version": None,
+            "to_version": None,
+            "publish_reason": "nothing to commit",
+            "publish_error": None,
+        }
 
     if hasattr(catalog, "commit"):
         # THE CATALOG COMMITS. A commit registered only in this process is one the cascade cannot
         # ride: the event that wakes a mover is the catalog's publication of a new version, so a
         # locally-recorded commit lands the data and tells nothing downstream it happened.
         version, tier_rows = catalog.commit(
-            spec.project,
+            spec.namespace,
             spec.dataset,
             all_fragments,
-            read_version=catalog.describe_version(spec.project, spec.dataset),
+            read_version=catalog.describe_version(spec.namespace, spec.dataset),
             run_id=spec.run_id,
         )
         # `row_count` from the catalog is the DATASET's total after the commit, not this run's work —
@@ -301,7 +451,7 @@ def _publish(catalog: Any, spec: RunSpec, version: int) -> dict[str, Any]:  # no
     if publish is None:
         return {"published": False, "publish_error": "catalog has no publish operation"}
     try:
-        body = publish(spec.project, spec.dataset, version)
+        body = publish(spec.namespace, spec.dataset, version)
     except Exception as exc:
         _log.warning("publish failed for run %s at version %s: %s", spec.run_id, version, exc)
         return {"published": False, "publish_error": str(exc)}

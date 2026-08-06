@@ -19,7 +19,7 @@ import traceback
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from lineage_kit.context import LineageContext, use_context
 from lineage_kit.emitter import ambient_emitter, default_emitter, use_emitter
@@ -83,12 +83,22 @@ class LineageRun:
         run_id: str | None = None,
         parent: LineageContext | None = None,
         emitter: Emitter | None = None,
+        run_facets: dict[str, Any] | None = None,
     ) -> None:
         self.job_name = job_name
         self.namespace = namespace
         self.run_id = run_id or str(uuid.uuid4())
         self.parent = parent
         self._emitter = emitter
+        #: Custom run facets carried on EVERY event this run emits, START and terminal alike.
+        #:
+        #: Per-run rather than per-call because that is what they describe. The medallion's `lance`
+        #: facet carries the tenant a write belongs to, and the cascade head reads it off the terminal
+        #: event (`ingest_trigger._cascade_project`) — but a START that omits it and a COMPLETE that
+        #: carries it are the same run described two different ways, and any consumer correlating the
+        #: pair has to special-case which one to trust. Authored with `custom_facet()` so the payload
+        #: stays spec-legal; `RunFacets` allows extras, so it reaches the wire verbatim.
+        self._run_facets = dict(run_facets or {})
         self._terminal: RunState | None = None
 
     @property
@@ -124,7 +134,7 @@ class LineageRun:
         outputs: Iterable[OutputDatasetLike] = (),
         error: ErrorMessageRunFacet | None = None,
     ) -> RunEvent:
-        facets = RunFacets(parent=self.parent.parent_facet() if self.parent else None, error_message=error)
+        facets = RunFacets(parent=self.parent.parent_facet() if self.parent else None, error_message=error, **self._run_facets)
         return RunEvent(
             event_type=state,
             event_time=_now(),

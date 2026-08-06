@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 
@@ -68,6 +69,52 @@ def catalog_enabled() -> bool:
     return os.getenv("RASK_INGEST_USE_CATALOG", "").lower() in ("1", "true", "yes")
 
 
+#: The Dapr secret store and key holding the catalog bearer, and the field inside the bundle. Same
+#: store the rest of the governed fleet reads (`lance-secrets` -> OpenBao), so there is one place a
+#: credential lives and one place it rotates.
+SECRET_STORE = os.getenv("RASK_SECRET_STORE", "lance-secrets")
+SECRET_KEY = os.getenv("RASK_SECRET_KEY", "lance")
+CATALOG_TOKEN_FIELD = os.getenv("RASK_CATALOG_TOKEN_FIELD", "catalog-token")
+
+
+@lru_cache(maxsize=1)
+def catalog_token() -> str | None:
+    """The catalog bearer, from the SECRET STORE — never from process env.
+
+    This was `os.getenv("RASK_CATALOG_TOKEN")`, and the consequence was measured in-cluster rather
+    than reasoned about: on a governed estate the variable is unset (the chart ships no plaintext env
+    for a credential, which is the rule working), so every call went out with NO Authorization header
+    and the catalog answered
+
+        401 {"detail": "Missing bearer token"}
+
+    on `describe`. That is `ensure_dataset` — the FIRST activity of every run — so no ingest could
+    create its bronze dataset and every run ended FAILED with `units 0/0`. A door refusing an
+    unauthenticated caller is correct; the caller having no way to be authenticated is the defect.
+
+    FAIL-CLOSED, via the estate's one helper (`fetch_required_secrets`), which catalog / lineage /
+    maintenance already use — so a missing secret raises here rather than booting a service that will
+    401 on its first real call. Deliberately NO env fallback: a fallback makes the store optional, and
+    an optional secret store is the "wired but never read" state an audit already found once.
+
+    Returns None only when the catalog is not in use at all (`catalog_enabled()` false — the local/dev
+    path, which has no catalog to authenticate to). Cached because a token fetch per HTTP call would
+    put the secret store on the hot path of every unit.
+    """
+    if not catalog_enabled():
+        return None
+    # The SERVICE DOOR makes the bearer unnecessary, so do not demand a secret that is not needed.
+    # This fail-closed fetch was written before the catalog had an identity door, and it turned a
+    # missing-and-unneeded `catalog-token` into a failed run at the first activity. A service that
+    # can authenticate as itself has nothing to look up.
+    if os.getenv("RASK_CATALOG_SERVICE_IDENTITY") and (os.getenv("RASK_CATALOG_APP_TOKEN") or os.getenv("APP_API_TOKEN")):
+        return None
+    from service_kit.governed.secrets import fetch_required_secrets
+
+    bundle = fetch_required_secrets(SECRET_STORE, SECRET_KEY, require=CATALOG_TOKEN_FIELD)
+    return bundle[CATALOG_TOKEN_FIELD]
+
+
 class CatalogError(RuntimeError):
     """The catalog refused, or could not be reached."""
 
@@ -78,23 +125,55 @@ class CatalogServiceClient:
     def __init__(self, schema: pa.Schema, base_url: str | None = None, token: str | None = None) -> None:
         self._schema = schema
         self._base = (base_url or catalog_base_url()).rstrip("/")
-        self._token = token or os.getenv("RASK_CATALOG_TOKEN")
+        self._token = token if token is not None else catalog_token()
         self.registered: list[tuple[str, int, str]] = []
 
     # ── identity ──────────────────────────────────────────────────────────────────────
 
-    def table_id(self, project: str, dataset: str) -> str:
-        return f"{project}{DELIMITER}{dataset}"
+    def table_id(self, namespace: str, dataset: str) -> str:
+        """`{namespace}${dataset}` — pure composition, and the argument is a NAMESPACE.
+
+        It was named `project`, and that name was the whole defect. A project is a level of the
+        hierarchy ABOVE the one a table lives in, so passing one produced `bind86$e2ewin` — the 403's
+        object, which nobody had granted anything on because `namespace:bind86` does not exist. The
+        callers were already right (`table_id("bronze", "pages")`); only the parameter lied.
+
+        The project -> namespace resolution belongs at the boundary where a project is authoritative,
+        which is `RunSpec.namespace`. Doing it here would mean two places qualify, and a caller that
+        already holds a namespace would get it qualified twice (`bronze-bronze$pages`, measured).
+        """
+        return f"{namespace}{DELIMITER}{dataset}"
 
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        """The credential this plane presents to the catalog.
+
+        THE SERVICE IDENTITY IS PREFERRED, and that ordering is the fix. The catalog now runs the
+        same identity door lineage does (`service_kit.governed.dapr_auth.service_principal`), so a
+        service authenticates the way a service should — with the app token daprd already injects
+        plus the subject it claims — and needs no bearer at all.
+
+        The bearer path came first and was the wrong shape for the problem: the catalog verifies OIDC
+        JWTs, a JWT EXPIRES, and a static string in a secret store cannot be one. Chasing it produced
+        a fail-closed run on a `catalog-token` secret that never needed to exist. Kept below only for
+        a caller that genuinely holds a user's bearer — forwarding a human's token is a real case, and
+        it takes precedence over nothing here because a service call has no human to forward.
+
+        Both halves, never one: the door requires the token AND the identity, and sending one is a
+        request refused for a reason invisible from this side.
+        """
         headers = dict(extra or {})
-        if self._token:
+        token = os.getenv("RASK_CATALOG_APP_TOKEN") or os.getenv("APP_API_TOKEN")
+        identity = os.getenv("RASK_CATALOG_SERVICE_IDENTITY")
+        if token and identity:
+            headers["dapr-api-token"] = token
+            headers["x-lance-service-identity"] = identity
+        elif self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         return headers
 
     # ── the two doors ─────────────────────────────────────────────────────────────────
 
-    def ensure(self, project: str, dataset: str) -> str:
+    def ensure(self, namespace: str, dataset: str) -> str:
         """Create the namespace and the table if absent; return the location the catalog vends.
 
         THREE steps, not two. The design said "create the table, then commit fragments", and against
@@ -107,18 +186,18 @@ class CatalogServiceClient:
         has to exist first. Nothing about the table endpoints says so, and the failure only appears
         against a catalog whose namespace has never been created — which every dev catalog is, once.
         """
-        located = self._describe(project, dataset)
+        located = self._describe(namespace, dataset)
         if located is not None:
             return located
 
-        self._ensure_namespace(project)
-        self._create_empty(project, dataset)
-        located = self._describe(project, dataset)
+        self._ensure_namespace(namespace)
+        self._create_empty(namespace, dataset)
+        located = self._describe(namespace, dataset)
         if located is None:
-            raise CatalogError(f"catalog created {self.table_id(project, dataset)} but describes no location for it")
+            raise CatalogError(f"catalog created {self.table_id(namespace, dataset)} but describes no location for it")
         return located
 
-    def commit(self, project: str, dataset: str, fragments_json: Sequence[str], read_version: int, run_id: str) -> tuple[int, int]:
+    def commit(self, namespace: str, dataset: str, fragments_json: Sequence[str], read_version: int, run_id: str) -> tuple[int, int]:
         """Fold client-written fragments into ONE new version. Returns (version, row_count)."""
         import httpx
 
@@ -128,7 +207,7 @@ class CatalogServiceClient:
             "fragments": [json.loads(f) for f in fragments_json],
             "read_version": read_version,
         }
-        url = f"{self._base}/v1/table/{self.table_id(project, dataset)}/commit"
+        url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/commit"
         try:
             response = httpx.post(url, json=payload, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except Exception as exc:
@@ -138,16 +217,16 @@ class CatalogServiceClient:
             # Optimistic concurrency: another writer committed against the same read_version. The
             # activity's own retry re-reads and re-commits, which is the documented recovery — so
             # this must be raised, never swallowed into a success.
-            raise CatalogError(f"commit conflict on {self.table_id(project, dataset)} at read_version {read_version} — re-read and retry")
+            raise CatalogError(f"commit conflict on {self.table_id(namespace, dataset)} at read_version {read_version} — re-read and retry")
         if response.status_code >= 400:
             raise CatalogError(f"catalog refused the commit ({response.status_code}): {response.text[:300]}")
 
         body = response.json()
         version = int(body["version"])
-        self.registered.append((self.table_id(project, dataset), version, run_id))
+        self.registered.append((self.table_id(namespace, dataset), version, run_id))
         return version, int(body.get("row_count", 0))
 
-    def publish(self, project: str, dataset: str, version: int, *, key_column: str = "id") -> dict[str, object]:
+    def publish(self, namespace: str, dataset: str, version: int, *, key_column: str = "id") -> dict[str, object]:
         """Ask the catalog to gate `version` and, if it passes, advance the `published` tag.
 
         A commit makes bronze READABLE; this is what makes it READY (§ D2 D-R1). The plane does not
@@ -161,7 +240,7 @@ class CatalogServiceClient:
         """
         import httpx
 
-        url = f"{self._base}/v1/table/{self.table_id(project, dataset)}/publish"
+        url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/publish"
         payload = {"version": version, "key_column": key_column}
         try:
             response = httpx.post(url, json=payload, headers=self._headers(), timeout=TIMEOUT_SECONDS)
@@ -174,10 +253,10 @@ class CatalogServiceClient:
 
     # ── internals ─────────────────────────────────────────────────────────────────────
 
-    def _describe(self, project: str, dataset: str) -> str | None:
+    def _describe(self, namespace: str, dataset: str) -> str | None:
         import httpx
 
-        url = f"{self._base}/v1/table/{self.table_id(project, dataset)}/describe"
+        url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/describe"
         try:
             response = httpx.post(url, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except Exception as exc:
@@ -191,7 +270,7 @@ class CatalogServiceClient:
         location = response.json().get("location")
         return str(location) if location else None
 
-    def _ensure_namespace(self, project: str) -> None:
+    def _ensure_namespace(self, namespace: str) -> None:
         """Ensure the project's namespace exists. Probes FIRST, creates only if it does not.
 
         The probe is not an optimisation. Where namespaces are warehouse-scoped, a create against an
@@ -205,7 +284,7 @@ class CatalogServiceClient:
         """
         import httpx
 
-        probe = f"{self._base}/v1/namespace/{project}/exists"
+        probe = f"{self._base}/v1/namespace/{namespace}/exists"
         try:
             found = httpx.post(probe, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except Exception as exc:
@@ -213,7 +292,7 @@ class CatalogServiceClient:
         if found.status_code < 400:
             return
 
-        url = f"{self._base}/v1/namespace/{project}/create"
+        url = f"{self._base}/v1/namespace/{namespace}/create"
         try:
             response = httpx.post(url, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except Exception as exc:
@@ -234,14 +313,14 @@ class CatalogServiceClient:
             # setup gap, not a bug, and the message is the fix.
             if "must belong to a warehouse" in response.text:
                 raise CatalogError(
-                    f"namespace {project!r} is not provisioned: this deployment scopes namespaces to warehouses "
+                    f"namespace {namespace!r} is not provisioned: this deployment scopes namespaces to warehouses "
                     f"(project > warehouse > namespace > table), and ingest does not provision tenancy. "
                     f"An admin creates it with POST /v1/projects, POST /v1/warehouses, "
                     f"POST /v1/warehouses/{{id}}/namespaces."
                 )
-            raise CatalogError(f"catalog refused namespace {project!r} ({response.status_code}): {response.text[:300]}")
+            raise CatalogError(f"catalog refused namespace {namespace!r} ({response.status_code}): {response.text[:300]}")
 
-    def _create_empty(self, project: str, dataset: str) -> None:
+    def _create_empty(self, namespace: str, dataset: str) -> None:
         """Step 1 of the creation two-step — zero rows, so no data byte transits the catalog."""
         import httpx
         import pyarrow as pa
@@ -251,7 +330,7 @@ class CatalogServiceClient:
             writer.write_table(self._schema.empty_table())
         body = sink.getvalue().to_pybytes()
 
-        url = f"{self._base}/v1/table/{self.table_id(project, dataset)}/create"
+        url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/create"
         try:
             response = httpx.post(
                 url,
@@ -265,16 +344,16 @@ class CatalogServiceClient:
         # 409 is a RACE, not a failure: two chunks of the same run, or two runs against one dataset,
         # can both find it absent and both try. The loser re-describes and proceeds.
         if response.status_code == 409:
-            logger.info("catalog table %s already existed — another writer created it first", self.table_id(project, dataset))
+            logger.info("catalog table %s already existed — another writer created it first", self.table_id(namespace, dataset))
             return
         if response.status_code >= 400:
             raise CatalogError(f"catalog refused create ({response.status_code}): {response.text[:300]}")
 
-    def describe_version(self, project: str, dataset: str) -> int:
+    def describe_version(self, namespace: str, dataset: str) -> int:
         """The table's current version — the `read_version` a client-direct commit is built against."""
         import httpx
 
-        url = f"{self._base}/v1/table/{self.table_id(project, dataset)}/describe"
+        url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/describe"
         try:
             response = httpx.post(url, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
             response.raise_for_status()

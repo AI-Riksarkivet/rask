@@ -1,5 +1,22 @@
 """The unit worker — fetch, validate, write a fragment, ack.
 
+**NOT AN ORCHESTRATOR, and not a deployment.** Dapr Workflow owns the run: `workflow.ingest_run`
+fans out child workflows, `when_all` fans them in, and Dapr persists and replays the history. This
+class is what runs INSIDE the `drain_chunk` ACTIVITY — the JetStream consumer that does the fetching.
+The division is deliberate and each half is doing the thing it is good at:
+
+    Dapr Workflow   DURABLE DECISIONS — enumerate, fan out, fan in, commit once, emit lineage. It
+                    survives a pod death because the history replays. There is no counter to
+                    hand-roll and no ledger to keep.
+    JetStream       IN-CHUNK DELIVERY — one unit to exactly one consumer, redelivery on a lost ack,
+                    poison parking, and `max_ack_pending` backpressure. Dapr has no equivalent, and
+                    an activity per page would be a million activity results in the state store.
+
+The first version of this file DID try to be an orchestrator — the drain waited on an external Dapr
+workflow event that the worker signalled over a NATS subject, with nothing bridging the two, and no
+Deployment ran a `Worker` at all. Every chunk would have published its units, waited the full
+ten-minute fallback, and reported zero fragments. Draining inside an activity is what fixed it.
+
 One worker is one competing consumer on the run's queue-group subscription. Scaling is adding pods;
 there is no partitioning to get wrong, because JetStream hands each unit to exactly one consumer.
 
@@ -16,15 +33,16 @@ poisoned dataset that fails months later at read time.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-import os
 from typing import TYPE_CHECKING, Any, Protocol
 
 import pyarrow as pa
 from pydantic import BaseModel, Field
 
 from ingest.lander import write_unit_fragments
-from ingest.queue import UnitTask, WorkQueue
+from ingest.queue import ACK_WAIT_SECONDS, QueueMessage, UnitTask, WorkQueue
+from ingest.sizing import ResolvedSizing, resolve
 from ingest.staging import stage_fragments
 
 
@@ -37,12 +55,12 @@ logger = logging.getLogger(__name__)
 #
 # They answer to three different systems and there is no reason for them to agree:
 #
-#   workflow fan-out   `workflow.CHUNK_SIZE`  — keys per CHILD WORKFLOW. A DAPR concern: a million
-#                                               activity results would melt the state store. Nothing
-#                                               to do with Lance.
-#   source politeness  FETCH_* below          — in-flight requests against the SOURCE. A IIIF/HCP
-#                                               concern: rate limits, not throughput.
-#   storage layout     FRAGMENT_TARGET_*      — rows per LANCE FRAGMENT. A Lance concern.
+#   workflow fan-out   `workflow.CHUNK_SIZE`   — keys per CHILD WORKFLOW. A DAPR concern: a million
+#                                                activity results would melt the state store. Nothing
+#                                                to do with Lance.
+#   source politeness  `sizing.fetch_*`        — in-flight requests against the SOURCE. A IIIF/HCP
+#                                                concern: rate limits, not throughput.
+#   storage layout     `sizing.fragment_*`     — rows per LANCE FRAGMENT. A Lance concern.
 #
 # The third one did not exist. Every unit was written as its own fragment
 # (`units_to_table([(key, result)])` — a list of ONE), so a 10k-page volume produced 10k fragments in
@@ -50,24 +68,56 @@ logger = logging.getLogger(__name__)
 # Lance's own guidance is ~1M rows per fragment, and its ingestion notes name the per-row write as
 # the anti-pattern: "each call commits a new version and a new fragment".
 #
-# All three are env-overridable, because the right value is a property of the deployment (source
-# rate limit, page size, object-store latency) and not of this file.
+# The last two are NOT module constants any more — they live on the run, resolved at accept from the
+# request and defaulted from env (`ingest.sizing`). They were deployment-wide, which is one value for
+# every source the plane would ever ingest; a rate-limited IIIF endpoint and an S3 bucket in the same
+# datacentre want different numbers, and only the caller knows which they are hitting.
 
-# How many units one fetch() pulls from the queue. One round trip per batch instead of per unit.
-FETCH_BATCH = int(os.getenv("RASK_INGEST_FETCH_BATCH", "16"))
+#: How often a HELD message tells JetStream it is still being worked. A fifth of the queue's
+#: `ACK_WAIT_SECONDS`, so several consecutive misses still do not expire the ack — derived from that
+#: constant rather than written as a literal, because the two drifting apart is invisible: the only
+#: symptom is the queue quietly redelivering LIVE work, which reads as a slow source and lands as a
+#: staging overlap.
+HEARTBEAT_SECONDS = ACK_WAIT_SECONDS / 5
 
-# Bounded parallel fetching. The expensive resource is the SOURCE, not us: IIIF and HCP are
-# rate-limited external systems, so this is a politeness ceiling as much as a throughput one.
-FETCH_CONCURRENCY = int(os.getenv("RASK_INGEST_FETCH_CONCURRENCY", "8"))
 
-# Rows accumulated before ONE fragment is written. Capped well under the queue's `max_ack_pending`
-# because the batch is held UNACKED while it fills — see the ack contract in `drain_chunk`.
-FRAGMENT_TARGET_ROWS = int(os.getenv("RASK_INGEST_FRAGMENT_ROWS", "1024"))
+async def _renew_held(held: dict[int, Any]) -> None:
+    """Tell JetStream the held messages are still being worked, until cancelled.
 
-# …or this many payload bytes, whichever comes first. Page images are megabytes: a row-only trigger
-# would let one fragment reach tens of gigabytes on a large-format volume, and Lance's sizing note
-# puts the sane upper range at 10-100 GB per fragment with 1 TB a hard ceiling.
-FRAGMENT_TARGET_BYTES = int(os.getenv("RASK_INGEST_FRAGMENT_BYTES", str(256 * 1024 * 1024)))
+    `msg.in_progress()` was called NOWHERE in this plane, and a batch holds its messages unacked from
+    first fetch until the fragment is on the store. Against a slow or rate-limited source that window
+    exceeds `ACK_WAIT_SECONDS` (300) and JetStream redelivers units a LIVE worker is still holding —
+    so the same bytes are fetched twice against the very endpoint the concurrency limit exists to
+    protect, and the two workers' fragments overlap in a way `discover_staged` may not resolve.
+
+    No crash required, which is what made this worse than the documented overlap: an ordinary slow
+    run reaches it.
+
+    Takes the held MAPPING rather than closing over the batch list, because `flush` REBINDS
+    `pending_msgs` to a fresh list — a heartbeat closing over that name would keep renewing the
+    previous batch while the current one expired.
+
+    Keyed by `id(msg)` and NOT a set: a nats-py `Msg` is UNHASHABLE, so `held.add(msg)` raised
+    `TypeError: unhashable type: 'Msg'` inside the drain activity — which Dapr reported as a failed
+    activity, leaving the run COMPLETE with `units_done: 0` and nothing committed. The unit test
+    missed it because its fake message was a plain object, which IS hashable; the in-cluster lane
+    caught it on the first run. Identity is the right key anyway (two messages are never "equal"),
+    and `id()` cannot be recycled while the mapping holds the reference.
+    """
+    # POLL REASON: KEEPALIVE, not a poll — this loop TELLS and never asks. It reports "still working"
+    # to JetStream for messages this process is holding, and reads no state, so there is nothing an
+    # event could deliver instead: the fact being reported is our own liveness, and only we have it.
+    # A13 forbids polling loops (a loop asking "is it done yet"); an ack keepalive is the opposite,
+    # and without it `ack_wait` expires and the queue redelivers work a LIVE worker is mid-fetch on.
+    # BOUNDED by the drain: created in `drain_chunk` and cancelled in its `finally`, so it cannot
+    # outlive the work it accompanies.
+    while True:
+        await asyncio.sleep(HEARTBEAT_SECONDS)
+        for msg in list(held.values()):
+            with contextlib.suppress(Exception):
+                # Best-effort per message: one already-acked or expired message must not stop the
+                # others being renewed.
+                await msg.in_progress()
 
 
 class ChunkOutcome(BaseModel):
@@ -96,7 +146,7 @@ class AcceptAll:
         return None if payload else "empty payload"
 
 
-def units_to_table(units: Sequence[tuple[str, bytes]]) -> pa.Table:
+def units_to_table(units: Sequence[tuple[str, bytes]], partitions: Sequence[str | None] | None = None) -> pa.Table:
     """Build the bronze batch: the data AS RECEIVED plus the acquisition facts.
 
     Bronze is faithful to source (§3.5) — no decoding, no conversion. `id` is a stable hash of the
@@ -109,6 +159,11 @@ def units_to_table(units: Sequence[tuple[str, bytes]]) -> pa.Table:
     no packed tier (nothing protecting against small-file explosion), and no `read_blobs` /
     `take_blobs` / `read_blob_ranges` for readers, so the viewer could only ever load whole rows.
     The code this plane replaced already got this right (`medallion/services/ingest.py:31`).
+
+    `partitions` is positional-parallel to `units` and OPTIONAL: omitted (or None entries) writes
+    nulls, which is what a source with no meaningful grouping should produce. The values are the
+    ADAPTER's — see `sources.partition_key_for` — and this function deliberately does not derive them
+    from the key, because that would put source knowledge in the worker.
     """
     import hashlib
 
@@ -117,6 +172,11 @@ def units_to_table(units: Sequence[tuple[str, bytes]]) -> pa.Table:
     from ingest.runtime import BRONZE_SCHEMA, BRONZE_STAGE
 
     ids = [int.from_bytes(hashlib.sha256(k.encode()).digest()[:8], "big", signed=True) for k, _ in units]
+    keys = list(partitions) if partitions is not None else [None] * len(units)
+    if len(keys) != len(units):
+        # Positional parallelism is the contract; a length mismatch would silently misattribute rows
+        # to the wrong partition, which is worse than writing none.
+        raise ValueError(f"partitions has {len(keys)} entries for {len(units)} units")
     return pa.table(
         {
             "id": pa.array(ids, pa.int64()),
@@ -130,6 +190,9 @@ def units_to_table(units: Sequence[tuple[str, bytes]]) -> pa.Table:
             # Not decoration: the media viewer PROJECTS it, so a bronze table without it is one no
             # reader in the estate can open — see the schema comment.
             "stage": pa.array([BRONZE_STAGE] * len(units), pa.string()),
+            # How this row GROUPS — a column, not a fragment boundary. See BRONZE_SCHEMA for the
+            # measurement that decided that (compaction merges key-pure fragments; a column survives).
+            "partition_key": pa.array(keys, pa.string()),
         },
         schema=BRONZE_SCHEMA,
     )
@@ -155,7 +218,7 @@ def _is_permanent(exc: BaseException) -> bool:
     return isinstance(status, int) and status in PERMANENT_STATUSES
 
 
-def _is_redelivery(msg: object) -> bool:
+def _is_redelivery(msg: QueueMessage) -> bool:
     """Has JetStream handed us this unit before?
 
     `num_delivered` is 1 on a first delivery and climbs on every redelivery, so >1 means some earlier
@@ -168,7 +231,7 @@ def _is_redelivery(msg: object) -> bool:
     overlap rather than duplicating rows.
     """
     try:
-        return int(msg.metadata.num_delivered) > 1  # type: ignore[attr-defined]
+        return int(msg.metadata.num_delivered) > 1
     except (AttributeError, TypeError, ValueError):
         return False
 
@@ -176,11 +239,22 @@ def _is_redelivery(msg: object) -> bool:
 class Worker:
     """Consumes one run's units until the chunk drains."""
 
-    def __init__(self, queue: WorkQueue, fetcher: Fetcher, validator: Validator | None = None, name: str = "w0") -> None:
+    def __init__(
+        self,
+        queue: WorkQueue,
+        fetcher: Fetcher,
+        validator: Validator | None = None,
+        name: str = "w0",
+        sizing: ResolvedSizing | None = None,
+    ) -> None:
         self._q = queue
         self._fetch = fetcher
         self._validate = validator or AcceptAll()
         self._name = name
+        # The RUN's numbers, resolved at accept and carried down through the chunk spec. Falling back
+        # to `resolve()` here (deployment defaults) rather than requiring them keeps every existing
+        # caller — and every test that builds a bare Worker — working unchanged.
+        self._sizing = sizing or resolve()
 
     async def _refuse(self, msg: Any, task: UnitTask, exc: Exception, outcome: ChunkOutcome) -> None:  # noqa: ANN401 — a nats Msg, typed only under TYPE_CHECKING
         """A fetch failed. Redeliver it, or park it — the two are NOT the same failure.
@@ -230,29 +304,41 @@ class Worker:
         version and a new fragment".
 
         Holding messages unacked is what makes this safe AND what bounds the batch: the queue's
-        `max_ack_pending` is the ceiling on in-flight unacked work, so `FRAGMENT_TARGET_ROWS` must
+        `max_ack_pending` is the ceiling on in-flight unacked work, so the run's `fragment_rows` must
         stay under it or JetStream simply stops delivering and the drain deadlocks. The ack contract
         itself is unchanged in meaning — bytes on the store, identity staged beside them, and only
         then the ack — it now just applies to a batch instead of a row.
         """
         sub = await self._q.subscribe(run_id)
         outcome = ChunkOutcome(chunk_id=chunk_id)
-        sem = asyncio.Semaphore(FETCH_CONCURRENCY)
+        sizing = self._sizing
+        sem = asyncio.Semaphore(sizing.fetch_concurrency)
 
         # The open batch: fetched units and the messages still owed an ack for them.
         pending: list[tuple[str, bytes]] = []
+        # Positional-parallel to `pending`: the ADAPTER's grouping label for each held unit, taken
+        # off the task rather than derived here — the worker resolves units by URI scheme and does
+        # not know what a volume or a folder is.
+        pending_parts: list[str | None] = []
         pending_msgs: list[Any] = []
         pending_bytes = 0
 
+        # EVERY message currently held unacked, in a container that is never REASSIGNED — `flush`
+        # rebinds `pending_msgs` to a fresh list, so a heartbeat closing over that name would keep
+        # renewing the previous batch while the current one expires.
+        #
+        # A DICT KEYED BY `id`, not a set: a nats-py `Msg` is unhashable.
+        held: dict[int, Any] = {}
+
         async def flush() -> None:
             """One fragment for everything accumulated, then ack the whole batch."""
-            nonlocal pending, pending_msgs, pending_bytes
+            nonlocal pending, pending_msgs, pending_bytes, pending_parts
             if not pending:
                 return
-            units, msgs_to_ack = pending, pending_msgs
-            pending, pending_msgs, pending_bytes = [], [], 0
+            units, msgs_to_ack, parts = pending, pending_msgs, pending_parts
+            pending, pending_msgs, pending_bytes, pending_parts = [], [], 0, []
 
-            written = write_unit_fragments(dataset_uri, units_to_table(units))
+            written = write_unit_fragments(dataset_uri, units_to_table(units, parts))
             # EVERY unit in the batch, not `units[0][0]`. The manifest is the finalizer's only record
             # of which rows a fragment holds, so naming one member left the other N-1 invisible and a
             # partially-acked batch committed its units TWICE
@@ -262,56 +348,93 @@ class Worker:
             outcome.units_done += len(units)
             for msg in msgs_to_ack:
                 await msg.ack()
+                held.pop(id(msg), None)
             logger.info("fragment: %d units, %d bytes -> %d fragment(s)", len(units), sum(len(p) for _, p in units), len(written))
 
-        while outcome.units_done + len(pending) + len(outcome.errors) < expected:
-            try:
-                msgs = await sub.fetch(min(FETCH_BATCH, expected), timeout=30)
-            except TimeoutError:
-                # No units available right now. Not an error — another worker may hold them.
-                break
+        beat = asyncio.create_task(_renew_held(held))
+        try:
+            while outcome.units_done + len(pending) + len(outcome.errors) < expected:
+                try:
+                    msgs = await sub.fetch(min(sizing.fetch_batch, expected), timeout=30)
+                except TimeoutError:
+                    # No units available right now. Not an error — another worker may hold them.
+                    break
 
-            async def handle(msg: object) -> None:
-                nonlocal pending_bytes
-                task = UnitTask.model_validate_json(msg.data)  # type: ignore[attr-defined]
-                async with sem:
-                    try:
-                        key, result = await self._one(task)
-                    except Exception as exc:
-                        await self._refuse(msg, task, exc, outcome)
-                        return
-                    if key is None:
-                        # Validation refused it: park and ACK. Redelivering corrupt bytes cannot help.
-                        outcome.errors[task.key] = str(result)
-                        await self._q.park_poison(task, str(result))
-                        await msg.ack()  # type: ignore[attr-defined]
-                        return
-                    # Held, NOT acked — the ack is owed until this unit's fragment is on the store.
-                    pending.append((key, result))
-                    pending_msgs.append(msg)
-                    pending_bytes += len(result)
+                async def handle(msg: QueueMessage) -> None:
+                    nonlocal pending_bytes
+                    task = UnitTask.model_validate_json(msg.data)  # type: ignore[attr-defined]
+                    async with sem:
+                        try:
+                            key, result = await self._one(task)
+                        except Exception as exc:
+                            await self._refuse(msg, task, exc, outcome)
+                            return
+                        if key is None:
+                            # Validation refused it: park and ACK. Redelivering corrupt bytes cannot help.
+                            outcome.errors[task.key] = str(result)
+                            await self._q.park_poison(task, str(result))
+                            await msg.ack()
+                            return
+                        # Held, NOT acked — the ack is owed until this unit's fragment is on the store.
+                        pending.append((key, result))
+                        pending_parts.append(task.partition_key)
+                        pending_msgs.append(msg)
+                        held[id(msg)] = msg
+                        pending_bytes += len(result)
 
-            # A REDELIVERED unit never shares a fragment with a fresh one, and that isolation is what
-            # keeps recovery decidable. `discover_staged` resolves an overlap by dropping the
-            # fragment whose units another already covers — which only works while overlaps are
-            # containments. Let a redelivery batch with fresh units and you get F={u0..u3} against
-            # H={u2,u3,u4,u5}: neither contains the other, so committing either is wrong and
-            # `discover_staged` can only raise. Splitting the fetch is what makes that unreachable.
-            fresh = [m for m in msgs if not _is_redelivery(m)]
-            again = [m for m in msgs if _is_redelivery(m)]
+                # A REDELIVERED unit never shares a fragment with a fresh one, and that isolation is what
+                # keeps recovery decidable. `discover_staged` resolves an overlap by dropping the
+                # fragment whose units another already covers — which only works while overlaps are
+                # containments. Let a redelivery batch with fresh units and you get F={u0..u3} against
+                # H={u2,u3,u4,u5}: neither contains the other, so committing either is wrong and
+                # `discover_staged` can only raise. Splitting the fetch is what makes that unreachable.
+                fresh = [m for m in msgs if not _is_redelivery(m)]
+                again = [m for m in msgs if _is_redelivery(m)]
 
-            if fresh:
-                await asyncio.gather(*(handle(m) for m in fresh))
-            if again:
-                await flush()  # close the fresh batch before the redelivered units join it
-                await asyncio.gather(*(handle(m) for m in again))
-                await flush()
-            elif len(pending) >= FRAGMENT_TARGET_ROWS or pending_bytes >= FRAGMENT_TARGET_BYTES:
-                await flush()
+                if fresh:
+                    await asyncio.gather(*(handle(m) for m in fresh))
+                if again:
+                    await flush()  # close the fresh batch before the redelivered units join it
+                    # ONE FRAGMENT PER REDELIVERED UNIT — what makes the overlap state STRUCTURALLY
+                    # unreachable rather than merely reported.
+                    #
+                    # Splitting fresh from redelivered (above) stops a redelivery merging with fresh
+                    # work, but left redeliveries batching with EACH OTHER — and they do not
+                    # necessarily come from the same original batch. Two crashed batches whose
+                    # remainders arrive in one fetch produced a single fragment overlapping both and
+                    # contained by neither: F={u0..u3} against H={u2,u3,u4,u5}, which no selection
+                    # resolves, so `discover_staged` could only raise and strand the run.
+                    #
+                    # A SINGLETON is contained by any fragment holding it, so the staged family stays
+                    # LAMINAR — every pair nested or disjoint — and an exact cover always exists.
+                    #
+                    # Deliberately NOT "batch all uncovered redeliveries together", which looks
+                    # equivalent and is not race-proof: worker A holds {u0..u5}, ack_wait expires on
+                    # u0..u3, worker B batches {u0,u1,u2,u3,u9} — F\\H={u4,u5} and H\\F={u9}, neither
+                    # contained, and the state is back.
+                    #
+                    # The cost is one fragment per redelivered unit, paid only on recovery; the
+                    # heartbeat above is what keeps that population small in the first place.
+                    for msg in again:
+                        await handle(msg)
+                        await flush()
+                elif len(pending) >= sizing.fragment_rows or pending_bytes >= sizing.fragment_bytes:
+                    await flush()
+
+        finally:
+            # ALWAYS. A heartbeat that outlives its drain keeps renewing messages nobody is working,
+            # which is the same redelivery-starvation this exists to prevent, pointed the other way.
+            beat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await beat
 
         # The remainder. A chunk is almost never an exact multiple of the target, so without this the
         # tail of every run would be fetched, held, and then silently redelivered on ack_wait.
         await flush()
 
-        await self._q.signal_drained(run_id, chunk_id, outcome.model_dump())
+        # RETURNING the outcome is the signal. There was a `signal_drained` publish here, left over
+        # from the design where a chunk workflow suspended on an external NATS event — which nothing
+        # in the estate ever raised. Draining inside the activity replaced it: Dapr persists this
+        # return value and replays the activity if the pod dies, so a second, unacked notification on
+        # a WORK_QUEUE stream bought nothing and accumulated forever.
         return outcome

@@ -72,9 +72,11 @@ def test_each_kind_declares_the_options_its_adapter_READS(sources: list[dict[str
     read: dict[str, set[str]] = {}
     tree = ast.parse(ADAPTERS.read_text(encoding="utf-8"))
     for func in [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]:
-        # `_iiif` / `_iiif_lineage` both belong to the `iiif` kind; the leading underscore and any
-        # `_lineage` suffix are naming, not identity.
-        kind = func.name.lstrip("_").removesuffix("_lineage").replace("_", "-")
+        # `_iiif`, `_iiif_lineage` and `_iiif_partition` all belong to the `iiif` kind; the leading
+        # underscore and the twin suffixes are naming, not identity. Missing a suffix invents a
+        # PHANTOM kind — `_iiif_partition` first registered here as kind `iiif-partition`, whose
+        # options are described nowhere, so this gate failed on a function that was entirely correct.
+        kind = func.name.lstrip("_").removesuffix("_lineage").removesuffix("_partition").replace("_", "-")
         for node in ast.walk(func):
             is_options_get = (
                 isinstance(node, ast.Call)

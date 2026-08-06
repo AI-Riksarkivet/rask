@@ -116,6 +116,51 @@ spec:
                  file cannot call the helper because it cannot template at all. Deriving it here means
                  the ingest plane follows the bucket every other tier follows, including a rename. */}}
             - { name: RASK_INGEST_WAREHOUSE, value: "s3://{{ include "lance.stageBucket" (list $root $root.Values.medallion.producer.bronzeNamespace) }}/ingest" }
+            {{- if and $root.Values.dapr.sidecars (or (not $svc.governedAuth) $root.Values.auth.enabled) }}
+            {{- /* ARMED ONLY IF THERE IS ALSO A KEY. The two halves of this door used to render under
+                 unrelated conditions — this one on `dapr.sidecars`, the USER half below on
+                 `auth.enabled` — and the shipped combination is sidecars ON, auth OFF. That arms the
+                 lock and renders no key: `authorize_ingest` finds APP_API_TOKEN set (so not dev-open),
+                 finds `oidc_enabled` false (so no user path), and falls through to
+                 `PermissionDeniedError`. Measured on the live release: every `POST /api/ingests`
+                 answered 403, from the UI and from a shell alike, with no human able to start a run.
+
+                 The comment on the USER half below PREDICTED this outcome in as many words — "left a
+                 signed-in project admin with NO way in and the UI path dead rather than merely
+                 ungoverned" — which is worth noting: the reasoning was right and written down, and
+                 the two conditions still drifted apart, because nothing rendered them together.
+
+                 For a `governedAuth` service the token is therefore left UNSET when the user door is
+                 not wired. That is the estate's dev-open default, the same one every other door
+                 takes, and it keeps the UI path alive instead of dead. A service that does NOT
+                 declare governedAuth is unaffected — it has no user half to be inconsistent with.
+
+                 The SERVICE half of the ingest control door. `authorize_ingest` treats an UNSET
+                 APP_API_TOKEN as dev-open, matching every other door in the estate — which means a
+                 deployment that forgets it runs an unauthenticated write API and looks identical to
+                 one that is protected. Rendered from the same secret the medallion producer and the
+                 movers read, so the whole plane presents one service identity. Gated on
+                 dapr.sidecars because that is what creates the secret (the medallion templates make
+                 the same reference under the same condition, so it can never dangle). */}}
+            - name: APP_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ $root.Release.Name }}-dapr-app-token, key: token }
+            {{- end }}
+            {{- end }}
+            {{- if and $root.Values.auth.enabled $svc.governedAuth }}
+            {{- /* The USER door, for services that declare `governedAuth` — NOT every frontDoor
+                   service. `frontDoor` means "the gateway routes to it", which is a different
+                   question: the gateway and compute read no auth settings at all, so keying on it
+                   emitted seven variables neither service reads. `ingest.auth.authorize_ingest` refuses
+                   the service-token path when the caller is the public gateway, and then has nowhere
+                   to fall through to unless OIDC is wired — so closing that bypass without this left
+                   a signed-in project admin with NO way in and the UI path dead rather than merely
+                   ungoverned. IngestAuthSettings extends GovernedAuthSettings, so the prefix is
+                   LANCE_ — verified, not assumed: emitting the wrong prefix produces variables the
+                   service never reads, which looks wired and does nothing. */}}
+            {{- include "lance.governedOidcEnv" (list $root "LANCE") | nindent 12 }}
+            {{- include "lance.governedFgaEnv" (list $root "LANCE") | nindent 12 }}
+            {{- with include "lance.governedFgaPins" (list $root "LANCE") }}{{- . | nindent 12 }}{{- end }}
             {{- end }}
             {{- /* Per-service env passthrough. Added 2026-08-03 because this block was a FIXED set of
                  includes: a values key a service needed had nowhere to render, and the first

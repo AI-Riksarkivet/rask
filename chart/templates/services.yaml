@@ -135,25 +135,9 @@ spec:
             # every write handler, so a wedged sidecar/NATS would otherwise hang every catalog write.
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
             {{- if .Values.auth.enabled }}
-            - { name: LANCE_OIDC_ENABLED, value: "true" }
-            - { name: LANCE_OIDC_ISSUER, value: {{ .Values.dex.issuer | quote }} }
-            # Split-horizon: the issuer is the PUBLIC URL tokens carry; discovery/JWKS are fetched in-cluster.
-            - { name: LANCE_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" . }}:{{ .Values.dex.port }}/dex" }
-            - { name: LANCE_OIDC_AUDIENCE, value: {{ .Values.dex.clientId | quote }} }
-            # Scheme-derived like the vault skipVerify: the http escape hatch opens ONLY for a plain-http
-            # issuer (the in-cluster dev Dex); an https issuer (real IdP) keeps the HTTPS guard enforced.
-            - { name: LANCE_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" .Values.dex.issuer) | quote }} }
-            - { name: LANCE_FGA_ENABLED, value: "true" }
-            - { name: LANCE_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
-            {{- with .Values.auth.fgaStoreId }}
-            # Operator-pinned FGA store id (production posture) — the SAME auth.fgaStoreId the
-            # bootstrap-admin Job grants into, so the pinned store can never diverge from the store the
-            # catalog checks against. Unset = provision-by-name at boot (`lance-catalog`).
-            - { name: LANCE_FGA_STORE_ID, value: {{ . | quote }} }
-            {{- end }}
-            {{- with .Values.auth.fgaModelId }}
-            - { name: LANCE_FGA_MODEL_ID, value: {{ . | quote }} }
-            {{- end }}
+            {{- include "lance.governedOidcEnv" (list . "LANCE") | nindent 12 }}
+            {{- include "lance.governedFgaEnv" (list . "LANCE") | nindent 12 }}
+            {{- with include "lance.governedFgaPins" (list . "LANCE") }}{{- . | nindent 12 }}{{- end }}
             # #41 compliance audit trail (who/what/outcome for authn/authz/vending) — configurable.
             # hasKey+ternary, NOT `| default`: Sprig's default() treats boolean false as empty (making
             # `false` un-settable), while a bare reference renders "" when the key is missing entirely —
@@ -364,7 +348,14 @@ spec:
             # micro-frontend zones (frontend.serviceIdentity) — the zones read lineage as a SERVICE on the
             # no-login governed path, so their identity MUST be allowlisted or every zone's read fails closed
             # (403). (The retired web pod's identity was here too; frontend.serviceIdentity carries it now.)
-            - { name: LINEAGE_SERVICE_SUBJECTS, value: "{{ .Values.medallion.train.trainerIdentity }},{{ .Values.frontend.serviceIdentity }}" }
+            # …and the INGEST plane, which was MISSING and cost it every provenance record on an
+            # auth-enabled estate. Its emitter sent no identity, lineage answered 401, and the emitter
+            # swallows that by design (a landed commit must not become a failed run) — so the data
+            # landed and the graph never heard about it, silently. Exactly the failure recorded above
+            # for the trainer in 2026-07, repeated on a second lane two months later.
+            # Read from the ingest service's OWN `RASK_LINEAGE_SERVICE_IDENTITY` so the two halves
+            # cannot drift: the door's allowlist and the caller's claim come from ONE value.
+            - { name: LINEAGE_SERVICE_SUBJECTS, value: "{{ .Values.medallion.train.trainerIdentity }},{{ .Values.frontend.serviceIdentity }},{{ .Values.services.ingest.env.RASK_LINEAGE_SERVICE_IDENTITY }}" }
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "lineage") | nindent 12 }}

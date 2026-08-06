@@ -188,6 +188,25 @@ class Settings(BaseSettings):
     # store/model ids are unset, the app provisions them at startup (dev/e2e);
     # in production, provision once and pin both ids.
     fga_enabled: bool = Field(default=False, alias="LANCE_FGA_ENABLED")
+
+    # Bare FGA subjects (comma-separated) that may call the catalog as an in-cluster SERVICE, using
+    # the app token + `x-lance-service-identity` instead of an OIDC bearer.
+    #
+    # EMPTY BY DEFAULT — the door is SHUT, and the catalog behaves exactly as before. That default is
+    # deliberate: this is the estate's governance root, and opening a non-OIDC path into it is a
+    # decision to make on purpose, not to inherit from an upgrade.
+    #
+    # WHY IT EXISTS AT ALL: the catalog verified OIDC JWTs and nothing else, so a SERVICE had no way
+    # to authenticate to it. Measured — every ingest run died at its first activity with
+    # `catalog refused describe (401): Missing bearer token`, and the medallion's `register_gold_table`
+    # has the identical shape (a static `MEDALLION_CATALOG_TOKEN` from env that no governed deploy
+    # sets). A JWT expires, so a stored static token is the wrong shape for this door; the estate's
+    # existing answer for service-to-service is the identity door lineage already runs, which is what
+    # this reuses (`service_kit.governed.dapr_auth.service_principal`) rather than inventing a second.
+    service_subjects: str = Field(default="", alias="LANCE_SERVICE_SUBJECTS")
+    # Subjects that may NOT use the shared app token and need their own credential. Same contract as
+    # lineage's — see `service_principal`.
+    privileged_subjects: str = Field(default="", alias="LANCE_PRIVILEGED_SUBJECTS")
     fga_api_url: str = Field(default="http://openfga:8080", alias="LANCE_FGA_API_URL")
     # Compliance audit trail (#41): emit a structured event on the dedicated `lance.audit` logger for every
     # security-relevant action — authn success/failure, authz allow/deny, credential vending — carrying

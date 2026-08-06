@@ -85,6 +85,8 @@ class RunStore(Protocol):
 
     async def put(self, record: RunRecord) -> None: ...
 
+    async def recent(self, limit: int) -> list[RunRecord]: ...
+
 
 class InMemoryRunStore:
     """The default store. Deliberately NOT durable — run truth is the workflow's, not this cache.
@@ -102,6 +104,18 @@ class InMemoryRunStore:
 
     async def put(self, record: RunRecord) -> None:
         self._runs[record.run_id] = record
+
+    async def recent(self, limit: int) -> list[RunRecord]:
+        """The runs THIS REPLICA accepted, newest first.
+
+        A read-side index, and the endpoint says so rather than implying otherwise. Runs accepted by
+        another replica are absent, and a restart empties it — which is correct for what this is
+        (`get` exists to answer a poll without a workflow query) and would be a lie if it were
+        presented as the estate's run list. The durable list is the LINEAGE graph, which is why the
+        compute zone's runs page reads that.
+        """
+        ordered = sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
+        return ordered[: max(0, limit)]
 
 
 class WorkflowStarter(Protocol):
@@ -180,8 +194,19 @@ def merge_workflow_state(record: RunRecord, state: dict[str, object] | None) -> 
     # The workflow's own terminal state is finer-grained than the engine's: a run that landed 9,997
     # of 10,000 pages is COMPLETED as far as Dapr is concerned, and only the outcome knows it did so
     # with errors. Prefer the outcome's status wherever it produced one.
+    #
+    # THE ALLOWED SET INCLUDES "FAILED", and leaving it out was a latent defect that the run DEADLINE
+    # made reachable. A workflow can fail BY POLICY — return a FAILED outcome rather than raising —
+    # and the timeout path does exactly that: it refuses to commit a partial harvest, records the
+    # reason, and returns. To Dapr that is a workflow which RETURNED, so `runtime_status` is
+    # COMPLETED; with FAILED excluded here the door then reported a run that deliberately failed as
+    # COMPLETE, which is the worst possible direction for this error to point.
+    #
+    # Gated on `status == "COMPLETE"` still, so this can only ever REFINE a normal return. An engine
+    # FAILED or TERMINATED — the workflow crashed, or an operator killed it — stays authoritative and
+    # cannot be overwritten by whatever happens to be in a partial output payload.
     outcome_status = output.get("status")
-    if status == "COMPLETE" and outcome_status in ("COMPLETE", "COMPLETE_WITH_ERRORS"):
+    if status == "COMPLETE" and outcome_status in ("COMPLETE", "COMPLETE_WITH_ERRORS", "FAILED"):
         status = outcome_status  # type: ignore[assignment]
 
     errors = output.get("errors")

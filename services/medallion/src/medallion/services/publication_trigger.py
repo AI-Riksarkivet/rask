@@ -81,13 +81,30 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
     parts = _split_object_id(str(data.get("object_id") or ""), DELIMITER)
     if parts is None:
         return _SUCCESS
-    namespace, dataset = parts
+    # TWO NAMING SYSTEMS MEET HERE, and conflating them is what the first version of this head did.
+    #
+    #   * the CATALOG names a table `<namespace>$<table>`, where the namespace is the TENANT
+    #     (`project > warehouse > namespace`, and the ingest plane creates a namespace per project);
+    #   * the MEDALLION names a lane `<tier>$<lane>` — `bronze$events` — and that name is IDENTICAL
+    #     for every tenant, with the tenant travelling separately in `project`. `transform.py:109`
+    #     compares the arrived name against the RAW `settings.from_dataset` and says so explicitly:
+    #     "the trigger carries the unqualified name for every tenant".
+    #
+    # This head published the CATALOG identifier as the lane, so `acme$events` was compared against
+    # `bronze$events` and every tenant's publication was DROPped as another lane's. It appeared to
+    # work exactly once, in a test whose tenant happened to be NAMED `bronze` and whose table happened
+    # to be named `events` — the two systems' strings collided and nothing was actually translated.
+    # `ingest_trigger._bronze_write_dataset` is the reference: it returns `settings.bronze_dataset`,
+    # never a per-tenant string.
+    tenant, table = parts
 
     extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
     trigger: dict[str, Any] = {
         "token": str(data.get("event_id") or ""),
-        "dataset": f"{namespace}{DELIMITER}{dataset}",
-        "namespace": namespace,
+        # The LANE, tier-qualified from the medallion's own setting — the same string for every
+        # tenant, which is what makes the mover's discriminator work at all.
+        "dataset": f"{settings.bronze_namespace}{DELIMITER}{table}",
+        "namespace": settings.bronze_namespace,
         # THE RANGE (D-R3). A consumer resolves it with `_row_created_at_version > from AND <= to`
         # and keeps no bookmark. `from_version` is None on a dataset's first publication, meaning
         # "everything up to `to`" — carried as-is rather than coerced to 0, because "no prior
@@ -99,8 +116,11 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
         "from_uri": extra.get("location"),
     }
     # The tenant, without which the mover cannot resolve its tier roots and silently skips compute.
-    # The namespace IS the project in this estate's hierarchy (project > warehouse > namespace).
-    trigger["project"] = namespace
+    # OMITTED when empty rather than sent as "": `transform.py` treats a present-but-unsafe project as
+    # deterministic garbage and DROPs, so an empty string would refuse every single-tenant trigger.
+    # Same conditional as the reference head.
+    if tenant:
+        trigger["project"] = tenant
 
     try:
         await dapr_publish.publish_event(

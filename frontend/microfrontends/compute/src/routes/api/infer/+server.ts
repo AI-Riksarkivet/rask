@@ -12,11 +12,17 @@ import type { RequestHandler } from './$types';
  * inference doors cannot drift apart.
  *
  * The ONE thing that stays here is the upstream, because `$env/dynamic/private` is a SvelteKit virtual
- * module and @rask/api stays env-free: `MODELS_SERVE_URL`, default `http://localhost:8000/htrflow`.
+ * module and @rask/api stays env-free: `COMPUTE_SERVE_URL`, default `http://localhost:8000/htrflow`.
  * Note that plain `make serve-up` deploys `transcribe` ONLY, which has no HTTP handler — so the honest
  * first-run answer is the helper's `wrong_serve_app` 501, and `make serve-up-htrflow` (or
  * `serve-up-both`) is what makes this work.
  */
-const SERVE_URL = env.MODELS_SERVE_URL ?? 'http://localhost:8000/htrflow';
+// `COMPUTE_SERVE_URL`, not `MODELS_SERVE_URL`. #131 moved inference out of the models zone and the
+// chart's variable moved with it (frontends.yaml:149,262) — this reader did not, so the chart
+// injected a name nothing read while the code read a name the chart no longer set. In-cluster that
+// is silent: the `??` fallback resolves, the playground points at localhost:8000 inside the pod, and
+// every inference request fails as if the Serve deployment were down.
+// `tests/unit/test_invariants.py::test_no_dead_chart_env_vars` is what caught it.
+const SERVE_URL = env.COMPUTE_SERVE_URL ?? 'http://localhost:8000/htrflow';
 
 export const POST: RequestHandler = (event) => proxyServeInfer(event, { target: SERVE_URL });

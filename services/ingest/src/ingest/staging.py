@@ -48,7 +48,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 
 if TYPE_CHECKING:
@@ -307,16 +307,22 @@ def _split(uri: str) -> tuple[str, str]:
     return bucket, prefix.strip("/")
 
 
-def _client() -> object:
+def _client() -> Any:  # noqa: ANN401 — boto3 client has no public stub; matches `storage.s3_client`
     """The estate's sanctioned S3 wrapper. Never boto3 directly — `packages/storage` owns the
-    endpoint/credential resolution that keeps this MinIO/RustFS/AWS-agnostic."""
+    endpoint/credential resolution that keeps this MinIO/RustFS/AWS-agnostic.
+
+    Returns `Any` because that is what `s3_client` returns, and for the same stated reason. Narrowing
+    it to `object` here was strictly worse than the truth: every call site then needed a suppression
+    (`get_paginator` carried one) or produced a diagnostic, so the annotation bought no safety and
+    cost four — and a real typo in a boto3 kwarg would have arrived indistinguishable from them.
+    """
     from storage import s3_client
 
     return s3_client(os.getenv("RASK_S3_ENDPOINT_URL"))
 
 
 def _list_object_keys(bucket: str, prefix: str) -> list[str]:
-    paginator = _client().get_paginator("list_objects_v2")  # type: ignore[attr-defined]
+    paginator = _client().get_paginator("list_objects_v2")
     keys: list[str] = []
     for page in paginator.paginate(Bucket=bucket, Prefix=f"{prefix}/"):
         keys.extend(obj["Key"] for obj in page.get("Contents", []) if obj["Key"].endswith(".json"))

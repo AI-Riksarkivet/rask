@@ -241,3 +241,95 @@ def test_a_TRULY_unresolvable_overlap_still_raises(tmp_path: Path) -> None:
 
     with pytest.raises(StagingOverlapError, match="u4"):
         discover_staged(dataset, RUN)
+
+
+# ── the same defect, one layer up ─────────────────────────────────────────────
+
+
+def test_finalize_does_not_OVERRULE_the_exact_cover(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`discover_staged` selects; `finalize_run` used to un-select.
+
+    The selection above is only half the fix. `finalize_run` computed
+    `[*discover_staged(...), *fragments]` — the exact cover UNIONED with the fragment list the
+    workflow carried — deduplicated by string identity. Every carried fragment was staged first
+    (`worker.py` calls `stage_fragments` on the line immediately before `outcome.fragments.extend`),
+    so the carried list can contribute exactly one thing the cover does not already account for: a
+    fragment the cover deliberately SUPERSEDED.
+
+    Re-adding it commits both, which is precisely the "four units in, six rows out" arithmetic the
+    tests above close — reintroduced one layer above the layer that closed it. The scenario is the
+    ordinary partial-ack one: batch F covers u0..u3, the pod dies mid-ack, u2/u3 come back and are
+    written as G, and the workflow's outcome still carries G from the attempt that produced it.
+    """
+    from ingest import runtime
+
+    dataset = str(tmp_path / "bronze")
+    stage_fragments(dataset, RUN, ["u0", "u1", "u2", "u3"], [FRAGMENT_F])
+    stage_fragments(dataset, RUN, ["u2", "u3"], [FRAGMENT_G])
+
+    # What the finalizer is handed: the cover picks F alone, but the workflow still carries G.
+    assert discover_staged(dataset, RUN) == [FRAGMENT_F]
+
+    committed: list[list[str]] = []
+
+    class _Catalog:
+        def ensure(self, project: str, dataset_name: str) -> str:
+            return dataset
+
+    class _Lander:
+        def __init__(self, catalog: object) -> None: ...
+        def commit_fragments(self, uri: str, frags: list[str], *, run_id: str) -> object:
+            committed.append(list(frags))
+            from ingest.lander import CommitResult
+
+            return CommitResult(dataset_uri=uri, version=2, rows=_rows(frags), rows_added=_rows(frags), fragments_committed=len(frags))
+
+    monkeypatch.setattr(runtime, "_catalog", lambda: _Catalog())
+    monkeypatch.setattr("ingest.lander.Lander", _Lander)
+    monkeypatch.setattr(runtime, "purge_staged", lambda *a, **k: None, raising=False)
+
+    from ingest.workflow import RunSpec
+
+    runtime.finalize_run(RunSpec(run_id=RUN, kind="local-dir", project="p", dataset="d"), [FRAGMENT_G], {})
+
+    assert committed, "finalize never reached the commit"
+    assert _rows(committed[0]) == 4, f"four units were fetched but {_rows(committed[0])} rows would commit from {committed[0]}"
+    assert committed[0] == [FRAGMENT_F], "the carried, superseded fragment was re-added over the exact cover"
+
+
+def test_SINGLETON_redeliveries_keep_the_staged_family_LAMINAR(tmp_path: Path) -> None:
+    """The state the exact cover could only REPORT is now structurally unreachable.
+
+    The reachable scenario, from `drain_chunk`: two batches crash, and their remainders arrive in the
+    SAME fetch. Batching all redeliveries together produced ONE fragment spanning both remainders —
+    F={u0..u3} against H={u2,u3,u4,u5}, neither containing the other, so no selection is correct and
+    `discover_staged` could only raise and strand the run.
+
+    Staging each redelivered unit ALONE fixes it by construction: a singleton is contained by any
+    fragment holding it, so every pair in the staged family is nested or disjoint — laminar — and an
+    exact cover always exists. This test stages what the new worker loop stages and asserts the
+    finalizer resolves it rather than raising.
+
+    The unresolvable SHAPE itself is pinned by `test_a_TRULY_unresolvable_overlap_still_raises`
+    above — F={u0..u3} against H={u2,u3,u4,u5} with nothing else covering u4,u5. What the singleton
+    rule removes is the only way `drain_chunk` could ever CREATE an H: it no longer emits a fragment
+    spanning more than one redelivered unit, so a merged remainder cannot exist to overlap anything.
+    """
+    dataset = str(tmp_path / "bronze")
+
+    # Two batches that crashed mid-ack.
+    stage_fragments(dataset, RUN, ["u0", "u1", "u2", "u3"], ['{"n":"F","units":["u0","u1","u2","u3"]}'])
+    stage_fragments(dataset, RUN, ["u4", "u5", "u6"], ['{"n":"K","units":["u4","u5","u6"]}'])
+
+    # Their remainders come back together in one fetch. The OLD loop batched them into a single
+    # fragment {u2,u3,u4,u5}; the new one stages each alone.
+    for unit in ("u2", "u3", "u4", "u5"):
+        stage_fragments(dataset, RUN, [unit], [f'{{"n":"{unit}","units":["{unit}"]}}'])
+
+    staged = discover_staged(dataset, RUN)
+
+    # Resolvable, and exactly once per unit — the singletons are all superseded by F and K.
+    assert _rows(staged) == 7, f"7 units staged but {_rows(staged)} rows would commit from {staged}"
+    covered = [u for f in staged for u in json.loads(f)["units"]]
+    assert sorted(covered) == ["u0", "u1", "u2", "u3", "u4", "u5", "u6"]
+    assert len(covered) == len(set(covered)), "a unit would commit twice"

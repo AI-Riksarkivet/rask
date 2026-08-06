@@ -2,10 +2,10 @@ import {
 	CircuitBoard,
 	Database,
 	ScanText,
-	Upload,
 	Boxes,
 	FileText,
 	Gauge,
+	Import,
 	LayoutDashboard,
 	ListTree,
 	ScrollText,
@@ -37,6 +37,45 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 				{ title: 'Actors', href: '/compute/actors', match: seg('/compute/actors'), icon: Boxes },
 				// DCGM (2026-08-05): the GPU metrics surface — a dummy until the exporter is wired.
 				{ title: 'GPU', href: '/compute/gpu', match: seg('/compute/gpu'), icon: CircuitBoard },
+			],
+		},
+		{
+			// INGEST is its own group, not a row of Workloads. Workloads answers "what is running on
+			// the Ray cluster"; ingest answers "how does data get INTO the estate" — it never touches
+			// Ray, it drives the ingest plane's control API. Filing it under Workloads is what made it
+			// read as a Ray job, and the run view alongside it is the ETL run, not a Ray job.
+			label: 'Ingest',
+			items: [
+				{
+					// ETL — the estate's name for this plane, so the ROW says it and not a verb. The
+					// route was `/compute/new` ("new" names the action, not the thing) and sat in no
+					// sidebar group at all, reachable only by typing the URL; renaming the route to
+					// `/compute/etl` then labelling the row "New run" just moved the same mistake up a
+					// layer. The row is the noun; "Runs" beside it is the same noun's history.
+					title: 'ETL',
+					href: '/compute/etl',
+					match: seg('/compute/etl'),
+					icon: Import,
+				},
+				{
+					// The run board. It was REMOVED for a while, because this row pointed at a route
+					// that did not exist and `nav-truth.test.ts` ("every sidebar href resolves to a
+					// real route") caught it — a row linking to a 404 advertises a capability the
+					// estate does not have.
+					//
+					// It is back because the page is back, and the page reads LINEAGE rather than the
+					// ingest service: that service still cannot list its own runs (three routes; a
+					// `RunStore` with only get/put, backed by a per-pod dict that is deliberately not
+					// durable). The graph every run writes to at START and COMPLETE/FAIL is the
+					// durable record of which runs exist.
+					//
+					// `seg` not `exact`: it lights up for `/compute/ingest/<run_id>` too, which is the
+					// detail page this list links into.
+					title: 'Runs',
+					href: '/compute/ingest',
+					match: seg('/compute/ingest'),
+					icon: ListTree,
+				},
 			],
 		},
 		{

@@ -22,6 +22,11 @@ data:
   # R6/R20 media wave — their capabilities serve from the media plane below.
   RASK_COMPUTE_URL: {{ printf "http://%s-compute:8804" (include "rask.fullname" .) | quote }}
   RASK_CONTROLPLANE_URL: {{ printf "http://%s-controlplane:8820" (include "rask.fullname" .) | quote }}
+  # The ingest plane. WITHOUT this the gateway's ingest row falls back to its own 127.0.0.1:8830 —
+  # the gateway proxying to ITSELF, where no such route exists — so every /api/ingest/* call 404s with
+  # a body indistinguishable from an unrouted path. The row was in the code and the service was up;
+  # only the address was missing, and nothing in either component could tell you so.
+  RASK_INGEST_URL: {{ printf "http://%s-ingest:%v" (include "rask.fullname" .) .Values.services.ingest.port | quote }}
   # The studio flow-builder's server half. Without this the gateway's /api/flows row falls back to its
   # code default (127.0.0.1:8840 — the gateway pod itself) and every call 502s, which the builder shows
   # as "engine offline": graceful, but it means no server-side or durable runs at all.

@@ -18,11 +18,25 @@ from ingest.runtime import _publish
 
 
 class _Spec:
-    """The two fields `_publish` reads. A real RunSpec drags the whole workflow module in for nothing."""
+    """The fields `_publish` reads. A real RunSpec drags the whole workflow module in for nothing.
+
+    `namespace` derives from the SAME function the real spec's property does rather than being a
+    hardcoded string. A stub that fakes a derived value drifts the moment the derivation changes —
+    which is what happened here: the plane started addressing the catalog by namespace, the stub kept
+    offering only `project`, and `_publish` swallowed the AttributeError into its
+    catalog-cannot-publish branch. The run would have reported `published: False` with a plausible
+    reason, in production, with nothing raising.
+    """
 
     project = "demo"
     dataset = "pages"
     run_id = "run-1"
+
+    @property
+    def namespace(self) -> str:
+        from ingest.naming import bronze_namespace_for
+
+        return bronze_namespace_for(self.project)
 
 
 class _Catalog:
@@ -49,7 +63,10 @@ def test_a_run_PUBLISHES_the_version_it_committed() -> None:
 
     out = _publish(catalog, _Spec(), 4)
 
-    assert catalog.calls == [("demo", "pages", 4)]
+    # `demo-bronze`, not `demo`: publication addresses the catalog NAMESPACE, and a project is a level
+    # above that. This asserted `demo` while the plane composed the same string everywhere — which is
+    # how a table id nobody had granted anything on looked correct at every call site.
+    assert catalog.calls == [("demo-bronze", "pages", 4)]
     assert out["published"] is True
 
 

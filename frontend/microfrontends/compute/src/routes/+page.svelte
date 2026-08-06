@@ -29,7 +29,7 @@
 
 	// The compute landing — the Ray-plane summary merged with the PIPELINE RUNS feed. The
 	// batches/HTR dashboard died at P7a (the batches table + orchestrator plane are gone):
-	// ingestion is `POST /api/ingest-iiif` (the /new page) and the cascade's progress is the
+	// ingestion is `POST /api/ingest` (the /new page) and the cascade's progress is the
 	// lineage runs feed — the same `query.live` pulse that backs the shell's bell, so the
 	// landing and the bell can never disagree about the estate.
 	//
@@ -203,7 +203,12 @@
 			<div class="bg-card inline-flex items-center rounded-full border px-3 py-1.5">
 				<RayStatus />
 			</div>
-			<Button size="sm" onclick={() => goto(`${base}/new`)}>Ingest volume</Button>
+			<!-- `/etl`, not `/new`. The route was renamed and this button was not, so the landing page's
+			     only path into the ingest plane 404'd. Invisible because nothing gates a dead INTERNAL
+			     link — the cross-zone gate only checks that cross-zone anchors carry `data-sveltekit-reload`.
+			     "a source", not "volume": a volume is one source kind's unit, and the door takes any
+			     registered kind. -->
+			<Button size="sm" onclick={() => goto(`${base}/etl`)}>Ingest a source</Button>
 		</div>
 
 		<!-- Live cluster counts — each card soft-navs into its view -->

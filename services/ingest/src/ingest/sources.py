@@ -82,6 +82,21 @@ class LineageTwin(Protocol):
     def __call__(self, spec: SourceSpec) -> LineageInput: ...
 
 
+class PartitionOf(Protocol):
+    """How this kind groups its units — the value of the bronze `partition_key` column.
+
+    Registered BESIDE the adapter for the same reason `lineage_input` is: only the adapter knows what
+    a unit key means. For IIIF that is the volume (constant for a run); for an S3 prefix it is the
+    containing folder. The worker must not learn this — it resolves units by URI SCHEME and knows
+    nothing about volumes or prefixes, so parsing the key there would re-weld the source into the
+    worker, which is exactly what I1 removed.
+
+    Returning None is the honest answer for a kind with no meaningful grouping, and writes a null.
+    """
+
+    def __call__(self, spec: SourceSpec, key: str) -> str | None: ...
+
+
 class _Registration(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
@@ -89,6 +104,7 @@ class _Registration(BaseModel):
     build: object
     lineage_input: object
     descriptor: SourceDescriptor
+    partition_of: object = None
 
 
 _REGISTRY: dict[str, _Registration] = {}
@@ -102,6 +118,7 @@ def register(
     label: str | None = None,
     description: str | None = None,
     options: Sequence[SourceOption] = (),
+    partition_of: PartitionOf | None = None,
 ) -> None:
     """Register a source kind. Called at import time by the adapter modules themselves.
 
@@ -117,6 +134,7 @@ def register(
         build=build,
         lineage_input=lineage_input,
         descriptor=SourceDescriptor(kind=kind, label=label or kind, description=description, options=list(options)),
+        partition_of=partition_of,
     )
 
 
@@ -141,6 +159,20 @@ def lineage_input_for(spec: SourceSpec) -> LineageInput:
         raise ValueError(f"unknown source kind {spec.kind!r}")
     twin: Callable[[SourceSpec], LineageInput] = reg.lineage_input  # type: ignore[assignment]
     return twin(spec)
+
+
+def partition_key_for(spec: SourceSpec, key: str) -> str | None:
+    """The bronze `partition_key` for one unit, as the ADAPTER defines it.
+
+    Optional by design: a kind that registers no `partition_of` writes nulls, which is the honest
+    answer for a source with no meaningful grouping. Never raises for an unknown kind — this runs on
+    the write path, and a partition label is not worth failing a unit that has already been fetched.
+    """
+    reg = _REGISTRY.get(spec.kind)
+    if reg is None or reg.partition_of is None:
+        return None
+    fn: Callable[[SourceSpec, str], str | None] = reg.partition_of  # type: ignore[assignment]
+    return fn(spec, key)
 
 
 def registered_kinds() -> list[str]:

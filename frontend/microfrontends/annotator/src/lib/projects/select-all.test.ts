@@ -52,8 +52,12 @@ describe('when to offer the rest of the filter', () => {
 		// There is no "rest" to offer, and a banner saying "select all 12" above 12 already-selected
 		// rows is furniture.
 		expect(
-			selectAllPrompt({ pageCount: 20, pageSelectedCount: 12, selectedCount: 12, matchingCount: 12 })
-				.kind,
+			selectAllPrompt({
+				pageCount: 20,
+				pageSelectedCount: 12,
+				selectedCount: 12,
+				matchingCount: 12,
+			}).kind,
 		).toBe('none');
 	});
 
@@ -81,8 +85,12 @@ describe('once everything matching is held', () => {
 
 	it('does not claim "all" when the filter fit on one page anyway', () => {
 		expect(
-			selectAllPrompt({ pageCount: 20, pageSelectedCount: 20, selectedCount: 20, matchingCount: 20 })
-				.kind,
+			selectAllPrompt({
+				pageCount: 20,
+				pageSelectedCount: 20,
+				selectedCount: 20,
+				matchingCount: 20,
+			}).kind,
 		).toBe('none');
 	});
 

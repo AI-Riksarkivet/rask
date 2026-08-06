@@ -119,7 +119,8 @@ export function refuseReason(
 		// Named rather than silently truncated: a send that quietly dropped the tail would leave
 		// someone believing a corpus was queued when most of it was not. The replica count is named
 		// too when it is what closed the door — "400 exceeds 333" is baffling without it.
-		const why = consensusN > 1 ? ` (${SEND_TASK_CAP.toLocaleString()} tasks ÷ ${consensusN} replicas)` : '';
+		const why =
+			consensusN > 1 ? ` (${SEND_TASK_CAP.toLocaleString()} tasks ÷ ${consensusN} replicas)` : '';
 		return `${count.toLocaleString()} items exceeds the ${cap.toLocaleString()} limit for one send${why} — narrow the selection.`;
 	}
 	return null;

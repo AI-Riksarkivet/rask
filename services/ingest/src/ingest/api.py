@@ -15,12 +15,15 @@ Both are pinned by A1/A2 in `tests/test_ingest_api.py`.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
+from ingest.auth import AuthSettingsDep, authorize_ingest
+from ingest.provenance import ProvenanceRefused
 from ingest.runs import (
     SCHEDULE_TIMEOUT_SECONDS,
     RunRecord,
@@ -31,7 +34,11 @@ from ingest.runs import (
     record_from_workflow_state,
     run_id_for,
 )
+from ingest.sizing import IngestSizing, SizingRefused, resolve
 from ingest.sources import SourceDescriptor, SourceSpec, describe_sources, registered_kinds
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(tags=["ingest"])
@@ -53,12 +60,21 @@ async def list_sources() -> list[SourceDescriptor]:
 
 
 class IngestRequest(BaseModel):
-    """A source-agnostic request — I1/I2: no source-specific route, no dataset path."""
+    """A source-agnostic request — I1/I2: no source-specific route, no dataset path.
+
+    `project` + `dataset` are this plane's TWO-level addressing and they do NOT mirror the catalog's
+    four-level hierarchy (`project > warehouse > namespace > table`). What `catalog_service.ensure`
+    actually does: creates a NAMESPACE named after the project, then a table id `{project}${dataset}`.
+    So `project` names a namespace, `dataset` is a table, the warehouse is never chosen, and a nested
+    namespace is unreachable. Named here so nobody reads these two fields as the hierarchy; the
+    conflation itself is open work.
+    """
 
     kind: str = Field(description="registered source kind, e.g. 'iiif' | 's3-prefix' | 'local-dir'")
     project: str
     dataset: str
     options: dict[str, object] = Field(default_factory=dict)
+    sizing: IngestSizing = Field(default_factory=IngestSizing, description="per-run write partitioning; unset fields use the deployment default")
 
 
 class IngestAccepted(BaseModel):
@@ -94,15 +110,38 @@ def get_reader(request: Request) -> WorkflowRunReader | None:
 async def create_ingest(
     body: IngestRequest,
     response: Response,
+    request: Request,
     store: Annotated[RunStore, Depends(get_store)],
     starter: Annotated[WorkflowStarter, Depends(get_starter)],
+    settings: AuthSettingsDep,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    # The INVOKING Dapr app-id. Without it the door cannot tell a service from the public front
+    # door invoking on a stranger's behalf — see `auth.public_callers`.
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> IngestAccepted:
+    # BEFORE anything else. The body names the project this write lands in, so the admin check targets
+    # that project rather than a configured one — authorization scope must equal write scope, or an
+    # admin of project A passes the gate while the rows land in project B.
+    await authorize_ingest(request, settings, body.project, dapr_api_token, authorization, dapr_caller_app_id)
+
     if body.kind not in registered_kinds():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"unknown source kind {body.kind!r} — registered: {registered_kinds() or '<none>'}",
         )
+
+    # HERE, at accept, not inside the drain. A `fragment_rows` at or above the queue's
+    # `max_ack_pending` does not write bigger fragments — it stops JetStream delivering and the drain
+    # waits forever, silently, hours in. Resolving at the door turns that into a 400 naming the
+    # ceiling, which is a fix the caller can act on; the resolved numbers then ride the spec so every
+    # worker in the fan-out runs the values THIS run was accepted with, rather than re-reading env
+    # that may have moved under a rolling restart.
+    try:
+        sizing = resolve(body.sizing)
+    except SizingRefused as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     # A token-less call gets a fresh run: without a caller key there is nothing to converge ON, and
     # inventing one would make every retry a new run while pretending otherwise.
@@ -121,7 +160,7 @@ async def create_ingest(
 
     spec = SourceSpec(kind=body.kind, project=body.project, dataset=body.dataset, options=body.options)
     try:
-        await starter.start(run_id, {"run_id": run_id, **spec.model_dump()})
+        await starter.start(run_id, {"run_id": run_id, **spec.model_dump(), "sizing": sizing.model_dump()})
     except TimeoutError as exc:
         # 503, not 500. A1 bounds the schedule call so a slow sidecar cannot hold the POST past its
         # one-second contract — but the bound turned a BUSY sidecar into an unretryable server error,
@@ -164,12 +203,72 @@ class RunStatusResponse(BaseModel):
     publish_error: str | None = None
 
 
+class RunListResponse(BaseModel):
+    """Runs this REPLICA accepted, plus the caveat that makes the answer usable.
+
+    `authoritative=False` is the whole point. The store is a process-local read-side index (`get`
+    exists so a poll need not query the workflow engine), so a run accepted by another replica is
+    absent and a restart empties it. Answering with a bare list would present that as the estate's
+    run history, which it is not — the durable list is the LINEAGE graph, and the compute zone's runs
+    page reads that for exactly this reason.
+
+    Shipped anyway because the honest local list is genuinely useful — an operator on one pod wants
+    to know what that pod took — and because a field that says so costs one line, while a caller
+    guessing costs an incident.
+    """
+
+    runs: list[RunStatusResponse]
+    authoritative: bool = Field(
+        default=False,
+        description="FALSE always: this is one replica's read-side index, not the estate's run history. Use the lineage graph for that.",
+    )
+
+
+@router.get("/ingests", response_model=RunListResponse)
+async def list_ingests(
+    request: Request,
+    store: Annotated[RunStore, Depends(get_store)],
+    settings: AuthSettingsDep,
+    limit: int = 50,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+) -> RunListResponse:
+    """Recent runs, newest first. Authorized PER RUN, then filtered.
+
+    There is no single project to authorize against before reading — the list spans tenants — so each
+    record is checked against its OWN project and the ones the caller may not see are dropped rather
+    than refused. A 403 for the whole call would leak that runs exist; an empty list leaks nothing.
+    """
+    records = await store.recent(min(max(limit, 0), 200))
+
+    visible: list[RunStatusResponse] = []
+    for record in records:
+        try:
+            await authorize_ingest(request, settings, record.project, dapr_api_token, authorization, dapr_caller_app_id)
+        except Exception:
+            # DEBUG, not warning: a caller seeing only their own runs is the endpoint WORKING.
+            # Logging it louder would make a correctly-filtered list look like a stream of
+            # authorization failures, which is how a real signal gets tuned out.
+            logger.debug("run %s filtered from the list for this caller", record.run_id, exc_info=True)
+            continue
+        visible.append(RunStatusResponse(**record.model_dump()))
+
+    return RunListResponse(runs=visible)
+
+
 @router.get("/ingests/{run_id}", response_model=RunStatusResponse)
 async def get_ingest(
     run_id: str,
     request: Request,
     store: Annotated[RunStore, Depends(get_store)],
     reader: Annotated[WorkflowRunReader | None, Depends(get_reader)],
+    settings: AuthSettingsDep,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    # The INVOKING Dapr app-id. Without it the door cannot tell a service from the public front
+    # door invoking on a stranger's behalf — see `auth.public_callers`.
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> RunStatusResponse:
     record = await store.get(run_id)
     engine_state = await asyncio.to_thread(reader.state, run_id) if reader is not None else None
@@ -183,6 +282,11 @@ async def get_ingest(
         if record is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no ingest run {run_id!r}")
         await store.put(record)
+
+    # Authorized against the run's OWN project, which is only knowable after the record is resolved —
+    # a run id names a tenant, and a status body carries that tenant's project, dataset, source keys
+    # and error detail. Reading it is not public.
+    await authorize_ingest(request, settings, record.project, dapr_api_token, authorization, dapr_caller_app_id)
 
     # The store holds only what the caller asked for; everything that MOVES is read from the engine.
     # Without this a completed run reported ACCEPTED forever — nothing writes the record a second
@@ -199,8 +303,23 @@ async def get_ingest(
     # which reads as "no reader configured" and would have reported a provenance defect on every
     # completed run, i.e. the exact bug this join exists to fix.
     provenance = getattr(request.app.state, "provenance_reader", None)
+    # A REFUSED read is its own answer, and reporting it is the point. Before this, the credential-less
+    # read got a 401, the reader swallowed it as "unreachable", and the endpoint answered
+    # `defect: null` — so A8 certified provenance as sound while every lineage event was being
+    # rejected. Silence about an unverifiable claim is the same failure the defect field exists to
+    # prevent, pointed at the checker instead of the data.
+    refused: str | None = None
     if provenance is not None and record.status in ("COMPLETE", "COMPLETE_WITH_ERRORS"):
-        present = await asyncio.to_thread(provenance.has_run, run_id)
+        try:
+            present = await asyncio.to_thread(provenance.has_run, run_id)
+        except ProvenanceRefused:
+            present = None
+            refused = (
+                "provenance could NOT be verified: the lineage graph refused this service's read. "
+                "The run may or may not have a provenance record — this service has no valid lineage "
+                "credential, so its A8 verdict cannot be trusted. Check RASK_LINEAGE_APP_TOKEN and "
+                "RASK_LINEAGE_SERVICE_IDENTITY, and that the identity is in LINEAGE_SERVICE_SUBJECTS."
+            )
         record = record.model_copy(update={"lineage_run_present": present is not False})
 
     return RunStatusResponse(
@@ -210,7 +329,9 @@ async def get_ingest(
         units_done=record.units_done,
         errors=record.errors,
         committed_version=record.committed_version,
-        defect=("run reports success but no lineage run exists for it — the data landed with no provenance record" if record.is_defective else None),
+        # The refusal OUTRANKS the ordinary defect string: "we could not check" must never be
+        # rendered as "we checked and it was fine".
+        defect=refused or ("run reports success but no lineage run exists for it — the data landed with no provenance record" if record.is_defective else None),
         published=record.published,
         from_version=record.from_version,
         to_version=record.to_version,

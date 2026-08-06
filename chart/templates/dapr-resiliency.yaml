@@ -83,11 +83,26 @@ spec:
         policy: constant
         duration: 2s
         maxRetries: 3
-    circuitBreakers:
-      invokeBreaker:
-        maxRequests: 1
-        timeout: 30s
-        trip: consecutiveFailures >= 5
+        # RETRY ONLY WHAT A RETRY CAN FIX. Without this, every 4xx is retried three times, so one
+        # rejected request becomes FOUR failures against `consecutiveFailures >= 5` — two denied
+        # logins open the breaker and the next 30 s of traffic to that app gets 500 for EVERY caller.
+        # Measured on the ingest door: a handful of anonymous 403s took the whole app-id offline,
+        # which turns an authorization check into a self-inflicted denial of service.
+        # Retrying a 403 is also pointless on its own terms: the answer will not change.
+        matching:
+          httpStatusCodes: 408,429,500-599
+{{- /* NO CIRCUIT BREAKER ON INVOCATION TARGETS, deliberately.
+     There was one — `consecutiveFailures >= 5`, 30 s open — and Dapr's circuit breaker, unlike its
+     retry policy, has NO status matching: it counts every non-2xx, including the 4xx an authorization
+     check returns as its normal, correct answer.
+     Measured on the ingest door, after the retry `matching` above already removed the 4x
+     amplification: `403 403 403 403 403 500 500 500 500 500`. Five refused requests took the whole
+     app-id offline for every caller for 30 s. That is a denial of service ANY unauthenticated client
+     can trigger on demand, against every app behind the gateway, by sending five requests it already
+     knows will be refused. A protective control an attacker can aim is not a protective control.
+     What is lost is fail-fast against a genuinely dead upstream. That is bounded by `invokeTimeout`
+     and by the retry policy, and a slower failure on a real outage is a far smaller cost than a
+     trivially remote-triggerable one on a healthy fleet. */}}
   targets:
     apps:
 {{- /* Target only app-ids whose pods can actually render — mirror the templates' own gates
@@ -122,7 +137,6 @@ spec:
       {{ . }}:
         timeout: invokeTimeout
         retry: invokeRetry
-        circuitBreaker: invokeBreaker
 {{- end }}
 scopes:
   - gateway

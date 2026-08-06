@@ -19,7 +19,7 @@
 #   scripts/ingest-lane.sh all        # all three
 set -euo pipefail
 
-NS="${NS:-rask}"
+NS="${NS:-default}"
 RELEASE="${RELEASE:-rask}"
 TAG="${TAG:-dev}"
 REGISTRY="${REGISTRY:-localhost:5000}"
@@ -195,6 +195,10 @@ cmd_provision() {
 	log "provisioning $PROJECT (project > warehouse > namespace) via the catalog"
 	kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
 import json, os, sys, urllib.request, urllib.error
+import os as _os
+def _auth():
+    tok = _os.environ.get('APP_API_TOKEN')
+    return {'dapr-api-token': tok} if tok else {}
 base = os.getenv('RASK_CATALOG_URL', 'http://rask-catalog:2333').rstrip('/')
 def post(path, body):
     req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
@@ -218,6 +222,25 @@ for path, body, fatal in (
         sys.exit('   provisioning failed: %s %s' % (status, detail))
 " || die "could not provision $PROJECT"
 	ok "$PROJECT provisioned"
+
+	# Creating the tenant is only half of standing one up: the service token is project-BLIND and may
+	# write into exactly ONE configured project, so a freshly provisioned tenant that nothing is
+	# authorized for gets a correct 403 on its first ingest. That is the door working, and it cost a
+	# lane run to see — the chart pins `demo` (the estate's nominal tenant) and the lane provisions its
+	# own, because `demo` predates warehouse enforcement and cannot be adopted.
+	#
+	# Authorizing the service for the tenant it just created is what an operator does, so the lane does
+	# it too rather than reaching for a project the deployment happens to already allow.
+	log "authorizing the ingest service token for $PROJECT"
+	# …and enable the fixture source, pointed at the ONE directory the lane seeds. Unset (the chart
+	# default) means local-dir is refused outright, which is what a production ingest wants and
+	# what made the first run after the confinement fail every unit with "local-dir is not
+	# enabled here". Both settings in one call so there is one rollout, not two.
+	kubectl set env -n "$NS" deploy/"$RELEASE"-ingest \
+		"RASK_INGEST_SERVICE_PROJECT=$PROJECT" "RASK_INGEST_LOCAL_ROOT=$POD_FIXTURE_DIR" >/dev/null
+	kubectl rollout status -n "$NS" deploy/"$RELEASE"-ingest --timeout=240s >/dev/null ||
+		die "ingest did not come back after the service-project change"
+	ok "service token scoped to project:$PROJECT"
 }
 
 cmd_fixtures() {
@@ -286,6 +309,10 @@ print(len([f for f in os.listdir('$POD_FIXTURE_DIR') if f.endswith('.tif')]) if 
 	local accepted
 	accepted="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
 import json, time, urllib.request
+import os as _os
+def _auth():
+    tok = _os.environ.get('APP_API_TOKEN')
+    return {'dapr-api-token': tok} if tok else {}
 body = json.dumps({
     'kind': 'local-dir',
     'project': '$PROJECT',
@@ -293,7 +320,7 @@ body = json.dumps({
     'options': {'root': '$POD_FIXTURE_DIR', 'pattern': '*.tif'},
 }).encode()
 req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
-                             headers={'Content-Type': 'application/json', 'Idempotency-Key': '$key'})
+                             headers={'Content-Type': 'application/json', 'Idempotency-Key': '$key', **_auth()})
 start = time.monotonic()
 with urllib.request.urlopen(req, timeout=30) as response:
     payload = json.load(response)
@@ -317,7 +344,12 @@ print(json.dumps(payload))
 	for _ in $(seq 1 60); do
 		body="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
 import json, urllib.request
-with urllib.request.urlopen('http://127.0.0.1:8830/api/ingests/$run_id', timeout=15) as r:
+import os as _os
+def _auth():
+    tok = _os.environ.get('APP_API_TOKEN')
+    return {'dapr-api-token': tok} if tok else {}
+_req = urllib.request.Request('http://127.0.0.1:8830/api/ingests/$run_id', headers=_auth())
+with urllib.request.urlopen(_req, timeout=15) as r:
     print(r.read().decode())
 " 2>/dev/null)" || true
 		run_status="$(jq -r .status <<<"$body" 2>/dev/null || echo '')"
@@ -354,10 +386,14 @@ with urllib.request.urlopen('http://127.0.0.1:8830/api/ingests/$run_id', timeout
 	local repeat
 	repeat="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
 import json, urllib.request
+import os as _os
+def _auth():
+    tok = _os.environ.get('APP_API_TOKEN')
+    return {'dapr-api-token': tok} if tok else {}
 body = json.dumps({'kind':'local-dir','project':'$PROJECT','dataset':'$dataset',
                    'options':{'root':'$POD_FIXTURE_DIR','pattern':'*.tif'}}).encode()
 req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
-                             headers={'Content-Type':'application/json','Idempotency-Key':'$key'})
+                             headers={'Content-Type':'application/json','Idempotency-Key':'$key', **_auth()})
 with urllib.request.urlopen(req, timeout=30) as r:
     print(r.read().decode())
 ")" || die "repeat POST failed"
@@ -404,10 +440,14 @@ print(sorted(os.listdir('$POD_FIXTURE_DIR-corrupt')))
 	local run_id
 	run_id="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
 import json, urllib.request
+import os as _os
+def _auth():
+    tok = _os.environ.get('APP_API_TOKEN')
+    return {'dapr-api-token': tok} if tok else {}
 body = json.dumps({'kind':'local-dir','project':'$PROJECT','dataset':'$dataset',
                    'options':{'root':'$POD_FIXTURE_DIR-corrupt','pattern':'*.tif'}}).encode()
 req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
-                             headers={'Content-Type':'application/json','Idempotency-Key':'$key'})
+                             headers={'Content-Type':'application/json','Idempotency-Key':'$key', **_auth()})
 with urllib.request.urlopen(req, timeout=30) as r:
     print(json.load(r)['run_id'])
 ")" || die "A5 POST failed"
@@ -415,8 +455,12 @@ with urllib.request.urlopen(req, timeout=30) as r:
 	local body="" status=""
 	for _ in $(seq 1 60); do
 		body="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
-import urllib.request
-with urllib.request.urlopen('http://127.0.0.1:8830/api/ingests/$run_id', timeout=15) as r:
+import os as _os, urllib.request
+def _auth():
+    tok = _os.environ.get('APP_API_TOKEN')
+    return {'dapr-api-token': tok} if tok else {}
+_req = urllib.request.Request('http://127.0.0.1:8830/api/ingests/$run_id', headers=_auth())
+with urllib.request.urlopen(_req, timeout=15) as r:
     print(r.read().decode())
 " 2>/dev/null)" || true
 		status="$(jq -r .status <<<"$body" 2>/dev/null || echo '')"
@@ -493,11 +537,15 @@ print('uploaded to s3://%s/%s' % (bucket, '$prefix'))
 	local run_id
 	run_id="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
 import json, os, urllib.request
+import os as _os
+def _auth():
+    tok = _os.environ.get('APP_API_TOKEN')
+    return {'dapr-api-token': tok} if tok else {}
 bucket = os.environ['RASK_INGEST_WAREHOUSE'].removeprefix('s3://').split('/')[0]
 body = json.dumps({'kind':'s3-prefix','project':'$PROJECT','dataset':'$dataset',
                    'options':{'bucket':bucket,'prefix':'$prefix','endpoint':os.getenv('RASK_S3_ENDPOINT_URL')}}).encode()
 req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
-                             headers={'Content-Type':'application/json','Idempotency-Key':'$key'})
+                             headers={'Content-Type':'application/json','Idempotency-Key':'$key', **_auth()})
 with urllib.request.urlopen(req, timeout=30) as r:
     print(json.load(r)['run_id'])
 ")" || die "A3 POST failed"
@@ -521,8 +569,12 @@ with urllib.request.urlopen(req, timeout=30) as r:
 	local body="" status=""
 	for _ in $(seq 1 90); do
 		body="$(kubectl exec -n "$NS" "$newpod" -c ingest -- python -c "
-import urllib.request
-with urllib.request.urlopen('http://127.0.0.1:8830/api/ingests/$run_id', timeout=15) as r:
+import os as _os, urllib.request
+def _auth():
+    tok = _os.environ.get('APP_API_TOKEN')
+    return {'dapr-api-token': tok} if tok else {}
+_req = urllib.request.Request('http://127.0.0.1:8830/api/ingests/$run_id', headers=_auth())
+with urllib.request.urlopen(_req, timeout=15) as r:
     print(r.read().decode())
 " 2>/dev/null)" || true
 		status="$(jq -r .status <<<"$body" 2>/dev/null || echo '')"

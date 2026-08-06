@@ -3193,23 +3193,52 @@ What is still open, most consequential first:
 
 ### The movers COMPOSE a dataset path; the catalog VENDS one
 
-`transform.py:191` builds `{project_root}/medallion/{namespace}`, while the catalog vends tables at
-`s3://<warehouse>/<hash>_<ns>$<name>`. The two never meet, so no configuration of names can make an
-ingest-written table visible to a mover — the cascade fires correctly and then finds nothing to move.
+**The READ half is FIXED.** The trigger carries the catalog-vended `from_uri`, and the whole cascade
+was proven end to end for a tenant that shares no name with any tier:
 
-This is I2 ("resolve the location through the CATALOG, never compose a path") violated on the mover
-side, and it predates the ingest plane. The fix is to make the movers catalog-resolved. It is a
-change to a service outside the ingest plane and wants its own review.
+    BRONZE  s3://acme-wh/3196ee6c_acme$events   v2  rows=4  tags={'published': 2}
+    SILVER  s3://acme-wh/medallion/silver       v2  rows=4  + source_rowid/thumbnail/embedding
+    GOLD    s3://acme-wh/medallion/gold         v2  rows=4
 
-Everything else in the cascade now works: the publication head is subscribed
-(`catalog.control.v1 -> /publication-arrival`), receives deliveries, carries `{from, to, project}`,
-and the mover wakes and correctly identifies another lane.
+all inside the tenant's own warehouse, with the lineage graph carrying both naming systems side by
+side (`acme$events` for the catalog, `acme-bronze$events` / `acme-silver$features` /
+`acme-gold$catalog` for the medallion lanes).
+
+**The WRITE half is not.** `transform.py` composes `{project_root}/medallion/{namespace}` for its
+TARGET and never registers it, so what the cascade produces is invisible to the catalog. Measured
+while the silver and gold datasets above held real rows:
+
+    catalog namespace acme   : ['events']
+    catalog namespace silver : []
+    catalog namespace gold   : []
+
+Nothing downstream can discover a silver or gold table through the catalog — no governance, no
+grants, no `published` tag, and no vended location for the NEXT consumer, which is the same problem
+this section was originally written about, one tier further down. I2 ("resolve the location through
+the CATALOG, never compose a path") on the other side of the mover. It is a change to a service
+outside the ingest plane and wants its own review.
+
+### `/api/ingest-iiif` — RETIRED
+
+The row was dead, but not because nobody called it: **A12 deleted the medallion route it pointed
+at**, so it resolved to a live backend that answered 502 rather than to no route at all — naming a
+backend as broken instead of a path as absent, which is the worse failure. Removed; the
+sibling-prefix ORDERING property it demonstrated (`_pick_route` requires `path == prefix or
+startswith(prefix + "/")`, so a `-` suffix cannot fall into `/api/ingest`) is kept and still tested,
+with the assertion inverted to the direction the bug now runs.
 
 ### `/bronze-arrival` still exists alongside `/publication-arrival`
 
 Both publish the same `medallion.bronze` trigger, and the movers' token de-duplication is what stops
-a table emitting both signals from cascading twice. Retiring the lineage head is a follow-up once
-every writer publishes — doing it before then would strand any writer that has not adopted publish.
+a table emitting both signals from cascading twice.
+
+**The stated retirement condition is not reachable as written.** "Once every writer publishes"
+requires writers that CAN publish, and none of the remaining ones can: the movers compose their
+targets and never register them, so they have no catalog table to publish; `/produce` and
+`/ingest-media` write bronze with no catalog involvement at all. Prerequisite order is therefore:
+movers register (the write-half residual above) → `/produce` and `/ingest-media` become
+catalog-mediated → only then is the lineage head genuinely redundant. Disabling either head today
+strands a real lane in each direction.
 
 ### `StagingOverlapError` is reachable
 
@@ -3227,12 +3256,201 @@ is opt-in through field metadata (`lance-schema:unenforced-primary-key`) which t
 nowhere, so `id` is an ordinary column the estate agrees to merge on and Lance validates no
 uniqueness. Declaring it properly is open.
 
-### Dropped from the medallion head, still not restored
+### Dropped from the medallion head — partially restored
 
-The empty-source refusal (a mis-set prefix currently commits nothing, reports COMPLETE, and emits a
-WROTE edge for a table it did not write) and the ingest ceilings (`s3-prefix` at a bucket root
-enumerates the whole bucket). Both are guards against a mis-pointed source; both are cheaper here
-than in the head they came from, because enumeration is a discrete phase.
+**RESTORED.** The `iiif` adapter's `max_pages` was registered, rendered by the compute zone,
+numeric-validated on the user's behalf, posted in `options` — and **read by nothing**. It worked
+before A12 (`iiif_produce.py` sliced `image_ids[: self._max_pages]`); the rewrite kept the interface
+and dropped the behaviour, which is worse than never offering it: a user who caps a harvest at 10
+pages and receives the whole volume has been misled by their own UI. Now applied to the IDS, before
+any URL is built or byte fetched, with the string/int/blank/zero coercions pinned by a test.
 
-The IIIF read-through cache belongs to the ADAPTER, not the platform — a per-source `Fetcher` is
-already the designed seam.
+**STILL OPEN — the empty-source refusal.** OPEN-WORK previously described only the LOCAL catalog
+path. The accurate statement, both configurations:
+
+* **local catalog (default, and what every test uses)** — the run commits nothing, reports COMPLETE
+  with a `committed_version` it did not produce, and emits a COMPLETE lineage event naming the
+  bronze table: a WROTE edge for a table it did not write.
+* **catalog service (`RASK_INGEST_USE_CATALOG=true`, the CHART DEFAULT)** — the run dies in
+  `finalize`, because the catalog refuses an empty commit with 400 "no fragments to commit".
+
+The second half is FIXED: `finalize_run` now treats an empty fragment list as the no-op
+`Lander.commit_fragments` always did, reports `committed_version: None` rather than the version the
+dataset already had, and publishes nothing. That branch was **structurally invisible to the suite** —
+it runs only when the catalog has `commit`, and `LocalCatalog` does not — so `test_empty_commit.py`
+drives it through a stub that has one. Before the guard, the 400 burned the activity's four retries
+and killed the workflow BEFORE `emit_terminal`, leaving a permanent orphan START in the graph and a
+FAILED run with an empty `errors` dict and no operator-readable reason. The same 400 swallowed the
+FAIL lineage of any run whose units all failed validation.
+
+What remains is the REFUSAL itself: a source enumerating zero units is still not refused at the
+enumeration seam, and `ensure_dataset` runs before enumeration, so a mis-pointed source still leaves
+a registered empty bronze table behind. Note a latent blocker for that fix: `runs.py`'s
+`_RUNTIME_STATUS` merge only promotes an outcome status when it is `COMPLETE` or
+`COMPLETE_WITH_ERRORS`, so a workflow that RETURNS `status: "FAILED"` has it silently dropped and the
+door still answers COMPLETE.
+
+**STILL OPEN — the ingest ceilings.** Enumeration is unbounded for every source kind: no unit, byte
+or time ceiling. `S3Source` does a full recursive LIST when `prefix` is empty, which the registry
+explicitly invites ("Leave empty to take the whole bucket"). Separately, `chart/values.yaml` declares
+`RASK_INGEST_MAX_RUN_HOURS: "24"` that **no code in `services/ingest` reads**, while gate A15 asserts
+`olderThanDays * 24 >= max_run_hours` and passes — a green gate certifying a relation whose other
+side nothing enforces. Either the workflow gains a real deadline or the gate is weakened to what it
+can prove; leaving it is worse than having no gate.
+
+**`id` is NOT a primary key, and should NOT be declared one.** Investigated and REFUTED. Lance's
+`lance-schema:unenforced-primary-key` is real, but its only capability is enabling `merge_insert`
+with no explicit key — which this estate forbids (every merge site passes `on=`) — while the
+enforcement it appears to buy (`id` unwritable as null) comes from `nullable=False` alone, measured.
+Declaring it is an irreversible create-time trap for no gain. If the enforcement is wanted, that is
+`pa.field("id", pa.int64(), nullable=False)` plus a nullability check in `assert_creation_contract`.
+The larger defect that investigation surfaced: `CatalogServiceClient.ensure` never runs
+`assert_creation_contract` on either its short-circuit return or after `_create_empty`, so the
+creation gate exists on the path tests take and not on the path production takes.
+
+### The Dapr app-token bypass — CLOSED estate-wide
+
+`dapr.io/app-token-secret` makes daprd stamp `dapr-api-token` on **every** request it hands the app,
+and the gateway forwards `/api/*` through Dapr service invocation. So the app-token proves *"this
+arrived through Dapr"*, never *"the caller is a trusted service"* — and the gateway is a trusted
+service invoking on behalf of the anonymous public. Measured 2026-08-04 against the ingest door:
+403 direct to the pod, 403 via Service DNS, **202 through the gateway**, and a browser with no login
+started a real data-writing run.
+
+Closed at three layers, after an adversarial audit of 49 candidate doors (35 confirmed, 14 refuted):
+
+* **the doors** — `ingest.auth`, `medallion.api.produce_auth` (both `authorize_produce` and
+  `authorize_train`, the latter by FORWARDING the caller rather than re-deriving it), and
+  `service_kit.governed.dapr_auth.require_dapr_token`, which is consumed only as `Depends(...)` and
+  therefore fixed twelve sidecar-only routes across catalog / lineage / medallion / maintenance
+  without touching one endpoint signature;
+* **the lineage service door** — `_service_principal` opens on the app token PLUS a CALLER-SUPPLIED
+  `x-lance-service-identity`, so a client could name itself an allowlisted service. It now refuses a
+  public front door outright;
+* **the edge** — the gateway strips `dapr-caller-app-id`, `dapr-api-token`, `dapr-app-id` and
+  `x-lance-service-identity` from every inbound request. This is load-bearing, not belt-and-braces:
+  daprd APPENDS its stamp rather than replacing a client's, and FastAPI binds the FIRST occurrence,
+  so a forged `dapr-caller-app-id: medallion` got a **202** out of the already-fixed ingest door.
+  Without the strip every caller check in the estate is decorative.
+
+The public-front-door list lives ONCE, in `service_kit.governed.dapr_auth`.
+
+Measured after deploying by digest, with lineage's user door armed:
+
+```
+anonymous POST /api/lineage/api/v1/lineage                        -> 403 "'gateway' is a public front door…"
+  + forged x-lance-service-identity: service-trainer              -> 403 (same)
+  + forged dapr-caller-app-id: medallion AND the identity         -> 403 (same)
+emitter shape (Service DNS, token + allowlisted identity, no hop) -> reaches the FGA authz gate
+BFF read shape (service-web)                                      -> 200
+```
+
+### The governed-auth env is shared, and only ingest was missing a user door
+
+`_helpers.tpl` defines `lance.governedOidcEnv` / `governedFgaEnv` / `governedFgaPins` ONCE, each
+taking `(list $root $prefix)`. **The prefix is a parameter because the estate does not share one**:
+service-kit's `GovernedAuthSettings` reads `LANCE_*`, lineage's own config reads `LINEAGE_*`,
+medallion's reads `MEDALLION_*`. A helper with `LANCE_` hardcoded emitted, onto lineage, seven
+variables lineage does not read — wired-looking and completely inert. Caught before it shipped, and
+the clearest argument there is for one definition over three copies.
+
+A rendered chart with `auth.enabled=true` already gave SIX deployments a user door (catalog, viewer,
+search, annotator, lineage, the medallion producer). The genuine gap was **ingest alone**, now 7 of 7.
+The movers and maintenance correctly have none: every one of their routes is sidecar-delivered and
+guarded by `require_dapr_token`, so a user door there would gate nothing.
+
+Keyed on a per-service `governedAuth` flag, NOT `frontDoor` — being routed by the gateway and having
+an auth door are different facts, and conflating them put seven inert variables on the gateway and on
+compute, neither of which reads any auth setting.
+
+**Still open:** this dev cluster runs `auth.enabled=false`, so every door is in its documented
+dev-open state until the estate turns auth on. That is a deployment posture, not a chart gap — the
+in-cluster proofs above were taken with lineage's door armed by hand from the chart's own values.
+
+### Circuit breakers cannot see the difference between "refused" and "down"
+
+Removed from the invocation targets in the same session, and worth stating as a rule rather than a
+patch: Dapr's **retry** policy takes a `matching.httpStatusCodes`, its **circuit breaker** does not.
+A breaker keyed on consecutive non-2xx counts an authorization denial exactly like an outage, so five
+refused requests took an entire app-id offline for every caller for 30 s — a denial of service any
+unauthenticated client could trigger on demand, by sending requests it already knew would fail.
+
+If a breaker is ever wanted back, it needs a failure signal that means *unavailable* (transport
+errors, timeouts, 5xx). Until Dapr can express that, `invokeTimeout` plus status-matched retries are
+the honest bound.
+
+## Studio flow builder — what shipped, and what it left open
+
+`open_studio_flows.md` is RETIRED here (2026-08-06): the builder shipped, is deployed, and was driven
+end to end against the live cluster. Its design rationale did not need summarising into bullets — it
+went into the code as comments (`lib/flows/*`, `services/flows/*`) and into the two skills
+(`rask-frontend`'s studio row, `rask-services-fleet`'s flows row). What remains is below.
+
+**What the zone is now.** `/studio` IS the builder — the canvas is the zone root; the mini-app
+launcher and the GSAP animation A/B are deleted. Three panes: the rail is the node library (live Ray
+Serve deployments first, each dropping a Model node preset to that app), the canvas is the graph, the
+right pane is the per-node inspector, and a bottom drawer carries Logs / Flows / API. Eleven node
+kinds, of which `dataset` and `mcp` are openly SCAFFOLD — they refuse at run time rather than
+emitting plausible data. `services/flows` (:8840, gateway row `/api/flows`) is the server half: the
+declared node catalog, graph validation sharing the frontend's vocabulary, and runs on two lanes.
+
+### `/htr` is healthy on dev-kuberay and not routed by its ingress
+
+The app is RUNNING with a GPU replica (`HTRFlow`, 1/1, `num_gpus: 1`, on `gpu-a5000-worker-*`), and
+`runners/htr/scripts/deploy_htr.py:8` states its contract: `POST /htr/transcribe`, raw image bytes in,
+ALTO XML out. But `https://dev-kuberay.ra.se/htr/transcribe` answers `text/plain 404: Not Found` —
+byte-identical to a path that does not exist, and with no `x-request-id`, where the routed vLLM apps
+answer `application/json {"detail":"Not Found"}` WITH one. Port 8000 on that host is closed. So the
+Serve HTTP ingress for that prefix is not exposed; the vLLM apps got explicit routes
+(`dev-kuberay.ra.se/gemma-31b/v1` is hardcoded in-repo), `htr` did not. **Closing it is an ingress
+change on that cluster, not a code change** — studio already calls it with `app=htr, path=/transcribe`
+once the route exists.
+
+### Discovery and callability are different questions, and the library conflates them
+
+The node library lists what the Ray DASHBOARD reports (`/api/serve/applications/` via the compute
+service), and marks each `RUNNING`. Reachability depends on the INGRESS, which the dashboard knows
+nothing about — so `htr` appears callable and is not. Either probe each app and mark the unreachable
+ones, or stop implying callability. Same root cause as the next entry: two clusters.
+
+### Two Ray clusters, and only one of them is this chart's
+
+`RAY_DASHBOARD_URL: https://dev-kuberay.ra.se` (fleet ConfigMap) is the EXTERNAL GPU cluster —
+`gemma-31b`, `qwen3-embed`, `qwen3-rerank`, `htr`. The chart's own KubeRay `rask-ray` is a different
+cluster serving only `htrflow`, CPU-only by design (`ray.gpuCount: 0`, correct for a laptop/CI
+install). `frontend.serveUrl` is the override that points the inference zones at the external one;
+`MODELS_SERVE_URL` still points at the in-cluster CPU `htrflow`. Anyone debugging "why is inference
+slow / 404" should read that env var FIRST — a session was spent GPU-patching the wrong cluster.
+
+### The zones cannot see `auth.enabled`, so inference is anonymous on a governed estate
+
+`auth.enabled: true` with `frontend.oidc.enabled: false` renders zones with no OIDC env, so
+`locals.authEnabled` is false, so `@rask/api/serve-proxy`'s 401 guard never fires — anonymous callers
+reach GPU inference while the backends demand bearers. The chart's own values warn about this pair.
+Two ways to close: enable the zones' OIDC (the intended state), or inject `auth.enabled` into the
+zones and fail closed on it. Not done because failing closed breaks a working UI until OIDC is
+configured — a deliberate decision, not an oversight.
+
+### Uploads pass through the zone pod's memory
+
+`proxyServeInfer` does `await request.arrayBuffer()`, so every byte is buffered in a SvelteKit pod
+sized for rendering HTML. `BODY_SIZE_LIMIT=32M` bounds the damage; it does not fix the shape, and it
+rules out audio/video entirely. The estate already does this properly elsewhere — `PageLoaderActor`
+is an S3 read-through cache — so the honest lane is a scratch bucket with a TTL, presigned PUT
+straight from the browser to RustFS (creds from the Dapr secret store, never env), and an
+`objectRef` payload kind. Needed for the bucket-attach and video/audio cases.
+
+### Not built: IIIF loader, bucket attach, streaming
+
+- **IIIF node** — the loader that actually fits this archive: manifest → canvas → image, no upload at
+  all. Needs an allowlisted fetch proxy (`iiifintern-ai.ra.se` is the host the repo already knows).
+- **Bucket attach** — load from and upload to a bucket; loading can ride the governed
+  `/api/explorer/object*` read, uploading needs the presigned lane above.
+- **Streaming** — every run is one-shot. A long generation shows nothing until it completes, which
+  reads as "nothing happens" (measured: a CPU HTR page took 66 s of silence). Needs SSE on
+  `services/flows` and a progress surface per node.
+- **Durable lane unproven** — runs take the inline executor. The sidecar now holds the actor runtime
+  (`lance-statestore` is scoped to app-id `flows`), but the Dapr Workflow path has not been observed
+  end to end.
+- **Server-declared palette** — `services/flows` declares the node catalog and the frontend still
+  ships its own registry; the seam exists and is unused.

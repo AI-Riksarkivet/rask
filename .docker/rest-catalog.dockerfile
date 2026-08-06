@@ -75,6 +75,13 @@ WORKDIR /srv
 # The venv is root-owned and the app runs as 10001, so it is immutable to the account running it.
 COPY --from=builder --link /opt/venv /opt/venv
 
+# ── the import gate ──────────────────────────────────────────────────────────
+# Import every module this image serves, against the venv the runtime stage ships. A missing
+# DECLARED dependency is invisible to the workspace venv (a sibling member resolves it) and can
+# only be seen here, where the deployable's own closure is the only one present. See the script.
+COPY .docker/import-gate.py /tmp/import-gate.py
+RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage medallion maintenance viewer search annotator && rm /tmp/import-gate.py
+
 # Strip setuid/setgid bits from the whole shipped filesystem (base account tools passwd/chsh/... +
 # anything in the venv) — no use in a container, residual privesc surface. Own RUN so its `|| true`
 # (which only tolerates find matching nothing) cannot mask a real build failure above.

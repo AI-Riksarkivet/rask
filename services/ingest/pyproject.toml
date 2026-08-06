@@ -5,7 +5,12 @@ description = "the ingest service — pre-bronze acquisition as a platform plane
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
-    "service-kit",
+    # [governed] because `ingest.auth` imports `service_kit.governed.fga` — openfga-sdk, pyjwt and
+    # lance-namespace live behind that extra so the base library stays dependency-light. The bare
+    # "service-kit" here was enough for the local venv (another workspace member pulls openfga-sdk in)
+    # and NOT enough for the image, whose venv is `uv sync --package ingest` alone: the door landed in
+    # a pod that crash-looped on `ModuleNotFoundError: No module named 'openfga_sdk'`.
+    "service-kit[governed]",
     "lineage-kit",
     "storage",
     "validate",

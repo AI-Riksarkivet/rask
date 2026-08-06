@@ -61,6 +61,12 @@ w namespace:silver-media parent 'table:silver-media$features'
 # ingest head writes as the PRODUCER's identity (lance-ray) — the retired raw→bronze mover's writer
 # rung moved here with the collapse (R23).
 w user:service-lance-ray writer "$WAREHOUSE"
+# The INGEST plane writes bronze too, and it was never seeded. `services/ingest` is the P7a
+# acquisition head — it creates the bronze table and commits the fragments — so it needs the same rung
+# the producer has. Without it every run reached the catalog fully AUTHENTICATED and was refused on
+# authorization alone (`403 can_get_metadata required on table:…`), which reads like a broken door
+# rather than a missing grant.
+w user:service-ingest writer "$WAREHOUSE"
 w user:service-bronze-to-silver writer "$WAREHOUSE"
 w user:service-media-to-silver writer "$WAREHOUSE"
 w user:service-silver-to-gold validator namespace:gold
@@ -106,9 +112,13 @@ if [ -n "$PROJECT" ]; then
     w "warehouse:$ZONE_WH" parent "namespace:$PROJECT-$ns"
   done
   w user:service-lance-ray writer "namespace:$PROJECT-bronze"
+  w user:service-ingest writer "namespace:$PROJECT-bronze"
   w user:service-bronze-to-silver writer "namespace:$PROJECT-silver"
   w user:service-silver-to-gold validator "namespace:$PROJECT-gold"
   w "namespace:$PROJECT-bronze" parent "table:$PROJECT-bronze\$events"
+  # The ingest lane's table. `INGEST_TABLE` because the ETL form lets a user name it, unlike the
+  # producer's fixed `events` lane — pass it when seeding a tenant whose first ingest is not `pages`.
+  w "namespace:$PROJECT-bronze" parent "table:$PROJECT-bronze\$${INGEST_TABLE:-pages}"
   w "namespace:$PROJECT-silver" parent "table:$PROJECT-silver\$features"
   w "namespace:$PROJECT-gold" parent "table:$PROJECT-gold\$catalog"
   echo "✓ enabled tenant '$PROJECT' medallion (zone warehouse:$ZONE_WH — stage parents, mover rungs, table links)"

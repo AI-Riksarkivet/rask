@@ -12,14 +12,16 @@ through. A configured-but-broken auth layer must never degrade to open access.
 
 from __future__ import annotations
 
+import time
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from lance_namespace import ServiceUnavailableError, UnauthenticatedError
+from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.dependencies import SettingsDep
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.dapr_auth import ServiceDoorClosed, is_public_caller, service_principal
 from service_kit.governed.oidc import IDToken, OIDCVerifier
 
 
@@ -28,10 +30,79 @@ _bearer = HTTPBearer(auto_error=False, description="OIDC bearer token")
 _CredentialsDep = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]
 
 
-def authenticate(request: Request, settings: SettingsDep, credentials: _CredentialsDep) -> IDToken | None:
-    """Authenticate the request, returning the parsed token (or ``None`` when OIDC is off)."""
+def authenticate(
+    request: Request,
+    settings: SettingsDep,
+    credentials: _CredentialsDep,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    x_lance_service_identity: Annotated[str | None, Header()] = None,
+    # The INVOKING Dapr app-id — what separates a service from the PUBLIC front door invoking on a
+    # stranger's behalf. See `service_kit.governed.dapr_auth.is_public_caller`.
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+) -> IDToken | None:
+    """Authenticate the request: an OIDC bearer (human/external) OR the SERVICE door.
+
+    THE SERVICE DOOR IS SHUT BY DEFAULT (`service_subjects` empty) and this function then behaves
+    exactly as it always has. It exists because a service had NO way to authenticate here: the
+    catalog verified OIDC JWTs and nothing else, so every ingest run died at its first activity with
+    `catalog refused describe (401): Missing bearer token` — and a JWT expires, so the static token
+    the medallion carries for the same purpose is the wrong shape for the problem.
+
+    The mechanism is the one lineage already runs, extracted rather than re-invented, so the estate
+    keeps ONE service-to-service auth model and the lessons paid for there (the public-caller
+    laundering path, privileged subjects needing their own credential) apply here for free.
+    """
     if not settings.oidc_enabled:
         return None
+
+    # THE LAUNDERING PATH, refused before anything else. The gateway forwards through Dapr service
+    # invocation and the callee's daprd stamps a valid `dapr-api-token` on the way in — so an
+    # ANONYMOUS public request can arrive already holding the estate's service credential, and
+    # `x-lance-service-identity` is caller-supplied. The gateway strips both at the edge; this refuses
+    # the door even if one gets through, because a service principal is never something the public
+    # front door should be able to mint.
+    if is_public_caller(dapr_caller_app_id):
+        audit("authn", FAILURE, reason="public_caller")
+        raise PermissionDeniedError(
+            f"{dapr_caller_app_id!r} is a public front door: the service door authenticates a service, not a caller — sign in and retry"
+        )
+
+    # Both headers, never the token alone: with `dapr.io/app-token-secret` set the SIDECAR stamps
+    # `dapr-api-token` on every request it delivers, so gating on the token would divert a
+    # gateway-proxied HUMAN into the service door and 403 them on the missing identity.
+    if settings.service_subjects and dapr_api_token is not None and x_lance_service_identity is not None:
+        try:
+            principal = service_principal(
+                token=dapr_api_token,
+                identity=x_lance_service_identity,
+                allowed_subjects=settings.service_subjects,
+                privileged_subjects=settings.privileged_subjects,
+            )
+        except ServiceDoorClosed:
+            # No APP_API_TOKEN here: nothing to verify, so fall through to OIDC rather than admitting
+            # a caller who merely named a subject.
+            pass
+        else:
+            audit("authn", SUCCESS, subject=principal.sub)
+            # A SYNTHETIC token, and every field is deliberate. `IDToken` requires the conformant
+            # OIDC core claims (iss/sub/aud/exp/iat) — supplying only `sub` raised a pydantic
+            # ValidationError that surfaced to the caller as a bare catalog 500, which reads as a
+            # broken catalog rather than a malformed principal.
+            #
+            # `iss` names the SERVICE DOOR rather than the IdP, so an audit line can never be
+            # mistaken for a human login; `exp` is short because nothing re-verifies this object —
+            # it is already authenticated and exists only to carry `sub` into the authz layer, where
+            # a service is bounded by its own FGA rung exactly like a person.
+            now = int(time.time())
+            return IDToken(
+                iss="rask://service-door",
+                sub=principal.sub,
+                aud=settings.oidc_audience or "rask",
+                iat=now,
+                exp=now + 60,
+                service=True,
+            )
+
     verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
     if verifier is None:
         # OIDC is enabled but no verifier is available: fail closed, never open.

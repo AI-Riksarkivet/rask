@@ -373,7 +373,14 @@ smoke-rustfs: ## Storage smoke vs rustfs (S3 round-trip + LanceDB) — needs rus
 	  uv run python scripts/smoke_rustfs.py
 
 # ---- local k3s ------------------------------------------------------------
-COMPOSE_IMAGES = gateway compute controlplane
+# `ingest` was MISSING here until 2026-08-06, and its absence is why the plane could never be
+# verified in-cluster. `.docker/ingest.dockerfile` exists and the chart ships a `rask-ingest`
+# Deployment on :8830 — but a service that is in neither this list nor $(K3S_IMAGES) is never built
+# by `make k3s-build` and never side-loaded by `make k3s-import`, so a hand-built image lands in
+# DOCKER while k3s reads CONTAINERD and answers ErrImagePull. Measured: a Dagger build succeeded
+# (exit 0), `kubectl set image` -> ErrImagePull, rolled back. Four correct fixes sat unprovable
+# behind it.
+COMPOSE_IMAGES = gateway compute controlplane ingest
 # SvelteKit SSR microfrontend zone images — one web-<zone> image per $(ZONES) entry,
 # all built from the one parametrized .docker/frontend.dockerfile via --build-arg
 # APP=<name>. (R22: the web- prefix keeps the zone image namespace disjoint from the
@@ -498,7 +505,14 @@ seed-corpus: ## Seed the demo corpus into the volume the media plane actually RE
 	./scripts/seed-corpus.sh
 
 k3s-pins: ## Capture what the cluster is RUNNING into chart/values-live-pins.yaml (#135)
-	@KUBECONFIG=$(KUBECONFIG) KUBECTL=$(KUBECTL) ./scripts/k3s-pins.sh chart/values-live-pins.yaml
+	@# KUBECTL is deliberately NOT passed through. `KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl` is a
+	@# THREE-WORD string carrying its own env assignment, so `KUBECTL=$(KUBECTL) ./script` made the shell
+	@# read `KUBECTL=KUBECONFIG=...` as an assignment and then run `kubectl ./scripts/k3s-pins.sh` —
+	@# `error: unknown command "./scripts/k3s-pins.sh" for "kubectl"`. The script quotes `"$$KUBECTL"`,
+	@# so passing it correctly would fail too: it would exec a binary literally named
+	@# `KUBECONFIG=... kubectl`. KUBECONFIG is already in the environment; the script's own `kubectl`
+	@# default is the right one.
+	@KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh chart/values-live-pins.yaml
 	@echo ">> now: helm upgrade rask ./chart -f chart/values-live-pins.yaml   (changes only what you meant to)"
 
 k9s: bootstrap ## Browse the k3s cluster in k9s (the chart's NOTES.txt points here)

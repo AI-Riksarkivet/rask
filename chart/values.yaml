@@ -106,6 +106,11 @@ services:
     # Writes Lance to the warehouse, so it needs the S3 endpoint injected (see fleet.yaml). Values
     # files cannot carry Helm templates — a `{{ include ... }}` here renders as a LITERAL string — so
     # the endpoint is a template concern and this is only the flag that asks for it.
+    # This service has a governed door (`ingest.auth.authorize_ingest`) with a USER path, so it
+    # needs the OIDC/FGA env. Declared per-service rather than derived from `frontDoor`: being
+    # routed by the gateway and having an auth door are different facts, and conflating them put
+    # seven inert variables on the gateway and compute.
+    governedAuth: true
     lanceWriter: true
     env:
       # Lineage is both WRITTEN and READ here, and the two need different halves of one service.
@@ -114,8 +119,40 @@ services:
       # reporting success — exactly the hole A8 exists to catch. RASK_LINEAGE_URL is the read side,
       # which the status endpoint joins against so A8's verdict comes from the graph rather than from
       # a flag nothing sets. Both point at the release's lineage Service.
+      # The ONE project this deployment's service token may ingest into. The Dapr app-api-token
+      # authenticates a SERVICE, not a tenant — honouring an arbitrary requested project would let
+      # any token holder write into every tenant — so it is pinned here and crossing tenants takes a
+      # user bearer with can_administer on the target. Mirrors MEDALLION_PRODUCE_ADMIN_PROJECT.
+      # Stated explicitly rather than left to the code default: which tenant a shared credential can
+      # write into is not a fact anyone should have to read Python to discover.
+      RASK_INGEST_SERVICE_PROJECT: demo
+      # The ONE directory tree the `local-dir` source may read. EMPTY means the kind is REFUSED,
+      # which is the right default: `options.root` is caller-supplied and reaches a recursive reader,
+      # so an unconfined local-dir is an arbitrary-file-read primitive aimed at this pod's own
+      # filesystem — {"root":"/proc/self","pattern":"environ"} would land the S3 credential as rows
+      # in a governed table the explorer then serves.
+      #
+      # Present-but-empty rather than absent, so the knob is discoverable: the first in-cluster run
+      # after the confinement landed failed every unit with "local-dir is not enabled here", and
+      # nothing in the chart hinted that such a setting existed. local-dir is a fixture source;
+      # s3-prefix and iiif are the production ones and need nothing here.
+      RASK_INGEST_LOCAL_ROOT: ""
       RASK_LINEAGE_ENDPOINT: http://rask-lineage:8000
       RASK_LINEAGE_URL: http://rask-lineage:8000
+      # WHO this plane is at the lineage door. Without it, on an auth-enabled estate, the ingest
+      # plane loses ALL provenance SILENTLY: the emitter sends no identity, lineage answers 401, and
+      # the emitter swallows the failure by design (a landed commit must not become a failed run).
+      # Measured — four `401 Unauthorized` in five minutes while the same run reported
+      # `{"status":"COMPLETE","defect":null}` and the lane printed "OK  A8 — no provenance defect".
+      #
+      # The emitter warns about exactly this and was being ignored by the chart:
+      #   "lineage_service_door_half_configured — need BOTH RASK_LINEAGE_APP_TOKEN (or APP_API_TOKEN)
+      #    and RASK_LINEAGE_SERVICE_IDENTITY; sending neither, so an authenticated ingest will 401"
+      #
+      # The TOKEN half is already present: the fleet template injects `APP_API_TOKEN`, which both the
+      # emitter and the provenance reader accept under that name. This supplies the missing half, and
+      # `services.yaml` adds the same subject to `LINEAGE_SERVICE_SUBJECTS` so the door admits it.
+      RASK_LINEAGE_SERVICE_IDENTITY: service-ingest
       # Route creation and commits through the CATALOG rather than writing the object store
       # directly. Opt-in by an explicit flag, never inferred from a reachable URL: a catalog that is
       # merely down must fail the run loudly, not silently downgrade to a local write that produces
@@ -932,19 +969,30 @@ stateStore:
     # catalog is the service that creates the published table, but nothing here provisions workflow
     # instances and none are expected.
     - catalog
-    # ── `ingest` is here for the SECRET store, not for state. Read this before removing it. ─────────
-    # The ingest workers resolve their S3 credentials through `lance-secrets` — fail-closed, no env
-    # fallback — and dapr-component.yaml:180 derives the secret-store scope by concat'ing THIS list.
-    # `$secretScopes`'s other members are hardcoded template branches (catalog, lineage, compaction,
-    # medallion, media), so `stateStore.scopes` is the only values-level lever that grants secret
-    # access. Unscoped, the sidecar answers ERR_SECRET_STORES_NOT_CONFIGURED and every worker
-    # fail-closes at boot — the same failure the medallion hit live 2026-07-24.
+    # ── `ingest` needs BOTH halves. Removing it breaks the plane in two separate ways. ──────────────
+    # SECRETS: the ingest workers resolve their S3 credentials through `lance-secrets` — fail-closed,
+    # no env fallback — and dapr-component.yaml:180 derives the secret-store scope by concat'ing THIS
+    # list. `$secretScopes`'s other members are hardcoded template branches (catalog, lineage,
+    # compaction, medallion, media), so `stateStore.scopes` is the only values-level lever that grants
+    # secret access. Unscoped, the sidecar answers ERR_SECRET_STORES_NOT_CONFIGURED and every worker
+    # fail-closes at boot — the failure the medallion hit live 2026-07-24.
     #
-    # The state-store grant rides along because the two lists are deliberately coupled (a state store
-    # resolves its own DSN through the secret store, so state ⊆ secrets). Ingest does NOT use it:
-    # docs/DECISIONS.md § "Ingest orchestration" ruled Dapr Workflow un-adopted — every step of the run
-    # is idempotent by a caller-chosen key — and the unit ledger is JetStream KV, not Dapr state. If a
-    # future reader is auditing for dead config, this is the entry that looks like it and is not.
+    # STATE: Dapr Workflow orchestrates the ingest run (`services/ingest/src/ingest/workflow.py`), and
+    # the workflow engine runs on the ACTOR runtime, which requires an actorStateStore this app-id can
+    # load. This comment used to say the OPPOSITE — that the state grant merely "rides along" because
+    # state ⊆ secrets, citing a DECISIONS.md ruling that Dapr Workflow was un-adopted. That ruling was
+    # REVERSED on 2026-08-03 ("Ingest orchestration — Dapr Workflow IS adopted"); the comment was never
+    # updated, so it sat here inviting exactly the removal that stops the plane dead.
+    #
+    # Measured 2026-08-05 against a cluster whose deployed components predated this list: the sidecar
+    # logged "Actor state store not configured - actor hosting disabled" and EVERY `POST /v1/ingests`
+    # answered 500, "the state store is not configured to use the actor runtime". Not a degraded run —
+    # no run could start at all.
+    #
+    # THE TWO FAIL AS A CHAIN, and only the second symptom is visible: scoping the state store alone
+    # changed nothing, because the state store resolves its own DSN THROUGH `lance-secrets`, so an
+    # unscoped secret store means the state store never loads, which Dapr reports as "no actor state
+    # store". Chasing that message alone leads to the wrong component. Fix both, restart, re-POST.
     #
     # Declared AHEAD of the Deployment on purpose: a sidecar loads components at BOOT, and M7's
     # hot-reload abort (dapr-statestore.yaml:62, actorStateStore: "true") means a LATER addition would

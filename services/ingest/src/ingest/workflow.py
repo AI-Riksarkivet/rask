@@ -38,11 +38,14 @@ ack across a job's runtime, which is the specific thing A13 outlaws.
 from __future__ import annotations
 
 import json
+import os
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 import dapr.ext.workflow as wf
 from pydantic import BaseModel, Field
+
+from ingest.sizing import ResolvedSizing, resolve
 
 
 if TYPE_CHECKING:
@@ -52,6 +55,31 @@ if TYPE_CHECKING:
 # state store, large enough that a million-unit run does not spawn a million children. The plan's
 # own figure (open_ingest.md: "child workflow per ~1-10k keys").
 CHUNK_SIZE = 1000
+
+#: How long a run may take before it is failed. ZERO (the code default) means UNBOUNDED — the chart
+#: opts in with `RASK_INGEST_MAX_RUN_HOURS`, because this plane's own docstrings advertise
+#: million-unit harvests and a live default would kill the legitimate long run it exists to protect.
+#:
+#: It is the enforcement half of gate A15, which asserts `maintenance.olderThanDays * 24 >=
+#: RASK_INGEST_MAX_RUN_HOURS` so version GC cannot delete the version a live run is committing
+#: against. That assertion was passing while NOTHING read the value — a gate certifying a relation
+#: with only one side implemented.
+MAX_RUN_HOURS = float(os.getenv("RASK_INGEST_MAX_RUN_HOURS", "0") or 0)
+
+#: The most units one run may enumerate before it is refused. ZERO (the code default) means
+#: UNBOUNDED, for the same reason as the hour ceiling: this plane advertises million-unit harvests.
+#:
+#: WHAT THIS DOES AND DOES NOT PROTECT, stated because the honest scope is narrower than it looks.
+#: It refuses the RUN — the queue publish, the fan-out, the state-store churn of a fan-out nobody
+#: intended. It does NOT prevent the source LISTING, because all three adapters materialize their
+#: listing below this seam (`S3Source` does a full recursive LIST when `prefix` is empty, which the
+#: registry explicitly invites). An `islice` here would look like a bound and stop nothing: the walk
+#: has already happened by the time a key reaches us.
+#:
+#: So there is deliberately NO "stops pulling at the limit" test. Such a test passes against a lazy
+#: fake and is false for every production source — a green assertion about a property the code does
+#: not have is worse than no assertion.
+MAX_UNITS = int(os.getenv("RASK_INGEST_MAX_UNITS", "0") or 0)
 
 # Retries are the activity's, not a hand-rolled loop: Dapr owns the backoff and the replay.
 ACTIVITY_RETRY = wf.RetryPolicy(
@@ -75,6 +103,21 @@ class ChunkSpec(BaseModel):
     #: derivations of one location is the bug; carrying the resolved value is the fix.
     dataset_uri: str = ""
 
+    #: The run's write partitioning, RESOLVED at accept and carried — same reason as `dataset_uri`.
+    #: Re-reading env inside the drain would let a rolling restart change a live run's fragment size
+    #: mid-fan-out, so two chunks of one run could write to different layouts. Defaulted rather than
+    #: required so a chunk enqueued by an older build still validates.
+    sizing: ResolvedSizing = Field(default_factory=resolve)
+
+    #: The SOURCE identity, carried so `publish_chunk_units` can ask the adapter for each unit's
+    #: `partition_key`. Only the adapter knows what a unit key means (a IIIF volume, an S3 folder),
+    #: and the worker deliberately does not — it resolves by URI scheme. Defaulted so a chunk
+    #: enqueued by an older build still validates; an empty `kind` simply yields a null partition.
+    kind: str = ""
+    project: str = ""
+    dataset: str = ""
+    options: dict[str, Any] = Field(default_factory=dict)
+
 
 class ChunkResult(BaseModel):
     """What a drained chunk reports back — the fragments to commit, and what refused to land."""
@@ -92,6 +135,29 @@ class RunSpec(BaseModel):
     project: str
     dataset: str
     options: dict[str, Any] = Field(default_factory=dict)
+    #: Resolved at ACCEPT (`api.create_ingest`) so a refusal is a 400 rather than a drain that hangs,
+    #: and so the whole fan-out shares one set of numbers.
+    sizing: ResolvedSizing = Field(default_factory=resolve)
+
+    @property
+    def namespace(self) -> str:
+        """The catalog NAMESPACE this run writes into — `bind86-bronze`, or `bronze` untenanted.
+
+        THE ONE PLACE a project becomes a namespace, and the interface this plane was missing. The
+        two are different levels — a project selects the storage root, a namespace is the medallion
+        tier — and every consumer that needed a namespace was handed `spec.project` instead. The
+        catalog client's parameter was even NAMED `project`, so the mistake type-checked and read
+        correctly at every site while composing `bind86$e2ewin`: the 403's object, which nobody had
+        granted anything on because `namespace:bind86` does not exist.
+
+        Resolving it here is what makes the plane's names agree BY CONSTRUCTION rather than by four
+        call sites each remembering to qualify. The catalog keys on it, OpenFGA authorizes against
+        exactly the object it composes, and the lineage output the cascade head matches derives from
+        the same function — so the graph and the catalog cannot name different tables.
+        """
+        from ingest.naming import bronze_namespace_for
+
+        return bronze_namespace_for(self.project)
 
 
 class RunOutcome(BaseModel):
@@ -134,10 +200,73 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
     units_total = sum(len(chunk.get("keys") or ()) for chunk in chunks)
     ctx.set_custom_status(json.dumps({"units_total": units_total, "chunks": len(chunks)}))
 
+    # THE UNIT CEILING — refused HERE, before a single task is published.
+    #
+    # A mis-pointed source is the case: `s3-prefix` with an empty `prefix` lists a whole bucket, and
+    # the registry invites exactly that ("Leave empty to take the whole bucket"). Without a ceiling
+    # that becomes millions of queue messages, a fan-out of thousands of child workflows, and the
+    # state-store churn of both — for a run nobody meant to start.
+    #
+    # It refuses by POLICY (a returned FAILED outcome), not by raising: raising inside the activity
+    # would burn four retries re-LISTING the source before failing, and the operator would read a
+    # crash rather than a limit. That path only reports honestly because the status merge now carries
+    # a returned FAILED through to the door — see `runs.merge_workflow_state`.
+    #
+    # Placed after `enumerate_chunks` rather than inside it because the ceiling is a property of the
+    # RUN, and this is where the run's decisions live. It cannot prevent the listing itself (see
+    # MAX_UNITS) — what it prevents is acting on it.
+    if MAX_UNITS > 0 and units_total > MAX_UNITS:
+        refused: dict[str, Any] = RunOutcome(
+            status="FAILED",
+            errors={
+                "run": (
+                    f"source enumerated {units_total} units, over the {MAX_UNITS} ceiling "
+                    f"(RASK_INGEST_MAX_UNITS). Narrow the source — an empty s3-prefix lists the whole "
+                    f"bucket — or raise the ceiling for this deployment."
+                )
+            },
+        ).model_dump()
+        yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": refused}, retry_policy=ACTIVITY_RETRY)
+        return refused
+
     # Fan out. when_all is fan-in: the parent suspends until every child has drained, and survives
     # its own pod dying because the history replays. This is the durable-orchestration property that
     # a hand-rolled counter had to imitate.
-    results = yield wf.when_all([ctx.call_child_workflow(chunk_run, input=c) for c in chunks])
+    fanout = wf.when_all([ctx.call_child_workflow(chunk_run, input=c) for c in chunks])
+
+    # THE RUN DEADLINE — A15's other half, which nothing enforced.
+    #
+    # `RASK_INGEST_MAX_RUN_HOURS` was declared in `chart/values.yaml` and read by NO code, while the
+    # A15 gate asserted `maintenance.olderThanDays * 24 >= max_run_hours` and passed. That gate
+    # certifies "version GC keeps more history than a run can take" — a guarantee that is fiction
+    # while nothing bounds how long a run takes. A green gate over an unenforced relation is worse
+    # than no gate: it is a promise with nothing behind it, and the failure it exists to prevent
+    # (GC deleting the version a live run is committing against) is silent data loss.
+    #
+    # `ctx.create_timer` is a DURABLE Dapr timer — runtime-managed, replay-safe, and explicitly NOT
+    # counted against A13's in-process timer budget (the condition names Dapr workflow timers as the
+    # carve-out). It is not a poll: the workflow suspends and the runtime wakes it once.
+    #
+    # ZERO MEANS UNBOUNDED, and that is the default in code. The plane's own docstrings advertise
+    # million-unit runs, so a live default would break the legitimate long harvest this is meant to
+    # protect — the deployment opts in, exactly like the other ceilings.
+    if MAX_RUN_HOURS > 0:
+        deadline = ctx.create_timer(timedelta(hours=MAX_RUN_HOURS))
+        winner = yield wf.when_any([fanout, deadline])
+        if winner is deadline:
+            # Terminal, and it does NOT fall through to `finalize`: committing a partial harvest under
+            # a deadline would publish a dataset nobody asked for and mark it complete. The run is
+            # recorded as failed WITH its reason, and the staged fragments stay staged — recoverable
+            # by a re-run, which converges on the same rows because the unit ids are content-derived.
+            timed_out: dict[str, Any] = RunOutcome(
+                status="FAILED",
+                errors={"run": f"exceeded the {MAX_RUN_HOURS}h ceiling (RASK_INGEST_MAX_RUN_HOURS) with {units_total} units enumerated"},
+            ).model_dump()
+            yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": timed_out}, retry_policy=ACTIVITY_RETRY)
+            return timed_out
+        results = fanout.get_result()
+    else:
+        results = yield fanout
 
     parsed = [ChunkResult.model_validate(r) for r in results]
     fragments = [f for r in parsed for f in r.fragments]
@@ -170,7 +299,7 @@ def chunk_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, An
     the activity's result and replays the activity — not the workflow's decisions — if the pod dies,
     while JetStream still owns redelivery, poison parking and `max_ack_pending` backpressure within
     the chunk. Fan-out is across CHUNKS (Dapr distributes child workflows over the pod fleet) and,
-    within a chunk, across `worker.FETCH_CONCURRENCY`.
+    within a chunk, across `sizing.fetch_concurrency`.
 
     Nothing here polls (A13): the activity blocks on JetStream's server-fulfilled pull fetch.
     """
@@ -241,7 +370,20 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
     chunks: list[dict[str, Any]] = []
     for index in range(0, len(keys), CHUNK_SIZE):
         window = keys[index : index + CHUNK_SIZE]
-        chunks.append(ChunkSpec(run_id=spec.run_id, chunk_id=f"{spec.run_id}-c{index // CHUNK_SIZE}", keys=window, dataset_uri=uri).model_dump())
+        chunks.append(
+            ChunkSpec(
+                run_id=spec.run_id,
+                chunk_id=f"{spec.run_id}-c{index // CHUNK_SIZE}",
+                keys=window,
+                dataset_uri=uri,
+                # Carried, not re-resolved — same reason as `dataset_uri` above.
+                sizing=spec.sizing,
+                kind=spec.kind,
+                project=spec.project,
+                dataset=spec.dataset,
+                options=spec.options,
+            ).model_dump()
+        )
     return chunks
 
 
@@ -308,6 +450,26 @@ def emit_terminal(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None
     """
     spec = RunSpec.model_validate(payload["spec"])
     outcome = RunOutcome.model_validate(payload["outcome"])
+
+    # RELEASE WHAT THIS RUN LEFT QUEUED, on every terminal path.
+    #
+    # `publish_units` runs in one activity and `drain_chunk` in a LATER one, and the drain is what
+    # creates the durable consumer — so a run that dies between them strands its units behind a
+    # consumer that was never BORN. WORK_QUEUE retention makes that permanent: a message leaves only
+    # when acked, no consumer for that run id is ever created again, and nothing sweeps the stream.
+    # The live estate sat at `messages: 1, consumers: 0` for hours with every other signal green.
+    #
+    # HERE rather than in a sweep, and that is the whole design. A sweep would have to re-derive
+    # "this run has no live workflow" from outside — the same inference `/queue`'s `stranded` flag
+    # exists because two readers got it wrong on the same day. The workflow does not infer: it knows
+    # it is ending, and it releases what it published.
+    #
+    # Best-effort by construction (`release_run` never raises): tidying up must not turn a run that
+    # landed its data into a run that failed. Same reasoning as I8 for lineage.
+    from ingest.runtime import release_run_units
+
+    _run_async(release_run_units(spec.run_id))
+
     _lineage().terminal(
         spec.run_id,
         outcome.status,

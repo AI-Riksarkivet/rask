@@ -50,6 +50,11 @@ def _dataset(tmp_path: Path, payloads: list[bytes | None], schema: pa.Schema = B
         columns["sha256"] = pa.array([hashlib.sha256(p or b"").hexdigest() for p in payloads], pa.string())
     if "stage" in schema.names:
         columns["stage"] = pa.array(["bronze"] * len(payloads), pa.string())
+    if "partition_key" in schema.names:
+        # Nulls: these fixtures exercise the BLOB read APIs, and the grouping label is irrelevant to
+        # them. Present because the schema declares it — a column omitted here is a `KeyError` from
+        # inside pyarrow, which reads as a product failure rather than a stale fixture.
+        columns["partition_key"] = pa.array([None] * len(payloads), pa.string())
     table = pa.table(columns, schema=schema)
     lance.write_dataset(table, uri, **CREATION_FLAGS)
     return lance.dataset(uri)

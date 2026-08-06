@@ -60,7 +60,7 @@ def test_target_base_falls_back_when_disabled(gw, monkeypatch: pytest.MonkeyPatc
     assert base == "http://127.0.0.1:8804"
 
 
-def test_ingest_row_reaches_the_ingest_plane_and_does_not_swallow_ingest_iiif() -> None:
+def test_ingest_row_reaches_the_ingest_plane_and_a_sibling_prefix_does_not_fall_into_it() -> None:
     """The /api/ingest row, and the sibling-prefix property it only LOOKS like it violates.
 
     `_pick_route` matches on `path == prefix or path.startswith(prefix + "/")`, so "/api/ingest-iiif"
@@ -77,9 +77,14 @@ def test_ingest_row_reaches_the_ingest_plane_and_does_not_swallow_ingest_iiif() 
     sub = _pick_route("/api/ingest/ingests/abc", rows)
     assert sub is not None and sub[2] == "ingest"
 
-    # The deprecated medallion head still resolves to the medallion, not to the new plane.
+    # THE PROPERTY SURVIVES ITS EXAMPLE. `/api/ingest-iiif` was a real row through a deprecation
+    # window; A12 deleted the medallion route it pointed at, so it resolved to a backend that 502'd
+    # instead of a path that 404s — and the row is now gone. The sibling-prefix rule it demonstrated
+    # is what must not regress: a `-` suffix must NOT fall into the `/api/ingest` row and be
+    # rewritten into the ingest plane, which would turn a clean "no upstream" into a wrong-service
+    # 404. Asserted on the absent row, because that is the direction the bug now runs.
     legacy = _pick_route("/api/ingest-iiif", rows)
-    assert legacy is not None and legacy[2] == "lance-ray"
+    assert legacy is None, "a sibling prefix must not fall into the /api/ingest row — it has no upstream, and 404 is the correct answer"
 
 
 def test_flows_rows_map_to_the_flows_service(gw) -> None:

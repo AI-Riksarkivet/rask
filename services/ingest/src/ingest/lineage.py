@@ -71,6 +71,58 @@ def _delimiter() -> str:
     return os.getenv("RASK_CATALOG_DELIMITER", "$")
 
 
+def _output_datasets(project: str, dataset: str, version: int | None, rows: int) -> list[Any]:
+    """The table this run wrote, STAMPED with what it wrote — the `version` and `outputStatistics` facets.
+
+    **THE NAME IS THE CASCADE'S TRIGGER, and it was addressing the wrong level of the hierarchy.**
+    This composed `{project}${dataset}` in namespace `{project}` — for project `bind86`, the pair
+    (`bind86`, `bind86$e2ewin`). The medallion's head matches on
+    `project_namespace(project, bronze_namespace)` (`ingest_trigger.py:52-57`), i.e. the pair
+    (`bind86-bronze`, `bind86-bronze$e2ewin`). Those never intersect, so **no ingest write could ever
+    fire the cascade** — and nothing failed: the data landed, lineage recorded it, A8 passed, and
+    silver was simply never woken. R23's shape exactly, since the tier is announced by the record of
+    what happened rather than by a separate event.
+
+    The level confusion is the root of it. A PROJECT selects the storage root, through the warehouse
+    registry (`produce.py:60-66`); the NAMESPACE is the medallion TIER; the TABLE is the dataset. The
+    live FGA store agrees — `project:bind86 -> warehouse:bind86-wh -> namespace:alpha|beta`, with
+    `namespace:bronze parent table:bronze$pages` already present — so `namespace:bind86` was never a
+    thing that existed. A grant against it would have turned the run green while writing somewhere
+    nothing watches.
+
+    `project_namespace` is imported rather than re-derived: a convention two services must agree on
+    cannot live inside one of them, which is why it moved to service-kit.
+
+    The FACETS are A6, and their absence was a quiet hole rather than a visible one. `terminal()` has
+    always been PASSED the committed version and the row count — it recorded them on its own in-memory
+    `LineageEvent` and then emitted an output carrying neither, so the graph could say a run wrote
+    `bronze$pages` and could not say WHICH VERSION or HOW MUCH. That is the difference between a
+    provenance record and a note that something happened: asked "where did version 7 come from", the
+    graph could only answer with every run that ever touched the table.
+
+    Both are stamped whenever they exist, on FAIL as well as COMPLETE. A failed run that committed
+    fragments before dying still moved the dataset forward, and the version it left behind is exactly
+    what an operator reconstructing the damage needs. `version=None` means nothing was committed, and
+    then no version facet is written at all — a facet claiming version 0 would be a fact we do not have.
+    """
+    from lineage_kit.schemas import DatasetFacets, DatasetVersionFacet, OutputDataset, OutputDatasetFacets, OutputStatisticsFacet
+
+    from ingest.naming import bronze_namespace_for, bronze_table_id
+
+    if not dataset:
+        return []
+
+    facets = DatasetFacets(version=DatasetVersionFacet(datasetVersion=str(version))) if version is not None else DatasetFacets()
+    return [
+        OutputDataset(
+            namespace=bronze_namespace_for(project),
+            name=bronze_table_id(project, dataset),
+            facets=facets,
+            outputFacets=OutputDatasetFacets(outputStatistics=OutputStatisticsFacet(rowCount=rows)),
+        )
+    ]
+
+
 def lineage_run_id(run_id: str) -> str:
     """The graph run id for an ingest run — stable, so two activities agree without sharing state."""
     from lineage_kit import run_id_for
@@ -106,7 +158,7 @@ def _emitter() -> Any:  # noqa: ANN401 — Emitter
     return build_emitter()
 
 
-def _run(run_id: str) -> Any:  # noqa: ANN401 — LineageRun, imported lazily to keep this module light
+def _run(run_id: str, project: str = "") -> Any:  # noqa: ANN401 — LineageRun, imported lazily to keep this module light
     """Reconstruct this ingest run's graph run. Same inputs -> same run, in any activity.
 
     `namespace` is keyword-only AND has no default — `job_run()` fills it from `LineageSettings`, and
@@ -117,7 +169,36 @@ def _run(run_id: str) -> Any:  # noqa: ANN401 — LineageRun, imported lazily to
     from lineage_kit.config import LineageSettings
     from lineage_kit.runs import LineageRun
 
-    return LineageRun(job_name=JOB_NAME, namespace=LineageSettings().namespace, run_id=lineage_run_id(run_id), emitter=_emitter())
+    return LineageRun(
+        job_name=JOB_NAME,
+        namespace=LineageSettings().namespace,
+        run_id=lineage_run_id(run_id),
+        emitter=_emitter(),
+        run_facets=_tenant_facet(project),
+    )
+
+
+def _tenant_facet(project: str) -> dict[str, Any]:
+    """The `lance` run facet carrying the tenant this run's write belongs to — the THIRD half of #52.
+
+    The cascade head derives its expected namespace from this facet (`ingest_trigger._cascade_project`
+    -> `project_namespace(project, bronze_namespace)`). Emitting the qualified output name without it
+    is not half a fix, it is no fix: the head would read no project, fall back to the single-tenant
+    pair `bronze` / `bronze$<dataset>`, and miss the very `bind86-bronze$…` output the qualification
+    just produced. The two have to move together.
+
+    Same `is_safe_project` guard as the name composition, and for the head's own stated reason — a
+    project outside the path-safe shape must never become an S3 prefix or a lineage-name qualifier.
+    An unsafe value yields NO facet, which degrades to exactly the single-tenant pair the output name
+    also degrades to.
+    """
+    from lineage_kit.consume import LANCE_RUN_FACET
+    from lineage_kit.schemas import custom_facet
+
+    from ingest.naming import tenant
+
+    safe = tenant(project)
+    return {LANCE_RUN_FACET: custom_facet(project=safe)} if safe else {}
 
 
 class LineageRecorder:
@@ -130,7 +211,7 @@ class LineageRecorder:
         naming bronze as its own input would make the graph claim the data came from where it landed.
         """
         self._record(LineageEvent(run_id=run_id, event_type="START", project=project, dataset=dataset, source_kind=kind))
-        self._emit(lambda: _run(run_id).start(inputs=self._inputs(kind, project, dataset, options)))
+        self._emit(lambda: _run(run_id, project).start(inputs=self._inputs(kind, project, dataset, options)))
 
     def terminal(
         self,
@@ -159,13 +240,10 @@ class LineageRecorder:
         event_type = "FAIL" if status == "FAILED" else "COMPLETE"
         self._record(LineageEvent(run_id=run_id, event_type=event_type, project=project, dataset=dataset, version=version, rows=rows, errors=errors))
 
-        # The catalog's own identifier for the table — `bronze$pages`, not `pages`. The graph and the
-        # cascade head both key on it, so composing it differently here would make the run's output
-        # name a table nothing else recognises.
-        outputs = [(project, f"{project}{_delimiter()}{dataset}")] if project and dataset else []
+        outputs = _output_datasets(project, dataset, version, rows)
 
         def emit() -> None:
-            run = _run(run_id)
+            run = _run(run_id, project)
             if event_type == "FAIL":
                 run.fail(f"ingest run {run_id} failed: {errors or 'no detail'}", outputs=outputs)
             else:

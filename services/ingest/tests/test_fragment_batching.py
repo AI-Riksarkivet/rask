@@ -13,7 +13,7 @@ import lance
 import pyarrow as pa
 import pytest
 from ingest.runtime import BRONZE_SCHEMA
-from ingest.worker import FRAGMENT_TARGET_BYTES, FRAGMENT_TARGET_ROWS, _is_permanent, units_to_table
+from ingest.worker import _is_permanent, units_to_table
 
 
 def _units(n: int, size: int = 64) -> list[tuple[str, bytes]]:
@@ -57,8 +57,49 @@ def test_the_fragment_batch_stays_under_the_queues_ack_ceiling() -> None:
     fills, JetStream stops delivering at the ceiling, and the drain waits for units it will never be
     sent. Asserted as a relation so raising one without the other fails here."""
     from ingest.queue import MAX_ACK_PENDING
+    from ingest.sizing import resolve
 
-    assert FRAGMENT_TARGET_ROWS < MAX_ACK_PENDING
+    assert resolve().fragment_rows < MAX_ACK_PENDING
+
+
+def test_a_REQUESTED_row_target_over_the_ack_ceiling_is_REFUSED() -> None:
+    """The deployment default being safe is not enough once the value is caller-supplied.
+
+    Sizing is per-run now, so a caller can ask for Lance's own recommended 1M rows — which is a
+    perfectly sensible number to read off the docs, and which would hang this plane: the batch is
+    held unacked while it fills, JetStream stops at `max_ack_pending`, and the drain waits forever
+    for units it will not be sent. No error, no crash, just a run that never finishes.
+
+    So the refusal happens at ACCEPT with the ceiling named, not silently at 3am mid-harvest.
+    """
+    from ingest.queue import MAX_ACK_PENDING
+    from ingest.sizing import IngestSizing, SizingRefused, resolve
+
+    with pytest.raises(SizingRefused, match=str(MAX_ACK_PENDING)):
+        resolve(IngestSizing(fragment_rows=1_000_000))
+
+    # …and the boundary is exactly the ceiling, not "somewhere near it".
+    with pytest.raises(SizingRefused):
+        resolve(IngestSizing(fragment_rows=MAX_ACK_PENDING))
+    assert resolve(IngestSizing(fragment_rows=MAX_ACK_PENDING - 1)).fragment_rows == MAX_ACK_PENDING - 1
+
+
+def test_an_unset_sizing_field_falls_back_to_the_DEPLOYMENT_default() -> None:
+    """Per-run sizing must not force a caller to specify all four.
+
+    A request that names only `fetch_concurrency` (the common case — being polite to one endpoint)
+    must leave the fragment layout exactly as the deployment has it, or every caller becomes
+    responsible for numbers they have no basis to pick.
+    """
+    from ingest.sizing import IngestSizing, resolve
+
+    base = resolve()
+    only_one = resolve(IngestSizing(fetch_concurrency=2))
+
+    assert only_one.fetch_concurrency == 2
+    assert only_one.fragment_rows == base.fragment_rows
+    assert only_one.fragment_bytes == base.fragment_bytes
+    assert only_one.fetch_batch == base.fetch_batch
 
 
 def test_a_byte_ceiling_exists_alongside_the_row_ceiling() -> None:
@@ -68,8 +109,9 @@ def test_a_byte_ceiling_exists_alongside_the_row_ceiling() -> None:
     — Lance puts the sane upper range at 10-100 GB per fragment with 1 TB a hard ceiling — so the
     batch flushes on whichever limit arrives first.
     """
-    assert FRAGMENT_TARGET_BYTES > 0
-    assert FRAGMENT_TARGET_BYTES >= 16 * 1024 * 1024, "a byte ceiling this small would fragment on every page"
+    from ingest.sizing import resolve
+
+    assert resolve().fragment_bytes >= 16 * 1024 * 1024, "a byte ceiling this small would fragment on every page"
 
 
 # ── the payload is a BLOB column, with real placement tiers ───────────────────────────
@@ -136,6 +178,9 @@ def test_bronze_CANNOT_EXPRESS_the_null_that_makes_readers_lie(tmp_path: Path) -
             "payload": blob_array([b"aaa", None, b"ccc"]),
             "sha256": pa.array(["x", "y", "z"], pa.string()),
             "stage": pa.array(["bronze"] * 3, pa.string()),
+            # Irrelevant to the null-payload trap under test, but the schema declares it — omitting a
+            # declared column raises a pyarrow KeyError, which would mask the OSError this asserts.
+            "partition_key": pa.array([None] * 3, pa.string()),
         },
         schema=BRONZE_SCHEMA,
     )

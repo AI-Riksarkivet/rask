@@ -185,13 +185,14 @@ def test_the_ack_ceiling_exceeds_the_fragment_batch() -> None:
     stops delivering at the ceiling and the drain waits forever for units it will never be sent. At
     the old values — ceiling 32, batch 1024 — every run would have hung on its 33rd unit.
 
-    Asserted as a RELATION between the two constants, so raising the batch without raising the
-    ceiling fails here instead of in a cluster at 3am.
+    Asserted as a RELATION between the two, so raising the batch without raising the ceiling fails
+    here instead of in a cluster at 3am. Since sizing became per-run this covers the DEFAULT; the
+    caller-supplied path is refused at accept (`test_fragment_batching.py`).
     """
     from ingest.queue import MAX_ACK_PENDING
-    from ingest.worker import FRAGMENT_TARGET_ROWS
+    from ingest.sizing import resolve
 
-    assert MAX_ACK_PENDING > FRAGMENT_TARGET_ROWS, (
-        f"max_ack_pending={MAX_ACK_PENDING} <= fragment batch {FRAGMENT_TARGET_ROWS}: the drain will "
-        f"deadlock once a batch fills, because the held messages are never acked"
+    rows = resolve().fragment_rows
+    assert rows < MAX_ACK_PENDING, (
+        f"max_ack_pending={MAX_ACK_PENDING} <= fragment batch {rows}: the drain will deadlock once a batch fills, because the held messages are never acked"
     )

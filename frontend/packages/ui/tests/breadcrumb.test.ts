@@ -24,9 +24,25 @@ describe('pathCrumbs', () => {
 	it('humanises dashed segments and keeps repeated segments unique', () => {
 		expect(pathCrumbs('/compute/api-docs')).toEqual([
 			{ id: 'compute', label: 'Compute', href: '/compute' },
-			{ id: 'compute/api-docs', label: 'Api docs', href: '/compute/api-docs' },
+			// 'API docs', not 'Api docs': sentence-casing an INITIALISM renames the thing the crumb
+			// points at. Title case is still refused — 'API Docs' would be worse than either.
+			{ id: 'compute/api-docs', label: 'API docs', href: '/compute/api-docs' },
 		]);
 		expect(pathCrumbs('/studio/studio').map((c) => c.id)).toEqual(['studio', 'studio/studio']);
+	});
+
+	it('uppercases an initialism segment instead of sentence-casing it', () => {
+		// `/compute/etl` rendered as "Etl", which reads as a misspelling. The estate calls that plane
+		// ETL — a breadcrumb that renames its destination is worse than an ugly one.
+		expect(pathCrumbs('/compute/etl').at(-1)?.label).toBe('ETL');
+	});
+
+	it('leaves ordinary words alone — the initialism list is CLOSED, not a heuristic', () => {
+		// The tempting rule ("short segment ⇒ acronym") would shout at every one of these. Each entry
+		// in the list is a name the estate actually routes on, so adding one stays a decision.
+		expect(pathCrumbs('/compute/jobs').at(-1)?.label).toBe('Jobs');
+		expect(pathCrumbs('/compute/logviewer').at(-1)?.label).toBe('Logviewer');
+		expect(pathCrumbs('/lakehouse/models').at(-1)?.label).toBe('Models');
 	});
 
 	it('percent-decodes a segment for the label but keeps the href encoded', () => {

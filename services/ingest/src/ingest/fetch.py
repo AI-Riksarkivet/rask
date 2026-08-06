@@ -25,7 +25,7 @@ that reaches this module.
 
 **Blocking calls run in a thread.** Every fetch below is synchronous, and the worker is async with
 bounded concurrency. Calling them inline would block the event loop and serialise the fetches that
-`FETCH_CONCURRENCY` exists to overlap, turning the concurrency ceiling into a lie that shows up only
+The fetch-concurrency ceiling exists to overlap, turning the concurrency ceiling into a lie that shows up only
 as an unexplained throughput cliff.
 """
 
@@ -34,7 +34,6 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 
@@ -93,6 +92,11 @@ def _fetch_http(url: str) -> bytes:
                     if 400 <= code < 500 and code not in _RETRYABLE_4XX:
                         raise
                 last = exc
+                # POLL REASON: BACKOFF, not a poll — this waits between BOUNDED retry attempts of one
+                # request (`attempt < HTTP_ATTEMPTS - 1`) and asks for no state on a schedule. It ends
+                # by exhausting attempts, never by an answer arriving, which is what makes it
+                # categorically different from the loop A13 forbids. Exponential so a rate-limited
+                # endpoint gets increasing room instead of a fixed drumbeat.
                 if attempt < HTTP_ATTEMPTS - 1:
                     time.sleep(HTTP_BASE_DELAY * (2**attempt))
     assert last is not None
@@ -110,8 +114,19 @@ def _fetch_s3(uri: str) -> bytes:
 
 
 def _fetch_file(uri: str) -> bytes:
-    """`unquote` is load-bearing: `Path.as_uri()` percent-encodes, so a fixture named `sida 1.tif`
+    """Read a local file, CONFINED to the configured local-dir root.
+
+    The confinement is repeated here rather than trusted from the adapter, because a unit key crosses
+    the QUEUE as a bare `file://` URI: whatever enumerated it is long gone by the time a worker reads
+    it, and anything able to enqueue would otherwise bypass a check that lives only at enumeration.
+    Two checks on the same rule, at the two places the rule can be broken.
+
+    `unquote` is load-bearing: `Path.as_uri()` percent-encodes, so a fixture named `sida 1.tif`
     round-trips as `sida%201.tif` and the read fails with a FileNotFoundError naming a path that
-    visibly exists on disk."""
+    visibly exists on disk. It runs BEFORE confinement, so an encoded traversal (`%2e%2e%2f`) is
+    decoded and then refused rather than slipping past as an opaque string.
+    """
+    from ingest.adapters import confine_to_local_root
+
     parsed = urlparse(uri)
-    return Path(unquote(parsed.path if parsed.scheme == "file" else uri)).read_bytes()
+    return confine_to_local_root(unquote(parsed.path if parsed.scheme == "file" else uri)).read_bytes()

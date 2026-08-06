@@ -1155,3 +1155,68 @@ def test_events_governs_on_columnlineage_source_datasets() -> None:
     }
     assert _column_lineage_datasets(event) == {"bronze$secret"}
     assert _column_lineage_datasets({}) == set()  # summary=True → no payload → no extra refs, nothing hidden
+
+
+# ── the public front door must not be able to mint a service principal ────────
+
+
+def test_the_service_door_REFUSES_the_public_front_door(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The laundering path, at the door that guards the authoritative lineage graph.
+
+    The gateway forwards `/api/lineage/**` through Dapr service invocation, and the callee's daprd
+    stamps a valid `dapr-api-token` on the way in. `x-lance-service-identity` is caller-supplied. So
+    an anonymous public request arrives holding the estate's service credential AND naming an
+    allowlisted subject — which `_service_principal` would accept, yielding forged, author-stamped
+    RunEvents in the graph, governance tag/description writes, and DLQ replay.
+
+    The gateway strips both headers at the edge; this refuses the door even if one ever gets through,
+    because a service principal is never something the public front door should be able to mint.
+    """
+    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+
+    with pytest.raises(PermissionDeniedError, match="public front door"):
+        security.authenticate(
+            _request(),
+            _svc_settings(),
+            None,
+            dapr_api_token="s3cret",
+            x_lance_service_identity="service-trainer",
+            dapr_caller_app_id="gateway",
+        )
+
+
+def test_a_REAL_service_caller_still_gets_its_principal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard must not sever service-to-service lineage ingest, which is the door's whole job."""
+    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+
+    principal = security.authenticate(
+        _request(),
+        _svc_settings(),
+        None,
+        dapr_api_token="s3cret",
+        x_lance_service_identity="service-trainer",
+        dapr_caller_app_id="medallion",
+    )
+
+    assert isinstance(principal, security.ServicePrincipal)
+    assert principal.sub == "service-trainer"
+
+
+def test_the_EMITTER_path_carries_no_caller_id_and_is_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`lineage_kit.emitter` posts to RASK_LINEAGE_ENDPOINT over plain Service DNS.
+
+    No Dapr invocation hop means no `dapr-caller-app-id`, so absence must keep working — it is how
+    the medallion producer, all three movers and the Ray train job emit. Treating absence as public
+    would stop every provenance record in the estate.
+    """
+    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+
+    principal = security.authenticate(
+        _request(),
+        _svc_settings(),
+        None,
+        dapr_api_token="s3cret",
+        x_lance_service_identity="service-trainer",
+    )
+
+    assert isinstance(principal, security.ServicePrincipal)

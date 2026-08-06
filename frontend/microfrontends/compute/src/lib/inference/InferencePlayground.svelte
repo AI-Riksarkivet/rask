@@ -202,7 +202,7 @@
 				<p class="text-muted-foreground text-sm">
 					Nothing is listening at <code class="text-foreground">{failure.serveUrl}</code>. Start the
 					HTRflow deployment with <code class="text-foreground">make serve-up-htrflow</code>, or point
-					<code class="text-foreground">MODELS_SERVE_URL</code> at a live Serve ingress.
+					<code class="text-foreground">COMPUTE_SERVE_URL</code> at a live Serve ingress.
 				</p>
 			{:else if failure.reason === 'wrong_serve_app'}
 				<p class="text-muted-foreground text-sm">
@@ -265,7 +265,7 @@
 		<code>/api/serve/*</code> reaches Ray's dashboard API on :8265 and is registered
 		<code>GET</code>/<code>HEAD</code> only, so a POST is answered 405 — deliberately, because the
 		same surface can deploy arbitrary code. The bytes therefore go from this zone's server straight to
-		the Serve ingress at <code>MODELS_SERVE_URL</code> (default
+		the Serve ingress at <code>COMPUTE_SERVE_URL</code> (default
 		<code>http://localhost:8000/htrflow</code>), which is how the medallion's own HTR stage reaches it
 		too. Giving <code>/api/serve</code> an authenticated inference POST is a backend change, not a frontend
 		one.

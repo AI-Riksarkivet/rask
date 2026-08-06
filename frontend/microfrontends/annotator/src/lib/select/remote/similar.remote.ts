@@ -52,7 +52,9 @@ export const findSimilar = query(
 			// "this corpus declares no vector space", "key has 2 parts, expected 3" — and collapsing
 			// them into "search failed" throws away the only thing that tells someone what to do.
 			const detail =
-				body && typeof body === 'object' && typeof (body as { detail?: unknown }).detail === 'string'
+				body &&
+				typeof body === 'object' &&
+				typeof (body as { detail?: unknown }).detail === 'string'
 					? (body as { detail: string }).detail
 					: `HTTP ${res.status}`;
 			return { ok: false, status: res.status, detail };
@@ -62,7 +64,11 @@ export const findSimilar = query(
 		// silently — an empty neighbour set that reads as "nothing is similar".
 		const parsed = v.safeParse(v.array(v.record(v.string(), v.unknown())), body);
 		if (!parsed.success) {
-			return { ok: false, status: 0, detail: `contract drift: ${parsed.issues[0]?.message ?? 'decode failed'}` };
+			return {
+				ok: false,
+				status: 0,
+				detail: `contract drift: ${parsed.issues[0]?.message ?? 'decode failed'}`,
+			};
 		}
 		return { ok: true, data: parsed.output };
 	},

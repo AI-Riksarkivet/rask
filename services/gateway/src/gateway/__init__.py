@@ -40,6 +40,42 @@ _HOP_BY_HOP = frozenset(
     {b"connection", b"keep-alive", b"proxy-authenticate", b"proxy-authorization", b"te", b"trailers", b"transfer-encoding", b"upgrade", b"host"}
 )
 
+#: Trust headers a CLIENT must never be able to set. Stripped from every inbound request, on every
+#: route, before it is forwarded.
+#:
+#: Dapr stamps these on the way IN to a backend, and the estate's doors read them as proof of who is
+#: calling. A client that sets one is asserting an identity, and the edge is the only place that
+#: assertion can be refused — past here the value is indistinguishable from the sidecar's.
+#:
+#: MEASURED against the ingest door on the live cluster, AFTER it had already been fixed to refuse
+#: public callers:
+#:
+#:     anonymous POST, no header                        -> 403
+#:     anonymous POST + `dapr-caller-app-id: gateway`   -> 403
+#:     anonymous POST + `dapr-caller-app-id: medallion` -> 202 ACCEPTED
+#:
+#: daprd APPENDS its own stamp rather than replacing a client's, and FastAPI's `Header()` binds the
+#: FIRST occurrence — verified directly: `[medallion, gateway]` binds `medallion`, `[gateway,
+#: medallion]` binds `gateway`. One forged header turned every caller-identity check in the estate
+#: back into the bypass it was written to close.
+#:
+#: This belongs HERE and not in the doors: a door sees one value and cannot tell whose it is, while
+#: the gateway knows for a fact that anything arriving on its public listener came from a client.
+#: `dapr-api-token` is included for the same reason — a caller must never be able to present the
+#: estate's service credential just by copying it into a header.
+_CLIENT_SPOOFABLE = frozenset(
+    {
+        b"dapr-caller-app-id",
+        b"dapr-api-token",
+        b"dapr-app-id",
+        # The lineage service door reads this as the caller's IDENTITY and checks it against an
+        # allowlist (`lineage.api.security._service_principal`). Combined with the token daprd
+        # stamps on the way in, a client that sets it names itself an allowlisted service — the
+        # same laundering as the caller-app-id, one header along.
+        b"x-lance-service-identity",
+    }
+)
+
 
 def _rewrite_location(location: str) -> str:
     """Scrub an upstream redirect Location: an absolute URL (which carries the
@@ -61,7 +97,7 @@ Route = tuple[str, str, str, str]
 The upstream prefix REPLACES the public one when forwarding. rask rows keep it
 identical (the fleet services mount under RASK_API_PREFIX themselves); lance rows
 rewrite — catalog/lineage serve `/v1/...`/`/runs` at root, the medallion producer
-serves `/produce`+`/ingest-iiif`+`/train` at root, and the media trio serves
+serves `/produce`+`/train` at root, and the media trio serves
 `/api/...` internally.
 """
 
@@ -105,22 +141,15 @@ def _routes() -> list[Route]:
         ("/api/catalog", "", *catalog),
         ("/api/lineage", "", *lineage),
         ("/api/produce", "/produce", *medallion),
-        # /api/ingest must outrank /api/ingest-iiif is NOT true — they are siblings, not nested, and
-        # `_pick_route` requires `path == prefix or path.startswith(prefix + "/")`, so
-        # "/api/ingest-iiif" can never match the "/api/ingest" row (the next char is "-", not "/").
-        # Stated because it looks like a longest-prefix hazard and is not; ordering them either way
-        # is safe, and `tests/test_routing.py` pins that rather than leaving it to a reading.
-        # Rewrites to "/api", not "/v1". The ingest service is composed by `make_service_app`, which
-        # mounts its routers under `settings.api_prefix` — "/api" — so the pod serves `/api/ingests`
-        # and the live openapi.json says so. The "/v1" here was taken from the module's own
-        # docstrings, which describe the route as `/v1/ingests`; that is the ROUTER's path, before
-        # the prefix the app factory adds. Every call through the gateway would have 404'd, and the
-        # unit tests could not see it because they assert the gateway's rewrite in isolation rather
-        # than against the service's real mount. Same shape as the `/api/media` row above.
+        # SIBLING PREFIXES, not nested. `_pick_route` requires `path == prefix or
+        # path.startswith(prefix + "/")`, so a row like "/api/ingest-iiif" could never have matched
+        # the "/api/ingest" row — the next character is "-", not "/". The deprecated `/api/ingest-iiif`
+        # row is GONE (A12 deleted the medallion route it pointed at, so it 502'd rather than 404'd,
+        # which is the worse failure: it names a backend as broken instead of the path as absent),
+        # but the ORDERING PROPERTY it demonstrated is still load-bearing and still tested.
         ("/api/ingest", "/api", *ingest),
         # DEPRECATED — the medallion's IIIF head. Retires with the nine-plus-three IIIF files
         # (A12); kept for one deprecation window so the frontend can move to /api/ingest first.
-        ("/api/ingest-iiif", "/ingest-iiif", *medallion),
         ("/api/train", "/train", *medallion),
         (f"{prefix}/ray", f"{prefix}/ray", *compute),
         (f"{prefix}/projects", f"{prefix}/projects", *controlplane),
@@ -294,7 +323,7 @@ async def proxy(path: str, request: Request) -> Response:
     # /api/explorer/search?q → /api/search?q. rask rows rewrite to themselves.
     upstream_path = upstream_prefix + norm_path[len(route_prefix) :]
     url = httpx.URL(f"{base}{upstream_path}").copy_with(query=request.url.query.encode("utf-8") or None)
-    headers = [(k, v) for k, v in request.headers.raw if k.lower() not in _HOP_BY_HOP]
+    headers = [(k, v) for k, v in request.headers.raw if k.lower() not in _HOP_BY_HOP and k.lower() not in _CLIENT_SPOOFABLE]
     upstream_req = client.build_request(request.method, url, headers=headers, content=await request.body())
     try:
         upstream_resp = await client.send(upstream_req, stream=True)

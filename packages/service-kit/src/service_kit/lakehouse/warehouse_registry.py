@@ -74,6 +74,25 @@ def is_safe_project(value: object) -> bool:
     return isinstance(value, str) and _PROJECT_RE.fullmatch(value) is not None
 
 
+def project_namespace(project: str, name: str) -> str:
+    """Project-qualify a lineage namespace or dataset name — ``("acme", "bronze")`` → ``"acme-bronze"``.
+
+    Empty ``project`` → ``name`` unchanged (the single-tenant default, byte-identical). Qualification
+    keeps per-project lineage on DISTINCT graph nodes — the lineage repository MERGEs ``Dataset`` nodes
+    on name alone, so two tenants both emitting ``bronze$events`` would otherwise collide onto one node
+    (#84 risk 1) — and the ``-`` join keeps the result inside the established ``[A-Za-z0-9_-]`` segment
+    shape (``acme-bronze$events`` is still a valid ``stage$name`` dataset id).
+
+    LIVES HERE, beside :func:`is_safe_project`, because it is the SAME concern and more than one plane
+    needs it. It began in ``medallion/core/config.py`` where only the medallion could reach it — and
+    the ingest plane, which writes bronze and must therefore name it identically, composed
+    ``f"{project}${dataset}"`` instead. That is not a near-miss: the cascade head matches on the
+    qualified pair (``ingest_trigger.py``), so ingest's bronze writes could never fire it. A naming
+    convention that two services must agree on cannot live inside one of them.
+    """
+    return f"{project}-{name}" if project else name
+
+
 def clear_cache() -> None:
     """Drop every cached resolution (tests + explicit invalidation)."""
     _cache.clear()

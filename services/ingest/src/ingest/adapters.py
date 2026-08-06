@@ -17,6 +17,7 @@ else, which is the drift this design exists to prevent.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,21 +27,75 @@ from ingest.sources import LineageInput, SourceOption, SourceSpec, register
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    import httpx
+
     from service_kit.lakehouse.sources import SourceAdapter, SourceObject
 
 
+#: The ONE directory tree `local-dir` may read, and there is deliberately no default.
+#:
+#: `options.root` is caller-supplied and reaches `LocalDirSource`, which rglobs and reads every match.
+#: Unconfined, that is an arbitrary-file-read primitive pointed at the ingest pod's own filesystem:
+#: `{"kind":"local-dir","options":{"root":"/proc/self","pattern":"environ"}}` lands the process
+#: environment — including the S3 credential — as rows in a governed table that the explorer will
+#: then serve. Extensionless files sail past the payload validator, so nothing downstream catches it.
+#:
+#: Unset means the kind is REFUSED, not "read anything". A default of `/` or of the working directory
+#: would be the same hole with an extra step, and a source that cannot be pointed anywhere is a
+#: source nobody can abuse.
+LOCAL_ROOT_ENV = "RASK_INGEST_LOCAL_ROOT"
+
+#: Per-request ceiling for the IIIF fetch. Matches `fetch.py`'s HTTP_TIMEOUT: one source kind must
+#: not have a quieter idea of "stuck" than the fetcher that pulls the same bytes for every other.
+_IIIF_TIMEOUT = 60.0
+
+
+def local_root() -> Path | None:
+    """The configured base, resolved, or None when `local-dir` is not enabled here."""
+    base = os.getenv(LOCAL_ROOT_ENV)
+    return Path(base).resolve() if base else None
+
+
+def confine_to_local_root(candidate: str) -> Path:
+    """Resolve `candidate` and refuse it unless it sits under the configured base.
+
+    `resolve()` before comparing, so `..` and symlinks are collapsed FIRST — comparing the raw string
+    would let `/allowed/../etc` through, and a symlink inside the base would let the traversal happen
+    on the filesystem's side of the check.
+    """
+    base = local_root()
+    if base is None:
+        raise ValueError(f"local-dir is not enabled here: set {LOCAL_ROOT_ENV} to the directory it may read")
+    resolved = Path(candidate).resolve()
+    if resolved != base and base not in resolved.parents:
+        raise ValueError(f"local-dir path {candidate!r} is outside {LOCAL_ROOT_ENV} ({base})")
+    return resolved
+
+
 def _local_dir(spec: SourceSpec) -> SourceAdapter:
-    """A directory tree. The dummy lane's fixture source — deterministic, no network (A11)."""
+    """A directory tree UNDER the configured root. The lane's fixture source — deterministic, no network."""
     from service_kit.lakehouse.sources import LocalDirSource
 
     root = str(spec.options.get("root") or "")
     if not root:
         raise ValueError("local-dir source requires options.root")
-    return LocalDirSource(Path(root), str(spec.options.get("pattern") or "*"))
+    return LocalDirSource(confine_to_local_root(root), str(spec.options.get("pattern") or "*"))
 
 
 def _local_dir_lineage(spec: SourceSpec) -> LineageInput:
     return LineageInput(namespace="file", name=str(spec.options.get("root") or ""))
+
+
+def _local_dir_partition(spec: SourceSpec, key: str) -> str | None:
+    """The containing DIRECTORY — the local twin of the S3 folder rule.
+
+    `LocalDirSource` rglobs, so a nested tree really does produce several directories under one root;
+    partitioning on the root instead would give every unit the same value.
+    """
+    head, sep, _ = key.rpartition("/")
+    if not sep:
+        return None
+    return head or None
 
 
 def _s3_prefix(spec: SourceSpec) -> SourceAdapter:
@@ -86,32 +141,70 @@ class IIIFVolumeSource:
     the latter would only lose hard-won behaviour against a rate-limited endpoint.
     """
 
-    def __init__(self, volume_id: str, iiif_base: str | None = None, query_params: str | None = None) -> None:
+    def __init__(
+        self,
+        volume_id: str,
+        iiif_base: str | None = None,
+        query_params: str | None = None,
+        max_pages: int | None = None,
+    ) -> None:
         self._volume = volume_id
         self._base = iiif_base
         self._query = query_params
+        #: Stop after this many pages. The option was REGISTERED, rendered by the compute zone,
+        #: numeric-validated on the user's behalf and posted in `options` — and read by nothing. It
+        #: worked before A12 (`iiif_produce.py` sliced `image_ids[: self._max_pages]`); the rewrite
+        #: kept the interface and dropped the behaviour, which is worse than never offering it: a
+        #: user who caps a harvest at 10 pages and gets the whole volume has been actively misled.
+        self._max_pages = max_pages
 
     def iter_objects(self) -> Iterator[SourceObject]:
+        """Keys AND bytes, over ONE pooled connection for the whole volume.
+
+        `fetch_image`'s `client` is a required keyword-only argument, and this method used to call
+        `fetch_image(url)` — a `TypeError` before the first byte moved. `fetch.py:70` had already hit
+        and fixed exactly that, and fixing it in one of the two callers is how the same defect gets
+        re-shipped; `ty` is what caught the second one.
+
+        The client is opened HERE rather than per page because that is the whole reason
+        `storage.iiif` injects one: a volume is hundreds of requests to a single host, and a
+        per-request client re-runs the TCP and TLS handshake for every page against an endpoint that
+        already hands out RST at ~64 concurrent reads.
+        """
+        import httpx
+
         from service_kit.lakehouse.sources import SourceObject
         from storage.iiif import fetch_image
 
-        for url in self.iter_keys():
-            yield SourceObject(uri=url, data=fetch_image(url))
+        with httpx.Client(timeout=_IIIF_TIMEOUT, follow_redirects=True) as client:
+            for url in self.iter_keys(client=client):
+                yield SourceObject(uri=url, data=fetch_image(url, client=client))
 
-    def iter_keys(self) -> Iterator[str]:
+    def iter_keys(self, client: httpx.Client | None = None) -> Iterator[str]:
         """Every page's URL, from the volume manifest alone — no image bytes transferred.
 
         This is where the keys-without-bytes protocol pays for itself. `get_image_ids` is ONE
         manifest request; building the URLs is string work. Enumerating through `iter_objects`
         instead downloaded the entire volume — multi-MB per page — purely to read back the URL that
         had just been used to fetch it, and then the workers fetched all of it again.
+
+        `client` is optional because `iter_unit_keys` calls this with no arguments — the enumeration
+        path is one manifest request and has nothing to pool. It exists so `iter_objects` can share
+        its connection rather than opening a second one for the manifest.
         """
         from storage.iiif import DEFAULT_IIIF_BASE, DEFAULT_QUERY_PARAMS, build_image_url, get_image_ids
 
         base = self._base or DEFAULT_IIIF_BASE
         query = self._query or DEFAULT_QUERY_PARAMS
-        for image_id in get_image_ids(self._volume):
-            yield build_image_url(image_id, iiif_base=base, query_params=query)
+        # `base_url`, not `iiif_base` — the latter is what this file invented and `ty` refused. The
+        # keyword is the SAME on both calls, which is what makes a single wrong guess break both.
+        image_ids = get_image_ids(self._volume, base_url=base, client=client)
+        # Applied to the IDS, before any URL is built or any byte is fetched. `get_image_ids` is one
+        # manifest request regardless, so the cap costs nothing here and saves the whole download.
+        if self._max_pages is not None and self._max_pages > 0:
+            image_ids = image_ids[: self._max_pages]
+        for image_id in image_ids:
+            yield build_image_url(image_id, base_url=base, query_params=query)
 
 
 def _iiif(spec: SourceSpec) -> SourceAdapter:
@@ -120,12 +213,52 @@ def _iiif(spec: SourceSpec) -> SourceAdapter:
         raise ValueError("iiif source requires options.volume_id")
     base = spec.options.get("iiif_base")
     query = spec.options.get("query_params")
-    return IIIFVolumeSource(volume, str(base) if base else None, str(query) if query else None)
+    # Coerced, not trusted: the form posts JSON, so a numeric field arrives as a string ("10") from
+    # the browser and as an int from a script. A blank field arrives as "" — falsy, meaning "all".
+    raw_max = spec.options.get("max_pages")
+    max_pages = int(raw_max) if str(raw_max or "").strip().isdigit() else None
+    return IIIFVolumeSource(volume, str(base) if base else None, str(query) if query else None, max_pages=max_pages)
 
 
 def _iiif_lineage(spec: SourceSpec) -> LineageInput:
     """R23: the INPUT is the external world — `iiif://…` — never a governed tier."""
     return LineageInput(namespace="iiif", name=str(spec.options.get("volume_id") or ""))
+
+
+# ── partition keys: how each kind GROUPS its units (the bronze `partition_key` column) ────────
+#
+# One function per kind, registered beside the factory, because only the adapter knows what a unit
+# key means. The worker resolves units by URI SCHEME and must stay that way.
+#
+# Read `runtime.BRONZE_SCHEMA` for why this is a COLUMN and not a fragment boundary: Lance has no
+# table partitioning, and key-pure fragments are merged back together by the very first maintenance
+# compaction (measured, 5 fragments → 1).
+
+
+def _iiif_partition(spec: SourceSpec, key: str) -> str | None:
+    """The VOLUME — constant for the whole run, because `_iiif` refuses a spec without exactly one.
+
+    Worth stating plainly: for IIIF this column is uniform within a dataset written by one run, so
+    it earns its keep only where several volumes share a dataset. If physical separation per volume
+    is what is wanted, one dataset per volume is both simpler and closer to Lance's own model
+    (separate tables federated by the catalog) — this column does not replace that choice.
+    """
+    return str(spec.options.get("volume_id") or "") or None
+
+
+def _s3_prefix_partition(spec: SourceSpec, key: str) -> str | None:
+    """The containing FOLDER of the object — the owner's "partition on folder level".
+
+    Derived from the key rather than from `options.prefix`, because the prefix is the run's ROOT and
+    every object under it would then share one value; the folder is what actually varies. `s3://b/a/
+    b/c.tif` -> `s3://b/a/b`. An object at the bucket root has no folder, which is a null rather
+    than an invented one.
+    """
+    head, sep, _ = key.rpartition("/")
+    if not sep:
+        return None
+    # A bare `s3://bucket` head means the object sat at the root — no folder to name.
+    return head or None
 
 
 def register_builtin_sources() -> None:
@@ -146,6 +279,8 @@ def register_builtin_sources() -> None:
             "local-dir",
             build=_local_dir,
             lineage_input=_local_dir_lineage,
+            # The containing directory — the local twin of the S3 folder rule.
+            partition_of=_local_dir_partition,
             label="Local directory",
             description="A directory tree on the worker. Deterministic and offline — the lane's fixture source.",
             options=[
@@ -159,6 +294,7 @@ def register_builtin_sources() -> None:
             "s3-prefix",
             build=_s3_prefix,
             lineage_input=_s3_prefix_lineage,
+            partition_of=_s3_prefix_partition,
             label="S3 prefix",
             description="Every object under a bucket prefix, through the estate's provider-agnostic client — RustFS, MinIO, HCP or AWS.",
             options=[
@@ -178,6 +314,7 @@ def register_builtin_sources() -> None:
             "iiif",
             build=_iiif,
             lineage_input=_iiif_lineage,
+            partition_of=_iiif_partition,
             label="IIIF volume",
             description="Every page of a volume from a IIIF Image API. External raw (R23) — the lineage input is the iiif:// source, never a governed tier.",
             options=[

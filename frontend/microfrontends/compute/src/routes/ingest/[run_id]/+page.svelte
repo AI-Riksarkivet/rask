@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { getIngestRunStatus } from '$lib/remote/ingest.remote';
+	import { liveRead, lineageTick } from '$lib/live/tick.svelte';
 	import { Card } from '@rask/ui/card';
 	import { CircleAlert, CircleCheck, CircleX, Loader } from '@lucide/svelte';
 
@@ -31,18 +32,48 @@
 	);
 	const errorEntries = $derived(Object.entries(run?.errors ?? {}));
 
-	// POLL REASON: a run's progress is a COUNTER climbing inside a workflow — `units_done` moves once
-	// per fetched unit — and nothing publishes it. The estate's cursors carry committed facts: the
-	// lineage cursor moves when a run COMMITS, which for an ingest is the last thing that happens, so
-	// a `query.live` on it would sit silent through the whole harvest and then fire once at the end.
-	// That is the opposite of what this page is for. Bounded rather than ambient: the effect returns
-	// early once the run is settled, so the timer exists only while there is something to watch.
+	// PROGRESS. `units_total` was fetched and never rendered, so the page could say "4 done" and never
+	// "4 of 500" — no progress bar was possible for exactly the long harvest where one matters. The
+	// workflow publishes the enumerated total as CUSTOM STATUS specifically so this is answerable
+	// while the run is still going; dropping it here wasted that.
+	//
+	// Zero means NOT YET KNOWN, not "no units": enumeration is an activity that runs after the run is
+	// accepted, so there is a real window where the run exists and its total does not. Showing 0% then
+	// would be a lie about a run that is working.
+	const total = $derived(run?.units_total ?? 0);
+	const totalKnown = $derived(total > 0);
+	const percent = $derived(totalKnown ? Math.min(100, Math.round(((run?.units_done ?? 0) / total) * 100)) : 0);
+
+	// TWO SIGNALS, because a run has two kinds of news and only one of them is on a cursor.
+	//
+	// 1. THE CURSOR — the estate's idiom (`liveRead` + `lineageTick`, the helper that replaced
+	//    thirteen hand-rolled pollers in the lakehouse). An ingest emits lineage at START and again
+	//    at COMPLETE/FAIL, so the cursor moves at both ENDS of a run: the page learns that a run
+	//    finished the moment it finishes, instead of up to a full tick later. Keyed on `runId`, so
+	//    navigating between runs re-reads at once rather than showing the previous run's cache.
+	liveRead(
+		lineageTick,
+		() => {
+			// `.catch(() => {})` is MANDATORY on any refresh a loop can repeat: one uncaught rejection
+			// evicts the query from cache and silently kills further updates, leaving the page frozen
+			// on a stale frame with no error shown.
+			runQuery.refresh().catch(() => {});
+		},
+		() => runId,
+	);
+
+	// 2. POLL REASON: PROGRESS, and it is the one thing no cursor carries. `units_done` climbs once
+	//    per fetched unit INSIDE the workflow and publishes nothing — the estate's cursors carry
+	//    committed facts, and a harvest commits once, at the end. So a cursor-only page would show
+	//    "0 units" for the entire run and then jump to the total, which is precisely the long harvest
+	//    a progress bar exists for.
+	//    BOUNDED, not ambient: the effect returns early once the run is settled, so the timer exists
+	//    only while there is something to watch, and a finished run issues no requests at all. This
+	//    is the single marked survivor on this page — the terminal transition above is the cursor's
+	//    job, not this timer's.
 	$effect(() => {
 		if (settled) return;
 		const timer = setInterval(() => {
-			// `.catch(() => {})` is MANDATORY on a polled refresh: one uncaught rejection evicts the
-			// query from cache and silently kills the loop, so a transient blip would leave the page
-			// frozen on a stale frame with no error and no further updates.
 			runQuery.refresh().catch(() => {});
 		}, 2000);
 		return () => clearInterval(timer);
@@ -103,15 +134,60 @@
 				</p>
 			{/if}
 
-			<dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-				<dt class="text-muted-foreground">Units done</dt>
-				<dd class="font-mono" data-testid="units-done">{run.units_done}</dd>
+			<!-- PROGRESS, not just a counter. -->
+			<div class="space-y-1" data-testid="run-progress">
+				<div class="flex items-baseline justify-between text-sm">
+					<span class="text-muted-foreground">Units</span>
+					<span class="font-mono" data-testid="units-done">
+						{run.units_done}{#if totalKnown}<span class="text-muted-foreground"> of {total}</span>{/if}
+					</span>
+				</div>
+				{#if totalKnown}
+					<div class="bg-muted h-2 w-full overflow-hidden rounded-full">
+						<div
+							class="h-full rounded-full bg-emerald-600 transition-[width] duration-500"
+							style:width="{percent}%"
+						></div>
+					</div>
+				{:else}
+					<!-- Honest about the window between accept and enumeration: the run exists, its total
+					     does not yet. A 0% bar here would misreport a working run as a stalled one. -->
+					<p class="text-muted-foreground text-xs">Enumerating the source — the total is not known yet.</p>
+				{/if}
+			</div>
 
+			<dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
 				<dt class="text-muted-foreground">Committed version</dt>
 				<dd class="font-mono" data-testid="committed-version">
 					{run.committed_version ?? '—'}
 				</dd>
+
+				<!-- The PUBLICATION half (§D2). A commit makes rows readable; only a publication makes
+				     them ready, so a committed-but-unpublished run is a distinct state and not a
+				     success. These fields were on the wire all along and stripped by the client schema. -->
+				{#if run.published !== undefined && run.published !== null}
+					<dt class="text-muted-foreground">Published</dt>
+					<dd class="font-mono" data-testid="run-published">
+						{run.published ? 'yes' : 'no'}
+						{#if run.from_version != null && run.to_version != null}
+							<span class="text-muted-foreground">(v{run.from_version} → v{run.to_version})</span>
+						{/if}
+					</dd>
+				{/if}
 			</dl>
+
+			{#if run.publish_error}
+				<!-- A publish failure is deliberately NOT a failed run — the commit landed. But it must
+				     be loud, or the rows sit readable-and-not-ready with nothing saying so. -->
+				<p class="rounded border border-amber-600 p-3 text-sm text-amber-700" data-testid="publish-error">
+					<strong>Committed, but not published.</strong>
+					{run.publish_error}
+				</p>
+			{:else if run.published === false && run.publish_reason}
+				<p class="text-muted-foreground rounded border p-3 text-sm" data-testid="publish-reason">
+					Not published — {run.publish_reason}
+				</p>
+			{/if}
 
 			{#if errorEntries.length > 0}
 				<!-- Named, not counted. "3 units failed" tells an operator a number; the unit keys tell

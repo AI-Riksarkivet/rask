@@ -22,6 +22,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 
 from lineage.api.dependencies import SettingsDep
+from service_kit.governed.dapr_auth import is_public_caller
 from service_kit.governed.oidc import IDToken, OIDCVerifier
 
 
@@ -71,19 +72,62 @@ class ServicePrincipal:
         return self._sub
 
 
+def _dedicated_token(identity: str) -> str | None:
+    """The credential that is the ONLY one able to claim `identity`, from the SECRET STORE.
+
+    Returns None when the subject has no dedicated credential provisioned — the caller decides
+    whether that is acceptable (an ordinary subject) or fatal (a privileged one). Deliberately no env
+    fallback: a credential readable from process env is the shape the estate's rule forbids, and it
+    is exactly how the shared token came to sit in seven web pods.
+    """
+    from service_kit.governed.secrets import fetch_dapr_secret
+
+    store = os.environ.get("LINEAGE_SECRET_STORE", "lance-secrets")
+    key = os.environ.get("LINEAGE_SECRET_KEY", "lance")
+    return fetch_dapr_secret(store, key).get(f"service-token-{identity}") or None
+
+
 def _service_principal(settings: SettingsDep, token: str | None, identity: str | None) -> ServicePrincipal:
-    """Authenticate an in-cluster service producer: valid app token + an ALLOWLISTED subject."""
+    """Authenticate an in-cluster service producer: a valid credential + an ALLOWLISTED subject.
+
+    TWO questions, and this door used to answer only the first:
+
+      1. may this SUBJECT use the service door at all?  ->  `service_subjects`, the allowlist
+      2. may THIS CALLER be that subject?               ->  the credential, below
+
+    Without (2) the identity is a claim the door BELIEVES. With one shared app token and an allowlist
+    of `service-trainer,service-web`, any holder of that token could pick either — and they are not
+    peers: `service-web` is a reader on the warehouse, `service-trainer` is `writer` on
+    `namespace:models`. That shared token lives in the env of seven sidecar-less web pods, so env
+    read in any one of them meant forged, author-stamped writes into the authoritative lineage graph.
+
+    A privileged subject therefore needs its OWN credential, and the shared token cannot claim it.
+    """
     expected = os.environ.get("APP_API_TOKEN")
     if not expected:
         # The service door only exists when the app token does. Without it there is nothing to verify,
         # so an unauthenticated caller must not be able to open it by merely naming a subject.
         raise UnauthenticatedError("service ingest is not configured")
-    if not _secrets.compare_digest((token or "").encode(), expected.encode()):
-        raise UnauthenticatedError("invalid service token")
+
     allowed = {s.strip() for s in settings.service_subjects.split(",") if s.strip()}
     if not identity or identity not in allowed:
         # Fail closed on an unlisted subject — this is what stops a token holder impersonating a human.
         raise PermissionDeniedError(f"service identity not allowed: {identity or '<missing>'}")
+
+    privileged = {s.strip() for s in settings.privileged_subjects.split(",") if s.strip()}
+    if identity in privileged:
+        # FAIL CLOSED on a missing secret. A privileged subject whose credential is unprovisioned must
+        # NOT fall back to the shared token — that is the escalation this exists to stop, and a quiet
+        # fallback would restore it while looking configured.
+        dedicated = _dedicated_token(identity)
+        if not dedicated:
+            raise UnauthenticatedError(f"service identity {identity!r} is privileged but has no dedicated credential provisioned")
+        if not _secrets.compare_digest((token or "").encode(), dedicated.encode()):
+            raise UnauthenticatedError(f"the presented credential may not claim {identity!r}")
+        return ServicePrincipal(identity)
+
+    if not _secrets.compare_digest((token or "").encode(), expected.encode()):
+        raise UnauthenticatedError("invalid service token")
     return ServicePrincipal(identity)
 
 
@@ -93,6 +137,9 @@ def authenticate(
     credentials: _CredentialsDep,
     dapr_api_token: Annotated[str | None, Header()] = None,
     x_lance_service_identity: Annotated[str | None, Header()] = None,
+    # The INVOKING Dapr app-id — what separates a service from the public front door invoking on a
+    # stranger's behalf. See `service_kit.governed.dapr_auth.is_public_caller`.
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> Principal | None:
     """Authenticate the caller: an OIDC bearer (human/external) OR the service door (in-cluster producer).
 
@@ -106,6 +153,17 @@ def authenticate(
     # service-invoked request carrying a valid user bearer would be diverted into the service door and
     # 403 on the missing identity (audit 2026-07-15). A token-only request now falls through to OIDC,
     # which still requires a valid bearer — the door itself stays exactly as strict (app token + allowlist).
+    # THE LAUNDERING PATH. The gateway forwards through Dapr service invocation and the callee's daprd
+    # stamps a valid `dapr-api-token` on the way in, so an ANONYMOUS public request arrives here
+    # already holding the estate's service credential — and `x-lance-service-identity` is
+    # caller-supplied, so it can name an allowlisted subject itself. Together that is a forged,
+    # author-stamped write into the authoritative lineage graph. The gateway strips both headers at
+    # the edge; this refuses the door even if one ever gets through, because a service principal is
+    # never something the public front door should be able to mint.
+    if is_public_caller(dapr_caller_app_id):
+        raise PermissionDeniedError(
+            f"{dapr_caller_app_id!r} is a public front door: the service door authenticates a service, not a caller — sign in and retry"
+        )
     if dapr_api_token is not None and x_lance_service_identity is not None:
         return _service_principal(settings, dapr_api_token, x_lance_service_identity)
     verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)

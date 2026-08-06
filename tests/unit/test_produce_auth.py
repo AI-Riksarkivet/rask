@@ -57,6 +57,7 @@ def _run(
     fga_result: bool = True,
     fga_raises: bool = False,
     project: str | None = None,
+    caller_app_id: str | None = None,
     captured: dict[str, object] | None = None,
 ) -> None:
     if app_token is None:
@@ -83,6 +84,7 @@ def _run(
             dapr_api_token=dapr_token,
             authorization=authz,
             project=project,
+            dapr_caller_app_id=caller_app_id,
         )
     )
 
@@ -377,13 +379,16 @@ def test_fga_outage_is_audited_as_failure(monkeypatch: pytest.MonkeyPatch, audit
 
 
 def test_service_token_acceptance_is_audited(monkeypatch: pytest.MonkeyPatch, audit_records: list[logging.LogRecord]) -> None:
-    # The service path opens the same door, so its acceptance is recorded too; the shared token names no
-    # principal, hence the fixed "service" subject.
+    # The service path opens the same door, so its acceptance is recorded too. The subject now names
+    # WHICH caller — the shared token names no principal, but the Dapr caller app-id does, and an
+    # audit line reading only "service" cannot answer "which one", which is the question an incident
+    # starts from. `direct` marks a caller that reached the app without a Dapr invocation hop (Service
+    # DNS or the pod itself), which is a materially different fact from "some service".
     _run(monkeypatch, app_token="s3cr3t", dapr_token="s3cr3t")
     assert _audit_fields(audit_records[0]) == {
         "audit.action": "produce_service_token",
         "audit.outcome": "allow",
-        "audit.subject": "service",
+        "audit.subject": "service:direct",
         "audit.resource": "project:acme",
     }
 
@@ -401,3 +406,54 @@ def test_medallion_audit_stream_is_env_gated(monkeypatch: pytest.MonkeyPatch) ->
     assert MedallionSettings.model_validate({}).audit_enabled is True
     monkeypatch.setenv("LANCE_AUDIT_ENABLED", "false")
     assert MedallionSettings().audit_enabled is False
+
+
+# ── the gateway must not launder anonymous traffic into a governed write ──────
+
+
+def test_a_VALID_service_token_from_the_PUBLIC_DOOR_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The measured bypass, on the highest-value door in the estate.
+
+    `dapr.io/app-token-secret` makes daprd stamp `dapr-api-token` on every request it hands the app,
+    and the gateway forwards `/api/produce` through Dapr service invocation — so an anonymous public
+    request reaches this door already holding the estate's service credential. Measured on the sibling
+    ingest door: 403 straight to the pod, 202 through the gateway.
+
+    What that buys an anonymous caller here is not a read: `/produce` writes `bronze$events`,
+    fabricates OpenLineage provenance, and fires the whole bronze->silver->gold cascade.
+    """
+    _expect(monkeypatch, 403, app_token="s3cr3t", dapr_token="s3cr3t", caller_app_id="gateway")
+
+
+def test_the_TRAIN_door_inherits_the_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`authorize_train` delegates its whole decision to `authorize_produce`.
+
+    An unforwarded caller id would leave `/train` — which spends GPU and writes the model registry —
+    open while `/produce` looked fixed, and the delegation is precisely what makes that invisible.
+    """
+    monkeypatch.setenv("APP_API_TOKEN", "s3cr3t")
+    ns = SimpleNamespace(oidc_enabled=True, produce_admin_project="acme")
+    request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(oidc=None))))
+
+    with pytest.raises(LanceNamespaceError) as exc:
+        asyncio.run(
+            produce_auth.authorize_train(
+                request,
+                cast(MedallionSettings, ns),
+                cast(OpenFgaClient, object()),
+                dapr_api_token="s3cr3t",
+                authorization=None,
+                dapr_caller_app_id="gateway",
+            )
+        )
+    assert status_for(int(exc.value.code)) == 403
+
+
+def test_a_SERVICE_caller_and_a_DIRECT_caller_are_both_still_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard must not sever service-to-service produce, which is the token's actual job.
+
+    Absent caller id = pub/sub, input-binding or Service-DNS delivery — every legitimate path onto
+    this door. A fix that broke them would be indistinguishable from deleting the service-token path.
+    """
+    assert _run(monkeypatch, app_token="s3cr3t", dapr_token="s3cr3t", caller_app_id="medallion") is None
+    assert _run(monkeypatch, app_token="s3cr3t", dapr_token="s3cr3t", caller_app_id=None) is None
