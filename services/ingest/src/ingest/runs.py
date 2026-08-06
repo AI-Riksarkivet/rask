@@ -168,6 +168,25 @@ def record_from_workflow_state(run_id: str, state: dict[str, object] | None) -> 
     )
 
 
+def _failure_detail(state: dict[str, object]) -> str:
+    """The engine's own reason for a RAISED workflow failure, or "" when it records none.
+
+    Never raises and never assumes a shape: the field has moved across dapr-ext-workflow versions and
+    is not a contract this plane owns. A caller asking why a run failed is worse served by a KeyError
+    than by an honest empty string.
+    """
+    for key in ("failure_details", "serialized_error", "error", "failure"):
+        raw = state.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()[:500]
+        detail = _as_mapping(raw)
+        for field in ("message", "error_message", "stack_trace", "error_type"):
+            value = detail.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:500]
+    return ""
+
+
 def merge_workflow_state(record: RunRecord, state: dict[str, object] | None) -> RunRecord:
     """Overlay the engine's live truth onto the accepted-time record.
 
@@ -210,6 +229,26 @@ def merge_workflow_state(record: RunRecord, state: dict[str, object] | None) -> 
         status = outcome_status  # type: ignore[assignment]
 
     errors = output.get("errors")
+
+    # A RAISED failure carries its reason somewhere else entirely, and reading only the output made
+    # those runs unexplainable. Measured 2026-08-06: two runs answered
+    # `{"status":"FAILED","units_total":0,"errors":{}}` — no reason, nothing to act on, and no way to
+    # tell a source that enumerated nothing from an activity that died on its first call.
+    #
+    # The two failure MODES are not symmetric. A workflow that fails BY POLICY returns a FAILED
+    # outcome and its errors ride `serialized_output` (the deadline and unit-ceiling paths do this).
+    # A workflow that RAISES — an activity exhausting its retries — produces NO output at all, and
+    # Dapr records the detail in its own failure field. Reading one and not the other means the
+    # louder failure is the silent one.
+    #
+    # Several key spellings are tried because the shape has moved across dapr-ext-workflow versions
+    # and the field is not part of a contract this plane controls. Failing to FIND it must not itself
+    # raise — the caller is asking why a run failed, and a KeyError is a worse answer than "unknown".
+    if not errors and status == "FAILED":
+        detail = _failure_detail(state)
+        if detail:
+            errors = {"run": detail}
+
     committed = output.get("committed_version")
     rows = output.get("rows")
 
