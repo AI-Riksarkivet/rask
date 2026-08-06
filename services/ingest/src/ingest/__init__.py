@@ -99,6 +99,22 @@ def _wire_auth(app: FastAPI) -> None:
             settings.oidc_cache_ttl,
             leeway=settings.oidc_leeway,
             allow_insecure=settings.oidc_allow_insecure,
+            # SPLIT-HORIZON DISCOVERY, and the ONLY door in the estate that was missing it. The issuer
+            # is the browser-facing URL that lands in a token's `iss` claim (`http://localhost:8080/dex`
+            # in k3s); the discovery document has to be fetched from the in-cluster service
+            # (`http://rask-dex:5556/dex`). Without the override the verifier fetches discovery from the
+            # issuer, which resolves to the POD ITSELF, and every user-bearer ingest died with
+            #
+            #     httpx.ConnectError: [Errno 111] Connection refused
+            #
+            # surfaced to the browser as `{"message":"Internal Error"}` — a 500 with nothing about auth
+            # in it. The service-token path never touched the verifier, so every in-cluster test passed
+            # and only a real signed-in submit from `/compute/etl` reached the line.
+            #
+            # The chart has been setting `LANCE_OIDC_DISCOVERY_URL` all along and `GovernedAuthSettings`
+            # has been parsing it; this door simply never passed it on, while catalog, lineage, viewer,
+            # annotator and medallion all did (identical expression, five sites).
+            discovery_overrides=({settings.oidc_issuer: settings.oidc_discovery_url} if settings.oidc_discovery_url else None),
         )
 
 
