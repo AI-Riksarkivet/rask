@@ -104,6 +104,43 @@ def enforce_author(event: RunEvent, token: Principal | None) -> None:
         event.run.facets["author"] = {"name": token.sub, "sub": token.sub}
 
 
+def is_external_source(namespace: str) -> bool:
+    """Is this dataset OUTSIDE the governed estate — a raw source rather than a table we authorize?
+
+    R23 draws the line the whole medallion rests on: the governed tiers are exactly bronze -> silver ->
+    gold, and **raw is the external world, never a governed tier**. So a producer that honestly records
+    where its data came from names something that has no catalog entry, no ``table:`` object, and
+    therefore no tuple that could ever be written for it. Authorizing those inputs the same way as
+    governed ones is not strict — it is unsatisfiable, and it refused every such producer permanently:
+
+        403 "can_get_metadata required on inputs: bind86-src/run1"
+
+    on the ingest plane's START event, whose input is the S3 prefix the run reads. The run landed its
+    data, the terminal event was authorized fine, and the graph stayed empty because the run was never
+    opened. Ten configuration causes were investigated before the service's own message was read.
+
+    The discriminator is the NAMESPACE carrying a URI scheme, which is OpenLineage's own naming
+    convention: an external data source is namespaced by its store URI (``s3://bucket``,
+    ``iiif://host``), while a governed table is namespaced by its catalog namespace (``bronze``,
+    ``bind86-bronze``) — a bare identifier, delimiter-joined to the table id. That is a property of the
+    naming spec both sides already follow, not a heuristic invented here.
+
+    **This does not reopen the forgery hole it sits next to.** The guard exists so an authenticated
+    reader cannot record "I read ``gold$catalog``" into the audit graph. A namespace is PART OF A
+    DATASET'S IDENTITY, so a caller who fakes ``s3://anything`` as the namespace of ``gold$catalog``
+    creates an *external* node named ``s3://anything / gold$catalog`` — a different node from the
+    governed ``gold / gold$catalog``, connected to nothing that resolves. It cannot impersonate a
+    governed dataset; it can only assert an edge to a node that is, correctly, outside the estate. What
+    remains protected is exactly what the guard was written to protect: claiming to have read a
+    GOVERNED dataset you cannot see.
+
+    Outputs are deliberately NOT filtered this way. Writing is the direction that mutates the estate,
+    and this plane never writes outside it — an output naming an external namespace is a producer
+    claiming to have written the outside world, which is not a case to make permissive.
+    """
+    return "://" in namespace
+
+
 async def enforce_output_authz(event: RunEvent, request: Request, settings: LineageSettings, token: Principal | None) -> None:
     """Output-scoped ingest authz: require the producer may WRITE every output dataset it claims.
 
@@ -111,8 +148,10 @@ async def enforce_output_authz(event: RunEvent, request: Request, settings: Line
     a producer cannot record provenance for a table it has no ``can_write_data`` on (the same write
     permission the catalog requires to mutate that table). No-op when FGA is off. Fail-closed BEFORE any
     empty-set short-circuit: unwired client → 503, unauthenticated → 401, any non-writable output → 403.
-    Inputs are also authorized (``can_get_metadata``): you may only record READING a dataset you can see,
-    so an authenticated reader can't forge READ-edge provenance for datasets outside its reach.
+    GOVERNED inputs are also authorized (``can_get_metadata``): you may only record READING a dataset you
+    can see, so an authenticated reader can't forge READ-edge provenance for datasets outside its reach.
+    External sources are exempt and :func:`is_external_source` says why — they are unauthorizable by
+    construction, and requiring a tuple for one refused every honest producer of a raw ingest.
     """
     if not settings.fga_enabled:
         return
@@ -135,7 +174,7 @@ async def enforce_output_authz(event: RunEvent, request: Request, settings: Line
     # service-web read identity) could forge READ-edge provenance like "service-web read gold$catalog" into
     # the governed audit graph. `writer ⊇ reader` in model.fga, so movers (writers) and the trainer (reader)
     # still pass; only a claim to have read an unreachable dataset is refused. (bug hunt 2026-07-13)
-    inputs = [d.name for d in event.inputs if d.name]
+    inputs = [d.name for d in event.inputs if d.name and not is_external_source(d.namespace)]
     if inputs:
         objs = [f"{object_type}:{n}" for n in inputs]
         seen = await fga.batch_check(client, user=token.sub, relation="can_get_metadata", objects=objs)
