@@ -284,6 +284,21 @@ image:
   # Set to pin the deployed artifact by content rather than by a mutable tag. WINS over `tag`.
   # This is what an image-automation controller (Argo Image Updater, Flux) writes back into git.
   digest: ""
+  # PER-COMPONENT pins (#135) — the reason a `helm upgrade` stopped being destructive.
+  #
+  # One `tag` above cannot describe this fleet. A real estate runs a catalog tag across 11 services,
+  # a different tag on gateway/compute/controlplane, a third across the 7 zones, and an ingest
+  # DIGEST. Rendering all of them from one value overwrites every image with a tag that is not on
+  # the node — observed twice on 2026-08-06, once taking the whole fleet to ImagePullBackOff.
+  #
+  # Keys are the COMPONENT name the template passes to `rask.image` (`gateway`, `compute`,
+  # `lance-rest-catalog`, `web-lakehouse`, …) — the same string that appears in the rendered
+  # reference. `digests` beats `tags`, exactly as the global `digest` beats the global `tag`.
+  #
+  #   tags:    { lance-rest-catalog: be-256ca0da, web-lakehouse: zone-14d8882d }
+  #   digests: { rask-ingest: "sha256:834d2e23…" }
+  tags: {}
+  digests: {}
   # Opt-in for side-loaded images (`make k3s-build` + `k3s-import`, `kind load`): renders a bare
   # `<component>:<tag>` that the node must ALREADY hold. Never set this for a remote cluster.
   localImages: false
@@ -514,7 +529,9 @@ frontend:
   # publicIssuer, publicOrigin (forms the home zone's /auth/callback redirect URI). The confidential Dex
   # client secret rides dex.clientSecret.
   oidc:
-    enabled: false
+    # ON BY DEFAULT, in lockstep with auth.enabled — the chart REFUSES the half-governed pair
+    # (templates/auth-consistency.yaml), so these two must move together or the render fails.
+    enabled: true
     publicIssuer: "" # browser-reachable IdP issuer, e.g. https://auth.example.com/dex
     publicOrigin: "" # browser-reachable origin, e.g. https://app.example.com (forms the redirect URI)
     sessionSecret: "" # >=32 random chars; seals the session cookie (AES-256-GCM). REQUIRED when enabled.
@@ -527,7 +544,17 @@ frontend:
 
 # --- Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ------------
 auth:
-  enabled: false
+  # ON BY DEFAULT (2026-08-06). It was `false`, and values-prod.yaml flipped it — which meant every
+  # install that forgot to pass a values file came up UNGOVERNED, silently and green. That is exactly
+  # how it kept happening: a `helm upgrade` without `-f values-prod.yaml` reverts a governed estate to
+  # an open one, the session Secret stops rendering, and pods that still reference it fail to start
+  # (observed on rask-web-models, 2026-08-06). A security default must fail CLOSED, not open.
+  #
+  # This makes a bare `helm install` REFUSE rather than install: frontend.oidc.enabled is on too, and
+  # the chart already fails the render without a sessionSecret. That refusal is the point — an
+  # ungoverned estate should require someone to ask for it (`--set auth.enabled=false`), never to
+  # forget something.
+  enabled: true
   # Permit auth.enabled=true WITHOUT a frontend sign-in flow. Off by default, and the chart REFUSES
   # that combination (templates/auth-consistency.yaml): it installs green and then shows every user
   # a governed UI with no way in, while the catalog 401s each read. Set this only for an estate that

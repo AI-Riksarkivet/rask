@@ -463,6 +463,19 @@ CORPUS ?= pvc
 # mount it on this single-node cluster. Prod (a real RWX class) keeps the chart default.
 CORPUS_ACCESS_MODE ?= ReadWriteOnce
 
+# The LOCAL dev identity values. auth.enabled + frontend.oidc.enabled are ON in the chart's own
+# defaults now (a security default must fail closed — an ungoverned estate should require asking for
+# it, never forgetting a values file), and the chart REFUSES to render OIDC without a session secret.
+# So the local loop supplies its own here, in the open, where it is obviously a dev value:
+#   - it is not a secret in any meaningful sense — dex's static users are chart config, the estate is
+#     on localhost, and the string says what it is;
+#   - it is NOT a default inside values.yaml, because a plausible-looking key shipped in the chart is
+#     the one that silently reaches production. Prod supplies its own via values-prod.yaml.
+# Override any of them from the environment for a differently-addressed dev cluster.
+DEV_ISSUER          ?= http://localhost:8080/dex
+DEV_ORIGIN          ?= http://localhost:8080
+DEV_SESSION_SECRET  ?= dev-session-secret-32-chars-min-ok
+
 k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait for the gateway
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ -z "$$HF_TOKEN" ] && [ -r "$${HF_HOME:-$$HOME/.cache/huggingface}/token" ]; then \
@@ -474,6 +487,10 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	  --take-ownership \
 	  --set image.localImages=true \
 	  --set explorer.enabled=$(EXPLORER) \
+	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) \
+	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) \
+	  --set-string frontend.oidc.sessionSecret=$(DEV_SESSION_SECRET) \
+	  --set-string dex.issuer=$(DEV_ISSUER) \
 	  --set explorer.corpus.mode=$(CORPUS) \
 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) \
 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN} \
@@ -485,6 +502,10 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 
 seed-corpus: ## Seed the demo corpus into the volume the media plane actually READS
 	./scripts/seed-corpus.sh
+
+k3s-pins: ## Capture what the cluster is RUNNING into chart/values-live-pins.yaml (#135)
+	@KUBECONFIG=$(KUBECONFIG) KUBECTL=$(KUBECTL) ./scripts/k3s-pins.sh chart/values-live-pins.yaml
+	@echo ">> now: helm upgrade rask ./chart -f chart/values-live-pins.yaml   (changes only what you meant to)"
 
 k9s: bootstrap ## Browse the k3s cluster in k9s (the chart's NOTES.txt points here)
 	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/k9s

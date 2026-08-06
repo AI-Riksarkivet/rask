@@ -800,7 +800,22 @@ GITOPS IS THE FIRST-CLASS CONSUMER of this chart, and that decides the two rules
        deploy). A digest still wins over it, so a pinned reconciler is never overridden by a tag. */ -}}
 {{- $override := "" -}}{{- if gt (len .) 2 -}}{{- $override = index . 2 -}}{{- end -}}
 {{- $i := $root.Values.image -}}
-{{- $digest := $i.digest | default "" -}}
+{{- /* PER-COMPONENT pins (#135). The fleet is NOT built as one tag and never has been: on a live
+       estate this chart's single `image.tag` had to describe four different references at once
+       (a catalog tag across 11 services, a different backend tag, a zone tag, and an ingest
+       DIGEST under a repo name the chart cannot even produce). It cannot, so `helm upgrade`
+       rewrote every image to one tag that was not on the node — measured twice on 2026-08-06,
+       once taking the whole fleet to ImagePullBackOff and costing 22 `kubectl set image` calls to
+       recover. That made DEPLOYING A DESTRUCTIVE ACT, which is why an entire day of fixes reached
+       the cluster by hand instead of through the chart.
+       `image.digests.<component>` and `image.tags.<component>` are read HERE, so a pin is real
+       rather than documentation. Precedence, most specific first:
+         digests.<c>  >  digest  >  tags.<c>  >  <call-site override>  >  tag
+       A digest still beats every tag, so a reconciler's content pin is never undone by a tag. */ -}}
+{{- $perDigest := "" -}}{{- if $i.digests -}}{{- $perDigest = index $i.digests $name | default "" -}}{{- end -}}
+{{- $perTag := "" -}}{{- if $i.tags -}}{{- $perTag = index $i.tags $name | default "" -}}{{- end -}}
+{{- $digest := $perDigest | default ($i.digest | default "") -}}
+{{- $override = $perTag | default $override -}}
 {{- if $i.localImages -}}
 {{- /* Side-loaded: a bare name the kubelet must already hold. Never valid for a remote cluster. */ -}}
 {{- printf "%s:%s" $name (required "image.tag must be set" ($override | default $i.tag)) -}}
