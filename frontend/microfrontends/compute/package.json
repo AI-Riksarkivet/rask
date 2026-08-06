@@ -9,6 +9,7 @@
 		"build": "vite build",
 		"preview": "vite preview",
 		"start": "bun ./build/index.js",
+		"test": "vitest run",
 		"check": "svelte-check --tsconfig ./tsconfig.json",
 		"lint": "oxlint .",
 		"fmt": "rsvelte-fmt .",
@@ -33,6 +34,7 @@
 		"@types/bun": "^1.3.14",
 		"svelte": "^5.56.8",
 		"svelte-adapter-bun": "^1.0.1",
-		"vite": "^8.0.16"
+		"vite": "^8.0.16",
+		"vitest": "^4.1.10"
 	}
 }
