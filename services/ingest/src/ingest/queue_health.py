@@ -64,6 +64,15 @@ class QueueHealth(BaseModel):
             "with no stream fails silently, so a poison unit is dropped rather than parked."
         ),
     )
+    retention: str | None = Field(
+        default=None,
+        description=(
+            "the live stream's retention policy, because `messages` means two different things. Under "
+            "WORK_QUEUE a message leaves when ACKED, so depth IS outstanding work; under `limits` an "
+            "acked message is retained for max_age and depth is not. The chart creates INGEST with "
+            "`limits` while this plane is written against WORK_QUEUE, and nothing said which you had."
+        ),
+    )
     stranded: bool | None = Field(
         default=None,
         description=(
