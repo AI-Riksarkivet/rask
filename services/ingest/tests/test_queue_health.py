@@ -223,3 +223,71 @@ def test_the_release_runs_on_the_TERMINAL_path_not_in_a_sweep() -> None:
         "the terminal activity stopped releasing its queued units — a run that dies between "
         "publish_units and drain_chunk now strands them behind a consumer that was never created"
     )
+
+
+# ── the stream this plane is written against vs the one it got ───────────────
+
+
+def test_the_snapshot_REPORTS_which_retention_the_live_stream_has() -> None:
+    """`messages` means two different things and nothing said which.
+
+    Under WORK_QUEUE a message leaves when it is ACKED, so depth IS outstanding work — the reasoning
+    this plane used to dissolve its side ledger. Under `limits` an acked message is RETAINED for
+    max_age, so depth is not outstanding work and the ledger claim is false where it is deployed.
+
+    Measured 2026-08-06: the chart's Job creates INGEST with `--retention limits`, `queue.py` asks for
+    WORK_QUEUE, whoever runs first wins, and the loser accepted the difference in silence for the
+    plane's whole life. Reporting the policy is what makes the two readings distinguishable at all.
+    """
+    from ingest.queue import QueueSnapshot
+
+    assert "retention" in QueueSnapshot.__annotations__, "the snapshot stopped reporting retention — `messages` is ambiguous again"
+
+
+def test_a_DISAGREEING_stream_warns_and_does_not_raise(caplog: pytest.LogCaptureFixture) -> None:
+    """Loud, never fatal.
+
+    Raising here would take the entire ingest plane down on every cluster whose stream predates the
+    fix — turning a correctness debt into an outage, which is the trade `/queue` already refuses when
+    it declines to gate liveness on NATS. The requirement is only that it stops being SILENT.
+    """
+    import asyncio
+    import logging
+
+    from ingest.queue import STREAM, WorkQueue
+
+    class _Info:
+        config = type("C", (), {"retention": "limits"})()
+
+    class _JS:
+        async def stream_info(self, _name: str) -> _Info:
+            return _Info()
+
+    queue = WorkQueue(None, _JS())  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(queue._warn_if_retention_disagrees())
+
+    assert any(STREAM in r.message and "WORK_QUEUE" in r.message for r in caplog.records), "a stream with the wrong retention passed without a word"
+
+
+def test_a_MATCHING_stream_says_nothing(caplog: pytest.LogCaptureFixture) -> None:
+    """A warning that fires on the correct configuration trains people to ignore it, which is how a
+    real signal dies. NATS spells it `workqueue`; the check normalises rather than matching one
+    spelling, because the wire form has varied across client versions."""
+    import asyncio
+    import logging
+
+    from ingest.queue import WorkQueue
+
+    class _Info:
+        config = type("C", (), {"retention": "workqueue"})()
+
+    class _JS:
+        async def stream_info(self, _name: str) -> _Info:
+            return _Info()
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(WorkQueue(None, _JS())._warn_if_retention_disagrees())  # type: ignore[arg-type]
+
+    assert not caplog.records, "a correctly configured stream produced a warning"

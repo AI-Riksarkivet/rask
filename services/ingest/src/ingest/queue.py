@@ -147,8 +147,52 @@ class WorkQueue:
         )
         try:
             await self._js.add_stream(config)
-        except Exception:
             return
+        except Exception:
+            # Already exists — and `add_stream` does NOT reconcile, so whatever is there stands. Debug
+            # rather than warning: this is the NORMAL in-cluster path (the chart's Job creates it), and
+            # the thing actually worth saying is what the existing stream IS, which the next line says.
+            logger.debug("%s already exists; not reconciled by add_stream", STREAM, exc_info=True)
+            await self._warn_if_retention_disagrees()
+
+    async def _warn_if_retention_disagrees(self) -> None:
+        """Say so, loudly, when the LIVE stream is not the stream this plane is written against.
+
+        WHOEVER CREATES IT FIRST WINS, and until now the loser accepted the difference in silence.
+        Measured 2026-08-06: the chart's Job creates INGEST with `--retention limits --deny-delete
+        --deny-purge`; this module asks for WORK_QUEUE; the Job runs first in-cluster, so the live
+        stream is `limits`. Three statements about one stream, two of them false — the chart's own
+        comment twenty-seven lines below its flag claims WorkQueuePolicy too.
+
+        The difference is not cosmetic. This plane's design rests on WORK_QUEUE in this file's own
+        words — "a message is REMOVED once acked, which is what makes the stream itself the
+        outstanding-work ledger, which is why this plane needs no side ledger". Under `limits` an
+        acked message is RETAINED, so `messages` is not outstanding work and that reasoning does not
+        hold where it is deployed. `deny_purge`/`deny_delete` then make it unreclaimable out of band:
+        `release_run`'s purge is refused with `err_code=10110 'stream purge not permitted'` and
+        returns an inert 0.
+
+        WARNS rather than raises, on purpose. Raising here would take the whole ingest plane down on
+        every cluster whose stream predates the fix — turning a correctness debt into an outage, which
+        is the trade `queue_health` already refuses. The point is that it stops being SILENT: an
+        operator reading logs, or `/queue`'s `retention` field, can now see which stream they have.
+        """
+        try:
+            info = await self._js.stream_info(STREAM)
+        except Exception:
+            logger.debug("could not read %s config to verify its retention", STREAM, exc_info=True)
+            return
+
+        live = str(getattr(info.config, "retention", "") or "")
+        if "workqueue" not in live.replace("_", "").lower():
+            logger.warning(
+                "%s exists with retention=%r, but this plane is written against WORK_QUEUE — acked messages are "
+                "RETAINED, so queue depth is not outstanding work and `release_run` cannot reclaim. "
+                "The chart's nats-stream-job creates it; changing the flag only affects a stream that does not "
+                "exist yet, so an existing cluster needs the stream recreated.",
+                STREAM,
+                live,
+            )
 
     async def publish_units(self, tasks: Sequence[UnitTask]) -> int:
         """Publish a chunk's units, DEDUPED on a deterministic message id. Returns the count accepted.
@@ -310,6 +354,10 @@ class QueueSnapshot(TypedDict):
     messages: int | None
     consumers: int | None
     dlq_present: bool
+    #: The live stream's retention policy. Present because it silently disagreed with the code for the
+    #: plane's whole life: `messages` means "outstanding work" under WORK_QUEUE and "retained for
+    #: max_age" under limits, and nothing said which one you were looking at.
+    retention: str
 
 
 async def inspect_queue(url: str, timeout: float = 3.0) -> QueueSnapshot:
@@ -330,10 +378,15 @@ async def inspect_queue(url: str, timeout: float = 3.0) -> QueueSnapshot:
     try:
         nc = await nats.connect(url, connect_timeout=timeout, allow_reconnect=False, max_reconnect_attempts=0)
         js = nc.jetstream()
-        out = QueueSnapshot(reachable=True, stream_present=False, messages=None, consumers=None, dlq_present=False)
+        out = QueueSnapshot(reachable=True, stream_present=False, messages=None, consumers=None, dlq_present=False, retention="")
         try:
             info = await js.stream_info(STREAM)
-            out.update(stream_present=True, messages=info.state.messages, consumers=info.state.consumer_count)
+            out.update(
+                stream_present=True,
+                messages=info.state.messages,
+                consumers=info.state.consumer_count,
+                retention=str(getattr(info.config, "retention", "") or ""),
+            )
         except Exception:
             # An absent stream is the ANSWER, not an error — and it is the answer that hid for four
             # and a half hours while every liveness probe stayed green.
