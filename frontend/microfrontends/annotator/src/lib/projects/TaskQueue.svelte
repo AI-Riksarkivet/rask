@@ -29,6 +29,8 @@
 	import { Select } from '@rask/ui/select';
 
 	import { bulkActions, targetsFor } from './bulk-events';
+	import { indexRows, rowFor, rowKeysFor, rowText } from './corpus-rows';
+	import { fetchCorpusRows } from './remote/rows.remote';
 	import {
 		corpusText,
 		distinctValues,
@@ -90,6 +92,23 @@
 	let filterText = $state('');
 	let filterLabel = $state('');
 
+	// #60 — THE CORPUS ROW behind each item. A task carries its row KEYS, not the row, so until now
+	// the queue could show the item's administration (state, assignee, lease) but never a fact about
+	// the thing being labelled: a date, a page number, the transcribed text. "Filter to the 1890s"
+	// was unanswerable, and `item-columns.ts` carried a standing note refusing to fake it.
+	//
+	// Fetched for the WHOLE task list, not the visible page, and that is load-bearing: filtering is
+	// what these rows are for, and filtering a page by data only fetched for that page is circular —
+	// you could never filter TO a row that is not already on screen. A project is bounded by
+	// SEND_TASK_CAP (1000), which is also the endpoint's own cap, so the two agree by construction.
+	const rowsQuery = $derived(fetchCorpusRows({ keys: rowKeysFor(tasks), dataset: null }));
+	// Rows are DECORATION on a queue that already works without them: `?? []` everywhere, never a
+	// loading gate. An unreachable viewer costs the extra columns, not the queue.
+	const rowIndex = $derived(
+		indexRows(rowsQuery.current?.rows ?? [], rowsQuery.current?.keyFields ?? []),
+	);
+	const rowKeyFields = $derived(rowsQuery.current?.keyFields ?? []);
+
 	const visible = $derived(
 		tasks.filter(
 			(t) =>
@@ -100,7 +119,13 @@
 					labelText(t)
 						.split(',')
 						.some((l) => l.trim() === filterLabel)) &&
-				matchesText(t, filterText),
+				// The corpus row is OR-ed with the task's own text rather than replacing it: one box
+				// means "find this anywhere", and a person typing a doc id must still match the item
+				// even when its row has not arrived (or never will — a task may outlive its row, #37).
+				(matchesText(t, filterText) ||
+					rowText(rowFor(t, rowIndex), rowKeyFields)
+						.toLowerCase()
+						.includes(filterText.trim().toLowerCase())),
 		),
 	);
 	const filtering = $derived(
