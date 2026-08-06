@@ -28,12 +28,16 @@ every dataset's first run, which is what the single-step design would have quiet
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Protocol, TypedDict
+import logging
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
 import lance
 import pyarrow as pa
 from lance import LanceOperation
 from pydantic import BaseModel
+
+
+logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
@@ -118,6 +122,7 @@ class Lander:
         base = lance.dataset(dataset_uri)
         committed = lance.LanceDataset.commit(dataset_uri, LanceOperation.Append(fragments), read_version=base.version)
         self._catalog.register_version(dataset_uri, committed.version, run_id)
+        _ensure_partition_index(committed)
         # Counted from the FRAGMENTS, not as a before/after difference against the dataset. A
         # difference would be wrong the moment two runs commit concurrently — each would see the
         # other's rows and claim them — and this is exactly the plane where that is normal.
@@ -129,6 +134,59 @@ class Lander:
             rows_added=added,
             fragments_committed=len(fragments),
         )
+
+
+#: The scalar-index kind for `partition_key`. BITMAP because the column is LOW-CARDINALITY equality —
+#: one distinct value per IIIF volume or S3 folder, queried as `partition_key = 'x'`. Lance stores a
+#: compressed Roaring Bitmap per distinct value (`lance_docs/guide.md:3211-3215`), which is the case
+#: BTREE would serve worse.
+PARTITION_INDEX = "BITMAP"
+PARTITION_INDEX_NAME = "partition_key_idx"
+
+
+def _ensure_partition_index(dataset: Any) -> None:  # noqa: ANN401 — LanceDataset
+    """Create the `partition_key` index if it is absent. Idempotent, best-effort, never fatal.
+
+    THE COLUMN IS HALF A DESIGN WITHOUT THIS. `runtime.py:97-121` records why partitioning is a COLUMN
+    here and not a fragment boundary — Lance has no table partitioning
+    (`lance_docs/ns_catalog/partitioning-spec.md:4`, "Lance tables do not natively support
+    partitioning, instead promoting clustering"), and key-pure fragments do not survive compaction
+    (measured: five fragments, one key each, then `compact_files()` -> ONE). The same measurement says
+    what DOES survive: "a BITMAP index on the column made `partition_key = 'x'` answer as an
+    index-served ScalarIndexQuery rather than a scan."
+
+    Nothing created it. `services/maintenance` cannot: `optimize_indices()` FOLDS compacted fragments
+    into indices that already exist, and a grep for `create_scalar_index` across that whole service
+    returns nothing. So a dataset with no index gets nothing from maintenance, forever, and every
+    partition query was a full scan.
+
+    HERE rather than at creation, because creation is the CATALOG's (the two-step at this module's
+    head: the catalog creates the dataset empty server-side, the lander appends). Ingest's first
+    reachable moment is its own commit — and an index over zero rows would be built and immediately
+    stale anyway.
+
+    CREATE ONCE, MAINTAIN ELSEWHERE — and that is the format's own division, not a shortcut. An index
+    SEGMENT records which fragments it covers in its `fragment_bitmap`
+    (`lance_docs/file_format.md:1200`), and the engine filters out row addresses that are not in it
+    (`:1239`). So an index built at commit N covers commit N's fragments and no later ones: results
+    stay correct as the tier grows, but new fragments are served by scan until something folds them
+    in. That something is `services/maintenance`'s `optimize_indices()`, which is exactly what it does
+    and all it does. Re-creating the index here on every commit would duplicate that work and make a
+    routine append cost more as the tier grows.
+
+    BITMAP is the format's own recommendation for this shape: `lance_docs/file_format.md`'s
+    `index/scalar/bitmap.md` — "extremely fast query performance for LOW-CARDINALITY columns", which
+    is one distinct value per IIIF volume or S3 folder.
+
+    Never fatal: a run that landed its data must not fail because an optimisation could not be built.
+    Same reasoning as I8 for lineage, and the index is recoverable at any later commit.
+    """
+    try:
+        if any(getattr(i, "name", "") == PARTITION_INDEX_NAME for i in dataset.describe_indices()):
+            return
+        dataset.create_scalar_index("partition_key", index_type=PARTITION_INDEX, name=PARTITION_INDEX_NAME)
+    except Exception:
+        logger.warning("could not ensure the %s index on partition_key — queries will scan", PARTITION_INDEX, exc_info=True)
 
 
 def write_unit_fragments(dataset_uri: str, batch: pa.Table) -> list[str]:
