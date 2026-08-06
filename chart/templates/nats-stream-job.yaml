@@ -61,6 +61,36 @@ spec:
                     --no-allow-rollup --deny-delete --deny-purge
                 fi
               }
+              # INGEST is a WORK QUEUE, not a retained log, and it needs its own creation path.
+              #
+              # `services/ingest/src/ingest/queue.py` declares RetentionPolicy.WORK_QUEUE and BUILDS ON
+              # it: "a message is REMOVED once acked — that is what makes the stream itself the
+              # outstanding-work ledger, which is why this plane needs no side ledger". Creating it
+              # here with `limits` made that claim FALSE wherever it is deployed (acked messages were
+              # retained 168h, so `messages` was not outstanding work), and this file asserted the
+              # opposite of itself twenty-seven lines below — measured 2026-08-06 on the live stream:
+              # retention=limits, deny_purge=true, deny_delete=true.
+              #
+              # `--deny-purge --deny-delete` are deliberately ABSENT here rather than carried over.
+              # They protect a retained RECORD; a work queue has none — it reclaims by ack. Their only
+              # measured effect was to make the ingest plane's own `release_run -> purge_stream` return
+              # an inert 0 while the server refused it (err_code 10110, "stream purge not permitted").
+              #
+              # ONE-TIME MIGRATION on an existing cluster: this function is `if exists; then skip`, so a
+              # stream already created with `limits` KEEPS it. Run `nats stream rm INGEST` once (it is a
+              # work queue — draining it first is the whole point) and let this Job recreate it, or the
+              # chart is correct while the cluster is not, which is the drift being closed.
+              add_workqueue_if_missing() {
+                if nats --server "$S" stream info "$1" >/dev/null 2>&1; then
+                  echo "stream $1 already exists"
+                else
+                  nats --server "$S" stream add "$1" \
+                    --subjects "$2" --storage file --retention work \
+                    --max-age=168h --max-bytes=-1 --max-msgs=-1 --max-msgs-per-subject=-1 \
+                    --max-msg-size=-1 --discard old --dupe-window=2m --replicas {{ (hasKey .Values.nats "streamReplicas") | ternary .Values.nats.streamReplicas 1 }} \
+                    --no-allow-rollup
+                fi
+              }
               add_if_missing LINEAGE "lineage.events.>"
               add_if_missing MEDALLION "medallion.>"
               add_if_missing TRAINING "training.>"
@@ -88,7 +118,7 @@ spec:
               # every run of this Job would delete the queue out from under in-flight ingest work.
               # Revisit only if ingest moves onto a Dapr subscription (open decision §7.5), at which
               # point it joins the loop like any other app.
-              add_if_missing INGEST "ingest.>"
+              add_workqueue_if_missing INGEST "ingest.>"
               {{- if .Values.catalog.controlEmit }}
               # Control-plane change-events (grants/warehouses/policies/tables) broadcast to EVERY catalog
               # replica's ring buffer (GET /v1/events). Its own stream so a parking-free broadcast publish

@@ -37,6 +37,7 @@ import pyarrow as pa
 from lineage_kit.schemas import custom_facet
 from pydantic import BaseModel, Field
 
+from annotator.projects.agreement import group_scores, summarize
 from annotator.projects.models import AnnotationProject, Draft, Shape, Task, TaskState
 
 
@@ -397,19 +398,28 @@ def project_facet(project: AnnotationProject, plan: PublishPlan, *, frozen_at: d
 
 
 def _consensus_counts(project: AnnotationProject, plan: PublishPlan) -> dict[str, Any]:
-    """Agreement counts per replica group: a group agrees when every member's LABEL MULTISET is
-    identical (order-free). Counts plus the manager's PICKS — never a fabricated merge, which would
-    put words in annotators' mouths; a consumer wanting canonical rows filters by the picked ids."""
-    labels_by_task: dict[str, list[str]] = {}
+    """Agreement per replica group, GEOMETRY-AWARE and chance-corrected (#55).
+
+    This used to compare LABEL MULTISETS: a group "agreed" when every member's sorted list of label
+    strings matched. That called two annotators drawing boxes in completely different places with
+    the same labels a PERFECT agreement, applied no chance correction, and scored a group where
+    every replica was skipped as perfect because ``[] == []``.
+
+    Now: shapes are matched at IoU >= 0.5 (``agreement.IOU_MATCH_THRESHOLD``) and the labels of
+    matched objects are scored with Fleiss' kappa. ``unanimous_groups`` replaces
+    ``perfect_agreement_groups`` — a RENAME, not an alias, because the old key's meaning changed
+    and a consumer silently reading a stronger number under the old name is exactly the drift a
+    published metric cannot afford.
+
+    Still never a fabricated merge: the counts sit beside the manager's PICKS, and a consumer
+    wanting canonical rows filters by the picked ids.
+    """
+    shapes_by_task: dict[str, list[dict[str, Any]]] = {}
     for row in plan.rows:
         if row["shape_type"] == NO_SHAPE:
             continue
-        labels_by_task.setdefault(row["task_id"], []).append(row["label"] or "")
-    perfect = 0
-    for members in plan.replica_groups.values():
-        multisets = [sorted(labels_by_task.get(tid, [])) for tid in members]
-        if len(set(map(tuple, multisets))) == 1:
-            perfect += 1
+        shapes_by_task.setdefault(row["task_id"], []).append(row)
+    scored = [group_scores([shapes_by_task.get(tid, []) for tid in members]) for members in plan.replica_groups.values()]
     # The pick WITH its attribution (task_id, by, at) — a facet naming only the winner would drop
     # exactly the "who decided, when" half that makes an adjudication provenance (audit finding).
     picks = {
@@ -419,8 +429,7 @@ def _consensus_counts(project: AnnotationProject, plan: PublishPlan) -> dict[str
     }
     return {
         "n": project.consensus_n,
-        "groups": len(plan.replica_groups),
-        "perfect_agreement_groups": perfect,
+        **summarize(scored),
         **({"adjudications": picks} if picks else {}),
     }
 
