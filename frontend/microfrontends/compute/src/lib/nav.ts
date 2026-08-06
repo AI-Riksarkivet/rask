@@ -1,5 +1,6 @@
 import {
 	CircuitBoard,
+	Database,
 	ScanText,
 	Upload,
 	Boxes,
@@ -43,10 +44,6 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 			items: [
 				{ title: 'Jobs', href: '/compute/jobs', match: seg('/compute/jobs'), icon: ListTree },
 				{ title: 'Serve', href: '/compute/serve', match: seg('/compute/serve'), icon: ServerCog },
-				// The ingest form has existed since the zone did and was in NO nav — reachable only by
-				// typing the URL, and the route was renamed `etl` -> `new` underneath anyone who had.
-				// A page that starts a real pipeline run must be reachable from the rail.
-				{ title: 'Ingest', href: '/compute/new', match: seg('/compute/new'), icon: Upload },
 				// #131: inference is a COMPUTE concern, not a model-registry one. Moved here from
 				// /models/playground by ruling — you send an image to a live Serve deployment and read
 				// what comes back, which is the same plane as Jobs and Serve, not the registry.
@@ -55,6 +52,28 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 					href: '/compute/inference',
 					match: seg('/compute/inference'),
 					icon: ScanText,
+				},
+			],
+		},
+		{
+			// I/O — data going IN to the estate and questions coming OUT of it. Ingest sat under
+			// "Workloads" beside Jobs and Serve, which names how it RUNS rather than what it is for;
+			// grouped with the query engine it reads as the estate's data doorway.
+			label: 'I/O',
+			items: [
+				// The ingest form has existed since the zone did and was in NO nav — reachable only by
+				// typing the URL, and the route was renamed `etl` -> `new` underneath anyone who had.
+				// A page that starts a real pipeline run must be reachable from the rail.
+				{ title: 'Ingest', href: '/compute/new', match: seg('/compute/new'), icon: Upload },
+				// SCAFFOLD (2026-08-06): no query backend exists yet. It ships as a nav leaf + a
+				// scaffold-badged page ON PURPOSE — R15 is law, a zone surface missing from the rail is
+				// a defect regardless of scaffold status, and a visible stub is how the shape gets
+				// reviewed before the engine is built.
+				{
+					title: 'Query engine',
+					href: '/compute/query',
+					match: seg('/compute/query'),
+					icon: Database,
 				},
 			],
 		},
