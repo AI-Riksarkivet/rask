@@ -15,6 +15,7 @@ Both are pinned by A1/A2 in `tests/test_ingest_api.py`.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from typing import Annotated
 
@@ -35,6 +36,9 @@ from ingest.runs import (
 )
 from ingest.sizing import IngestSizing, SizingRefused, resolve
 from ingest.sources import SourceDescriptor, SourceSpec, describe_sources, registered_kinds
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(tags=["ingest"])
@@ -197,6 +201,60 @@ class RunStatusResponse(BaseModel):
     to_version: int | None = None
     publish_reason: str | None = None
     publish_error: str | None = None
+
+
+class RunListResponse(BaseModel):
+    """Runs this REPLICA accepted, plus the caveat that makes the answer usable.
+
+    `authoritative=False` is the whole point. The store is a process-local read-side index (`get`
+    exists so a poll need not query the workflow engine), so a run accepted by another replica is
+    absent and a restart empties it. Answering with a bare list would present that as the estate's
+    run history, which it is not — the durable list is the LINEAGE graph, and the compute zone's runs
+    page reads that for exactly this reason.
+
+    Shipped anyway because the honest local list is genuinely useful — an operator on one pod wants
+    to know what that pod took — and because a field that says so costs one line, while a caller
+    guessing costs an incident.
+    """
+
+    runs: list[RunStatusResponse]
+    authoritative: bool = Field(
+        default=False,
+        description="FALSE always: this is one replica's read-side index, not the estate's run history. Use the lineage graph for that.",
+    )
+
+
+@router.get("/ingests", response_model=RunListResponse)
+async def list_ingests(
+    request: Request,
+    store: Annotated[RunStore, Depends(get_store)],
+    settings: AuthSettingsDep,
+    limit: int = 50,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+) -> RunListResponse:
+    """Recent runs, newest first. Authorized PER RUN, then filtered.
+
+    There is no single project to authorize against before reading — the list spans tenants — so each
+    record is checked against its OWN project and the ones the caller may not see are dropped rather
+    than refused. A 403 for the whole call would leak that runs exist; an empty list leaks nothing.
+    """
+    records = await store.recent(min(max(limit, 0), 200))
+
+    visible: list[RunStatusResponse] = []
+    for record in records:
+        try:
+            await authorize_ingest(request, settings, record.project, dapr_api_token, authorization, dapr_caller_app_id)
+        except Exception:
+            # DEBUG, not warning: a caller seeing only their own runs is the endpoint WORKING.
+            # Logging it louder would make a correctly-filtered list look like a stream of
+            # authorization failures, which is how a real signal gets tuned out.
+            logger.debug("run %s filtered from the list for this caller", record.run_id, exc_info=True)
+            continue
+        visible.append(RunStatusResponse(**record.model_dump()))
+
+    return RunListResponse(runs=visible)
 
 
 @router.get("/ingests/{run_id}", response_model=RunStatusResponse)

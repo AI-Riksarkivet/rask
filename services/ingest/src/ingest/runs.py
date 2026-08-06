@@ -85,6 +85,8 @@ class RunStore(Protocol):
 
     async def put(self, record: RunRecord) -> None: ...
 
+    async def recent(self, limit: int) -> list[RunRecord]: ...
+
 
 class InMemoryRunStore:
     """The default store. Deliberately NOT durable — run truth is the workflow's, not this cache.
@@ -102,6 +104,18 @@ class InMemoryRunStore:
 
     async def put(self, record: RunRecord) -> None:
         self._runs[record.run_id] = record
+
+    async def recent(self, limit: int) -> list[RunRecord]:
+        """The runs THIS REPLICA accepted, newest first.
+
+        A read-side index, and the endpoint says so rather than implying otherwise. Runs accepted by
+        another replica are absent, and a restart empties it — which is correct for what this is
+        (`get` exists to answer a poll without a workflow query) and would be a lie if it were
+        presented as the estate's run list. The durable list is the LINEAGE graph, which is why the
+        compute zone's runs page reads that.
+        """
+        ordered = sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
+        return ordered[: max(0, limit)]
 
 
 class WorkflowStarter(Protocol):
