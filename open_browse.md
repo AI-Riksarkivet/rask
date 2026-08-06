@@ -87,13 +87,24 @@ Three panes, one page, `/annotator/browse`:
 ```
 ┌ SELECT ─────────────────┬ PREVIEW ─────────────┬ ACT ──────────────┐
 │ how to choose items     │ what you chose       │ what to do        │
-│  · search / filter      │  grid of candidates  │  · label as …     │
-│  · atlas region         │  with the current    │  · send to a      │
-│  · nearest to an example│  label + confidence  │    project        │
-│  · uncertainty          │  and WHY it was      │  · reject         │
-│  · a labelling function │  chosen              │                   │
+│  · search / filter      │  TABLE by default,   │  · label as …     │
+│  · atlas region         │  gallery on a toggle │  · send to a      │
+│  · nearest to an example│  with the current    │    project        │
+│  · uncertainty          │  label + confidence  │  · reject         │
+│  · a labelling function │  and WHY it was      │                   │
 └─────────────────────────┴──────────────────────┴───────────────────┘
 ```
+
+**PREVIEW is a TABLE first (#70), not a gallery.** It opened as a document gallery, which is the
+wrong first view for a surface whose job is bulk selection: a gallery answers "what does this look
+like" and a bulk-labeling pass asks "which of these match" — you filter and sort to a set, then act
+on it. The gallery survives as a toggle because for page images it genuinely answers "which of these
+are letters" in a glance. Both views read the SAME filtered, sorted rows and the SAME selection, so
+they cannot disagree about what is in view.
+
+The queue's own review pass got the matching treatment (#76): quick view is a SPLIT PANE beside the
+rows, not an overlay over them — reviewing is a sustained walk with prev/next, and a modal costs the
+filter, the page and your place in it on every item.
 
 The middle pane is the load-bearing one. **Every candidate must say why it is here** — "0.51
 confidence between `figure` and `caption`", "3rd nearest to the example you picked", "matched

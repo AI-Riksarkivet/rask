@@ -18,14 +18,18 @@ a delete-by-predicate.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import lance
 
+from service_kit.exceptions import ConflictError
 from service_kit.lancekit.reader import translate_catalog_errors
 
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     import pyarrow as pa
 
     from service_kit.media.config import Settings
@@ -42,6 +46,40 @@ class TableWriter(Protocol):
     def delete(self, predicate: str) -> None: ...
 
 
+#: A LOST COMMIT RACE, by message — pylance 9.0.0 exposes no typed error for it (probed: neither
+#: ``lance.error`` nor the native module carries one), so the message is the only signal there is.
+#: Same markers the catalog's own classifier uses (``catalog/services/dataplane.py``), kept identical
+#: on purpose: one vocabulary for one condition, whichever plane hits it.
+_COMMIT_CONFLICT_MARKERS = ("commit conflict", "concurrent")
+
+
+@contextmanager
+def translate_commit_conflict() -> Iterator[None]:
+    """Turn a LOST COMMIT RACE on the direct path into the 409 the client already handles.
+
+    The version check and the write are two separate steps (the endpoint reads
+    ``reader.table_version()``, builds a delta, then commits), so a writer that lands in
+    between passes the check and loses the commit. That is the ordinary OCC outcome and the
+    caller's remedy is the same as for a stale ``base_version`` — re-read, rebuild, re-send.
+
+    Untranslated it escaped as a raw ``OSError``, which no handler maps (only ``DomainError``
+    and ``RequestValidationError`` are registered), so the browser got a 500. A 500 reads as
+    "the server is broken" and is not retried; the annotator's client only branches on 409
+    (``annotations-client.ts``). So the one moment the guarantee actually fires was reported
+    as an outage, and the work was lost rather than merged.
+
+    NOT retried here on purpose: the delta was built against the version that just lost, so
+    re-committing it would overwrite the winner — precisely what OCC exists to stop. Only the
+    caller can rebuild against the new version.
+    """
+    try:
+        yield
+    except OSError as exc:
+        if any(m in str(exc).lower() for m in _COMMIT_CONFLICT_MARKERS):
+            raise ConflictError(f"annotations changed on the server while this save was committing — re-read and re-send: {exc}") from exc
+        raise
+
+
 class LanceTableWriter:
     """Direct Lance writes — verbatim today's behavior (the byte-identical default)."""
 
@@ -49,15 +87,18 @@ class LanceTableWriter:
         self._ds = ds
 
     def merge_upsert(self, delta: pa.Table, on: str) -> None:
-        self._ds.merge_insert(on).when_matched_update_all().when_not_matched_insert_all().execute(delta)
+        with translate_commit_conflict():
+            self._ds.merge_insert(on).when_matched_update_all().when_not_matched_insert_all().execute(delta)
 
     def merge_insert_only(self, delta: pa.Table, on: str) -> None:
         # Insert unmatched rows only — matched rows (same key) are left AS-IS, so a
         # re-save preserves any human review already made to an existing row.
-        self._ds.merge_insert(on).when_not_matched_insert_all().execute(delta)
+        with translate_commit_conflict():
+            self._ds.merge_insert(on).when_not_matched_insert_all().execute(delta)
 
     def delete(self, predicate: str) -> None:
-        self._ds.delete(predicate)
+        with translate_commit_conflict():
+            self._ds.delete(predicate)
 
 
 class CatalogWriteTransport(Protocol):

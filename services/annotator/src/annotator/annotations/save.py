@@ -76,7 +76,10 @@ def save_annotations(
     # loaded against the same source the wire GET served it from.
     table_id = state.settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE)
     reader = open_reader(dataset=ds, table_id=table_id, settings=state.settings, caller_token=caller_token)
-    check_base_version_value(reader.table_version(), body.base_version)
+    # REQUIRED here (#50): this path commits a merge_upsert, which UPDATES matched rows, so a save
+    # that does not state what it was built from can overwrite another annotator's fields. The tag
+    # batch is insert-only and keeps the precondition optional — see check_base_version_value.
+    check_base_version_value(reader.table_version(), body.base_version, required=True)
 
     where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
     current = reader.to_table(filter=where)
