@@ -17,6 +17,8 @@ import type { FlowPayload, NodeConfig, NodeKind, NodeOutput, NodeRuntime } from 
 export interface InvokeRequest {
 	app: string;
 	name: string;
+	/** Path within the app (`/v1/chat/completions`), or '' for its root. */
+	path: string;
 	payload: FlowPayload;
 }
 
@@ -363,7 +365,7 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
 				deps.patchRuntime(id, { status: 'running', error: null });
 				deps.log(
 					'info',
-					`POST /${app} — ${cfg.bodyMode === 'json' ? 'json body' : wire.kind} (${
+					`POST /${app}${cfg.modelPath.trim()} — ${cfg.bodyMode === 'json' ? 'json body' : wire.kind} (${
 						wire.kind === 'bytes' ? `${wire.bytes.byteLength} B` : `${wire.text.length} chars`
 					})`,
 					id,
@@ -372,6 +374,7 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
 				const payload = await deps.invoke({
 					app,
 					name: cfg.requestName.trim() || 'page',
+					path: cfg.modelPath.trim(),
 					payload: wire,
 				});
 				const ms = Math.round(performance.now() - t0);

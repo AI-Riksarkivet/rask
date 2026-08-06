@@ -36,6 +36,7 @@ function cfg(patch: Partial<NodeConfig> = {}): NodeConfig {
 		text: '',
 		app: 'htrflow',
 		requestName: '',
+		modelPath: '',
 		bodyMode: 'upstream',
 		bodyTemplate: DEFAULT_JSON_BODY,
 		promptTemplate: DEFAULT_PROMPT,
@@ -63,7 +64,12 @@ function makeHarness(
 	nodes: Array<{ id: string; kind: NodeKind }>,
 	edges: Array<[string, string]>,
 	config: Record<string, NodeConfig>,
-	invoke?: (req: { app: string; name: string; payload: FlowPayload }) => Promise<FlowPayload>,
+	invoke?: (req: {
+		app: string;
+		name: string;
+		path: string;
+		payload: FlowPayload;
+	}) => Promise<FlowPayload>,
 ): Harness {
 	const flowNodes: Node[] = nodes.map((n) => ({
 		id: n.id,
