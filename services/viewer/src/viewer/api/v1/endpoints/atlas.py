@@ -14,6 +14,10 @@ knows the corpus:
   are memoized on ``state.points_cache`` keyed (dataset, space, version).
 * ``GET /chunk/..`` / ``POST /chunks`` — full hits for one chunk / a lasso
   selection (detail pane + playback), the latter addressed by ``_rowid``.
+* ``POST /chunks/by-key`` — the same full hits addressed BY KEY, for callers
+  that hold a descriptor key-path rather than a row address. A labelling task
+  is exactly that: ``_rowid`` is only stable for the table version it was read
+  at, so a task cannot carry one (#60).
 """
 
 import logging
@@ -26,11 +30,11 @@ from service_kit.exceptions import NotFoundError, ValidationError
 from service_kit.lancekit.alignments import parse_alignments_json
 from service_kit.lancekit.descriptor import AtlasSpace, Declared
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
-from service_kit.lancekit.predicate import and_, eq, isin
+from service_kit.lancekit.predicate import and_, eq, isin, or_
 from service_kit.lancekit.registry import DatasetHandle, table_dataset
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
-from service_kit.schemas.atlas import ChunkRowIds
+from service_kit.schemas.atlas import ChunkKeys, ChunkRowIds
 from viewer.api.v1.endpoints.media import FRAME_INDEX_COLUMN
 from viewer.api.v1.endpoints.system import DURATION_COLUMN
 from viewer.api.v1.endpoints.transcripts import alignments_binding
@@ -226,6 +230,49 @@ def atlas_chunk(
     if not rows:
         raise NotFoundError("chunk not found")
     return _finalize_hits(handle, rows)[0]
+
+
+@router.post("/chunks/by-key")
+def atlas_chunks_by_key(state: StateDep, body: ChunkKeys, dataset: DatasetParam = None) -> dict[str, Any]:
+    """Full hits for rows addressed BY KEY — the join a labelling queue needs (#60).
+
+    ``POST /chunks`` beside this is cheaper and stays the right door for anything that came from
+    /points: the atlas hands back the very ``_rowid``s it was given. A TASK cannot use it. A task
+    carries the descriptor key-path it was sent with, and a row address is only stable for the
+    table version it was read at — so a task minted last week holds no usable ``_rowid``, and the
+    queue could show a task's KEYS but never the row behind them ("filter to the 1890s" was
+    unanswerable for exactly this reason).
+
+    One OR-ed predicate rather than N round trips: the queue joins a PAGE of tasks at a time, and
+    a request per row would put 50 sequential fetches behind every page turn. Capped at the same
+    1000 as the rowid door — the table render budget is the same budget.
+
+    Rows are returned UNORDERED and possibly SHORT: a key whose row was deleted, or which belongs
+    to a different dataset, simply does not come back. The caller re-associates by key and must
+    treat a missing row as "no corpus columns for this task" rather than an error — a task can
+    legitimately outlive the row it points at, and #37 already made that a first-class state.
+
+    The response is an OBJECT carrying ``key_fields`` beside the rows, unlike the bare list the
+    rowid door returns. Re-associating requires reading each row's own key back out of it (order
+    cannot be trusted), which means knowing WHICH columns form the key — and a caller holding a
+    task has no reason to have fetched the descriptor. Making it fetch one just to use this door
+    would be handing it a second source of truth for the identity it is already addressing by.
+    """
+    handle = dataset_handle(state, dataset)
+    declared = handle.descriptor.declared
+    if declared.search is None:
+        raise NotFoundError("no row table declared for dataset")
+    key_fields = list(declared.identity.key_fields)
+    wanted = body.keys[:1000]
+    if not wanted:
+        return {"rows": [], "key_fields": key_fields}
+    ds = table_dataset(handle, declared.search.row_table)
+    columns = _hit_columns(declared, set(ds.schema.names))
+    # `validate_doc_key` per key, not once: the doc key is the only free-text part of the address,
+    # and it is what `chunk_key_filter` escapes into the predicate.
+    where = or_(*(chunk_key_filter(declared, validate_doc_key(declared, k.doc_id), k.keys) for k in wanted))
+    rows = ds.to_table(columns=columns, filter=where).to_pylist()
+    return {"rows": _finalize_hits(handle, rows), "key_fields": key_fields}
 
 
 @router.post("/chunks")

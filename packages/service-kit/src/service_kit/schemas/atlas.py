@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AtlasSpace(StrEnum):
@@ -43,3 +43,24 @@ class ChunkRowIds(BaseModel):
     """
 
     rowids: list[int]
+
+
+class RowKey(BaseModel):
+    """One row addressed the way a TASK carries it: the doc key plus the remaining identity
+    fields, positional against ``descriptor.identity.key_fields`` minus the doc key."""
+
+    doc_id: str
+    keys: list[int] = Field(default_factory=list)
+
+
+class ChunkKeys(BaseModel):
+    """A batch of rows addressed BY KEY rather than by ``_rowid``.
+
+    ``ChunkRowIds`` above is the cheaper address and stays the right one for anything that came
+    from /points — the atlas hands back the very ids it was given. But a labelling TASK does not
+    carry a ``_rowid``: it carries the descriptor key-path it was sent with, and row addresses are
+    only stable for the table version they were read at, so a task minted last week cannot hold
+    one. Joining the corpus row back onto a queue row therefore needs this door (#60).
+    """
+
+    keys: list[RowKey] = Field(default_factory=list)

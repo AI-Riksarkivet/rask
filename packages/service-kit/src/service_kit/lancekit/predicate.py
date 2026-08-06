@@ -47,3 +47,20 @@ def and_(*clauses: str) -> str:
     """AND-join the non-empty clauses (empties dropped, so callers can pass
     optional legs unconditionally)."""
     return " AND ".join(c for c in clauses if c)
+
+
+def or_(*clauses: str) -> str:
+    """OR-join the non-empty clauses, PARENTHESISING each one.
+
+    The parens are the whole point and are not cosmetic: ``AND`` binds tighter than ``OR``,
+    and every real caller here ORs together conjunctions built by :func:`and_` (a row key is
+    ``doc = 'x' AND chunk = 1``). Joined bare, two keys render as::
+
+        doc = 'a' AND chunk = 1 OR doc = 'b' AND chunk = 2
+
+    which parses as ``(doc='a' AND chunk=1) OR (doc='b' AND chunk=2)`` only by luck of this
+    shape — the moment a leg is a bare disjunction or a caller passes a single ``OR`` clause,
+    the grouping silently changes and the predicate matches rows nobody asked for. A filter
+    that returns the WRONG rows is worse than one that errors, because it looks like data.
+    """
+    return " OR ".join(f"({c})" for c in clauses if c)
