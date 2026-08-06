@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 import lance
 import pytest
+from dapr.ext.workflow import WorkflowActivityContext
 from ingest import lineage as lineage_mod
 from ingest.adapters import register_builtin_sources
 from ingest.workflow import ChunkResult, ChunkSpec, RunSpec, emit_start, emit_terminal, enumerate_chunks
@@ -50,7 +51,7 @@ def _fixtures(root: Path, count: int) -> None:
         (root / f"page-{i:03d}.tif").write_bytes(b"II*\x00" + f"page-{i}".encode())
 
 
-def test_enumerate_produces_chunks_not_units(tmp_path: Path) -> None:
+def test_enumerate_produces_chunks_not_units(activity_ctx: WorkflowActivityContext, tmp_path: Path) -> None:
     """The decision that dissolved the tracker: activities carry CHUNKS.
 
     A million persisted-and-replayed activity results would melt the state store. One child per
@@ -59,7 +60,7 @@ def test_enumerate_produces_chunks_not_units(tmp_path: Path) -> None:
     _fixtures(tmp_path, 5)
     spec = RunSpec(run_id="r1", kind="local-dir", project="p", dataset="pages", options={"root": str(tmp_path)})
 
-    chunks = enumerate_chunks(None, {"spec": spec.model_dump(), "dataset_uri": str(tmp_path / "bronze.lance")})  # type: ignore[arg-type]
+    chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": str(tmp_path / "bronze.lance")})
 
     assert len(chunks) == 1, "5 units must be ONE chunk, not five activity results"
     parsed = ChunkSpec.model_validate(chunks[0])
@@ -67,7 +68,7 @@ def test_enumerate_produces_chunks_not_units(tmp_path: Path) -> None:
     assert parsed.run_id == "r1"
 
 
-def test_enumeration_slices_at_the_chunk_boundary(tmp_path: Path) -> None:
+def test_enumeration_slices_at_the_chunk_boundary(activity_ctx: WorkflowActivityContext, tmp_path: Path) -> None:
     from ingest import workflow as wf_mod
 
     _fixtures(tmp_path, 7)
@@ -75,7 +76,7 @@ def test_enumeration_slices_at_the_chunk_boundary(tmp_path: Path) -> None:
     wf_mod.CHUNK_SIZE = 3
     try:
         spec = RunSpec(run_id="r2", kind="local-dir", project="p", dataset="d", options={"root": str(tmp_path)})
-        chunks = enumerate_chunks(None, {"spec": spec.model_dump(), "dataset_uri": str(tmp_path / "bronze.lance")})  # type: ignore[arg-type]
+        chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": str(tmp_path / "bronze.lance")})
     finally:
         wf_mod.CHUNK_SIZE = original
 
@@ -84,7 +85,7 @@ def test_enumeration_slices_at_the_chunk_boundary(tmp_path: Path) -> None:
     assert len(set(ids)) == 3, "chunk ids must be unique — the drained event keys off them"
 
 
-def test_a6_lineage_start_precedes_the_work_and_a_terminal_always_follows(tmp_path: Path) -> None:
+def test_a6_lineage_start_precedes_the_work_and_a_terminal_always_follows(activity_ctx: WorkflowActivityContext, tmp_path: Path) -> None:
     """A6: START at accept, terminal always — the FAIL branch the medallion never had.
 
     `iiif_produce.py` contains zero `event_type="FAIL"`: a harvest that raised became a 400 with NO
@@ -92,9 +93,9 @@ def test_a6_lineage_start_precedes_the_work_and_a_terminal_always_follows(tmp_pa
     """
     spec = RunSpec(run_id="r3", kind="local-dir", project="p", dataset="d", options={"root": str(tmp_path)})
 
-    emit_start(None, spec.model_dump())  # type: ignore[arg-type]
+    emit_start(activity_ctx, spec.model_dump())
     emit_terminal(
-        None,  # type: ignore[arg-type]
+        activity_ctx,
         {"spec": spec.model_dump(), "outcome": {"status": "FAILED", "committed_version": None, "rows": 0, "errors": {"k": "boom"}}},
     )
 
@@ -102,7 +103,7 @@ def test_a6_lineage_start_precedes_the_work_and_a_terminal_always_follows(tmp_pa
     assert kinds == ["START", "FAIL"], f"expected START then FAIL, got {kinds}"
 
 
-def test_lineage_never_raises_into_the_run() -> None:
+def test_lineage_never_raises_into_the_run(activity_ctx: WorkflowActivityContext) -> None:
     """I8: lineage is OBSERVATIONAL — a broken record must not fail a run that delivered data."""
     rec = lineage_mod.LineageRecorder()
     rec.terminal("r", "COMPLETE", 2, 10, {})
@@ -111,7 +112,7 @@ def test_lineage_never_raises_into_the_run() -> None:
 
 @pytest.mark.skipif(not _reachable(), reason=f"no NATS at {NATS_URL}")
 @pytest.mark.asyncio
-async def test_a4_a7_the_full_chain_lands_rows_and_commits_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a4_a7_the_full_chain_lands_rows_and_commits_once(activity_ctx: WorkflowActivityContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """enumerate -> publish -> drain -> finalize, through the real activities.
 
     A7 in miniature: exactly ONE data-visibility commit per run. A4: a second run appends rather
@@ -137,7 +138,7 @@ async def test_a4_a7_the_full_chain_lands_rows_and_commits_once(tmp_path: Path, 
     LocalCatalog(BRONZE_SCHEMA).ensure_at(uri)
     monkeypatch.setenv("RASK_INGEST_ACTIVE_DATASET", uri)
 
-    chunks = enumerate_chunks(None, {"spec": spec.model_dump(), "dataset_uri": str(tmp_path / "bronze.lance")})  # type: ignore[arg-type]
+    chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": str(tmp_path / "bronze.lance")})
     chunk = ChunkSpec.model_validate(chunks[0])
     assert await publish_chunk_units(chunk) == 4
 
