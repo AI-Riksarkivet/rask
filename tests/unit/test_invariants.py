@@ -1048,3 +1048,25 @@ def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
         "these pod templates want a sidecar (dapr.io/enabled ANNOTATION) but do not carry the matching "
         f"LABEL, so the fail-closed webhook skips them and they come up un-injected: {missing}"
     )
+
+
+def test_the_ingress_admits_a_real_page_image() -> None:
+    """ingress-nginx caps a request body at **1 MB** by default, and every image surface in this
+    estate is larger than that.
+
+    Measured 2026-08-06 on the deployed stack: the inference playground refused a 2239 kB page image
+    with `HTTP 413`. The zone's own guard allows 25 MB and the Ray Serve ingress never saw the bytes
+    — the EDGE rejected them, so the failure read as "inference is broken" rather than "the ingress
+    has a 1 MB cap". The same cap sits in front of the annotator's Arrow import and the medallion's
+    multi-image batch posts.
+
+    Asserted RENDERED and numerically, exactly like the read-timeout sibling above: an annotation
+    that is merely present but smaller than a real page image is decoration.
+    """
+    rendered = _helm_template("ingress.enabled=true")
+    ingress = next((doc for doc in rendered.split("\n---") if re.search(r"^kind: Ingress$", doc, re.MULTILINE)), None)
+    assert ingress is not None, "ingress.enabled=true rendered no Ingress"
+    m = re.search(r"nginx\.ingress\.kubernetes\.io/proxy-body-size:\s*\"?(\d+)([mMgG])\"?", ingress)
+    assert m, "the Ingress carries no nginx.ingress.kubernetes.io/proxy-body-size — nginx's 1 MB default 413s every page image before it reaches a zone"
+    megabytes = int(m.group(1)) * (1024 if m.group(2).lower() == "g" else 1)
+    assert megabytes >= 25, f"proxy-body-size is {m.group(0)} — below the zones' own 25 MB inference guard, so the edge is the tighter limit"

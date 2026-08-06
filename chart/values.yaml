@@ -1106,6 +1106,13 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # proxy-body-size is load-bearing for the same reason proxy-read-timeout is: the DEFAULT is
+    # wrong for this estate. ingress-nginx caps a request body at 1m, and every image surface here
+    # is bigger than that — the inference playground's 2.2 MB page image was refused 413 at the
+    # INGRESS, before the zone server (whose own guard allows 25 MB) ever saw it, so the failure
+    # read as "inference is broken" rather than "the edge has a 1 MB cap". Also covers the
+    # annotator's Arrow import and the medallion's multi-image batch posts.
+    nginx.ingress.kubernetes.io/proxy-body-size: 64m
   tls: []          # e.g. [{ secretName: rask-tls, hosts: ["rask.example.com"] }]
 
 # ---- cluster infra foundation (subchart dependencies, Chart.yaml) ----------
