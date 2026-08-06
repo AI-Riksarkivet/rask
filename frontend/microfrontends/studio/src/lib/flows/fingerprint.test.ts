@@ -12,6 +12,7 @@ function cfg(patch: Partial<NodeConfig> = {}): NodeConfig {
 		text: '',
 		app: 'htrflow',
 		requestName: '',
+		modelPath: '',
 		bodyMode: 'upstream',
 		bodyTemplate: DEFAULT_JSON_BODY,
 		promptTemplate: DEFAULT_PROMPT,

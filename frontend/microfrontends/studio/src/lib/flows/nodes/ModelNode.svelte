@@ -60,6 +60,19 @@
 				{/if}
 			</p>
 		{/if}
+		<label class="text-muted-foreground mt-2 mb-1 block text-[0.7rem]" for="path-{id}">
+			Path in app
+		</label>
+		<input
+			id="path-{id}"
+			class="{FIELD_CLASS} w-full font-mono"
+			placeholder="/v1/chat/completions"
+			bind:value={cfg.modelPath}
+		/>
+		<p class="text-muted-foreground mt-1 text-[0.65rem]">
+			Empty hits the app root — right for a bytes-in app like /htrflow. vLLM apps need
+			<code>/v1/chat/completions</code>.
+		</p>
 		<label class="text-muted-foreground mt-2 mb-1 block text-[0.7rem]" for="body-{id}">Body</label>
 		<select id="body-{id}" class="{FIELD_CLASS} w-full" bind:value={cfg.bodyMode}>
 			<option value="upstream">Upstream payload (raw)</option>

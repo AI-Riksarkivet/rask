@@ -80,6 +80,12 @@ export interface NodeConfig {
 	app: string;
 	/** model: the `?name=` passthrough (names the page in ALTO output). */
 	requestName: string;
+	/** model: the path WITHIN the Serve app — `/v1/chat/completions`, `/rerank`, or empty for the
+	 *  app root. Load-bearing: a Serve app's route_prefix only reaches its root, and every
+	 *  OpenAI-compatible deployment (vLLM: gemma, qwen-embed) puts its real endpoints under `/v1/...`,
+	 *  so without this the whole class of app is uncallable. Measured against the live cluster
+	 *  2026-08-06: POST /gemma-31b 404s, POST /gemma-31b/v1/chat/completions answers. */
+	modelPath: string;
 	/** model: what to put in the request BODY. `upstream` forwards the incoming payload verbatim —
 	 *  right for a bytes-in app like `/htrflow`, which reads the raw image. `json` sends
 	 *  `bodyTemplate` instead, which is what an LLM / embedding / rerank deployment expects; those
