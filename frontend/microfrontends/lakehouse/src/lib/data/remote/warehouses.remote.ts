@@ -147,6 +147,14 @@ export const createWarehouse = command(
 		project: v.string(),
 		bucket: v.optional(v.nullable(v.string())),
 		serving: v.optional(v.literal('gold')),
+		// #73 made `protected` REQUIRED on `CreateWarehouseBody` — protection now covers every rung of
+		// the hierarchy, not just tables. Defaulted rather than surfaced: a warehouse is born
+		// unprotected and is armed deliberately afterwards through the protection door, so asking at
+		// create time would offer a choice the estate does not actually want made there. Omitting it
+		// entirely is what broke the build — valibot's inferred arg type then lacked a field the
+		// generated body type requires, and the mismatch surfaced at the command's overload rather
+		// than anywhere near the cause.
+		protected: v.optional(v.boolean(), false),
 	}),
 	async (body: CreateWarehouseBody): Promise<ApiResult<WarehouseRecord>> => {
 		const result = parsed(

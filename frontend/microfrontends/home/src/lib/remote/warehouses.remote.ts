@@ -126,6 +126,15 @@ export const createWarehouse = command(
 		project: v.string(),
 		bucket: v.optional(v.nullable(v.string())),
 		serving: v.optional(v.literal('gold')),
+		// #73 made `protected` REQUIRED on `CreateWarehouseBody`. Defaulted, not surfaced: a warehouse
+		// is born unprotected and armed deliberately afterwards through the protection door.
+		//
+		// SECOND COPY of this schema — `lakehouse/.../warehouses.remote.ts` carries the same one, and
+		// both broke identically. `query.live`/`command` must be declared inside an app to get its own
+		// endpoint, so the SHIM is legitimately per-zone; the SCHEMA is not, and this is the second
+		// time a catalog body change has had to be applied twice. Worth hoisting the valibot schemas
+		// into `@rask/api` next to the generated types they mirror.
+		protected: v.optional(v.boolean(), false),
 	}),
 	async (body: CreateWarehouseBody): Promise<ApiResult<WarehouseRecord>> =>
 		parsed(
