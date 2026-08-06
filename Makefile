@@ -479,6 +479,7 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m \
 	  --take-ownership \
 	  --set image.localImages=true \
+	  -f chart/values-local.yaml \
 	  --set explorer.enabled=$(EXPLORER) \
 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) \
 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) \

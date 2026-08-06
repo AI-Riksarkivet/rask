@@ -1,0 +1,39 @@
+# The LOCAL k3s deployment's non-default choices — pass with `-f` on EVERY upgrade.
+#
+#     helm upgrade --install rask ./chart -f chart/values-local.yaml [...]
+#     make k3s-up          # does this for you
+#
+# WHY THIS FILE EXISTS. These settings used to live only as `--set` flags inside `make k3s-up`, and
+# on 2026-08-06 that cost the estate its corpus twice in one day. The second time is the instructive
+# one: another session ran a plain `helm upgrade` (rev 30 failed on a duplicate env, rev 31's
+# rollback failed, rev 32 completed) — and because that upgrade did not carry `--set
+# explorer.corpus.mode=pvc`, the media plane silently reverted to the chart's `emptyDir` default.
+# The PVC was still there, still Bound, still holding the seeded corpus; the pods simply stopped
+# mounting it. The symptom was `NotFoundError: dataset 'transcripts_v2' not found under
+# /media-corpus` and a 500 on every browse surface.
+#
+# A flag inside one make target is not a deployment's intent, it is one path's argument. Anyone who
+# upgrades any other way gets the chart defaults, which are chosen for an ARBITRARY cluster and are
+# wrong for this one. A values file is the intent, and `-f` carries it whoever runs helm.
+#
+# The chart defaults are NOT wrong and are deliberately left alone: `explorer.enabled=false` and
+# `corpus.mode=emptyDir` are what a fresh cluster with no node preparation should get.
+
+explorer:
+  # The media plane is on here, and it has to be: `frontend.apps` always includes the `explorer` and
+  # `annotator` zones, and both proxy /<zone>/api/* to VIEWER_API — env the chart only injects when
+  # `explorer.enabled`. Without it those two zones deploy with no upstream at all and answer 502.
+  enabled: true
+  corpus:
+    # `emptyDir` is per-pod scratch: the media plane could never hold a corpus across a restart, and
+    # a seed written into one is invisible to the very pod that mounts it. The claim carries
+    # `helm.sh/resource-policy: keep`, so the corpus outlives the release.
+    mode: pvc
+    # NOT the chart's ReadWriteMany default. k3s's local-path provisioner REFUSES RWX outright —
+    #   failed to provision volume with StorageClass "local-path":
+    #   NodePath only supports ReadWriteOnce and ReadWriteOncePod (1.22+) access modes
+    # — so an RWX claim sits Pending forever and all three media pods sit Pending behind it. RWO
+    # restricts a volume to one NODE, not one pod, so all three still mount it on a single-node
+    # cluster. values.yaml's claim that a single-node cluster "will still bind an RWX claim ...
+    # but that is luck, not a contract" is wrong in both halves: it is not luck, and it does not bind.
+    accessMode: ReadWriteOnce
