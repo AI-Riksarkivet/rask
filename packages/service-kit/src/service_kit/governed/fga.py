@@ -275,6 +275,46 @@ async def provision(api_url: str, *, store_name: str = "lance-catalog") -> tuple
     return store_id, written.authorization_model_id
 
 
+async def resolve(api_url: str, *, store_name: str = "lance-catalog") -> tuple[str, str] | None:
+    """Find an EXISTING store + its current model by name. Read-only. ``None`` if either is absent.
+
+    THE HALF OF :func:`provision` THAT IS NOT A WRITE, split out because conflating them cost the
+    ingest plane its entire user-bearer door.
+
+    A service that must not own the estate's permissions must not WRITE an authorization model —
+    ingest is a data writer, and a writer minting a model makes it the source of truth for everyone
+    else's access. That principle is right. What it does not justify is refusing to LOOK UP the store
+    every other service is already using: reading is not authoring.
+
+    Ingest applied the principle to both halves and therefore had nothing to fall back on when
+    unpinned. The chart's default posture is ``auth.fgaStoreId: ""`` — resolve-by-name at boot, because
+    a store id is a per-cluster ULID and cannot be a committed chart default — so ingest 503'd out of
+    the box on every dev and e2e cluster while catalog, lineage and medallion came up fine. The
+    symptom reaches a user as ``{"message":"Internal Error"}`` from a form submit; the cause is a
+    startup warning nobody reads.
+
+    Returning ``None`` rather than provisioning is the point: if the store does not exist yet, the
+    estate has not been bootstrapped, and the caller fails closed. This function can never create a
+    store, never write a model, and never change what anyone is allowed to do.
+
+    The model is the store's CURRENT one — ``read_authorization_models`` answers newest-first — which
+    is the same version :func:`provision` just wrote for the services that do bootstrap. Pinning
+    ``*_FGA_MODEL_ID`` remains the production posture; this is the dev/e2e path made survivable.
+    """
+    async with OpenFgaClient(ClientConfiguration(api_url=api_url)) as client:
+        stores = await client.list_stores()
+        existing = [s for s in (stores.stores or []) if s.name == store_name]
+        if not existing:
+            return None
+        store_id = max(existing, key=lambda s: s.created_at).id
+    async with OpenFgaClient(ClientConfiguration(api_url=api_url, store_id=store_id)) as client:
+        models = await client.read_authorization_models()
+        found = models.authorization_models or []
+        if not found:
+            return None
+        return store_id, found[0].id
+
+
 def make_client(
     api_url: str,
     store_id: str,

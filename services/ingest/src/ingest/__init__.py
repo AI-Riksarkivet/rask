@@ -83,11 +83,9 @@ def _wire_auth(app: FastAPI) -> None:
         store_id, model_id = settings.fga_store_id, settings.fga_model_id
         if store_id and model_id:
             app.state.fga = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
-        else:
-            # Deliberately NOT provisioning here. The ingest plane is a data writer, not an authz
-            # owner: minting a store/model would make a writer the source of truth for the estate's
-            # permissions. Unpinned means the door fails closed (503) until an operator pins it.
-            logger.warning("ingest: LANCE_FGA_ENABLED without a pinned store/model — the ingest door will 503")
+        # UNPINNED is not a failure here — it is resolved in the lifespan, where there is an event
+        # loop (`_resolve_fga_client`). Building nothing and leaving `app.state.fga` None keeps the
+        # fail-closed property intact for the window before startup completes.
 
     app.state.oidc = None
     if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_audience:
@@ -118,6 +116,54 @@ def _wire_auth(app: FastAPI) -> None:
         )
 
 
+async def _resolve_fga_client(app: FastAPI) -> None:
+    """When the store/model are UNPINNED, resolve the one the estate already uses. Read-only.
+
+    THIS PLANE STILL REFUSES TO PROVISION. A data writer that mints a store or writes an authorization
+    model becomes the source of truth for everyone else's permissions, and that is not ingest's job.
+    But it applied that principle to the LOOKUP as well, and reading which store exists is not
+    authoring one — so ingest ended up the only service in the estate that cannot boot on the chart's
+    own default posture.
+
+    `auth.fgaStoreId: ""` is that posture, and it is correct: a store id is a per-cluster ULID, so it
+    cannot be a committed chart default. Catalog, lineage and medallion resolve by name and come up;
+    ingest 503'd every user-bearer request on every dev and e2e cluster. It reaches a person as
+    `{"message":"Internal Error"}` from an ETL submit, and the only trace is a startup warning.
+
+    The stopgap was `kubectl set env LANCE_FGA_STORE_ID=…` on the live deployment, which drifts from
+    the chart and dies at the next `make k3s-up` — a fix that has to be reapplied by hand is a defect
+    wearing a workaround.
+
+    HERE rather than in `_wire_auth` because resolving is I/O and `_wire_auth` is sync. Leaving
+    `app.state.fga` None until startup completes keeps the fail-closed window closed: `authorize_ingest`
+    503s on a missing client, which is the correct answer before the estate is known to be reachable.
+
+    Still fails closed after: `fga.resolve` returns None when no store or model exists, meaning the
+    estate has not been bootstrapped, and the client stays unwired.
+    """
+    from ingest.auth import get_auth_settings
+
+    settings = get_auth_settings()
+    if not settings.fga_enabled or app.state.fga is not None:
+        return
+    from service_kit.governed import fga
+
+    try:
+        resolved = await fga.resolve(settings.fga_api_url)
+    except Exception:
+        # Never fatal at startup. OpenFGA being slow to accept connections is an ordering blip, not a
+        # reason to CrashLoopBackOff; the door 503s until it is reachable, which is where an operator
+        # can actually see it.
+        logger.warning("ingest: could not reach OpenFGA to resolve a store — the ingest door will 503", exc_info=True)
+        return
+    if resolved is None:
+        logger.warning("ingest: LANCE_FGA_ENABLED but no provisioned OpenFGA store to resolve — the ingest door will 503")
+        return
+    store_id, model_id = resolved
+    app.state.fga = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
+    logger.info("ingest: resolved the OpenFGA store by name (unpinned) — pin LANCE_FGA_STORE_ID/MODEL_ID for production")
+
+
 def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanFactory shape
     """Start the Dapr WorkflowRuntime for the lifetime of the process.
 
@@ -134,6 +180,7 @@ def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanF
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        await _resolve_fga_client(app)
         runtime = None
         try:
             import dapr.ext.workflow as wf
