@@ -134,7 +134,7 @@ def _chunk_rows() -> dict[str, list]:
             columns["speech_id"].append(page_no)
             columns["chunk_id"].append(page_no)
             columns["frame_idx"].append(0)
-            columns["image"].append({"data": page_image(document["title"], page_no), "uri": None})
+            columns["image"].append(page_image(document["title"], page_no))
             columns["mime"].append("image/png")
             columns["caption"].append(f"{document['title']} · page {page_no}")
             columns["text"].append(prose)
@@ -164,8 +164,14 @@ def seed(root: Path) -> Path:
     # speech_id/chunk_id are INTEGERS: the viewer builds its frame filter as
     # `speech_id = 0 AND chunk_id = 19` with unquoted numeric literals, so string columns
     # fail with "Received literal Int64(0) and could not convert to literal of type Utf8".
-    blob = pa.struct([pa.field("data", pa.large_binary()), pa.field("uri", pa.utf8())])
-    image_field = pa.field("image", blob, metadata={b"ARROW:extension:name": b"lance.blob.v2"})
+    # `lance.blob_field` rather than a hand-rolled struct + `ARROW:extension:name` metadata. This was
+    # the ONLY site in the repo spelling blob-v2 by hand; every other writer uses the helpers
+    # (`medallion/services/ingest.py:20,48,86`, `ingest/runtime.py:24,128`). The two are not
+    # equivalent: the helper yields a real Arrow EXTENSION type (`extension<lance.blob.v2<BlobType>>`),
+    # while the hand-rolled struct only carries the name as field metadata — which any process that
+    # has imported lance will fail to reconstruct across an Arrow-IPC boundary. It reads the same
+    # today and is a landmine for every door this fixture is about to be put through.
+    image_field = lance.blob_field("image")
     schema = pa.schema(
         [
             pa.field("doc_id", pa.utf8()),
@@ -198,7 +204,7 @@ def seed(root: Path) -> Path:
             "speech_id": pa.array(columns["speech_id"], pa.int64()),
             "chunk_id": pa.array(columns["chunk_id"], pa.int64()),
             "frame_idx": pa.array(columns["frame_idx"], pa.int64()),
-            "image": pa.array(columns["image"], type=blob),
+            "image": lance.blob_array(columns["image"]),
             "mime": pa.array(columns["mime"]),
             "caption": pa.array(columns["caption"]),
             "text": pa.array(columns["text"]),
@@ -209,7 +215,7 @@ def seed(root: Path) -> Path:
         },
         schema=schema,
     )
-    lance.write_dataset(chunks, str(db / "chunks.lance"), mode="overwrite", data_storage_version="2.2")
+    lance.write_dataset(chunks, str(db / "chunks.lance"), mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
 
     # The doc-level table `document.table` points at — ONE row per document, and it carries its own
     # cover blob because `document.media_blob` must name a column in THIS table (the descriptor
@@ -220,9 +226,9 @@ def seed(root: Path) -> Path:
             pa.field("doc_id", pa.utf8()),
             pa.field("title", pa.utf8()),
             pa.field("n_chunks", pa.int32()),
-            # The SAME `lance.blob.v2` extension metadata the chunks table uses — a bare struct is
-            # refused with "document.media_blob 'image' is not a lance.blob.v2 column".
-            pa.field("image", blob, metadata={b"ARROW:extension:name": b"lance.blob.v2"}),
+            # The SAME blob-v2 helper the chunks table uses — a bare struct is refused with
+            # "document.media_blob 'image' is not a lance.blob.v2 column".
+            lance.blob_field("image"),
             pa.field("mime", pa.utf8()),
         ]
     )
@@ -231,12 +237,12 @@ def seed(root: Path) -> Path:
             "doc_id": pa.array([d["doc_id"] for d in DOCUMENTS]),
             "title": pa.array([d["title"] for d in DOCUMENTS]),
             "n_chunks": pa.array([len(d["pages"]) for d in DOCUMENTS], pa.int32()),
-            "image": pa.array([{"data": page_image(d["title"], 0), "uri": None} for d in DOCUMENTS], type=blob),
+            "image": lance.blob_array([page_image(d["title"], 0) for d in DOCUMENTS]),
             "mime": pa.array(["image/png"] * len(DOCUMENTS)),
         },
         schema=doc_schema,
     )
-    lance.write_dataset(documents, str(db / "documents.lance"), mode="overwrite", data_storage_version="2.2")
+    lance.write_dataset(documents, str(db / "documents.lance"), mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
 
     # The FTS index, through the LANCEDB api — the search service opens the row table with
     # `lancedb` and runs `tbl.search(MatchQuery(...), query_type="fts")`, which needs an index
