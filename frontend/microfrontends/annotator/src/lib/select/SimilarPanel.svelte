@@ -11,8 +11,19 @@
 	import { Button } from '@rask/ui/button';
 	import { Sparkles } from '@lucide/svelte';
 
+	import { Input } from '@rask/ui/input';
+	import { MAX_SIMILAR_N } from './similar-limits';
 	import { findSimilar } from './remote/similar.remote';
-	import { describeNeighbour, keyOfHit, newlyAdded, type SimilarHit } from './similar';
+	import {
+		DEFAULT_MAX_DISTANCE,
+		describeCutoff,
+		describeNeighbour,
+		distanceBounds,
+		keyOfHit,
+		newlyAdded,
+		withinDistance,
+		type SimilarHit,
+	} from './similar';
 
 	let {
 		seedKey,
@@ -38,13 +49,31 @@
 	let open = $state(false);
 	let added = $state<number | null>(null);
 
+	/** KNOB 1 — BREADTH. How many neighbours to ask for. Was hardcoded at 24, which quietly decided
+	 *  the size of every propagated batch in the estate. */
+	let howMany = $state(24);
+
+	/** KNOB 2 — THE CUTOFF. The maximum embedding distance a neighbour may have and still be
+	 *  propagated to. This is the one that matters: `n` alone says "give me forty" whether or not
+	 *  forty are actually alike, so without it the fortieth gets the label because it was RETURNED,
+	 *  not because it resembled anything. Both knobs are adjustable and both are shown — a silent
+	 *  threshold is how a corpus gets mislabelled at scale (`open_browse.md` §5). */
+	let maxDistance = $state(DEFAULT_MAX_DISTANCE);
+
 	/** Loaded only once someone asks. A browse page nobody is building a batch on should not fan out
 	 *  a vector search per chunk it renders. */
 	const neighbours = $derived(
-		open && seedKey ? findSimilar({ key: seedKey, dataset, table, n: 24 }) : null,
+		open && seedKey ? findSimilar({ key: seedKey, dataset, table, n: howMany }) : null,
 	);
 
-	const hits = $derived((neighbours?.current?.ok ? neighbours.current.data : []) as SimilarHit[]);
+	const returned = $derived(
+		(neighbours?.current?.ok ? neighbours.current.data : []) as SimilarHit[],
+	);
+	/** The cutoff is applied CLIENT-side, on what the service returned: the slider must react without
+	 *  a round trip, or dragging it is guesswork. `howMany` is the server-side ask. */
+	const hits = $derived(withinDistance(returned, maxDistance));
+	const bounds = $derived(distanceBounds(returned));
+	const cutoffSummary = $derived(describeCutoff(returned.length, hits.length));
 
 	/** The neighbour keys, minus the seed — the service already drops it, but this panel is also the
 	 *  place a stale result would show up, and adding the thing you clicked to your own batch is the
@@ -89,6 +118,52 @@
 				Nothing else in this corpus is near it.
 			</p>
 		{:else}
+			<!-- THE TWO KNOBS, both visible and both adjustable (`open_browse.md` §5). The plan is
+			     explicit that this is the difference between a useful tool and one that silently
+			     mislabels a corpus, and the summary line is the visible half: it names how many
+			     candidates the cutoff EXCLUDED, because "18 of 24" leaves the six invisible and the
+			     dropped count is what tells you the cutoff is too strict. -->
+			<div class="border-border flex flex-col gap-1.5 border-b pb-2" data-testid="propagate-knobs">
+				<div class="flex items-center gap-2 text-xs">
+					<label class="text-muted-foreground shrink-0" for="similar-n">neighbours</label>
+					<Input
+						id="similar-n"
+						type="number"
+						min="1"
+						max={MAX_SIMILAR_N}
+						bind:value={howMany}
+						class="h-7 w-20 text-xs"
+						data-testid="propagate-n"
+					/>
+					{#if bounds}
+						<span class="text-muted-foreground ml-auto font-mono">
+							{bounds.nearest.toFixed(3)}–{bounds.furthest.toFixed(3)}
+						</span>
+					{/if}
+				</div>
+				{#if bounds}
+					<!-- Bounded to the distances ACTUALLY returned, so the control cannot be dragged into
+					     a range where nothing lives — a slider that does nothing is worse than none. -->
+					<div class="flex items-center gap-2 text-xs">
+						<label class="text-muted-foreground shrink-0" for="similar-cutoff">cutoff</label>
+						<input
+							id="similar-cutoff"
+							type="range"
+							class="h-7 flex-1"
+							min={bounds.nearest}
+							max={bounds.furthest}
+							step="0.001"
+							bind:value={maxDistance}
+							data-testid="propagate-cutoff"
+						/>
+						<span class="font-mono">{Number(maxDistance).toFixed(3)}</span>
+					</div>
+				{/if}
+				<p class="text-muted-foreground text-xs" data-testid="propagate-summary">
+					{cutoffSummary}
+				</p>
+			</div>
+
 			<ul class="max-h-64 overflow-y-auto text-xs" data-testid="similar-list">
 				{#each hits as hit, i (keyOfHit(hit, keyFields))}
 					{@const key = keyOfHit(hit, keyFields)}
