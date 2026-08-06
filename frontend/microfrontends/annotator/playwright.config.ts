@@ -48,7 +48,16 @@ export default defineConfig({
 			// The projects/tasks/assist upstream every ported remote function reaches. Whether a model
 			// runner is deployed is no longer this server's env — it is whatever a spec seeds on the
 			// mock, and unseeded means unreachable, which keeps the honest-mock chip up.
-			env: { ANNOTATOR_API: MOCK_ANNOTATOR, ANNOTATOR_PROJECTS_API: MOCK_ANNOTATOR },
+			// SEARCH_API points at the same generic mock: `findSimilar` is a remote function, so it
+			// runs on the ZONE SERVER and `page.route` cannot see it — without this it fell through to
+			// the `:8102` default, nothing answered, and the "more like this" panel could only ever be
+			// driven into its error branch. That is why the propagation knobs (#87) had no browser
+			// coverage at all: the controls render only once a search SUCCEEDS.
+			env: {
+				ANNOTATOR_API: MOCK_ANNOTATOR,
+				ANNOTATOR_PROJECTS_API: MOCK_ANNOTATOR,
+				SEARCH_API: MOCK_ANNOTATOR,
+			},
 		},
 		{
 			command: 'bun e2e/mock-annotator.ts',

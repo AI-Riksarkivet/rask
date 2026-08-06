@@ -1,5 +1,7 @@
 import { test, expect, type Route } from '@playwright/test';
 
+import { MOCK_ANNOTATOR } from './ports';
+
 // Hermetic coverage for the zone contract: the app is server-aware (hooks + BFF routes
 // answer under /annotator; only the Pixi canvas page itself opts out of SSR per-page),
 // the client fetches the media plane through THIS zone's base-prefixed BFF routes
@@ -216,3 +218,47 @@ test('AI assist is NOT offered on a canvas that cannot accept shapes', async ({ 
 // The FAIL-HONEST chip test and the real-runner Detect flow both need a server where a runner IS
 // deployed (`MEDIA_ASSIST_URL` set) — presence is server env now, not a fetch the browser can restub.
 // They live in e2e/runner/assist.spec.ts, driven against this config's second app server.
+
+test('propagation exposes BOTH knobs and says what the cutoff EXCLUDED', async ({ page }) => {
+	// #87 / `open_browse.md` §5. Propagating a label to neighbours is the highest-leverage action on
+	// this surface and the easiest way to mislabel a corpus at scale: `n` alone says "give me forty"
+	// whether or not forty are actually alike, so the fortieth gets the label because it was RETURNED,
+	// not because it resembled anything. Both knobs must be VISIBLE and adjustable, and the cutoff has
+	// to state what it removed — a threshold nobody can see is the whole failure mode.
+	//
+	// `findSimilar` is a REMOTE function: it runs on the zone SERVER, so `page.route` cannot intercept
+	// it. It is seeded on the mock instead, which `SEARCH_API` now points at (playwright.config.ts).
+	// Before that env existed this panel could only ever be driven into its error branch — which is
+	// why the propagation controls had no browser coverage at all.
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/seed`, {
+		data: {
+			routes: {
+				'GET /api/search/similar': [
+					{ doc_id: DOC, speech_id: 0, chunk_id: 20, _distance: 0.1 },
+					{ doc_id: DOC, speech_id: 0, chunk_id: 21, _distance: 0.2 },
+					{ doc_id: DOC, speech_id: 0, chunk_id: 22, _distance: 0.9 },
+				],
+			},
+		},
+	});
+
+	await page.goto('/annotator/browse');
+	await page.getByTestId('doc-row').first().click();
+	await expect(page.getByTestId('chunk-picker')).toBeVisible();
+	await page.getByTestId('similar-open').first().click();
+
+	// Both knobs RENDERED, not merely implemented.
+	await expect(page.getByTestId('propagate-n')).toBeVisible();
+	await expect(page.getByTestId('propagate-cutoff')).toBeVisible();
+
+	// Wide open: everything returned is inside the cutoff, and the panel says so rather than leaving
+	// the reader to infer it from a list length.
+	await expect(page.getByTestId('propagate-summary')).toContainText('all 3 within the cutoff');
+
+	// Tighten below the furthest neighbour. The summary must name the EXCLUDED one — "2 of 3" alone
+	// would leave it invisible, which is exactly the silence this task exists to remove.
+	await page.getByTestId('propagate-cutoff').fill('0.5');
+	await expect(page.getByTestId('propagate-summary')).toContainText('1 beyond the cutoff');
+	// …and it is genuinely gone from the LIST, not merely from the count.
+	await expect(page.getByTestId('similar-list')).not.toContainText('0.900');
+});

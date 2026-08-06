@@ -69,3 +69,54 @@ export function newlyAdded(existing: readonly string[], incoming: readonly strin
 	const have = new Set(existing);
 	return new Set(incoming.filter((k) => k && !have.has(k))).size;
 }
+
+/** The default cutoff. Deliberately generous — a threshold that hides candidates on first open
+ *  teaches people the feature is broken, and the histogram below tells them where to tighten it. */
+export const DEFAULT_MAX_DISTANCE = 1;
+
+/**
+ * The neighbours at or inside a distance cutoff.
+ *
+ * PROPAGATION'S SAFETY RAIL (`open_browse.md` §5). Labelling a few items and pushing the label to
+ * their neighbours is the highest-leverage action on this surface and the easiest way to mislabel a
+ * corpus at scale: `n` alone says "give me forty" whether or not forty are actually alike, so the
+ * fortieth gets the label because it was returned, not because it resembled anything.
+ *
+ * A hit with NO distance is KEPT. The service omits `_distance` when a corpus declares no vector
+ * space, and silently dropping every candidate there would present "no matches" for what is really
+ * "this corpus cannot answer that question" — the two are different and only one is the user's
+ * fault.
+ */
+export function withinDistance(hits: readonly SimilarHit[], maxDistance: number): SimilarHit[] {
+	return hits.filter((h) => h._distance === undefined || h._distance <= maxDistance);
+}
+
+/**
+ * How the candidates are spread, so the cutoff can be set by LOOKING rather than guessing.
+ *
+ * The design's requirement is that both knobs be visible and adjustable; a number with no sense of
+ * the distribution is adjustable but not visible in any useful way. `nearest`/`furthest` bound the
+ * slider to the data actually returned, so the control cannot be dragged into a range where nothing
+ * lives.
+ */
+export function distanceBounds(
+	hits: readonly SimilarHit[],
+): { nearest: number; furthest: number } | null {
+	const ds = hits.map((h) => h._distance).filter((d): d is number => typeof d === 'number');
+	if (ds.length === 0) return null;
+	return { nearest: Math.min(...ds), furthest: Math.max(...ds) };
+}
+
+/**
+ * What the cutoff is doing, in words — the sentence beside the slider.
+ *
+ * Names what is EXCLUDED, not just what is kept. "18 of 24" leaves the six invisible; "6 beyond the
+ * cutoff" is the number someone needs to decide whether they are being too strict, and it is the
+ * difference between a threshold you can reason about and one that silently eats candidates.
+ */
+export function describeCutoff(total: number, kept: number): string {
+	const dropped = total - kept;
+	if (total === 0) return 'no candidates';
+	if (dropped === 0) return `all ${total} within the cutoff`;
+	return `${kept} of ${total} — ${dropped} beyond the cutoff`;
+}
