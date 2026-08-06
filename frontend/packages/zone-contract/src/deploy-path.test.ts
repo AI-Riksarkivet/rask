@@ -89,11 +89,46 @@ describe('nothing outside the frontend still points at a moved path', () => {
 		'.dagger/frontend.go',
 	];
 
+	/**
+	 * The file's CODE, with comments stripped.
+	 *
+	 * This gate matches on NAMES, and a file that EXPLAINS why it does not use one contains the same
+	 * characters as a file that uses it. Measured: `chart/templates/frontends.yaml` gained a comment
+	 * reading "Deliberately ABOVE the BFF's own 25 MB guard (`@rask/api/serve-proxy`)" — a sentence
+	 * documenting an unrelated limit — and this gate reported the chart as naming a retired package.
+	 *
+	 * Rewriting the prose would be the smaller change and the wrong one: it leaves a gate whose
+	 * failure mode is "someone described the system too precisely", and the tempting fix is always to
+	 * delete the explanation. The ingest plane's I3/I4 grep-gates hit this three times and landed on
+	 * the same answer.
+	 *
+	 * `//` is stripped only when NOT preceded by `:` — otherwise every `https://` URL in a chart
+	 * annotation would be truncated mid-value and the gate would stop seeing real references.
+	 */
+	const codeOnly = (src: string): string =>
+		src
+			.split('\n')
+			.map((line) => line.replace(/#.*$/, '').replace(/(^|[^:])\/\/.*$/, '$1'))
+			.join('\n');
+
 	it.each(SEARCHED)('%s names no retired package or zone', (rel) => {
 		const path = resolve(REPO_ROOT, rel);
 		if (!existsSync(path)) return; // the file moving is a separate, visible change
-		const src = readFileSync(path, 'utf8');
+		const src = codeOnly(readFileSync(path, 'utf8'));
 		expect(DEAD.filter((d) => src.includes(d))).toEqual([]);
+	});
+
+	it('the comment-stripping does not blind the gate to a REAL reference', () => {
+		// A gate that has never been seen to fail is indistinguishable from a broken regex, and this
+		// one just grew a filter that could swallow the very thing it looks for.
+		const withReal = codeOnly('image: @rask/ui\n# a comment mentioning @rask/api\n');
+		expect(DEAD.filter((d) => withReal.includes(d))).toEqual(['@rask/']);
+
+		const commentOnly = codeOnly('# only a comment mentioning @rask/api\n');
+		expect(DEAD.filter((d) => commentOnly.includes(d))).toEqual([]);
+
+		// A URL survives: stripping `//` after a colon would cut every annotation value in half.
+		expect(codeOnly('  url: https://example.com/x')).toContain('https://example.com/x');
 	});
 
 	// The list above holds PACKAGE and DIRECTORY names, so a retired URL path walked straight through it —
