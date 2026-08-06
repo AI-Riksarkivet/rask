@@ -124,6 +124,30 @@ spec:
           {{- include "lance.preStop" $root | nindent 10 }}
           env:
             # --- the shared zone env (every zone gets these) ---------------------------
+            # The Bun server's request-body ceiling, and it MUST be set: `svelte-adapter-bun`
+            # defaults BODY_SIZE_LIMIT to 512K (see a zone's own build/index.js), which is
+            # smaller than anything this estate actually uploads — a page scan is megabytes.
+            # Over the limit the SERVER answers 413 before the route runs, with a body that is
+            # not our problem+json, so the UI could only report an opaque "HTTP 413". Measured
+            # 2026-08-06: a 2.25 MB scan into studio's /api/infer.
+            #
+            # Deliberately ABOVE the BFF's own 25 MB guard (`@rask/api/serve-proxy`) so the
+            # guard is what speaks: it names the limit and the reason, whereas the adapter's
+            # 413 is anonymous. The zone-level knob is the outer bound, not the policy.
+            - name: BODY_SIZE_LIMIT
+              value: {{ $root.Values.frontend.bodySizeLimit | default "32M" | quote }}
+            {{- $serveOrigin := $root.Values.frontend.serveUrl | default (printf "http://%s-ray-serve-svc:8000" (include "rask.fullname" $root)) }}
+            # Ray Serve's HTTP INGRESS — a different endpoint from the dashboard the compute service
+            # reads for `/api/serve` discovery, and nothing routes to it: inference is the one call the
+            # gateway cannot carry (its `/api/serve` row is GET-only by design, because Ray's dashboard
+            # exposes a deploy API). So the two zones that offer inference reach it directly, and both
+            # default to `http://localhost:8000` in code — which inside a pod is the pod. Studio takes
+            # the ORIGIN (it appends `?app=`); compute takes the full app URL.
+            - name: STUDIO_SERVE_URL
+              value: {{ $serveOrigin | quote }}
+            # #131: inference moved models -> compute (it is a compute concern, not a registry one).
+            - name: COMPUTE_SERVE_URL
+              value: {{ printf "%s/%s" (trimSuffix "/" $serveOrigin) (trimPrefix "/" ($root.Values.ray.serveRoutePrefix | default "/htrflow")) | quote }}
             # SSR load/remote functions reach the gateway server-side via an absolute base
             # URL; client code uses the relative /api/* Ingress route. Both names are live:
             # the api package's gateway client reads RASK_GATEWAY_URL, the BFF reads
@@ -224,7 +248,7 @@ spec:
               value: {{ printf "http://%s:5556/dex" (include "lance.dexHost" $root) | quote }}
             {{- end }}
             {{- end }}
-            {{- if and $root.Values.ray.enabled (eq .name "models") }}
+            {{- if and $root.Values.ray.enabled (eq .name "compute") }}
             # --- the models zone's inference upstream ------------------------------------------
             # The playground (/models/playground) posts page bytes to the Ray SERVE HTTP INGRESS,
             # NOT through the gateway. That is not a shortcut: /api/serve reaches Ray's DASHBOARD
@@ -235,7 +259,7 @@ spec:
             # way (MEDALLION_HTRFLOW_URL), so this is the established seam, not a new one.
             #
             # Scoped PER ZONE like the media block below: no other zone routes to Serve.
-            - name: MODELS_SERVE_URL
+            - name: COMPUTE_SERVE_URL
               value: {{ printf "http://%s-ray-head-svc:%v%s" (include "rask.fullname" $root) $root.Values.ray.servePort $root.Values.ray.serveRoutePrefix | quote }}
             {{- end }}
             {{- if and $root.Values.explorer.enabled (or (eq .name "explorer") (eq .name "annotator")) }}

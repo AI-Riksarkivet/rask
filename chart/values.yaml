@@ -373,6 +373,16 @@ controlplane:
 frontend:
   enabled: true
   replicas: 1
+  # The Bun server's request-body ceiling for EVERY zone. `svelte-adapter-bun` defaults it to 512K,
+  # which silently 413s any real upload (a page scan is megabytes) from the server itself — before the
+  # route, so the answer is not our problem+json and the UI can only say "HTTP 413". Kept ABOVE the
+  # BFF's own 25 MB inference guard so that guard is what a user actually reads.
+  bodySizeLimit: 32M
+  # Ray Serve's HTTP ingress origin, for the zones that run inference (studio's flow builder, models'
+  # playground). Empty = the in-cluster KubeRay Serve service, `<release>-ray-serve-svc:8000`. Set it
+  # when Serve lives on a cluster this chart does not own — the address is NOT derivable from the Ray
+  # DASHBOARD the compute service reads, and the two can be different clusters entirely.
+  serveUrl: ''
   image:
     # The DEFAULT tag; shared across zones. A zone may override it with `tag:` on its apps entry below —
     # that is what makes the zone split mean anything: independent deploy is the only thing a zone
