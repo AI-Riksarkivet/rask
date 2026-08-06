@@ -1208,3 +1208,60 @@ def test_the_INGEST_stream_has_ONE_definition_and_the_chart_agrees_with_the_code
     # (2) The chart must not describe the stream as something it does not create.
     if "WorkQueuePolicy" in job:
         assert "--retention work" in body, "the chart calls INGEST a WorkQueuePolicy stream while creating it otherwise"
+
+
+def test_the_lineage_allowlist_is_DERIVED_from_every_declared_identity() -> None:
+    """The door's allowlist and the callers' claims must come from ONE value, not two lists.
+
+    `LINEAGE_SERVICE_SUBJECTS` was a hand-written string naming three services, and a list that has
+    to be kept in sync with the set of services that emit lineage WILL drift — nothing connected the
+    two. It drifted twice: the trainer in 2026-07, and `service-ingest` on 2026-08-06, where every
+    ingest emit 403'd for a day while the data landed perfectly.
+
+    The failure is SILENT by construction, which is why a gate is the only thing that catches it. The
+    emitter swallows a refused emit on purpose — a landed commit must not become a failed run — so
+    the symptom is an absence in the graph, not an error anywhere.
+
+    A service now DECLARES itself by setting `env.RASK_LINEAGE_SERVICE_IDENTITY`, and the chart reads
+    those declarations. This asserts the derivation actually holds: declare an identity and you are
+    admitted; the string cannot be edited out from under a declaration.
+    """
+    import re
+
+    rendered = _helm_template("auth.enabled=true")
+
+    declared = {
+        m.group(1)
+        for m in re.finditer(r'name:\s*RASK_LINEAGE_SERVICE_IDENTITY,\s*value:\s*"?([\w-]+)"?', rendered)
+    }
+    assert declared, "no service declares a lineage identity — the derivation has nothing to read, so this gate is vacuous"
+
+    allowlist_match = re.search(r'name:\s*LINEAGE_SERVICE_SUBJECTS,\s*value:\s*"([^"]*)"', rendered)
+    assert allowlist_match, "the lineage door renders no allowlist at all — every service emit will 401"
+    allowed = set(allowlist_match.group(1).split(","))
+
+    missing = declared - allowed
+    assert not missing, (
+        f"{sorted(missing)} declare RASK_LINEAGE_SERVICE_IDENTITY but are NOT in LINEAGE_SERVICE_SUBJECTS. "
+        "Their lineage emits will 403 and the emitter will swallow it — the data lands and the graph "
+        "stays empty, with nothing reporting the gap."
+    )
+
+
+def test_the_allowlist_admits_NO_EMPTY_subject() -> None:
+    """An unset identity must contribute nothing, not an empty string.
+
+    `compact` is what provides this. Without it a service whose identity is unset renders a bare `,,`
+    and the door's allowlist contains "" — which admits a caller presenting no identity at all, on a
+    door whose entire purpose is to require one.
+    """
+    import re
+
+    rendered = _helm_template("auth.enabled=true")
+    match = re.search(r'name:\s*LINEAGE_SERVICE_SUBJECTS,\s*value:\s*"([^"]*)"', rendered)
+    assert match
+
+    subjects = match.group(1).split(",")
+
+    assert "" not in subjects, f"the allowlist contains an EMPTY subject: {subjects!r} — it would admit an unidentified caller"
+    assert len(subjects) == len(set(subjects)), f"the allowlist repeats a subject: {subjects!r}"
