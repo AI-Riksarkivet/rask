@@ -12,8 +12,6 @@ over.
 
 from __future__ import annotations
 
-from typing import Any
-
 import lance
 import pyarrow as pa
 import pytest
