@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Self
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,15 @@ class QueueHealth(BaseModel):
     reachable: bool = Field(description="the NATS server answered")
     stream_present: bool | None = Field(default=None, description="the INGEST stream exists; None when unreachable")
     messages: int | None = Field(default=None, description="messages currently on the stream")
-    consumers: int | None = Field(default=None, description="durable consumers bound to it")
+    consumers: int | None = Field(
+        default=None,
+        description=(
+            "durable consumers bound to the stream RIGHT NOW. Zero is the normal IDLE state, not a "
+            "fault: the drain creates one durable per run (`ingest-<run_id>`) and it goes away with "
+            "the run, so between runs there is nothing bound. Read `stranded` for the question this "
+            "number gets mistaken for."
+        ),
+    )
     dlq_present: bool | None = Field(
         default=None,
         description=(
@@ -55,7 +64,33 @@ class QueueHealth(BaseModel):
             "with no stream fails silently, so a poison unit is dropped rather than parked."
         ),
     )
+    stranded: bool | None = Field(
+        default=None,
+        description=(
+            "messages are queued and NOTHING is bound to take them — work nobody is coming for. "
+            "The endpoint already held both numbers and reported neither, so two readers in one day "
+            "read `consumers: 0` as 'no worker exists' when it is the ordinary idle state."
+        ),
+    )
     detail: str | None = Field(default=None, description="what went wrong, when something did")
+
+    @model_validator(mode="after")
+    def _derive_stranded(self) -> Self:
+        """`messages > 0` with `consumers == 0` is the one combination that means WORK IS LOST.
+
+        The stream is WORK_QUEUE retention, so a message leaves only when it is ACKED. A unit whose
+        run died takes its durable consumer with it and the message then sits forever: no consumer
+        will be created for that run id again, nothing sweeps the stream, and every other signal
+        stays green. Measured on the live estate — one message, no consumers, unchanged across an
+        hour.
+
+        Derived rather than reported by the probe because it is a JUDGEMENT about two facts, and the
+        probe's job is to state facts. Computed here, once, so no caller has to remember the rule —
+        which is exactly what both readers of this endpoint failed to do.
+        """
+        if self.reachable and self.messages is not None and self.consumers is not None:
+            object.__setattr__(self, "stranded", self.messages > 0 and self.consumers == 0)
+        return self
 
 
 @router.get("/queue", response_model=QueueHealth)

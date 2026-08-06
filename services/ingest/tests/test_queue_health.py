@@ -99,3 +99,62 @@ def test_the_diagnostic_is_NOT_folded_into_liveness() -> None:
     assert not any(
         isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in ("stream_info", "jetstream", "connect") for n in ast.walk(tree)
     ), "the liveness route grew a dependency probe"
+
+
+# ── `stranded` — the question `consumers` gets mistaken for ──────────────────
+
+
+def test_ZERO_consumers_is_the_IDLE_state_not_a_fault() -> None:
+    """The misreading this field exists to end, and it happened TWICE in one day.
+
+    The drain creates one durable per run (`ingest-<run_id>`, `queue.py:197`) and it goes away with
+    the run, so between runs nothing is bound. An automated audit and then a human reader both saw
+    `consumers: 0` on the live estate and reported "no worker deployment exists" — a diagnosis that
+    sent the next hour looking for a missing Deployment that was never supposed to exist.
+
+    A field can be factually correct and still be the wrong answer to the question people bring it.
+    """
+    from ingest.queue_health import QueueHealth
+
+    idle = QueueHealth(reachable=True, stream_present=True, messages=0, consumers=0)
+
+    assert idle.stranded is False, "an EMPTY queue with no consumer is a plane at rest"
+
+
+def test_messages_with_NO_consumer_is_work_nobody_is_coming_for() -> None:
+    """The real defect, and the one combination that means work is LOST.
+
+    WORK_QUEUE retention removes a message only when it is ACKED. A unit whose run died takes its
+    durable consumer with it, and the message then sits forever: no consumer is ever created for that
+    run id again, nothing sweeps the stream, and every other signal stays green. Measured on the live
+    estate — one message, no consumers, unchanged across an hour of polling.
+    """
+    from ingest.queue_health import QueueHealth
+
+    stuck = QueueHealth(reachable=True, stream_present=True, messages=1, consumers=0)
+
+    assert stuck.stranded is True
+
+
+def test_a_DRAINING_run_is_not_stranded() -> None:
+    """Messages plus a bound consumer is the plane WORKING. Reporting that as stranded would train
+    an operator to ignore the field, which is how a real signal dies."""
+    from ingest.queue_health import QueueHealth
+
+    busy = QueueHealth(reachable=True, stream_present=True, messages=500, consumers=1)
+
+    assert busy.stranded is False
+
+
+def test_an_UNREACHABLE_queue_says_UNKNOWN_rather_than_fine() -> None:
+    """`None`, not `False`. The two are different claims and only one of them is true.
+
+    `False` asserts "nothing is stranded" — from a probe that could not look. That is the same
+    false-negative shape as A8 certifying provenance it could not read: an unanswerable question
+    reported as a clean answer.
+    """
+    from ingest.queue_health import QueueHealth
+
+    down = QueueHealth(reachable=False, detail="connection refused")
+
+    assert down.stranded is None
