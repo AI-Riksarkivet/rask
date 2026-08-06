@@ -46,6 +46,28 @@ from ray_kit.schemas import (
 
 log = logging.getLogger(__name__)
 
+#: How many jobs a `/jobs` read may materialise, newest first.
+#:
+#: Ray's Jobs API takes NO query parameters (`GET /api/jobs`, spec v4.0.0) — no limit, offset or
+#: status filter — so it hands back every job the cluster has ever seen and the bound can only be
+#: applied here. The live cluster measured 81,155 jobs / 164.7 MB in one response; validating all of
+#: them peaked at 1179 MiB against a 1536 MiB container limit (two concurrent calls: 1488 MiB).
+#:
+#: 200 is chosen against the CONSUMER, not the producer: the jobs board paginates and no rask surface
+#: renders more than a screenful of recent runs. `total`/`truncated` on the payload keep the cap
+#: honest rather than silent.
+MAX_JOBS = 200
+
+#: Row cap for the task state API.
+#:
+#: This was `10000`, which is EXACTLY Ray's `RAY_MAX_LIMIT_FROM_API_SERVER` ceiling — the code asked
+#: for the largest page the server will ever produce, on an endpoint polled every 5 s by two separate
+#: pages. `detail=1` is unfortunately load-bearing (`required_resources`, `error_message` and the
+#: three timestamps are all `state_column(detail=True)` in Ray 2.56, and the state API offers no
+#: column projection), so each row carries `runtime_env_info`, `events`, `profiling_data` and
+#: `call_site` whether or not anything reads them. The only lever is the row count.
+MAX_TASKS = 500
+
 # Errors meaning "Ray is unreachable / refused us", raised by the Job SDK at runtime.
 # `requests.*` subclass OSError (NOT builtin ConnectionError); the SDK only translates
 # its construct-time check to builtin ConnectionError, so live calls can still raise
@@ -151,25 +173,46 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
     return RayHealth(ok=True, dashboard_url=dashboard_url, client_ray_version=ray.__version__)
 
 
-async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str) -> RayJobsPayload:
+async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str, *, max_jobs: int = MAX_JOBS) -> RayJobsPayload:
     if client is None:
         return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error="Ray dashboard unreachable")
     try:
         details = await to_thread.run_sync(client.list_jobs)
     except RAY_TRANSIENT_ERRORS as exc:
         return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+    # SORT AND CAP FIRST, VALIDATE SECOND. The old order — validate every job, then sort — built a
+    # `.dict()` copy AND a `RayJob` for every job Ray had ever seen. Measured against the live
+    # cluster: 81,155 jobs / 164.7 MB in one response, peaking at 1179 MiB of RSS for a single call
+    # against a 1536 MiB limit, and 1488 MiB for two concurrent ones. That is the OOMKill.
+    #
+    # Ray's Jobs API cannot help. `GET /api/jobs` is specified (v4.0.0) with NO parameters at all —
+    # no limit, no offset, no status filter — so it always returns every job ever submitted and the
+    # bound has to be ours. The list only grows: the HTR pipeline submits one job per chunk and
+    # dashboard job history never expires, so this is not a plateau we can wait out.
+    #
+    # Sorting Ray's own `JobDetails` objects is cheap (they already exist — the SDK materialised
+    # them) and lets us pay the expensive `.dict()` + `model_validate` for `max_jobs` rows instead
+    # of all of them.
+    present = [d for d in details if d is not None]
+    recent = sorted(present, key=lambda d: getattr(d, "start_time", None) or 0, reverse=True)[:max_jobs]
+
     jobs: list[RayJob] = []
-    for d in details:
-        if d is None:
-            continue
+    for d in recent:
         # `.dict()` (V1 API) is required: Ray ships `JobDetails` as a Pydantic V1 model
         # so `model_dump()` doesn't exist. See `schemas/ray.py` for the rationale.
         payload = d.dict()
         payload["batches"] = _parse_batches(d.entrypoint)
         payload["logs_url"] = f"{dashboard_url}/#/jobs/{d.submission_id}" if d.submission_id else None
         jobs.append(RayJob.model_validate(payload))
-    jobs.sort(key=lambda j: getattr(j, "start_time", None) or 0, reverse=True)
-    return RayJobsPayload(ok=True, dashboard_url=dashboard_url, jobs=jobs)
+    # `total` + `truncated` so the cap is VISIBLE. A silently shortened list reads as "the cluster
+    # has 200 jobs", which is a lie the UI would have no way to detect.
+    return RayJobsPayload(
+        ok=True,
+        dashboard_url=dashboard_url,
+        jobs=jobs,
+        total=len(present),
+        truncated=len(present) > len(jobs),
+    )
 
 
 def _parse_res_value(s: str) -> float:
@@ -396,7 +439,7 @@ def _state_rows(payload: dict) -> list[dict]:
 async def list_tasks(http: httpx.AsyncClient, dashboard_url: str) -> RayTasksPayload:
     """Tasks from the state API (`/api/v0/tasks`)."""
     try:
-        resp = await http.get(f"{dashboard_url}/api/v0/tasks?detail=1&limit=10000")
+        resp = await http.get(f"{dashboard_url}/api/v0/tasks?detail=1&limit={MAX_TASKS}")
         resp.raise_for_status()
         rows = _state_rows(resp.json())
     except httpx.HTTPError as exc:
