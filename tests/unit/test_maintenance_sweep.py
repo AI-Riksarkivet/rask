@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pyarrow.fs as pafs
-from maintenance.services.optimize import DatasetResult, discover_dataset_uris
+from maintenance.services.optimize import DatasetResult, discover_datasets
 from maintenance.services.sweep import summarize
 
 
@@ -47,7 +47,7 @@ def test_discover_skips_manifest_and_non_dirs() -> None:
             "lance-catalog/efgh_gold$catalog": [_dir("lance-catalog/efgh_gold$catalog/_versions")],
         }
     )
-    uris = discover_dataset_uris(cast(Any, fs), "lance-catalog")
+    uris = discover_datasets(cast(Any, fs), "lance-catalog").uris
     assert uris == ["s3://lance-catalog/abcd_ns$table", "s3://lance-catalog/efgh_gold$catalog"]
 
 
@@ -66,7 +66,7 @@ def test_discover_recurses_namespace_prefixes_to_nested_datasets() -> None:
             "lance-catalog/abcd_t": [_dir("lance-catalog/abcd_t/_versions")],
         }
     )
-    uris = discover_dataset_uris(cast(Any, fs), "lance-catalog")
+    uris = discover_datasets(cast(Any, fs), "lance-catalog").uris
     assert uris == [
         "s3://lance-catalog/medallion/raw",
         "s3://lance-catalog/medallion/bronze",

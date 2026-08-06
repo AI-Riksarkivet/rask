@@ -44,7 +44,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
-from maintenance.services.optimize import discover_dataset_uris
+from maintenance.services.optimize import discover_datasets
 from maintenance.services.orphans import OrphanFile, scan_datasets
 from service_kit.governed import fga
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
@@ -654,10 +654,16 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
     datasets: list[tuple[str, str]] = []
     for bucket in _scannable_buckets(report, settings, sources):
         try:
-            for uri in discover_dataset_uris(fs, bucket):
-                datasets.append((uri, uri.removeprefix("s3://")))
+            found = discover_datasets(fs, bucket)
         except Exception as exc:
             report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"dataset discovery failed: {exc}"))
+            continue
+        datasets.extend((uri, uri.removeprefix("s3://")) for uri in found.uris)
+        # The depth bound is a REAL gap in coverage, so it becomes a real incomplete-scan note: a
+        # dataset nested deeper than the walk reaches was never opened, and `report_is_clean` — the
+        # gate the #79 purge waits on — must not certify an estate whose file layer we only partly saw.
+        for prefix in found.truncated:
+            report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"depth limit reached at {prefix} — datasets under it were not scanned"))
     scan = scan_datasets(fs, datasets, settings.storage_options())
     report.orphan_files = scan.orphans
     report.counts["orphan_files"] = len(scan.orphans)

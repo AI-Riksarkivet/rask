@@ -49,7 +49,23 @@ class DatasetResult(BaseModel):
     error_type: str | None = None
 
 
-def discover_dataset_uris(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -> list[str]:
+class Discovery(BaseModel):
+    """What one bucket's walk found — AND what it did not reach.
+
+    ``truncated`` exists because the depth bound used to be silent. A dataset nested deeper than
+    ``max_depth`` was neither maintained by the sweep nor scanned by the orphan pass, and NOTHING
+    recorded that: both surfaces reported success over the datasets they happened to reach. That is
+    the "0 that means we did not look" the orphan module's own docstring forbids, arrived at from the
+    other direction. A prefix we stopped walking is now DATA the caller must dispose of — the sweep
+    counts it, the reconciler files an ``IncompleteScan``.
+    """
+
+    uris: list[str] = []
+    #: Prefixes the walk stopped at because it hit ``max_depth`` — each may hide any number of datasets.
+    truncated: list[str] = []
+
+
+def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -> Discovery:
     """Lance datasets under ``bucket`` — a directory IS a dataset iff it has a ``_versions/`` child
     (the Lance table-layout marker); any other directory is a namespace prefix and is recursed into
     (bounded by ``max_depth``). Skips ``__`` bookkeeping dirs (the catalog's ``__manifest``) and the
@@ -59,8 +75,10 @@ def discover_dataset_uris(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 
     The catalog lays top-level tables out as ``<uuid>_<table_id>/``, but the medallion cascade nests
     its datasets one level down (``medallion/raw`` …) — without the marker probe the sweep both
     reported the ``medallion/`` prefix as a failed dataset AND never maintained the real ones under it.
+
+    Returns a :class:`Discovery`, not a bare list, so the depth cut-off cannot be dropped on the floor.
     """
-    uris: list[str] = []
+    found = Discovery()
 
     def _walk(prefix: str, depth: int) -> None:
         for info in fs.get_file_info(pafs.FileSelector(prefix, recursive=False)):
@@ -71,12 +89,16 @@ def discover_dataset_uris(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 
                 continue
             marker = fs.get_file_info(f"{info.path}/_versions")
             if marker.type == pafs.FileType.Directory:
-                uris.append(f"s3://{info.path}")
+                found.uris.append(f"s3://{info.path}")
             elif depth < max_depth:
                 _walk(info.path, depth + 1)
+            else:
+                # Not a dataset, and we are out of depth — anything under here is unmaintained and
+                # unscanned. Record the prefix rather than returning silently.
+                found.truncated.append(f"s3://{info.path}")
 
     _walk(bucket, 1)
-    return uris
+    return found
 
 
 def compact_one(
