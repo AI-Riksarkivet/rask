@@ -171,16 +171,52 @@
 	navigation: auto;
 }
 
-/* The estate's flash was a white PAINT, not a missing animation, so the default cross-fade is the
-   whole fix; a slide would be decoration. Kept short enough not to feel like latency. */
+/* SHELL PARITY — the half that actually answers "everything flashes, even the sidebar and topnavbar".
+   The opt-in alone is not enough: the DEFAULT cross-document transition captures each document
+   WHOLE and cross-fades one into the other, so the navbar fades into an identical navbar and the
+   sidebar into an identical sidebar. Nothing moved, and yet every pixel animated — which reads as a
+   flash of the chrome rather than as a page changing.
+
+   A `view-transition-name` makes the browser treat the two documents' elements as the SAME element
+   and carry it across the swap instead of blending two copies. So the chrome is named and held
+   still, and only the content region animates. That is the whole point of an MFE fleet whose shell
+   is identical in all seven zones: the shell should look continuous precisely BECAUSE it is.
+
+   Names must be unique per document — one header, one sidebar, one main, which the shell guarantees. */
+header {
+	view-transition-name: rask-shell-header;
+}
+
+[data-slot='sidebar-wrapper'] > [data-slot='sidebar'] {
+	view-transition-name: rask-shell-sidebar;
+}
+
+main {
+	view-transition-name: rask-shell-main;
+}
+
+/* The chrome is CONTINUOUS, not animated: a named element still gets the default cross-fade unless
+   told otherwise, and cross-fading a thing into its own twin is the artefact being removed. */
+::view-transition-old(rask-shell-header),
+::view-transition-new(rask-shell-header),
+::view-transition-old(rask-shell-sidebar),
+::view-transition-new(rask-shell-sidebar) {
+	animation: none;
+	mix-blend-mode: normal;
+}
+
+/* Only the CONTENT animates, and only briefly — the change of page is the thing worth showing. */
+::view-transition-old(rask-shell-main),
+::view-transition-new(rask-shell-main),
 ::view-transition-old(root),
 ::view-transition-new(root) {
-	animation-duration: 180ms;
+	animation-duration: 140ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	::view-transition-old(root),
-	::view-transition-new(root) {
+	::view-transition-group(*),
+	::view-transition-old(*),
+	::view-transition-new(*) {
 		animation: none;
 	}
 }
