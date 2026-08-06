@@ -411,6 +411,9 @@ frontend:
   # playground). Empty = the in-cluster KubeRay Serve service, `<release>-ray-serve-svc:8000`. Set it
   # when Serve lives on a cluster this chart does not own — the address is NOT derivable from the Ray
   # DASHBOARD the compute service reads, and the two can be different clusters entirely.
+  # Empty => `ray.dashboardUrl` (the cluster `compute` discovers apps on — so the builder cannot list
+  # an app it is unable to call), and only if THAT is empty too, the in-cluster KubeRay Service.
+  # Set this ONLY when Serve lives somewhere the dashboard does not.
   serveUrl: ''
   image:
     # The DEFAULT tag; shared across zones. A zone may override it with `tag:` on its apps entry below —
