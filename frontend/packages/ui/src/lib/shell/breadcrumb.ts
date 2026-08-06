@@ -45,11 +45,17 @@ function humanise(seg: string): string {
  * and percent-decodes. The domain (first segment) is kept — it is the first crumb,
  * not the project.
  */
-export function pathCrumbs(pathname: string): Crumb[] {
+export function pathCrumbs(pathname: string, zoneLabels: Record<string, string> = {}): Crumb[] {
 	const segs = pathname.split('/').filter(Boolean);
 	return segs.map((seg, i) => {
 		const id = segs.slice(0, i + 1).join('/');
-		return { id, label: humanise(seg), href: `/${id}` };
+		// The FIRST segment is the zone, and its human name is the NAVBAR's, not the directory's.
+		// Reported: the trail read "Annotator > Browse" while the bar above it said "Annotate" — the
+		// same zone under two names on one screen. `humanise` can only ever produce the directory
+		// name, because that is all a URL segment carries; the label lives in `topNav()`. Later
+		// segments keep `humanise`: they are in-zone paths and identifiers, which have no nav entry.
+		const label = i === 0 ? (zoneLabels[seg] ?? humanise(seg)) : humanise(seg);
+		return { id, label, href: `/${id}` };
 	});
 }
 

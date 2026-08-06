@@ -190,7 +190,12 @@
 		     data and admin index pages open with. -->
 		<div class="flex shrink-0 flex-wrap items-center gap-3">
 			<div>
-				<h1 class="text-lg font-semibold">Annotate</h1>
+				<!-- "Bulk labeling", matching the RAIL ROW and the breadcrumb — not "Annotate", which is
+				     the ZONE's name. One page was calling itself three things at once: the rail said
+				     Bulk labeling, the breadcrumb said Browse, and this said Annotate, so the crumb
+				     trail read "Annotate / Browse / Annotate" and none of the three agreed. A page that
+				     repeats the zone name tells you nothing about where inside the zone you are. -->
+				<h1 class="text-lg font-semibold">Bulk labeling</h1>
 				<p class="text-muted-foreground text-sm">
 					Filter or sort to the documents you want, then pick chunks to send for labeling.
 				</p>

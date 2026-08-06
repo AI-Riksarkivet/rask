@@ -149,6 +149,20 @@
 					Next <ChevronRight class="size-4" />
 				</Button>
 			</div>
+		{:else}
+			<!-- Reported: "when pressing the preview button we dont see anything… its an empty drawer".
+			     There was no `{:else}`, so whenever the lookup missed, the sheet opened and rendered
+			     NOTHING — no title, no message, no way to tell a broken drawer from an empty item.
+			     The lookup can legitimately miss: `tasks` is the CURRENT PAGE's rows, and a filter,
+			     a sort or a page change between opening and rendering leaves the id pointing at a row
+			     that is no longer in view. That is recoverable and must say so. -->
+			<Sheet.Header>
+				<Sheet.Title>Item not in view</Sheet.Title>
+				<Sheet.Description>
+					This item is no longer on the current page — a filter, sort or page change moved it.
+					Clear the filter or turn back to its page to preview it.
+				</Sheet.Description>
+			</Sheet.Header>
 		{/if}
 	</Sheet.Content>
 </Sheet.Root>

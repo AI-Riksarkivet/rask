@@ -9,7 +9,7 @@
 	import { IsMobile, SHELL_COLLAPSE_BREAKPOINT } from '../hooks/is-mobile.svelte.js';
 	import { ChevronRight, MoreHorizontal } from '@lucide/svelte';
 	import { gsap } from 'gsap';
-	import { zoneNavLeaves } from './nav-config.js';
+	import { zoneNavLeaves , zoneLabels} from './nav-config.js';
 	import type { Me, NotificationFeed, Project, NavUser, ZoneNav } from './nav-config.js';
 	import { collapseCrumbs, pathCrumbs, projectFromHost, type Crumb } from './breadcrumb.js';
 	import { isMainMenu } from './nav-config.js';
@@ -133,7 +133,7 @@
 		name: projectName || 'Select project',
 		subtitle: projectName ? (project.subtitle ?? 'Project') : 'No active project',
 	});
-	const crumbs = $derived([...pathCrumbs(pathname), ...extraCrumbs]);
+	const crumbs = $derived([...pathCrumbs(pathname, zoneLabels()), ...extraCrumbs]);
 	// A deep path (project → domain → collection → a long resource id) does not fit a narrow row, so
 	// the MIDDLE of the trail folds behind an ellipsis menu rather than squeezing every crumb into
 	// illegibility — and the current page, the one crumb worth keeping, is never the thing that

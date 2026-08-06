@@ -670,3 +670,25 @@ export function prefetchOnIntent(href: string) {
 		};
 	};
 }
+
+
+/**
+ * zone directory segment -> the label the NAVBAR uses for it.
+ *
+ * Derived from `topNav()` rather than written out, so it cannot drift from the bar: the bar is the
+ * thing a person just read, and a breadcrumb that disagreed with it named the same zone twice on one
+ * screen ("Annotate" above, "Annotator" below). `annotator` -> `Annotate` is the deliberate
+ * label/directory split this exists for; every other zone happens to match, and would still be
+ * correct if one stopped matching tomorrow.
+ *
+ * `estateAdmin` is irrelevant to labels — Settings is the only admin-gated entry and is not a zone —
+ * so it is called with `false` and the result is stable.
+ */
+export function zoneLabels(): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const entry of topNav(false)) {
+		const seg = entry.href.split('/').filter(Boolean)[0];
+		if (seg) out[seg] = entry.title;
+	}
+	return out;
+}
