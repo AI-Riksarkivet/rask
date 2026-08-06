@@ -237,17 +237,25 @@ test('quick view reviews an item BESIDE the queue, and walks the page', async ({
 
 	await page.getByTestId('row-quick-view').first().click();
 
-	const sheet = page.getByRole('dialog');
-	await expect(sheet).toContainText('1 of 20 in view');
-	await expect(sheet).toContainText('suggested');
+	// `getByTestId`, not `getByRole('dialog')`: quick view is a PANE beside the queue now, not an
+	// overlay, so it is deliberately not a dialog — nothing is modal and the table stays interactive
+	// next to it. Announcing it as a dialog would tell a screen-reader user focus is trapped when it
+	// is not. The assertions below are unchanged.
+	const pane = page.getByTestId('quick-view');
+	await expect(pane).toContainText('1 of 20 in view');
+	await expect(pane).toContainText('suggested');
+
+	// The queue is still THERE and still usable — the property a split has and an overlay does not,
+	// and the reason this test is named "BESIDE the queue".
+	await expect(page.getByTestId('row-quick-view').first()).toBeVisible();
 	// It does NOT wrap: a review pass that loops from the end back to the start never tells you that
 	// you have seen everything.
-	await expect(sheet.getByTestId('quick-prev')).toBeDisabled();
+	await expect(pane.getByTestId('quick-prev')).toBeDisabled();
 
-	await sheet.getByTestId('quick-next').click();
+	await pane.getByTestId('quick-next').click();
 
-	await expect(sheet).toContainText('2 of 20 in view');
-	await expect(sheet.getByTestId('quick-prev')).toBeEnabled();
+	await expect(pane).toContainText('2 of 20 in view');
+	await expect(pane.getByTestId('quick-prev')).toBeEnabled();
 });
 
 test('quick view is scoped to what the FILTER matched', async ({ page }) => {
@@ -257,5 +265,5 @@ test('quick view is scoped to what the FILTER matched', async ({ page }) => {
 
 	await page.getByTestId('row-quick-view').first().click();
 
-	await expect(page.getByRole('dialog')).toContainText('1 of 1 in view');
+	await expect(page.getByTestId('quick-view')).toContainText('1 of 1 in view');
 });

@@ -25,6 +25,7 @@
 	import { Button } from '@rask/ui/button';
 	import { Dialog } from '@rask/ui/dialog';
 	import { Input } from '@rask/ui/input';
+	import { ResizableSplit } from '@rask/ui/resizable-split';
 	import { Select } from '@rask/ui/select';
 
 	import { bulkActions, targetsFor } from './bulk-events';
@@ -247,7 +248,12 @@
 		notice = null;
 		const failures: string[] = [];
 		for (const task of items) {
-			const result = await fireTaskEvent({ taskId: task.task_id, event: 'assign', assignee: to, projectId });
+			const result = await fireTaskEvent({
+				taskId: task.task_id,
+				event: 'assign',
+				assignee: to,
+				projectId,
+			});
 			if (!result.ok) failures.push(`${task.source.keys[0] ?? task.task_id}: ${result.detail}`);
 		}
 		bulkBusy = false;
@@ -668,118 +674,122 @@
 	</div>
 {/snippet}
 
-<div class="flex flex-col gap-2">
-	{#if selectedIds.length > 0}
-		<div
-			class="bg-muted/50 flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm"
-			data-testid="bulk-bar"
-		>
-			<span class="text-muted-foreground shrink-0">{selectedIds.length} selected</span>
+<!-- The queue itself, as a SNIPPET so it can be rendered either alone or as the left half of the
+     split. Same instance either way: `{@render}` does not remount, so opening quick view cannot
+     reset the table's sort, filter, page or selection — which is the whole reason quick view exists. -->
+{#snippet queuePane()}
+	<div class="flex flex-col gap-2">
+		{#if selectedIds.length > 0}
+			<div
+				class="bg-muted/50 flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm"
+				data-testid="bulk-bar"
+			>
+				<span class="text-muted-foreground shrink-0">{selectedIds.length} selected</span>
 
-			<!-- Every action the SELECTION can take, derived from the rows' own legal events and in a
+				<!-- Every action the SELECTION can take, derived from the rows' own legal events and in a
 			     fixed order — a control that reorders itself between two clicks is how someone accepts a
 			     batch they meant to skip. Each names its own count, so a mixed selection is honest about
 			     the rows it will not touch instead of acting on a subset silently. -->
-			<div class="ml-auto flex flex-wrap items-center justify-end gap-1">
-				{#each available as action (action.event)}
-					<Button
-						variant={action.event === 'accept' ? 'default' : 'outline'}
-						size="sm"
-						data-testid="bulk-{action.event}"
-						disabled={bulkBusy}
-						onclick={() => void bulkFire(action.event)}
-					>
-						{(EVENT_LABELS[action.event] ?? action.event).replace('…', '')}
-						{action.count}
-					</Button>
-				{/each}
+				<div class="ml-auto flex flex-wrap items-center justify-end gap-1">
+					{#each available as action (action.event)}
+						<Button
+							variant={action.event === 'accept' ? 'default' : 'outline'}
+							size="sm"
+							data-testid="bulk-{action.event}"
+							disabled={bulkBusy}
+							onclick={() => void bulkFire(action.event)}
+						>
+							{(EVENT_LABELS[action.event] ?? action.event).replace('…', '')}
+							{action.count}
+						</Button>
+					{/each}
 
-				<!-- Stays separate: `assign` needs a RECIPIENT, so it opens a dialog rather than firing. -->
-				{#if selectedAssignable.length > 0}
-					<Button
-						variant="outline"
-						size="sm"
-						data-testid="bulk-assign"
-						disabled={bulkBusy}
-						onclick={() => {
+					<!-- Stays separate: `assign` needs a RECIPIENT, so it opens a dialog rather than firing. -->
+					{#if selectedAssignable.length > 0}
+						<Button
+							variant="outline"
+							size="sm"
+							data-testid="bulk-assign"
+							disabled={bulkBusy}
+							onclick={() => {
 	bulkAssignFor = [...selectedAssignable];
 	assignee = '';
 }}
-					>
-						{`Assign ${selectedAssignable.length}`}
-					</Button>
-				{/if}
+						>
+							{`Assign ${selectedAssignable.length}`}
+						</Button>
+					{/if}
 
-				<!-- Removing queued work has no undo, so it confirms — and it is last, away from the
+					<!-- Removing queued work has no undo, so it confirms — and it is last, away from the
 				     actions someone clicks repeatedly. -->
-				{#if droppable && selectedIds.length > 0}
-					<Button
-						variant="ghost"
-						size="sm"
-						data-testid="bulk-remove"
-						disabled={bulkBusy}
-						title="remove the selected items from the project"
-						onclick={() => void bulkRemove()}
-					>
-						<Trash2 class="size-3.5" /> Remove {selectedIds.length}
-					</Button>
-				{/if}
+					{#if droppable && selectedIds.length > 0}
+						<Button
+							variant="ghost"
+							size="sm"
+							data-testid="bulk-remove"
+							disabled={bulkBusy}
+							title="remove the selected items from the project"
+							onclick={() => void bulkRemove()}
+						>
+							<Trash2 class="size-3.5" /> Remove {selectedIds.length}
+						</Button>
+					{/if}
+				</div>
 			</div>
-		</div>
-	{/if}
-	<!-- SELECT THE REST. An OFFER, never automatic: silently extending a selection past what someone
+		{/if}
+		<!-- SELECT THE REST. An OFFER, never automatic: silently extending a selection past what someone
 	     can see is how a bulk action lands on rows nobody looked at. -->
-	{#if allPrompt.kind === 'offer'}
-		<p class="text-muted-foreground text-xs" data-testid="select-all-offer">
-			All {allPrompt.pageCount} on this page are selected.
-			<button
-				type="button"
-				class="text-foreground underline underline-offset-2"
-				data-testid="select-all-matching"
-				onclick={() => (rowSelection = selectionOf(visible))}
-			>
-				Select all {allPrompt.matchingCount.toLocaleString()} matching this filter
-			</button>
-		</p>
-	{:else if allPrompt.kind === 'all'}
-		<p class="text-muted-foreground text-xs" data-testid="select-all-held">
-			All {allPrompt.matchingCount.toLocaleString()} matching items are selected.
-			<button
-				type="button"
-				class="text-foreground underline underline-offset-2"
-				data-testid="select-all-clear"
-				onclick={() => (rowSelection = {})}
-			>
-				Clear selection
-			</button>
-		</p>
-	{/if}
+		{#if allPrompt.kind === 'offer'}
+			<p class="text-muted-foreground text-xs" data-testid="select-all-offer">
+				All {allPrompt.pageCount} on this page are selected.
+				<button
+					type="button"
+					class="text-foreground underline underline-offset-2"
+					data-testid="select-all-matching"
+					onclick={() => (rowSelection = selectionOf(visible))}
+				>
+					Select all {allPrompt.matchingCount.toLocaleString()} matching this filter
+				</button>
+			</p>
+		{:else if allPrompt.kind === 'all'}
+			<p class="text-muted-foreground text-xs" data-testid="select-all-held">
+				All {allPrompt.matchingCount.toLocaleString()} matching items are selected.
+				<button
+					type="button"
+					class="text-foreground underline underline-offset-2"
+					data-testid="select-all-clear"
+					onclick={() => (rowSelection = {})}
+				>
+					Clear selection
+				</button>
+			</p>
+		{/if}
 
-	{#if notice}
-		<p class={notice.ok ? 'text-success text-sm' : 'text-destructive text-sm'}>{notice.text}</p>
-	{/if}
+		{#if notice}
+			<p class={notice.ok ? 'text-success text-sm' : 'text-destructive text-sm'}>{notice.text}</p>
+		{/if}
 
-	<!-- Rendered only when there is something to filter. A filter bar over three items is furniture;
+		<!-- Rendered only when there is something to filter. A filter bar over three items is furniture;
 	     over a thousand it is the only way to work. -->
-	{#if tasks.length > 1}
-		<div class="flex flex-wrap items-center gap-2" data-testid="queue-filter">
-			<!-- ONE box across the item's columns — key, corpus, label, modality. A person typing here
+		{#if tasks.length > 1}
+			<div class="flex flex-wrap items-center gap-2" data-testid="queue-filter">
+				<!-- ONE box across the item's columns — key, corpus, label, modality. A person typing here
 			     means "find this anywhere"; asking which column it lives in is asking them to know the
 			     schema. -->
-			<Input
-				bind:value={filterText}
-				placeholder="Search items…"
-				aria-label="Search items"
-				class="h-8 w-56"
-				data-testid="filter-text"
-				oninput={onFilterChanged}
-			/>
-			{#if labelsPresent.length > 0}
-				<Select
-					bind:value={filterLabel}
-					ariaLabel="Filter by label"
-					onValueChange={onFilterChanged}
-					options={[
+				<Input
+					bind:value={filterText}
+					placeholder="Search items…"
+					aria-label="Search items"
+					class="h-8 w-56"
+					data-testid="filter-text"
+					oninput={onFilterChanged}
+				/>
+				{#if labelsPresent.length > 0}
+					<Select
+						bind:value={filterLabel}
+						ariaLabel="Filter by label"
+						onValueChange={onFilterChanged}
+						options={[
 	{ value: '', label: `All labels (${tasks.length})` },
 	...labelsPresent.map((name) => ({
 		value: name,
@@ -792,13 +802,13 @@
 		})`,
 	})),
 ]}
-				/>
-			{/if}
-			<Select
-				bind:value={filterState}
-				ariaLabel="Filter by state"
-				onValueChange={onFilterChanged}
-				options={[
+					/>
+				{/if}
+				<Select
+					bind:value={filterState}
+					ariaLabel="Filter by state"
+					onValueChange={onFilterChanged}
+					options={[
 	{ value: '', label: `All states (${tasks.length})` },
 	...statesPresent.map((st) => ({
 		value: st,
@@ -807,94 +817,127 @@
 		label: `${st} (${tasks.filter((t) => t.state === st).length})`,
 	})),
 ]}
-			/>
-			<Input
-				bind:value={filterAssignee}
-				placeholder="Filter by assignee…"
-				aria-label="Filter by assignee"
-				class="h-8 w-48"
-				oninput={onFilterChanged}
-			/>
-			<!-- LIST or GRID. Pinned right so it reads as a property of the whole view rather than one
+				/>
+				<Input
+					bind:value={filterAssignee}
+					placeholder="Filter by assignee…"
+					aria-label="Filter by assignee"
+					class="h-8 w-48"
+					oninput={onFilterChanged}
+				/>
+				<!-- LIST or GRID. Pinned right so it reads as a property of the whole view rather than one
 			     more filter. -->
-			<div class="ml-auto flex items-center gap-1" data-testid="queue-view-toggle">
-				<Button
-					variant={view === 'list' ? 'secondary' : 'ghost'}
-					size="icon-sm"
-					aria-label="List view"
-					aria-pressed={view === 'list'}
-					data-testid="view-list"
-					title="list — audit the queue"
-					onclick={() => setView('list')}
-				>
-					<Rows3 class="size-4" />
-				</Button>
-				<Button
-					variant={view === 'grid' ? 'secondary' : 'ghost'}
-					size="icon-sm"
-					aria-label="Grid view"
-					aria-pressed={view === 'grid'}
-					data-testid="view-grid"
-					title="grid — scan the images"
-					onclick={() => setView('grid')}
-				>
-					<LayoutGrid class="size-4" />
-				</Button>
-			</div>
+				<div class="ml-auto flex items-center gap-1" data-testid="queue-view-toggle">
+					<Button
+						variant={view === 'list' ? 'secondary' : 'ghost'}
+						size="icon-sm"
+						aria-label="List view"
+						aria-pressed={view === 'list'}
+						data-testid="view-list"
+						title="list — audit the queue"
+						onclick={() => setView('list')}
+					>
+						<Rows3 class="size-4" />
+					</Button>
+					<Button
+						variant={view === 'grid' ? 'secondary' : 'ghost'}
+						size="icon-sm"
+						aria-label="Grid view"
+						aria-pressed={view === 'grid'}
+						data-testid="view-grid"
+						title="grid — scan the images"
+						onclick={() => setView('grid')}
+					>
+						<LayoutGrid class="size-4" />
+					</Button>
+				</div>
 
-			{#if filtering}
-				<span class="text-muted-foreground text-xs" data-testid="filter-count">
-					{visible.length} of {tasks.length}
-				</span>
-				<Button
-					variant="ghost"
-					size="sm"
-					data-testid="clear-filter"
-					onclick={() => {
+				{#if filtering}
+					<span class="text-muted-foreground text-xs" data-testid="filter-count">
+						{visible.length} of {tasks.length}
+					</span>
+					<Button
+						variant="ghost"
+						size="sm"
+						data-testid="clear-filter"
+						onclick={() => {
 	filterState = '';
 	filterAssignee = '';
 	filterText = '';
 	filterLabel = '';
 	onFilterChanged();
 }}
-				>
-					Clear
-				</Button>
-			{/if}
-		</div>
-	{/if}
+					>
+						Clear
+					</Button>
+				{/if}
+			</div>
+		{/if}
 
-	{#if view === 'grid' && pageRows.length > 0}
-		<!-- The grid renders the TABLE's current page, so filters, sorting and pagination all still
+		{#if view === 'grid' && pageRows.length > 0}
+			<!-- The grid renders the TABLE's current page, so filters, sorting and pagination all still
 		     apply and the two modes cannot disagree about what is in view. Selection is the same
 		     object, so every bulk action above works identically from either. -->
-		<TaskGrid
-			tasks={pageRows}
-			bind:selection={rowSelection}
-			apiUrl={(path) => `${base}${path}`}
-			onopen={openQuick}
-		/>
-	{:else}
-		<DataTable
-			{table}
-			emptyMessage={filtering
+			<TaskGrid
+				tasks={pageRows}
+				bind:selection={rowSelection}
+				apiUrl={(path) => `${base}${path}`}
+				onopen={openQuick}
+			/>
+		{:else}
+			<DataTable
+				{table}
+				emptyMessage={filtering
 	? 'No items match this filter.'
 	: 'No items yet — send data points in from Search or the Atlas.'}
-		/>
-	{/if}
-</div>
+			/>
+		{/if}
+	</div>
+{/snippet}
 
-<!-- Review one item BESIDE the queue. Not the drawing canvas — an item needing shapes still goes
-     there, and the drawer links to it. -->
-<QuickView
-	bind:open={quickOpen}
-	bind:taskId={quickId}
-	tasks={pageRows}
-	apiUrl={(path) => `${base}${path}`}
-	{canvasHref}
-	busy={busy !== null}
-	onfire={(task, event) => void fireFromQuick(task, event)}
-/>
+{#snippet quickPane()}
+	<QuickView
+		bind:open={quickOpen}
+		bind:taskId={quickId}
+		tasks={pageRows}
+		apiUrl={(path) => `${base}${path}`}
+		{canvasHref}
+		busy={busy !== null}
+		onfire={(task, event) => void fireFromQuick(task, event)}
+	/>
+{/snippet}
+
+<!-- Review one item BESIDE the queue — a SPLIT, not an overlay.
+     This was a right-side `Sheet`, and the e2e test has been named "reviews an item BESIDE the
+     queue" the whole time. An overlay works against the exact pass it exists for: reviewing is a
+     SUSTAINED walk with prev/next ("fifty-seven items is fifty-seven round trips"), and a modal
+     hides the table so you lose your place, traps focus, and makes changing rows a
+     close -> click -> reopen — reintroducing the round trip it removed. Beside the queue, the rows
+     stay visible, the next item can be picked straight from the table, and filter/sort stay live.
+     Label Studio's Data Manager puts the detail beside the list for the same reason.
+     Still NOT the drawing canvas: an item needing shapes goes there, and the pane links to it. -->
+{#if quickOpen}
+	<!-- Snippets passed INLINE as children, not as `left={queuePane}` props — the shape
+	     `AnnotatorShell` already uses for this component. There are two `svelte` installs in the
+	     workspace (5.56.3 and 5.56.8), so `Snippet` is not one type across the package boundary and
+	     the prop form fails svelte-check with "Two different types with this name exist, but they are
+	     unrelated". Inline snippets are declared in THIS module and typed against its own svelte. -->
+	<ResizableSplit
+		storageKey="annotator-queue-quickview"
+		initial={0.62}
+		minLeft={420}
+		minRight={340}
+	>
+		{#snippet left()}
+			{@render queuePane()}
+		{/snippet}
+		{#snippet right()}
+			{@render quickPane()}
+		{/snippet}
+	</ResizableSplit>
+{:else}
+	{@render queuePane()}
+{/if}
 
 <!-- BULK assign. A separate dialog from the per-row one rather than a mode flag on it: the two
      differ in what they act on, what they say, and what they do on submit, and a shared dialog

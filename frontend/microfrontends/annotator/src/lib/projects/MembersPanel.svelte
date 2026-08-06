@@ -9,6 +9,7 @@
 	import { Trash2, UserPlus } from '@lucide/svelte';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
+	import { Subject } from '@rask/ui/identity';
 	import { Input } from '@rask/ui/input';
 	import { Select } from '@rask/ui/select';
 
@@ -93,7 +94,14 @@
 		<ul class="flex flex-col gap-1">
 			{#each members as m (m.user + m.relation)}
 				<li class="flex items-center gap-2 text-sm" data-testid="member-row">
-					<span class="font-mono text-xs">{m.user}</span>
+					<!-- An OIDC `sub` is an opaque base64 blob — printed raw it fills the row with
+					     `user:CiQwOGE4Njg0Yi1kYjg4…` and tells nobody anything. `Subject` ellipsizes the
+					     opaque ones in the MIDDLE (keeping both ends, which is what distinguishes two
+					     subjects) while leaving readable identifiers verbatim, and always carries the FULL
+					     value on `title` so hover and copy still yield what a tuple write needs. Never
+					     `subjectDisplay(...).label` — the component is what makes that title invariant
+					     structural. -->
+					<Subject value={m.user} class="text-xs" />
 					<Badge variant="outline">{m.relation}</Badge>
 					<Button
 						variant="ghost"
