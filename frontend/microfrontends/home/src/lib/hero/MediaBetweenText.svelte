@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Attachment } from 'svelte/attachments';
 	import { gsap } from 'gsap';
+	import { on } from 'svelte/events';
 	import { cn } from '@rask/ui/utils';
 
 	// A wordmark that OPENS around a piece of media: `firstText`, a curtain that widens from nothing
@@ -68,14 +69,41 @@
 			return () => mm.revert();
 		};
 	}
+
+	// HOVER. The curtain is the only playful thing on an otherwise sober landing, so it answers the
+	// pointer: a small lift + tilt on enter, settled back on leave. `overwrite: 'auto'` because a fast
+	// in-out-in must not queue three tweens on one transform, and the pair is registered only when
+	// motion is allowed — under `reduce` the element simply does not respond, which is the correct
+	// non-answer rather than an instant jump.
+	const hoverLift: Attachment<HTMLElement> = (node) => {
+		const mm = gsap.matchMedia();
+		mm.add('(prefers-reduced-motion: no-preference)', () => {
+			const to = (vars: gsap.TweenVars) =>
+				gsap.to(node, { duration: 0.35, overwrite: 'auto', ...vars });
+			// `on` from svelte/events, not addEventListener: it returns its own unsubscriber, so the
+			// two listeners cannot drift out of sync with their removals (the estate lints for this).
+			const offEnter = on(node, 'pointerenter', () =>
+				to({ y: -6, rotate: -4, scale: 1.12, ease: 'back.out(2.5)' }),
+			);
+			const offLeave = on(node, 'pointerleave', () =>
+				to({ y: 0, rotate: 0, scale: 1, ease: 'power2.out' }),
+			);
+			return () => {
+				offEnter();
+				offLeave();
+			};
+		});
+		return () => mm.revert();
+	};
 </script>
 
 <span class={cn('inline-flex flex-row items-center justify-center', className)}>
 	<span>{firstText}</span>
 	<span
-		class="curtain mx-1 shrink-0 overflow-hidden rounded-xl sm:mx-2"
+		class="curtain mx-1 shrink-0 cursor-pointer overflow-hidden rounded-lg sm:mx-1.5"
 		style:--curtain-h="{targetWidth}px"
 		{@attach openCurtain(targetWidth)}
+		{@attach hoverLift}
 	>
 		<!-- object-cover is what makes the widening read as a REVEAL rather than a horizontal squash:
 		     the image keeps its aspect ratio and the box crops it. -->

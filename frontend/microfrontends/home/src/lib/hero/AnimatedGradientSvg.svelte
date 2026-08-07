@@ -86,13 +86,20 @@
 	const blobConfigs = $derived<BlobConfig[]>(
 		colors.map((color, index) => {
 			const random = createSeededRandom(hashString(`${color}-${index}`));
+			// SPREAD ACROSS THE PANEL, don't let the seed decide coverage. The reference picks both
+			// offsets from 0–50% of an element positioned by its top-left corner, so every blob's
+			// CENTRE lands left-of-middle and above it — with three or four colours they pile into one
+			// quadrant and the panel glows in a single corner while the rest reads flat (measured
+			// in-browser: all the colour in the bottom-right, nothing on the left). Each blob now gets
+			// its own lane along the width, and the seed only jitters it within that lane.
+			const lane = colors.length > 1 ? index / (colors.length - 1) : 0.5;
 
 			return {
 				color,
 				widthFactor: randomBetween(random, 0.5, 1.5),
 				heightFactor: randomBetween(random, 0.5, 1.5),
-				top: `${randomBetween(random, 0, 50)}%`,
-				left: `${randomBetween(random, 0, 50)}%`,
+				top: `${randomBetween(random, -20, 45)}%`,
+				left: `${lane * 80 - 25 + randomBetween(random, -8, 8)}%`,
 				tx1: randomBetween(random, -0.5, 0.5),
 				ty1: randomBetween(random, -0.5, 0.5),
 				tx2: randomBetween(random, -0.5, 0.5),
