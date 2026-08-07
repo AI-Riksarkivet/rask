@@ -6,7 +6,7 @@ import logging
 from collections.abc import Sequence
 from typing import Annotated
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     DeclareTableRequest,
@@ -44,6 +44,7 @@ from catalog.api.dependencies import (
     SettingsDep,
     StorageOptionsDep,
     VendorDep,
+    namespace_for_top_ns,
 )
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.credentials import _has_external_bases
@@ -73,9 +74,7 @@ router = APIRouter(prefix="/v1/table", tags=["table"])
 _MAX_NAMESPACE_DEPTH = 8
 
 
-def _collect_tables(
-    ns: LanceNamespace, delimiter: str, root_tables: list[str], include_declared: bool, extra_roots: Sequence[str] = ()
-) -> list[str]:
+def _collect_tables(ns: LanceNamespace, delimiter: str, root_tables: list[str], include_declared: bool, extra_roots: Sequence[str] = ()) -> list[str]:
     """Every table in the tree, fully qualified — root tables plus each namespace's, depth-first.
 
     Synchronous and run in a threadpool by the caller: the native namespace client is blocking, and
@@ -116,6 +115,7 @@ def _collect_tables(
 
 @router.get("", response_model_exclude_none=True)
 async def list_all_tables(
+    request: Request,
     ns: NamespaceDep,
     settings: SettingsDep,
     token: CurrentToken,
@@ -138,12 +138,23 @@ async def list_all_tables(
     #
     # Names come back FULLY QUALIFIED (`bronze$pages`), which is what the UI already assumes — it
     # groups on the delimiter — and what the FGA filter below matches against `table:<name>`.
+    # BOUND namespaces first, each through its OWN warehouse-rooted connection. The request-scoped
+    # `ns` on a collection route is ALWAYS the default root (get_namespace has no {id} to route by),
+    # so listing a bound seed through it structurally returns nothing — measured live as the estate
+    # listing showing 2 of 9 while every per-namespace route saw everything. `namespace_for_top_ns`
+    # is the same binding resolution the per-id routes use; a seed that fails (deactivated warehouse,
+    # unreadable bucket) degrades to a warning, never a blank registry.
     bound = await run_in_threadpool(warehouses.list_bindings, settings.registry_root, settings.storage_options())
-    response.tables = await run_in_threadpool(
-        _collect_tables, ns, settings.delimiter, response.tables, include_declared, [b["top_ns"] for b in bound]
-    )
+    for b in bound:
+        top = b["top_ns"]
+        try:
+            seed_ns = await namespace_for_top_ns(request, settings, top)
+            listed = await run_in_threadpool(native.call, seed_ns, "list_tables", ListTablesRequest(id=[top], include_declared=include_declared))
+            response.tables.extend(f"{top}{settings.delimiter}{name}" for name in (listed.tables or []))
+        except Exception:  # noqa: BLE001 — one bad warehouse, not a blank estate
+            log.warning("could not list bound namespace %s", top, exc_info=True)
+    response.tables = await run_in_threadpool(_collect_tables, ns, settings.delimiter, response.tables, include_declared)
     # When FGA is on and the caller is known, return only the tables they can read.
-    # Each table name is the canonical id suffix, matching ``table:<name>`` from list_objects.
     if settings.fga_enabled and token is not None and client is not None:
         allowed = set(await fga.list_objects(client, user=token.sub, relation="can_read_data", object_type="table"))
         response.tables = [name for name in response.tables if f"table:{name}" in allowed]

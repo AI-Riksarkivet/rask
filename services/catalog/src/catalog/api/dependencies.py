@@ -130,6 +130,25 @@ async def get_namespace(request: Request) -> LanceNamespace:
     return _namespace_for_root(request, settings, root)
 
 
+async def namespace_for_top_ns(request: Request, settings: Settings, top_ns: str) -> LanceNamespace:
+    """The rooted connection for ONE top-level namespace — the per-seed half of :func:`get_namespace`.
+
+    Collection routes (``GET /v1/table``) carry no ``{id}`` for `get_namespace` to route by, so their
+    request-scoped ``ns`` is ALWAYS the default root — structurally blind to every warehouse-BOUND
+    namespace's tables (measured live: the estate listing showed 2 of 9 while the per-namespace routes
+    saw everything, because those routes resolve the binding per id). A collection route that wants a
+    bound namespace's contents resolves it explicitly through this helper, one seed at a time, using
+    the SAME binding lookup + per-warehouse connection cache the id routes use.
+    """
+    default_ns: LanceNamespace = request.app.state.namespace
+    if not settings.warehouses_enabled:
+        return default_ns
+    root = await _resolve_warehouse_root(request, settings, top_ns)
+    if not root or root == settings.root:
+        return default_ns
+    return _namespace_for_root(request, settings, root)
+
+
 NamespaceDep = Annotated[LanceNamespace, Depends(get_namespace)]
 
 
