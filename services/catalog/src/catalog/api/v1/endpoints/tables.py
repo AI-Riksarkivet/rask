@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import Annotated
 
 from fastapi import APIRouter, Header
@@ -58,7 +59,7 @@ from catalog.core.lineage_emit import (
     emit_write_event,
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import dataplane, native
+from catalog.services import dataplane, native, warehouses
 from service_kit.governed import fga
 from service_kit.lakehouse import protection, trash
 
@@ -72,42 +73,45 @@ router = APIRouter(prefix="/v1/table", tags=["table"])
 _MAX_NAMESPACE_DEPTH = 8
 
 
-def _collect_tables(ns: LanceNamespace, delimiter: str, root_tables: list[str], include_declared: bool) -> list[str]:
+def _collect_tables(
+    ns: LanceNamespace, delimiter: str, root_tables: list[str], include_declared: bool, extra_roots: Sequence[str] = ()
+) -> list[str]:
     """Every table in the tree, fully qualified — root tables plus each namespace's, depth-first.
 
     Synchronous and run in a threadpool by the caller: the native namespace client is blocking, and
     a walk of N namespaces is N blocking calls.
+
+    ``extra_roots`` seeds the walk with top-level namespaces the NATIVE enumeration cannot see. The
+    shipped ``dir`` backend stores a namespace as a ``__manifest`` ROW and answers a per-namespace
+    ``list_tables`` fine — but ``list_namespaces`` at the ROOT yields nothing (measured live: the
+    estate held media/silver/alpha/beta with registered tables while this walk returned only the two
+    flat root rows, so the lakehouse Tables registry showed 2 of 9). The BINDINGS registry is the
+    estate's sanctioned tolerant enumerator (``list_bindings`` — enumeration only, never destructive
+    decisions), so its ``top_ns`` names ride in as additional roots. Each visited namespace lists its
+    OWN tables — not its children's — so a seeded root with no native child listing still reports.
     """
     found = list(root_tables)
-    stack: list[list[str]] = [[]]
+    stack: list[list[str]] = [[], *[[name] for name in extra_roots]]
     seen: set[tuple[str, ...]] = set()
     while stack:
         parent = stack.pop()
         if len(parent) >= _MAX_NAMESPACE_DEPTH or tuple(parent) in seen:
             continue
         seen.add(tuple(parent))
+        if parent:
+            try:
+                tables = native.call(ns, "list_tables", ListTablesRequest(id=parent, include_declared=include_declared)).tables or []
+                found.extend(delimiter.join([*parent, name]) for name in tables)
+            except Exception:  # noqa: BLE001 — one bad namespace, not a blank registry
+                log.warning("could not list tables in %s", parent, exc_info=True)
         try:
             children = native.call(ns, "list_namespaces", ListNamespacesRequest(id=parent)).namespaces or []
         except Exception:  # noqa: BLE001 — a namespace we cannot list must not empty the whole list
             log.warning("could not list namespaces under %s", parent or "<root>", exc_info=True)
             continue
-        for child in children:
-            path = [*parent, child]
-            stack.append(path)
-            try:
-                tables = (
-                    native.call(
-                        ns,
-                        "list_tables",
-                        ListTablesRequest(id=path, include_declared=include_declared),
-                    ).tables
-                    or []
-                )
-            except Exception:  # noqa: BLE001 — same: one bad namespace, not a blank registry
-                log.warning("could not list tables in %s", path, exc_info=True)
-                continue
-            found.extend(delimiter.join([*path, name]) for name in tables)
-    return found
+        stack.extend([*parent, child] for child in children)
+    # A bound namespace the native walk ALSO found arrives twice — dedupe, deterministically.
+    return sorted(set(found))
 
 
 @router.get("", response_model_exclude_none=True)
@@ -134,7 +138,10 @@ async def list_all_tables(
     #
     # Names come back FULLY QUALIFIED (`bronze$pages`), which is what the UI already assumes — it
     # groups on the delimiter — and what the FGA filter below matches against `table:<name>`.
-    response.tables = await run_in_threadpool(_collect_tables, ns, settings.delimiter, response.tables, include_declared)
+    bound = await run_in_threadpool(warehouses.list_bindings, settings.registry_root, settings.storage_options())
+    response.tables = await run_in_threadpool(
+        _collect_tables, ns, settings.delimiter, response.tables, include_declared, [b["top_ns"] for b in bound]
+    )
     # When FGA is on and the caller is known, return only the tables they can read.
     # Each table name is the canonical id suffix, matching ``table:<name>`` from list_objects.
     if settings.fga_enabled and token is not None and client is not None:

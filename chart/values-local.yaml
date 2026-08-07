@@ -20,6 +20,10 @@
 # `corpus.mode=emptyDir` are what a fresh cluster with no node preparation should get.
 
 explorer:
+  # #142: the media corpus is SERVED FROM THE GOVERNED BUCKET (registered as media$chunks /
+  # media$documents). Without this pin a helm upgrade renders the chart default "" and flips all
+  # three readers back to the empty disk — the exact landmine class #135 documents.
+  corpusS3Root: "s3://bind86-wh"
   # The media plane is on here, and it has to be: `frontend.apps` always includes the `explorer` and
   # `annotator` zones, and both proxy /<zone>/api/* to VIEWER_API — env the chart only injects when
   # `explorer.enabled`. Without it those two zones deploy with no upstream at all and answer 502.
