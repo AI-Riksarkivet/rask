@@ -61,14 +61,20 @@
 		<AnimatedGradientSvg
 			colors={HERO_COLORS}
 			blur="medium"
-			speed={14}
-			class="opacity-20 dark:opacity-30"
+			speed={9}
+			class="opacity-[0.14] dark:opacity-[0.22]"
 		/>
 		<div class="relative flex flex-col items-center gap-5 px-6 py-14 text-center">
 			<h1 class="text-5xl font-semibold tracking-tight sm:text-7xl">
 				<!-- alt is EMPTY on purpose: the image is a flourish inside a wordmark, and any alt text
 				     would land in the middle of this heading's accessible name. -->
-				<MediaBetweenText firstText="LA" secondText="GOM" mediaSrc="/peepo-justright.png" alt="" />
+				<MediaBetweenText
+					firstText="LA"
+					secondText="GOM"
+					mediaSrc="/peepo-justright.png"
+					alt=""
+					targetWidth={58}
+				/>
 			</h1>
 			<p class="text-muted-foreground max-w-2xl text-sm">
 				The governed lakehouse estate. Open a project to work in it, or configure the estate itself —
