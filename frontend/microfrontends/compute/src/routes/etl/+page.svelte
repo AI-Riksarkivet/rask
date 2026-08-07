@@ -43,7 +43,10 @@
 	// re-runs whenever the query refreshes, which would silently reset a half-filled form back to
 	// the first kind. The select writes through the function-pair binding below.
 	let chosen = $state<string | null>(null);
-	const kind = $derived(chosen ?? sources[0]?.kind ?? '');
+	// Default to the GOVERNED lane, not whatever sorts first: `local-dir` is the hermetic test
+	// seam and was the first thing every user saw. The fallback chain still degrades to "whatever
+	// is registered" so a deployment without s3-prefix keeps a working form.
+	const kind = $derived(chosen ?? (sources.some((s) => s.kind === 's3-prefix') ? 's3-prefix' : (sources[0]?.kind ?? '')));
 
 	let dataset = $state('');
 
@@ -255,8 +258,10 @@
 					     into a NAMESPACE named for the project holding a table of this name — so this is
 					     the identifier the lakehouse will show, not a decoration. -->
 					<span class="text-muted-foreground block text-xs">
-						Lands as <span class="font-mono">{project || '<project>'}${dataset || '<table>'}</span>
-						in bronze.
+						Lands as <span class="font-mono"
+						>{project ? `${project}-bronze` : '<project>-bronze'}${dataset || '<table>'}</span
+						>. <!-- The TIER is part of the namespace (`bind86-bronze`, ingest/naming.py) — the
+						earlier copy said `bind86$…` and lied from the day #52 qualified the cascade. -->
 					</span>
 				{/if}
 			</label>
