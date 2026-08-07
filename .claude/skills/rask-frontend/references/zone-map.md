@@ -37,7 +37,7 @@ Six areas that used to be separate apps, merged under one router: `catalog`, `li
 
 **`lineage`** — Svelte Flow DAG explorer (depth layout with longest-path + iteration cap, theme-live via `useColorMode()`), datasets, dataset detail (governance, grants, read audit, upstream/downstream), jobs, job detail (a **two-read split**: 200 events with `summary:true` ≈46 kB, plus one raw event for facets), runs, column-level lineage.
 
-**`models`** is an area here, not a zone; **storage is not even an area** — it is `catalog/storage`. **`governance`** (access, audit) split out of `admin` (events, streams, dlq, tenants) so the breadcrumb stops contradicting the rail, but both sit behind the same estate-admin door (`PRIVILEGED_AREAS` in `+layout.svelte:32`). The model registry (list/describe/**promote**) rides `lib/models/remote/models.remote.ts` — the `capi/v1/model/[model]/promote` route is gone; `/pipeline`'s medallion triggers ride `lib/models/remote/medallion.remote.ts` (two `command()`s with the idempotency key as an arg; the `medallion/[action]` route is gone).
+**`models`** is an area here, not a zone; **storage is not even an area** — it is `catalog/storage`. **`governance`** (access, audit) split out of `admin` (events, streams, dlq, tenants) so the breadcrumb stops contradicting the rail, but both sit behind the same estate-admin door (`PRIVILEGED_AREAS` in `+layout.svelte:32`). The model registry (list/describe/**promote**) rides `lib/models/remote/models.remote.ts` — the `capi/v1/model/[model]/promote` route is gone. (`/pipeline`'s medallion triggers rode `lib/models/remote/medallion.remote.ts`; route, component, remote module, `MEDALLION_API` env and chart row were all **deleted 2026-08-07** — the cascade is event-driven and the button was a second manual writer.)
 
 7 `+server.ts` routes — 4 keep-bytes (`capi/v1/table/[id]/query` + `/insert` Arrow, `capi/v1/table/[id]/[...rest]` for blob bytes and the #113 commit log, and `api/explorer/[...rest]`, the R18 storage-browser seam that rides to the GATEWAY with its path unchanged), 1 keep-flow (`capi/v1/me`), 2 catch-alls (`api/[...path]` → lineage, `capi/[...path]` → catalog). The `/api/audit` shim is **gone**; its logic survives in `lib/server/audit-core.ts`, consumed only by `admin/remote/audit.remote.ts`.
 
@@ -65,7 +65,9 @@ It renders `AppShell` with **`canvas={true}`** — drops sidebar and breadcrumb,
 
 ## `compute` — base `/compute`, port 5175
 
-10 pages + a dock, ~1800 lines under `routes/`: `/` (overview), `/jobs`, `/jobs/[id]`, `/actors`, `/cluster`, `/serve`, `/logviewer`, `/api-docs` (iframes `/api/docs`), `/new` (`ingestIIIFVolume()` → `POST /api/ingest-iiif` with `Idempotency-Key: ui-<volumeId>`), `/ingest/[run_id]` (that run's detail), and `/workbench`. The views themselves live in `$lib/boards/*` per the panel-is-the-page rule, so the routes stay thin and the dock's panels render the page's component (`src/` totals ~3800).
+**13 pages + a dock** (measured 2026-08-07 — `find src/routes -name '+page.svelte'`): `/` (overview), `/jobs`, `/jobs/[id]`, `/actors`, `/cluster`, `/serve`, `/gpu`, `/logviewer`, `/api-docs` (iframes `/api/docs`), `/etl` (`ingestIIIFVolume()` → `POST /api/ingest-iiif` with `Idempotency-Key: ui-<volumeId>`), `/ingest` (the run board, read from LINEAGE), `/ingest/[run_id]` (that run's detail), `/query` (scaffold — no query backend yet), and `/workbench`. The views themselves live in `$lib/boards/*` per the panel-is-the-page rule, so the routes stay thin and the dock's panels render the page's component.
+
+Two routes this list used to name are gone, and both are worth knowing: **`/new`** became `/etl` (a stale nav row pointing at `/new` also named an unimported icon, so evaluating `nav.ts` threw and took EVERY compute page down with a 500 — not just the dead link), and **`/inference`** was deleted 2026-08-07 with its `api/infer` route and `COMPUTE_SERVE_URL` — a single-app, HTR-only duplicate of studio's flow canvas. **The zone now has NO `+server.ts` and no acting surface at all**: it observes Ray, it does not drive it.
 
 The reference implementation of dialect (a): 10 queries in `lib/remote/compute.remote.ts`, 3 param-keyed, polled at 5 s via `.refresh().catch(()=>{})` and read imperatively through `.current`.
 
@@ -96,7 +98,7 @@ Mini-app launcher with exactly one tenant: a GSAP vs `svelte/transition` A/B.
 
 Two-level IA: the **top navbar is cross-zone** (one entry per zone; a zone with sub-areas becomes a `NavigationMenu` trigger + panel), the **sidebar is in-zone only** and never lists other zones. The admin columns append only for `me.estate_admin` and fail closed — `topNav(false)` when `me` is null; `packages/ui/tests/nav-config.test.ts:76-106` asserts both polarities and that `/lakehouse/governance/access` (the FGA workbench's real route) never appears in a non-admin's href set, in **either** bar.
 
-Matchers exported for zones to build configs: `norm` (drops one trailing slash), `seg` (prefix-segment), `exact` (root-leaf, so `/lakehouse/models` does not stay lit on `/models/pipeline`), `under(...prefixes)`.
+Matchers exported for zones to build configs: `norm` (drops one trailing slash), `seg` (prefix-segment), `exact` (root-leaf, so `/lakehouse/models` does not stay lit on `/models/experiments`), `under(...prefixes)`.
 
 `prefetchDocument(href)` / `prefetchOnIntent(href)` inject `<link rel="prefetch">` on pointerenter/focus, once per href, SSR no-op — honoured by Chromium and Firefox, not Safari. Implemented as a native `addEventListener` inside an `{@attach}` so Bits UI's own pointer handlers on the node survive.
 

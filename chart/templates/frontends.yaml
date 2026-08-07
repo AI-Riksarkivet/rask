@@ -151,24 +151,24 @@ spec:
             # Ray Serve's HTTP INGRESS — a different endpoint from the dashboard the compute service
             # reads for `/api/serve` discovery, and nothing routes to it: inference is the one call the
             # gateway cannot carry (its `/api/serve` row is GET-only by design, because Ray's dashboard
-            # exposes a deploy API). So the two zones that offer inference reach it directly, and both
-            # default to `http://localhost:8000` in code — which inside a pod is the pod. Studio takes
-            # the ORIGIN (it appends `?app=`); compute takes the full app URL.
+            # exposes a deploy API). So the ONE zone that offers inference reaches it directly, and
+            # defaults to `http://localhost:8000` in code — which inside a pod is the pod. Studio takes
+            # the ORIGIN, because it appends `?app=` per request.
             - name: STUDIO_SERVE_URL
               value: {{ $serveOrigin | quote }}
-            # #131: inference moved models -> compute (it is a compute concern, not a registry one).
+            # NO `COMPUTE_SERVE_URL`, and its absence removed a whole class of trap with it.
             #
-            # GATED so this does not collide with the ray-enabled block further down, which sets the
-            # SAME name for the SAME zone with the ray-head address. Rendering both put
-            # COMPUTE_SERVE_URL in the env list TWICE, and helm's strategic-merge-patch refuses a
-            # duplicated list key — `The order in patch list … doesn't match $setElementOrder`. That
-            # aborted a real upgrade on 2026-08-06 AFTER it had partially applied, taking ~20
-            # deployments to ImagePullBackOff. The ray block is the more specific and more correct
-            # address, so it wins whenever it renders; this is the fallback for a ray-less estate.
-            {{- if not (and $root.Values.ray.enabled (eq .name "compute")) }}
-            - name: COMPUTE_SERVE_URL
-              value: {{ printf "%s/%s" (trimSuffix "/" $serveOrigin) (trimPrefix "/" ($root.Values.ray.serveRoutePrefix | default "/htrflow")) | quote }}
-            {{- end }}
+            # It fed the compute zone's inference playground, deleted 2026-08-07 (a single-app,
+            # HTR-only duplicate of studio's flow canvas — see compute/src/lib/nav.ts). With no reader
+            # left, injecting it would be the dead config `test_no_dead_chart_env_vars` exists to catch.
+            #
+            # It also took TWO renderings to express, and they collided: an ungated row here plus a
+            # ray-enabled row further down set the SAME name on the SAME zone, so the env list carried
+            # it twice, and Kubernetes' strategic-merge-patch keys env by `name` — helm refused the
+            # upgrade with `The order in patch list … doesn't match $setElementOrder` AFTER partially
+            # applying, taking ~20 deployments to ImagePullBackOff on 2026-08-06.
+            # `test_no_env_var_is_rendered_TWICE_on_any_workload` (parametrized over `ray.enabled`,
+            # because that toggle is what produced the overlap) still guards the class.
             # SSR load/remote functions reach the gateway server-side via an absolute base
             # URL; client code uses the relative /api/* Ingress route. Both names are live:
             # the api package's gateway client reads RASK_GATEWAY_URL, the BFF reads
@@ -182,10 +182,12 @@ spec:
               value: {{ printf "http://%s-catalog:%v" (include "rask.fullname" $root) $root.Values.services.catalog.port | quote }}
             - name: LINEAGE_API
               value: {{ printf "http://%s-lineage:%v" (include "rask.fullname" $root) $root.Values.services.lineage.port | quote }}
-            {{- if $root.Values.medallion.enabled }}
-            - name: MEDALLION_API
-              value: {{ printf "http://%s-lance-ray:%v" (include "rask.fullname" $root) $root.Values.medallion.port | quote }}
-            {{- end }}
+            # NO `MEDALLION_API`. Its ONLY frontend reader was the models zone's `/pipeline` trigger
+            # door (`medallion.remote.ts` → POST /produce, /train), deleted 2026-08-07 — so injecting it
+            # now would be exactly the dead config `tests/unit/test_invariants.py::
+            # test_no_dead_chart_env_vars` exists to catch: a plane fully "configured" and read by
+            # nobody. The medallion is still reachable SERVER-side, through the gateway's own
+            # `RASK_MEDALLION_API_URL` row, which is a different variable with a live reader.
             - name: GREPTIME_API
               value: {{ printf "http://%s:%v" (include "lance.greptimeHost" $root) $root.Values.observability.greptimePort | quote }}
             {{- if $root.Values.nats.enabled }}
@@ -269,20 +271,16 @@ spec:
               value: {{ printf "http://%s:5556/dex" (include "lance.dexHost" $root) | quote }}
             {{- end }}
             {{- end }}
-            {{- if and $root.Values.ray.enabled (eq .name "compute") }}
-            # --- the models zone's inference upstream ------------------------------------------
-            # The playground (/models/playground) posts page bytes to the Ray SERVE HTTP INGRESS,
-            # NOT through the gateway. That is not a shortcut: /api/serve reaches Ray's DASHBOARD
-            # api (:8265) via the compute service, which registers it GET/HEAD-only on purpose
-            # (services/compute/src/compute/proxy.py:16-22 — the same surface can PUT a deployment,
-            # i.e. run arbitrary code). Inference lives on :8000 behind the Serve route prefix, and
-            # nothing in the fleet routes there. The medallion's own HTR stage reaches it the same
-            # way (MEDALLION_HTRFLOW_URL), so this is the established seam, not a new one.
-            #
-            # Scoped PER ZONE like the media block below: no other zone routes to Serve.
-            - name: COMPUTE_SERVE_URL
-              value: {{ printf "http://%s-ray-head-svc:%v%s" (include "rask.fullname" $root) $root.Values.ray.servePort $root.Values.ray.serveRoutePrefix | quote }}
-            {{- end }}
+            {{- /* NO per-zone ray block here any more. It set the compute zone's `COMPUTE_SERVE_URL`
+                 to the IN-CLUSTER head (`rask-ray-head-svc:8000<serveRoutePrefix>`), and that address
+                 is the second half of why the playground it fed never worked: rask's Ray is managed
+                 OUTSIDE this repo (`ray.dashboardUrl`, measured live as https://dev-kuberay.ra.se),
+                 so the in-cluster head is the opt-in case and this block pointed the one inference
+                 surface at the wrong cluster — a CPU htrflow — whenever ray.enabled was set.
+                 Inference now has exactly one door, studio's, which takes `$serveOrigin` above and is
+                 therefore derived from the same ONE signal as discovery. The reasoning for why
+                 inference bypasses the gateway at all (its `/api/serve` row is GET/HEAD-only on
+                 purpose, because Ray's dashboard can PUT a deployment) lives with STUDIO_SERVE_URL. */}}
             {{- if and $root.Values.explorer.enabled (or (eq .name "explorer") (eq .name "annotator")) }}
             # --- the media plane's upstreams for these two zones' BFF proxy routes -------
             # (/<zone>/api/* -> the media Services). Scoped PER ZONE, not handed to every

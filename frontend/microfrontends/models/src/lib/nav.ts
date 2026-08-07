@@ -1,12 +1,4 @@
-import {
-	Activity,
-	ChartLine,
-	FlaskConical,
-	ListChecks,
-	Package,
-	Rocket,
-	Workflow,
-} from '@lucide/svelte';
+import { Activity, ChartLine, FlaskConical, ListChecks, Package, Rocket } from '@lucide/svelte';
 import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 
 /**
@@ -15,24 +7,28 @@ import { exact, seg, type ZoneNav } from '@rask/ui/shell';
  * This zone began as `train` (submit / runs / monitoring / analysis, all placeholder) while the
  * governed registry lived in the lakehouse at `/lakehouse/models`. That split asked a reader to know
  * that "the models area" and "the training zone" were two different places, and it filed the registry
- * — the thing a training run PRODUCES — inside the zone that governs tables. The registry, its
- * experiments and its pipeline moved here; the lakehouse keeps model LINEAGE, which is a lineage
- * question and belongs with the graph.
+ * — the thing a training run PRODUCES — inside the zone that governs tables. The registry and its
+ * experiments moved here; the lakehouse keeps model LINEAGE, which is a lineage question and belongs
+ * with the graph.
  *
  * REGISTRY IS THE ZONE ROOT, matched with `exact` — it is what this zone is for, and `seg` would keep
  * it lit on every sibling area (the same reason nav-config's own Registry/Graph leaves use `exact`).
  * Training therefore moves off the root onto `/models/submit`, so every area is a named segment and
  * none of them is "whatever the root happens to be".
  *
- * The three groups, and why they are three:
+ * The two groups, and why they are two:
  *
- *  - REGISTRY — what a model IS: its versions, the experiments behind them, the pipeline that blesses
- *    one. These are the surfaces that physically migrated out of the lakehouse.
- *  - INFERENCE — its own group rather than a leaf of Registry, because it is a different verb: you
- *    are not administering a version, you are running one.
+ *  - REGISTRY — what a model IS: its versions and the experiments behind them. These are the surfaces
+ *    that physically migrated out of the lakehouse.
  *  - TRAINING — the four surfaces the `train` zone shipped, placeholder badges and all. They are
  *    honest scaffolding for a service that does not exist yet, and deleting them would lose the
  *    intended contract without replacing it.
+ *
+ * TWO groups, not the three this comment used to describe. INFERENCE went to `/compute/inference` at
+ * #131 (running a version is a compute verb, not a registry one) and the `/models/pipeline` trigger
+ * door was deleted 2026-08-07: it fired the medallion cascade head and a train request from a button,
+ * which is an OPERATION on the lakehouse rather than anything about a model, and the cascade is
+ * event-driven — the button was a second, manual writer to a plane that already has one.
  *
  * KEEP THE RATIONALE UP HERE, not between the leaves. `nav-truth.test.ts` scans this file with a
  * regex that pairs each `title:` with an `href:` within 200 characters and then looks ahead to the
@@ -53,12 +49,6 @@ export const MODELS_ZONE_NAV: ZoneNav = {
 					href: '/models/experiments',
 					match: seg('/models/experiments'),
 					icon: FlaskConical,
-				},
-				{
-					title: 'Pipeline',
-					href: '/models/pipeline',
-					match: seg('/models/pipeline'),
-					icon: Workflow,
 				},
 			],
 		},

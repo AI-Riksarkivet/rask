@@ -134,9 +134,10 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 			},
 		],
 	},
-	// NO 'Models' GROUP. The registry, its experiments and its pipeline were `/lakehouse/models/*`
-	// until they moved to the MODELS zone, which now owns a model end to end — training, registry,
-	// blessing, inference. What stays here is model LINEAGE: which run wrote which version, and off
+	// NO 'Models' GROUP. The registry and its experiments were `/lakehouse/models/*` until they moved
+	// to the MODELS zone, which owns what a model IS — training, registry, blessing. (Two surfaces that
+	// moved with them have since gone: inference to `/compute/inference` at #131, and the `/pipeline`
+	// cascade-trigger door deleted outright.) What stays here is model LINEAGE: which run wrote which version, and off
 	// which datasets. That is a lineage question about a graph this zone owns, so it is answered by
 	// the Lineage group above and not by a second models rail that would only ever be half the story.
 	// A cross-zone leaf pointing at /models was considered and rejected — the top navbar owns

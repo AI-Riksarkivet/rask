@@ -10,7 +10,9 @@
  *     card, to `/data/projects/<project>`
  *   - `packages/ui/src/lib/shell/project-switcher.svelte` — `/data`, in the shell that EVERY zone mounts,
  *     so it was broken in all four zones at once
- *   - `TableDetail.svelte` ×2 and `PipelineControl.svelte` ×1 — `/lineage`
+ *   - `TableDetail.svelte` ×2 and `PipelineControl.svelte` ×1 — `/lineage` (the latter has since been
+ *     deleted along with `/models/pipeline`; it is named here because it is part of the record of what
+ *     this gate was written to catch, not because the file still exists)
  *
  * Every one carried `data-sveltekit-reload`, so the reload gate was satisfied: they hard-navigated,
  * correctly and deliberately, to a 404. The request leaves the zone, the ingress hands `/data` to the

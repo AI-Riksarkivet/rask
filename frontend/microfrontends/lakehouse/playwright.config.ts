@@ -80,11 +80,15 @@ export default defineConfig({
 				OIDC_CLIENT_ID: 'lance-admin-e2e',
 				OIDC_REDIRECT_URI: `${AUTH_ON}/auth/callback`,
 				CATALOG_API: `http://localhost:${MOCK_CATALOG_PORT}`,
-				// The three NON-catalog upstreams the ported admin/models remote functions reach —
-				// one combined seed-driven mock (paths never collide). See e2e/admin/mock-observability.ts.
+				// The two NON-catalog upstreams the ported admin remote functions reach — one combined
+				// seed-driven mock (paths never collide). See e2e/admin/mock-observability.ts.
+				//
+				// MEDALLION_API was a third. Nothing in THIS zone ever read it: it arrived with the
+				// models surfaces that were ported out to `/models`, and the only reader went with them
+				// (and has since been deleted with `/models/pipeline`). Removed rather than kept as
+				// harmless — an env pointing a mock at an upstream no code calls reads as coverage.
 				GREPTIME_API: MOCK_OBS,
 				NATS_MONITOR_API: MOCK_OBS,
-				MEDALLION_API: MOCK_OBS,
 				// The dead-subscription detector's expectation list is SERVER env now (the jetstream port
 				// computes missing = expected − bound). Fixed here; the streams spec's fixtures either
 				// satisfy it (bound consumers present) or violate it per test.

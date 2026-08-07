@@ -160,7 +160,7 @@ export const seg = (href: string) => (p: string) =>
 	norm(p) === href || norm(p).startsWith(href + '/');
 /** exact match: active ONLY on this exact path. Used for a root leaf whose href equals its own
  *  zone's href (e.g. Registry=/models, Graph=/lineage) — `seg` there would over-match every sibling
- *  sub-route (/models/pipeline would light up Registry too), so those leaves match exactly. */
+ *  sub-route (/models/experiments would light up Registry too), so those leaves match exactly. */
 export const exact = (href: string) => (p: string) => norm(p) === href;
 /** domain match: active when the path is under any of the given prefixes. */
 export const under =
@@ -284,26 +284,35 @@ const EXPLORER_ITEMS: TopNavItem[] = [
 
 /** The MODELS zone's panel rows — one model's whole life.
  *
- *  These three were a COLUMN OF THE LAKEHOUSE PANEL (`/lakehouse/models/*`) until the surface itself
- *  moved. They now name the zone's own routes, and the last two rows are what the move was for: the
- *  registry that training produces and the playground that spends it finally sit in the same place as
- *  the training that fills it, instead of one zone away from it. */
+ *  These were a COLUMN OF THE LAKEHOUSE PANEL (`/lakehouse/models/*`) until the surface itself moved.
+ *  They now name the zone's own routes: the registry that training produces sits in the same place as
+ *  the training that fills it, instead of one zone away from it.
+ *
+ *  TWO ROWS WERE DELETED HERE, and both had rotted the same way — a navbar row outliving its route:
+ *
+ *   - `Playground` → `/models/playground`. #131 moved inference to `/compute/inference` and the models
+ *     zone never had (or kept) a playground route, so this row had been a 404 since that move.
+ *   - `Pipeline` → `/models/pipeline`. The route existed but was a manual trigger for the medallion
+ *     cascade head + train request — an operation on the lakehouse, not a fact about a model — and the
+ *     cascade is event-driven, so the button was a second manual writer. Deleted 2026-08-07.
+ *
+ *  NOTHING CAUGHT EITHER ONE, and that is the part worth keeping. `nav-truth.test.ts` walked every
+ *  zone's `ZoneNav` sidebar leaves and resolved each href against the route tree — but it did not see
+ *  `TopNavItem` rows at all; `link-targets.ts` checks only a link's FIRST segment (`models` is served,
+ *  so `/models/playground` passed); and the per-zone Playwright shell specs assert each row's `href`
+ *  ATTRIBUTE, which a row pointing at a 404 satisfies perfectly. Three gates, all green, over a dead
+ *  link in all seven zones.
+ *
+ *  So this stays a STANDING WARNING, not a note about the past: adding a row here is currently
+ *  unguarded, and the fix is to run THIS file through `nav-truth.test.ts`'s existing scanner and route
+ *  resolver — the same two it already applies to every zone's sidebar leaves. Until that lands, the
+ *  only thing standing between a new `TopNavItem` and a seven-zone 404 is whoever writes it. */
 const MODEL_ITEMS: TopNavItem[] = [
 	{ title: 'Registry', href: '/models/', description: 'Candidate → blessed, per model.' },
 	{
 		title: 'Experiments',
 		href: '/models/experiments',
 		description: 'Training runs and their metrics.',
-	},
-	{
-		title: 'Pipeline',
-		href: '/models/pipeline',
-		description: 'Train, validate, promote.',
-	},
-	{
-		title: 'Playground',
-		href: '/models/playground',
-		description: 'Run a page through HTR and read the ALTO.',
 	},
 	{
 		title: 'Training runs',
@@ -569,8 +578,9 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// MODELS — the model-lifecycle zone. It began as R17's `train` (submit / runs / monitoring /
 			// analysis, all scaffold) and was a PLAIN LINK on the reasoning that a one-row dropdown is
 			// noise. It earns a panel now, because the migration R17 promised actually happened: the
-			// registry, experiments and pipeline moved out of the lakehouse, and the playground joined
-			// them, so the zone has five real destinations rather than four placeholders.
+			// registry and its experiments moved out of the lakehouse, so the zone has real destinations
+			// rather than four placeholders. (It briefly had five rows; the pipeline door and the
+			// playground are gone — see MODEL_ITEMS.)
 			//
 			// The label is the JOB, not the directory — and here they agree. "Train" named one AREA of
 			// this zone and would now under-describe it: you come here to see what a model IS, not only
@@ -680,7 +690,6 @@ export function prefetchOnIntent(href: string) {
 		};
 	};
 }
-
 
 /**
  * zone directory segment -> the label the NAVBAR uses for it.
