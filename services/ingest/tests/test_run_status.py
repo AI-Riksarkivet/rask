@@ -387,3 +387,61 @@ def test_a_partial_run_reports_BOTH_numbers() -> None:
 
     assert (merged.units_done, merged.units_total) == (497, 500)
     assert len(merged.errors) == 3
+
+
+def test_a_RAISED_failure_reports_its_REASON_not_an_empty_dict() -> None:
+    """A run that says FAILED and nothing else is a run nobody can act on.
+
+    Measured 2026-08-06: two runs answered `{"status":"FAILED","units_total":0,"errors":{}}`. No
+    reason, no way to tell a source that enumerated nothing from an activity that died on its first
+    call — and the operator's only remaining move is to read pod logs and correlate by timestamp.
+
+    The two failure MODES are not symmetric, which is what the original code missed. A workflow that
+    fails BY POLICY returns a FAILED outcome and its errors ride `serialized_output` — the deadline
+    and unit-ceiling paths both do this. A workflow that RAISES produces no output at all and Dapr
+    records the detail in its own failure field. Reading only the first means the LOUDER failure is
+    the silent one.
+    """
+    from ingest.runs import RunRecord, merge_workflow_state
+
+    record = RunRecord(run_id="r1", project="bind86", dataset="pages", kind="s3-prefix")
+    raised = {
+        "runtime_status": "FAILED",
+        "failure_details": {"message": "catalog refused create_table: 403 can_create_table required"},
+    }
+
+    merged = merge_workflow_state(record, raised)
+
+    assert merged.status == "FAILED"
+    assert merged.errors, "a raised failure reported no reason at all"
+    assert "can_create_table" in str(merged.errors), f"the engine's reason did not reach the caller: {merged.errors}"
+
+
+def test_a_POLICY_failure_keeps_its_OWN_errors() -> None:
+    """The outcome's errors win where they exist. The engine's detail is a FALLBACK, not a
+    replacement — a deadline refusal explains itself far better than "the workflow returned"."""
+    from ingest.runs import RunRecord, merge_workflow_state
+
+    record = RunRecord(run_id="r2", project="bind86", dataset="pages", kind="s3-prefix")
+    policy = {
+        "runtime_status": "COMPLETED",
+        "serialized_output": {"status": "FAILED", "errors": {"run": "exceeded the 2h run deadline"}},
+        "failure_details": {"message": "should not be preferred"},
+    }
+
+    merged = merge_workflow_state(record, policy)
+
+    assert "deadline" in str(merged.errors)
+    assert "should not be preferred" not in str(merged.errors)
+
+
+def test_an_UNRECORDED_reason_does_not_raise() -> None:
+    """The caller is asking why a run failed. A KeyError is a worse answer than "unknown", and the
+    field's shape has moved across dapr-ext-workflow versions — it is not a contract this plane owns."""
+    from ingest.runs import RunRecord, merge_workflow_state
+
+    record = RunRecord(run_id="r3", project="bind86", dataset="pages", kind="s3-prefix")
+
+    merged = merge_workflow_state(record, {"runtime_status": "FAILED"})
+
+    assert merged.status == "FAILED"  # must not raise

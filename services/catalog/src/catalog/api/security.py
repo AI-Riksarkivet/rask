@@ -55,22 +55,38 @@ def authenticate(
     if not settings.oidc_enabled:
         return None
 
-    # THE LAUNDERING PATH, refused before anything else. The gateway forwards through Dapr service
-    # invocation and the callee's daprd stamps a valid `dapr-api-token` on the way in — so an
-    # ANONYMOUS public request can arrive already holding the estate's service credential, and
-    # `x-lance-service-identity` is caller-supplied. The gateway strips both at the edge; this refuses
-    # the door even if one gets through, because a service principal is never something the public
-    # front door should be able to mint.
-    if is_public_caller(dapr_caller_app_id):
-        audit("authn", FAILURE, reason="public_caller")
-        raise PermissionDeniedError(
-            f"{dapr_caller_app_id!r} is a public front door: the service door authenticates a service, not a caller — sign in and retry"
-        )
-
     # Both headers, never the token alone: with `dapr.io/app-token-secret` set the SIDECAR stamps
     # `dapr-api-token` on every request it delivers, so gating on the token would divert a
     # gateway-proxied HUMAN into the service door and 403 them on the missing identity.
     if settings.service_subjects and dapr_api_token is not None and x_lance_service_identity is not None:
+        # THE LAUNDERING PATH, refused AT THE SERVICE DOOR — not at the top of this function.
+        #
+        # The rule is sound and unchanged: a service principal is never something the public front
+        # door should be able to mint. The gateway forwards through Dapr service invocation and the
+        # callee's daprd stamps a valid `dapr-api-token` on the way in, so an ANONYMOUS public
+        # request can arrive already holding the estate's service credential; `x-lance-service-identity`
+        # is caller-supplied. The gateway strips both at the edge, and this refuses the door even if
+        # one gets through.
+        #
+        # WHAT CHANGED, and why it had to: this check used to run BEFORE anything else, so it fired
+        # on every request carrying `dapr-caller-app-id: gateway` — which is EVERY request the
+        # gateway proxies, including a signed-in human holding a perfectly valid OIDC bearer that
+        # was never even looked at. Measured on the live cluster: the same token, same endpoint,
+        # direct to the catalog answered 200 and answered 403 with the single header added. Every
+        # authenticated read and write through `/api/catalog/*` — the only public path to the
+        # catalog — was dead, and the error told the caller to "sign in and retry" when they had.
+        #
+        # Minting a SERVICE principal and verifying a HUMAN's bearer are different operations. The
+        # bearer is verified cryptographically against the IdP; the gateway cannot forge one, and a
+        # caller presenting a valid token is simply being themselves. Refusing that bought no
+        # security and cost the entire authenticated surface. Scoping the refusal to this branch
+        # keeps the laundering path shut — a public caller cannot reach `service_principal` — while
+        # a proxied human falls through to OIDC below, which is the case the estate is FOR.
+        if is_public_caller(dapr_caller_app_id):
+            audit("authn", FAILURE, reason="public_caller")
+            raise PermissionDeniedError(
+                f"{dapr_caller_app_id!r} is a public front door: the service door authenticates a service, not a caller — sign in and retry"
+            )
         try:
             principal = service_principal(
                 token=dapr_api_token,

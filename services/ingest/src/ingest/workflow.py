@@ -229,6 +229,28 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
         yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": refused}, retry_policy=ACTIVITY_RETRY)
         return refused
 
+    # AN EMPTY SOURCE IS A SUCCESS WITH ZERO ROWS, and it short-circuits HERE.
+    #
+    # Not a failure, deliberately. An empty folder or prefix is a legitimate state of the world — a
+    # scheduled ETL over a quiet source hits it routinely — and reporting it as FAILED would alert
+    # every time nothing happened to arrive, which is how an alert stops being read. "0 rows" is the
+    # honest answer and it is queryable; "failed" is neither.
+    #
+    # Short-circuited rather than left to fall through, because the fall-through is `when_all([])`
+    # and its behaviour on an empty list is not a documented guarantee — the run would be resting on
+    # an implementation detail of the fan-in. Returning here makes the empty case a decision the
+    # workflow states rather than an accident it survives.
+    #
+    # `finalize` is skipped too, which is what keeps the "no empty version" half true: it would find
+    # no fragments and `commit_fragments` already refuses to commit an empty list (a run whose every
+    # unit failed should leave no version behind to explain), but not calling it at all means the
+    # dataset is not even opened for a run that had nothing to write.
+    if units_total == 0:
+        empty: dict[str, Any] = RunOutcome(status="COMPLETE", rows=0).model_dump()
+        empty["units_total"] = 0
+        yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": empty}, retry_policy=ACTIVITY_RETRY)
+        return empty
+
     # Fan out. when_all is fan-in: the parent suspends until every child has drained, and survives
     # its own pod dying because the history replays. This is the durable-orchestration property that
     # a hand-rolled counter had to imitate.

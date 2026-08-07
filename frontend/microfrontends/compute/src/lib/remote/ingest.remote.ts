@@ -2,6 +2,7 @@ import * as v from 'valibot';
 import { command, query, getRequestEvent } from '$app/server';
 import { env } from '$env/dynamic/private';
 import { lineageAuthHeaders } from '@rask/api/runs-feed';
+import { isIngestJob } from './ingest-job';
 import {
 	getIngestRun,
 	listIngestSources,
@@ -137,10 +138,9 @@ export interface IngestRunRow {
 	updated_at: string | null;
 }
 
-/** The lineage job name every ingest run shares (`ingest.lineage.JOB_NAME`). Correlation is by run
- *  id; the NAME is what groups the lane, and it is the only server-side handle for "runs of this
- *  plane" — the lineage board is estate-wide and carries catalog drops, movers and training runs. */
-const INGEST_JOB = 'ingest.run';
+// The job matcher lives in a sibling module: it is namespace-qualified in the graph, it needed a test,
+// and a `.remote.ts` may export only remote functions. See `ingest-job.ts` for why a bare-name
+// comparison left this board permanently empty.
 
 /** How many rows the list shows. Trimmed on the SERVER, and that is not a nicety: `/runs` measured
  *  330_103 bytes for 875 runs on the live estate (`@rask/api/runs-feed:156`). Shipping that to a
@@ -184,7 +184,7 @@ export const listIngestRuns = query(async (): Promise<IngestRunRow[]> => {
 	const rows = (body as { runs?: unknown[] })?.runs ?? [];
 	return rows
 		.filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
-		.filter((r) => r.job === INGEST_JOB)
+		.filter((r) => isIngestJob(r.job))
 		.slice(0, WINDOW)
 		.map((r) => ({
 			run_id: String(r.run_id ?? ''),

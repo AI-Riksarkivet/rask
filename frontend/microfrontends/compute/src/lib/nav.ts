@@ -100,10 +100,12 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 			// grouped with the query engine it reads as the estate's data doorway.
 			label: 'I/O',
 			items: [
-				// The ingest form has existed since the zone did and was in NO nav — reachable only by
-				// typing the URL, and the route was renamed `etl` -> `new` underneath anyone who had.
-				// A page that starts a real pipeline run must be reachable from the rail.
-				{ title: 'Ingest', href: '/compute/new', match: seg('/compute/new'), icon: Upload },
+				// NO ingest row here. The form lives at `/compute/etl` and is already the "ETL" row of
+				// the Ingest group above; the copy that used to sit here pointed at `/compute/new` — a
+				// route deleted in the same change that created `/compute/etl` — and named an icon
+				// (`Upload`) that was never imported, so evaluating this module threw
+				// `ReferenceError: Upload is not defined` and took the whole zone's layout down: every
+				// compute page 500'd, not just the dead link.
 				// SCAFFOLD (2026-08-06): no query backend exists yet. It ships as a nav leaf + a
 				// scaffold-badged page ON PURPOSE — R15 is law, a zone surface missing from the rail is
 				// a defect regardless of scaffold status, and a visible stub is how the shape gets

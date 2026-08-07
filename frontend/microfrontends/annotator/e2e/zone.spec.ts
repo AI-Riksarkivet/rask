@@ -1,5 +1,7 @@
 import { test, expect, type Route } from '@playwright/test';
 
+import { MOCK_ANNOTATOR } from './ports';
+
 // Hermetic coverage for the zone contract: the app is server-aware (hooks + BFF routes
 // answer under /annotator; only the Pixi canvas page itself opts out of SSR per-page),
 // the client fetches the media plane through THIS zone's base-prefixed BFF routes
@@ -143,7 +145,11 @@ test('S9: the landing is PROJECTS; /browse hosts the data selection → canvas f
 	await page.goto('/annotator/browse');
 	await expect(page.getByTestId('data-selection')).toBeVisible();
 	await expect(page.getByTestId('dataset-id')).toHaveText('demo');
-	await page.getByTestId('doc-tile').click();
+	// `doc-row`, not `doc-tile`: browse opens as a TABLE now (#70) with the gallery on a toggle,
+	// because a bulk-labeling surface is filtered and sorted to a set before anything is picked —
+	// a gallery answers "what does this look like" and the job here asks "which of these match".
+	// The tile still exists and is exercised below via the gallery toggle.
+	await page.getByTestId('doc-row').first().click();
 	await expect(page.getByTestId('chunk-picker')).toBeVisible();
 	// Open one chunk in the canvas: the URL carries the ?keys= deep link and the shell
 	// boots, loading the unit through the zone-based BFF paths.
@@ -188,12 +194,71 @@ test('unreachable annotations surface on the status chip (no silent loading hang
 	await expect(page.getByTestId('annotate-status')).toContainText('load failed');
 });
 
-test('AI assist is labeled mocked while no model runner is deployed', async ({ page }) => {
+test('AI assist is NOT offered on a canvas that cannot accept shapes', async ({ page }) => {
+	// This spec stubs the annotations GET to 404 for every test (see the status-chip test above), so
+	// the canvas here is always read-only. Assist WRITES predicted shapes, so offering it on a
+	// surface that would discard them is the same defect #72 fixed for the drawing tools — the bar is
+	// gated on `controller.canDraw`, and the honesty chip lives inside it.
+	//
+	// This assertion replaced "AI assist is labeled mocked while no model runner is deployed", which
+	// asserted that chip VISIBLE on this very page. That test could only ever have passed before the
+	// gate existed; after it, its premise (a read-only canvas showing an assist affordance) is the
+	// thing we now deliberately prevent. The mock-chip assertion belongs where the canvas is
+	// writable — the runner-backed spec this file's own footer points at — and is tracked in #85.
 	await page.goto(`/annotator/?keys=${KEY}`);
-	await expect(page.getByTestId('assist-mock-chip')).toBeVisible();
-	await expect(page.getByTestId('assist-mock-chip')).toContainText('mocked — needs runner');
+
+	// The canvas really did mount and really is read-only — otherwise "absent" proves nothing.
+	await expect(page.getByTitle('Redo (Ctrl+Shift+Z)')).toBeVisible();
+	await expect(page.getByTestId('annotate-status')).toContainText('load failed');
+
+	await expect(page.getByTestId('assist-mock-chip')).toHaveCount(0);
+	await expect(page.getByTestId('ai-assist')).toHaveCount(0);
 });
 
 // The FAIL-HONEST chip test and the real-runner Detect flow both need a server where a runner IS
 // deployed (`MEDIA_ASSIST_URL` set) — presence is server env now, not a fetch the browser can restub.
 // They live in e2e/runner/assist.spec.ts, driven against this config's second app server.
+
+test('propagation exposes BOTH knobs and says what the cutoff EXCLUDED', async ({ page }) => {
+	// #87 / `open_browse.md` §5. Propagating a label to neighbours is the highest-leverage action on
+	// this surface and the easiest way to mislabel a corpus at scale: `n` alone says "give me forty"
+	// whether or not forty are actually alike, so the fortieth gets the label because it was RETURNED,
+	// not because it resembled anything. Both knobs must be VISIBLE and adjustable, and the cutoff has
+	// to state what it removed — a threshold nobody can see is the whole failure mode.
+	//
+	// `findSimilar` is a REMOTE function: it runs on the zone SERVER, so `page.route` cannot intercept
+	// it. It is seeded on the mock instead, which `SEARCH_API` now points at (playwright.config.ts).
+	// Before that env existed this panel could only ever be driven into its error branch — which is
+	// why the propagation controls had no browser coverage at all.
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/seed`, {
+		data: {
+			routes: {
+				'GET /api/search/similar': [
+					{ doc_id: DOC, speech_id: 0, chunk_id: 20, _distance: 0.1 },
+					{ doc_id: DOC, speech_id: 0, chunk_id: 21, _distance: 0.2 },
+					{ doc_id: DOC, speech_id: 0, chunk_id: 22, _distance: 0.9 },
+				],
+			},
+		},
+	});
+
+	await page.goto('/annotator/browse');
+	await page.getByTestId('doc-row').first().click();
+	await expect(page.getByTestId('chunk-picker')).toBeVisible();
+	await page.getByTestId('similar-open').first().click();
+
+	// Both knobs RENDERED, not merely implemented.
+	await expect(page.getByTestId('propagate-n')).toBeVisible();
+	await expect(page.getByTestId('propagate-cutoff')).toBeVisible();
+
+	// Wide open: everything returned is inside the cutoff, and the panel says so rather than leaving
+	// the reader to infer it from a list length.
+	await expect(page.getByTestId('propagate-summary')).toContainText('all 3 within the cutoff');
+
+	// Tighten below the furthest neighbour. The summary must name the EXCLUDED one — "2 of 3" alone
+	// would leave it invisible, which is exactly the silence this task exists to remove.
+	await page.getByTestId('propagate-cutoff').fill('0.5');
+	await expect(page.getByTestId('propagate-summary')).toContainText('1 beyond the cutoff');
+	// …and it is genuinely gone from the LIST, not merely from the count.
+	await expect(page.getByTestId('similar-list')).not.toContainText('0.900');
+});

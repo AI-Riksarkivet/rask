@@ -355,7 +355,31 @@ spec:
             # for the trainer in 2026-07, repeated on a second lane two months later.
             # Read from the ingest service's OWN `RASK_LINEAGE_SERVICE_IDENTITY` so the two halves
             # cannot drift: the door's allowlist and the caller's claim come from ONE value.
-            - { name: LINEAGE_SERVICE_SUBJECTS, value: "{{ .Values.medallion.train.trainerIdentity }},{{ .Values.frontend.serviceIdentity }},{{ .Values.services.ingest.env.RASK_LINEAGE_SERVICE_IDENTITY }}" }
+            {{- /* DERIVED, not enumerated. This was a hand-written list of three names, and a list that
+                 must be kept in sync with the set of services that emit lineage WILL drift — nothing
+                 connected the two. It drifted twice: the trainer in 2026-07 (recorded above), and
+                 `service-ingest` on 2026-08-06, where every ingest emit 403'd for a day while the
+                 data landed. The emitter swallows a refused emit by design (a landed commit must not
+                 become a failed run), so the symptom is a silent gap in the graph, not an error.
+
+                 A service DECLARES its identity by setting `env.RASK_LINEAGE_SERVICE_IDENTITY`. That
+                 declaration is now the ONLY input: the door's allowlist and the caller's claim are
+                 read from one value, so a new emitter is admitted by declaring itself and cannot be
+                 forgotten into a string. Same principle as `project_namespace` — a convention two
+                 sides must agree on cannot live in one of them.
+
+                 `trainerIdentity` and `frontend.serviceIdentity` are appended explicitly because they
+                 live outside `.Values.services` and have no env block to declare from; folding them
+                 in would mean inventing one. `uniq` because a value may legitimately appear twice;
+                 `compact` because an unset identity must contribute nothing rather than an empty
+                 subject, which would allowlist the empty string. */}}
+            {{- $subjects := list .Values.medallion.train.trainerIdentity .Values.frontend.serviceIdentity }}
+            {{- range $svcName, $svc := .Values.services }}
+              {{- with (get ($svc.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}
+                {{- $subjects = append $subjects . }}
+              {{- end }}
+            {{- end }}
+            - { name: LINEAGE_SERVICE_SUBJECTS, value: {{ compact $subjects | uniq | sortAlpha | join "," | quote }} }
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "lineage") | nindent 12 }}

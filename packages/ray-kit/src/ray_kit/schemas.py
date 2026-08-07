@@ -24,7 +24,12 @@ class RayHealth(BaseModel):
 
 
 class RayJob(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    # `extra="ignore"`, NOT "allow". Ray's `JobDetails` carries `runtime_env` (the job's full pip/uv
+    # list, env vars and working_dir refs), `metadata` (an arbitrary user dict) and `driver_info`;
+    # `list_jobs` feeds the whole `d.dict()` in, so "allow" RETAINED all of it on every row while the
+    # declared eleven scalars are the only fields any surface reads. Verified against the SPA before
+    # narrowing: `frontend/microfrontends/compute` + `@rask/api` reference exactly the declared set.
+    model_config = ConfigDict(extra="ignore")
     submission_id: str | None = None
     # Ray's driver job id, distinct from submission_id; carried via extra="allow"
     # but declared so the SPA can fall back to it as a row key.
@@ -48,6 +53,12 @@ class RayJobsPayload(BaseModel):
     dashboard_url: str
     jobs: list[RayJob] = Field(default_factory=list)
     error: str | None = None
+    #: How many jobs the cluster reported, before `dashboard.MAX_JOBS` capped the list.
+    total: int = 0
+    #: True when `jobs` is a newest-first PREFIX of `total`. Ray's `GET /api/jobs` takes no
+    #: parameters, so the cap is ours and the caller has no other way to know it was applied —
+    #: without this a truncated list reads as the whole cluster.
+    truncated: bool = False
 
 
 class RayGpu(BaseModel):
