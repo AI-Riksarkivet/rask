@@ -120,7 +120,15 @@ describe('findViolations reads the markup, not a regex', () => {
 describe('every cross-zone link in the estate hard-navigates', () => {
 	// The gate itself. A soft nav into another zone resolves against a route manifest that does not
 	// contain the target — a 404 that type-checks, unit-tests and renders fine.
-	const components = globSync('microfrontends/*/src/**/*.svelte', { cwd: FRONTEND_ROOT });
+	// @rask/ui is IN the gate (#92): the shell renders in all seven zones, so a shell link to any
+	// zone's base is cross-zone from six of them — which is exactly where two defects hid while the
+	// glob stopped at microfrontends/*. A shell component has no owning zone, so it gets none: every
+	// statically-readable zone-base href in it must hard-navigate, the same rule the `__project`
+	// crumb already applies to itself unconditionally.
+	const components = [
+		...globSync('microfrontends/*/src/**/*.svelte', { cwd: FRONTEND_ROOT }),
+		...globSync('packages/ui/src/**/*.svelte', { cwd: FRONTEND_ROOT }),
+	];
 
 	it('finds components to check', () => {
 		expect(components.length).toBeGreaterThan(100);
@@ -129,8 +137,10 @@ describe('every cross-zone link in the estate hard-navigates', () => {
 	it.each(components)('%s', (rel) => {
 		// The OWNING zone comes from the path (`microfrontends/<zone>/src/…`). Passing it is what lets
 		// the gate see the home zone's own routes: `/projects` is cross-app from every zone but home,
-		// and indistinguishable from a same-zone href without knowing who is asking.
-		const owner = rel.split('/')[1];
+		// and indistinguishable from a same-zone href without knowing who is asking. A shell component
+		// (`packages/ui/…`) has NO owner — it renders in every zone, so no zone-base href is ever
+		// safely "same-zone" for it.
+		const owner = rel.startsWith('microfrontends/') ? rel.split('/')[1] : undefined;
 		const found = findViolations(readFileSync(resolve(FRONTEND_ROOT, rel), 'utf8'), owner);
 		expect(
 			found,
@@ -143,5 +153,32 @@ describe('every cross-zone link in the estate hard-navigates', () => {
 				)
 				.join('\n'),
 		).toEqual([]);
+	});
+});
+
+describe("the shell's breadcrumb hard-navigates the project crumb from EVERY branch", () => {
+	// The gate above cannot see this defect: the breadcrumb anchors render `href={crumb.href}`, a
+	// dynamic expression the static scan deliberately ignores. But the crumb list can contain
+	// `__project` — a link into the HOME zone — and `collapseCrumbs` puts EVERYTHING in `tail`
+	// whenever the trail fits (breadcrumb.ts:102), i.e. the common case. A tail branch without the
+	// hard-nav conditional soft-navigates the project crumb from six zones into a route they do not
+	// own. Found with two of three branches carrying the conditional; this pins all-or-nothing so a
+	// fourth render site cannot reopen the hole.
+	const shell = readFileSync(
+		resolve(FRONTEND_ROOT, 'packages/ui/src/lib/shell/app-shell.svelte'),
+		'utf8',
+	);
+
+	it('every crumb.href anchor carries the __project reload conditional', () => {
+		const anchors = shell.match(/href=\{crumb\.href\}/g) ?? [];
+		const conditionals =
+			shell.match(/data-sveltekit-reload=\{crumb\.id === '__project' \? '' : undefined\}/g) ?? [];
+		expect(anchors.length).toBeGreaterThan(0);
+		expect(
+			conditionals.length,
+			`${anchors.length} breadcrumb anchor(s) render crumb.href but only ${conditionals.length} ` +
+				`carry the __project hard-nav conditional — the uncovered branch soft-navigates the ` +
+				`project crumb cross-zone (404).`,
+		).toBe(anchors.length);
 	});
 });

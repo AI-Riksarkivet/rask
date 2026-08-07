@@ -30,7 +30,12 @@ type Leaf = { zone: string; title: string; href: string; reload: boolean };
 function leavesOf(zone: string): Leaf[] {
 	const path = resolve(FRONTEND_ROOT, 'microfrontends', zone, 'src', 'lib', 'nav.ts');
 	if (!existsSync(path)) return [];
-	const src = readFileSync(path, 'utf8');
+	return scanLeaves(readFileSync(path, 'utf8'), zone);
+}
+
+/** The title/href scan itself, shared with the SHELL navbar check below — one regex, one set of
+ *  window rules, so the two nav surfaces cannot drift in what the gate can see. */
+function scanLeaves(src: string, zone: string): Leaf[] {
 	const out: Leaf[] = [];
 	// Each leaf carries exactly one `title:` and one `href:`; take them pairwise in source order.
 	//
@@ -154,4 +159,32 @@ describe('zone-root hrefs keep their trailing slash', () => {
 			).toBe(true);
 		});
 	}
+});
+
+describe('every SHELL navbar href resolves to a real route', () => {
+	// The estate navbar (`@rask/ui`'s nav-config.ts) renders in all seven zones — and sat outside
+	// every resolution gate: `link-targets` deliberately checks only a link's FIRST segment, which is
+	// exactly how `/models/playground` stayed a live navbar 404 after #131 moved inference out (the
+	// removal comment in nav-config.ts:293-301 names this gap verbatim). Same scanner, same resolver
+	// as the zone sidebars above, so the two nav surfaces cannot drift in what the gate can see.
+	const shellLeaves = scanLeaves(
+		readFileSync(resolve(FRONTEND_ROOT, 'packages/ui/src/lib/shell/nav-config.ts'), 'utf8'),
+		'shell',
+	).filter((leaf) => leaf.href.startsWith('/'));
+
+	it('finds navbar leaves to check', () => {
+		expect(shellLeaves.length).toBeGreaterThan(10);
+	});
+
+	it.each(shellLeaves.map((l) => [l.title, l.href] as const))(
+		'shell: "%s" -> %s',
+		(title, href) => {
+			const owner = ownerOf(href);
+			expect(
+				routeExists(owner, href),
+				`the estate navbar links "${title}" to ${href}, but the ${owner || 'home'} zone serves no ` +
+					`such route — a navbar 404 in all seven zones.`,
+			).toBe(true);
+		},
+	);
 });

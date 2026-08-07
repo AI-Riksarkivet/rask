@@ -47,7 +47,13 @@
 	let {
 		pathname = '',
 		project = { name: '', subtitle: 'Project' },
-		user = { name: 'rask', email: 'local', initials: 'RA' },
+		// NO fabricated default (#92). This used to default to `{ name: 'rask', email: 'local',
+		// initials: 'RA' }` — the exact identity NavbarUser's own comment records removing as a
+		// governance defect, re-injected one layer up: any zone that passed no `user` rendered a
+		// signed-in account named after the product, and `signedIn = !!user` was true for a person
+		// who never signed in. Null is the honest default; NavbarUser already renders the signed-out
+		// states for both auth modes.
+		user = null,
 		authEnabled = false,
 		zoneNav = null,
 		me = null,
@@ -281,8 +287,14 @@
 										data-slot="breadcrumb-page">{crumb.label}</span
 									>
 								{:else}
+									<!-- The SAME conditional the lead and dropdown branches carry, and the one this
+									     branch was missing (#92): `collapseCrumbs` puts EVERYTHING in tail whenever
+									     the trail fits (breadcrumb.ts:102) — the common case — so the `__project`
+									     crumb rendered HERE as a soft link into the home zone from six zones that
+									     do not own `/projects/…`. Pinned all-or-nothing by the zone-contract gate. -->
 									<a
 										href={crumb.href}
+										data-sveltekit-reload={crumb.id === '__project' ? '' : undefined}
 										class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
 										>{crumb.label}</a
 									>
