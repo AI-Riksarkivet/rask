@@ -61,11 +61,15 @@
 				>
 					<Boxes class="size-4" />
 				</div>
-				<div class="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
+				<div
+					class="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden"
+				>
 					<span class="truncate font-medium capitalize">{displayName}</span>
 					<span class="text-muted-foreground truncate text-xs">{project.subtitle ?? 'Project'}</span>
 				</div>
-				<ChevronsUpDown class="text-muted-foreground size-4 shrink-0 group-data-[collapsible=icon]:hidden" />
+				<ChevronsUpDown
+					class="text-muted-foreground size-4 shrink-0 group-data-[collapsible=icon]:hidden"
+				/>
 			</Button>
 		{/snippet}
 	</DropdownMenu.Trigger>

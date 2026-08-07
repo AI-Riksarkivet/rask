@@ -25,7 +25,19 @@ export type Crumb = {
  *  `logs`, `home`). Every entry is a name this estate actually routes on; adding one is a decision,
  *  which is the point. Matched per WORD after the dash-split, so `api-docs` and a future `htr-runs`
  *  both work without listing the whole segment. */
-const INITIALISMS = new Set(['etl', 'api', 'ui', 'iiif', 'htr', 'alto', 'ocr', 's3', 'fga', 'gpu', 'sql']);
+const INITIALISMS = new Set([
+	'etl',
+	'api',
+	'ui',
+	'iiif',
+	'htr',
+	'alto',
+	'ocr',
+	's3',
+	'fga',
+	'gpu',
+	'sql',
+]);
 
 /** Percent-decode a path segment for display, falling back to the raw text on a malformed
  *  escape (`decodeURIComponent` throws on a lone `%`). Ids like `silver$features` reach the
