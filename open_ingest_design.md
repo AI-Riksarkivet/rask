@@ -392,9 +392,18 @@ operator reads a limit instead of four burnt retries.
 1. **O(existing rows) per tick, not O(new rows)** — a full column scan of the target on every fire,
    paid even when nothing is new. **UNVERIFIED arithmetic:** 10M rows = 80 MB of int64 plus a
    Python set of ~10M ints (several hundred MB of interpreter overhead) inside one Dapr activity.
-2. **It detects APPEARANCE, not MUTATION.** A source object replaced at the same URI has the same
-   `id`, so the new bytes never land. The `sha256` fixity column would prove they differ, but
-   nothing reads it back. **This is an owner call, not a code call** — see open questions.
+2. **It detects APPEARANCE, not MUTATION — and the owner ruled mutation REAL (2026-08-07): sinks DO
+   replace objects under the same key.** So the identity must carry a version dimension:
+   `id = sha256(key + "\x00" + version_token)`, the token being the **S3 listing ETag** — free in
+   the same `list_objects_v2` page enumerate already reads, zero extra calls. Same key + same etag
+   → same id → skipped; replaced object → new id → re-ingested as a NEW row while the old row
+   stays (bronze is history: both versions remain queryable, lineage records when each was
+   witnessed). Sources with no version token (`iiif`, `local-dir`) keep `id = sha256(key)`,
+   documented as **snapshot semantics** — a re-harvest is an explicit operator decision, not change
+   detection. Deliberately **point-in-time reconcile, not a change log**: each run compares
+   current-sink vs bronze; an object replaced twice between runs lands once, as the latest — all a
+   poll can witness, and all an archive needs. `etag` also becomes a bronze column beside `sha256`
+   (listing-fingerprint vs content-fixity — different jobs).
 3. It does not by itself fix the blind-Append duplication for **non**-incremental runs; it removes
    the reason to make one.
 
@@ -418,6 +427,39 @@ operator reads a limit instead of four burnt retries.
 authorizes on the service-token branch, which `auth.py:126-133` **pins to
 `RASK_INGEST_SERVICE_PROJECT`**. A multi-tenant watch set cannot work through that door as it
 stands, and nothing in the plane carries a watch creator's authority forward to fire time.
+
+### The streaming boundary — when this design stops being the answer (owner-ratified 2026-08-07)
+
+The generic ingest pipeline is `source → [A: notice+fetch] → [B: durable log] → [C: Lance writer]`.
+A streaming stack (Fluss + Flink tiering, the shelf option with a real Lance connector —
+`fluss-lake-lance 0.9.1-incubating`) provides **B and C**; it contains **no line of A**, and A is
+where this estate's work lives: S3 buckets and the IIIF Image API are passive, so someone must
+list, notice, fetch and produce — with Fluss that same adapter code would be rewritten as a Flink
+source, in Java, plus a Fluss cluster, a Flink cluster and a tiering job to operate. What the
+estate already runs fills the same three roles: NATS JetStream is B, the lander is C, Dapr Workflow
+orchestrates. **The owner confirmed same-day freshness is sufficient** — archival sources change at
+human speed — so the scheduled-poll design is final, with ONE recorded trigger to revisit: **a
+source that PUSHES events at streaming rates or a sub-minute freshness requirement.** On that day,
+evaluate Fluss-Lance tiering before building anything — hand-rolling C at streaming rates is the
+mistake in that world, exactly as adopting a JVM streaming stack for a nightly harvest is the
+mistake in this one. (Fluss's replay-backfill is also the WEAKER backfill here: it replays what
+passed through the log, while re-listing the source replays what exists — and the source, unlike a
+log, is complete.)
+
+### Backfill is two different words, and only one of them is this section
+
+**Row backfill** — catching up on source objects that arrived or changed — is what 1c designs: the
+anti-join plus the `(key, etag)` identity. **Column backfill** — populating a NEW column on
+existing rows (HTR text, embeddings, features) — needs none of this plane's machinery, because
+Lance ships it natively with its own durability: `add_columns(batch_udf,
+checkpoint_file=…)` restarts from its own checkpoint after a failure (`lance_docs/guide.md`, Data
+Evolution), and the distributed form — `fragment.merge_columns` per worker, one
+`LanceOperation.Merge` commit — parallelises it without any orchestrator owning restartability. A
+Dapr workflow or Ray job at most SCHEDULES a column backfill; making it own the durability would
+duplicate what the checkpoint file already provides. One caveat travels with it: schema-changing
+operations conflict with concurrent writes (the guide's own warning), so a column backfill on a
+table an incremental ingest also appends to must be sequenced — which IS a scheduling job, and the
+one legitimate role the workflow has there.
 
 ### FGA doors — 1c
 
@@ -457,10 +499,12 @@ stands, and nothing in the plane carries a watch creator's authority forward to 
    index-served predicate may not exist. For `iiif` the value is constant per run
    (`adapters.py:238-247`), so the narrowing works there. How much it saves in either case was not
    verified.
-4. **The data-contract decision A silently makes:** a source object **replaced** at the same URI has
-   the same `id` and is skipped forever. Is "skip" correct for this archive, or must a mutated
-   object land as a new row (which needs a second identity dimension the schema does not have)?
-   **Owner call.**
+4. ~~The data-contract decision A silently makes~~ **ANSWERED by the owner 2026-08-07: sinks
+   mutate; a replaced object must land as a new row.** Resolved by the `(key, etag)` identity in
+   cost 2 above. Residual half: whether the S3 listing ETag is stable across RustFS multipart
+   uploads for identical bytes (etags differ by part-size even for equal content — harmless here,
+   since a differing etag merely re-ingests bytes whose `sha256` then proves equality, but it means
+   occasional duplicate-content rows, not missed changes). UNVERIFIED against RustFS.
 5. **How a cron-fired run is authorized beyond one project.** `auth.py:126-133` pins the
    service-token path to one project, and **nothing** in the plane carries a watch creator's
    authority forward to fire time. A stored principal, a service-account-per-project, or an explicit
@@ -574,6 +618,21 @@ second, weaker opinion in the code gives the estate two answers to "who may writ
 - **Manual push to bronze** uses the existing doors: `can_create_table` on
   `namespace:<proj>-bronze` (create-on-parent), then `can_write_data` on
   `table:<proj>-bronze$<name>`.
+
+### The mechanism for a manual push is `merge_insert`, not a raw insert (corrected 2026-08-07)
+
+The catalog routes `merge_insert_into_table` (spec op; **not** among the `dir` backend's seven
+501 stubs), and the format's own dialect is exactly the dedup a manual door needs
+(`lance_docs/guide.md`, Merge Insert): `when_not_matched_insert_all()` is **native
+insert-if-not-exists** — a re-submitted push inserts nothing twice — and adding
+`when_matched_update_all()` is upsert, both keyed on `id` and each committing ONE atomic new
+version. Concurrency is the format's, not ours: an Update-vs-Update commit is a REBASEABLE conflict
+(deletion masks merge; same-row touches degrade to a retry) and Append never conflicts with Append
+(`lance_docs/file_format.md:4828-4834`, `:5140-5155` — read in full, not skimmed, 2026-08-07).
+A manual push is small and its bytes transit the catalog anyway, so nothing about the
+client-direct-fragments constraint that forces the WORKER path onto the enumerate-side anti-join
+(`staging.py:144-152`) applies here. Raw `insert_into_table` remains for the caller who explicitly
+WANTS duplicate-tolerant append semantics; the UI's door should default to merge.
 
 ### Open question — 2
 
