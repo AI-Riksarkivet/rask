@@ -138,6 +138,7 @@
         "@sveltejs/kit": "^2.70.1",
         "@tailwindcss/vite": "^4.3.3",
         "@xyflow/svelte": "^1.6.2",
+        "gsap": "^3.15.0",
         "mode-watcher": "^1.1.0",
         "svelte-sonner": "^1.1.1",
         "tailwindcss": "^4.3.3",
@@ -325,7 +326,6 @@
       "name": "@rask/labeling",
       "version": "0.0.0",
       "dependencies": {
-        "@rask/explorer-api": "workspace:*",
         "apache-arrow": "^21.2.0",
       },
       "devDependencies": {

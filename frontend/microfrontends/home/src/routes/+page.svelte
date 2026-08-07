@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { Badge } from '@rask/ui/badge';
 	import { Card } from '@rask/ui/card';
+	import { stagger } from '@rask/ui/motion';
 	import { Activity, Boxes, FolderKanban } from '@lucide/svelte';
+	import AnimatedGradientSvg from '$lib/hero/AnimatedGradientSvg.svelte';
+	import MediaBetweenText from '$lib/hero/MediaBetweenText.svelte';
 
 	// HOME — the estate landing, and the first of the main menu's three places (Home · Projects ·
 	// Settings). It is NOT the project gallery any more: that surface is `/projects`, where its
@@ -36,19 +39,44 @@
 			needs: 'the DLQ and health surfaces, aggregated above the zone that owns each',
 		},
 	];
+
+	// The hero's aurora reads from the THEME, not from a palette — raw token vars, so the blobs
+	// re-colour with light/dark instead of being hexes that only work under one of them. rask has no
+	// `--chart-N` scale, so these are what `@rask/ui`'s tokens.css actually defines, used here purely
+	// as DECORATION and carrying none of their status meaning. Three, not four: `--ring` resolves to
+	// the SAME oklch as `--primary` in dark mode, so a fourth blob added a second identical blue
+	// rather than another hue.
+	const HERO_COLORS = ['var(--primary)', 'var(--warning)', 'var(--success)'];
 </script>
 
 <svelte:head><title>lance</title></svelte:head>
 
 <div class="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
-	<header class="flex flex-wrap items-center gap-3">
-		<h1 class="text-2xl font-semibold">lance</h1>
-		<Badge variant="outline">Scaffold — no insights wired yet</Badge>
-	</header>
-	<p class="text-muted-foreground max-w-2xl text-sm">
-		The governed lakehouse estate. Open a project to work in it, or configure the estate itself — this
-		page will summarise what is happening across every project you can see.
-	</p>
+	<!-- The hero. `isolate` gives the aurora a stacking context of its own so an absolutely-positioned
+	     decoration cannot paint over anything outside this panel, and the content sits above it on
+	     `relative` rather than a z-index ladder. -->
+	<section class="border-border bg-card relative isolate overflow-hidden rounded-xl border">
+		<!-- Two opacities: the same tokens read far stronger over the light `--card` than over the dark
+		     one, so a single value is either garish in light or invisible in dark. -->
+		<AnimatedGradientSvg
+			colors={HERO_COLORS}
+			blur="medium"
+			speed={14}
+			class="opacity-20 dark:opacity-30"
+		/>
+		<div class="relative flex flex-col items-center gap-5 px-6 py-14 text-center">
+			<h1 class="text-5xl font-semibold tracking-tight sm:text-7xl">
+				<!-- alt is EMPTY on purpose: the image is a flourish inside a wordmark, and any alt text
+				     would land in the middle of this heading's accessible name. -->
+				<MediaBetweenText firstText="LA" secondText="GOM" mediaSrc="/peepo-justright.png" alt="" />
+			</h1>
+			<p class="text-muted-foreground max-w-2xl text-sm">
+				The governed lakehouse estate. Open a project to work in it, or configure the estate itself —
+				this page will summarise what is happening across every project you can see.
+			</p>
+			<Badge variant="outline">Scaffold — no insights wired yet</Badge>
+		</div>
+	</section>
 
 	<!-- Navigation lives in the TOPNAVBAR alone (2026-08-05 ruling): the Projects/Settings cards
 	     that sat here duplicated it — two ways to the same two places, and the duplicate was the
@@ -57,7 +85,11 @@
 
 	<!-- The insight panels. Each names WHAT it will show and WHICH read it waits on, so the page is a
 	     plan rather than a mystery — and so nobody mistakes an empty card for a broken one. -->
-	<section class="flex flex-col gap-3" aria-label="Estate insights">
+	<section
+		class="flex flex-col gap-3"
+		aria-label="Estate insights"
+		{@attach stagger({ y: 10, each: 0.08 })}
+	>
 		{#each PANELS as panel (panel.title)}
 			<Card class="flex flex-col gap-2 p-5">
 				<div class="flex items-center gap-2">

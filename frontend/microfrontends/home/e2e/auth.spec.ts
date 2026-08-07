@@ -21,7 +21,7 @@ const ZONE_ENTRIES: Record<string, { title: string; kind: 'trigger' | 'link' }> 
 	explorer: { title: 'Explorer', kind: 'trigger' }, // the corpus read plane; 'Search' died with the `media` directory
 	annotator: { title: 'Annotate', kind: 'link' },
 	compute: { title: 'Compute', kind: 'trigger' }, // the merged rask zone (R16)
-	train: { title: 'Train', kind: 'link' }, // resurrected zone (R17), plain link while scaffolded
+	models: { title: 'Models', kind: 'trigger' }, // REPLACED `train` (R17 → #108), on train's own port
 	studio: { title: 'Studio', kind: 'link' }, // the sandbox/PoC zone (R17)
 };
 
@@ -41,7 +41,9 @@ test('GET /auth/login is a fail-safe no-op redirect home when auth is unconfigur
 	const res = await page.goto('/auth/login');
 	expect(res?.status()).toBe(200); // followed the 302 → the landing rendered (not a 404/500)
 	expect(page.url()).toBe(`${baseURL}/`);
-	await expect(page.getByRole('heading', { name: 'lance', exact: true })).toBeVisible();
+	// The h1 is the LAGOM wordmark now (#144): two flex spans around the peepo image, so the
+	// accessible name computes with a separator space — match loosely, never `exact`.
+	await expect(page.getByRole('heading', { name: /LA\s*GOM/ })).toBeVisible();
 });
 
 test('GET /auth/logout clears the session and redirects home', async ({ page, baseURL }) => {
@@ -105,7 +107,9 @@ test('the MAIN MENU navbar carries Home and Projects for an anonymous visitor �
 
 test('the landing is HOME — an honest scaffold, not the project gallery', async ({ page }) => {
 	await page.goto('/');
-	await expect(page.getByRole('heading', { name: 'lance', exact: true })).toBeVisible();
+	// The h1 is the LAGOM wordmark now (#144): two flex spans around the peepo image, so the
+	// accessible name computes with a separator space — match loosely, never `exact`.
+	await expect(page.getByRole('heading', { name: /LA\s*GOM/ })).toBeVisible();
 	// IT SAYS WHAT IT IS. The insights are not wired, and a landing page that implied otherwise — or
 	// showed invented numbers — would be worse than one that admits it. The badge is the claim.
 	await expect(page.getByText('Scaffold — no insights wired yet')).toBeVisible();

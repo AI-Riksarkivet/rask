@@ -5,6 +5,7 @@
 	// hierarchy (project › warehouse › namespace › table), so the estate's list of projects lives in
 	// the main menu, never inside a project-scoped zone's catalog.
 	import { untrack } from 'svelte';
+	import { gsap } from 'gsap';
 	import { LayoutGrid, List, Plus } from '@lucide/svelte';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
@@ -63,6 +64,47 @@
 	// ?redirect= contract, navbar-user.svelte).
 	const here = $derived(page.url.pathname);
 	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(here)}`);
+
+	// ONE-SHOT, and `entered` is what makes that literal. The grid node outlives a count change, so
+	// adding a project (the create flow's `invalidateAll`) already does not re-run the attachment —
+	// but the view toggle DESTROYS the grid, and without the latch every trip through the table
+	// would re-stagger cards the reader was already reading. Component-scoped, not module-scoped: a
+	// fresh mount of the surface should still animate.
+	//
+	// Local rather than @rask/ui/motion's `stagger` because both differences are this gallery's own
+	// (the latch, and the 0.98 scale), and that module is shared by every zone.
+	let entered = false;
+
+	// Reduced motion: no tween, and nothing to undo — `from` never runs, so the cards are already at
+	// their final state in the DOM.
+	function cardsEnter(el: HTMLElement) {
+		if (entered || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+		entered = true;
+		const tween = gsap.from(el.children, {
+			autoAlpha: 0,
+			y: 16,
+			scale: 0.98,
+			duration: 0.5,
+			stagger: 0.06,
+			ease: 'power3.out',
+			// Leave nothing inline: a lingering `transform` makes each card a containing block, and
+			// the card's own hover transition has to own opacity once the entrance is done.
+			clearProps: 'transform,opacity,visibility',
+		});
+		return () => tween.kill();
+	}
+
+	/** The empty state fades and nothing more — there is no list here to stagger. */
+	function emptyEnter(el: HTMLElement) {
+		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+		const tween = gsap.from(el, {
+			autoAlpha: 0,
+			duration: 0.4,
+			ease: 'power2.out',
+			clearProps: 'opacity,visibility',
+		});
+		return () => tween.kill();
+	}
 </script>
 
 <div class="px-4 py-10">
@@ -152,7 +194,10 @@
 				</Table.Body>
 			</Table.Root>
 		{:else if projects.length > 0}
-			<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+			<!-- The entrance is attached to the CONTAINER, not each card: one tween staggering the
+			     grid's own children, so a card added later slots in without its own animation and
+			     without restarting anyone else's. -->
+			<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" {@attach cardsEnter}>
 				{#each projects as p (p.project)}
 					<!-- SAME-ZONE now: the project overview moved here with the list (2026-08-03), so this
 					     is a soft nav and must NOT carry data-sveltekit-reload — the hard reload it used to
@@ -183,6 +228,7 @@
 			<!-- Empty state: signed out (prompt), or signed in with no memberships. -->
 			<div
 				class="border-border flex flex-col items-center gap-3 rounded-lg border border-dashed p-10 text-center"
+				{@attach emptyEnter}
 			>
 				{#if signedIn}
 					<p class="text-muted-foreground">
