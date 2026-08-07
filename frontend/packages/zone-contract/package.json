@@ -5,6 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev:proxy": "bun src/proxy.ts",
+		"dev:zone": "bun src/dev-zone.ts",
 		"weigh": "bun src/weigh.ts",
 		"check:tsgo": "tsgo --noEmit -p tsconfig.json",
 		"test": "vitest run",

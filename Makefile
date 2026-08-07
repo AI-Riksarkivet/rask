@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check audit scan-config scan-secrets scan-image scan-zone-image seed-corpus
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check audit scan-config scan-secrets scan-image scan-zone-image seed-corpus
 
 help:
 	@echo "Targets:"
@@ -241,6 +241,22 @@ home:      # catch-all zone only, :5273 (serves /)
 
 frontend-%:           # run one domain zone on its own port, e.g. `make frontend-explorer`
 	bun --cwd=frontend run dev:$*
+
+# ONE zone + its FAKE upstreams — the only frontend loop that needs no cluster and no fleet.
+#
+# `make frontend-<zone>` above starts the zone alone, which leaves its /api pointed at a backend
+# nobody started (home/lakehouse default to :8001, the lineage service — which `make dev-micro` does
+# not run, so every call fails on a connection refused). This starts that zone's own seed-driven
+# mocks and points it at them, which is the same machinery its Playwright suite uses — so it works
+# with no k3s, no uvicorn fleet, and no container runtime. That is what makes it the loop for a cloud
+# sandbox (claude.ai/code, CI) as well as for a laptop.
+#
+# Mocks answer 404 until seeded, auth is OFF, and cross-zone links 404 because only one zone listens.
+# `compute` and `studio` have no mocks at all — the script says so instead of pretending. Details and
+# the full trap list: .claude/skills/rask-frontend (§ Develop ONE zone, no cluster).
+dev-zone:             # one zone + fake upstreams, e.g. `make dev-zone ZONE=lakehouse`
+	@test -n "$(ZONE)" || { echo "  !! usage: make dev-zone ZONE=lakehouse   (zones: $(ZONES))"; exit 1; }
+	bun --cwd=frontend/packages/zone-contract run dev:zone $(ZONE)
 
 frontend-build:       # production-build every zone + the ui library (turbo, cached)
 	bun --cwd=frontend run build

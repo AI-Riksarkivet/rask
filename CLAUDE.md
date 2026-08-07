@@ -66,9 +66,21 @@ make serve-up          # deploy /transcribe + /htrflow on Ray Serve
 make dev-micro         # the fleet: gateway :8888 + compute :8804 + controlplane :8820 +
                        #   the explorer viewer :8101 (via scripts/dev-micro.sh)
 make dev-frontends     # ALL 7 zones + the :3024 composition proxy (builds @rask/ui first)
+make dev-zone ZONE=lakehouse   # ONE zone + its FAKE upstreams — no cluster, no fleet, no docker
 make home              # the catch-all zone alone, :5273
 make frontend-explorer # one zone alone (frontend-<zone>: lakehouse|explorer|annotator|compute|studio|models)
 ```
+
+**`make dev-zone ZONE=<z>` is the leanest loop, and the only one that works with no cluster at all** —
+it starts that zone plus the seed-driven mock upstreams its own Playwright suite uses, so it also runs
+in a cloud sandbox (claude.ai/code) or CI, where Dagger and k3s cannot. Mocks answer 404 until seeded,
+auth is OFF, and cross-zone links 404 because one zone is listening. `compute` and `studio` ship no
+mocks (no `e2e/`, no `test:e2e`) — they start, but unmocked. Full trap list and the coverage table:
+`.claude/skills/rask-frontend` § *Develop ONE zone, no cluster*.
+
+**`make frontend-<zone>` does NOT actually isolate a zone**, despite the name: it goes through
+`turbo run dev --filter=<zone>...`, which also starts turbo's built-in microfrontends proxy on **:3024**
+and `@rask/ui`'s watcher — so it fails outright if anything already holds :3024. Use `dev-zone`.
 
 **Open `:3024`, not a zone's own port** — that is the composition proxy that routes
 `/<zone>` to the right dev server. `scripts/dev-micro.sh` is the source of truth for the
@@ -171,7 +183,7 @@ Two **language-pure planes** — **don't blur them**. Python lives at the repo r
   - `frontend/packages/engine` — `@rask/engine`, a framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage).
   - `frontend/packages/labeling` — `@rask/labeling`, the `LabelOp` model + the annotator's Arrow-IPC transport.
   - `frontend/packages/config` — `@rask/config`, one shared `tsconfig.base.json` (extended by 6 of 14 packages).
-  - `frontend/packages/zone-contract` — `@rask/zone-contract`, **test-only**: 12 files / 699 tests gating the estate's shape (cross-zone `data-sveltekit-reload`, the zone manifest, deploy paths, bundle budgets, and a toolchain guard that fails the build if ESLint/Prettier reappear).
+  - `frontend/packages/zone-contract` — `@rask/zone-contract`, **imported by nothing at runtime**: 21 files gating the estate's shape (cross-zone `data-sveltekit-reload`, the zone manifest, deploy paths, and a toolchain guard that fails the build if ESLint/Prettier reappear), **plus the dev scripts those gates guard** — `src/dev-zone.ts` (`make dev-zone`) and `src/proxy.ts`. Dev tooling lives *inside* a package on purpose: `lint`/`fmt` are per-package turbo tasks, so a script parked outside both workspace globs would be linted and formatted by nothing.
 - `scripts/` — **all** dev/ops scripts, shell + Python: one-shot setup / debug tools (`harvest_ead`, `index_catalog`, `download_*`, `smoke_s3`, the self-contained Ray jobs `ray_stage_job`/`ray_train_job`/`ray_iiif_ingest_job`, …) plus `dev-micro.sh` and `k3s-install.sh`. **No production-state-changing CLIs** — ingestion and the cascade run through the HTTP services (the medallion producer + movers).
 
 - `runners/` — **sealed model environments, NOT workspace members.** `runners/htr` holds the Ray Data HTR pipeline (`src/runner`) *and* the model actors (`src/htr`) in one project with its **own `pyproject.toml` and own `uv.lock`**. Matched by no glob, so torch/htrflow/ultralytics/transformers never enter the fleet's resolution (root lock 200 → 145 packages; fleet tests ~32 min → ~6 s). `storage` is a **path** dep. Its tests are invisible to the root pytest — `make test` runs them separately; its images build from **its** lock; it carries its own ruff config (ruff resolves the nearest pyproject). Ray entrypoint: `uv run --project runners/htr runner`, overridden in-cluster by `RASK_RUNNER_CMD=runner`.

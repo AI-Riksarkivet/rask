@@ -44,7 +44,7 @@ Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consume
 | `@rask/explorer-api` | Arrow-backed explorer/viewer client (media bytes, Arrow batches) |
 | `@rask/engine` | Framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage) |
 | `@rask/labeling` | The `LabelOp` model + annotator Arrow-IPC transport |
-| `@rask/zone-contract` | **Test-only** — the vitest gates on the estate's shape (counts and the near-floor scanner guards in § Gates) |
+| `@rask/zone-contract` | **Gates + the dev tooling they guard** — the vitest suite on the estate's shape (counts and the near-floor scanner guards in § Gates), plus two dev scripts that live here so a package's `lint`/`fmt` tasks actually cover them: `src/proxy.ts` (`dev:proxy`, a hand-rolled composition proxy nothing invokes) and `src/dev-zone.ts` (`dev:zone`, behind `make dev-zone`). It ships no runtime code — nothing imports it |
 | `@rask/config` | One shared `tsconfig.base.json` — weaker than the inlined copy; see § TypeScript strictness is split |
 
 **A `frontend/packages/*` entry is a LIBRARY, never a domain slice.** A zone's panels, stores and
@@ -198,9 +198,49 @@ Under `svelte-adapter-bun` a relative `/api/*` resolves against the **incoming e
 
 ⚠️ The two wirings disagree on the env var. `compute/src/hooks.server.ts:11` reads **`RASK_GATEWAY_URL`**; `home`/`lakehouse` go through `makeZoneHooks(env, {gateway:true})`, which reads **`LANCE_GATEWAY_URL`** and defaults to `http://localhost:8001` (`bff.ts:241,267`) — the lineage port, not the gateway. Local dev sets only `RASK_GATEWAY_URL`. Treat a "works in `compute`, fails in `lakehouse`" SSR fetch as this.
 
+## Develop ONE zone, no cluster — `make dev-zone ZONE=<z>`
+
+**`make dev-zone ZONE=lakehouse`** starts that zone plus its own seed-driven mock upstreams and
+nothing else. Measured 2026-08-07: zone serving in **7 s**, every route 200 (`/lakehouse/`,
+`catalog/tables`, `lineage`, `workbench`), styled (OKLCH tokens loaded, 13 sidebar links) — with
+**no k3s, no uvicorn fleet, no container runtime**. That last part is the point: it is the only
+frontend loop that runs in a cloud sandbox (claude.ai/code, CI), and it is how CI already exercises
+5 of 7 zones on a stock `ubuntu-latest` runner.
+
+**`make frontend-<zone>` is NOT isolated, despite its name.** It calls `bun run dev:<zone>` →
+`turbo run dev --filter=<zone>...`, and turbo 2.10.7 answers that by also starting its built-in
+**microfrontends proxy on :3024** (the filter closure reaches `microfrontends.json`). So it dies with
+`Microfrontends proxy error: Port is not available` whenever anything already holds :3024, and the
+`...` closure additionally starts `@rask/ui`'s `svelte-package -w` — the exact writer
+`make dev-frontends` filters out. `dev-zone` runs the zone's own `vite dev` instead: one port, no
+proxy, no watcher, safe beside a running composition.
+
+The five zones with mocks are `home`, `lakehouse`, `explorer`, `annotator`, `models`.
+**`compute` and `studio` have no `e2e/` and no `test:e2e`** — `dev-zone` still starts them and says so,
+but their `/api` is unmocked, and it is the same gap that leaves them outside every local gate.
+
+Four things it deliberately does not give you — none is a bug:
+
+| | |
+|---|---|
+| **Mocks 404 until seeded** | They answer nothing until a caller POSTs `/__mock/seed`, by their own design (a mock with baked-in fixtures cannot tell a live surface from a dead one). Interactively you get working pages in their EMPTY state. A per-zone seed fixture is the obvious next step. |
+| **Auth is OFF** | The e2e configs set `OIDC_*` to force the governed path on; `dev-zone` omits them, so `locals.authEnabled` is false. To drive the governed path, run the zone's Playwright suite — it mints the sealed cookie. |
+| **Cross-zone links 404** | The shared navbar renders all seven entries with `data-sveltekit-reload`; one zone is listening. Use `make dev-frontends` + :3024 to cross a boundary. |
+| **No Dapr / cascade / FGA** | Cluster-only. Dapr *logic* is sandbox-friendly (`flows` degrades to an inline lane when `DAPR_GRPC_PORT` is unset); Dapr *wiring* — component `scopes:` per app-id, `actorStateStore`, JetStream delivery — fails silently and fail-closed, and only in-cluster. |
+
+Port numbers are **not** restated in the launcher: each mock reads its own from `<zone>/e2e/ports.ts`,
+`dev-zone.ts` imports that same module, and the zone's dev port comes from its `vite.config.ts`. The env
+MAPPING does exist twice (launcher + `playwright.config.ts`), so `dev-zone.test.ts` fails if they
+disagree — verified by deleting `NATS_MONITOR_API` from the lakehouse stack and watching it go red.
+
+Also useful: `cd frontend/microfrontends/<zone> && CI=1 bunx playwright test` needs no setup at all —
+it starts its own dev servers *and* mocks. **`CI=1` is not optional**: `reuseExistingServer` is on
+locally, so without it Playwright silently ADOPTS a foreign dev server and calls it the mock.
+
 ## Composition — dev and prod share only the base path
 
 **One local loop for UI: `make dev-frontends`** — Vite HMR, sub-second, `/api` mocked or proxied.
+(For a single zone use `make dev-zone ZONE=<z>` above — `make dev-frontends` binds :3024 and all seven.)
 For anything only reproducible IN-CLUSTER (auth/OIDC, FGA, Dapr, the gateway's real routing) there is
 no hot loop: build the zone image with `dagger call zone-image --zone=<zone> publish …` and roll it
 out. That costs minutes, not seconds, and it is the deliberate trade — the in-cluster hot-reload
