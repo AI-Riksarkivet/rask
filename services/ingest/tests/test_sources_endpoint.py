@@ -30,7 +30,7 @@ ADAPTERS = Path(__file__).resolve().parents[1] / "src" / "ingest" / "adapters.py
 #: of it: the registry is process-global and `test_ingest_api.py` registers a `test-src` kind for its
 #: own A9 fixture, so an equality assertion here passes alone and fails in the suite — which reads as
 #: a flaky test rather than as the over-strict assertion it is.
-BUILTIN_KINDS = ("iiif", "local-dir", "s3-prefix")
+BUILTIN_KINDS = ("local-dir", "s3-prefix")
 
 
 @pytest.fixture
@@ -108,7 +108,6 @@ def test_a_required_option_is_the_one_the_adapter_REFUSES_without(sources: list[
 
     assert required["local-dir"] == {"root"}
     assert required["s3-prefix"] == {"bucket"}
-    assert required["iiif"] == {"volume_id"}
 
 
 def test_a_builtin_kind_carries_a_human_label(sources: list[dict[str, object]]) -> None:

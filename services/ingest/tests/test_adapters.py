@@ -8,7 +8,6 @@ replaces it.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar
 
 import pytest
 from ingest.adapters import register_builtin_sources
@@ -21,7 +20,8 @@ def _registered() -> None:
 
 
 def test_the_builtin_sources_are_registered() -> None:
-    assert {"local-dir", "s3-prefix", "iiif"} <= set(registered_kinds())
+    assert {"local-dir", "s3-prefix"} <= set(registered_kinds())
+    assert "iiif" not in registered_kinds(), "IIIF was removed by owner ruling 2026-08-07 — it must not quietly return"
 
 
 def test_local_dir_yields_every_file_with_its_uri(tmp_path: Path) -> None:
@@ -58,12 +58,11 @@ def test_enumeration_order_is_deterministic(tmp_path: Path) -> None:
 
 def test_lineage_input_names_the_EXTERNAL_system_not_a_tier() -> None:
     """R23: raw is other people's systems. The run's INPUT is never a governed tier."""
-    iiif = lineage_input_for(SourceSpec(kind="iiif", project="p", dataset="d", options={"volume_id": "v1"}))
     s3 = lineage_input_for(SourceSpec(kind="s3-prefix", project="p", dataset="d", options={"bucket": "images", "prefix": "x/"}))
+    local = lineage_input_for(SourceSpec(kind="local-dir", project="p", dataset="d", options={"root": "/data/x"}))
 
-    assert iiif.namespace == "iiif"
     assert s3.namespace == "s3://images"
-    for got in (iiif, s3):
+    for got in (s3, local):
         assert "bronze" not in got.namespace and "silver" not in got.namespace
 
 
@@ -116,7 +115,6 @@ def test_every_registered_adapter_actually_implements_iter_objects(tmp_path: Pat
         # against a source shape the service will not build.
         "local-dir": {"root": str(tmp_path)},
         "s3-prefix": {"bucket": "b", "prefix": "p/"},
-        "iiif": {"volume_id": "v1"},
     }
     for kind, options in probes.items():
         adapter = build_source(SourceSpec(kind=kind, project="p", dataset="d", options=options))
@@ -125,113 +123,19 @@ def test_every_registered_adapter_actually_implements_iter_objects(tmp_path: Pat
         )
 
 
-def test_every_adapter_is_DRIVEN_not_merely_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Existence is not enough — the test above passed while `iter_objects` was a guaranteed TypeError.
+def test_every_adapter_is_DRIVEN_not_merely_present(tmp_path: Path) -> None:
+    """Existence is not enough — the probe above once passed while `iter_objects` was a guaranteed
+    TypeError on its first unit (the removed IIIF adapter's wrong call signatures; `ty` found them,
+    a test should have). So: actually turn the crank on every kind that can be driven offline.
 
-    `IIIFVolumeSource.iter_objects` called `fetch_image(url)`, whose `client` is a required
-    keyword-only argument, and `iter_keys` passed `iiif_base=` to a function whose parameter is
-    `base_url`. Both are unconditional raises on the FIRST unit, and both survived a suite that only
-    asked whether the method existed. `ty` found them; a test should have.
-
-    So: actually turn the crank, with the network replaced at the seam the adapter reaches through.
-    Every kind that can be driven offline is driven — the point is that a wrong call signature has
-    nowhere left to hide, not that IIIF specifically is covered.
+    With IIIF removed (owner ruling 2026-08-07) the offline-drivable set is `local-dir` — s3-prefix
+    is driven for real by `test_worker_queue`'s moto lane, not mocked weaker here.
     """
-    import httpx
-    from ingest.sources import build_source, iter_unit_keys
+    from ingest.sources import build_source
 
-    manifest = {"items": [{"id": "https://iiif.example/arkis!A0060198_00001/canvas"}]}
-
-    class _FakeResponse:
-        def __init__(self, url: str) -> None:
-            self._url = url
-
-        def raise_for_status(self) -> None: ...
-
-        def json(self) -> dict[str, object]:
-            return manifest
-
-        @property
-        def content(self) -> bytes:
-            return b"\xff\xd8\xff" + self._url.encode()
-
-    class _FakeClient:
-        """Records what it was asked for, so the URL the adapter BUILT is assertable."""
-
-        seen: ClassVar[list[str]] = []
-
-        def __init__(self, *args: object, **kwargs: object) -> None: ...
-
-        def __enter__(self) -> _FakeClient:
-            return self
-
-        def __exit__(self, *exc: object) -> None: ...
-
-        def get(self, url: str, *args: object, **kwargs: object) -> _FakeResponse:
-            _FakeClient.seen.append(url)
-            return _FakeResponse(url)
-
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
-
-    # local-dir: a real file, so the whole read path runs against the filesystem.
     (tmp_path / "page.tif").write_bytes(b"II*\x00fixture")
 
     local = build_source(SourceSpec(kind="local-dir", project="p", dataset="d", options={"root": str(tmp_path)}))
-    assert [obj.uri for obj in local.iter_objects()], "local-dir yielded nothing from a directory holding a file"
-
-    iiif = build_source(SourceSpec(kind="iiif", project="p", dataset="d", options={"volume_id": "A0060198", "iiif_base": "https://iiif.example"}))
-
-    keys = list(iter_unit_keys(iiif))
-    assert keys == ["https://iiif.example/arkis!A0060198_00001/full/max/0/default.jpg"], keys
-
-    objects = list(iiif.iter_objects())
-    assert len(objects) == 1, objects
-    assert objects[0].uri == keys[0]
-    assert objects[0].data.startswith(b"\xff\xd8\xff"), "iter_objects returned no image bytes"
-
-    # The manifest and the image must have gone through ONE client, not one per request: the shared
-    # connection is why `storage.iiif` takes a client at all.
-    assert any(url.endswith("/manifest") for url in _FakeClient.seen), _FakeClient.seen
-
-
-def test_max_pages_is_READ_not_merely_offered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The option was registered, rendered, numeric-validated and posted — and read by nothing.
-
-    It worked before A12 (`iiif_produce.py` sliced `image_ids[: self._max_pages]`); the rewrite kept
-    the interface and dropped the behaviour. That is worse than never offering it: a user who caps a
-    harvest at 3 pages and receives the whole volume has been actively misled by their own UI.
-
-    Driven through `build_source` from the same `options` dict the control API posts, because the
-    coercion is half the defect — the browser sends `"3"`, a script sends `3`, and a blank field
-    sends `""` meaning "all".
-    """
-    import httpx
-    from ingest.sources import build_source, iter_unit_keys
-
-    manifest = {"items": [{"id": f"https://iiif.example/arkis!A0060198_{i:05d}/canvas"} for i in range(1, 11)]}
-
-    class _Resp:
-        def raise_for_status(self) -> None: ...
-        def json(self) -> dict[str, object]:
-            return manifest
-
-    class _Client:
-        def __init__(self, *a: object, **k: object) -> None: ...
-        def __enter__(self) -> _Client:
-            return self
-
-        def __exit__(self, *e: object) -> None: ...
-        def get(self, url: str, *a: object, **k: object) -> _Resp:
-            return _Resp()
-
-    monkeypatch.setattr(httpx, "Client", _Client)
-
-    def keys(options: dict[str, object]) -> list[str]:
-        spec = SourceSpec(kind="iiif", project="p", dataset="d", options={"volume_id": "A0060198", **options})
-        return list(iter_unit_keys(build_source(spec)))
-
-    assert len(keys({})) == 10, "no cap must still harvest the whole volume"
-    assert len(keys({"max_pages": 3})) == 3, "an int cap must be honoured"
-    assert len(keys({"max_pages": "3"})) == 3, "the form posts JSON — a numeric field arrives as a STRING"
-    assert len(keys({"max_pages": ""})) == 10, "a blank field means 'all', not 'none'"
-    assert len(keys({"max_pages": 0})) == 10, "0 is 'unbounded', matching the estate's other ceilings"
+    objects = list(local.iter_objects())
+    assert [obj.uri for obj in objects], "local-dir yielded nothing from a directory holding a file"
+    assert objects[0].data.startswith(b"II*\x00"), "iter_objects returned no bytes"

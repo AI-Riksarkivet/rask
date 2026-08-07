@@ -30,7 +30,7 @@ class SourceSpec(BaseModel):
     and the catalog resolves where that is. A fixed per-lane URI is why volume B overwrote volume A.
     """
 
-    kind: str = Field(description="registry key, e.g. 'iiif' | 's3-prefix' | 'local-dir'")
+    kind: str = Field(description="registry key, e.g. 's3-prefix' | 'local-dir'")
     project: str
     dataset: str
     options: dict[str, object] = Field(default_factory=dict)

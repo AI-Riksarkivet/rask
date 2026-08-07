@@ -207,7 +207,7 @@ class LineageRecorder:
     def start(self, run_id: str, project: str, dataset: str, kind: str, options: dict[str, Any]) -> None:
         """START, with the EXTERNAL source as the input (R23).
 
-        The input is `iiif://…` or `s3://bucket`, never a governed tier: raw is the outside world, and
+        The input is the external source (`s3://bucket`), never a governed tier: raw is the outside world, and
         naming bronze as its own input would make the graph claim the data came from where it landed.
         """
         self._record(LineageEvent(run_id=run_id, event_type="START", project=project, dataset=dataset, source_kind=kind))
