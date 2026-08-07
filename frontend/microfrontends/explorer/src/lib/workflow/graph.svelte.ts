@@ -846,5 +846,20 @@ class WorkflowGraph {
 	}
 }
 
-/** The singleton, imported by the canvas and every node component. */
+/**
+ * The singleton, imported by the canvas and every node component.
+ *
+ * MODULE-SCOPE RUNE STATE UNDER `ssr = true` — the invariant that keeps it safe (#97): on the
+ * server this object is ONE instance shared by every request, so a mutation during SSR would leak
+ * one user's state into another's HTML. It does not leak because every mutation in the estate is
+ * BROWSER-GATED — `onMount`, `$effect` (never runs on the server) or event handlers — and the
+ * server render only ever reads the pristine initial state. Verified empirically 2026-08-07: two
+ * sessions curled against the built server (params + identity on one, bare on the other, both
+ * orders, repeated) produced byte-identical HTML except Bits UI's internal id counter. If you add
+ * a store mutation that runs during server render (component top-level code or a `load()`), you
+ * are re-opening that leak: move it into `onMount`/`$effect`, or give this store per-request
+ * context instead. The same invariant covers the other eight module singletons (audio-preview,
+ * voice-search, saved-views, feature-flags, service-health, descriptor-store, atlas/cross-filter,
+ * workflow/command-menu).
+ */
 export const graph = new WorkflowGraph();

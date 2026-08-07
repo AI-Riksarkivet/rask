@@ -116,4 +116,7 @@ class ServiceHealth {
 	}
 }
 
+// Module-scope rune state under ssr=true: safe ONLY while every mutation stays browser-gated
+// (onMount/$effect/handlers) — the full invariant + the two-session SSR proof live at the
+// `graph` singleton in workflow/graph.svelte.ts (#97).
 export const serviceHealth = new ServiceHealth();
