@@ -100,11 +100,23 @@ let probes = 0;
 const json = (data: unknown, status = 200): Response =>
 	new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 
+/** DEV-ONLY identity for a request that carries NO Authorization header.
+ *
+ *  Empty by default, so the contract every spec relies on is untouched: an absent bearer resolves to
+ *  `''`, which `identityOf` does not know, and the mock 401s "exactly like the real catalog". It is set
+ *  ONLY by `make dev-zone`, which runs the zone with auth OFF — no OIDC, no Dex, so the zone forwards no
+ *  bearer and every seeded read would 401 into an empty state. Rather than teach the mock to accept an
+ *  anonymous caller (that would trade a test's fidelity for a developer's convenience), the dev loop
+ *  names an identity out of band and the mock adopts it only when told to.
+ *
+ *  Read once at module scope: this is process configuration, not per-request state. */
+const DEV_BEARER = process.env.MOCK_DEV_BEARER ?? '';
+
 Bun.serve({
 	port: MOCK_LINEAGE_PORT,
 	async fetch(req: Request): Promise<Response> {
 		const url = new URL(req.url);
-		const bearer = (req.headers.get('authorization') ?? '').replace(/^Bearer /, '');
+		const bearer = (req.headers.get('authorization') ?? DEV_BEARER).replace(/^Bearer /, '');
 
 		// The cursor probe: newest first, so `events[0].seq` IS the cursor. `seq === 0` means the feed is
 		// empty, which the real service also reports as an empty list.

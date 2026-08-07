@@ -1,9 +1,20 @@
 name: Documentation
+
+# PUBLISH ONLY — never on a push, never on a pull request.
+#
+# This ran on every push to main, and every run FAILED: `bun install` at the repo root died with
+# "Bun could not find a package.json file to install from", because the JS/TS plane moved under
+# `frontend/` and this workflow kept the pre-split paths. Four consecutive red runs of ~30 s each were
+# sitting on main when this was fixed (2026-08-07) — pure noise on every commit, and noise that had
+# been red long enough to stop being read.
+#
+# Docs deployment is a RELEASE act, not a per-commit one: it force-pushes a built site to `gh-pages`,
+# so tying it to every push means the public site tracks whatever landed last rather than what was
+# published. `workflow_dispatch` for an on-demand rebuild, `release: published` for the real thing.
 on:
-  push:
-    branches:
-      - master
-      - main
+  workflow_dispatch:
+  release:
+    types: [published]
 permissions: {}
 
 concurrency:
@@ -29,13 +40,18 @@ jobs:
         uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2
         with:
           bun-version: latest
+      # `frontend/` is the JS/TS workspace ROOT — its own package.json + bun.lock. There is no
+      # package.json at the repo root, which is exactly what killed every previous run. Using
+      # `working-directory` rather than `bun --cwd=frontend` on purpose: the `--cwd <path>` form with a
+      # space silently no-ops in bun, and one wrong form here is another 30-second red run nobody reads.
       - name: Install dependencies
+        working-directory: frontend
         run: bun install
       - name: Build Storybook
-        working-directory: packages/ui
+        working-directory: frontend/packages/ui
         run: bun run build-storybook
       - name: Copy Storybook into docs site
-        run: cp -r packages/ui/storybook-static site/storybook
+        run: cp -r frontend/packages/ui/storybook-static site/storybook
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@d92aa235d04922e8f08b40ce78cc5442fcfbfa2f # v4

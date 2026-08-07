@@ -25,15 +25,18 @@
  *
  * WHAT IT DOES NOT DO — read this before assuming a blank page is a bug:
  *
- *   - The mocks are SEED-DRIVEN. They answer 404 to everything until a caller POSTs `/__mock/seed`,
- *     because a mock with baked-in fixtures cannot tell a live surface from a dead one (that is the
- *     mocks' own design note, and it is right). So interactively you get working pages in their EMPTY
- *     state, not populated data. Perfect for layout, nav, empty/error states and the gates; useless
- *     for "does this table paginate 10k rows". Seeding a fixture set per zone is the obvious next
- *     step and is deliberately not smuggled in here.
- *   - AUTH IS OFF. The e2e configs set `OIDC_*` to force the governed path on; this omits them, so
- *     `locals.authEnabled` is false and surfaces render as an anonymous-permitted caller. To develop
- *     the governed path, run the zone's Playwright suite (which mints a sealed cookie) instead.
+ *   - POPULATED DATA IS PER ZONE, and only `lakehouse` has it. The mocks answer 404 to everything
+ *     until seeded — deliberately, because a mock with baked-in fixtures cannot tell a live surface
+ *     from a dead one — so a zone renders EMPTY unless it ships an `e2e/dev-seed.ts`. Where that file
+ *     exists this launcher POSTs it in before the zone starts (lakehouse: 4 catalog routes, 2
+ *     observability routes and 3 lineage runs, verified rendering as real table rows). Where it does
+ *     not, the launcher says so instead of leaving you to guess whether blank means broken.
+ *   - AUTH IS OFF, but the mocks still see an IDENTITY. The e2e configs set `OIDC_*` to force the
+ *     governed path on; this omits them, so `locals.authEnabled` is false and the zone forwards no
+ *     bearer — which the mocks 401 by design ("exactly like the real catalog"), meaning seeded reads
+ *     would resolve to nothing. The launcher therefore hands the MOCKS `MOCK_DEV_BEARER` out of band;
+ *     unset, every mock behaves exactly as it does under Playwright. To develop the real governed
+ *     path (sealed cookie, login-first redirect), run the zone's Playwright suite instead.
  *   - CROSS-ZONE LINKS 404. The shared navbar renders all seven zone entries with
  *     `data-sveltekit-reload`; only one zone is listening. That is inherent to the isolation, not a
  *     defect — use `make dev-frontends` and :3024 when you need to cross a zone boundary.
@@ -60,7 +63,20 @@ export type ZoneStack = {
 	/** Server-side env for the zone's dev server, built from that zone's own port constants.
 	 *  Keys must match what the zone's `playwright.config.ts` sets (minus `OIDC_*`) — gated. */
 	env: (port: (name: string) => number) => Record<string, string>;
+	/** Optional `e2e/dev-seed.ts` exporting `DEV_SEEDS` — fixtures POSTed into the mocks so the zone
+	 *  renders POPULATED surfaces instead of empty ones. Absent for a zone that has none yet, which is
+	 *  an honest "not written" rather than a silent blank page. */
+	seedModule?: string;
 };
+
+/** The identity the dev loop signs in AS.
+ *
+ *  Prefix-matched by the mocks' `identityOf`, so it must start with their admin token. The zone runs
+ *  auth OFF (no OIDC, no Dex) and therefore forwards NO bearer, which the mocks answer 401 to by
+ *  design — "exactly like the real catalog". Handing them this value out of band via `MOCK_DEV_BEARER`
+ *  is what makes a seeded read resolve, WITHOUT teaching any mock to accept an anonymous caller: unset,
+ *  every mock behaves exactly as it does under Playwright. Seeds are keyed to the same string. */
+const DEV_BEARER = 'e2e-token:admin';
 
 /**
  * The five zones that ship hermetic mocks. `compute` and `studio` are ABSENT ON PURPOSE — they have
@@ -82,6 +98,7 @@ export const ZONE_STACKS: Record<string, ZoneStack> = {
 		}),
 	},
 	lakehouse: {
+		seedModule: 'e2e/dev-seed.ts',
 		mocks: [
 			'e2e/admin/mock-catalog.ts',
 			'e2e/admin/mock-observability.ts',
@@ -173,6 +190,80 @@ async function waitForPort(port: number, label: string, tries = 60): Promise<voi
 	throw new Error(`${label} never came up on :${port} after ${(tries * 100) / 1000}s`);
 }
 
+/**
+ * One seed group, as `e2e/dev-seed.ts` declares it.
+ *
+ * `routes` is the GENERIC per-bearer mechanism — `POST /__mock/seed` with `{bearer, routes}` — which
+ * the catalog and observability mocks implement. Not every mock does: the lakehouse's lineage mock is
+ * STATEFUL with its own API (`POST /__mock/runs`) and answers 502 "not mocked" to anything else, so a
+ * group may override `path` and `body` and post whatever that mock actually accepts. Assuming one
+ * envelope for all of them earned a 502 on the first run — the mock's fallback working as designed.
+ */
+type SeedGroup = {
+	env: string;
+	path?: string;
+	body?: unknown;
+	routes?: Record<string, unknown>;
+};
+
+/**
+ * POST the zone's dev fixtures into its mocks, so surfaces render POPULATED.
+ *
+ * Failure here is a WARNING, never fatal. A seed group naming an env the stack does not set, or a mock
+ * that refuses a body, leaves that surface empty — which is exactly what the zone did before seeds
+ * existed, so it is a degradation and not a reason to refuse to start. It is reported loudly because a
+ * silently-unseeded zone is indistinguishable from a broken one, which is the whole problem seeds solve.
+ */
+async function seedMocks(
+	zone: string,
+	zoneDir: string,
+	stack: ZoneStack,
+	env: Record<string, string>,
+): Promise<void> {
+	if (!stack.seedModule) {
+		console.error(
+			`==> no ${zone}/e2e/dev-seed.ts — surfaces will render EMPTY (mocks answer 404 until seeded)`,
+		);
+		return;
+	}
+
+	const mod: Record<string, unknown> = await import(resolve(zoneDir, stack.seedModule));
+	const groups = mod['DEV_SEEDS'];
+	if (!Array.isArray(groups)) {
+		console.error(`!! ${zone}/${stack.seedModule} exports no DEV_SEEDS array — nothing seeded`);
+		return;
+	}
+
+	for (const group of groups as SeedGroup[]) {
+		const base = env[group.env];
+		if (!base) {
+			console.error(
+				`!! seed group names ${group.env}, which this zone's stack does not set — skipped`,
+			);
+			continue;
+		}
+		const path = group.path ?? '/__mock/seed';
+		const body = group.body ?? { bearer: DEV_BEARER, routes: group.routes ?? {} };
+		const what = group.routes
+			? `${Object.keys(group.routes).length} route(s)`
+			: `a ${path} payload`;
+		try {
+			const res = await fetch(`${base}${path}`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(body),
+			});
+			console.error(
+				res.ok
+					? `==> seeded ${what} into ${group.env}${group.path ? ` (${path})` : ''}`
+					: `!! ${group.env} refused ${path} (HTTP ${res.status}) — those surfaces stay empty`,
+			);
+		} catch (err) {
+			console.error(`!! could not reach ${group.env} to seed it: ${String(err)}`);
+		}
+	}
+}
+
 async function main(): Promise<number> {
 	const zone = process.argv[2];
 	const known = zoneDirs();
@@ -219,7 +310,14 @@ async function main(): Promise<number> {
 		for (const mock of stack.mocks) {
 			console.error(`==> mock: ${zone}/${mock}`);
 			children.push(
-				Bun.spawn(['bun', mock], { cwd: zoneDir, stdout: 'inherit', stderr: 'inherit' }),
+				Bun.spawn(['bun', mock], {
+					cwd: zoneDir,
+					// The ONE thing that makes a bearer-less dev request resolve to an identity. Scoped to
+					// these child processes, so it can never leak into a Playwright run.
+					env: { ...process.env, MOCK_DEV_BEARER: DEV_BEARER },
+					stdout: 'inherit',
+					stderr: 'inherit',
+				}),
 			);
 		}
 		// Wait for every distinct mock port before the zone starts: a zone whose first SSR render races
@@ -229,6 +327,7 @@ async function main(): Promise<number> {
 			return Number.isFinite(p) ? [p] : [];
 		});
 		await Promise.all(distinct.map((p) => waitForPort(p, `${zone} mock`, 60)));
+		await seedMocks(zone, zoneDir, stack, env);
 	}
 
 	const port = devPort(zone);
