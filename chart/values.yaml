@@ -189,6 +189,9 @@ services:
     port: 8840
     replicas: 1
     frontDoor: true
+    # The run door spends GPU compute (model nodes invoke live Serve endpoints), so on a governed
+    # stack it checks the estate writer tier — FlowsSettings extends GovernedAuthSettings (LANCE_*).
+    governedAuth: true
     waitFor: []
   gateway:
     module: "gateway:app"

@@ -14,7 +14,7 @@ from http import HTTPStatus
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from flows import executor
+from flows import executor, security
 from flows.catalog import CATALOG
 from flows.dependencies import FlowsSettingsDep, HttpDep, RunsDep, SchedulerDep
 from flows.graph import validate_graph
@@ -27,7 +27,8 @@ from flows.models import (
     RunState,
     ValidateResponse,
 )
-from service_kit.exceptions import PROBLEM_JSON, NotFoundError
+from service_kit.exceptions import PROBLEM_JSON, ForbiddenError, NotFoundError
+from service_kit.governed.audit import ALLOW, DENY, audit
 
 
 log = logging.getLogger(__name__)
@@ -63,6 +64,8 @@ async def create_run(
     settings: FlowsSettingsDep,
     runs: RunsDep,
     scheduler: SchedulerDep,
+    subject: security.CurrentSubject,
+    checker: security.CheckerDep,
 ) -> RunState | JSONResponse:
     """Execute a flow.
 
@@ -82,6 +85,15 @@ async def create_run(
             media_type=PROBLEM_JSON,
             content=RunRefused(detail=f"{len(problems)} problem(s) in the graph", problems=problems).model_dump(),
         )
+
+    # AUTHZ, after shape (identity 401 → shape 422 → authz 403, the estate's door order). A flow's
+    # model nodes invoke live Serve endpoints, so this is the one route that spends compute. The
+    # denial NAMES the missing tuple — the estate's FGA-denial format, so the fix is in the message.
+    obj = settings.fga_root_object
+    allowed = await checker(user=subject, relation=security.EXECUTE, obj=obj)
+    audit("flows_run", ALLOW if allowed else DENY, subject=subject, resource=obj)
+    if not allowed:
+        raise ForbiddenError(f"'{subject}' lacks '{security.EXECUTE}' on '{obj}' — running a flow needs the estate writer tier")
 
     run_id = f"run-{uuid.uuid4().hex[:12]}"
 

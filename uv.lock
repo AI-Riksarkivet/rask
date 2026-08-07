@@ -930,7 +930,7 @@ source = { editable = "services/flows" }
 dependencies = [
     { name = "dapr-ext-workflow" },
     { name = "httpx" },
-    { name = "service-kit" },
+    { name = "service-kit", extra = ["governed"] },
     { name = "uvicorn" },
 ]
 
@@ -938,7 +938,7 @@ dependencies = [
 requires-dist = [
     { name = "dapr-ext-workflow", specifier = ">=1.18" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "service-kit", editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed"], editable = "packages/service-kit" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 
