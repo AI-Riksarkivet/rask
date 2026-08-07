@@ -21,6 +21,7 @@ import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from pydantic import ValidationError as PydanticValidationError
 from starlette.concurrency import run_in_threadpool
 
 from search.api.dependencies import EmbedderFactoryDep, RerankerFactoryDep, StateDep
@@ -92,24 +93,36 @@ def _cached_search(
     )
 
 
+def _spec_from_query(request: Request) -> SearchSpec:
+    """Bind ``SearchSpec`` from the flat query string OURSELVES — never via FastAPI's
+    query-param-model pattern (``Annotated[SearchSpec, Query()]``).
+
+    That pattern is BROKEN on the deployed FastAPI (0.140.13, measured 2026-08-07): under a real
+    uvicorn socket the model never flattens — the server demands a single required ``spec`` param and
+    422s every flat call, which killed live search estate-wide — while ``TestClient`` binds the same
+    request happily, so no in-process test can see it. Isolated by driving the identical app object
+    through both paths inside the running pod. ``SearchSpec`` already owns validation, clamping and
+    ``extra="ignore"`` (filters + ``corpus`` ride the same query string), so binding is one call; a
+    type error (``n=abc``) surfaces as the same clean 422 problem body the old wire shape promised.
+    """
+    try:
+        return SearchSpec.model_validate(dict(request.query_params))
+    except PydanticValidationError as exc:
+        raise ValidationError(str(exc)) from exc
+
+
 @router.get("/search")
 def search_get(
     request: Request,
     state: StateDep,
     get_embedder: EmbedderFactoryDep,
     get_reranker: RerankerFactoryDep,
-    # The generic knobs bind to the spec model (FastAPI Pydantic query-param
-    # model): each field is one query param, validated + clamped by SearchSpec
-    # itself — including the optional `dataset` selector. The descriptor-declared
-    # filter params ride alongside in the same query string and are extracted
-    # below (extra="ignore" keeps them out of the model), so the wire shape is
-    # unchanged.
-    spec: Annotated[SearchSpec, Query()],
     # FAN-OUT. Repeat it (`?corpus=a&corpus=b`) to search several at once. Its own name rather than
     # overloading `dataset`: a repeated `dataset` would change that param's type from the caller's
     # point of view, and every existing client sends exactly one.
     corpus: Annotated[list[str] | None, Query(description="Fan out across these corpora, fused by RRF")] = None,
 ) -> list[dict[str, Any]]:
+    spec = _spec_from_query(request)
     if corpus:
         return _fused_search(state, corpus, request, spec, get_embedder, get_reranker)
     handle = dataset_handle(state, spec.dataset)
