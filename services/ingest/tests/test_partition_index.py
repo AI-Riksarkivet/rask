@@ -95,3 +95,23 @@ def test_it_NEVER_fails_a_commit_that_already_landed(tmp_path) -> None:  # type:
             raise RuntimeError("index catalogue unreadable")
 
     _ensure_partition_index(_Broken())  # must not raise
+
+
+def test_the_CATALOG_COMMIT_path_gets_the_same_indexes(tmp_path) -> None:
+    """The deployed path bypasses the lander (the catalog folds fragments server-side), and every
+    catalog-committed table shipped with NO indexes — found by the goal's explain gate against a
+    table the live pipeline had just written (`describe_indices() == []`, 2026-08-07). One policy,
+    two entry points: `ensure_indexes_at(uri)` must produce exactly what the lander's own commit
+    produces."""
+    import lance
+    from ingest.lander import CREATION_FLAGS, ID_INDEX_NAME, PARTITION_INDEX_NAME, ensure_indexes_at
+    from ingest.worker import units_to_table
+
+    uri = str(tmp_path / "t.lance")
+    lance.write_dataset(units_to_table([("file:///a.tif", b"II*\x00a")]), uri, **CREATION_FLAGS)
+
+    ensure_indexes_at(uri)
+
+    names = {getattr(i, "name", i.get("name") if isinstance(i, dict) else "") for i in lance.dataset(uri).describe_indices()}
+    assert PARTITION_INDEX_NAME in names
+    assert ID_INDEX_NAME in names

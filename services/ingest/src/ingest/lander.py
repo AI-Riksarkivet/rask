@@ -200,6 +200,21 @@ def _ensure_partition_index(dataset: Any) -> None:  # noqa: ANN401 — LanceData
         logger.warning("could not ensure the scalar indexes (partition_key/id) — queries will scan", exc_info=True)
 
 
+def ensure_indexes_at(dataset_uri: str) -> None:
+    """Index policy for a committed dataset, by URI — for the CATALOG-commit path.
+
+    The lander's own commit calls `_ensure_partition_index(committed)` on the dataset object it
+    already holds — and the catalog-service branch in `runtime.finalize_run` BYPASSES the lander
+    entirely (the catalog folds the fragments server-side), so every deployed table was committed
+    with NO indexes at all: the goal's own explain-plan proof found `describe_indices() == []` on
+    a table the deployed pipeline had just written (2026-08-07). One policy, two entry points,
+    same never-fatal contract.
+    """
+    try:
+        _ensure_partition_index(lance.dataset(dataset_uri))
+    except Exception:
+        logger.warning("could not open %s to ensure indexes — queries will scan", dataset_uri, exc_info=True)
+
 def write_unit_fragments(dataset_uri: str, batch: pa.Table) -> list[str]:
     """A worker's half of the write: fragments on disk, invisible until the lander commits them.
 

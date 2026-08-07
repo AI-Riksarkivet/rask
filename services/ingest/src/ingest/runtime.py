@@ -418,6 +418,11 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
         # that stays right under concurrent commits.
         added = _rows_in(all_fragments)
         result = CommitResult(dataset_uri=uri, version=version, rows=tier_rows, rows_added=added, fragments_committed=len(all_fragments))
+        # The index policy the lander applies on ITS commit path — this branch bypasses the lander,
+        # and every catalog-committed table shipped index-less until the explain-plan gate caught it.
+        from ingest.lander import ensure_indexes_at
+
+        ensure_indexes_at(uri)
     else:
         result = Lander(catalog).commit_fragments(uri, all_fragments, run_id=spec.run_id)
     # Only after the commit lands. Purging earlier would delete the record a retried finalize needs,
