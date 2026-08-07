@@ -1303,6 +1303,26 @@ nats:
     cluster:
       enabled: true
       replicas: 3
+  # Memory bound (#139) — see the note under `openfga.resources`. The nats chart takes container
+  # overrides as a `merge` into the Container spec, not a top-level `resources` key. Sized as the
+  # BUS: JetStream file-store broker whose memory tracks in-flight messages + raft state, per node.
+  container:
+    merge:
+      resources:
+        requests: { cpu: 50m, memory: 128Mi }
+        limits: { memory: 512Mi }
+  # Memory bound (#139): the config reloader is an inotify loop; the debug box is an idle shell.
+  reloader:
+    merge:
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits: { memory: 64Mi }
+  natsBox:
+    container:
+      merge:
+        resources:
+          requests: { cpu: 10m, memory: 16Mi }
+          limits: { memory: 64Mi }
   # the headless service is <release>-nats:4222
   # First-party keys (the nats subchart ignores them):
   # Externalize: when set, the pubsub components + the stream-provision Job connect HERE instead of the
