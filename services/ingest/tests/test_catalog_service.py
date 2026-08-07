@@ -42,6 +42,11 @@ def test_ensure_returns_the_location_the_catalog_VENDS() -> None:
     Composing `{warehouse}/{project}/{dataset}.lance` from env is exactly the hardcoded path I2
     forbids: two callers with different env compose different locations for the same logical table.
     """
+    # ensure() on an EXISTING table now also evolves the schema (the etag column, 2026-08-07);
+    # the door answering "already exists" is the ordinary idempotent case.
+    respx.post(f"{BASE}/v1/table/bronze$pages/add_columns").mock(
+        return_value=httpx.Response(400, json={"detail": "column etag already exists"})
+    )
     respx.post(f"{BASE}/v1/table/bronze$pages/describe").mock(
         return_value=httpx.Response(200, json={"location": "s3://governed/bronze/pages.lance", "version": 3})
     )
@@ -324,6 +329,9 @@ def test_a_409_then_a_403_is_reported_as_an_AUTHORIZATION_gap_on_an_existing_tab
 def test_an_EXISTING_visible_table_is_never_re_created() -> None:
     """The fall-through must not turn every run into a create attempt. A describable table short-circuits
     before the namespace probe, which is also what keeps a run cheap on the common path."""
+    respx.post(f"{BASE}/v1/table/bind86-bronze$there/add_columns").mock(
+        return_value=httpx.Response(400, json={"detail": "column etag already exists"})
+    )
     respx.post(f"{BASE}/v1/table/bind86-bronze$there/describe").mock(
         return_value=httpx.Response(200, json={"location": "s3://wh/there", "version": 7})
     )

@@ -142,6 +142,13 @@ class Lander:
 #: BTREE would serve worse.
 PARTITION_INDEX = "BITMAP"
 PARTITION_INDEX_NAME = "partition_key_idx"
+#: The anti-join column. BTREE, not BITMAP: `id` is HIGH-cardinality (one distinct value per row),
+#: exactly the shape the format routes to BTREE — "essentially a sorted copy of a column"
+#: (guide.md:3189), which over int64 is 8 bytes/row. Created at commit like the BITMAP, folded
+#: forward by services/maintenance optimize_indices — the create-once/maintain-elsewhere division
+#: the format itself draws (file_format.md:1200 fragment_bitmap coverage).
+ID_INDEX = "BTREE"
+ID_INDEX_NAME = "id_idx"
 
 
 def _ensure_partition_index(dataset: Any) -> None:  # noqa: ANN401 — LanceDataset
@@ -182,12 +189,31 @@ def _ensure_partition_index(dataset: Any) -> None:  # noqa: ANN401 — LanceData
     Same reasoning as I8 for lineage, and the index is recoverable at any later commit.
     """
     try:
-        if any(getattr(i, "name", "") == PARTITION_INDEX_NAME for i in dataset.describe_indices()):
-            return
-        dataset.create_scalar_index("partition_key", index_type=PARTITION_INDEX, name=PARTITION_INDEX_NAME)
+        present = {getattr(i, "name", "") for i in dataset.describe_indices()}
+        if PARTITION_INDEX_NAME not in present:
+            dataset.create_scalar_index("partition_key", index_type=PARTITION_INDEX, name=PARTITION_INDEX_NAME)
+        if ID_INDEX_NAME not in present:
+            # The anti-join reads `id` on EVERY incremental tick; without this it is a full
+            # column scan that grows with the tier. Same never-fatal contract as the BITMAP.
+            dataset.create_scalar_index("id", index_type=ID_INDEX, name=ID_INDEX_NAME)
     except Exception:
-        logger.warning("could not ensure the %s index on partition_key — queries will scan", PARTITION_INDEX, exc_info=True)
+        logger.warning("could not ensure the scalar indexes (partition_key/id) — queries will scan", exc_info=True)
 
+
+def ensure_indexes_at(dataset_uri: str) -> None:
+    """Index policy for a committed dataset, by URI — for the CATALOG-commit path.
+
+    The lander's own commit calls `_ensure_partition_index(committed)` on the dataset object it
+    already holds — and the catalog-service branch in `runtime.finalize_run` BYPASSES the lander
+    entirely (the catalog folds the fragments server-side), so every deployed table was committed
+    with NO indexes at all: the goal's own explain-plan proof found `describe_indices() == []` on
+    a table the deployed pipeline had just written (2026-08-07). One policy, two entry points,
+    same never-fatal contract.
+    """
+    try:
+        _ensure_partition_index(lance.dataset(dataset_uri))
+    except Exception:
+        logger.warning("could not open %s to ensure indexes — queries will scan", dataset_uri, exc_info=True)
 
 def write_unit_fragments(dataset_uri: str, batch: pa.Table) -> list[str]:
     """A worker's half of the write: fragments on disk, invisible until the lander commits them.

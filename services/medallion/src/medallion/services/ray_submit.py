@@ -57,7 +57,12 @@ async def submit_stage_job(
     must not produce a governed dataset the in-process path would have stamped. It is provenance, never
     a credential, so echoing it back through the jobs API (which mirrors runtime_env) is harmless.
     """
-    submission_id = rk.submission_id(stage, token)
+    # The work identity rides in the id: a token-less trigger used to collapse EVERY submission of a
+    # stage onto `ray-<stage>-notoken`, and submit_or_reattach read the collision as success — the
+    # second transform silently never ran. The same collapse hid WITH a token whenever one trigger
+    # fans out to two tables of the same stage. from→to IS the transform's identity; a redelivered
+    # trigger carries the same pair, so redelivery idempotency is unchanged.
+    submission_id = rk.submission_id(stage, token, work=f"{from_uri}\x00{to_uri}")
     env_vars = {
         "FROM_URI": from_uri,
         "TO_URI": to_uri,

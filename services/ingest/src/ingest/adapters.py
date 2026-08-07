@@ -108,7 +108,13 @@ def _s3_prefix(spec: SourceSpec) -> SourceAdapter:
         raise ValueError("s3-prefix source requires options.bucket")
     endpoint = spec.options.get("endpoint")
     fs = pafs.S3FileSystem(endpoint_override=str(endpoint)) if endpoint else pafs.S3FileSystem()
-    return S3Source(fs, bucket, str(spec.options.get("prefix") or ""))
+    # The storage client rides along for the VERSIONED listing (ETags): pyarrow FileInfo carries
+    # no ETag, and the estate rule is storage.s3_client, never raw boto3. Same endpoint resolution
+    # as the filesystem, so the two views of the bucket cannot diverge.
+    from storage import s3_client
+
+    client = s3_client(str(endpoint)) if endpoint else s3_client()
+    return S3Source(fs, bucket, str(spec.options.get("prefix") or ""), client=client)
 
 
 def _s3_prefix_lineage(spec: SourceSpec) -> LineageInput:

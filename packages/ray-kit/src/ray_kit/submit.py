@@ -26,6 +26,7 @@ The pieces this owns are the ones that are hard to get right twice:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -50,13 +51,22 @@ class RayJobError(RuntimeError):
     """A submitted Ray job failed, was stopped, or did not finish within the timeout."""
 
 
-def submission_id(stage: str, token: str | None) -> str:
-    """A deterministic id per ``(stage, token)`` so redelivery re-attaches to the same job.
+def submission_id(stage: str, token: str | None, work: str = "") -> str:
+    """A deterministic id per ``(stage, token, work)`` so redelivery re-attaches to the same job.
 
     Idempotency lives HERE rather than in the caller: a trigger delivered twice must not start two jobs,
-    and the only thing both deliveries share is the pair this hashes.
+    and the only thing both deliveries share is what this hashes.
+
+    ``work`` is the job's own identity — for a stage transform, its ``from→to`` URIs. Without it a
+    token-less trigger collapsed EVERY submission of a stage onto one id (``ray-silver-notoken``), and
+    ``submit_or_reattach`` read the collision as a successful re-attach — the second transform's work
+    silently never ran. The same collapse hid WITH a token whenever one trigger fans out to two tables
+    of the same stage. The token stays visible in the id (operators grep the dashboard by it); the work
+    rides as a short digest so arbitrarily long URIs can't push the id past Ray's limits.
     """
     raw = f"ray-{stage}-{token or 'notoken'}"
+    if work:
+        raw = f"{raw}-{hashlib.sha256(work.encode()).hexdigest()[:12]}"
     return re.sub(r"[^A-Za-z0-9_-]", "-", raw)[:200]
 
 

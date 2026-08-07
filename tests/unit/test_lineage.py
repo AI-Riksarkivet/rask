@@ -780,11 +780,12 @@ def test_ingest_sets_run_progress_only_when_the_facet_rides(monkeypatch: pytest.
 
 
 def test_list_runs_folds_progress_onto_the_status_board(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The 12-column _LIST_RUNS row folds into RunStatus with progress as ints (positions 4/5)."""
+    """The 13-column _LIST_RUNS row folds into RunStatus with progress as ints (positions 4/5)."""
     import lineage.services.repository as repo_mod
 
     async def _fake_fetch(_pool: object, _graph: str, query: str, params: dict[str, object] | None = None, *, columns: int) -> list[list[object]]:
-        assert "r.progress_done" in query and columns == 12
+        # 13 columns since source_run_id joined the projection (the run-board identity fix).
+        assert "r.progress_done" in query and columns == 13
         return [
             [
                 "r-prog",
@@ -799,6 +800,7 @@ def test_list_runs_folds_progress_onto_the_status_board(monkeypatch: pytest.Monk
                 2,
                 "silver$features",
                 "",
+                "ingest-run-77",
             ]
         ]
 

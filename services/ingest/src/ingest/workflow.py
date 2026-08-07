@@ -95,6 +95,10 @@ class ChunkSpec(BaseModel):
     run_id: str
     chunk_id: str
     keys: list[str] = Field(default_factory=list)
+    #: Positional-parallel VERSION TOKENS for `keys` (S3 listing ETags) — identity material the
+    #: workers fold into row ids. Defaulted empty so a chunk enqueued by an older build still
+    #: validates; publish pads with None.
+    tokens: list[str | None] = Field(default_factory=list)
     #: Resolved ONCE, by `enumerate_chunks`, and carried. It used to be re-derived at each end from
     #: env — `RASK_INGEST_ACTIVE_DATASET` or `{warehouse}/{run_id}.lance` for workers, and
     #: `{warehouse}/{project}/{dataset}.lance` for finalize. Those are different datasets: workers
@@ -410,24 +414,66 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
     a million activity results would melt the state store, which is the whole reason chunking exists
     and the reason this plane needs no separate ledger.
     """
-    from ingest.sources import SourceSpec, build_source, iter_unit_keys
+    from ingest.sources import SourceSpec, build_source, iter_versioned_unit_keys
 
     spec = RunSpec.model_validate(payload["spec"])
     source_spec = SourceSpec(kind=spec.kind, project=spec.project, dataset=spec.dataset, options=spec.options)
     # KEYS, not objects. `iter_units` reads every object's bytes to hand back its uri — so
     # enumerating a IIIF volume through it downloaded the whole volume here and the workers then
     # downloaded it again. Two full transfers of the source, the first with no backpressure at all.
-    keys = list(iter_unit_keys(build_source(source_spec)))
+    pairs = list(iter_versioned_unit_keys(build_source(source_spec)))
 
     uri = str(payload["dataset_uri"])
+    # THE ANTI-JOIN — what makes repeated ingest CONVERGE (owner goal 2026-08-07). Before this,
+    # `lander.py` committed a blind Append and a re-run duplicated every row: nine runs of one
+    # fixture prefix measured nine copies per file. The identity is `unit_id(key, token)` — the
+    # SAME derivation the worker writes (`identity.py`, one function, two callers) — so:
+    #   unchanged object  -> same id -> skipped HERE, its bytes never fetched;
+    #   replaced object   -> new etag -> new id -> lands as a NEW row, the old row stays;
+    #   new object        -> no id match -> lands.
+    # Projecting the `id` column ALONE (int64, 8 bytes/row) deliberately: `payload` is a blob-v2
+    # sidecar and never rides a projection that does not name it. A quiet tick drops every key,
+    # falls into the units_total == 0 short-circuit, and leaves NO Lance version. The skip is
+    # LOGGED with counts — silent truncation would read as data loss in reverse.
+    from ingest.identity import unit_id
+
+    existing: set[int] = set()
+    try:
+        import lance
+
+        dataset = lance.dataset(uri)
+        if dataset.count_rows():
+            existing = set(dataset.to_table(columns=["id"]).column("id").to_pylist())
+    except Exception:
+        # A dataset the catalog just created (or a local test path) may not be openable yet —
+        # an empty set means nothing is skipped, which is the safe degradation: worst case is
+        # the pre-anti-join behaviour, never a silently skipped ingest.
+        _log = __import__("logging").getLogger(__name__)
+        _log.warning("anti-join could not read %s — ingesting everything", uri, exc_info=True)
+
+    if existing:
+        before = len(pairs)
+        pairs = [(key, token) for key, token in pairs if unit_id(key, token) not in existing]
+        skipped = before - len(pairs)
+        if skipped:
+            import logging
+
+            logging.getLogger(__name__).info(
+                "anti-join: %d of %d objects already in bronze (by id) — fetching %d",
+                skipped,
+                before,
+                len(pairs),
+            )
+
     chunks: list[dict[str, Any]] = []
-    for index in range(0, len(keys), CHUNK_SIZE):
-        window = keys[index : index + CHUNK_SIZE]
+    for index in range(0, len(pairs), CHUNK_SIZE):
+        window = pairs[index : index + CHUNK_SIZE]
         chunks.append(
             ChunkSpec(
                 run_id=spec.run_id,
                 chunk_id=f"{spec.run_id}-c{index // CHUNK_SIZE}",
-                keys=window,
+                keys=[key for key, _ in window],
+                tokens=[token for _, token in window],
                 dataset_uri=uri,
                 # Carried, not re-resolved — same reason as `dataset_uri` above.
                 sizing=spec.sizing,

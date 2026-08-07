@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import pyarrow.fs as pafs
 from pydantic import BaseModel
@@ -48,6 +48,24 @@ class KeyedSourceAdapter(SourceAdapter, Protocol):
     def iter_keys(self) -> Iterator[str]: ...
 
 
+class VersionedKeyedSourceAdapter(KeyedSourceAdapter, Protocol):
+    """A :class:`KeyedSourceAdapter` whose listing carries a per-object VERSION TOKEN.
+
+    The owner ruled (2026-08-07) that sinks DO replace objects under the same key, so a key alone
+    cannot identify what was ingested: the bronze row identity is ``sha256(key + token)`` and a
+    replaced object lands as a NEW row while the old one stays (bronze is history). The token is
+    whatever the store hands out FREE at listing time — for S3 the ``ETag`` from ``list_objects_v2``,
+    zero extra calls.
+
+    Optional, exactly like :class:`KeyedSourceAdapter`: a source with no version story degrades to
+    ``(key, None)`` — SNAPSHOT semantics, where a re-harvest is an explicit operator decision. That
+    degradation is a documented contract, not an accident: only the S3 kind promises
+    replace-in-place detection.
+    """
+
+    def iter_versioned_keys(self) -> Iterator[tuple[str, str | None]]: ...
+
+
 class LocalDirSource:
     """A :class:`SourceAdapter` over a local directory tree — each file's bytes + its ``file://`` URI.
 
@@ -78,10 +96,15 @@ class S3Source:
     adapter serves MinIO, RustFS, or AWS by swapping the filesystem — the exact provider-agnostic seam.
     """
 
-    def __init__(self, fs: pafs.S3FileSystem, bucket: str, prefix: str = "") -> None:
+    def __init__(self, fs: pafs.S3FileSystem, bucket: str, prefix: str = "", client: Any | None = None) -> None:  # noqa: ANN401 — boto3 has no public stubs (same rule as storage.client)
         self._fs = fs
         self._bucket = bucket
         self._prefix = prefix
+        #: A boto3-compatible client (``storage.s3_client``) for the VERSIONED listing. Optional and
+        #: additive: pyarrow FileInfo carries no ETag, so version tokens need list_objects_v2 — and
+        #: the estate rule is storage.s3_client, never raw boto3 in service code. Absent -> the
+        #: adapter still works, degraded to token-less snapshot listing.
+        self._client = client
 
     def _listing(self) -> list[pafs.FileInfo]:
         base = "/".join(part for part in (self._bucket, self._prefix) if part)
@@ -95,6 +118,24 @@ class S3Source:
         """The URIs alone — one LIST call, no object bodies transferred."""
         for info in self._listing():
             yield f"s3://{info.path}"
+
+    def iter_versioned_keys(self) -> Iterator[tuple[str, str | None]]:
+        """``(uri, etag)`` pairs from ONE paginated ``list_objects_v2`` — tokens cost nothing extra.
+
+        S3 guarantees keys are returned in UTF-8 binary order, so this listing is deterministic
+        without a sort — the same reproducibility contract ``_listing`` enforces by sorting. The
+        ETag is stripped of the quotes S3 wraps it in. Without a client this degrades to
+        ``(key, None)`` over the pyarrow listing: same keys, snapshot semantics.
+        """
+        if self._client is None:
+            for key in self.iter_keys():
+                yield key, None
+            return
+        paginator = self._client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self._bucket, Prefix=self._prefix):
+            for obj in page.get("Contents", []):
+                etag = str(obj.get("ETag") or "").strip('"') or None
+                yield f"s3://{self._bucket}/{obj['Key']}", etag
 
     def iter_objects(self) -> Iterator[SourceObject]:
         base = "/".join(part for part in (self._bucket, self._prefix) if part)
