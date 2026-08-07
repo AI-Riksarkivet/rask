@@ -25,7 +25,7 @@
  *
  * WHAT IT DOES NOT DO — read this before assuming a blank page is a bug:
  *
- *   - POPULATED DATA IS PER ZONE — `lakehouse` and `annotator` have it; `explorer`, `home` and
+ *   - POPULATED DATA IS PER ZONE — `lakehouse`, `annotator` and `explorer` have it; `home` and
  *     `compute`/`studio` do not. The mocks answer 404 to everything until seeded (deliberately: a mock
  *     with baked-in fixtures cannot tell a live surface from a dead one), so a zone renders EMPTY
  *     unless it ships an `e2e/dev-seed.ts`, which this launcher POSTs in before the zone starts. Both
@@ -42,6 +42,14 @@
  *     cursor's env also defaults to a dead `:8001`, so a zone's stack must point `LINEAGE_API` at its
  *     own mock. Corollary: `curl` cannot diagnose this. No hydration, no mount, no `liveRead`, no
  *     requests at all — only a real browser shows the truth.
+ *
+ *     A BOOT GATE CAN HIDE THE WHOLE ZONE. Explorer SSRs "Loading dataset" and renders NOTHING —
+ *     not even seeded search results the browser demonstrably received (200, correct rows) — until
+ *     `/api/datasets/<id>/descriptor` resolves. That call rides the zone's `[...path]` catch-all
+ *     through `makeViewerProxy`, whose upstream is `VIEWER_API` defaulting to a dead `:8101` that
+ *     NOTHING previously set: the e2e suite masks it with `page.route`, which a dev browser does not
+ *     have. So explorer's stack points `VIEWER_API` at the mock and its fixture seeds the descriptor
+ *     and `/api/health` FIRST. Media bytes stay out of reach (binary a JSON mock cannot speak).
  *
  *     `home` is NOT seedable today and that is a zone decision, not a gap here: its project gallery is
  *     identity-scoped, so with auth OFF it answers "No projects to show — sign-in is not configured on
@@ -129,12 +137,20 @@ export const ZONE_STACKS: Record<string, ZoneStack> = {
 		}),
 	},
 	explorer: {
+		seedModule: 'e2e/dev-seed.ts',
 		mocks: ['e2e/mock-media-services.ts'],
 		env: (port) => ({
 			CATALOG_API: url(port('MOCK_SERVICES_PORT')),
 			SEARCH_API: url(port('MOCK_SERVICES_PORT')),
 			ANNOTATOR_API: url(port('MOCK_SERVICES_PORT')),
 			ANNOTATOR_PROJECTS_API: url(port('MOCK_SERVICES_PORT')),
+			// The zone's [...path] catch-all (makeViewerProxy) targets VIEWER_API, defaulting to a
+			// dead :8101 — and the DESCRIPTOR rides it, which gates every surface in the zone. The
+			// e2e suite works around this with page.route; a dev browser has no such interception.
+			VIEWER_API: url(port('MOCK_SERVICES_PORT')),
+			// And the cursor, as everywhere: a zone whose cursor never opens never fires the reads
+			// hanging off `liveRead`.
+			LINEAGE_API: url(port('MOCK_SERVICES_PORT')),
 		}),
 	},
 	annotator: {
