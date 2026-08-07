@@ -1315,8 +1315,31 @@ nats:
 # --- Dapr control plane (subchart) — injects the daprd sidecar into annotated pods ----------------
 dapr:
   enabled: true
+  # Memory bound (#139) — see the note under `openfga.resources`. Five control-plane components, all
+  # controller loops rather than data paths, so all sized as controllers. The sidecar injector's
+  # `resources` here bound the INJECTOR itself; per-app daprd sidecar sizing is a separate concern
+  # (the `dapr.io/sidecar-memory-*` annotations), deliberately not changed here.
+  dapr_operator:
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
+  dapr_sentry:
+    resources:
+      requests: { cpu: 25m, memory: 32Mi }
+      limits: { memory: 128Mi }
+  dapr_placement:
+    resources:
+      requests: { cpu: 25m, memory: 32Mi }
+      limits: { memory: 128Mi }
+  dapr_scheduler:
+    resources:
+      requests: { cpu: 25m, memory: 64Mi }
+      limits: { memory: 256Mi }
   # --- SUBCHART values (dapr 1.18.1) --------------------------------------------------------------
   dapr_sidecar_injector:
+    resources:
+      requests: { cpu: 25m, memory: 32Mi }
+      limits: { memory: 128Mi }
     # FAIL-CLOSED sidecar injection. Dapr ships `Ignore`, which means the API server SILENTLY admits a
     # pod unmutated when the injector webhook is unreachable. The Dapr control plane is a subchart of
     # THIS release, so on a fresh cluster the app pods are created in the same breath as the injector,
@@ -1449,6 +1472,17 @@ kueue:
 openfga:
   enabled: true
   replicaCount: 1
+
+  # MEMORY BOUND (#139). Every workload below ran with NO `limits.memory`, which does not mean
+  # "unbounded and fine" — it means the container can never be OOMKilled by its OWN cgroup, so it
+  # grows until the NODE is under pressure and the kernel picks a victim by badness score. The pod
+  # that dies is very often NOT the pod that caused it, and the victim just gets SIGKILL with nothing
+  # in its own logs or events. That failure mode presents exactly as "a service crashed randomly for
+  # no reason". Requests are set too: without them the scheduler cannot reason about the node's real
+  # commitment, which is a second route to surprise evictions.
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
   # Pin to v1.8.0: v1.18.0's migration 006 (DROP INDEX CONCURRENTLY) breaks against the AGE-shared
   # Postgres; v1.8.0 migrates cleanly. Server + our migrate Job both use this tag (schema match).
   image:
@@ -1571,6 +1605,11 @@ cnpg:
 # Ready is admitted and reconciled later (the KubeRay/RayService behaviour) —
 # this is what lets the Cluster be a plain template instead of a hook.
 cloudnative-pg:
+  # Memory bound (#139) — see the note under `openfga.resources`. This is the OPERATOR (a controller
+  # loop), not the Postgres it manages, so it is sized as a controller.
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
   # CNPG ships its CRDs as templated resources (not a bare crds/ dir), so Helm
   # cannot map our Cluster CR in the same release on a cold install. We instead
   # vendor the CNPG CRDs into the umbrella chart's crds/ dir (installed in Helm's
@@ -1644,6 +1683,12 @@ observability:
 # rendered `<release>-observability-s3` Secret (templates/observability.yaml — rustfs.accessKey/secretKey,
 # the ONE store credential pair).
 greptimedb-standalone:
+  # Memory bound (#139) — see the note under `openfga.resources`. Sized HIGHEST of the group on
+  # purpose: this is a database ingesting OTLP traces + RED metrics from the whole fleet, so it is
+  # the one workload here whose footprint genuinely grows with how busy the estate is.
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 2Gi }
   objectStorage:
     s3:
       bucket: "rask-observability"
@@ -1655,6 +1700,10 @@ greptimedb-standalone:
 
 # Perses subchart — dashboards-as-code over GreptimeDB's Prometheus-compatible API.
 perses:
+  # Memory bound (#139) — see the note under `openfga.resources`.
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+    limits: { memory: 256Mi }
   # Perses bundles its datasource/panel plugins and extracts them into
   # /etc/perses/plugins at startup, but the container runs readOnlyRootFilesystem
   # so that path isn't writable → "datasource schemas are not loaded" and the
