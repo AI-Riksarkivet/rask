@@ -182,20 +182,18 @@ spec:
             - name: AWS_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef: { name: {{ $appSecret }}, key: AWS_SECRET_ACCESS_KEY }
+            {{- end }}
             {{- if $root.Values.explorer.corpusS3Root }}
-            # #142: the corpus read from the GOVERNED warehouse bucket instead of the mounted disk.
-            # `registry_root` flips to this s3:// root when both MEDIA_S3_ENDPOINT and
-            # MEDIA_S3_DB_ROOT are set (service_kit/media/config.py); the descriptor then comes from
-            # the `lance_media.descriptor` SCHEMA STAMP the seed writes, not a JSON file. Default ""
-            # keeps the disk behaviour. Same fleet credential pair as the object browser above.
-            # NO MEDIA_S3_* credentials on purpose: `storage_options` omits static creds when the
-            # fields are unset, so Lance/object_store uses the standard AWS chain — the fleet
-            # AWS_* pair this fence already injects above. One credential mechanism, not two.
-            # (The store-backed upgrade — the OpenBao bundle carrying the pair, fetched fail-closed
-            # like MEDIA_PUBLISH_* — is #142's remaining secrets item.)
+            # #142: ALL THREE readers serve the corpus from the governed bucket. NO secret env — the
+            # SECRET half comes from the Dapr secret store (`rustfs-secret-key` in the `lance`
+            # bundle, fetched fail-closed by `storage_options`); only the ENDPOINT, ROOT and the
+            # ACCESS-KEY ID (an identifier, not a secret — the MEDIA_PUBLISH_* split) are config.
             - { name: MEDIA_S3_ENDPOINT, value: {{ include "lance.s3Endpoint" $root | quote }} }
             - { name: MEDIA_S3_DB_ROOT, value: {{ $root.Values.explorer.corpusS3Root | quote }} }
-            {{- end }}
+            {{- $mediaSecret := $root.Values.existingSecret | default (printf "%s-app" (include "rask.fullname" $root)) }}
+            - name: MEDIA_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: {{ $mediaSecret }}, key: AWS_ACCESS_KEY_ID }
             {{- end }}
             {{- if or (eq $name "search") (eq $name "viewer") }}
             # Query encoders (values.encoders). search CALLS them (vector/hybrid/rerank legs); viewer

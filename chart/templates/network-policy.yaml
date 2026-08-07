@@ -225,6 +225,10 @@ spec:
                   # `app.kubernetes.io/component: viewer`. (core-api/search-api/volumes-api died
                   # with the wave; the orchestrator died at P7a.)
                   - viewer
+                  # #142: search + annotator read the media corpus from the governed bucket too —
+                  # absent from this list they are SILENTLY dropped (green pods, empty corpus).
+                  - search
+                  - annotator
                   {{- range .Values.medallion.movers }}
                   - {{ .name }}
                   {{- end }}

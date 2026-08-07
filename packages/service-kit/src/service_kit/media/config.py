@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     s3_endpoint: str | None = Field(default=None, alias="MEDIA_S3_ENDPOINT")
     s3_access_key_id: str | None = Field(default=None, alias="MEDIA_S3_ACCESS_KEY_ID")
     s3_secret_access_key: str | None = Field(default=None, alias="MEDIA_S3_SECRET_ACCESS_KEY")
+    # The SECRET half comes from the Dapr secret store, fail-closed — the MEDIA_PUBLISH_* precedent
+    # below: coordinates are config, the secret is not. `rustfs-secret-key` is already seeded in the
+    # `lance` bundle by the chart's infra-credentials plane. MEDIA_S3_SECRET_ACCESS_KEY exists for
+    # tests and sidecar-less dev only; the chart never sets it.
+    s3_secret_store: str = Field(default="lance-secrets", alias="MEDIA_S3_SECRET_STORE")
+    s3_secret_key: str = Field(default="lance", alias="MEDIA_S3_SECRET_KEY")
+    s3_secret_field: str = Field(default="rustfs-secret-key", alias="MEDIA_S3_SECRET_FIELD")
     s3_region: str = Field(default="us-east-1", alias="MEDIA_S3_REGION")
     s3_db_root: str | None = Field(default=None, alias="MEDIA_S3_DB_ROOT")
 
@@ -172,13 +179,26 @@ class Settings(BaseSettings):
             "allow_http": "true" if self.s3_endpoint.startswith("http://") else "false",
             "virtual_hosted_style_request": "false",
         }
-        # Pin static credentials only when BOTH are supplied. Otherwise omit them
-        # so Lance/object_store falls back to the standard AWS credential chain
-        # (AWS_* env vars, ~/.aws, IAM role) — sending "" would be read as an
-        # explicit empty key and break that chain (the normal K8s/rask deploy).
+        # Credential resolution, per the estate's secrets rule (store only, fail-closed):
+        #   1. BOTH static fields set — tests and sidecar-less dev. The chart never sets the secret.
+        #   2. Otherwise the secret comes from the Dapr secret store (cached), the access-key id from
+        #      config — the exact MEDIA_PUBLISH_* split (client_id is config, the password is not).
+        #      A missing bundle or field RAISES rather than falling back to the AWS env chain: an
+        #      env-borne secret is the shape the rule forbids, and a silent chain fallback would
+        #      re-admit it while looking configured.
         if self.s3_access_key_id and self.s3_secret_access_key:
             opts["access_key_id"] = self.s3_access_key_id
             opts["secret_access_key"] = self.s3_secret_access_key
+            return opts
+        if not self.s3_access_key_id:
+            raise RuntimeError("MEDIA_S3_ENDPOINT is set but MEDIA_S3_ACCESS_KEY_ID is not — the id is config, set it")
+        secret = _store_secret(self.s3_secret_store, self.s3_secret_key, self.s3_secret_field)
+        if not secret:
+            raise RuntimeError(
+                f"S3 secret {self.s3_secret_field!r} unavailable from Dapr store {self.s3_secret_store!r} — failing closed"
+            )
+        opts["access_key_id"] = self.s3_access_key_id
+        opts["secret_access_key"] = secret
         return opts
 
     @property
@@ -195,6 +215,16 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [o.strip() for o in v.split(",") if o.strip()]
         return v
+
+
+@lru_cache(maxsize=8)
+def _store_secret(store: str, key: str, field: str) -> str | None:
+    """One cached fetch per (store, key, field) — `storage_options` is read per dataset open, and
+    the bundle is static for the pod's lifetime. Import inside so sidecar-less callers that never
+    reach the store path (local roots, explicit test creds) pay nothing."""
+    from service_kit.governed.secrets import fetch_dapr_secret
+
+    return fetch_dapr_secret(store, key).get(field) or None
 
 
 @lru_cache
