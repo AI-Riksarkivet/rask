@@ -370,6 +370,11 @@ class RunStatus(BaseModel):
     #: The catalog operation for this run (``create_table`` / ``drop_table`` / ``rename_table`` / …), so the
     #: live board can label a drop/rename as such; ``None`` for runs with no ``lance`` operation facet.
     operation: str | None = None
+    #: The producer's OWN run id (the lance facet's run_id) — the id its detail doors answer to.
+    #: The graph run_id above is a derived one-way UUID5; a board that links with it links to
+    #: nothing (measured: every ingest-board row 404'd). None for runs recorded before producers
+    #: stated it — a consumer must render those unlinked, never guess.
+    source_run_id: str | None = None
 
 
 class Runs(BaseModel):

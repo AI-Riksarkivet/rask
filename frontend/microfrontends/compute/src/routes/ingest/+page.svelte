@@ -71,7 +71,16 @@
 				{#each runs as run (run.run_id)}
 					{@const pct = percent(run.progress_done, run.progress_total)}
 					<li>
-						<a class="hover:bg-muted/50 flex items-center gap-3 p-3" href="{base}/ingest/{run.run_id}">
+						<!-- Linked ONLY with the producer's own id: `run.run_id` is the graph's derived
+						     UUID5 and every link built from it was dead (measured — "No such run" on
+						     each row). A row without `source_run_id` predates producers stating it and
+						     renders unlinked WITH the reason — shown disabled, never hidden (ruling). -->
+						<svelte:element
+							this={run.source_run_id ? 'a' : 'div'}
+							class="hover:bg-muted/50 flex items-center gap-3 p-3 {run.source_run_id ? '' : 'opacity-60'}"
+							href={run.source_run_id ? `${base}/ingest/${run.source_run_id}` : undefined}
+							title={run.source_run_id ? undefined : 'Recorded before run identity landed in the graph — no detail page can resolve it.'}
+						>
 							{#if run.state === 'COMPLETE'}
 								<CircleCheck class="h-4 w-4 shrink-0 text-emerald-600" />
 							{:else if run.state === 'FAIL' || run.state === 'FAILED'}
@@ -83,7 +92,13 @@
 							{/if}
 
 							<span class="min-w-0 flex-1">
-								<span class="block truncate font-mono text-xs">{run.run_id}</span>
+								<!-- The TABLE is the headline — a bare UUID tells an operator nothing. -->
+								{#if run.table}
+									<span class="block truncate text-sm">{run.table}</span>
+									<span class="text-muted-foreground block truncate font-mono text-[10px]">{run.source_run_id ?? run.run_id}</span>
+								{:else}
+									<span class="block truncate font-mono text-xs">{run.source_run_id ?? run.run_id}</span>
+								{/if}
 								{#if run.error_message}
 									<span class="text-destructive block truncate text-xs">{run.error_message}</span>
 								{:else if run.updated_at}
@@ -97,7 +112,7 @@
 								</span>
 							{/if}
 							<span class="shrink-0 text-xs font-medium">{run.state ?? '—'}</span>
-						</a>
+						</svelte:element>
 					</li>
 				{/each}
 			</ul>

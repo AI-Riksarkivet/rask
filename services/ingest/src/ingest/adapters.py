@@ -25,11 +25,9 @@ from ingest.sources import LineageInput, SourceOption, SourceSpec, register
 
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
 
-    import httpx
 
-    from service_kit.lakehouse.sources import SourceAdapter, SourceObject
+    from service_kit.lakehouse.sources import SourceAdapter
 
 
 #: The ONE directory tree `local-dir` may read, and there is deliberately no default.
@@ -45,9 +43,6 @@ if TYPE_CHECKING:
 #: source nobody can abuse.
 LOCAL_ROOT_ENV = "RASK_INGEST_LOCAL_ROOT"
 
-#: Per-request ceiling for the IIIF fetch. Matches `fetch.py`'s HTTP_TIMEOUT: one source kind must
-#: not have a quieter idea of "stuck" than the fetcher that pulls the same bytes for every other.
-_IIIF_TIMEOUT = 60.0
 
 
 def local_root() -> Path | None:
@@ -121,109 +116,16 @@ def _s3_prefix_lineage(spec: SourceSpec) -> LineageInput:
     return LineageInput(namespace=f"s3://{spec.options.get('bucket')}", name=str(spec.options.get("prefix") or "/"))
 
 
-class IIIFVolumeSource:
-    """A IIIF volume as a `SourceAdapter` — the lane the medallion owns today and gives up at A12.
-
-    Wraps `storage.iiif`'s `get_image_ids` / `build_image_url` / `fetch_image`, which is what the
-    medallion's producer itself uses (`iiif_produce.py:41`). Deliberately NOT `IIIFCachedSource`:
-    despite the name it is a keys+read CACHE (`keys`/`read`/`cached_keys`), it has no `iter_objects`,
-    and the medallion's own docstring calls it retired. An earlier version of this file registered it
-    anyway, on a signature guessed from a grep — both the signature and the interface were wrong.
-
-    Nothing would have caught that before a live run: `SourceAdapter` is a plain Protocol, NOT
-    `runtime_checkable` (an `isinstance` against it raises TypeError), so there is no import-time or
-    startup check to fail. The registry would have happily handed back an object with no
-    `iter_objects`, and the first enumeration of a real volume would have been the error report.
-    `test_adapters.py` therefore asserts the method exists rather than trusting the annotation.
-
-    The retry policy stays `storage.iiif`'s. The medallion's defect was SEQUENTIAL fetching in the
-    request path, not its retries; the worker's bounded concurrency fixes the former, and re-deriving
-    the latter would only lose hard-won behaviour against a rate-limited endpoint.
-    """
-
-    def __init__(
-        self,
-        volume_id: str,
-        iiif_base: str | None = None,
-        query_params: str | None = None,
-        max_pages: int | None = None,
-    ) -> None:
-        self._volume = volume_id
-        self._base = iiif_base
-        self._query = query_params
-        #: Stop after this many pages. The option was REGISTERED, rendered by the compute zone,
-        #: numeric-validated on the user's behalf and posted in `options` — and read by nothing. It
-        #: worked before A12 (`iiif_produce.py` sliced `image_ids[: self._max_pages]`); the rewrite
-        #: kept the interface and dropped the behaviour, which is worse than never offering it: a
-        #: user who caps a harvest at 10 pages and gets the whole volume has been actively misled.
-        self._max_pages = max_pages
-
-    def iter_objects(self) -> Iterator[SourceObject]:
-        """Keys AND bytes, over ONE pooled connection for the whole volume.
-
-        `fetch_image`'s `client` is a required keyword-only argument, and this method used to call
-        `fetch_image(url)` — a `TypeError` before the first byte moved. `fetch.py:70` had already hit
-        and fixed exactly that, and fixing it in one of the two callers is how the same defect gets
-        re-shipped; `ty` is what caught the second one.
-
-        The client is opened HERE rather than per page because that is the whole reason
-        `storage.iiif` injects one: a volume is hundreds of requests to a single host, and a
-        per-request client re-runs the TCP and TLS handshake for every page against an endpoint that
-        already hands out RST at ~64 concurrent reads.
-        """
-        import httpx
-
-        from service_kit.lakehouse.sources import SourceObject
-        from storage.iiif import fetch_image
-
-        with httpx.Client(timeout=_IIIF_TIMEOUT, follow_redirects=True) as client:
-            for url in self.iter_keys(client=client):
-                yield SourceObject(uri=url, data=fetch_image(url, client=client))
-
-    def iter_keys(self, client: httpx.Client | None = None) -> Iterator[str]:
-        """Every page's URL, from the volume manifest alone — no image bytes transferred.
-
-        This is where the keys-without-bytes protocol pays for itself. `get_image_ids` is ONE
-        manifest request; building the URLs is string work. Enumerating through `iter_objects`
-        instead downloaded the entire volume — multi-MB per page — purely to read back the URL that
-        had just been used to fetch it, and then the workers fetched all of it again.
-
-        `client` is optional because `iter_unit_keys` calls this with no arguments — the enumeration
-        path is one manifest request and has nothing to pool. It exists so `iter_objects` can share
-        its connection rather than opening a second one for the manifest.
-        """
-        from storage.iiif import DEFAULT_IIIF_BASE, DEFAULT_QUERY_PARAMS, build_image_url, get_image_ids
-
-        base = self._base or DEFAULT_IIIF_BASE
-        query = self._query or DEFAULT_QUERY_PARAMS
-        # `base_url`, not `iiif_base` — the latter is what this file invented and `ty` refused. The
-        # keyword is the SAME on both calls, which is what makes a single wrong guess break both.
-        image_ids = get_image_ids(self._volume, base_url=base, client=client)
-        # Applied to the IDS, before any URL is built or any byte is fetched. `get_image_ids` is one
-        # manifest request regardless, so the cap costs nothing here and saves the whole download.
-        if self._max_pages is not None and self._max_pages > 0:
-            image_ids = image_ids[: self._max_pages]
-        for image_id in image_ids:
-            yield build_image_url(image_id, base_url=base, query_params=query)
-
-
-def _iiif(spec: SourceSpec) -> SourceAdapter:
-    volume = str(spec.options.get("volume_id") or "")
-    if not volume:
-        raise ValueError("iiif source requires options.volume_id")
-    base = spec.options.get("iiif_base")
-    query = spec.options.get("query_params")
-    # Coerced, not trusted: the form posts JSON, so a numeric field arrives as a string ("10") from
-    # the browser and as an int from a script. A blank field arrives as "" — falsy, meaning "all".
-    raw_max = spec.options.get("max_pages")
-    max_pages = int(raw_max) if str(raw_max or "").strip().isdigit() else None
-    return IIIFVolumeSource(volume, str(base) if base else None, str(query) if query else None, max_pages=max_pages)
-
-
-def _iiif_lineage(spec: SourceSpec) -> LineageInput:
-    """R23: the INPUT is the external world — `iiif://…` — never a governed tier."""
-    return LineageInput(namespace="iiif", name=str(spec.options.get("volume_id") or ""))
-
+# ── IIIF: REMOVED by owner ruling (2026-08-07) ────────────────────────────────────────────────
+#
+# The `iiif` source kind (IIIFVolumeSource + its lineage twin + its partition rule + its
+# registration) was deleted, not disabled. The ruling's reason is the design's own open questions:
+# a IIIF endpoint offers NO version token (no etag, no listing), so every convergence guarantee the
+# plane now makes — (key, etag) identity, replay-safe commits, re-runs that skip what landed — would
+# be fiction for it, and there is no reliable way to test against a live archive endpoint. Sources
+# are s3-prefix (the governed lane, with etags) and local-dir (the hermetic test seam). If IIIF
+# returns, it returns as an EXPLICIT snapshot importer with its own design, not as a watched sink.
+# The medallion producer's separate /ingest-iiif head is out of this ruling's scope (#34 owns it).
 
 # ── partition keys: how each kind GROUPS its units (the bronze `partition_key` column) ────────
 #
@@ -233,17 +135,6 @@ def _iiif_lineage(spec: SourceSpec) -> LineageInput:
 # Read `runtime.BRONZE_SCHEMA` for why this is a COLUMN and not a fragment boundary: Lance has no
 # table partitioning, and key-pure fragments are merged back together by the very first maintenance
 # compaction (measured, 5 fragments → 1).
-
-
-def _iiif_partition(spec: SourceSpec, key: str) -> str | None:
-    """The VOLUME — constant for the whole run, because `_iiif` refuses a spec without exactly one.
-
-    Worth stating plainly: for IIIF this column is uniform within a dataset written by one run, so
-    it earns its keep only where several volumes share a dataset. If physical separation per volume
-    is what is wanted, one dataset per volume is both simpler and closer to Lance's own model
-    (separate tables federated by the catalog) — this column does not replace that choice.
-    """
-    return str(spec.options.get("volume_id") or "") or None
 
 
 def _s3_prefix_partition(spec: SourceSpec, key: str) -> str | None:
@@ -308,33 +199,5 @@ def register_builtin_sources() -> None:
                 ),
             ],
         )
-
-    if "iiif" not in known:
-        register(
-            "iiif",
-            build=_iiif,
-            lineage_input=_iiif_lineage,
-            partition_of=_iiif_partition,
-            label="IIIF volume",
-            description="Every page of a volume from a IIIF Image API. External raw (R23) — the lineage input is the iiif:// source, never a governed tier.",
-            options=[
-                SourceOption(name="volume_id", label="Volume id", required=True, placeholder="A0068688"),
-                SourceOption(
-                    name="max_pages",
-                    label="Max pages",
-                    numeric=True,
-                    placeholder="all",
-                    help="Stop after this many pages. Leave empty to harvest the whole volume.",
-                ),
-                SourceOption(name="iiif_base", label="IIIF base URL", placeholder="(the configured default)"),
-                SourceOption(
-                    name="query_params",
-                    label="Image query",
-                    placeholder="full/max/0/default.jpg",
-                    help="The IIIF Image API parameters appended to each page request.",
-                ),
-            ],
-        )
-
 
 register_builtin_sources()

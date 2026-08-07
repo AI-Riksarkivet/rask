@@ -70,7 +70,7 @@ class IngestRequest(BaseModel):
     conflation itself is open work.
     """
 
-    kind: str = Field(description="registered source kind, e.g. 'iiif' | 's3-prefix' | 'local-dir'")
+    kind: str = Field(description="registered source kind, e.g. 's3-prefix' | 'local-dir'")
     project: str
     dataset: str
     options: dict[str, object] = Field(default_factory=dict)

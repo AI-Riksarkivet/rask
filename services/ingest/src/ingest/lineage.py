@@ -174,11 +174,11 @@ def _run(run_id: str, project: str = "") -> Any:  # noqa: ANN401 — LineageRun,
         namespace=LineageSettings().namespace,
         run_id=lineage_run_id(run_id),
         emitter=_emitter(),
-        run_facets=_tenant_facet(project),
+        run_facets=_tenant_facet(project, run_id),
     )
 
 
-def _tenant_facet(project: str) -> dict[str, Any]:
+def _tenant_facet(project: str, run_id: str | None = None) -> dict[str, Any]:
     """The `lance` run facet carrying the tenant this run's write belongs to — the THIRD half of #52.
 
     The cascade head derives its expected namespace from this facet (`ingest_trigger._cascade_project`
@@ -198,7 +198,17 @@ def _tenant_facet(project: str) -> dict[str, Any]:
     from ingest.naming import tenant
 
     safe = tenant(project)
-    return {LANCE_RUN_FACET: custom_facet(project=safe)} if safe else {}
+    fields: dict[str, Any] = {}
+    if safe:
+        fields["project"] = safe
+    # The INGEST run id — the id /ingests/{id} answers to — stated as data because the graph's own
+    # run id is run_id_for('ingest:<id>'), a one-way UUID5 nothing can map back. Without this the
+    # runs board could only link with the derived id, and every link was dead (measured in a
+    # browser: 'No such run' on every row). Independent of the project guard on purpose — a
+    # single-tenant run still has an id worth linking.
+    if run_id:
+        fields["run_id"] = run_id
+    return {LANCE_RUN_FACET: custom_facet(**fields)} if fields else {}
 
 
 class LineageRecorder:
@@ -207,7 +217,7 @@ class LineageRecorder:
     def start(self, run_id: str, project: str, dataset: str, kind: str, options: dict[str, Any]) -> None:
         """START, with the EXTERNAL source as the input (R23).
 
-        The input is `iiif://…` or `s3://bucket`, never a governed tier: raw is the outside world, and
+        The input is the external source (`s3://bucket`), never a governed tier: raw is the outside world, and
         naming bronze as its own input would make the graph claim the data came from where it landed.
         """
         self._record(LineageEvent(run_id=run_id, event_type="START", project=project, dataset=dataset, source_kind=kind))

@@ -52,15 +52,6 @@ def test_an_object_at_the_bucket_ROOT_has_no_folder_and_gets_a_NULL() -> None:
     assert partition_key_for(spec, "root-object.tif") is None
 
 
-def test_the_IIIF_partition_is_the_VOLUME() -> None:
-    from ingest.adapters import register_builtin_sources
-
-    register_builtin_sources()
-    spec = SourceSpec(kind="iiif", project="p", dataset="d", options={"volume_id": "A0068688"})
-
-    assert partition_key_for(spec, "https://iiif/arkis!A0068688_00001/full/max/0/default.jpg") == "A0068688"
-
-
 def test_an_UNREGISTERED_partition_rule_is_a_null_not_a_crash() -> None:
     """This runs on the WRITE path, after the bytes are already fetched.
 
