@@ -49,10 +49,10 @@ export function boundsFromPolygon(points: ArrayLike<number>): Rect {
 		maxX = -Infinity,
 		maxY = -Infinity;
 	for (let i = 0; i < points.length; i += 2) {
-		minX = Math.min(minX, points[i]);
-		minY = Math.min(minY, points[i + 1]);
-		maxX = Math.max(maxX, points[i]);
-		maxY = Math.max(maxY, points[i + 1]);
+		minX = Math.min(minX, points[i]!);
+		minY = Math.min(minY, points[i + 1]!);
+		maxX = Math.max(maxX, points[i]!);
+		maxY = Math.max(maxY, points[i + 1]!);
 	}
 	return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
@@ -92,7 +92,7 @@ export function pointInPolygon(px: number, py: number, polygon: ArrayLike<number
 			yi = polygon[i * 2 + 1];
 		const xj = polygon[j * 2],
 			yj = polygon[j * 2 + 1];
-		if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+		if (yi! > py !== yj! > py && px < ((xj! - xi!) * (py - yi!)) / (yj! - yi!) + xi!) {
 			inside = !inside;
 		}
 	}
@@ -134,12 +134,12 @@ export function simplifyPath(flat: ArrayLike<number>, tolerance: number): number
 		const [first, last] = stack.pop()!;
 		let maxDist = 0;
 		let maxIdx = -1;
-		const ax = flat[first * 2],
-			ay = flat[first * 2 + 1];
-		const bx = flat[last * 2],
-			by = flat[last * 2 + 1];
+		const ax = flat[first * 2]!,
+			ay = flat[first * 2 + 1]!;
+		const bx = flat[last * 2]!,
+			by = flat[last * 2 + 1]!;
 		for (let i = first + 1; i < last; i++) {
-			const d = perpDistance(flat[i * 2], flat[i * 2 + 1], ax, ay, bx, by);
+			const d = perpDistance(flat[i * 2]!, flat[i * 2 + 1]!, ax, ay, bx, by);
 			if (d > maxDist) {
 				maxDist = d;
 				maxIdx = i;
@@ -153,7 +153,7 @@ export function simplifyPath(flat: ArrayLike<number>, tolerance: number): number
 
 	const out: number[] = [];
 	for (let i = 0; i < n; i++) {
-		if (keep[i]) out.push(flat[i * 2], flat[i * 2 + 1]);
+		if (keep[i]) out.push(flat[i * 2]!, flat[i * 2 + 1]!);
 	}
 	return out;
 }
@@ -338,8 +338,8 @@ export function traceMaskContour(
 		let found = false;
 		for (let k = 0; k < 8; k++) {
 			const dir = (backtrack + 1 + k) % 8;
-			const nx = cx + N8[dir][0];
-			const ny = cy + N8[dir][1];
+			const nx = cx + N8[dir]![0]!;
+			const ny = cy + N8[dir]![1]!;
 			if (at(nx, ny)) {
 				backtrack = (dir + 4) % 8; // point back from new pixel to current
 				cx = nx;

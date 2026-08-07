@@ -1,15 +1,4 @@
 {
-	"extends": "./.svelte-kit/tsconfig.json",
-	"compilerOptions": {
-		"allowJs": true,
-		"checkJs": true,
-		"esModuleInterop": true,
-		"forceConsistentCasingInFileNames": true,
-		"resolveJsonModule": true,
-		"skipLibCheck": true,
-		"sourceMap": true,
-		"strict": true,
-		"noUncheckedIndexedAccess": true,
-		"moduleResolution": "bundler"
-	}
+	"//": "One line, not a hand-inlined option block (#95): the strictness lives in @rask/config's base, and a zone that restates it is a zone that drifts from it. SvelteKit's generated config goes first; the base wins where they overlap. Relative path rather than the @rask/config specifier because this zone does not (yet) declare that workspace dep — adding it needs a bun install, and installs are barred while another session's dev server is live; switch to '@rask/config/tsconfig.base.json' (annotator's form) whenever the dep lands.",
+	"extends": ["./.svelte-kit/tsconfig.json", "../../packages/config/tsconfig.base.json"]
 }

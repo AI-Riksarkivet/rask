@@ -62,8 +62,8 @@ export class BrushTool implements Tool {
 	onPointerMove(x: number, y: number): void {
 		if (!this.current) return;
 		const pts = this.current.pts;
-		const dx = x - pts[pts.length - 2];
-		const dy = y - pts[pts.length - 1];
+		const dx = x - pts[pts.length - 2]!;
+		const dy = y - pts[pts.length - 1]!;
 		if (dx * dx + dy * dy >= MIN_DIST_SQ) {
 			pts.push(x, y);
 			this.renderPreview();
@@ -104,10 +104,10 @@ export class BrushTool implements Tool {
 			if (s.erase) continue;
 			for (let i = 0; i < s.pts.length; i += 2) {
 				any = true;
-				minX = Math.min(minX, s.pts[i]);
-				minY = Math.min(minY, s.pts[i + 1]);
-				maxX = Math.max(maxX, s.pts[i]);
-				maxY = Math.max(maxY, s.pts[i + 1]);
+				minX = Math.min(minX, s.pts[i]!);
+				minY = Math.min(minY, s.pts[i + 1]!);
+				maxX = Math.max(maxX, s.pts[i]!);
+				maxY = Math.max(maxY, s.pts[i + 1]!);
 			}
 		}
 		if (!any) return null;
@@ -145,14 +145,14 @@ export class BrushTool implements Tool {
 		for (const s of this.strokes) {
 			octx.globalCompositeOperation = s.erase ? 'destination-out' : 'source-over';
 			octx.beginPath();
-			octx.moveTo(s.pts[0] - b.x, s.pts[1] - b.y);
+			octx.moveTo(s.pts[0]! - b.x, s.pts[1]! - b.y);
 			if (s.pts.length <= 2) {
 				// single tap → a dot
-				octx.arc(s.pts[0] - b.x, s.pts[1] - b.y, this.radius, 0, Math.PI * 2);
+				octx.arc(s.pts[0]! - b.x, s.pts[1]! - b.y, this.radius, 0, Math.PI * 2);
 				octx.fill();
 			} else {
 				for (let i = 2; i < s.pts.length; i += 2) {
-					octx.lineTo(s.pts[i] - b.x, s.pts[i + 1] - b.y);
+					octx.lineTo(s.pts[i]! - b.x, s.pts[i + 1]! - b.y);
 				}
 				octx.stroke();
 			}
@@ -172,8 +172,8 @@ export class BrushTool implements Tool {
 			if (local.length >= 6) {
 				const world = new Array<number>(local.length);
 				for (let i = 0; i < local.length; i += 2) {
-					world[i] = local[i] + b.x;
-					world[i + 1] = local[i + 1] + b.y;
+					world[i] = local[i]! + b.x;
+					world[i + 1] = local[i + 1]! + b.y;
 				}
 				const simplified = simplifyPath(world, this.simplifyTolerance);
 				if (simplified.length >= 6) {
@@ -221,7 +221,7 @@ export class BrushTool implements Tool {
 					join: 'round',
 				});
 			} else {
-				this.preview.circle(s.pts[0], s.pts[1], this.radius);
+				this.preview.circle(s.pts[0]!, s.pts[1]!, this.radius);
 				this.preview.fill({ color, alpha: 0.3 });
 			}
 		}

@@ -1,5 +1,7 @@
 {
 	"//": "Shared TypeScript base for every app/package (@rask/config). Matches lance-ns's @rask/config. Apps extend this + their .svelte-kit/tsconfig.json.",
+	"//noUncheckedIndexedAccess": "ON estate-wide (#95): five zones had hand-inlined it while the two zones and six packages extending THIS file silently ran without it — an index into an array or record answers T | undefined everywhere now, not just where someone remembered.",
+	"//exactOptionalPropertyTypes": "OFF here, deliberately (#95): Bits UI's builder prop unions explode under it ('union too complex to represent') in every Svelte-facing package, so the flag cannot ride the shared base. @rask/api opts into it in its OWN tsconfig — it is Svelte-free — and any other pure-TS package may do the same; do not 'fix' this by adding it here.",
 	"compilerOptions": {
 		"allowJs": true,
 		"checkJs": true,
@@ -9,6 +11,7 @@
 		"skipLibCheck": true,
 		"sourceMap": true,
 		"strict": true,
+		"noUncheckedIndexedAccess": true,
 		"moduleResolution": "bundler",
 		"module": "esnext",
 		"target": "esnext"

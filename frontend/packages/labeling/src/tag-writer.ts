@@ -39,7 +39,9 @@ export function tagBatchFromTaggedHits(
 	keyFields: readonly string[],
 	tagsFor: (row: Record<string, unknown>) => readonly string[],
 ): TagBatch {
-	const [docKey, ...rest] = keyFields;
+	// An EMPTY keyFields has no doc column — indexing rows by `undefined` would silently read the
+	// literal "undefined" key; the sibling `tagRemovesFromEntries` already guards the same way.
+	const [docKey = '', ...rest] = keyFields;
 	const adds: TagWrite[] = [];
 	for (const row of rows) {
 		const labels = tagsFor(row);

@@ -112,7 +112,7 @@ export class MagneticTool implements Tool {
 			const neighbors = this.keypointIndex.neighbors(x, y, 1, maxDist);
 
 			if (neighbors.length > 0) {
-				const [kx, ky] = this.keypoints[neighbors[0]];
+				const [kx, ky] = this.keypoints[neighbors[0]!]!;
 				this.cursorX = kx;
 				this.cursorY = ky;
 				this.isSnapped = true;
@@ -134,8 +134,8 @@ export class MagneticTool implements Tool {
 			this.isClosable = snapToPoint(
 				this.cursorX,
 				this.cursorY,
-				this.points[0],
-				this.points[1],
+				this.points[0]!,
+				this.points[1]!,
 				threshold,
 			);
 		} else {
@@ -218,7 +218,7 @@ export class MagneticTool implements Tool {
 
 		// Vertex dots
 		for (let i = 0; i < this.points.length; i += 2) {
-			this.preview.circle(this.points[i], this.points[i + 1], vertexR);
+			this.preview.circle(this.points[i]!, this.points[i + 1]!, vertexR);
 			this.preview.fill({ color: HANDLE_FILL });
 			this.preview.stroke({ color: STROKE_COLOR, width: 1 / scale });
 		}
@@ -237,7 +237,7 @@ export class MagneticTool implements Tool {
 		// Close indicator
 		if (this.isClosable) {
 			const r = 6 / scale;
-			this.preview.circle(this.points[0], this.points[1], r);
+			this.preview.circle(this.points[0]!, this.points[1]!, r);
 			this.preview.fill({ color: STROKE_COLOR, alpha: 0.2 });
 			this.preview.stroke({ color: STROKE_COLOR, width: 2 / scale });
 		}

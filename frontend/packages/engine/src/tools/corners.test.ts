@@ -46,7 +46,7 @@ describe('rgbaToGray reproduces cv.cvtColor(COLOR_RGBA2GRAY)', () => {
 		let differing = 0;
 		let worst = 0;
 		for (let i = 0; i < W * H; i++) {
-			const d = Math.abs(mine[i] - CV_GRAY[i]);
+			const d = Math.abs(mine[i]! - CV_GRAY[i]!);
 			if (d > 0) differing++;
 			worst = Math.max(worst, d);
 		}
@@ -65,7 +65,7 @@ describe('cornerMinEigenVal reproduces cv.cornerMinEigenVal(5, 3, BORDER_DEFAULT
 		expect(peak).toBeGreaterThan(0); // the fixture has real corners to disagree about
 		let worst = 0;
 		for (let i = 0; i < CV_RESPONSE.length; i++) {
-			worst = Math.max(worst, Math.abs(mine[i] - CV_RESPONSE[i]));
+			worst = Math.max(worst, Math.abs(mine[i]! - CV_RESPONSE[i]!));
 		}
 		expect(worst / peak).toBeLessThan(1e-6);
 	});

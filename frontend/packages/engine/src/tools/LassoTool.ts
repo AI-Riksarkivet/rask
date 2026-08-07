@@ -41,8 +41,8 @@ export class LassoTool implements Tool {
 		if (!this.drawing) return;
 		const lastX = this.points[this.points.length - 2];
 		const lastY = this.points[this.points.length - 1];
-		const dx = x - lastX;
-		const dy = y - lastY;
+		const dx = x - lastX!;
+		const dy = y - lastY!;
 		if (dx * dx + dy * dy >= MIN_DIST_SQ) {
 			this.points.push(x, y);
 		}

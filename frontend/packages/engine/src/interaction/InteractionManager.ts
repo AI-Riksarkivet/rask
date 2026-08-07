@@ -108,7 +108,7 @@ export class InteractionManager {
 		lassoTool.onLassoComplete = (indices) => {
 			this.selectedSet.clear();
 			for (const idx of indices) this.selectedSet.add(idx);
-			const primary = indices.length > 0 ? indices[indices.length - 1] : null;
+			const primary = indices.length > 0 ? indices[indices.length - 1]! : null;
 			this.selectedIndex = primary;
 			this.arrowPlugin.highlightSet(this.selectedSet);
 			this.onSelect?.(primary);
@@ -225,7 +225,7 @@ export class InteractionManager {
 			// Ctrl+click: toggle in selection set
 			if (this.selectedSet.has(index)) {
 				this.selectedSet.delete(index);
-				index = this.selectedSet.size > 0 ? [...this.selectedSet][this.selectedSet.size - 1] : null;
+				index = this.selectedSet.size > 0 ? [...this.selectedSet][this.selectedSet.size - 1]! : null;
 			} else {
 				this.selectedSet.add(index);
 			}
@@ -470,7 +470,7 @@ export class InteractionManager {
 					}
 					this.lastCycleX = x;
 					this.lastCycleY = y;
-					this.select(this.cycleHits[this.cycleIndex]);
+					this.select(this.cycleHits[this.cycleIndex]!);
 					return;
 				}
 			}

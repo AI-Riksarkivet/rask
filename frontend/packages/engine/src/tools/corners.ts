@@ -46,7 +46,7 @@ export function rgbaToGray(rgba: Uint8Array | Uint8ClampedArray, pixels: number)
 	const gray = new Uint8Array(pixels);
 	for (let i = 0; i < pixels; i++) {
 		const p = i * 4;
-		gray[i] = Math.round(rgba[p] * 0.299 + rgba[p + 1] * 0.587 + rgba[p + 2] * 0.114);
+		gray[i] = Math.round(rgba[p]! * 0.299 + rgba[p + 1]! * 0.587 + rgba[p + 2]! * 0.114);
 	}
 	return gray;
 }
@@ -85,8 +85,8 @@ export function cornerMinEigenVal(
 				const row = reflect101(y + j, height) * width;
 				for (let i = -1; i <= 1; i++) {
 					const v = gray[row + reflect101(x + i, width)];
-					gx += v * (i * (2 - Math.abs(j)));
-					gy += v * (j * (2 - Math.abs(i)));
+					gx += v! * (i * (2 - Math.abs(j)));
+					gy += v! * (j * (2 - Math.abs(i)));
 				}
 			}
 			dx[y * width + x] = gx * scale;
@@ -107,9 +107,9 @@ export function cornerMinEigenVal(
 					const k = row + reflect101(x + i, width);
 					const a = dx[k];
 					const b = dy[k];
-					sxx += a * a;
-					sxy += a * b;
-					syy += b * b;
+					sxx += a! * a!;
+					sxy += a! * b!;
+					syy += b! * b!;
 				}
 			}
 			const a = sxx * 0.5;
@@ -138,7 +138,7 @@ export function pickCorners(
 	minDist: number,
 ): [number, number][] {
 	let max = 0;
-	for (let i = 0; i < response.length; i++) if (response[i] > max) max = response[i];
+	for (let i = 0; i < response.length; i++) if (response[i]! > max) max = response[i]!;
 	const threshold = max * quality;
 	if (threshold <= 0) return [];
 
@@ -146,12 +146,12 @@ export function pickCorners(
 	const candidates: [number, number, number][] = []; // [response, x, y]
 	for (let y = 1; y < rows - 1; y++) {
 		for (let x = 1; x < cols - 1; x++) {
-			const v = response[y * cols + x];
+			const v = response[y * cols + x]!;
 			if (v < threshold) continue;
 			let isMax = true;
 			for (let dy = -1; dy <= 1 && isMax; dy++) {
 				for (let dx = -1; dx <= 1; dx++) {
-					if ((dx || dy) && response[(y + dy) * cols + (x + dx)] > v) {
+					if ((dx || dy) && response[(y + dy) * cols + (x + dx)]! > v) {
 						isMax = false;
 						break;
 					}

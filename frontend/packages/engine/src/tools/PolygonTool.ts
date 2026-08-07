@@ -44,7 +44,7 @@ export class PolygonTool implements Tool {
 		const threshold = SNAP_THRESHOLD_PX / this.ctx.getViewportScale();
 		if (
 			this.points.length >= MIN_VERTICES * 2 &&
-			snapToPoint(x, y, this.points[0], this.points[1], threshold)
+			snapToPoint(x, y, this.points[0]!, this.points[1]!, threshold)
 		) {
 			this.commitPolygon();
 			return true;
@@ -65,7 +65,7 @@ export class PolygonTool implements Tool {
 		const threshold = SNAP_THRESHOLD_PX / this.ctx.getViewportScale();
 		this.isClosable =
 			this.points.length >= MIN_VERTICES * 2 &&
-			snapToPoint(x, y, this.points[0], this.points[1], threshold);
+			snapToPoint(x, y, this.points[0]!, this.points[1]!, threshold);
 
 		this.renderPreview();
 	}
@@ -140,13 +140,13 @@ export class PolygonTool implements Tool {
 		// Dashed line from last vertex to cursor
 		const lastX = this.points[this.points.length - 2];
 		const lastY = this.points[this.points.length - 1];
-		this.preview.moveTo(lastX, lastY);
+		this.preview.moveTo(lastX!, lastY!);
 		this.preview.lineTo(this.cursorX, this.cursorY);
 		this.preview.stroke({ color: STROKE_COLOR, width: 1 / scale, alpha: 0.5 });
 
 		// Vertex dots
 		for (let i = 0; i < this.points.length; i += 2) {
-			this.preview.circle(this.points[i], this.points[i + 1], vertexR);
+			this.preview.circle(this.points[i]!, this.points[i + 1]!, vertexR);
 			this.preview.fill({ color: HANDLE_FILL });
 			this.preview.stroke({ color: STROKE_COLOR, width: 1.5 / scale });
 		}
@@ -154,7 +154,7 @@ export class PolygonTool implements Tool {
 		// Snap-to-close highlight on first vertex
 		if (this.isClosable) {
 			const closeR = 8 / scale;
-			this.preview.circle(this.points[0], this.points[1], closeR);
+			this.preview.circle(this.points[0]!, this.points[1]!, closeR);
 			this.preview.fill({ color: STROKE_COLOR, alpha: 0.2 });
 			this.preview.stroke({ color: STROKE_COLOR, width: 2 / scale });
 		}

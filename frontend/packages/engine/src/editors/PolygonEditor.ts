@@ -82,7 +82,7 @@ export class PolygonEditor implements Editor {
 		// Test vertices first
 		const n = this.points.length / 2;
 		for (let i = 0; i < n; i++) {
-			if (distance(x, y, this.points[i * 2], this.points[i * 2 + 1]) < threshold) {
+			if (distance(x, y, this.points[i * 2]!, this.points[i * 2 + 1]!) < threshold) {
 				this.ctx.setCursor(CURSOR_VERTEX);
 				if (prevHover !== i) {
 					this._hoveredVertex = i;
@@ -95,8 +95,8 @@ export class PolygonEditor implements Editor {
 		// Test midpoints
 		for (let i = 0; i < n; i++) {
 			const j = (i + 1) % n;
-			const mx = (this.points[i * 2] + this.points[j * 2]) / 2;
-			const my = (this.points[i * 2 + 1] + this.points[j * 2 + 1]) / 2;
+			const mx = (this.points[i * 2]! + this.points[j * 2]!) / 2;
+			const my = (this.points[i * 2 + 1]! + this.points[j * 2 + 1]!) / 2;
 			if (distance(x, y, mx, my) < threshold) {
 				this.ctx.setCursor(CURSOR_MIDPOINT);
 				if (prevHover !== -1) {
@@ -134,8 +134,8 @@ export class PolygonEditor implements Editor {
 
 		if (handle.type === 'midpoint') {
 			// Insert a new vertex at the midpoint, then drag it
-			const mx = (this.points[handle.fromIndex * 2] + this.points[handle.toIndex * 2]) / 2;
-			const my = (this.points[handle.fromIndex * 2 + 1] + this.points[handle.toIndex * 2 + 1]) / 2;
+			const mx = (this.points[handle.fromIndex * 2]! + this.points[handle.toIndex * 2]!) / 2;
+			const my = (this.points[handle.fromIndex * 2 + 1]! + this.points[handle.toIndex * 2 + 1]!) / 2;
 			const insertAt = (handle.fromIndex + 1) * 2;
 			this.points.splice(insertAt, 0, mx, my);
 			this.origPoints = [...this.points];
@@ -153,13 +153,13 @@ export class PolygonEditor implements Editor {
 
 		if (this.dragTarget.type === 'body') {
 			for (let i = 0; i < this.points.length; i += 2) {
-				this.points[i] = this.origPoints[i] + dx;
-				this.points[i + 1] = this.origPoints[i + 1] + dy;
+				this.points[i] = this.origPoints[i]! + dx;
+				this.points[i + 1] = this.origPoints[i + 1]! + dy;
 			}
 		} else if (this.dragTarget.type === 'vertex') {
 			const vi = this.dragTarget.index * 2;
-			this.points[vi] = this.origPoints[vi] + dx;
-			this.points[vi + 1] = this.origPoints[vi + 1] + dy;
+			this.points[vi] = this.origPoints[vi]! + dx;
+			this.points[vi + 1] = this.origPoints[vi + 1]! + dy;
 		}
 
 		this.renderHandles();
@@ -212,8 +212,8 @@ export class PolygonEditor implements Editor {
 		// Midpoint handles
 		for (let i = 0; i < n; i++) {
 			const j = (i + 1) % n;
-			const mx = (this.points[i * 2] + this.points[j * 2]) / 2;
-			const my = (this.points[i * 2 + 1] + this.points[j * 2 + 1]) / 2;
+			const mx = (this.points[i * 2]! + this.points[j * 2]!) / 2;
+			const my = (this.points[i * 2 + 1]! + this.points[j * 2 + 1]!) / 2;
 			this.handles.circle(mx, my, mr);
 			this.handles.fill({ color: MIDPOINT_FILL });
 			this.handles.stroke({ color: MIDPOINT_STROKE, width: strokeW });
@@ -224,7 +224,7 @@ export class PolygonEditor implements Editor {
 			const isHovered = this._hoveredVertex === i;
 			const r = isHovered ? vr * HOVER_VERTEX_SCALE : vr;
 			const fill = isHovered ? HOVER_COLOR : HANDLE_FILL;
-			this.handles.circle(this.points[i * 2], this.points[i * 2 + 1], r);
+			this.handles.circle(this.points[i * 2]!, this.points[i * 2 + 1]!, r);
 			this.handles.fill({ color: fill });
 			this.handles.stroke({ color: STROKE_COLOR, width: strokeW });
 		}

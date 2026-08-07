@@ -483,7 +483,7 @@ export class ArrowDataPlugin {
 		}
 		if (this.hiddenGroups.size > 0) {
 			for (let i = 0; i < numRows; i++) {
-				if (this.hiddenGroups.has(this.groupByStr[i])) {
+				if (this.hiddenGroups.has(this.groupByStr[i]!)) {
 					this.hiddenMask[i] = 1;
 				}
 			}
@@ -534,7 +534,7 @@ export class ArrowDataPlugin {
 					for (let i = 0; i < numRows; i++) {
 						const v = String(col.get(i) ?? '');
 						if (!categories.has(v)) {
-							categories.set(v, CATEGORY_PALETTE[categories.size % CATEGORY_PALETTE.length]);
+							categories.set(v, CATEGORY_PALETTE[categories.size % CATEGORY_PALETTE.length]!);
 						}
 						this.heatmapColors[i] = categories.get(v)!;
 					}
@@ -564,7 +564,7 @@ export class ArrowDataPlugin {
 				const ay = ovr ? ovr.y : this.yArr[i];
 				const aw = ovr ? ovr.w : this.wArr[i];
 				const ah = ovr ? ovr.h : this.hArr[i];
-				if (ax + aw < vp.x || ax > vp.x + vp.width || ay + ah < vp.y || ay > vp.y + vp.height) {
+				if (ax! + aw! < vp.x || ax! > vp.x + vp.width || ay! + ah! < vp.y || ay! > vp.y + vp.height) {
 					continue;
 				}
 			}
@@ -573,17 +573,17 @@ export class ArrowDataPlugin {
 			const groupVal = this.groupByStr[i];
 			const color = useHeatmap
 				? this.heatmapColors[i]
-				: (this.groupColors.get(groupVal) ?? this.colorFn(this.statusStr[i]));
+				: (this.groupColors.get(groupVal!) ?? this.colorFn(this.statusStr[i]!));
 
-			let colorMap = grouped.get(groupVal);
+			let colorMap = grouped.get(groupVal!);
 			if (!colorMap) {
 				colorMap = new Map();
-				grouped.set(groupVal, colorMap);
+				grouped.set(groupVal!, colorMap);
 			}
-			let rows = colorMap.get(color);
+			let rows = colorMap.get(color!);
 			if (!rows) {
 				rows = [];
-				colorMap.set(color, rows);
+				colorMap.set(color!, rows);
 			}
 			rows.push(i);
 		}
@@ -708,7 +708,7 @@ export class ArrowDataPlugin {
 
 		if (st === 'point') {
 			const scale = this.app.stage.scale.x || 1;
-			g.circle(this.xArr[i], this.yArr[i], 4 / scale);
+			g.circle(this.xArr[i]!, this.yArr[i]!, 4 / scale);
 			return;
 		}
 
@@ -721,7 +721,7 @@ export class ArrowDataPlugin {
 		if (poly && poly.length >= 6) {
 			g.poly(poly, true);
 		} else {
-			g.rect(this.xArr[i], this.yArr[i], this.wArr[i], this.hArr[i]);
+			g.rect(this.xArr[i]!, this.yArr[i]!, this.wArr[i]!, this.hArr[i]!);
 		}
 	}
 
@@ -743,7 +743,7 @@ export class ArrowDataPlugin {
 					existing.width = geo.w;
 					existing.height = geo.h;
 				}
-				existing.tint = this.colorFn(this.statusStr[i]);
+				existing.tint = this.colorFn(this.statusStr[i]!);
 				existing.visible = !this.hiddenMask[i];
 				continue;
 			}
@@ -756,7 +756,7 @@ export class ArrowDataPlugin {
 			const g0 = this.getGeometry(i);
 			sprite.position.set(g0.x, g0.y);
 			sprite.alpha = 0.45;
-			sprite.tint = this.colorFn(this.statusStr[i]);
+			sprite.tint = this.colorFn(this.statusStr[i]!);
 			sprite.visible = !this.hiddenMask[i];
 			this.maskSprites.set(i, sprite);
 			this.maskContainer.addChild(sprite);
@@ -808,10 +808,10 @@ export class ArrowDataPlugin {
 			};
 		}
 		return {
-			x: this.xArr[index],
-			y: this.yArr[index],
-			w: this.wArr[index],
-			h: this.hArr[index],
+			x: this.xArr[index]!,
+			y: this.yArr[index]!,
+			w: this.wArr[index]!,
+			h: this.hArr[index]!,
 			polygon: this.getPolygonSlice(index),
 		};
 	}
@@ -887,7 +887,7 @@ export class ArrowDataPlugin {
 	/** Smallest visible annotation at point (used for hover + normal click) */
 	getAnnotationAtPoint(x: number, y: number): number | null {
 		const hits = this.getAllAnnotationsAtPoint(x, y);
-		return hits.length > 0 ? hits[0] : null;
+		return hits.length > 0 ? hits[0]! : null;
 	}
 
 	/** All visible annotations at point, sorted by area ascending (smallest first) */
@@ -905,13 +905,13 @@ export class ArrowDataPlugin {
 			const aw = override ? override.w : this.wArr[i];
 			const ah = override ? override.h : this.hArr[i];
 
-			if (x >= ax && x <= ax + aw && y >= ay && y <= ay + ah) {
+			if (x >= ax! && x <= ax! + aw! && y >= ay! && y <= ay! + ah!) {
 				const poly = override?.polygon ?? this.getPolygonSlice(i);
 				if (poly && poly.length >= 6 && !isAxisAlignedRect(poly)) {
 					if (!pointInPolygon(x, y, poly)) continue;
 				}
 
-				hits.push({ index: i, area: aw * ah });
+				hits.push({ index: i, area: aw! * ah! });
 			}
 		}
 
