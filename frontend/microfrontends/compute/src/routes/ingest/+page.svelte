@@ -2,6 +2,7 @@
 	import { base } from '$app/paths';
 	import { listIngestRuns } from '$lib/remote/ingest.remote';
 	import { liveRead, lineageTick } from '$lib/live/tick.svelte';
+	import { Button } from '@rask/ui/button';
 	import { Card } from '@rask/ui/card';
 	import { CircleAlert, CircleCheck, CircleX, Import, Loader } from '@lucide/svelte';
 
@@ -36,86 +37,125 @@
 </svelte:head>
 
 <main class="bg-background flex-1 overflow-auto">
-	<Card class="m-4 max-w-4xl space-y-4 p-6">
-		<div class="flex items-center justify-between gap-2">
-			<div>
-				<h1 class="text-lg font-semibold">Ingest runs</h1>
-				<p class="text-muted-foreground text-sm">
-					Every run this plane has recorded, newest first — from the lineage graph, so the board
-					survives a pod restart and is shared across replicas.
+	<!-- Centered column, not a card hugging the top-left corner: on any wide viewport the old
+	     `m-4 max-w-4xl` left everything crammed into one corner with a field of dead space beside
+	     it. The header lives OUTSIDE the card — the card is the list, not the page. -->
+	<div class="mx-auto flex w-full max-w-4xl flex-col gap-4 p-6">
+		<div class="flex flex-wrap items-end justify-between gap-3">
+			<div class="space-y-1">
+				<h1 class="text-xl font-semibold tracking-tight">Ingest runs</h1>
+				<p class="text-muted-foreground max-w-prose text-sm">
+					Every run this plane has recorded, newest first — from the lineage graph, so the board survives
+					a pod restart and is shared across replicas.
 				</p>
 			</div>
-			<a
-				class="bg-primary text-primary-foreground inline-flex items-center gap-2 rounded px-3 py-1.5 text-sm"
-				href="{base}/etl"
-			>
-				<Import class="h-4 w-4" /> New run
-			</a>
+			<!-- The design system's Button (href form), not a hand-styled anchor: the base variant
+			     already carries whitespace-nowrap + shrink-0, which is what stops "New run" wrapping
+			     into a two-line pill when the header row tightens. -->
+			<Button href="{base}/etl" size="sm">
+				<Import data-icon="inline-start" /> New run
+			</Button>
 		</div>
 
 		{#if loading}
-			<p class="text-muted-foreground flex items-center gap-2 text-sm">
-				<Loader class="h-4 w-4 animate-spin" /> Reading the run board…
-			</p>
+			<Card class="p-6">
+				<p class="text-muted-foreground flex items-center gap-2 text-sm">
+					<Loader class="h-4 w-4 animate-spin" /> Reading the run board…
+				</p>
+			</Card>
 		{:else if runs.length === 0}
 			<!-- Honest about the two things an empty board can mean. A governed refusal and a genuinely
 			     empty plane look identical from here, and claiming "no runs" for an unreadable board is
 			     the same class of lie as reporting a failed read as loading. -->
-			<p class="text-muted-foreground text-sm">
-				No ingest runs on the board. Either none have been started, or the lineage board is not
-				readable with this session — start one from
-				<a class="underline" href="{base}/etl">ETL</a> and it will appear here.
-			</p>
+			<Card class="p-6">
+				<p class="text-muted-foreground text-sm">
+					No ingest runs on the board. Either none have been started, or the lineage board is not
+					readable with this session — start one from
+					<a class="underline" href="{base}/etl">ETL</a> and it will appear here.
+				</p>
+			</Card>
 		{:else}
-			<ul class="divide-y rounded border" data-testid="ingest-runs">
-				{#each runs as run (run.run_id)}
-					{@const pct = percent(run.progress_done, run.progress_total)}
-					<li>
-						<!-- Linked ONLY with the producer's own id: `run.run_id` is the graph's derived
-						     UUID5 and every link built from it was dead (measured — "No such run" on
-						     each row). A row without `source_run_id` predates producers stating it and
-						     renders unlinked WITH the reason — shown disabled, never hidden (ruling). -->
-						<svelte:element
-							this={run.source_run_id ? 'a' : 'div'}
-							class="hover:bg-muted/50 flex items-center gap-3 p-3 {run.source_run_id ? '' : 'opacity-60'}"
-							href={run.source_run_id ? `${base}/ingest/${run.source_run_id}` : undefined}
-							title={run.source_run_id ? undefined : 'Recorded before run identity landed in the graph — no detail page can resolve it.'}
-						>
-							{#if run.state === 'COMPLETE'}
-								<CircleCheck class="h-4 w-4 shrink-0 text-emerald-600" />
-							{:else if run.state === 'FAIL' || run.state === 'FAILED'}
-								<CircleX class="text-destructive h-4 w-4 shrink-0" />
-							{:else if run.error_message}
-								<CircleAlert class="h-4 w-4 shrink-0 text-amber-600" />
-							{:else}
-								<Loader class="text-muted-foreground h-4 w-4 shrink-0 animate-spin" />
-							{/if}
-
-							<span class="min-w-0 flex-1">
-								<!-- The TABLE is the headline — a bare UUID tells an operator nothing. -->
-								{#if run.table}
-									<span class="block truncate text-sm">{run.table}</span>
-									<span class="text-muted-foreground block truncate font-mono text-[10px]">{run.source_run_id ?? run.run_id}</span>
+			<Card class="overflow-hidden">
+				<ul class="divide-y" data-testid="ingest-runs">
+					{#each runs as run (run.run_id)}
+						{@const pct = percent(run.progress_done, run.progress_total)}
+						{@const terminal =
+							run.state === 'COMPLETE' || run.state === 'FAIL' || run.state === 'FAILED'}
+						<li>
+							<!-- Linked ONLY with the producer's own id: `run.run_id` is the graph's derived
+							     UUID5 and every link built from it was dead (measured — "No such run" on
+							     each row). A row without `source_run_id` predates producers stating it and
+							     renders unlinked WITH the reason — shown disabled, never hidden (ruling). -->
+							<svelte:element
+								this={run.source_run_id ? 'a' : 'div'}
+								class="hover:bg-muted/50 flex items-center gap-3 px-4 py-3 {run.source_run_id
+									? ''
+									: 'opacity-60'}"
+								href={run.source_run_id ? `${base}/ingest/${run.source_run_id}` : undefined}
+								title={run.source_run_id
+	? undefined
+	: 'Recorded before run identity landed in the graph — no detail page can resolve it.'}
+							>
+								{#if run.state === 'COMPLETE'}
+									<CircleCheck class="h-4 w-4 shrink-0 text-emerald-600" />
+								{:else if run.state === 'FAIL' || run.state === 'FAILED'}
+									<CircleX class="text-destructive h-4 w-4 shrink-0" />
+								{:else if run.error_message}
+									<CircleAlert class="h-4 w-4 shrink-0 text-amber-600" />
 								{:else}
-									<span class="block truncate font-mono text-xs">{run.source_run_id ?? run.run_id}</span>
+									<Loader class="text-muted-foreground h-4 w-4 shrink-0 animate-spin" />
 								{/if}
-								{#if run.error_message}
-									<span class="text-destructive block truncate text-xs">{run.error_message}</span>
-								{:else if run.updated_at}
-									<span class="text-muted-foreground block text-xs">{run.updated_at}</span>
-								{/if}
-							</span>
 
-							{#if pct !== null}
-								<span class="text-muted-foreground shrink-0 font-mono text-xs">
-									{run.progress_done} / {run.progress_total}
+								<span class="min-w-0 flex-1">
+									<!-- The TABLE is the headline — a bare UUID tells an operator nothing. -->
+									{#if run.table}
+										<span class="block truncate text-sm font-medium">{run.table}</span>
+										<span class="text-muted-foreground block truncate font-mono text-[10px]"
+											>{run.source_run_id ?? run.run_id}</span
+										>
+									{:else}
+										<span class="block truncate font-mono text-xs">{run.source_run_id ?? run.run_id}</span>
+									{/if}
+									{#if run.error_message}
+										<span class="text-destructive block truncate text-xs">{run.error_message}</span>
+									{:else if run.updated_at}
+										<span class="text-muted-foreground block text-xs">{run.updated_at}</span>
+									{/if}
 								</span>
-							{/if}
-							<span class="shrink-0 text-xs font-medium">{run.state ?? '—'}</span>
-						</svelte:element>
-					</li>
-				{/each}
-			</ul>
+
+								{#if pct !== null}
+									<span class="flex shrink-0 items-center gap-2">
+										<!-- A LIVE run gets a miniature of the detail page's bar — the board is where
+										     an operator watches several harvests at once, and a bare "12 / 500" makes
+										     them do the division. Terminal rows drop the bar: a full green strip on
+										     every finished row is noise, the numbers are the record. -->
+										{#if !terminal}
+											<span class="bg-muted h-1.5 w-24 overflow-hidden rounded-full">
+												<span
+													class="block h-full rounded-full bg-emerald-600 transition-[width] duration-500"
+													style:width="{pct}%"
+												></span>
+											</span>
+										{/if}
+										<span class="text-muted-foreground font-mono text-xs tabular-nums">
+											{run.progress_done} / {run.progress_total}
+										</span>
+									</span>
+								{/if}
+								<span
+									class="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase {run.state === 'COMPLETE'
+										? 'border-emerald-600/30 text-emerald-600'
+										: run.state === 'FAIL' || run.state === 'FAILED'
+											? 'border-destructive/30 text-destructive'
+											: 'text-muted-foreground'}"
+								>
+									{run.state ?? '—'}
+								</span>
+							</svelte:element>
+						</li>
+					{/each}
+				</ul>
+			</Card>
 
 			<!-- Said out loud, because a list that quietly stops at N reads as "that is all of them".
 			     The server trims: /runs measured 330 KB for 875 runs on the live estate. -->
@@ -123,5 +163,5 @@
 				<p class="text-muted-foreground text-xs">Showing the 50 most recent runs.</p>
 			{/if}
 		{/if}
-	</Card>
+	</div>
 </main>

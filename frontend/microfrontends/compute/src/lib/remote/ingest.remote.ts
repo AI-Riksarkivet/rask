@@ -24,7 +24,6 @@ import {
 // during SSR (a bare global `fetch` has no origin on the server) and inlines the response into the
 // SSR payload, so the first frame is rendered rather than fetched after mount.
 
-
 /** The signed-in caller's bearer, for the governed doors.
  *
  *  SvelteKit's request-scoped `fetch` forwards COOKIES but attaches no `Authorization` header — that

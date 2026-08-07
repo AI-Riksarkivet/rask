@@ -1,9 +1,10 @@
 <script lang="ts">
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { getIngestRunStatus } from '$lib/remote/ingest.remote';
 	import { liveRead, lineageTick } from '$lib/live/tick.svelte';
 	import { Card } from '@rask/ui/card';
-	import { CircleAlert, CircleCheck, CircleX, Loader } from '@lucide/svelte';
+	import { ArrowLeft, CircleAlert, CircleCheck, CircleX, Loader } from '@lucide/svelte';
 
 	// One ingest run's status (open_ingest.md A20). The run is genuinely asynchronous, so this page
 	// is the only honest place to learn what happened to it — the POST returns a handle, not a result.
@@ -42,7 +43,9 @@
 	// would be a lie about a run that is working.
 	const total = $derived(run?.units_total ?? 0);
 	const totalKnown = $derived(total > 0);
-	const percent = $derived(totalKnown ? Math.min(100, Math.round(((run?.units_done ?? 0) / total) * 100)) : 0);
+	const percent = $derived(
+		totalKnown ? Math.min(100, Math.round(((run?.units_done ?? 0) / total) * 100)) : 0,
+	);
 
 	// TWO SIGNALS, because a run has two kinds of news and only one of them is on a cursor.
 	//
@@ -85,125 +88,154 @@
 </svelte:head>
 
 <main class="bg-background flex-1 overflow-auto">
-	<Card class="m-4 max-w-3xl space-y-4 p-6">
-		<div class="flex items-center gap-2">
-			<h1 class="text-lg font-semibold">Ingest run</h1>
-			<span class="text-muted-foreground font-mono text-xs" data-testid="run-id">{runId}</span>
+	<!-- Centered column, same reason as the board: the old `m-4 max-w-3xl` card sat in the top-left
+	     corner of a wide viewport. The header (back link + title + id) lives outside the card. -->
+	<div class="mx-auto flex w-full max-w-3xl flex-col gap-4 p-6">
+		<div class="space-y-1">
+			<a
+				class="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-xs"
+				href="{base}/ingest"
+			>
+				<ArrowLeft class="h-3 w-3" /> Ingest runs
+			</a>
+			<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+				<h1 class="text-xl font-semibold tracking-tight">Ingest run</h1>
+				<span class="text-muted-foreground font-mono text-xs" data-testid="run-id">{runId}</span>
+			</div>
 		</div>
 
-		{#if failed}
-			<p
-				class="border-destructive text-destructive flex items-center gap-2 rounded border p-3 text-sm"
-				data-testid="run-unavailable"
-			>
-				<CircleX class="h-5 w-5 shrink-0" />
-				<span>
-					<strong>No such run.</strong> The ingest plane has no record of
-					<span class="font-mono">{runId}</span>. Neither its accepted record nor a workflow for it
-					exists — a run that had merely lost its progress would still answer here.
-				</span>
-			</p>
-		{:else if run === undefined}
-			<p class="text-muted-foreground flex items-center gap-2 text-sm">
-				<Loader class="h-4 w-4 animate-spin" /> Loading run…
-			</p>
-		{:else}
-			<div class="flex items-center gap-2" data-testid="run-status">
-				{#if run.status === 'COMPLETE'}
-					<CircleCheck class="h-5 w-5 text-emerald-600" />
-				{:else if run.status === 'FAILED'}
-					<CircleX class="text-destructive h-5 w-5" />
-				{:else if run.status === 'COMPLETE_WITH_ERRORS'}
-					<CircleAlert class="h-5 w-5 text-amber-600" />
-				{:else}
-					<Loader class="text-muted-foreground h-5 w-5 animate-spin" />
-				{/if}
-				<span class="font-medium">{run.status}</span>
-			</div>
+		<Card class="space-y-5 p-6">
+			{#if failed}
+				<p
+					class="border-destructive text-destructive flex items-center gap-2 rounded border p-3 text-sm"
+					data-testid="run-unavailable"
+				>
+					<CircleX class="h-5 w-5 shrink-0" />
+					<span>
+						<strong>No such run.</strong> The ingest plane has no record of
+						<span class="font-mono">{runId}</span>. Neither its accepted record nor a workflow for it
+						exists — a run that had merely lost its progress would still answer here.
+					</span>
+				</p>
+			{:else if run === undefined}
+				<p class="text-muted-foreground flex items-center gap-2 text-sm">
+					<Loader class="h-4 w-4 animate-spin" /> Loading run…
+				</p>
+			{:else}
+				<div
+					class="inline-flex items-center gap-2 rounded-full border px-3 py-1 {run.status ===
+					'COMPLETE'
+						? 'border-emerald-600/30'
+						: run.status ===
+							  'FAILED'
+							? 'border-destructive/30'
+							: run.status ===
+								  'COMPLETE_WITH_ERRORS'
+								? 'border-amber-600/30'
+								: ''}"
+					data-testid="run-status"
+				>
+					{#if run.status === 'COMPLETE'}
+						<CircleCheck class="h-4 w-4 text-emerald-600" />
+					{:else if run.status === 'FAILED'}
+						<CircleX class="text-destructive h-4 w-4" />
+					{:else if run.status === 'COMPLETE_WITH_ERRORS'}
+						<CircleAlert class="h-4 w-4 text-amber-600" />
+					{:else}
+						<Loader class="text-muted-foreground h-4 w-4 animate-spin" />
+					{/if}
+					<span class="text-sm font-medium">{run.status}</span>
+				</div>
 
-			<!-- A8. Shown ABOVE the numbers on purpose: a run that landed data with no provenance
+				<!-- A8. Shown ABOVE the numbers on purpose: a run that landed data with no provenance
 			     record still reports rows and a version, so an operator reading top-down would
 			     otherwise see success first and the hole second, if at all. -->
-			{#if run.defect}
-				<p
-					class="border-destructive text-destructive rounded border p-3 text-sm"
-					data-testid="run-defect"
-				>
-					<strong>Provenance defect.</strong>
-					{run.defect}
-				</p>
-			{/if}
-
-			<!-- PROGRESS, not just a counter. -->
-			<div class="space-y-1" data-testid="run-progress">
-				<div class="flex items-baseline justify-between text-sm">
-					<span class="text-muted-foreground">Units</span>
-					<span class="font-mono" data-testid="units-done">
-						{run.units_done}{#if totalKnown}<span class="text-muted-foreground"> of {total}</span>{/if}
-					</span>
-				</div>
-				{#if totalKnown}
-					<div class="bg-muted h-2 w-full overflow-hidden rounded-full">
-						<div
-							class="h-full rounded-full bg-emerald-600 transition-[width] duration-500"
-							style:width="{percent}%"
-						></div>
-					</div>
-				{:else}
-					<!-- Honest about the window between accept and enumeration: the run exists, its total
-					     does not yet. A 0% bar here would misreport a working run as a stalled one. -->
-					<p class="text-muted-foreground text-xs">Enumerating the source — the total is not known yet.</p>
+				{#if run.defect}
+					<p
+						class="border-destructive text-destructive rounded border p-3 text-sm"
+						data-testid="run-defect"
+					>
+						<strong>Provenance defect.</strong>
+						{run.defect}
+					</p>
 				{/if}
-			</div>
 
-			<dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-				<dt class="text-muted-foreground">Committed version</dt>
-				<dd class="font-mono" data-testid="committed-version">
-					{run.committed_version ?? '—'}
-				</dd>
+				<!-- PROGRESS, not just a counter. -->
+				<div class="space-y-1" data-testid="run-progress">
+					<div class="flex items-baseline justify-between text-sm">
+						<span class="text-muted-foreground">Units</span>
+						<span class="font-mono" data-testid="units-done">
+							{run.units_done}{#if totalKnown}<span class="text-muted-foreground"> of {total}</span>{/if}
+						</span>
+					</div>
+					{#if totalKnown}
+						<div class="bg-muted h-2 w-full overflow-hidden rounded-full">
+							<div
+								class="h-full rounded-full bg-emerald-600 transition-[width] duration-500"
+								style:width="{percent}%"
+							></div>
+						</div>
+					{:else}
+						<!-- Honest about the window between accept and enumeration: the run exists, its total
+					     does not yet. A 0% bar here would misreport a working run as a stalled one. -->
+						<p class="text-muted-foreground text-xs">
+							Enumerating the source — the total is not known yet.
+						</p>
+					{/if}
+				</div>
 
-				<!-- The PUBLICATION half (§D2). A commit makes rows readable; only a publication makes
+				<dl class="grid grid-cols-[auto_1fr] gap-x-8 gap-y-2 border-t pt-4 text-sm">
+					<dt class="text-muted-foreground">Committed version</dt>
+					<dd class="font-mono" data-testid="committed-version">
+						{run.committed_version ?? '—'}
+					</dd>
+
+					<!-- The PUBLICATION half (§D2). A commit makes rows readable; only a publication makes
 				     them ready, so a committed-but-unpublished run is a distinct state and not a
 				     success. These fields were on the wire all along and stripped by the client schema. -->
-				{#if run.published !== undefined && run.published !== null}
-					<dt class="text-muted-foreground">Published</dt>
-					<dd class="font-mono" data-testid="run-published">
-						{run.published ? 'yes' : 'no'}
-						{#if run.from_version != null && run.to_version != null}
-							<span class="text-muted-foreground">(v{run.from_version} → v{run.to_version})</span>
-						{/if}
-					</dd>
-				{/if}
-			</dl>
+					{#if run.published !== undefined && run.published !== null}
+						<dt class="text-muted-foreground">Published</dt>
+						<dd class="font-mono" data-testid="run-published">
+							{run.published ? 'yes' : 'no'}
+							{#if run.from_version != null && run.to_version != null}
+								<span class="text-muted-foreground">(v{run.from_version} → v{run.to_version})</span>
+							{/if}
+						</dd>
+					{/if}
+				</dl>
 
-			{#if run.publish_error}
-				<!-- A publish failure is deliberately NOT a failed run — the commit landed. But it must
+				{#if run.publish_error}
+					<!-- A publish failure is deliberately NOT a failed run — the commit landed. But it must
 				     be loud, or the rows sit readable-and-not-ready with nothing saying so. -->
-				<p class="rounded border border-amber-600 p-3 text-sm text-amber-700" data-testid="publish-error">
-					<strong>Committed, but not published.</strong>
-					{run.publish_error}
-				</p>
-			{:else if run.published === false && run.publish_reason}
-				<p class="text-muted-foreground rounded border p-3 text-sm" data-testid="publish-reason">
-					Not published — {run.publish_reason}
-				</p>
-			{/if}
+					<p
+						class="rounded border border-amber-600 p-3 text-sm text-amber-700"
+						data-testid="publish-error"
+					>
+						<strong>Committed, but not published.</strong>
+						{run.publish_error}
+					</p>
+				{:else if run.published === false && run.publish_reason}
+					<p class="text-muted-foreground rounded border p-3 text-sm" data-testid="publish-reason">
+						Not published — {run.publish_reason}
+					</p>
+				{/if}
 
-			{#if errorEntries.length > 0}
-				<!-- Named, not counted. "3 units failed" tells an operator a number; the unit keys tell
+				{#if errorEntries.length > 0}
+					<!-- Named, not counted. "3 units failed" tells an operator a number; the unit keys tell
 				     them which pages to look at, which is the only form of the answer that is actionable. -->
-				<section class="space-y-1" data-testid="run-errors">
-					<h2 class="text-sm font-medium">Units that refused to land ({errorEntries.length})</h2>
-					<ul class="space-y-1 text-xs">
-						{#each errorEntries as [unit, reason] (unit)}
-							<li class="rounded border p-2">
-								<span class="font-mono">{unit}</span>
-								<span class="text-muted-foreground"> — {reason}</span>
-							</li>
-						{/each}
-					</ul>
-				</section>
+					<section class="space-y-1" data-testid="run-errors">
+						<h2 class="text-sm font-medium">Units that refused to land ({errorEntries.length})</h2>
+						<ul class="space-y-1 text-xs">
+							{#each errorEntries as [unit, reason] (unit)}
+								<li class="rounded border p-2">
+									<span class="font-mono">{unit}</span>
+									<span class="text-muted-foreground"> — {reason}</span>
+								</li>
+							{/each}
+						</ul>
+					</section>
+				{/if}
 			{/if}
-		{/if}
-	</Card>
+		</Card>
+	</div>
 </main>

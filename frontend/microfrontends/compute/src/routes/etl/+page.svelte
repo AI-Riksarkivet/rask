@@ -46,7 +46,10 @@
 	// Default to the GOVERNED lane, not whatever sorts first: `local-dir` is the hermetic test
 	// seam and was the first thing every user saw. The fallback chain still degrades to "whatever
 	// is registered" so a deployment without s3-prefix keeps a working form.
-	const kind = $derived(chosen ?? (sources.some((s) => s.kind === 's3-prefix') ? 's3-prefix' : (sources[0]?.kind ?? '')));
+	const kind = $derived(
+		chosen ??
+			(sources.some((s) => s.kind === 's3-prefix') ? 's3-prefix' : (sources[0]?.kind ?? '')),
+	);
 
 	let dataset = $state('');
 
@@ -205,7 +208,8 @@
 </svelte:head>
 
 <main class="bg-background flex-1 overflow-auto">
-	<Card class="m-4 max-w-2xl space-y-4 p-6">
+	<!-- Centered like the run board and the run page — the whole ingest flow shares one geometry. -->
+	<Card class="mx-auto my-6 w-full max-w-2xl space-y-4 p-6">
 		<h1 class="text-lg font-semibold">Ingest a source</h1>
 		<p class="text-muted-foreground text-sm">
 			Accepts a run that harvests the source into a bronze dataset; the cascade then runs event-driven.
@@ -259,7 +263,7 @@
 					     the identifier the lakehouse will show, not a decoration. -->
 					<span class="text-muted-foreground block text-xs">
 						Lands as <span class="font-mono"
-						>{project ? `${project}-bronze` : '<project>-bronze'}${dataset || '<table>'}</span
+							>{project ? `${project}-bronze` : '<project>-bronze'}${dataset || '<table>'}</span
 						>. <!-- The TIER is part of the namespace (`bind86-bronze`, ingest/naming.py) — the
 						earlier copy said `bind86$…` and lied from the day #52 qualified the cascade. -->
 					</span>
@@ -315,8 +319,8 @@
 				</summary>
 				<div class="space-y-3 border-t px-3 py-3">
 					<p class="text-muted-foreground text-xs">
-						The run writes Lance fragments as it goes; these decide how big each one is and how
-						hard the source is pushed. Leave a field empty to use the deployment's value.
+						The run writes Lance fragments as it goes; these decide how big each one is and how hard the
+						source is pushed. Leave a field empty to use the deployment's value.
 					</p>
 					{#each SIZING_FIELDS as field (field.name)}
 						<label class="block space-y-1">
@@ -338,9 +342,9 @@
 			{#if badSizing.length > 0}
 				<p class="text-destructive text-sm" data-testid="sizing-error">
 					{#if badSizing.includes('Rows per fragment') && Number(sizing.fragment_rows ?? 0) >= ACK_CEILING}
-						Rows per fragment must stay under {ACK_CEILING}. Above that the drain holds more
-						unacked messages than the queue will deliver and the run hangs rather than failing —
-						compaction is what grows fragments toward Lance's larger target, not this field.
+						Rows per fragment must stay under {ACK_CEILING}. Above that the drain holds more unacked
+						messages than the queue will deliver and the run hangs rather than failing — compaction is
+						what grows fragments toward Lance's larger target, not this field.
 					{:else}
 						A whole number ≥ 1, or leave empty: {badSizing.join(', ')}.
 					{/if}
