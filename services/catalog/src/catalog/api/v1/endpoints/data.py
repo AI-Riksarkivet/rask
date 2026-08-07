@@ -353,7 +353,9 @@ async def commit_fragments(
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if not described.location:
         raise InvalidInputError("table has no object-store location for a client-direct commit")
-    version, row_count = await run_in_threadpool(dataplane.commit_appended_fragments, described.location, so, body.fragments, body.read_version)
+    version, row_count = await run_in_threadpool(
+        dataplane.commit_appended_fragments, described.location, so, body.fragments, body.read_version, body.run_id
+    )
     # Reuse the shared measured-write emitter (reopens once for version + schema), same as /insert — so the
     # WROTE edge + columnLineage-ready schema land identically whether the append was byte-proxy or direct.
     await lineage_deps.emit_measured_write(

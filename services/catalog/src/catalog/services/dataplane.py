@@ -596,7 +596,50 @@ def _classify_commit_error(exc: OSError) -> Exception:
     return ServiceUnavailableError(f"object store unavailable during commit: {exc}")
 
 
-def commit_appended_fragments(location: str, so: StorageOptions, fragments: list[dict[str, Any]], read_version: int) -> tuple[int, int]:
+#: The transaction-property marker a run's commit carries, `rask.ingest.run_id=<run_id>`. Rides
+#: pylance's `commit_message` (stored as the `__lance_commit_message` transaction property —
+#: verified round-trip on pylance 9.0.0: `read_transaction(v).transaction_properties` returns it
+#: verbatim). The marker is what makes a commit REPLAY-RECOGNIZABLE: a retried commit for the same
+#: run finds its own earlier version instead of appending twice.
+_RUN_MARKER_PREFIX = "rask.ingest.run_id="
+
+
+def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_version: int) -> tuple[int, int] | None:
+    """Did THIS run already commit? Scan versions after ``read_version`` for the run's marker.
+
+    THE REPLAY THIS EXISTS FOR: the ingest `finalize` activity commits, then dies before Dapr records
+    its result; the retry re-reads `read_version` fresh and — without this check — re-appends the same
+    fragments as a brand-new version. Append never conflicts with Append (transaction.md), so nothing
+    in the format refuses the duplicate; only recognizing our own commit can.
+
+    Bounded by construction: the scan walks versions AFTER the retry's `read_version`, which in the
+    replay case is at most a handful (our own commit plus whatever landed concurrently). A version
+    whose transaction cannot be read (pre-transaction-file history, GC'd) is SKIPPED, not fatal —
+    an unreadable stranger's version must not fail a legitimate first commit.
+    """
+    marker = _RUN_MARKER_PREFIX + run_id
+    try:
+        dataset = lance.dataset(location, storage_options=dict(so) if so else None)
+    except Exception:
+        return None  # no dataset yet -> certainly no prior commit by this run
+    for version_info in dataset.versions():
+        version = int(version_info["version"])
+        if version <= read_version:
+            continue
+        try:
+            transaction = dataset.read_transaction(version)
+            props = getattr(transaction, "transaction_properties", None) or {}
+        except Exception:
+            continue
+        if props.get("__lance_commit_message") == marker:
+            rows = lance.dataset(location, version=version, storage_options=dict(so) if so else None).count_rows()
+            return version, rows
+    return None
+
+
+def commit_appended_fragments(
+    location: str, so: StorageOptions, fragments: list[dict[str, Any]], read_version: int, run_id: str | None = None
+) -> tuple[int, int]:
     """Commit client-written fragments as an APPEND — the catalog as the governed commit coordinator (#2).
 
     The client wrote the data fragments DIRECTLY to object storage with vended, table-scoped creds
@@ -625,10 +668,24 @@ def commit_appended_fragments(location: str, so: StorageOptions, fragments: list
     # location (no malice required) could otherwise commit a 200-OK-but-UNREADABLE current version that
     # breaks reads for EVERY reader until an operator restores. Pre-verify the files exist under the table
     # location; a failed check leaves the table untouched (400) instead of poisoning its current version.
+    # IDEMPOTENT REPLAY (2026-08-07): a retried commit carrying a run_id is answered with the
+    # version that run already committed — checked BEFORE the file-existence verification, because
+    # a replay may arrive after maintenance compacted the staged files away, and refusing the
+    # replay for missing files it no longer needs would fail a commit that already succeeded.
+    if run_id:
+        already = _find_run_commit(location, so, run_id, read_version)
+        if already is not None:
+            return already
     _verify_fragment_data_files(location, so, fragments)
     op = lance.LanceOperation.Append(frags)
     try:
-        dataset = lance.LanceDataset.commit(location, op, read_version=read_version, storage_options=so)
+        dataset = lance.LanceDataset.commit(
+            location,
+            op,
+            read_version=read_version,
+            storage_options=so,
+            commit_message=(_RUN_MARKER_PREFIX + run_id) if run_id else None,
+        )
     except OSError as exc:
         raise _classify_commit_error(exc) from exc
     return int(dataset.version), dataset.count_rows()
