@@ -135,7 +135,8 @@ export class PolygonEditor implements Editor {
 		if (handle.type === 'midpoint') {
 			// Insert a new vertex at the midpoint, then drag it
 			const mx = (this.points[handle.fromIndex * 2]! + this.points[handle.toIndex * 2]!) / 2;
-			const my = (this.points[handle.fromIndex * 2 + 1]! + this.points[handle.toIndex * 2 + 1]!) / 2;
+			const my =
+				(this.points[handle.fromIndex * 2 + 1]! + this.points[handle.toIndex * 2 + 1]!) / 2;
 			const insertAt = (handle.fromIndex + 1) * 2;
 			this.points.splice(insertAt, 0, mx, my);
 			this.origPoints = [...this.points];

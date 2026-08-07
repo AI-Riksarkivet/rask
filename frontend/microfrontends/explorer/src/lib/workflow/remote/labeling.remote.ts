@@ -67,11 +67,15 @@ export const saveTagsAsAnnotations = command(
 		const refused = sessionGate();
 		if (refused) return refused;
 		const suffix = dataset ? `?dataset=${encodeURIComponent(dataset)}` : '';
-		return annotatorPost(`/api/annotations/tags${suffix}`, {
-			adds,
-			removes,
-			base_version,
-		}, SaveResultSchema);
+		return annotatorPost(
+			`/api/annotations/tags${suffix}`,
+			{
+				adds,
+				removes,
+				base_version,
+			},
+			SaveResultSchema,
+		);
 	},
 );
 
@@ -109,13 +113,17 @@ export const submitBatchJob = command(
 	async ({ producer, op, scope, prompt, dataset, exemplars }): Promise<ApiResult<JobResult>> => {
 		const refused = sessionGate();
 		if (refused) return refused;
-		return annotatorPost('/api/jobs/apply', {
-			producer,
-			op,
-			scope: scopePayload(scope),
-			prompt: prompt ?? null,
-			dataset: dataset ?? null,
-			exemplars: exemplars ?? [],
-		}, JobResultSchema);
+		return annotatorPost(
+			'/api/jobs/apply',
+			{
+				producer,
+				op,
+				scope: scopePayload(scope),
+				prompt: prompt ?? null,
+				dataset: dataset ?? null,
+				exemplars: exemplars ?? [],
+			},
+			JobResultSchema,
+		);
 	},
 );

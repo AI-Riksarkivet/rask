@@ -57,9 +57,6 @@ const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 
 const enc = encodeURIComponent;
 
-
-
-
 /** The generated-shape passthrough: the catalog's OpenAPI type IS the contract for these, so the
  *  payload is handed on with the type the client already used (exactly what the routes did). */
 function typedAs<T>(result: ApiResult<unknown>): ApiResult<T> {

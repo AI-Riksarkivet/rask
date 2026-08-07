@@ -83,4 +83,3 @@ export function sessionGate(): { ok: false; status: number; detail: string } | n
 	}
 	return null;
 }
-

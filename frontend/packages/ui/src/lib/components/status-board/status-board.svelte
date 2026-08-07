@@ -7,41 +7,53 @@
 	 * so the type is now shared rather than forked. */
 	import { CheckCircle2, LoaderCircle, XCircle, CircleDashed } from '@lucide/svelte';
 	import { enter, bar, breathe } from '../../motion';
-	import type { RunStatusLike } from '../../runs/run-status.js';
+	import {
+		runPhase,
+		runPhaseLabel,
+		runProgress,
+		type RunStatusLike,
+	} from '../../runs/run-status.js';
 
 	let { runs }: { runs: RunStatusLike[] } = $props();
 
-	const isRunning = (s?: string | null) => /START|RUNNING/i.test(s ?? '');
-	const isFail = (s?: string | null) => /FAIL|ABORT/i.test(s ?? '');
-	const stateIcon = (s?: string | null) =>
-		isFail(s)
+	// Phase logic DELEGATES to `runs/run-status` (#96) — this board used to re-implement it with
+	// its own regexes and magic fallbacks, and the forks disagreed in user-visible ways: `pct()`
+	// invented an 8% bar for an un-instrumented running run ("a 0% bar on an un-instrumented run
+	// is a lie" — and so is an 8% one), and the label printed `/3` as a denominator nobody
+	// reported. One reading of a run's state, shared with the notification surface.
+	const isActive = (r: RunStatusLike) => {
+		const p = runPhase(r);
+		return p === 'running' || p === 'started';
+	};
+	const isFailed = (r: RunStatusLike) => runPhase(r) === 'failed';
+	const stateIcon = (r: RunStatusLike) =>
+		isFailed(r)
 			? XCircle
-			: s === 'COMPLETE'
+			: runPhase(r) === 'complete'
 				? CheckCircle2
-				: isRunning(s)
+				: isActive(r)
 					? LoaderCircle
 					: CircleDashed;
-	const color = (s?: string | null) =>
-		isFail(s)
+	const color = (r: RunStatusLike) =>
+		isFailed(r)
 			? 'var(--fail)'
-			: s === 'COMPLETE'
+			: runPhase(r) === 'complete'
 				? 'var(--ok)'
-				: isRunning(s)
+				: isActive(r)
 					? 'var(--amber)'
 					: 'var(--mut)';
 
 	const shortJob = (j?: string | null) => (j ?? '').replace(/^ray-jobs\//, '');
 
 	function pct(r: RunStatusLike): number {
-		if (r.state === 'COMPLETE') return 100;
-		if (r.progress_total) return Math.round(((r.progress_done ?? 0) / r.progress_total) * 100);
-		return isRunning(r.state) ? 8 : 0;
+		if (runPhase(r) === 'complete') return 100;
+		return runProgress(r)?.percent ?? 0;
 	}
 	function label(r: RunStatusLike): string {
-		if (r.state === 'COMPLETE') return 'COMPLETE';
-		if (isFail(r.state)) return r.state ?? 'FAIL';
-		if (isRunning(r.state)) return `RUNNING ${r.progress_done ?? 0}/${r.progress_total ?? 3}`;
-		return r.state ?? '—';
+		const progress = runProgress(r);
+		return isActive(r) && progress
+			? `${runPhaseLabel(r)} ${progress.done}/${progress.total}`
+			: runPhaseLabel(r);
 	}
 	const time = (s?: string | null) => (s ? new Date(s).toLocaleTimeString() : '');
 </script>
@@ -53,23 +65,23 @@
 		</p>
 	{/if}
 	{#each runs as r (r.run_id)}
-		{@const StateIcon = stateIcon(r.state)}
+		{@const StateIcon = stateIcon(r)}
 		<div
 			class="row"
-			class:fail={isFail(r.state)}
-			class:running={isRunning(r.state)}
-			style:--c={color(r.state)}
+			class:fail={isFailed(r)}
+			class:running={isActive(r)}
+			style:--c={color(r)}
 			{@attach enter({ y: 8 })}
 		>
 			<div class="top">
 				<span class="job mono" title={r.job}>{shortJob(r.job)}</span>
 				<span class="pill">
-					<StateIcon size={12} class={isRunning(r.state) ? 'spin' : ''} />
+					<StateIcon size={12} class={isActive(r) ? 'spin' : ''} />
 					{label(r)}
 				</span>
 			</div>
 			<div class="track">
-				<div class="fill" {@attach bar(pct(r))} {@attach breathe(isRunning(r.state))}></div>
+				<div class="fill" {@attach bar(pct(r))} {@attach breathe(isActive(r))}></div>
 			</div>
 			<div class="meta">
 				<span class="who"

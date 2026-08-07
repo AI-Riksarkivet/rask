@@ -564,7 +564,12 @@ export class ArrowDataPlugin {
 				const ay = ovr ? ovr.y : this.yArr[i];
 				const aw = ovr ? ovr.w : this.wArr[i];
 				const ah = ovr ? ovr.h : this.hArr[i];
-				if (ax! + aw! < vp.x || ax! > vp.x + vp.width || ay! + ah! < vp.y || ay! > vp.y + vp.height) {
+				if (
+					ax! + aw! < vp.x ||
+					ax! > vp.x + vp.width ||
+					ay! + ah! < vp.y ||
+					ay! > vp.y + vp.height
+				) {
 					continue;
 				}
 			}

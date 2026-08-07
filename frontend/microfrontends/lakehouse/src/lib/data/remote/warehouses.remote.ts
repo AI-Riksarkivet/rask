@@ -46,9 +46,6 @@ const DeleteWarehouseSchema = v.object({
 	objects_purged: v.number(),
 });
 
-
-
-
 /** Warehouse admin reads: whatever the catalog shows this caller (any signed-in user). */
 export const fetchWarehouses = query(
 	async (): Promise<ApiResult<WarehouseRecord[]>> =>

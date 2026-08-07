@@ -32,9 +32,6 @@ import { catalogJSON, parsed } from '$lib/server/doors';
 
 const enc = encodeURIComponent;
 
-
-
-
 /** The client module's `AccessKind` as a wire option list — `satisfies` keeps the two from drifting. */
 const KINDS = ['table', 'namespace'] as const satisfies readonly AccessKind[];
 

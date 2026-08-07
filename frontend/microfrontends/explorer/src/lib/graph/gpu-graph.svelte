@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { acquireGpuCanvas } from '$lib/webgpu';
 	/**
 	 * gpu-graph — a self-contained WebGPU node-link renderer for the KG explorer.
 	 *
@@ -194,34 +195,12 @@ fn fsNode(@location(0) rgb : vec3f, @location(1) quad : vec2f,
 	};
 
 	async function initGpu(canvas: HTMLCanvasElement): Promise<GpuHandles | null> {
-		if (!navigator.gpu) {
-			gpuError = 'WebGPU is required (not available in this browser)';
+		const acquired = await acquireGpuCanvas(canvas);
+		if (!acquired.ok) {
+			gpuError = acquired.reason;
 			return null;
 		}
-		let adapter: GPUAdapter | null = null;
-		try {
-			adapter = await navigator.gpu.requestAdapter();
-		} catch {
-			adapter = null;
-		}
-		if (!adapter) {
-			gpuError = 'WebGPU is required (not available in this browser)';
-			return null;
-		}
-		let dev: GPUDevice;
-		try {
-			dev = await adapter.requestDevice();
-		} catch {
-			gpuError = 'WebGPU is required (not available in this browser)';
-			return null;
-		}
-		const context = canvas.getContext('webgpu');
-		if (!context) {
-			gpuError = 'WebGPU is required (not available in this browser)';
-			return null;
-		}
-		const fmt = navigator.gpu.getPreferredCanvasFormat();
-		context.configure({ device: dev, format: fmt, alphaMode: 'premultiplied' });
+		const { device: dev, ctx: context, format: fmt } = acquired;
 		const blend = {
 			color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
 			alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },

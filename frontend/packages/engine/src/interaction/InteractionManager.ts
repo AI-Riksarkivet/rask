@@ -225,7 +225,8 @@ export class InteractionManager {
 			// Ctrl+click: toggle in selection set
 			if (this.selectedSet.has(index)) {
 				this.selectedSet.delete(index);
-				index = this.selectedSet.size > 0 ? [...this.selectedSet][this.selectedSet.size - 1]! : null;
+				index =
+					this.selectedSet.size > 0 ? [...this.selectedSet][this.selectedSet.size - 1]! : null;
 			} else {
 				this.selectedSet.add(index);
 			}

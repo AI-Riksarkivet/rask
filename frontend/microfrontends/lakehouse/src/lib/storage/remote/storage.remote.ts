@@ -20,9 +20,6 @@ const StoreSchema = v.object({
 const RegistrySchema = v.object({ stores: v.array(StoreSchema) });
 const TiersSchema = v.record(v.string(), v.array(StoreSchema));
 
-
-
-
 /** Every store the catalog knows, with its role. */
 export const listStores = query(
 	async (): Promise<ApiResult<{ stores: Store[] }>> =>

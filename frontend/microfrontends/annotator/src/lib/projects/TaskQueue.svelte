@@ -20,6 +20,7 @@
 		type PaginationState,
 		type RowSelectionState,
 		type SortingState,
+		sortableHeader,
 	} from '@rask/ui/data-table';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
@@ -421,22 +422,6 @@
 
 	let sorting = $state<SortingState>([{ id: 'state', desc: false }]);
 	let pagination = $state<PaginationState>({ pageIndex: 0, pageSize: 20 });
-
-	const sortableHeader =
-		(label: string) =>
-		({
-			column,
-		}: {
-			column: {
-				getIsSorted(): false | 'asc' | 'desc';
-				getToggleSortingHandler(): ((e: Event) => void) | undefined;
-			};
-		}) =>
-			renderComponent(DataTableHeaderButton, {
-				label,
-				sorted: column.getIsSorted(),
-				onclick: column.getToggleSortingHandler(),
-			});
 
 	const columns: ColumnDef<TaskDetail>[] = [
 		selectionColumn<TaskDetail>(),

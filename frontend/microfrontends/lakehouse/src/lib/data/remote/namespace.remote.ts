@@ -26,9 +26,6 @@ import { catalogJSON, parsed } from '$lib/server/doors';
 
 const enc = encodeURIComponent;
 
-
-
-
 /** The tables under ONE namespace — the namespace→table rung of the zone Overview's hierarchy view
  *  (#109). The spec's list_tables through the catalog's GET route, reader-gated like every other read
  *  here.

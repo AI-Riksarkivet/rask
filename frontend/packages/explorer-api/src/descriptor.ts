@@ -240,6 +240,31 @@ export interface VectorSpace {
 
 const COSINE_DISTANCE_MAX = 2;
 
+/** One comparable relevance number for a row (higher = better), or null when it carries no
+ *  ranking signal. THE one copy (#96): this rule and its constant lived verbatim here (as a
+ *  `DatasetView` method) AND in api.ts — a change to how hybrid/semantic scores compare had to be
+ *  made twice or the list and the table disagreed. It sits beside the schema because the constant
+ *  is a property of the embedding distance, not of the transport. */
+export function relevanceOf(row: Row, mode?: SearchMode): number | null {
+	switch (mode) {
+		case 'fts':
+		case 'scene_fts':
+			return row._score ?? null;
+		case 'semantic':
+		case 'visual':
+			return row._distance != null ? COSINE_DISTANCE_MAX - row._distance : null;
+		case 'hybrid':
+			return row._relevance_score ?? null;
+		case 'scene':
+			return null;
+		default:
+			if (row._relevance_score != null) return row._relevance_score;
+			if (row._score != null) return row._score;
+			if (row._distance != null) return COSINE_DISTANCE_MAX - row._distance;
+			return null;
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // DatasetView — typed accessors over a parsed descriptor
 // ─────────────────────────────────────────────────────────────────────
@@ -430,25 +455,10 @@ export class DatasetView {
 		return this.searchModes.includes(mode);
 	}
 
-	/** One comparable relevance number (higher = better), or null if unranked. */
+	/** One comparable relevance number (higher = better), or null if unranked — delegates to the
+	 *  module-level rule so the method and the free function cannot disagree. */
 	relevanceOf(row: Row, mode?: SearchMode): number | null {
-		switch (mode) {
-			case 'fts':
-			case 'scene_fts':
-				return row._score ?? null;
-			case 'semantic':
-			case 'visual':
-				return row._distance != null ? COSINE_DISTANCE_MAX - row._distance : null;
-			case 'hybrid':
-				return row._relevance_score ?? null;
-			case 'scene':
-				return null;
-			default:
-				if (row._relevance_score != null) return row._relevance_score;
-				if (row._score != null) return row._score;
-				if (row._distance != null) return COSINE_DISTANCE_MAX - row._distance;
-				return null;
-		}
+		return relevanceOf(row, mode);
 	}
 
 	// ── media ─────────────────────────────────────────────────────────

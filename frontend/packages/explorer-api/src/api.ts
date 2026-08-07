@@ -27,40 +27,14 @@ import {
 } from './descriptor';
 
 export type { Alignment, Row, SearchMode } from './descriptor';
-export { activeView, registerView, setFanoutCorpora, viewForHit } from './descriptor';
+export { activeView, registerView, relevanceOf, setFanoutCorpora, viewForHit } from './descriptor';
 export { apiUrl, setApiBase } from './base';
 
 /** Legacy alias — a search/browse result row. Field access goes through the
  *  active {@link DatasetView}; this stays for import compatibility. */
 export type Hit = Row;
 
-// ─────────────────────────────────────────────────────────────────────
-// Relevance normalization (pure — reads only the ranking signals)
-// ─────────────────────────────────────────────────────────────────────
-
-const COSINE_DISTANCE_MAX = 2;
-
-/** A single comparable relevance number for a hit, normalized so higher is
- *  always better; `null` when the hit carries no ranking signal. */
-export function relevanceOf(hit: Hit, mode?: SearchMode): number | null {
-	switch (mode) {
-		case 'fts':
-		case 'scene_fts':
-			return hit._score ?? null;
-		case 'semantic':
-		case 'visual':
-			return hit._distance != null ? COSINE_DISTANCE_MAX - hit._distance : null;
-		case 'hybrid':
-			return hit._relevance_score ?? null;
-		case 'scene':
-			return null;
-		default:
-			if (hit._relevance_score != null) return hit._relevance_score;
-			if (hit._score != null) return hit._score;
-			if (hit._distance != null) return COSINE_DISTANCE_MAX - hit._distance;
-			return null;
-	}
-}
+// Relevance normalization lives in descriptor.ts beside the schema (#96) — one rule, one constant.
 
 // ─────────────────────────────────────────────────────────────────────
 // Search request shape

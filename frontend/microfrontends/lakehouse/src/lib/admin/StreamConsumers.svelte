@@ -15,6 +15,7 @@
 		type ColumnDef,
 		type PaginationState,
 		type SortingState,
+		sortableHeader,
 	} from '@rask/ui/data-table';
 	import * as Sheet from '@rask/ui/sheet';
 	import { ExternalLink } from '@lucide/svelte';
@@ -44,22 +45,6 @@
 
 	let sorting = $state<SortingState>([]);
 	let pagination = $state<PaginationState>({ pageIndex: 0, pageSize: 10 });
-
-	const sortableHeader =
-		(label: string) =>
-		({
-			column,
-		}: {
-			column: {
-				getIsSorted(): false | 'asc' | 'desc';
-				getToggleSortingHandler(): ((e: Event) => void) | undefined;
-			};
-		}) =>
-			renderComponent(DataTableHeaderButton, {
-				label,
-				sorted: column.getIsSorted(),
-				onclick: column.getToggleSortingHandler(),
-			});
 
 	const columns: ColumnDef<JetStreamConsumer>[] = [
 		{

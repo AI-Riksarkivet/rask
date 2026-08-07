@@ -12,6 +12,7 @@ export { default as FlexRender } from './flex-render.svelte';
 export { createSvelteTable, mergeObjects } from './create-svelte-table.svelte.js';
 export { renderComponent, renderSnippet } from './render-helpers.js';
 export { selectionColumn } from './selection-column.js';
+export { sortableHeader } from './sortable-header.js';
 export {
 	createColumnHelper,
 	getCoreRowModel,
