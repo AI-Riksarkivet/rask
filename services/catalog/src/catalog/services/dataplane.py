@@ -1146,9 +1146,15 @@ def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[s
     real column type — so ``4.0 → 4`` just works — turning a genuinely incompatible payload (e.g. ``4.5`` →
     ``int``, or a non-castable type) into a clean ``400``, never a 500. Blocking IO (opens the dataset for the
     live schema); the caller runs it in a threadpool.
+
+    An already-aligned payload passes through UNTOUCHED: re-serializing it cost two full
+    materialisations (the IPC re-encode + ``to_pybytes``) on every insert from a schema-exact client —
+    which is every non-browser client — for zero behavioural difference (#141).
     """
     incoming = pa.ipc.open_stream(data).read_all()
     target = open_dataset(ns, so, table_id).schema
+    if [(f.name, f.type, f.nullable) for f in incoming.schema] == [(f.name, f.type, f.nullable) for f in target]:
+        return data
     present = set(incoming.column_names)
     missing = [f.name for f in target if f.name not in present]
     if missing:

@@ -77,3 +77,27 @@ def test_missing_column_is_400(monkeypatch: pytest.MonkeyPatch) -> None:
     incoming = pa.table({"id": pa.array([1], pa.int64())})  # no 'score'
     with pytest.raises(InvalidInputError):
         _coerce(_ipc(incoming))
+
+
+def test_aligned_payload_passes_through_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A schema-exact payload is returned AS-IS — the same object, not a re-encode (#141).
+
+    Every non-browser client sends the table's own schema; re-serializing those payloads was two
+    full materialisations per insert for zero behavioural difference. Identity (``is``) is the
+    assertion because equality would also pass on a wasteful round-trip.
+    """
+    schema = pa.schema([("id", pa.int64()), ("tag", pa.string())])
+    _target(monkeypatch, schema)
+    data = _ipc(pa.table({"id": pa.array([1], pa.int64()), "tag": pa.array(["a"], pa.string())}))
+    out = dataplane.coerce_insert_arrow(cast(Any, None), cast(Any, {}), ["hunt", "t"], data)
+    assert out is data
+
+
+def test_matching_names_with_differing_nullability_still_coerces(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same names+types but a non-nullable target field ⇒ NOT the fast path — the cast must run so
+    the declared nullability lands (the native append checks the schema, not the values)."""
+    _target(monkeypatch, pa.schema([pa.field("id", pa.int64(), nullable=False)]))
+    data = _ipc(pa.table({"id": pa.array([1], pa.int64())}))  # incoming field is nullable=True
+    out = dataplane.coerce_insert_arrow(cast(Any, None), cast(Any, {}), ["hunt", "t"], data)
+    assert out is not data
+    assert pa.ipc.open_stream(out).read_all().schema.field("id").nullable is False
