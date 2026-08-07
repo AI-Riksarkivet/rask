@@ -272,36 +272,67 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
     # ZERO MEANS UNBOUNDED, and that is the default in code. The plane's own docstrings advertise
     # million-unit runs, so a live default would break the legitimate long harvest this is meant to
     # protect — the deployment opts in, exactly like the other ceilings.
-    if MAX_RUN_HOURS > 0:
-        deadline = ctx.create_timer(timedelta(hours=MAX_RUN_HOURS))
-        winner = yield wf.when_any([fanout, deadline])
-        if winner is deadline:
-            # Terminal, and it does NOT fall through to `finalize`: committing a partial harvest under
-            # a deadline would publish a dataset nobody asked for and mark it complete. The run is
-            # recorded as failed WITH its reason, and the staged fragments stay staged — recoverable
-            # by a re-run, which converges on the same rows because the unit ids are content-derived.
-            timed_out: dict[str, Any] = RunOutcome(
-                status="FAILED",
-                errors={"run": f"exceeded the {MAX_RUN_HOURS}h ceiling (RASK_INGEST_MAX_RUN_HOURS) with {units_total} units enumerated"},
-            ).model_dump()
-            yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": timed_out}, retry_policy=ACTIVITY_RETRY)
-            return timed_out
-        results = fanout.get_result()
-    else:
-        results = yield fanout
+    # THE ERROR BOUNDARY — every exit routes through ONE terminal step.
+    #
+    # Without it, a chunk that exhausted its retries raised straight out of `when_all` and the
+    # workflow died BEFORE `finalize`, before the FAIL lineage record, and before the queue release
+    # that rides `emit_terminal` — so a run with one permanently bad object lost its entire
+    # bookkeeping: no FAIL in the graph (the START emitted at accept orphaned forever), units
+    # leaking until stream retention, and the operator reading a bare Dapr failure instead of a
+    # reason. `tests/test_empty_commit.py` documented the loss verbatim for the finalize leg; the
+    # fan-in leg was the same hole one line earlier.
+    #
+    # REPLAY-SAFE by construction: the runtime re-raises the RECORDED child failure identically on
+    # every replay (`_durabletask/task.py` raises the persisted failure detail), so the except
+    # branch is as deterministic as the success branch, and the handler does nothing but call an
+    # activity — no clock, no I/O, no randomness (DWF-DET rules).
+    #
+    # `emit_terminal` itself failing after ITS retries still kills the workflow — deliberately.
+    # There is no record to write about failing to write the record, and pretending otherwise
+    # would just bury the loss one level deeper.
+    try:
+        if MAX_RUN_HOURS > 0:
+            deadline = ctx.create_timer(timedelta(hours=MAX_RUN_HOURS))
+            winner = yield wf.when_any([fanout, deadline])
+            if winner is deadline:
+                # Terminal, and it does NOT fall through to `finalize`: committing a partial harvest under
+                # a deadline would publish a dataset nobody asked for and mark it complete. The run is
+                # recorded as failed WITH its reason, and the staged fragments stay staged — recoverable
+                # by a re-run, which converges on the same rows because the unit ids are content-derived.
+                timed_out: dict[str, Any] = RunOutcome(
+                    status="FAILED",
+                    errors={"run": f"exceeded the {MAX_RUN_HOURS}h ceiling (RASK_INGEST_MAX_RUN_HOURS) with {units_total} units enumerated"},
+                ).model_dump()
+                yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": timed_out}, retry_policy=ACTIVITY_RETRY)
+                return timed_out
+            results = fanout.get_result()
+        else:
+            results = yield fanout
 
-    parsed = [ChunkResult.model_validate(r) for r in results]
-    fragments = [f for r in parsed for f in r.fragments]
-    errors = {k: v for r in parsed for k, v in r.errors.items()}
-    ctx.set_custom_status(json.dumps({"units_total": units_total, "finalizing": len(fragments)}))
+        parsed = [ChunkResult.model_validate(r) for r in results]
+        fragments = [f for r in parsed for f in r.fragments]
+        errors = {k: v for r in parsed for k, v in r.errors.items()}
+        ctx.set_custom_status(json.dumps({"units_total": units_total, "finalizing": len(fragments)}))
 
-    # Exactly one commit for the whole run — D6. Nothing is visible in bronze until this returns, so
-    # there is no observable partially-ingested state to reason about.
-    outcome: dict[str, Any] = yield ctx.call_activity(
-        finalize,
-        input={"spec": spec.model_dump(), "fragments": fragments, "errors": errors, "units_total": units_total},
-        retry_policy=ACTIVITY_RETRY,
-    )
+        # Exactly one commit for the whole run — D6. Nothing is visible in bronze until this returns, so
+        # there is no observable partially-ingested state to reason about. INSIDE the boundary on
+        # purpose: a permanently-refused commit is exactly as much a run failure as a dead chunk, and
+        # it must leave the same FAIL record. Staged fragments stay staged either way — a re-run
+        # converges via content-derived identity, and the orphan scan reports what nothing reclaimed.
+        outcome: dict[str, Any] = yield ctx.call_activity(
+            finalize,
+            input={"spec": spec.model_dump(), "fragments": fragments, "errors": errors, "units_total": units_total},
+            retry_policy=ACTIVITY_RETRY,
+        )
+    except Exception as exc:
+        failed: dict[str, Any] = RunOutcome(
+            # The recorded failure detail replays identically, so this string is deterministic.
+            status="FAILED",
+            errors={"run": f"unrecoverable before finalize completed: {str(exc)[:400]}"},
+        ).model_dump()
+        failed["units_total"] = units_total
+        yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": failed}, retry_policy=ACTIVITY_RETRY)
+        return failed
 
     yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": outcome}, retry_policy=ACTIVITY_RETRY)
     return outcome

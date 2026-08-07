@@ -219,6 +219,14 @@ class CatalogServiceClient:
             # activity boundary) while the catalog's schema declares dicts.
             "fragments": [json.loads(f) for f in fragments_json],
             "read_version": read_version,
+            # The run identity, ON THE WIRE at last. `CatalogClient.register_version`'s protocol has
+            # promised "the run id in commit metadata is how a died-after-commit run is reconciled"
+            # since the seam was written — and this client recorded the id in a LOCAL list
+            # (`self.registered`) that died with the process, so the deployed path had no
+            # reconciliation at all: a `finalize` retry after a successful commit re-appended every
+            # row. The catalog now stamps it as a transaction property and answers a replayed commit
+            # with the version this run already committed (idempotent replay).
+            "run_id": run_id,
         }
         url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/commit"
         try:
