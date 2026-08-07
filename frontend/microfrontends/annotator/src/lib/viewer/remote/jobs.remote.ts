@@ -1,7 +1,7 @@
-import { command, getRequestEvent, query } from '$app/server';
-import { env } from '$env/dynamic/private';
+import { command, query } from '$app/server';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
+import { SIGN_IN_REQUIRED, annotatorJSON, signedOut } from '$lib/server/doors';
 import type { JobResult } from '@rask/labeling/jobs';
 
 // Batch labeling jobs — submit a producer over a chunk-level selection, then poll it
@@ -16,44 +16,6 @@ import type { JobResult } from '@rask/labeling/jobs';
 //
 // `requireSession: true` carried over from the deleted apply route: enqueuing a deriver over a corpus
 // selection is a write, and a write must be attributable.
-
-const ANNOTATOR_API = env.ANNOTATOR_API ?? 'http://localhost:8103';
-
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
-
-function signedOut(): boolean {
-	const { locals } = getRequestEvent();
-	return locals.authEnabled && !locals.session;
-}
-
-async function annotatorJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	let res: Response;
-	try {
-		res = await fetch(`${ANNOTATOR_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
-	}
-	const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-	if (!res.ok) {
-		return {
-			ok: false,
-			status: res.status,
-			detail: typeof body.detail === 'string' ? body.detail : `HTTP ${res.status}`,
-		};
-	}
-	return { ok: true, data: body };
-}
 
 /** The chunk-level selection the deriver runs over — the three shapes `ChunkSelection` takes. */
 const ScopeSchema = v.variant('level', [
@@ -89,7 +51,7 @@ export const submitBatchJob = command(
 		exemplars: v.optional(v.array(v.string())),
 	}),
 	async ({ producer, op, scope, prompt, dataset, exemplars }): Promise<ApiResult<JobResult>> => {
-		if (signedOut()) return { ok: false, status: 401, detail: 'sign in required' };
+		if (signedOut()) return SIGN_IN_REQUIRED;
 		const result = await annotatorJSON('/api/jobs/apply', {
 			method: 'POST',
 			body: JSON.stringify({

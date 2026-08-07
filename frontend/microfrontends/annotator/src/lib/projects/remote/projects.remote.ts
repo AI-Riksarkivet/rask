@@ -1,7 +1,12 @@
-import { command, getRequestEvent, query } from '$app/server';
-import { env } from '$env/dynamic/private';
+import { command, query } from '$app/server';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
+import {
+	SIGN_IN_REQUIRED,
+	parsed,
+	projectsJSON as annotatorJSON,
+	signedOut,
+} from '$lib/server/doors';
 import {
 	MemberListSchema,
 	ProjectDetailSchema,
@@ -29,8 +34,9 @@ import {
 // answered, so a write is always attributable.
 //
 // PARSING moves, it is not invented: `client.ts` valibot-parsed every response at the browser
-// boundary and those exact parses now run server-side, keeping the same failure shape
-// (`status: 0`, `contract drift: …`) the pages already render as "unreachable".
+// boundary and those exact parses now run server-side. Transport and parse live in
+// `$lib/server/doors` over `@rask/api/upstream` (#93) — a drift is a 502 with the drift's own
+// words, and every page here buckets non-401/403/404 failures into its offline branch.
 //
 // SINGLE-FLIGHT REFRESH, only where it is the sole update path: `createProject` refreshes the tenant
 // list it just changed. The event/adjudication/send commands deliberately do NOT refresh — the detail
@@ -40,78 +46,7 @@ import {
 //
 // A remote file may export only remote functions, so the wire contracts stay in `../types.js`.
 
-// Dev seam, carried over from the deleted route: the projects/task plane may live on a DIFFERENT
-// annotator than the media plane (cluster actors + a locally-seeded corpus). Falls back to
-// ANNOTATOR_API — one service in any real deploy.
-const ANNOTATOR_API = env.ANNOTATOR_PROJECTS_API ?? env.ANNOTATOR_API ?? 'http://localhost:8103';
-
 const enc = encodeURIComponent;
-
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
-
-/** The deleted route's `requireSession: true`: on an auth-enabled stack a write never leaves this
- *  server without a signed-in user, and the caller sees the same 401 it always did. */
-function signedOut(): boolean {
-	const { locals } = getRequestEvent();
-	return locals.authEnabled && !locals.session;
-}
-
-const SIGN_IN_REQUIRED: ApiResult<never> = {
-	ok: false,
-	status: 401,
-	detail: 'sign in required',
-};
-
-/** One annotator-service call → `ApiResult<unknown>`; FastAPI's `{detail}` is surfaced as the failure
- *  detail, exactly as the browser client lifted it out of the proxied body. An UNREACHABLE service is
- *  `{ok:false, status:0}` — a rejected fetch here would throw across the remote boundary and skip
- *  every consumer's honest offline branch ("The annotation service is unreachable."). */
-async function annotatorJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	let res: Response;
-	try {
-		res = await fetch(`${ANNOTATOR_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
-	}
-	const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-	if (!res.ok) {
-		return {
-			ok: false,
-			status: res.status,
-			detail: typeof body.detail === 'string' ? body.detail : `HTTP ${res.status}`,
-		};
-	}
-	return { ok: true, data: body };
-}
-
-/** The boundary parse `client.ts` ran in the browser, moved here unchanged — including its status:
- *  a drift is `status: 0`, which the pages already read as "unreachable" rather than as a refusal. */
-function parsed<T>(
-	schema: v.BaseSchema<unknown, T, v.BaseIssue<unknown>>,
-	result: ApiResult<unknown>,
-): ApiResult<T> {
-	if (!result.ok) return result;
-	const decoded = v.safeParse(schema, result.data);
-	if (!decoded.success) {
-		return {
-			ok: false,
-			status: 0,
-			detail: `contract drift: ${decoded.issues[0]?.message ?? 'decode failed'}`,
-		};
-	}
-	return { ok: true, data: decoded.output };
-}
 
 /** A JSON write, gated by the session guard above. */
 const write = (
@@ -193,7 +128,7 @@ const CreateProjectSchema = v.object({
 export const listProjects = query(
 	v.object({ tenant: v.string() }),
 	async ({ tenant }): Promise<ApiResult<ProjectList>> =>
-		parsed(ProjectListSchema, await annotatorJSON(`/projects?tenant=${enc(tenant)}`)),
+		parsed(await annotatorJSON(`/projects?tenant=${enc(tenant)}`), ProjectListSchema),
 );
 
 /** One labeling task plus the transitions the CALLER may fire (`legal_events`, derived from the
@@ -201,7 +136,7 @@ export const listProjects = query(
 export const fetchProject = query(
 	ProjectIdArg,
 	async ({ projectId }): Promise<ApiResult<ProjectDetail>> =>
-		parsed(ProjectDetailSchema, await annotatorJSON(`/projects/${projectId}`)),
+		parsed(await annotatorJSON(`/projects/${projectId}`), ProjectDetailSchema),
 );
 
 /** Who holds which rung directly on this project. `can_manage`-gated server-side: who has access is
@@ -209,7 +144,7 @@ export const fetchProject = query(
 export const fetchMembers = query(
 	ProjectIdArg,
 	async ({ projectId }): Promise<ApiResult<MemberList>> =>
-		parsed(MemberListSchema, await annotatorJSON(`/projects/${projectId}/members`)),
+		parsed(await annotatorJSON(`/projects/${projectId}/members`), MemberListSchema),
 );
 
 /** Grant one rung. Idempotent server-side, so a double-click is a no-op rather than a 400. */
@@ -217,8 +152,8 @@ export const grantMember = command(
 	v.object({ projectId: v.string(), user: v.string(), relation: v.string() }),
 	async ({ projectId, user, relation }): Promise<ApiResult<MemberList>> => {
 		const result = parsed(
-			MemberListSchema,
 			await write('PUT', `/projects/${projectId}/members`, { user, relation }),
+			MemberListSchema,
 		);
 		if (result.ok) void fetchMembers({ projectId }).refresh();
 		return result;
@@ -231,8 +166,8 @@ export const revokeMember = command(
 	v.object({ projectId: v.string(), user: v.string(), relation: v.string() }),
 	async ({ projectId, user, relation }): Promise<ApiResult<MemberList>> => {
 		const result = parsed(
-			MemberListSchema,
 			await write('DELETE', `/projects/${projectId}/members`, { user, relation }),
+			MemberListSchema,
 		);
 		if (result.ok) void fetchMembers({ projectId }).refresh();
 		return result;
@@ -244,8 +179,8 @@ export const listTasks = query(
 	v.object({ projectId: v.string(), details: v.optional(v.boolean()) }),
 	async ({ projectId, details }): Promise<ApiResult<TaskListing>> =>
 		parsed(
-			TaskListingSchema,
 			await annotatorJSON(`/projects/${projectId}/tasks${details ? '?include=details' : ''}`),
+			TaskListingSchema,
 		),
 );
 
@@ -256,7 +191,7 @@ export const listTasks = query(
 export const createProject = command(
 	CreateProjectSchema,
 	async (req): Promise<ApiResult<Project>> => {
-		const result = parsed(ProjectSchema, await write('POST', '/projects', req));
+		const result = parsed(await write('POST', '/projects', req), ProjectSchema);
 		if (result.ok) void listProjects({ tenant: req.tenant }).refresh();
 		return result;
 	},
@@ -272,11 +207,11 @@ export const fireProjectEvent = command(
 	}),
 	async ({ projectId, event, targetNamespace }): Promise<ApiResult<Project>> =>
 		parsed(
-			ProjectSchema,
 			await write('POST', `/projects/${projectId}/events`, {
 				event,
 				...(targetNamespace ? { target_namespace: targetNamespace } : {}),
 			}),
+			ProjectSchema,
 		),
 );
 
@@ -294,8 +229,8 @@ export const updateProjectOntology = command(
 	v.object({ projectId: v.string(), ontology: OntologyWireSchema }),
 	async ({ projectId, ontology }): Promise<ApiResult<Project>> => {
 		const result = parsed(
-			ProjectSchema,
 			await write('PATCH', `/projects/${projectId}/ontology`, { ontology }),
+			ProjectSchema,
 		);
 		// Single-flight the read this write invalidates, like every other mutation here.
 		if (result.ok) void fetchProject({ projectId }).refresh();
@@ -311,8 +246,8 @@ export const sendItems = command(
 		items,
 	}): Promise<ApiResult<{ sent: number; created: number; task_ids: string[] }>> =>
 		parsed(
-			v.object({ sent: v.number(), created: v.number(), task_ids: v.array(v.string()) }),
 			await write('POST', `/projects/${projectId}/items`, { items }),
+			v.object({ sent: v.number(), created: v.number(), task_ids: v.array(v.string()) }),
 		),
 );
 
@@ -322,10 +257,10 @@ export const adjudicate = command(
 	v.object({ projectId: v.string(), groupId: v.string(), taskId: v.string() }),
 	async ({ projectId, groupId, taskId }): Promise<ApiResult<Project>> =>
 		parsed(
-			ProjectSchema,
 			await write('PUT', `/projects/${projectId}/adjudications/${enc(groupId)}`, {
 				task_id: taskId,
 			}),
+			ProjectSchema,
 		),
 );
 
@@ -368,7 +303,7 @@ export const clearAdjudication = command(
 	v.object({ projectId: v.string(), groupId: v.string() }),
 	async ({ projectId, groupId }): Promise<ApiResult<Project>> =>
 		parsed(
-			ProjectSchema,
 			await write('DELETE', `/projects/${projectId}/adjudications/${enc(groupId)}`),
+			ProjectSchema,
 		),
 );

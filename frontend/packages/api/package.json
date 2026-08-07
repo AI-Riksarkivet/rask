@@ -17,6 +17,10 @@
 			"types": "./src/client.ts",
 			"default": "./src/client.ts"
 		},
+		"./upstream": {
+			"types": "./src/upstream.ts",
+			"default": "./src/upstream.ts"
+		},
 		"./dock-layout": {
 			"types": "./src/dock-layout.ts",
 			"default": "./src/dock-layout.ts"

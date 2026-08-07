@@ -1,8 +1,7 @@
-import { command, getRequestEvent, query } from '$app/server';
-import { env } from '$env/dynamic/private';
+import { command, query } from '$app/server';
 import * as v from 'valibot';
-import { parse } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
+import { catalogJSON, parsed } from '$lib/server/doors';
 import type { ModelDescribe, ModelsList, PromoteResponse } from '../catalog';
 
 // The model registry, in the zone's remote-function dialect — same names, same
@@ -11,8 +10,6 @@ import type { ModelDescribe, ModelsList, PromoteResponse } from '../catalog';
 // run on the zone server with the signed-in session's bearer, which keeps the promote's
 // confused-deputy stance intact (a service credential never touches the catalog's can_promote rung)
 // and moves the wire parse off the browser.
-
-const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 
 const enc = encodeURIComponent;
 
@@ -51,49 +48,6 @@ const PromoteResponseSchema = v.object({
 	blessed_version: v.number(),
 	tag: v.string(),
 });
-
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
-
-async function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	try {
-		const res = await fetch(`${CATALOG_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-		if (!res.ok) {
-			let detail = `catalog answered ${res.status}`;
-			try {
-				const body: unknown = await res.json();
-				if (body && typeof body === 'object' && 'detail' in body) detail = String(body.detail);
-			} catch {
-				/* a non-JSON error body keeps the status-line detail */
-			}
-			return { ok: false, status: res.status, detail };
-		}
-		return { ok: true, data: await res.json() };
-	} catch (err) {
-		// The routes this replaces answered an unreachable catalog with 502 rather than throwing, and
-		// the registry reads that status to render its offline state instead of a boundary error.
-		return { ok: false, status: 502, detail: String(err) };
-	}
-}
-
-function parsed<T>(result: ApiResult<unknown>, schema: v.GenericSchema<unknown, T>): ApiResult<T> {
-	if (!result.ok) return result;
-	try {
-		return { ok: true, data: parse(schema, result.data) };
-	} catch (err) {
-		return { ok: false, status: 502, detail: `catalog contract drift: ${String(err)}` };
-	}
-}
 
 /** Every registered model with its candidate (latest) and blessed versions. */
 export const fetchModels = query(

@@ -1,10 +1,10 @@
-import { command, getRequestEvent, query } from '$app/server';
-import { env } from '$env/dynamic/private';
+import { command, query } from '$app/server';
 import * as v from 'valibot';
-import { parse } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
 import type { CreateWarehouseBody, WarehouseRecord } from '../catalog';
 
+import { catalogJSON, parsed } from '$lib/server/doors';
+// Transport: the zone's ONE catalog door (#93) — implementation in @rask/api/upstream.
 // The warehouse + project registry, in the zone's remote-function dialect — same
 // names, same `ApiResult` shapes as the /capi client this replaces, transport only. The three narrow
 // BFF routes it retires (`capi/v1/warehouses`, `capi/v1/warehouses/[id]/[action]`) existed to keep the
@@ -15,8 +15,6 @@ import type { CreateWarehouseBody, WarehouseRecord } from '../catalog';
 // The routes' `authEnabled && !session → 401` short-circuit is gone deliberately: it was a UX
 // shortcut, never the enforcement point (the catalog answers 401 itself for a bearer-less call), and
 // the components branch on the STATUS, which is identical either way.
-
-const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 
 const enc = encodeURIComponent;
 
@@ -48,49 +46,8 @@ const DeleteWarehouseSchema = v.object({
 	objects_purged: v.number(),
 });
 
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
 
-async function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	try {
-		const res = await fetch(`${CATALOG_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-		if (!res.ok) {
-			let detail = `catalog answered ${res.status}`;
-			try {
-				const body: unknown = await res.json();
-				if (body && typeof body === 'object' && 'detail' in body) detail = String(body.detail);
-			} catch {
-				/* a non-JSON error body keeps the status-line detail */
-			}
-			return { ok: false, status: res.status, detail };
-		}
-		return { ok: true, data: await res.json() };
-	} catch (err) {
-		// The routes this replaces answered an unreachable catalog with 502 rather than throwing, and
-		// the pages read that status to render "Catalog unreachable" — an uncaught fetch failure would
-		// replace that honest state with a boundary error.
-		return { ok: false, status: 502, detail: String(err) };
-	}
-}
 
-function parsed<T>(result: ApiResult<unknown>, schema: v.GenericSchema<unknown, T>): ApiResult<T> {
-	if (!result.ok) return result;
-	try {
-		return { ok: true, data: parse(schema, result.data) };
-	} catch (err) {
-		return { ok: false, status: 502, detail: `catalog contract drift: ${String(err)}` };
-	}
-}
 
 /** Warehouse admin reads: whatever the catalog shows this caller (any signed-in user). */
 export const fetchWarehouses = query(

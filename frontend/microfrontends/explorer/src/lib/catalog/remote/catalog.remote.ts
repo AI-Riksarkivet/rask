@@ -1,8 +1,8 @@
 import { command, getRequestEvent, query } from '$app/server';
-import { env } from '$env/dynamic/private';
 import * as v from 'valibot';
 import { fetchMe, type Me } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
+import { CATALOG_API, catalogJSON, typedAs } from '$lib/server/doors';
 import type { UserStateEnvelope } from '$lib/user-state';
 
 // This zone's CATALOG plane, in the remote-function dialect (the transport ruling, area 3) — the two
@@ -23,51 +23,12 @@ import type { UserStateEnvelope } from '$lib/user-state';
 //
 // DELETE is not ported. The route exposed it and nothing in the estate ever called it — the same
 // evidence that retires `api/jobs/[...path]` in this round. It comes back the day a caller does.
-const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
-
 /** The documents this zone owns — the picklist follows `UserStateDocument`. `dock-layout` +
  *  `dock-layout-library` back the zone's own search WORKBENCH (routes/workbench): its arrangement
  *  and its named views, per subject, on the same envelopes every dock in the estate uses. */
 const DocumentArg = v.object({
 	document: v.picklist(['workflow-graph', 'saved-views', 'dock-layout', 'dock-layout-library']),
 });
-
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
-
-/** One catalog call → `ApiResult<unknown>`. The STATUS is load-bearing for user-state and must survive
- *  the trip: 409 means "a document exists and cannot be read" (do not seed, do not overwrite), 401 means
- *  signed out (the mirror is the honest local answer), and an unreachable store is status 0 — none of
- *  which may be flattened into "empty", which is the flattening that destroys a user's work. */
-async function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	let res: Response;
-	try {
-		res = await fetch(`${CATALOG_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
-	}
-	if (!res.ok) {
-		let detail = `the catalog answered ${res.status}`;
-		try {
-			const body: unknown = await res.json();
-			if (body && typeof body === 'object' && 'detail' in body) detail = String(body.detail);
-		} catch {
-			/* a non-JSON error body keeps the status-line detail */
-		}
-		return { ok: false, status: res.status, detail };
-	}
-	return { ok: true, data: await res.json() };
-}
 
 /**
  * The navbar's frozen `/v1/me` identity.
@@ -86,12 +47,6 @@ export const fetchMeViaBff = query(async (): Promise<Me | null> => {
 		fetchFn: fetch,
 	});
 });
-
-/** The catalog's own shape is the contract here (neither the deleted route nor the client parsed it);
- *  this hands the payload on with the type the caller already used. */
-function typedAs<T>(result: ApiResult<unknown>): ApiResult<T> {
-	return result.ok ? { ok: true, data: result.data as T } : result;
-}
 
 /** Read the caller's own document. The three-outcome mapping (ok / absent / unreadable) and the
  *  localStorage mirror stay in `$lib/user-state`, which is where they were and where they are tested. */

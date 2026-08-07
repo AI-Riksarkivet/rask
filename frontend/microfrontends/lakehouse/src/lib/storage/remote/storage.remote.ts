@@ -1,16 +1,14 @@
-import { command, getRequestEvent, query } from '$app/server';
-import { env } from '$env/dynamic/private';
+import { command, query } from '$app/server';
 import * as v from 'valibot';
-import { parse } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
 import type { Store, StoreDraft } from '../storage';
 
+import { catalogJSON, parsed } from '$lib/server/doors';
+// Transport: the zone's ONE catalog door (#93) — implementation in @rask/api/upstream.
 // The stores registry, in the zone's remote-function dialect (the transport ruling, area 1) — same
 // names, same ApiResult shapes as the /capi client this replaces, transport only. Fixing one live
 // defect for free: `attachStore` used to POST through the GET-only /capi catch-all, a guaranteed 405
 // that left the attach form dead; a command() has its own endpoint.
-
-const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 
 const StoreSchema = v.object({
 	name: v.string(),
@@ -22,50 +20,8 @@ const StoreSchema = v.object({
 const RegistrySchema = v.object({ stores: v.array(StoreSchema) });
 const TiersSchema = v.record(v.string(), v.array(StoreSchema));
 
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
 
-async function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	// An UNREACHABLE catalog is `{ok:false, status:0}`, exactly like the browser client this replaced —
-	// a rejected fetch here would throw across the remote boundary and skip every consumer's honest
-	// offline/status-0 branch (e.g. failText's "catalog unreachable / may-or-may-not-have-applied").
-	let res: Response;
-	try {
-		res = await fetch(`${CATALOG_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
-	}
-	if (!res.ok) {
-		let detail = `catalog answered ${res.status}`;
-		try {
-			const body: unknown = await res.json();
-			if (body && typeof body === 'object' && 'detail' in body) detail = String(body.detail);
-		} catch {
-			/* a non-JSON error body keeps the status-line detail */
-		}
-		return { ok: false, status: res.status, detail };
-	}
-	return { ok: true, data: await res.json() };
-}
 
-function parsed<T>(result: ApiResult<unknown>, schema: v.GenericSchema<unknown, T>): ApiResult<T> {
-	if (!result.ok) return result;
-	try {
-		return { ok: true, data: parse(schema, result.data) };
-	} catch (err) {
-		return { ok: false, status: 502, detail: `catalog contract drift: ${String(err)}` };
-	}
-}
 
 /** Every store the catalog knows, with its role. */
 export const listStores = query(

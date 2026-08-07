@@ -1,8 +1,8 @@
 import { getRequestEvent } from '$app/server';
 import { env } from '$env/dynamic/private';
-import * as v from 'valibot';
-import { parse } from '@rask/api';
+import type * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
+import { parsed as sharedParsed, upstreamJSON } from '@rask/api/upstream';
 
 // The zone's ONE door to the catalog for remote functions: forward the signed-in session's bearer,
 // turn every outcome into the shared `ApiResult` union, and parse at the wire boundary.
@@ -22,43 +22,23 @@ import type { ApiResult } from '@rask/api/client';
  *  client (`fetchMe`) rather than `catalogJSON`, and they must address the same catalog. */
 export const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
-
-/** One catalog call → `ApiResult<unknown>`; FastAPI's `{detail}` is surfaced as the failure detail.
+/** One catalog call → `ApiResult<unknown>` — a 3-line DOOR over `@rask/api/upstream` (#93).
  *
- *  An UNREACHABLE catalog is `{ok:false, status:0}` (frontend-conventions §1.0: a rejected fetch must
- *  never cross the remote boundary) — the pages read that status to render an honest "Catalog
- *  unreachable" instead of a boundary error, and a create dialog's `failText` distinguishes a client
- *  TIMEOUT (where the catalog may still have committed) from a refused connection off the same status. */
-export async function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	let res: Response;
-	try {
-		res = await fetch(`${CATALOG_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
-	}
-	if (!res.ok) {
-		let detail = `catalog answered ${res.status}`;
-		try {
-			const body: unknown = await res.json();
-			if (body && typeof body === 'object' && 'detail' in body) detail = String(body.detail);
-		} catch {
-			/* a non-JSON error body keeps the status-line detail */
-		}
-		return { ok: false, status: res.status, detail };
-	}
-	return { ok: true, data: await res.json() };
+ *  The implementation moved to the shared producer once sixteen copies of it had drifted across the
+ *  estate (nine said unreachable = 0, four said 502, and the non-JSON-200 guard existed in exactly
+ *  one). What stays here is only what CANNOT move: `getRequestEvent` exists inside an app, so the
+ *  event's fetch and the session bearer are read here and passed in. The semantics are the shared
+ *  contract — 0 unreachable, n answered-n with the upstream's `{detail}`, 502 contract drift. */
+export function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
+	const { fetch, locals } = getRequestEvent();
+	return upstreamJSON({
+		fetch,
+		base: CATALOG_API,
+		path,
+		init,
+		bearer: locals.session?.accessToken,
+		upstream: 'catalog',
+	});
 }
 
 /** Parse a successful wire payload; a shape drift is a 502-flavoured failure, never a cast. */
@@ -66,10 +46,5 @@ export function parsed<T>(
 	result: ApiResult<unknown>,
 	schema: v.GenericSchema<unknown, T>,
 ): ApiResult<T> {
-	if (!result.ok) return result;
-	try {
-		return { ok: true, data: parse(schema, result.data) };
-	} catch (err) {
-		return { ok: false, status: 502, detail: `catalog contract drift: ${String(err)}` };
-	}
+	return sharedParsed(result, schema, 'catalog');
 }

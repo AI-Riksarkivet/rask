@@ -1,7 +1,7 @@
-import { command, getRequestEvent } from '$app/server';
-import { env } from '$env/dynamic/private';
+import { command } from '$app/server';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
+import { annotatorJSON, sessionGate, typedAs } from '$lib/server/doors';
 import type { SaveResult } from '@rask/labeling/tag-writer';
 import type { JobResult } from '@rask/labeling/jobs';
 
@@ -17,51 +17,12 @@ import type { JobResult } from '@rask/labeling/jobs';
 // here — which is what deleting the routes rather than widening them keeps true.
 //
 // Neither surface was parsed before (both clients cast the JSON), so neither is parsed now: moving a
-// transport is not the moment to invent a contract.
-const ANNOTATOR_API = env.ANNOTATOR_API ?? 'http://localhost:8103';
+// transport is not the moment to invent a contract. Transport and gate live in `$lib/server/doors`
+// over `@rask/api/upstream` (#93); the cast rides `typedAs` until #94 gives these planes schemas.
 
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
-
-/** `requireSession: true`, unchanged: a write must be attributable to a real user, and on an
- *  auth-enabled stack an anonymous caller is refused before the request leaves the zone. */
-function sessionGate(): { ok: false; status: number; detail: string } | null {
-	const { locals } = getRequestEvent();
-	if (locals.authEnabled && !locals.session) {
-		return { ok: false, status: 401, detail: 'sign in required' };
-	}
-	return null;
-}
-
-async function annotatorJSON<T>(path: string, body: unknown): Promise<ApiResult<T>> {
-	const { fetch } = getRequestEvent();
-	let res: Response;
-	try {
-		res = await fetch(`${ANNOTATOR_API}${path}`, {
-			method: 'POST',
-			headers: { ...bearerHeaders(), 'content-type': 'application/json' },
-			body: JSON.stringify(body),
-		});
-	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
-	}
-	if (!res.ok) {
-		let detail = `the annotator answered ${res.status}`;
-		try {
-			const problem: unknown = await res.json();
-			if (problem && typeof problem === 'object' && 'detail' in problem) {
-				detail = String(problem.detail);
-			}
-		} catch {
-			/* a non-JSON error body keeps the status-line detail */
-		}
-		return { ok: false, status: res.status, detail };
-	}
-	return { ok: true, data: (await res.json()) as T };
-}
+/** One media-plane POST, typed the way the call sites always were. */
+const annotatorPost = <T>(path: string, body: unknown): Promise<ApiResult<T>> =>
+	annotatorJSON(path, { method: 'POST', body: JSON.stringify(body) }).then((r) => typedAs<T>(r));
 
 /** One tagged unit: the doc key plus the NON-doc identity fields, positional (pairs with the
  *  descriptor's `keyFields` minus the doc key) — the arity-generic shape `@rask/labeling/tag-writer`
@@ -87,7 +48,7 @@ export const saveTagsAsAnnotations = command(
 		const refused = sessionGate();
 		if (refused) return refused;
 		const suffix = dataset ? `?dataset=${encodeURIComponent(dataset)}` : '';
-		return annotatorJSON<SaveResult>(`/api/annotations/tags${suffix}`, {
+		return annotatorPost<SaveResult>(`/api/annotations/tags${suffix}`, {
 			adds,
 			removes,
 			base_version,
@@ -129,7 +90,7 @@ export const submitBatchJob = command(
 	async ({ producer, op, scope, prompt, dataset, exemplars }): Promise<ApiResult<JobResult>> => {
 		const refused = sessionGate();
 		if (refused) return refused;
-		return annotatorJSON<JobResult>('/api/jobs/apply', {
+		return annotatorPost<JobResult>('/api/jobs/apply', {
 			producer,
 			op,
 			scope: scopePayload(scope),

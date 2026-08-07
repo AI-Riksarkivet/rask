@@ -1,7 +1,6 @@
 import { command, getRequestEvent, query } from '$app/server';
 import { env } from '$env/dynamic/private';
 import * as v from 'valibot';
-import { parse } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
 import {
 	BackfillResponseSchema,
@@ -25,6 +24,8 @@ import {
 	type UpdateRowsResult,
 } from '../catalog';
 
+import { catalogJSON, parsed } from '$lib/server/doors';
+// Transport: the zone's ONE catalog door (#93) — implementation in @rask/api/upstream.
 // The catalog TABLE-LIFECYCLE plane, in the zone's remote-function dialect (the transport ruling, area 1)
 // — same function names, same `ApiResult` shapes at every call site, transport only. Seventeen `/capi`
 // routes (the copy-pasted bearer-forward template, three of them with an action allowlist) collapse
@@ -56,52 +57,8 @@ const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 
 const enc = encodeURIComponent;
 
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
 
-/** One catalog call → `ApiResult<unknown>`; FastAPI's `{detail}` is surfaced as the failure detail. An
- *  unreachable catalog is a 502 rather than a thrown error — the deleted routes each ended in
- *  `catch (err) { return json({detail}, 502) }`, and the pages read that status to render "Catalog
- *  unreachable" instead of an affirmative empty state. */
-async function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	let res: Response;
-	try {
-		res = await fetch(`${CATALOG_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-	} catch (err) {
-		return { ok: false, status: 502, detail: String(err) };
-	}
-	if (!res.ok) {
-		let detail = `catalog answered ${res.status}`;
-		try {
-			const body: unknown = await res.json();
-			if (body && typeof body === 'object' && 'detail' in body) detail = String(body.detail);
-		} catch {
-			/* a non-JSON error body keeps the status-line detail */
-		}
-		return { ok: false, status: res.status, detail };
-	}
-	return { ok: true, data: await res.json() };
-}
 
-/** Parse a successful wire payload; a shape drift is a 502-flavoured failure, never a cast. */
-function parsed<T>(result: ApiResult<unknown>, schema: v.GenericSchema<unknown, T>): ApiResult<T> {
-	if (!result.ok) return result;
-	try {
-		return { ok: true, data: parse(schema, result.data) };
-	} catch (err) {
-		return { ok: false, status: 502, detail: `catalog contract drift: ${String(err)}` };
-	}
-}
 
 /** The generated-shape passthrough: the catalog's OpenAPI type IS the contract for these, so the
  *  payload is handed on with the type the client already used (exactly what the routes did). */
@@ -185,9 +142,12 @@ export const undropTable = command(v.string(), async (table): Promise<ApiResult<
 export const fetchTableDetail = query(
 	TableArg,
 	async ({ table }): Promise<ApiResult<TableDetail>> => {
-		const { fetch } = getRequestEvent();
+		const { fetch, locals } = getRequestEvent();
 		const base = `${CATALOG_API}/v1/table/${enc(table)}`;
-		const headers = bearerHeaders();
+		// Raw fetch on purpose: the per-part 404→null / 5xx→{error} mapping below cannot ride the
+		// JSON door, so this fan-out carries its own bearer.
+		const bearer = locals.session?.accessToken;
+		const headers: Record<string, string> = bearer ? { authorization: `Bearer ${bearer}` } : {};
 		const read = (path: string) => fetch(`${base}/${path}`, { method: 'POST', headers });
 		const part = async (res: Response): Promise<unknown> => {
 			if (res.ok) return res.json();

@@ -1,7 +1,5 @@
-import { command, getRequestEvent, query } from '$app/server';
-import { env } from '$env/dynamic/private';
+import { command, query } from '$app/server';
 import * as v from 'valibot';
-import { parse } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
 import {
 	AccessCheckSchema,
@@ -15,6 +13,8 @@ import {
 	type AccessList,
 } from '../namespace';
 
+import { catalogJSON, parsed } from '$lib/server/doors';
+// Transport: the zone's ONE catalog door (#93) — implementation in @rask/api/upstream.
 // PER-OBJECT access (a table or a namespace), in the zone's remote-function dialect
 // (the transport ruling, area 1) — same names, same ApiResult shapes as the /capi client this replaces,
 // transport only. This is the OBJECT-scoped surface the catalog mounts under
@@ -30,56 +30,10 @@ import {
 //
 // A remote file may export only remote functions, so the wire contracts stay in `../namespace`.
 
-const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
-
 const enc = encodeURIComponent;
 
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
 
-/** One catalog call → `ApiResult<unknown>`; FastAPI's `{detail}` is surfaced as the failure detail. */
-async function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	// An UNREACHABLE catalog is `{ok:false, status:0}`, exactly like the browser client this replaced —
-	// a rejected fetch here would throw across the remote boundary and skip every consumer's honest
-	// offline/status-0 branch (e.g. failText's "catalog unreachable / may-or-may-not-have-applied").
-	let res: Response;
-	try {
-		res = await fetch(`${CATALOG_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
-	}
-	if (!res.ok) {
-		let detail = `catalog answered ${res.status}`;
-		try {
-			const body: unknown = await res.json();
-			if (body && typeof body === 'object' && 'detail' in body) detail = String(body.detail);
-		} catch {
-			/* a non-JSON error body keeps the status-line detail */
-		}
-		return { ok: false, status: res.status, detail };
-	}
-	return { ok: true, data: await res.json() };
-}
 
-/** Parse a successful wire payload; a shape drift is a 502-flavoured failure, never a cast. */
-function parsed<T>(result: ApiResult<unknown>, schema: v.GenericSchema<unknown, T>): ApiResult<T> {
-	if (!result.ok) return result;
-	try {
-		return { ok: true, data: parse(schema, result.data) };
-	} catch (err) {
-		return { ok: false, status: 502, detail: `catalog contract drift: ${String(err)}` };
-	}
-}
 
 /** The client module's `AccessKind` as a wire option list — `satisfies` keeps the two from drifting. */
 const KINDS = ['table', 'namespace'] as const satisfies readonly AccessKind[];

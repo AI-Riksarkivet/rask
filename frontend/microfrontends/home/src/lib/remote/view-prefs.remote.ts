@@ -1,7 +1,7 @@
-import { command, getRequestEvent, query } from '$app/server';
-import { env } from '$env/dynamic/private';
+import { command, query } from '$app/server';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
+import { catalogJSON } from '$lib/server/catalog-fetch';
 
 // THE PROJECTS VIEW PREFERENCE — gallery or table — persisted per user.
 //
@@ -11,11 +11,11 @@ import type { ApiResult } from '@rask/api/client';
 // entry under its own key. A second user-state document for one enum would be a second thing to
 // provision, migrate and fail — the map exists precisely so it does not have to be.
 //
-// Transport is the estate's remote-function dialect, mirroring media's `readUserStateDoc` /
-// `writeUserStateDoc` verbatim in shape: the same names for the same job, so the two zones' user
-// state cannot drift apart. A BFF route was the OLD answer and was deleted estate-wide.
-
-const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
+// Transport is the zone's ONE catalog door, `$lib/server/catalog-fetch` — the module whose header
+// says it exists because this was three copies. This file was the sixteenth copy anyway (#93,
+// CONFIRMED verbatim, already drifted on non-JSON-200 handling), which is the whole argument: a
+// convention that survives on discipline alone loses to the next deadline. The implementation now
+// lives once in `@rask/api/upstream`, and the door is 3 lines.
 
 /** The key this preference occupies inside the shared document's `workbenches` map. */
 const VIEW_KEY = 'projects-view';
@@ -24,45 +24,6 @@ const VIEW_KEY = 'projects-view';
  *  store the user's own browser wrote to, and an unknown string must not reach the UI as a view. */
 const ViewSchema = v.picklist(['gallery', 'table']);
 export type ProjectsView = v.InferOutput<typeof ViewSchema>;
-
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
-
-/** One catalog call → `ApiResult<unknown>`. An unreachable catalog is `{ok:false, status:0}`: a
- *  rejected fetch must never cross the remote boundary. */
-async function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	let res: Response;
-	try {
-		res = await fetch(`${CATALOG_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
-	}
-	if (!res.ok) {
-		let detail = `catalog answered ${res.status}`;
-		try {
-			const body: unknown = await res.json();
-			if (body && typeof body === 'object' && 'detail' in body) detail = String(body.detail);
-		} catch {
-			/* a non-JSON error body is not worth a second failure mode */
-		}
-		return { ok: false, status: res.status, detail };
-	}
-	try {
-		return { ok: true, data: await res.json() };
-	} catch (err) {
-		return { ok: false, status: 502, detail: `catalog returned a non-JSON body: ${String(err)}` };
-	}
-}
 
 /** The envelope the catalog serves user-state in: `exists` plus the document itself. */
 const EnvelopeSchema = v.object({

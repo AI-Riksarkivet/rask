@@ -1,7 +1,7 @@
-import { command, getRequestEvent, query } from '$app/server';
-import { env } from '$env/dynamic/private';
+import { command, query } from '$app/server';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
+import { SIGN_IN_REQUIRED, annotatorJSON, signedOut } from '$lib/server/doors';
 import type { AssistShape } from '@rask/labeling/annotations-client';
 
 // Interactive AI-assist over ONE unit — GroundingDINO text / SAM region → predicted shapes
@@ -17,21 +17,6 @@ import type { AssistShape } from '@rask/labeling/annotations-client';
 // Note what does NOT move: the annotations transport beside it stays a `+server.ts` route. It is
 // Arrow IPC with the `X-Annotations-Version` header and a 409 save contract — bytes and HTTP
 // semantics, which is exactly the half of the rule that keeps its own endpoint.
-
-const ANNOTATOR_API = env.ANNOTATOR_API ?? 'http://localhost:8103';
-
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
-
-/** The deleted route's `requireSession: true`: an assist run writes predictions into a unit the
- *  caller is reviewing, so it must be attributable on an auth-enabled stack. */
-function signedOut(): boolean {
-	const { locals } = getRequestEvent();
-	return locals.authEnabled && !locals.session;
-}
 
 /** The producer's answer. Passed through with the type the client already read it as — the runner
  *  contract is the backend's, and hand-mirroring it in valibot would be a second source of truth. */
@@ -60,29 +45,15 @@ export const requestAssist = command(
 		),
 	}),
 	async ({ key, dataset, producer, prompt, region, taskId }): Promise<ApiResult<AssistResult>> => {
-		if (signedOut()) return { ok: false, status: 401, detail: 'sign in required' };
-		const { fetch } = getRequestEvent();
+		if (signedOut()) return SIGN_IN_REQUIRED;
 		const search = dataset ? `?dataset=${encodeURIComponent(dataset)}` : '';
-		let res: Response;
-		try {
-			res = await fetch(`${ANNOTATOR_API}/api/assist/${key}${search}`, {
-				method: 'POST',
-				headers: { ...bearerHeaders(), 'content-type': 'application/json' },
-				body: JSON.stringify({ producer, prompt, region, task_id: taskId }),
-			});
-		} catch (err) {
-			return { ok: false, status: 0, detail: String(err) };
-		}
-		const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-		if (!res.ok) {
-			return {
-				ok: false,
-				status: res.status,
-				detail:
-					typeof body.detail === 'string' ? body.detail : `assist failed (HTTP ${res.status})`,
-			};
-		}
-		return { ok: true, data: body as unknown as AssistResult };
+		const result = await annotatorJSON(`/api/assist/${key}${search}`, {
+			method: 'POST',
+			body: JSON.stringify({ producer, prompt, region, task_id: taskId }),
+		});
+		// The runner contract is the backend's — hand it on with the type the client already read
+		// it as (the cast is #94's, not this transport's).
+		return result.ok ? { ok: true, data: result.data as AssistResult } : result;
 	},
 );
 
@@ -121,27 +92,9 @@ export interface ProducerListing {
 export const assistProducers = query(
 	v.nullable(v.string()),
 	async (taskId): Promise<ApiResult<ProducerListing>> => {
-		if (signedOut()) return { ok: false, status: 401, detail: 'sign in required' };
-		const { fetch } = getRequestEvent();
+		if (signedOut()) return SIGN_IN_REQUIRED;
 		const search = taskId ? `?task_id=${encodeURIComponent(taskId)}` : '';
-		try {
-			const res = await fetch(`${ANNOTATOR_API}/api/assist/producers${search}`, {
-				headers: bearerHeaders(),
-			});
-			const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-			if (!res.ok) {
-				return {
-					ok: false,
-					status: res.status,
-					detail:
-						typeof body.detail === 'string'
-							? body.detail
-							: `could not read the assist registry (HTTP ${res.status})`,
-				};
-			}
-			return { ok: true, data: body as unknown as ProducerListing };
-		} catch (err) {
-			return { ok: false, status: 0, detail: String(err) };
-		}
+		const result = await annotatorJSON(`/api/assist/producers${search}`);
+		return result.ok ? { ok: true, data: result.data as ProducerListing } : result;
 	},
 );

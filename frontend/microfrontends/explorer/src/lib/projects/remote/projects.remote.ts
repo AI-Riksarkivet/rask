@@ -1,7 +1,7 @@
-import { command, getRequestEvent, query } from '$app/server';
-import { env } from '$env/dynamic/private';
+import { command, query } from '$app/server';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
+import { projectsJSON, sessionGate, typedAs } from '$lib/server/doors';
 import type { CreatedProject, ProjectsList, SendItem, SendResult } from '../projects';
 
 // The SEND half of the annotation funnel, in the zone's remote-function dialect (the transport ruling,
@@ -11,63 +11,8 @@ import type { CreatedProject, ProjectsList, SendItem, SendResult } from '../proj
 // passthrough (a catch-all forwards whatever a caller spells, including the whole project plane media
 // has no business reaching) without adding a single capability.
 //
-// Dev seam, unchanged: the projects/task plane may live on a DIFFERENT annotator than the media plane
-// (cluster actors + a locally-seeded corpus), so `ANNOTATOR_PROJECTS_API` wins when it is set and
-// falls back to `ANNOTATOR_API` — one service in any real deploy.
-const ANNOTATOR_API = env.ANNOTATOR_PROJECTS_API ?? env.ANNOTATOR_API ?? 'http://localhost:8103';
-
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
-
-/** The write gate the deleted POST route carried (`requireSession: true`): on an auth-enabled stack a
- *  send must be attributable — it seeds task provenance — so an anonymous caller is refused before the
- *  request leaves the zone. The GET had no such gate and still has none. */
-function sessionGate(): { ok: false; status: number; detail: string } | null {
-	const { locals } = getRequestEvent();
-	if (locals.authEnabled && !locals.session) {
-		return { ok: false, status: 401, detail: 'sign in required' };
-	}
-	return null;
-}
-
-async function projectsJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	let res: Response;
-	try {
-		res = await fetch(`${ANNOTATOR_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-	} catch (err) {
-		// UNREACHABLE is status 0, distinct from any answer the service gave: the dialog prints the
-		// detail verbatim, and "could not reach the annotator" is a different sentence from "the
-		// annotator refused you".
-		return { ok: false, status: 0, detail: String(err) };
-	}
-	if (!res.ok) {
-		let detail = `the annotator answered ${res.status}`;
-		try {
-			const body: unknown = await res.json();
-			if (body && typeof body === 'object' && 'detail' in body) detail = String(body.detail);
-		} catch {
-			/* a non-JSON error body keeps the status-line detail */
-		}
-		return { ok: false, status: res.status, detail };
-	}
-	return { ok: true, data: await res.json() };
-}
-
-/** The projects plane's own shapes are the contract (the deleted route parsed nothing and neither did
- *  the dialog); this hands the payload on with the type the call site already used. */
-function typedAs<T>(result: ApiResult<unknown>): ApiResult<T> {
-	return result.ok ? { ok: true, data: result.data as T } : result;
-}
+// Dev seam, transport and write gate all live in `$lib/server/doors` over `@rask/api/upstream`
+// (#93) — this file is the plane's named operations and nothing else.
 
 /** The send item's arg schema — the boundary check for what the dialog builds (see `SendItem`). */
 const SendItemSchema: v.GenericSchema<SendItem> = v.object({

@@ -1,7 +1,12 @@
-import { command, getRequestEvent, query } from '$app/server';
-import { env } from '$env/dynamic/private';
+import { command, query } from '$app/server';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
+import {
+	SIGN_IN_REQUIRED,
+	parsed,
+	projectsJSON as annotatorJSON,
+	signedOut,
+} from '$lib/server/doors';
 import { DraftSchema, TaskDetailSchema, type Draft, type TaskDetail } from '../types.js';
 import { listTasks } from './projects.remote';
 
@@ -21,64 +26,6 @@ import { listTasks } from './projects.remote';
 //
 // Session, parse and offline semantics are identical to `projects.remote.ts` — see its header.
 
-const ANNOTATOR_API = env.ANNOTATOR_PROJECTS_API ?? env.ANNOTATOR_API ?? 'http://localhost:8103';
-
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
-
-/** The deleted route's `requireSession: true` — a task event or a draft save is never anonymous on
- *  an auth-enabled stack, and the caller sees the same 401 the BFF answered. */
-function signedOut(): boolean {
-	const { locals } = getRequestEvent();
-	return locals.authEnabled && !locals.session;
-}
-
-const SIGN_IN_REQUIRED: ApiResult<never> = { ok: false, status: 401, detail: 'sign in required' };
-
-async function annotatorJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	let res: Response;
-	try {
-		res = await fetch(`${ANNOTATOR_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
-	}
-	const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-	if (!res.ok) {
-		return {
-			ok: false,
-			status: res.status,
-			detail: typeof body.detail === 'string' ? body.detail : `HTTP ${res.status}`,
-		};
-	}
-	return { ok: true, data: body };
-}
-
-function parsed<T>(
-	schema: v.BaseSchema<unknown, T, v.BaseIssue<unknown>>,
-	result: ApiResult<unknown>,
-): ApiResult<T> {
-	if (!result.ok) return result;
-	const decoded = v.safeParse(schema, result.data);
-	if (!decoded.success) {
-		return {
-			ok: false,
-			status: 0,
-			detail: `contract drift: ${decoded.issues[0]?.message ?? 'decode failed'}`,
-		};
-	}
-	return { ok: true, data: decoded.output };
-}
-
 const write = (method: 'POST' | 'PUT', path: string, body: unknown): Promise<ApiResult<unknown>> =>
 	signedOut()
 		? Promise.resolve(SIGN_IN_REQUIRED)
@@ -90,7 +37,7 @@ const TaskIdArg = v.object({ taskId: v.string() });
 export const fetchTask = query(
 	TaskIdArg,
 	async ({ taskId }): Promise<ApiResult<TaskDetail>> =>
-		parsed(TaskDetailSchema, await annotatorJSON(`/tasks/${taskId}`)),
+		parsed(await annotatorJSON(`/tasks/${taskId}`), TaskDetailSchema),
 );
 
 /** The task draft as the publish will read it. A 404 here means "not written yet" and MUST stay
@@ -99,7 +46,7 @@ export const fetchTask = query(
 export const fetchDraft = query(
 	TaskIdArg,
 	async ({ taskId }): Promise<ApiResult<Draft>> =>
-		parsed(DraftSchema, await annotatorJSON(`/tasks/${taskId}/draft`)),
+		parsed(await annotatorJSON(`/tasks/${taskId}/draft`), DraftSchema),
 );
 
 /** Fire a task transition. Every optional field rides only when the caller set it: `assignee` is the
@@ -127,7 +74,7 @@ export const fireTaskEvent = command(
 		projectId: v.optional(v.string()),
 	}),
 	async ({ taskId, projectId, ...body }): Promise<ApiResult<TaskDetail>> => {
-		const result = parsed(TaskDetailSchema, await write('POST', `/tasks/${taskId}/events`, body));
+		const result = parsed(await write('POST', `/tasks/${taskId}/events`, body), TaskDetailSchema);
 		// `{ projectId, details: true }` — the arguments the render sites use. The bare form is a
 		// different cache key and would refresh nothing (the defect `dropTask` carried).
 		//
@@ -158,7 +105,7 @@ export const saveDraft = command(
 		origin: v.optional(v.string()),
 	}),
 	async ({ taskId, ...body }): Promise<ApiResult<Draft>> => {
-		const result = parsed(DraftSchema, await write('PUT', `/tasks/${taskId}/draft`, body));
+		const result = parsed(await write('PUT', `/tasks/${taskId}/draft`, body), DraftSchema);
 		if (result.ok) void fetchDraft({ taskId }).refresh();
 		return result;
 	},
