@@ -67,7 +67,8 @@
 	}: {
 		pathname?: string;
 		project?: Project;
-		// `null` = auth-on but signed out (the navbar user menu shows "Sign in"); the default identity is the auth-off local placeholder.
+		// `null` = no resolved identity — signed out on an auth-on stack, or auth off entirely; the
+		// navbar renders the honest signed-out state either way (the fabricated placeholder died in #92).
 		user?: NavUser | null;
 		authEnabled?: boolean;
 		/** The CURRENT zone's own sidebar routes; null renders an empty sidebar (pre-wiring). */

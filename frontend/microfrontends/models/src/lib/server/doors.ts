@@ -20,7 +20,7 @@ import type * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import { parsed as sharedParsed, upstreamJSON } from '@rask/api/upstream';
 
-export const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
+const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 
 /** One catalog call → `ApiResult<unknown>`; the signed-in session's bearer rides along. */
 export function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {

@@ -13,7 +13,7 @@ import { env } from '$env/dynamic/private';
 import type { ApiResult } from '@rask/api/client';
 import { upstreamJSON } from '@rask/api/upstream';
 
-export const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
+const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 
 /** One catalog call → `ApiResult<unknown>`. The STATUS is load-bearing for the dock's three
  *  outcomes: 409 is "a document exists and cannot be read" (never overwrite), 401 is signed out,

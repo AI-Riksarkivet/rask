@@ -27,12 +27,11 @@ import type * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import { parsed as sharedParsed, upstreamJSON } from '@rask/api/upstream';
 
-export const PROJECTS_API =
-	env.ANNOTATOR_PROJECTS_API ?? env.ANNOTATOR_API ?? 'http://localhost:8103';
-export const ANNOTATOR_API = env.ANNOTATOR_API ?? 'http://localhost:8103';
+const PROJECTS_API = env.ANNOTATOR_PROJECTS_API ?? env.ANNOTATOR_API ?? 'http://localhost:8103';
+const ANNOTATOR_API = env.ANNOTATOR_API ?? 'http://localhost:8103';
 // The search service. Matches the explorer's own resolution (`SEARCH_API ?? :8102`) so the two
 // zones cannot end up pointed at different services on the same stack.
-export const SEARCH_API = env.SEARCH_API ?? 'http://localhost:8102';
+const SEARCH_API = env.SEARCH_API ?? 'http://localhost:8102';
 
 function doorTo(base: string, path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
 	const { fetch, locals } = getRequestEvent();

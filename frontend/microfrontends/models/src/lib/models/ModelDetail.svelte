@@ -6,11 +6,9 @@
 	import {
 		createSvelteTable,
 		DataTable,
-		DataTableHeaderButton,
 		getCoreRowModel,
 		getPaginationRowModel,
 		getSortedRowModel,
-		renderComponent,
 		renderSnippet,
 		type ColumnDef,
 		type PaginationState,

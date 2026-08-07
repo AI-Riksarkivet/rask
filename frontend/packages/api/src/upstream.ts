@@ -72,7 +72,11 @@ export async function upstreamJSON(req: UpstreamRequest): Promise<ApiResult<unkn
 	try {
 		return { ok: true, data: await res.json() };
 	} catch (err) {
-		return { ok: false, status: 502, detail: `${upstream} answered 200 with a non-JSON body: ${String(err)}` };
+		return {
+			ok: false,
+			status: 502,
+			detail: `${upstream} answered 200 with a non-JSON body: ${String(err)}`,
+		};
 	}
 }
 
@@ -88,19 +92,4 @@ export function parsed<T>(
 	} catch (err) {
 		return { ok: false, status: 502, detail: `${upstream} contract drift: ${String(err)}` };
 	}
-}
-
-/**
- * The failure → user-copy ladder, written once.
- *
- * `status 401 → sign in / 403 → denied / 0 → unreachable / else → the upstream's own detail` was
- * re-derived in 26 files across six zones — one policy, 26 chances to disagree about what a status
- * means. `action` names what the person was doing ("load the queue"), because "denied" with no
- * object is a message nobody can act on.
- */
-export function failText(fail: { status: number; detail: string }, action: string): string {
-	if (fail.status === 401) return `Sign in to ${action}.`;
-	if (fail.status === 403) return `You do not have permission to ${action}.`;
-	if (fail.status === 0) return `Could not ${action} — the service is unreachable. ${fail.detail}`;
-	return fail.detail;
 }

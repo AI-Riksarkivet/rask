@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 
-import { failText, parsed, upstreamJSON } from './upstream';
+import { parsed, upstreamJSON } from './upstream';
 
 const json = (body: unknown, status = 200) =>
 	new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -38,7 +38,9 @@ describe('the three outcomes', () => {
 	it('a non-2xx without a JSON body names the upstream and the status', async () => {
 		// "answered 503" alone cannot say WHICH upstream — the name is what stops a reader debugging
 		// the wrong service.
-		const result = await request(() => Promise.resolve(new Response('gateway timeout', { status: 503 })));
+		const result = await request(() =>
+			Promise.resolve(new Response('gateway timeout', { status: 503 })),
+		);
 
 		expect(result).toEqual({ ok: false, status: 503, detail: 'catalog answered 503' });
 	});
@@ -70,7 +72,13 @@ describe('headers', () => {
 			return Promise.resolve(json({}));
 		};
 
-		await upstreamJSON({ fetch: capture, base: 'http://up', path: '/x', bearer: 'tok', upstream: 'u' });
+		await upstreamJSON({
+			fetch: capture,
+			base: 'http://up',
+			path: '/x',
+			bearer: 'tok',
+			upstream: 'u',
+		});
 		expect(seen?.get('authorization')).toBe('Bearer tok');
 
 		await upstreamJSON({ fetch: capture, base: 'http://up', path: '/x', upstream: 'u' });
@@ -119,26 +127,5 @@ describe('parsed', () => {
 			expect(result.status).toBe(502);
 			expect(result.detail).toContain('catalog contract drift');
 		}
-	});
-});
-
-describe('failText — the 26-file ladder, written once', () => {
-	it('401 asks for sign-in, naming the action', () => {
-		expect(failText({ status: 401, detail: 'x' }, 'load the queue')).toBe('Sign in to load the queue.');
-	});
-
-	it('403 names the missing permission target, not just "denied"', () => {
-		expect(failText({ status: 403, detail: 'x' }, 'publish')).toContain('permission to publish');
-	});
-
-	it('0 says unreachable and keeps the transport detail for the curious', () => {
-		const text = failText({ status: 0, detail: 'ECONNREFUSED' }, 'list tables');
-
-		expect(text).toContain('unreachable');
-		expect(text).toContain('ECONNREFUSED');
-	});
-
-	it("anything else is the upstream's own words — they are the actionable half", () => {
-		expect(failText({ status: 409, detail: 'name already taken' }, 'create')).toBe('name already taken');
 	});
 });

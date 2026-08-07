@@ -27,10 +27,9 @@ import type { ApiResult } from '@rask/api/client';
 import { upstreamJSON } from '@rask/api/upstream';
 
 export const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
-export const VIEWER_API = env.VIEWER_API ?? 'http://localhost:8101';
-export const PROJECTS_API =
-	env.ANNOTATOR_PROJECTS_API ?? env.ANNOTATOR_API ?? 'http://localhost:8103';
-export const ANNOTATOR_API = env.ANNOTATOR_API ?? 'http://localhost:8103';
+const VIEWER_API = env.VIEWER_API ?? 'http://localhost:8101';
+const PROJECTS_API = env.ANNOTATOR_PROJECTS_API ?? env.ANNOTATOR_API ?? 'http://localhost:8103';
+const ANNOTATOR_API = env.ANNOTATOR_API ?? 'http://localhost:8103';
 
 function doorTo(
 	base: string,
