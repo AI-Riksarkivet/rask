@@ -421,8 +421,13 @@ async def list_actors(http: httpx.AsyncClient, dashboard_url: str) -> RayActorsP
         return RayActorsPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
 
     logical: dict[str, dict] = {}
+    # Enrich ONLY the actors the state page returned: /logical/actors without `ids` dumps EVERY
+    # actor's processStats/memoryInfo telemetry (no server cap exists on that route), all parsed
+    # and then discarded beyond the <=MAX state rows (#140). `ids` is comma-separated per Ray's
+    # node_head.py:703-704.
+    actor_ids = ",".join(i for i in (row.get("actor_id") for row in state_rows) if i)
     try:
-        lg_resp = await http.get(f"{dashboard_url}/logical/actors")
+        lg_resp = await http.get(f"{dashboard_url}/logical/actors?{urlencode({'ids': actor_ids})}" if actor_ids else f"{dashboard_url}/logical/actors?ids=none")
         lg_resp.raise_for_status()
         logical = (lg_resp.json().get("data") or {}).get("actors") or {}
     except httpx.HTTPError:
@@ -436,10 +441,18 @@ def _state_rows(payload: dict) -> list[dict]:
     return (((payload.get("data") or {}).get("result") or {}).get("result")) or []
 
 
-async def list_tasks(http: httpx.AsyncClient, dashboard_url: str) -> RayTasksPayload:
-    """Tasks from the state API (`/api/v0/tasks`)."""
+async def list_tasks(http: httpx.AsyncClient, dashboard_url: str, job_id: str | None = None) -> RayTasksPayload:
+    """Tasks from the state API (`/api/v0/tasks`), optionally filtered to ONE job SERVER-SIDE.
+
+    The job-detail page used to pull the whole cluster's task table and filter client-side; the
+    state API takes `filter_keys/filter_predicates/filter_values` (state_api_utils.py:66-71), so
+    the narrowing now happens where the rows live (#140).
+    """
     try:
-        resp = await http.get(f"{dashboard_url}/api/v0/tasks?detail=1&limit={MAX_TASKS}")
+        query = f"detail=1&limit={MAX_TASKS}"
+        if job_id:
+            query += "&" + urlencode({"filter_keys": "job_id", "filter_predicates": "=", "filter_values": job_id})
+        resp = await http.get(f"{dashboard_url}/api/v0/tasks?{query}")
         resp.raise_for_status()
         rows = _state_rows(resp.json())
     except httpx.HTTPError as exc:
@@ -507,18 +520,42 @@ async def overview(http: httpx.AsyncClient, dashboard_url: str) -> RayOverviewPa
     )
 
 
-async def job_logs(client: JobSubmissionClient | None, submission_id: str, tail: int = 2000) -> RayJobLogsPayload:
-    """Driver logs for one submitted job (last `tail` lines), via the Jobs SDK."""
+async def job_logs(
+    http: httpx.AsyncClient,
+    client: JobSubmissionClient | None,
+    dashboard_url: str,
+    submission_id: str,
+    tail: int = 2000,
+) -> RayJobLogsPayload:
+    """Driver logs for one submitted job — the last ``tail`` lines, BOUNDED SERVER-SIDE.
+
+    The SDK's ``get_job_logs`` returns the ENTIRE driver log as one string, and Ray never rotates
+    ``job-driver-<id>.log`` while ``log_to_driver=True`` funnels every worker's output into it — so
+    the old client-side ``splitlines()[-tail:]`` held ~3-4x the whole log in memory, re-incurred on
+    every 5 s poll of a RUNNING job, i.e. precisely while the log grows (#140). Ray's log-file API
+    accepts ``lines=`` (the same endpoint :func:`logs` already uses), so the tail is now cut where
+    the log lives: one job-info lookup resolves the driver node, one bounded read fetches the tail.
+    """
     if client is None:
         return RayJobLogsPayload(ok=False, submission_id=submission_id, error="Ray dashboard unreachable")
     try:
-        text = await to_thread.run_sync(client.get_job_logs, submission_id)
+        info = await to_thread.run_sync(client.get_job_info, submission_id)
     except Exception as exc:  # SDK raises plain RuntimeError on unknown ids
         return RayJobLogsPayload(ok=False, submission_id=submission_id, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
-    lines = text.splitlines()
-    if len(lines) > tail:
-        lines = lines[-tail:]
-    return RayJobLogsPayload(ok=True, submission_id=submission_id, logs="\n".join(lines))
+    node_id = getattr(info, "driver_node_id", None)
+    if not node_id:
+        # PENDING jobs have no driver yet; an honest empty beats a whole-log fallback that would
+        # reintroduce the defect for exactly the jobs an operator watches.
+        return RayJobLogsPayload(ok=True, submission_id=submission_id, logs="(no driver log yet — the job has not started a driver)")
+    qs = urlencode({"node_id": node_id, "filename": f"job-driver-{submission_id}.log", "lines": tail})
+    try:
+        resp = await http.get(f"{dashboard_url}/api/v0/logs/file?{qs}")
+    except httpx.HTTPError as exc:
+        return RayJobLogsPayload(ok=False, submission_id=submission_id, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+    if resp.status_code >= HTTPStatus.BAD_REQUEST:
+        # Ray's log endpoint 500s on empty files — same note logs() uses.
+        return RayJobLogsPayload(ok=True, submission_id=submission_id, logs="(empty or unavailable)")
+    return RayJobLogsPayload(ok=True, submission_id=submission_id, logs=resp.text.lstrip("\x00\x01"))
 
 
 async def logs(

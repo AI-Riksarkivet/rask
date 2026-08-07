@@ -181,8 +181,10 @@ export const TasksPayloadSchema = v.object({
 });
 export type TasksPayload = v.InferOutput<typeof TasksPayloadSchema>;
 
-export async function tasksList(fetchFn: typeof fetch = fetch): Promise<TaskInfo[]> {
-	const res = await fetchFn('/api/ray/tasks');
+export async function tasksList(fetchFn: typeof fetch = fetch, jobId?: string): Promise<TaskInfo[]> {
+	// Server-side narrowing (#140): the state API filters by job where the rows live, so the job
+	// detail page stops pulling the whole cluster's task table to render one job's rows.
+	const res = await fetchFn(jobId ? `/api/ray/tasks?job_id=${encodeURIComponent(jobId)}` : '/api/ray/tasks');
 	if (!res.ok) throw new Error(`tasksList: HTTP ${res.status}`);
 	const payload = parse(TasksPayloadSchema, await res.json());
 	if (!payload.ok) throw new Error(payload.error ?? 'tasks unavailable');

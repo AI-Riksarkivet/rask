@@ -66,6 +66,11 @@ export const getTasks = query(async (): Promise<TaskInfo[]> => {
 	return tasksList(getRequestEvent().fetch);
 });
 
+/** ONE job's tasks, filtered server-side (#140) — the detail page's transport. */
+export const getJobTasks = query(v.object({ jobId: v.string() }), async ({ jobId }): Promise<TaskInfo[]> => {
+	return tasksList(getRequestEvent().fetch, jobId);
+});
+
 /** Serve applications/deployments — polled every 5s. Offline-safe payload. */
 export const getServe = query(async (): Promise<ServePayload> => {
 	return serveApplications(getRequestEvent().fetch);

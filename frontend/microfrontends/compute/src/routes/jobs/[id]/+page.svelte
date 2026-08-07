@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { base } from '$app/paths';
 	import { type TaskInfo } from '@rask/api';
-	import { getRayJobs, getTasks, getRayCluster, getRayJobLogs } from '$lib/remote/compute.remote';
+	import { getRayJobs, getJobTasks, getRayCluster, getRayJobLogs } from '$lib/remote/compute.remote';
 	import { Card } from '@rask/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
 	import { SortHeader } from '@rask/ui/sort-header';
@@ -17,13 +17,11 @@
 	const id = $derived(decodeURIComponent(page.params.id ?? ''));
 
 	const jobsQuery = getRayJobs();
-	const tasksQuery = getTasks();
 	const clusterQuery = getRayCluster();
 	// Param query — re-keys when `id` changes (navigation between job details).
 	const logsQuery = $derived(getRayJobLogs({ id }));
 
 	const jobs = $derived(jobsQuery.current?.jobs ?? []);
-	const tasks = $derived(tasksQuery.current ?? []);
 	const nodes = $derived(clusterQuery.current?.nodes ?? []);
 	const logsPayload = $derived(logsQuery.current ?? null);
 	const logText = $derived(logsPayload?.ok ? logsPayload.logs : '');
@@ -47,6 +45,9 @@
 	}
 
 	const job = $derived(jobs.find((j) => j.submission_id === id) ?? null);
+	// Param query — created once the job payload names its Ray job_id; server-filtered (#140).
+	const tasksQuery = $derived(job?.job_id ? getJobTasks({ jobId: job.job_id }) : null);
+	const tasks = $derived(tasksQuery?.current ?? []);
 	const running = $derived(job?.status === 'RUNNING' || job?.status === 'PENDING');
 
 	// Manual log refresh (toolbar button) — event handler, so `.refresh()` (one
@@ -63,7 +64,7 @@
 	onMount(() => {
 		const timer = setInterval(() => {
 			jobsQuery.refresh().catch(() => {});
-			tasksQuery.refresh().catch(() => {});
+			tasksQuery?.refresh().catch(() => {});
 			clusterQuery.refresh().catch(() => {});
 			if (running) logsQuery.refresh().catch(() => {});
 		}, 5000);
@@ -80,7 +81,7 @@
 	});
 
 	const nodeMap = $derived(new Map(nodes.map((n) => [n.node_id, n])));
-	const jobTasks = $derived(job?.job_id ? tasks.filter((t) => t.job_id === job.job_id) : []);
+	const jobTasks = $derived(tasks); // already narrowed server-side
 
 	const sortedTasks = $derived.by(() => {
 		const dir = sortDir === 'asc' ? 1 : -1;

@@ -32,8 +32,10 @@ async def ray_jobs(client: RayClientDep, settings: SettingsDep) -> RayJobsPayloa
 
 
 @router.get("/jobs/{submission_id}/logs")
-async def ray_job_logs(client: RayClientDep, submission_id: str, tail: int = 2000) -> RayJobLogsPayload:
-    return await dashboard.job_logs(client, submission_id, tail)
+async def ray_job_logs(
+    http: HttpDep, client: RayClientDep, settings: SettingsDep, submission_id: str, tail: int = 2000
+) -> RayJobLogsPayload:
+    return await dashboard.job_logs(http, client, settings.ray_dashboard_url, submission_id, tail)
 
 
 @router.get("/cluster")
@@ -47,8 +49,8 @@ async def ray_actors(http: HttpDep, settings: SettingsDep) -> RayActorsPayload:
 
 
 @router.get("/tasks")
-async def ray_tasks(http: HttpDep, settings: SettingsDep) -> RayTasksPayload:
-    return await dashboard.list_tasks(http, settings.ray_dashboard_url)
+async def ray_tasks(http: HttpDep, settings: SettingsDep, job_id: str | None = None) -> RayTasksPayload:
+    return await dashboard.list_tasks(http, settings.ray_dashboard_url, job_id)
 
 
 @router.get("/overview")
