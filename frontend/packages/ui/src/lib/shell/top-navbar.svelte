@@ -109,6 +109,21 @@
 	const narrow = new IsMobile(SHELL_COLLAPSE_BREAKPOINT);
 	const collapsed = $derived(narrow.current);
 
+	// THE ESTATE BAR IS CENTRED; the zone bar is not. Inside a project this row is a menubar — it
+	// starts where the sidebar trigger ends and reads left-to-right like every other strip of chrome
+	// above content. The main menu has no rail, no crumbs and two or three entries in a full-width
+	// bar, so left-aligning them there parked the estate's ONLY navigation in a corner with a screen
+	// of dead space beside it.
+	//
+	// Centring takes a flexible spacer on BOTH flanks — the account cluster is the right one — because
+	// the entries must sit in the middle of the BAR, not in the middle of whatever the account cluster
+	// leaves over. `mx-auto` cannot do it: an auto margin is only paid out of free space, and the
+	// flex-1 flank has already taken all of it.
+	//
+	// Not while collapsed: there the bar is one Menu trigger whose Root deliberately spans the row
+	// (see below), and a centred single trigger would just look misplaced.
+	const centred = $derived(inMainMenu && !collapsed);
+
 	// The overflow panel is FLAT — one heading per zone, then its destinations. The desktop panels'
 	// group columns (Lakehouse's Catalog/Models/Governance/Operations) and the row descriptions are
 	// dropped: on a phone-width panel they cost a screenful of scrolling and buy nothing. The zone
@@ -132,21 +147,32 @@
 </script>
 
 <div class={cn('flex min-w-0 items-center gap-2', className)}>
+	{#if centred}
+		<!-- The LEFT flank. Empty and non-semantic on purpose: its only job is to be exactly as wide as
+		     the account cluster's flank, which is what puts the entries in the middle of the bar. -->
+		<div class="flex-1" data-slot="navbar-flank"></div>
+	{/if}
 	<!-- `aria-label` overrides the primitive's default "main", so this IS the zones landmark — one
 	     nav element, not a nav nested inside a nav. Collapsed, the root takes the whole row (the
 	     base `max-w-max` is dropped) so the shared panel viewport — which is `w-full` below `md` —
-	     is bounded by the row instead of by one narrow trigger, and cannot spill past the edge. -->
-	<NavigationMenu.Root aria-label="Zones" class={cn('min-w-0', collapsed && 'max-w-none flex-1')}>
+	     is bounded by the row instead of by one narrow trigger, and cannot spill past the edge.
+	     Centred, it is `flex-none` instead: the base `flex-1` would have it share the row's free space
+	     with the two flanks, and an entry group that grows with the window is not a centred one. -->
+	<NavigationMenu.Root
+		aria-label="Zones"
+		class={cn('min-w-0', collapsed && 'max-w-none flex-1', centred && 'flex-none')}
+	>
 		<NavigationMenu.List class="justify-start gap-0.5">
 			{#if meLoading}
 				{#each collapsed ? placeholders.slice(0, 1) : placeholders as entry, i (entry.title)}
-					<!-- The tier gap is RESERVED here too, on the same rule as the resolved bar. It is
+					<!-- The tier gap is RESERVED here too, on the same rule as the resolved bar — and under
+					     the same `inMainMenu` guard, or the two states disagree about a 56px hole. It is
 					     chrome, not content: leaving it out made the row 26px narrower while /v1/me was in
 					     flight and 26px wider the instant it landed — a layout shift measured by
 					     `the loading skeleton reserves the resolved entry widths`, which is exactly the
 					     regression that test exists to catch. Skeleton and resolved must reserve the SAME
 					     boxes, gaps included. -->
-					{#if !collapsed && i > 0 && entry.tier !== 'primary' && placeholders[i - 1]?.tier === 'primary'}
+					{#if !inMainMenu && !collapsed && i > 0 && entry.tier !== 'primary' && placeholders[i - 1]?.tier === 'primary'}
 						<li role="none" class="w-4 shrink-0 sm:w-6"></li>
 					{/if}
 					<li aria-hidden="true">
@@ -208,21 +234,24 @@
 				</NavigationMenu.Item>
 			{:else}
 				{#each entries as entry, i (entry.title)}
-					<!-- THE TIER GAP. `tier: 'primary'` already told the bar which entries lead — the
-					     lakehouse you govern and the compute that fills it — but nothing rendered that
-					     weighting, so eight equal chips told a newcomer nothing about where to start. One
-					     spacer at the boundary, drawn from the data rather than from a hardcoded index, so
-					     re-tiering an entry moves the gap with it. `role="none"` ALONE, not `aria-hidden`
-					     beside it: the two are not combinable (aria-hidden is unsupported on role=none, and
-					     the svelte a11y checker rejects the pair), and `none` is the right one. It strips the
-					     listitem semantics, so a screen reader walking the list never meets an empty item
-					     between two real ones — exactly what a decorative spacer should do. -->
-					{#if i > 0 && entry.tier !== 'primary' && entries[i - 1]?.tier === 'primary'}
-						<li
-							role="none"
-							class={inMainMenu ? 'w-8 shrink-0 sm:w-14' : 'w-4 shrink-0 sm:w-6'}
-							data-slot="navbar-tier-gap"
-						></li>
+					<!-- THE TIER GAP — A ZONE-BAR DEVICE, and only that. `tier: 'primary'` already told the
+					     bar which entries lead — the lakehouse you govern and the compute that fills it —
+					     but nothing rendered that weighting, so eight equal chips told a newcomer nothing
+					     about where to start. One spacer at the boundary, drawn from the data rather than
+					     from a hardcoded index, so re-tiering an entry moves the gap with it.
+					     `role="none"` ALONE, not `aria-hidden` beside it: the two are not combinable
+					     (aria-hidden is unsupported on role=none, and the svelte a11y checker rejects the
+					     pair), and `none` is the right one. It strips the listitem semantics, so a screen
+					     reader walking the list never meets an empty item between two real ones — exactly
+					     what a decorative spacer should do.
+					     NOT IN THE MAIN MENU. Weighting eight zone entries is guidance; weighting three
+					     estate entries is a hole. It was drawn there at DOUBLE width (sm:w-14) to read as
+					     structure and read instead as Settings having fallen off the end of the row — and
+					     the skeleton above reserved the compact gap, so an admin's bar also jumped 32px
+					     when /v1/me landed. Home, Projects and Settings are the three places you can be at
+					     this level, peers by construction: one rhythm, no spacer. -->
+					{#if !inMainMenu && i > 0 && entry.tier !== 'primary' && entries[i - 1]?.tier === 'primary'}
+						<li role="none" class="w-4 shrink-0 sm:w-6" data-slot="navbar-tier-gap"></li>
 					{/if}
 					<NavigationMenu.Item>
 						{#if entry.groups}
@@ -341,7 +370,10 @@
 			{/if}
 		</NavigationMenu.List>
 	</NavigationMenu.Root>
-	<div class="ml-auto flex shrink-0 items-center">
+	<!-- The RIGHT flank. `ml-auto` pins it to the end of a left-aligned bar; centred, it is the
+	     growing counterweight to the empty flank above, and the entries land between two equal
+	     halves. Either way its own contents stay hard right and at their natural size. -->
+	<div class={cn('flex items-center', centred ? 'flex-1 justify-end' : 'ml-auto shrink-0')}>
 		{#if meLoading}
 			<!-- size-8 = the resolved NavbarUser trigger (Button size="icon") — same box, no shift. The
 			     bell reserves nothing: a zone with no feed has no bell, so reserving its width would

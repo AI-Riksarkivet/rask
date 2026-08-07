@@ -192,10 +192,12 @@ export type TopNavEntry = {
 	/** Grouped alternative to `items` — rendered as labelled columns. Used by Lakehouse, whose panel
 	 *  spans the catalog, the model registry, lineage and the operational surfaces. */
 	groups?: TopNavGroup[];
-	/** Visual weight in the bar. 'primary' is where the work happens — the lakehouse you govern and
-	 *  the compute that fills it — and those lead the bar. Everything else is a real zone but a
+	/** Visual weight in the ZONE bar. 'primary' is where the work happens — the lakehouse you govern
+	 *  and the compute that fills it — and those lead the bar. Everything else is a real zone but a
 	 *  destination you go to for a specific task, so it reads one step quieter. Six equally-weighted
-	 *  entries give a newcomer no idea where to start; this is the ONLY thing that says so. */
+	 *  entries give a newcomer no idea where to start; this is the ONLY thing that says so.
+	 *  The MAIN MENU sets no tier and the shell renders none there: two or three peers are a group,
+	 *  not a hierarchy, and a spacer between them reads as one entry having fallen off the row. */
 	tier?: 'primary' | 'secondary';
 };
 
@@ -434,8 +436,15 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
  * another zone" is a real question.
  *
  * Settings is estate-admin only here for the same fail-closed reason it is everywhere else, which
- * means a non-admin's main menu carries exactly ONE entry. That is correct, not a degenerate case:
- * the estate has one thing for them to choose at that level.
+ * means a non-admin's main menu carries exactly TWO entries — Home and Projects (it said ONE while
+ * Home was still absent from this bar). That is correct, not a degenerate case: the estate has that
+ * much for them to choose between at this level, and the shell centres two entries as readily as it
+ * centres three.
+ *
+ * NO TIERS here, unlike the zone bar. Weighting is for a row of eight zones, where "start at the
+ * lakehouse" is real guidance; these two or three are the places you can BE at this level, peers by
+ * construction, and the shell renders them as one uniform group (it also refuses to draw the tier
+ * gap in this bar, so a re-tiered entry cannot punch a hole in it).
  */
 export function mainMenuNav(estateAdmin: boolean): TopNavEntry[] {
 	// HOME leads the main menu — and appears ONLY here. The zone bar carries no Home entry (see
@@ -451,7 +460,6 @@ export function mainMenuNav(estateAdmin: boolean): TopNavEntry[] {
 			// EXACT: '/' must not light up while you are on /projects or /settings — they are its
 			// SIBLINGS at this level, not routes underneath it.
 			match: exact('/'),
-			tier: 'primary',
 		},
 		PROJECTS_ENTRY,
 		...(estateAdmin ? [SETTINGS_ENTRY] : []),
@@ -610,7 +618,6 @@ const PROJECTS_ENTRY: TopNavEntry = {
 	href: '/projects',
 	icon: FolderKanban,
 	match: under('/projects'),
-	tier: 'primary',
 };
 
 /** SETTINGS — PLATFORM configuration: notifications, the defaults a NEW project is created with, and
