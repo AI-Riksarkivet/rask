@@ -126,8 +126,16 @@ async def list_all_tables(
 ) -> ListTablesResponse:
     """List every table in the namespace via ``list_all_tables``; when FGA is on,
     filter the result down to the tables the caller can ``can_read_data``.
-    ``include_declared=false`` drops declared-only tables (reserved, no storage yet)."""
-    req = ListTablesRequest(id=[], page_token=page_token, limit=limit, include_declared=include_declared)
+    ``include_declared=false`` drops declared-only tables (reserved, no storage yet).
+
+    Pagination is applied to the FINAL merged result, never to the native root call: the response is
+    root tables + bound seeds + the namespace walk, so a native-level ``limit`` would truncate only
+    the first ingredient and silently DROP tables from every page (#141 — the endpoint advertised
+    pagination and ignored it). The merged list is sorted and deduped, so the cursor is keyset-style:
+    ``page_token`` = the last name of the page, stateless and stable across pages. The walk itself
+    still costs the full estate server-side per call — acceptable at admin frequency, and honest now.
+    """
+    req = ListTablesRequest(id=[], include_declared=include_declared)
     response: ListTablesResponse = await run_in_threadpool(native.call, ns, "list_all_tables", req)
     # RECURSE INTO CHILD NAMESPACES. `list_all_tables` at the root returns only tables sitting
     # DIRECTLY at the root — despite the name — so with the estate's own convention (tiers are
@@ -158,7 +166,24 @@ async def list_all_tables(
     if settings.fga_enabled and token is not None and client is not None:
         allowed = set(await fga.list_objects(client, user=token.sub, relation="can_read_data", object_type="table"))
         response.tables = [name for name in response.tables if f"table:{name}" in allowed]
+    # Paginate AFTER the FGA filter so pages count only tables the caller can see.
+    response.tables, response.page_token = _paginate(response.tables, page_token, limit)
     return response
+
+
+def _paginate(names: list[str], page_token: str | None, limit: int | None) -> tuple[list[str], str | None]:
+    """Keyset pagination over an already-sorted, deduped name list.
+
+    The cursor is the last name of the previous page — stateless, and stable across calls because
+    the merged listing is ``sorted(set(...))``. A ``None`` next-token means the listing is complete;
+    the native call is always made unpaginated, so no upstream cursor can ride through by accident.
+    """
+    if page_token:
+        names = [name for name in names if name > page_token]
+    if limit is None or limit < 0 or limit >= len(names):
+        return names, None
+    page = names[:limit]
+    return page, (page[-1] if page else None)
 
 
 @router.post("/{id}/declare", response_model_exclude_none=True)
