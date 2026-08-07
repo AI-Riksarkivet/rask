@@ -70,24 +70,36 @@
 		};
 	}
 
+	// IDLE + HOVER, and they must not fight over the same properties. The idle bob owns `y` and
+	// `rotate` on an endless yoyo; the hover owns `scale` alone and leaves the bob running underneath,
+	// so pointing at the frog makes it grow mid-bob instead of yanking it to a pose and dropping it
+	// back when the tween is overwritten. That collision is exactly what `overwrite: 'auto'` would
+	// cause if both touched `y` — the fix is disjoint properties, not a bigger hammer.
+	//
+	// The bob starts after the curtain has opened (the width tween is 1s + 0.1 delay) so the two reads
+	// as one gesture: reveal, then settle into breathing.
+	const idleBob: Attachment<HTMLElement> = (node) => {
+		const mm = gsap.matchMedia();
+		mm.add('(prefers-reduced-motion: no-preference)', () => {
+			const tl = gsap
+				.timeline({ repeat: -1, yoyo: true, delay: 1.2 })
+				.to(node, { y: -4, rotate: 2.5, duration: 1.8, ease: 'sine.inOut' });
+			return () => tl.kill();
+		});
+		return () => mm.revert();
+	};
+
 	// HOVER. The curtain is the only playful thing on an otherwise sober landing, so it answers the
-	// pointer: a small lift + tilt on enter, settled back on leave. `overwrite: 'auto'` because a fast
-	// in-out-in must not queue three tweens on one transform, and the pair is registered only when
-	// motion is allowed — under `reduce` the element simply does not respond, which is the correct
-	// non-answer rather than an instant jump.
+	// pointer with a scale — registered only when motion is allowed, so under `reduce` the element
+	// simply does not respond, which is the correct non-answer rather than an instant jump.
 	const hoverLift: Attachment<HTMLElement> = (node) => {
 		const mm = gsap.matchMedia();
 		mm.add('(prefers-reduced-motion: no-preference)', () => {
-			const to = (vars: gsap.TweenVars) =>
-				gsap.to(node, { duration: 0.35, overwrite: 'auto', ...vars });
+			const to = (vars: gsap.TweenVars) => gsap.to(node, { duration: 0.35, ...vars });
 			// `on` from svelte/events, not addEventListener: it returns its own unsubscriber, so the
 			// two listeners cannot drift out of sync with their removals (the estate lints for this).
-			const offEnter = on(node, 'pointerenter', () =>
-				to({ y: -6, rotate: -4, scale: 1.12, ease: 'back.out(2.5)' }),
-			);
-			const offLeave = on(node, 'pointerleave', () =>
-				to({ y: 0, rotate: 0, scale: 1, ease: 'power2.out' }),
-			);
+			const offEnter = on(node, 'pointerenter', () => to({ scale: 1.18, ease: 'back.out(2.5)' }));
+			const offLeave = on(node, 'pointerleave', () => to({ scale: 1, ease: 'power2.out' }));
 			return () => {
 				offEnter();
 				offLeave();
@@ -103,6 +115,7 @@
 		class="curtain mx-1 shrink-0 cursor-pointer overflow-hidden rounded-lg sm:mx-1.5"
 		style:--curtain-h="{targetWidth}px"
 		{@attach openCurtain(targetWidth)}
+		{@attach idleBob}
 		{@attach hoverLift}
 	>
 		<!-- object-cover is what makes the widening read as a REVEAL rather than a horizontal squash:

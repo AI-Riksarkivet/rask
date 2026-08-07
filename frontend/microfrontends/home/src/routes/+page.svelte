@@ -3,7 +3,7 @@
 	import { Card } from '@rask/ui/card';
 	import { stagger } from '@rask/ui/motion';
 	import { Activity, Boxes, FolderKanban } from '@lucide/svelte';
-	import AnimatedGradientSvg from '$lib/hero/AnimatedGradientSvg.svelte';
+	import DotPattern from '$lib/hero/DotPattern.svelte';
 	import MediaBetweenText from '$lib/hero/MediaBetweenText.svelte';
 
 	// HOME — the estate landing, and the first of the main menu's three places (Home · Projects ·
@@ -39,14 +39,6 @@
 			needs: 'the DLQ and health surfaces, aggregated above the zone that owns each',
 		},
 	];
-
-	// The hero's aurora reads from the THEME, not from a palette — raw token vars, so the blobs
-	// re-colour with light/dark instead of being hexes that only work under one of them. rask has no
-	// `--chart-N` scale, so these are what `@rask/ui`'s tokens.css actually defines, used here purely
-	// as DECORATION and carrying none of their status meaning. Three, not four: `--ring` resolves to
-	// the SAME oklch as `--primary` in dark mode, so a fourth blob added a second identical blue
-	// rather than another hue.
-	const HERO_COLORS = ['var(--primary)', 'var(--warning)', 'var(--success)'];
 </script>
 
 <svelte:head><title>lance</title></svelte:head>
@@ -56,13 +48,16 @@
 	     decoration cannot paint over anything outside this panel, and the content sits above it on
 	     `relative` rather than a z-index ladder. -->
 	<section class="border-border bg-card relative isolate overflow-hidden rounded-xl border">
-		<!-- Two opacities: the same tokens read far stronger over the light `--card` than over the dark
-		     one, so a single value is either garish in light or invisible in dark. -->
-		<AnimatedGradientSvg
-			colors={HERO_COLORS}
-			blur="medium"
-			speed={9}
-			class="opacity-[0.14] dark:opacity-[0.22]"
+		<!-- DOTS, not colour (owner ruling 2026-08-07: "to much colouring… remove the gradient stuff").
+		     The field is `currentColor` at a low text opacity, so it is one paint that re-resolves under
+		     `.dark` instead of two hand-tuned values — and the radial mask fades it out well before the
+		     panel edge, which is what keeps it a texture rather than a pattern you read. -->
+		<DotPattern
+			glow
+			cr={0.9}
+			width={22}
+			height={22}
+			class="text-foreground/[0.07] dark:text-foreground/[0.10] mask-[radial-gradient(420px_circle_at_center,white,transparent)]"
 		/>
 		<div class="relative flex flex-col items-center gap-5 px-6 py-14 text-center">
 			<h1 class="text-5xl font-semibold tracking-tight sm:text-7xl">
