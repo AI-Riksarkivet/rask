@@ -255,3 +255,89 @@ def test_an_EXISTING_namespace_is_not_re_created() -> None:
     _client().ensure("lane", "pages")
 
     assert not create.called, "an existing namespace was re-created — the warehouse guard refuses that"
+
+
+# ── the absent-table case: a read door cannot say "absent", so it must not be believed ──────────────
+
+
+@respx.mock
+def test_a_403_on_describe_means_TRY_CREATE_not_give_up() -> None:
+    """THE BUG THAT MADE A NEW BRONZE TABLE IMPOSSIBLE.
+
+    `ensure` probed with `describe` and treated ONLY 404 as absent. The catalog answers **403** for a
+    table that does not exist — a table with no tuples cannot satisfy `can_get_metadata`, and a read
+    door that distinguished ABSENT from HIDDEN would be an existence oracle for table names. So the
+    probe raised and `_create_empty` was never reached. Measured against the deployed catalog as
+    `service-ingest`, 2026-08-06:
+
+        ABSENT  exists -> 403      ABSENT  describe -> 403
+        EXISTS  exists -> 200      EXISTS  describe -> 200 {location...}
+
+    Every ingest run that ever succeeded did so against a table someone had already created. This was
+    NOT a UI problem: the service-token path failed identically.
+    """
+    describe = respx.post(f"{BASE}/v1/table/bind86-bronze$brandnew/describe").mock(
+        return_value=httpx.Response(403, json={"title": "PermissionDeniedError", "detail": "can_get_metadata required on table:bind86-bronze$brandnew"})
+    )
+    respx.post(f"{BASE}/v1/namespace/bind86-bronze/exists").mock(return_value=httpx.Response(200))
+    create = respx.post(f"{BASE}/v1/table/bind86-bronze$brandnew/create").mock(
+        return_value=httpx.Response(200, json={"location": "s3://bind86-wh/abc_bind86-bronze$brandnew", "version": 1})
+    )
+
+    assert _client().ensure("bind86-bronze", "brandnew") == "s3://bind86-wh/abc_bind86-bronze$brandnew"
+    assert describe.called, "the probe must still run — an existing table must not be re-created"
+    assert create.called, "the 403 was treated as fatal and create was never attempted"
+
+
+@respx.mock
+def test_the_CREATE_response_vends_the_location_without_a_second_describe() -> None:
+    """Create's own 200 carries the location, so the happy path does not re-ask a read door the
+    question it cannot answer. A second describe here would 403 again on a catalog that seeds tuples
+    asynchronously, turning a successful create into a failed run."""
+    respx.post(f"{BASE}/v1/table/bind86-bronze$fresh/describe").mock(return_value=httpx.Response(403, json={}))
+    respx.post(f"{BASE}/v1/namespace/bind86-bronze/exists").mock(return_value=httpx.Response(200))
+    respx.post(f"{BASE}/v1/table/bind86-bronze$fresh/create").mock(
+        return_value=httpx.Response(200, json={"location": "s3://wh/fresh", "version": 1})
+    )
+
+    assert _client().ensure("bind86-bronze", "fresh") == "s3://wh/fresh"
+
+
+@respx.mock
+def test_a_409_then_a_403_is_reported_as_an_AUTHORIZATION_gap_on_an_existing_table() -> None:
+    """The one case the fall-through must NOT paper over.
+
+    409 means the table exists; a 403 from the re-describe means this identity genuinely cannot see it.
+    That is a real permission gap on an EXISTING table, and reporting it as "created but no location"
+    (the old message) sends a reader hunting a catalog bug. The message must name the relation and the
+    object, because that is the fix.
+    """
+    respx.post(f"{BASE}/v1/table/bind86-bronze$hidden/describe").mock(return_value=httpx.Response(403, json={}))
+    respx.post(f"{BASE}/v1/namespace/bind86-bronze/exists").mock(return_value=httpx.Response(200))
+    respx.post(f"{BASE}/v1/table/bind86-bronze$hidden/create").mock(return_value=httpx.Response(409, json={}))
+
+    with pytest.raises(CatalogError, match="already exists but this identity cannot describe it"):
+        _client().ensure("bind86-bronze", "hidden")
+
+
+@respx.mock
+def test_an_EXISTING_visible_table_is_never_re_created() -> None:
+    """The fall-through must not turn every run into a create attempt. A describable table short-circuits
+    before the namespace probe, which is also what keeps a run cheap on the common path."""
+    respx.post(f"{BASE}/v1/table/bind86-bronze$there/describe").mock(
+        return_value=httpx.Response(200, json={"location": "s3://wh/there", "version": 7})
+    )
+    create = respx.post(f"{BASE}/v1/table/bind86-bronze$there/create").mock(return_value=httpx.Response(200, json={}))
+
+    assert _client().ensure("bind86-bronze", "there") == "s3://wh/there"
+    assert not create.called, "an existing table was re-created — the create door would 409, but the run should never ask"
+
+
+@respx.mock
+def test_a_NON_authz_error_from_describe_is_still_fatal() -> None:
+    """Only 403/404 mean 'no location for you'. A 500 is the catalog being broken, and swallowing it
+    into a create attempt would turn an outage into a confusing create failure."""
+    respx.post(f"{BASE}/v1/table/bind86-bronze$boom/describe").mock(return_value=httpx.Response(500, text="boom"))
+
+    with pytest.raises(CatalogError, match="catalog refused describe"):
+        _client().ensure("bind86-bronze", "boom")
