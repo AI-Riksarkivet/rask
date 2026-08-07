@@ -61,12 +61,15 @@ def metrics_at(model_uri: str, storage_options: dict[str, str], version: int) ->
     artifacts and carry version N's ``meta`` — read the last row's meta (all of a publish's rows share it).
     """
     ds = _open(model_uri, storage_options, version=version)
-    metas = ds.to_table(columns=["meta"]).column("meta").to_pylist()
-    if not metas:
+    row_count = ds.count_rows()
+    if not row_count:
         raise InvalidTableStateError(f"model version {version} has no rows")
+    # Only the LAST row's meta is read (all of a publish's rows share it), so take exactly that row —
+    # to_table() here materialised the meta of EVERY artifact ever published, for one value (#141).
+    last_meta = ds.take([row_count - 1], columns=["meta"]).column("meta").to_pylist()[0]
     try:
         # parse_constant → refuse NaN/Infinity at parse (they would silently clear the gate — see below).
-        meta = json.loads(metas[-1], parse_constant=_reject_nonfinite)  # newest publish's rows appended last
+        meta = json.loads(last_meta, parse_constant=_reject_nonfinite)  # newest publish's rows appended last
     except (ValueError, TypeError) as exc:
         raise InvalidTableStateError(f"model version {version} metadata is unreadable or non-finite") from exc
     metrics = meta.get("metrics")
