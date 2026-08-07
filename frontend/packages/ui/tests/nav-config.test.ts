@@ -79,8 +79,8 @@ describe('topNav', () => {
 				.find((e) => e.title === 'Lakehouse')!
 				.groups!.map((g) => g.label);
 		// The governance guarantee, both polarities: a non-admin's panel cannot even name them.
-		// 'Models' left this list when the registry, experiments and pipeline routes physically moved
-		// to the MODELS zone — the column went with its routes.
+		// 'Models' left this list when the registry and experiments routes physically moved to the
+		// MODELS zone — the column went with its routes.
 		expect(labels(false)).toEqual(['Workspace', 'Catalog', 'Lineage']);
 		// Operations — streams, events, dead letters — is an operation ON the lakehouse, so it stays a
 		// column here. Governance is not a lakehouse feature and no longer appears in this panel at
@@ -307,18 +307,20 @@ describe('topNav', () => {
 		const studio = topNav(false).find((e) => e.title === 'Studio')!;
 		// This pair used to be 'Train and Studio are single-surface zones (R17)', on the reasoning that
 		// a one-row dropdown is noise. That was true while the zone was four placeholder training
-		// pages. R17's migration then actually landed — the lakehouse's registry, experiments and
-		// pipeline moved in and the playground joined them — so the zone has real destinations and
-		// earns rows. Studio panelled briefly too (Apps + Flows) and is a plain link AGAIN: the
-		// launcher and the animation demo were deleted, leaving one surface — the flow canvas at the
-		// zone root — and a one-row dropdown is noise. Both directions of the same rule.
-		expect(models.items!.map((i) => i.title)).toEqual([
-			'Registry',
-			'Experiments',
-			'Pipeline',
-			'Playground',
-			'Training runs',
-		]);
+		// pages. R17's migration then actually landed — the lakehouse's registry and experiments moved
+		// in — so the zone has real destinations and earns rows. Studio panelled briefly too (Apps +
+		// Flows) and is a plain link AGAIN: the launcher and the animation demo were deleted, leaving
+		// one surface — the flow canvas at the zone root — and a one-row dropdown is noise. Both
+		// directions of the same rule.
+		//
+		// FIVE ROWS BECAME THREE on 2026-08-07, and this assertion is the reason both dead ones survived
+		// as long as they did: it pinned the TITLES the config declares, never that their hrefs resolve.
+		// `Playground` → `/models/playground` had 404'd since #131 moved inference to
+		// `/compute/inference`; `Pipeline` → `/models/pipeline` was a manual medallion-cascade trigger,
+		// deleted with its route. Asserting the absences below, so neither can quietly return.
+		expect(models.items!.map((i) => i.title)).toEqual(['Registry', 'Experiments', 'Training runs']);
+		expect(models.items!.map((i) => i.href)).not.toContain('/models/pipeline');
+		expect(models.items!.map((i) => i.href)).not.toContain('/models/playground');
 		expect(models.groups).toBeUndefined();
 		expect(studio.items).toBeUndefined();
 		expect(studio.groups).toBeUndefined();
@@ -327,7 +329,7 @@ describe('topNav', () => {
 		expect(models.href).toBe('/models/');
 		expect(models.match('/models')).toBe(true);
 		expect(models.match('/models/submit')).toBe(true);
-		expect(models.match('/models/playground')).toBe(true);
+		expect(models.match('/models/monitoring')).toBe(true);
 		expect(models.match('/studio')).toBe(false);
 		expect(studio.match('/studio')).toBe(true);
 		// `under`, so the trigger stays lit on any future studio route even though it has one today.
@@ -337,7 +339,7 @@ describe('topNav', () => {
 		// trigger must. Both directions, because a half-done rename lights up two triggers at once.
 		const lakehouse = topNav(false).find((e) => e.title === 'Lakehouse')!;
 		expect(lakehouse.match('/models')).toBe(false);
-		expect(lakehouse.match('/models/pipeline')).toBe(false);
+		expect(lakehouse.match('/models/experiments')).toBe(false);
 	});
 
 	it('carries the expected rows per column', () => {
@@ -355,8 +357,8 @@ describe('topNav', () => {
 		// lakekeeper API's tenant list, not this product's model. The estate has one project concept,
 		// reached from the switcher, never from a row under one zone's catalog column.
 		expect(groups.Catalog).toEqual(['Tables', 'Namespaces', 'Warehouses', 'Storage']);
-		// NO 'Models' COLUMN any more — the registry, experiments and pipeline routes physically moved
-		// to the MODELS zone, which is its own trigger with its own panel (asserted below). Pinned as an
+		// NO 'Models' COLUMN any more — the registry and experiments routes physically moved to the
+		// MODELS zone, which is its own trigger with its own panel (asserted below). Pinned as an
 		// ABSENCE for the same reason Governance is: a trigger that keeps advertising another zone's
 		// routes is how the bar comes to describe an estate that no longer exists.
 		expect(groups.Models).toBeUndefined();
@@ -415,7 +417,7 @@ describe('ZoneNav matchers', () => {
 		// Registry (=/models) sits at its ZONE root; `seg` would keep it lit on every sibling area.
 		const m = exact('/models');
 		expect(m('/models')).toBe(true);
-		expect(m('/models/pipeline')).toBe(false);
+		expect(m('/models/experiments')).toBe(false);
 	});
 
 	it('norm + matchers tolerate the base-path trailing slash on a zone root', () => {

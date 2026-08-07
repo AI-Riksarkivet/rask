@@ -1,8 +1,11 @@
-// One mock for the three NON-catalog upstreams the admin/models remote functions reach server-side:
-// GreptimeDB (`/v1/sql?...`, `/v1/promql*` — the audit trail + experiment metrics), the NATS monitor
-// (`/jsz` — the streams panel) and the medallion head (`/produce`, `/train`). Their paths never
-// collide, so GREPTIME_API, NATS_MONITOR_API and MEDALLION_API all point at this one port
-// (playwright.config.ts, the auth-ON server).
+// One mock for the two NON-catalog upstreams the admin remote functions reach server-side: GreptimeDB
+// (`/v1/sql?...`, `/v1/promql*` — the audit trail + experiment metrics) and the NATS monitor (`/jsz` —
+// the streams panel). Their paths never collide, so GREPTIME_API and NATS_MONITOR_API both point at
+// this one port (playwright.config.ts, the auth-ON server).
+//
+// The medallion head (`/produce`, `/train`) was a third. No lakehouse code ever called it — the reader
+// moved out with the models surfaces and was deleted with `/models/pipeline` — so MEDALLION_API is gone
+// from the config rather than left pointing here.
 //
 // PURELY seed-driven — no baked-in fixtures: a spec seeds exactly the upstream response its old
 // page.route served, keyed per bearer like mock-catalog's generic mechanism (same shape: `__mock/seed`

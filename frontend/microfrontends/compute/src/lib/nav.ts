@@ -1,7 +1,6 @@
 import {
 	CircuitBoard,
 	Database,
-	ScanText,
 	Boxes,
 	FileText,
 	Gauge,
@@ -83,15 +82,20 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 			items: [
 				{ title: 'Jobs', href: '/compute/jobs', match: seg('/compute/jobs'), icon: ListTree },
 				{ title: 'Serve', href: '/compute/serve', match: seg('/compute/serve'), icon: ServerCog },
-				// #131: inference is a COMPUTE concern, not a model-registry one. Moved here from
-				// /models/playground by ruling — you send an image to a live Serve deployment and read
-				// what comes back, which is the same plane as Jobs and Serve, not the registry.
-				{
-					title: 'Inference',
-					href: '/compute/inference',
-					match: seg('/compute/inference'),
-					icon: ScanText,
-				},
+				// NO 'Inference' ROW. #131 moved an inference PLAYGROUND here from /models/playground on
+				// the reasoning that running a deployment is a compute verb — which was right about the
+				// verb and wrong about needing a second surface. Deleted 2026-08-07: it could only ever
+				// call ONE Serve app (a single `COMPUTE_SERVE_URL`, no per-request app or path) and its
+				// UI was HTR end to end — an image picker up, an ALTO parser down — so it could not test
+				// any of the estate's other live deployments. Studio's flow canvas is the general form of
+				// the same idea (`?app=&path=` + a typed payload per node, against the EXTERNAL Ray
+				// cluster where the GPU apps actually run), so this was a narrower duplicate of a surface
+				// that already worked.
+				//
+				// Deliberately NOT replaced by a cross-zone leaf into /studio. The estate's ruling is
+				// that the TOP NAVBAR owns cross-zone hops — it is the one surface that applies
+				// `data-sveltekit-reload` itself — and `nav-truth.test.ts` pins the cross-zone sidebar
+				// set as EMPTY. Studio already has a navbar entry in every zone, this one included.
 			],
 		},
 		{
