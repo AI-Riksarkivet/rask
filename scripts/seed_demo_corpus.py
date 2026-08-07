@@ -146,16 +146,44 @@ def _chunk_rows() -> dict[str, list]:
     return columns
 
 
-def seed(root: Path) -> Path:
-    db = root / f"{DATASET_ID}.lance"
-    # WIPE first. `mode="overwrite"` rewrites the data but leaves earlier `_indices/<uuid>`
-    # directories behind, and a re-index can leave the dataset pointing at an index whose files
-    # were collected — the reader then dies with `tokens.lance not found` and every query 400s
-    # while the corpus looks perfectly healthy on disk. Re-seeding must be idempotent, so the
-    # fixture is rebuilt from nothing rather than layered onto its own history.
-    if db.exists():
-        shutil.rmtree(db)
-    db.mkdir(parents=True, exist_ok=True)
+def _s3_options() -> dict[str, str]:
+    """Lance ``storage_options`` for an s3:// root, from SEED_S3_* (names shared with seed_bronze_pages).
+
+    The same option keys `service_kit.media.config.Settings.storage_options` builds for the READERS —
+    the seed must speak the dialect the viewer/search/annotator will read with, or the corpus works
+    for whoever wrote it and nobody else.
+    """
+    endpoint = os.environ.get("SEED_S3_ENDPOINT")
+    if not endpoint:
+        raise SystemExit("an s3:// root needs SEED_S3_ENDPOINT (and SEED_S3_KEY / SEED_S3_SECRET)")
+    return {
+        "endpoint": endpoint,
+        "access_key_id": os.environ.get("SEED_S3_KEY", ""),
+        "secret_access_key": os.environ.get("SEED_S3_SECRET", ""),
+        "region": os.environ.get("SEED_S3_REGION", "us-east-1"),
+        "allow_http": "true" if endpoint.startswith("http://") else "false",
+    }
+
+
+def seed(root: Path | str) -> str:
+    is_uri = isinstance(root, str)
+    opts = _s3_options() if is_uri else None
+    if is_uri:
+        # An object store has no dirs to mkdir and no chmod to run; `mode="overwrite"` replaces the
+        # data. The local branch's stale-`_indices` wipe does not apply on a fresh S3 prefix — on a
+        # RE-seed the index is rebuilt with replace=True below, which supersedes the old one.
+        db = f"{str(root).rstrip('/')}/{DATASET_ID}.lance"
+    else:
+        db_path = root / f"{DATASET_ID}.lance"
+        # WIPE first. `mode="overwrite"` rewrites the data but leaves earlier `_indices/<uuid>`
+        # directories behind, and a re-index can leave the dataset pointing at an index whose files
+        # were collected — the reader then dies with `tokens.lance not found` and every query 400s
+        # while the corpus looks perfectly healthy on disk. Re-seeding must be idempotent, so the
+        # fixture is rebuilt from nothing rather than layered onto its own history.
+        if db_path.exists():
+            shutil.rmtree(db_path)
+        db_path.mkdir(parents=True, exist_ok=True)
+        db = str(db_path)
 
     # The page image must be a Lance **blob-v2** column or the registry refuses the dataset
     # ("document.media_blob is not a lance.blob.v2 column"). Blob-v2 is a STRUCT — raw
@@ -215,7 +243,7 @@ def seed(root: Path) -> Path:
         },
         schema=schema,
     )
-    lance.write_dataset(chunks, str(db / "chunks.lance"), mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.write_dataset(chunks, f"{db}/chunks.lance", mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True, storage_options=opts)
 
     # The doc-level table `document.table` points at — ONE row per document, and it carries its own
     # cover blob because `document.media_blob` must name a column in THIS table (the descriptor
@@ -242,17 +270,18 @@ def seed(root: Path) -> Path:
         },
         schema=doc_schema,
     )
-    lance.write_dataset(documents, str(db / "documents.lance"), mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.write_dataset(documents, f"{db}/documents.lance", mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True, storage_options=opts)
 
     # The FTS index, through the LANCEDB api — the search service opens the row table with
     # `lancedb` and runs `tbl.search(MatchQuery(...), query_type="fts")`, which needs an index
     # built by that same stack. Writing the column without indexing it yields zero hits for every
     # query, indistinguishable from an empty corpus.
-    connection = lancedb.connect(str(db))
+    connection = lancedb.connect(db, storage_options=opts)
     connection.open_table("chunks").create_index("text", config=lancedb.index.FTS(), replace=True)
 
-    descriptors = root / "descriptors"
-    descriptors.mkdir(parents=True, exist_ok=True)
+    if not isinstance(root, str):
+        descriptors = root / "descriptors"
+        descriptors.mkdir(parents=True, exist_ok=True)
     # `capabilities` is DECLARED, not probed: it maps a capability name to the `table.column` it
     # needs, and `capability_available` just checks that column exists. Without the `frames` entry
     # the dataset lists with `capabilities: []` and the annotator has no page images to open.
@@ -295,7 +324,19 @@ def seed(root: Path) -> Path:
         ],
         "capabilities": {"frames": "chunks.image"},
     }
-    (descriptors / f"{DATASET_ID}.json").write_text(json.dumps(declared, indent=2) + "\n")
+    if isinstance(root, str):
+        # Over S3 the readers take the SCHEMA-STAMP path: `load_declared` walks the stems and reads
+        # `lance_media.descriptor` off dataset schema metadata (descriptor.py:221-227) — the local
+        # descriptor dir never applies to an object-store root. Stamp the chunks table; the loader
+        # takes the first stem that carries the key.
+        ds = lance.dataset(f"{db}/chunks.lance", storage_options=opts)
+        ds.update_schema_metadata({"lance_media.descriptor": json.dumps(declared)})
+        print("  s3 root: descriptor STAMPED into chunks.lance schema metadata (lance_media.descriptor)")
+        return db
+
+    descriptors2 = root / "descriptors"
+    descriptors2.mkdir(parents=True, exist_ok=True)
+    (descriptors2 / f"{DATASET_ID}.json").write_text(json.dumps(declared, indent=2) + "\n")
     _make_world_readable(root)
     return db
 
@@ -329,14 +370,17 @@ def main() -> None:
     # repo would put a Lance dataset in git. `tempfile.gettempdir()` rather than a literal /tmp so
     # ruff's S108 stays satisfied and TMPDIR is honoured.
     default = Path(tempfile.gettempdir()) / "rask-demo-corpus"
-    root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else default
+    arg = sys.argv[1] if len(sys.argv) > 1 else None
+    root: Path | str = arg if arg and "://" in arg else (Path(arg).resolve() if arg else default)
     db = seed(root)
+    opts = _s3_options() if isinstance(root, str) else None
     for name in ("chunks", "documents"):
-        ds = lance.dataset(str(db / f"{name}.lance"))
+        ds = lance.dataset(f"{db}/{name}.lance", storage_options=opts)
         print(f"  {name}.lance: {ds.count_rows()} rows, v{ds.version}")
     print(f"  fts index on chunks.text (searchable: {sum(len(d['pages']) for d in DOCUMENTS)} pages across {len(DOCUMENTS)} documents)")
     print(f"seeded {db}")
-    print(f"descriptor: {root / 'descriptors' / f'{DATASET_ID}.json'}")
+    if not isinstance(root, str):
+        print(f"descriptor: {root / 'descriptors' / f'{DATASET_ID}.json'}")
 
 
 if __name__ == "__main__":

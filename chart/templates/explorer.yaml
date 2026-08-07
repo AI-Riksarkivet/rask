@@ -182,6 +182,21 @@ spec:
             - name: AWS_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef: { name: {{ $appSecret }}, key: AWS_SECRET_ACCESS_KEY }
+            {{- if $root.Values.explorer.corpusS3Root }}
+            # #142: the corpus read from the GOVERNED warehouse bucket instead of the mounted disk.
+            # `registry_root` flips to this s3:// root when both MEDIA_S3_ENDPOINT and
+            # MEDIA_S3_DB_ROOT are set (service_kit/media/config.py); the descriptor then comes from
+            # the `lance_media.descriptor` SCHEMA STAMP the seed writes, not a JSON file. Default ""
+            # keeps the disk behaviour. Same fleet credential pair as the object browser above.
+            - { name: MEDIA_S3_ENDPOINT, value: {{ include "lance.s3Endpoint" $root | quote }} }
+            - { name: MEDIA_S3_DB_ROOT, value: {{ $root.Values.explorer.corpusS3Root | quote }} }
+            - name: MEDIA_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: {{ $appSecret }}, key: AWS_ACCESS_KEY_ID }
+            - name: MEDIA_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $appSecret }}, key: AWS_SECRET_ACCESS_KEY }
+            {{- end }}
             {{- end }}
             {{- if or (eq $name "search") (eq $name "viewer") }}
             # Query encoders (values.encoders). search CALLS them (vector/hybrid/rerank legs); viewer

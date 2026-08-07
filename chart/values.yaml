@@ -875,6 +875,10 @@ maintenance:
 explorer:
   enabled: false
   # Where the pods mount the corpus (read-only, all three services).
+  # #142: set to a warehouse bucket (e.g. "s3://bind86-wh") to serve the media corpus from the
+  # GOVERNED object store instead of the mounted volume. VIEWER ONLY so far — search/annotator
+  # still need creds + a rustfs NetworkPolicy row before they can follow. "" = the disk, unchanged.
+  corpusS3Root: ""
   corpusMountPath: /media-corpus
   # HOW the corpus volume is provided. This used to be an unconditional `hostPath` with
   # `type: Directory` pointed at /var/media-corpus — which means explorer.enabled=true on a cluster where
