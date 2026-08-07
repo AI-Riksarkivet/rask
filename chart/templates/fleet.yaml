@@ -177,10 +177,16 @@ spec:
             httpGet: {path: {{ $svc.healthPath | default "/api/health" }}, port: http}
             initialDelaySeconds: 5
             periodSeconds: 10
+            # k8s defaults timeoutSeconds to 1 — measured racing the OOM killer on compute (#136):
+            # under memory pressure the health handler missed the 1 s deadline, so kills presented
+            # as CrashLoopBackOff probe failures instead of the OOM they were. 5 s is still tight
+            # enough to catch a hung service within one period.
+            timeoutSeconds: 5
           livenessProbe:
             httpGet: {path: {{ $svc.healthPath | default "/api/health" }}, port: http}
             initialDelaySeconds: 15
             periodSeconds: 20
+            timeoutSeconds: 5
           resources:
             {{- /* A service may name its OWN tier (resources.<name>); otherwise the shared fleet one.
                  compute needs it — see the values comment: the Ray SDK does not fit in 512Mi. */}}

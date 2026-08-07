@@ -9,14 +9,23 @@ all align — and `import compute` shadows nothing, which kills R20's recorded
 `/api/ray` + `/api/serve`: those paths name the Ray cluster the endpoints
 introspect, not this service."""
 
-from compute import health, proxy, routes
+from fastapi import APIRouter
+
+from compute import health, proxy, pruner, routes
 from compute.lifespan import make_lifespan
 from service_kit import make_service_app
 
 
+# ONE root-mounted router composed from the two root concerns: the Serve proxy and the Dapr cron
+# binding (a binding is delivered to POST /<name> at the ROOT, never under the api prefix). Composed
+# here so proxy.py and pruner.py stay ignorant of each other.
+_root = APIRouter()
+_root.include_router(proxy.router)
+_root.include_router(pruner.router)
+
 app = make_service_app(
     title="compute",
     routers=[health.router, routes.router],
-    proxy_router=proxy.router,
+    proxy_router=_root,
     lifespan=make_lifespan,
 )

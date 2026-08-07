@@ -1,0 +1,22 @@
+{{- /* Job-history retention for the Ray cluster (#136). Ray's Jobs API keeps every submission
+     forever and its listing takes no parameters, so history grows without bound — the live
+     cluster reached 81,155 jobs / 164.7 MB per listing, which is what OOMKilled the compute
+     service. This cron binding ticks the compute service's sidecar-only prune route
+     (POST /compute-prune-jobs-cron, guarded by require_dapr_token), which deletes TERMINAL jobs
+     beyond the newest RASK_PRUNE_KEEP_JOBS (code default 500) via the spec's one reclamation
+     lever, DELETE /api/jobs/{id}. Mirrors the maintenance crons: schedule is component config,
+     scoped to the one consuming app-id, gated on dapr.enabled (no control plane, no Component CRD). */}}
+{{- if and .Values.dapr.enabled .Values.services.compute }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: compute-prune-jobs-cron
+  labels: {{- include "rask.componentLabels" (list . "compute") | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.services.compute.pruneSchedule | default "@every 6h" | quote }} }
+scopes:
+  - compute
+{{- end }}
