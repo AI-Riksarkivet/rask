@@ -191,10 +191,23 @@ class CatalogServiceClient:
             return located
 
         self._ensure_namespace(namespace)
-        self._create_empty(namespace, dataset)
+        # The create's OWN response carries the location, so the happy path costs one call, not two —
+        # and more importantly it does not re-ask a read door the question the read door cannot answer.
+        created = self._create_empty(namespace, dataset)
+        if created is not None:
+            return created
+
+        # Only a 409 reaches here: the table already existed. Re-describe, because the tuples that make
+        # it describable were seeded by whoever created it.
         located = self._describe(namespace, dataset)
         if located is None:
-            raise CatalogError(f"catalog created {self.table_id(namespace, dataset)} but describes no location for it")
+            # It exists (409) and we still cannot see it (403). That is a real authorization gap on an
+            # EXISTING table, not the absent-table case above, and it must not be reported as "created
+            # but no location" — that message sent a reader looking for a catalog bug for an afternoon.
+            raise CatalogError(
+                f"{self.table_id(namespace, dataset)} already exists but this identity cannot describe it — "
+                f"it needs can_get_metadata on table:{self.table_id(namespace, dataset)} (or writer on its namespace)"
+            )
         return located
 
     def commit(self, namespace: str, dataset: str, fragments_json: Sequence[str], read_version: int, run_id: str) -> tuple[int, int]:
@@ -262,7 +275,23 @@ class CatalogServiceClient:
         except Exception as exc:
             raise CatalogError(f"catalog unreachable for describe: {exc}") from exc
 
-        if response.status_code == 404:
+        # 404 AND 403 both mean "no location for you here" — and conflating them is not laziness, it is
+        # the only reading a caller is entitled to. A READ door cannot distinguish ABSENT from HIDDEN
+        # without becoming an existence oracle for table names, so the catalog answers 403 for both.
+        # Measured against the deployed catalog, service-ingest, 2026-08-06:
+        #
+        #     ABSENT  exists    -> 403 PermissionDeniedError      ABSENT  describe -> 403
+        #     EXISTS  exists    -> 200                            EXISTS  describe -> 200 {location…}
+        #
+        # Treating the 403 as fatal is what made a new bronze table IMPOSSIBLE: `ensure` raised here
+        # and `_create_empty` was never reached, on the service path as much as the UI one. Every run
+        # that ever succeeded did so against a table someone had already created.
+        #
+        # Falling through is not a permission bypass. CREATE is the authoritative gate and it is
+        # authorized on the PARENT — `can_create_table` on the namespace, the estate's create-on-parent
+        # rule — so a caller who may not create is refused there, with the right object in the message.
+        # Measured on the same run: `POST /v1/table/bind86-bronze$createprobe/create` -> 200.
+        if response.status_code in (403, 404):
             return None
         if response.status_code >= 400:
             raise CatalogError(f"catalog refused describe ({response.status_code}): {response.text[:300]}")
@@ -320,8 +349,18 @@ class CatalogServiceClient:
                 )
             raise CatalogError(f"catalog refused namespace {namespace!r} ({response.status_code}): {response.text[:300]}")
 
-    def _create_empty(self, namespace: str, dataset: str) -> None:
-        """Step 1 of the creation two-step — zero rows, so no data byte transits the catalog."""
+    def _create_empty(self, namespace: str, dataset: str) -> str | None:
+        """Step 1 of the creation two-step — zero rows, so no data byte transits the catalog.
+
+        Returns the location the catalog vends, or None when the table already existed (409).
+
+        RETURNING THE LOCATION IS THE POINT, not a convenience: this is the ONLY door in the sequence
+        that can answer "does this table exist" without being an existence oracle, because a caller who
+        may not create is refused by `can_create_table` on the NAMESPACE — a permission the parent
+        genuinely carries. The read doors cannot: `describe` and `exists` both answer 403 for an absent
+        table (measured 2026-08-06), so asking them first and believing the answer is what made a new
+        bronze table impossible to create at all.
+        """
         import httpx
         import pyarrow as pa
 
@@ -345,9 +384,12 @@ class CatalogServiceClient:
         # can both find it absent and both try. The loser re-describes and proceeds.
         if response.status_code == 409:
             logger.info("catalog table %s already existed — another writer created it first", self.table_id(namespace, dataset))
-            return
+            return None
         if response.status_code >= 400:
             raise CatalogError(f"catalog refused create ({response.status_code}): {response.text[:300]}")
+
+        location = response.json().get("location")
+        return str(location) if location else None
 
     def describe_version(self, namespace: str, dataset: str) -> int:
         """The table's current version — the `read_version` a client-direct commit is built against."""
