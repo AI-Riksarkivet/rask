@@ -100,9 +100,17 @@ def cache_key(
     return (handle.id, version_signature(handle), query_hash(spec, filters, image_bytes))
 
 
+def entry_bytes(result: list[dict[str, Any]]) -> int:
+    """Approximate heap footprint as serialized-JSON length. Hit rows are plain
+    str/num dicts (they leave the service as JSON anyway), so the serialized
+    length tracks real size closely enough to budget on."""
+    return len(json.dumps(result, default=str))
+
+
 def run_cached(
-    cache: dict[CacheKey, list[dict[str, Any]]],
+    cache: dict[CacheKey, tuple[list[dict[str, Any]], int]],
     max_size: int,
+    max_bytes: int,
     handle: DatasetHandle,
     spec: SearchSpec,
     filters: Mapping[str, str] | None,
@@ -111,17 +119,26 @@ def run_cached(
 ) -> list[dict[str, Any]]:
     """Return the cached hits for this query, else compute via ``produce`` and
     memoize. Bypassed entirely when ``max_size <= 0`` (cache disabled), so the
-    version reads are only paid when the cache is on. Eviction is LRU: a hit
-    moves its key to the end, and the oldest key is dropped when full."""
+    version reads are only paid when the cache is on. Eviction is LRU under TWO
+    bounds: entry count (the lookup bound) and total bytes (the memory bound —
+    a hit row carries transcript text, so 256 entries was a count, not a cap;
+    #141). ``max_bytes <= 0`` disables the byte bound only. An entry larger than
+    the whole byte budget is returned uncached — the cache must never hold a
+    single object that busts its own ceiling."""
     if max_size <= 0:
         return produce()
     key = cache_key(handle, spec, filters, image_bytes)
     hit = cache.get(key)
     if hit is not None:
         cache[key] = cache.pop(key)  # move-to-end → LRU recency
-        return hit
+        return hit[0]
     result = produce()
-    while len(cache) >= max_size:
-        cache.pop(next(iter(cache)))  # evict oldest
-    cache[key] = result
+    nbytes = entry_bytes(result)
+    if 0 < max_bytes < nbytes:
+        return result
+    total = sum(size for _, size in cache.values()) + nbytes
+    while cache and (len(cache) >= max_size or (max_bytes > 0 and total > max_bytes)):
+        _, freed = cache.pop(next(iter(cache)))  # evict oldest
+        total -= freed
+    cache[key] = (result, nbytes)
     return result

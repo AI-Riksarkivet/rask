@@ -55,10 +55,12 @@ class AppState(BaseModel):
     # Writes are idempotent (same input → same bytes), so a plain dict suffices.
     points_cache: dict[tuple[str, str, int], bytes] = Field(default_factory=dict)
     # Version-keyed search result cache (search.services.result_cache): keyed
-    # (dataset, table-version signature, query hash) → the query's hits. Same
-    # per-app, version-invalidated discipline as points_cache; sized by
-    # settings.search_cache_size (0 = off).
-    search_cache: dict[tuple[str, str, str], list[Any]] = Field(default_factory=dict)
+    # (dataset, table-version signature, query hash) → (the query's hits, their
+    # approximate byte size — carried so eviction can honour the byte ceiling
+    # without re-serializing every entry). Same per-app, version-invalidated
+    # discipline as points_cache; bounded by settings.search_cache_size AND
+    # settings.search_cache_bytes (0 = off / no byte bound respectively).
+    search_cache: dict[tuple[str, str, str], tuple[list[Any], int]] = Field(default_factory=dict)
     # Multi-dataset registry (LANCE_MEDIA_MERGE §4.4) — the schema-agnostic
     # resolution path. The legacy per-table fields above stay during the
     # media/search service port and are stripped at integration.

@@ -83,6 +83,7 @@ def _cached_search(
     return run_cached(
         state.search_cache,
         state.settings.search_cache_size,
+        state.settings.search_cache_bytes,
         handle,
         spec,
         filters,

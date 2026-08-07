@@ -41,10 +41,15 @@ class Settings(BaseSettings):
 
     # Version-keyed search result cache (the read-fast tier). Number of result
     # sets to retain per app instance; 0 disables it entirely (then no per-request
-    # version reads are paid). Each entry is small (a page of hits), so a few
-    # hundred is cheap; a write to any table a query reads bumps its Lance version
-    # and strands the old entry (LRU-evicted).
+    # version reads are paid). A write to any table a query reads bumps its Lance
+    # version and strands the old entry (LRU-evicted). Entries are NOT uniformly
+    # small — a hit row carries display.body (transcript text), so a full page of
+    # hits can run to megabytes; the byte ceiling below is the real memory bound,
+    # the entry count is just the lookup bound (#141).
     search_cache_size: int = Field(default=256, ge=0, alias="MEDIA_SEARCH_CACHE_SIZE")
+    # Total bytes of cached results to retain (approximated as serialized JSON
+    # length). 0 removes the byte bound (count-only, the pre-#141 behaviour).
+    search_cache_bytes: int = Field(default=64 * 1024 * 1024, ge=0, alias="MEDIA_SEARCH_CACHE_BYTES")
 
     # Optional S3 object-store backing (RASK_LANDING §4). Set MEDIA_S3_ENDPOINT to
     # serve datasets from RustFS / MinIO / AWS: the registry then lists + opens
