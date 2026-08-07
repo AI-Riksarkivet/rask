@@ -74,7 +74,7 @@ export interface IngestSizing {
 }
 
 export interface IngestRequest {
-	/** A registered source kind — 'iiif' | 's3-prefix' | 'local-dir'. The registry is the authority. */
+	/** A registered source kind — 's3-prefix' | 'local-dir' (IIIF removed by owner ruling 2026-08-07). The registry is the authority. */
 	kind: string;
 	project: string;
 	dataset: string;

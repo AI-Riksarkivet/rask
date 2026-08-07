@@ -379,7 +379,7 @@ const COMPUTE_ITEMS: TopNavItem[] = [
 		// the plane was hard to find.
 		title: 'ETL',
 		href: '/compute/etl',
-		description: 'Harvest a source into bronze — IIIF, an S3 prefix, or a local directory.',
+		description: 'Harvest a source into bronze — an S3 prefix, or a local directory.',
 	},
 	{ title: 'Jobs', href: '/compute/jobs', description: 'Submitted Ray jobs and their lifecycle.' },
 	{ title: 'Cluster', href: '/compute/cluster', description: 'Nodes and their resource load.' },
