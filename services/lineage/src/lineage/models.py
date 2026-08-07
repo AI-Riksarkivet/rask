@@ -364,6 +364,21 @@ class RunEvent(BaseModel):
         lance = (self.run.facets or {}).get("lance")
         return lance.get("operation") if isinstance(lance, dict) else None
 
+    @property
+    def source_run_id(self) -> str | None:
+        """The PRODUCER'S OWN run id, from the ``lance`` run facet (``run_id``).
+
+        The graph's ``run_id`` is the emitter's DERIVED id — a one-way UUID5 over
+        ``ingest:<id>`` — so nothing downstream can map a graph run back to the run the producing
+        service knows. Measured consequence: every row on the compute zone's ingest board linked to
+        a dead detail page ("No such run"), because the board listed graph ids and the detail door
+        answers only to ingest ids. The producer therefore states its own id as data, and the board
+        links with THAT.
+        """
+        lance = (self.run.facets or {}).get("lance")
+        value = lance.get("run_id") if isinstance(lance, dict) else None
+        return str(value) if value else None
+
     def output_version(self, name: str) -> str | None:
         """The Lance dataset version this run produced for output ``name`` (``version`` facet).
 

@@ -130,6 +130,13 @@ export const startIngest = command(IngestInput, async (input): Promise<IngestAcc
 /** One ingest run as the LIST renders it — deliberately fewer fields than the detail page. */
 export interface IngestRunRow {
 	run_id: string;
+	/** The INGEST run id — the id `/ingests/{id}` answers to — from the producer's lance facet.
+	 *  `run_id` above is the graph's DERIVED id (a one-way UUID5): linking with it produced a board
+	 *  where every row 404'd. Null for runs recorded before producers stated it; the page renders
+	 *  those unlinked with the reason, never guesses. */
+	source_run_id: string | null;
+	/** What the run wrote (the terminal event's outputs) — the human handle for a row. */
+	table: string | null;
 	state: string | null;
 	progress_done: number | null;
 	progress_total: number | null;
@@ -195,6 +202,8 @@ export const listIngestRuns = query(async (): Promise<IngestRunRow[]> => {
 		.slice(0, WINDOW)
 		.map((r) => ({
 			run_id: String(r.run_id ?? ''),
+			source_run_id: str(r.source_run_id),
+			table: Array.isArray(r.outputs) && typeof r.outputs[0] === 'string' ? r.outputs[0] : null,
 			state: str(r.state),
 			progress_done: num(r.progress_done),
 			progress_total: num(r.progress_total),

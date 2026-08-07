@@ -211,3 +211,27 @@ def test_an_UNNAMEABLE_output_is_omitted_rather_than_half_written(project: str) 
     grounds for omitting the edge.
     """
     assert _output_datasets(project, "", 1, 1) == []
+
+
+def test_the_run_facet_carries_the_INGEST_run_id() -> None:
+    """The graph's run id is `run_id_for("ingest:<id>")` — a one-way UUID5 nothing can map back.
+
+    Every row on the compute zone's run board linked with that derived id, and every link was dead
+    (measured in a browser: "No such run" on each row — the ingest door answers only to its own id).
+    So the producer states its own id as DATA, in the same `lance` facet the cascade head already
+    reads; the repository folds it onto the Run node and `/runs` serves it as `source_run_id`.
+    """
+    from ingest.lineage import _tenant_facet
+
+    facet = _tenant_facet("bind86", "run-123")["lance"]
+    assert facet["run_id"] == "run-123"
+    assert facet["project"] == "bind86"
+
+    # Independent of the project guard ON PURPOSE: a single-tenant run still has an id worth linking,
+    # and an unsafe project must drop the PROJECT, not the identity.
+    unsafe = _tenant_facet("../etc", "run-123")["lance"]
+    assert unsafe["run_id"] == "run-123"
+    assert "project" not in unsafe
+
+    # No id and no project -> no facet at all, exactly as before this field existed.
+    assert _tenant_facet("../etc", None) == {}
