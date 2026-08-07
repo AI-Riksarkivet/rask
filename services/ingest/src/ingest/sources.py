@@ -215,3 +215,17 @@ def iter_unit_keys(adapter: SourceAdapter) -> Iterator[str]:
     if callable(keyed):
         return iter(keyed())
     return (obj.uri for obj in adapter.iter_objects())
+
+def iter_versioned_unit_keys(adapter: SourceAdapter) -> Iterator[tuple[str, str | None]]:
+    """Enumerate ``(key, version_token)`` pairs — the identity material the anti-join needs.
+
+    Same duck-typed optionality as :func:`iter_unit_keys`, for the same Protocol reason. A source
+    without ``iter_versioned_keys`` degrades to ``(key, None)`` — snapshot semantics: the id stays
+    ``sha256(key)`` and replace-in-place is invisible. Only the S3 kind promises tokens (the
+    listing ETag, free in ``list_objects_v2``); the degradation is the documented contract for
+    everything else, never an error.
+    """
+    versioned = getattr(adapter, "iter_versioned_keys", None)
+    if callable(versioned):
+        return iter(versioned())
+    return ((key, None) for key in iter_unit_keys(adapter))

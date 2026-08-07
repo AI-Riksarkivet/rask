@@ -127,6 +127,12 @@ BRONZE_SCHEMA = pa.schema(
         pa.field("source_uri", pa.string()),
         blob_field("payload", nullable=False),
         pa.field("sha256", pa.string()),
+        # The listing fingerprint (S3 ETag) at the moment this row was WITNESSED — distinct from
+        # `sha256`, which fixes the fetched BYTES. Different jobs: the etag is identity material
+        # (`identity.unit_id` folds it into `id`, so a replaced object lands as a NEW row); the
+        # sha256 is fixity proof. Nullable, because token-less sources (local-dir) are snapshot
+        # semantics by contract; existing tables gain the column schema-only at ensure.
+        pa.field("etag", pa.string()),
         pa.field("stage", pa.string()),
         pa.field("partition_key", pa.string(), nullable=True),
     ]
@@ -197,6 +203,9 @@ async def publish_chunk_units(chunk: ChunkSpec) -> int:
         from ingest.sources import SourceSpec, partition_key_for
 
         spec = SourceSpec(kind=chunk.kind, project=chunk.project, dataset=chunk.dataset, options=chunk.options)
+        # Tokens are positional-parallel to keys, resolved at ENUMERATE where the listing was in
+        # hand; a chunk from an older build carries none and every token degrades to None.
+        tokens = list(chunk.tokens) + [None] * (len(chunk.keys) - len(chunk.tokens))
         tasks = [
             UnitTask(
                 run_id=chunk.run_id,
@@ -204,8 +213,9 @@ async def publish_chunk_units(chunk: ChunkSpec) -> int:
                 key=key,
                 dataset_uri=chunk.dataset_uri,
                 partition_key=partition_key_for(spec, key),
+                token=token,
             )
-            for key in chunk.keys
+            for key, token in zip(chunk.keys, tokens, strict=True)
         ]
         return await queue.publish_units(tasks)
     finally:

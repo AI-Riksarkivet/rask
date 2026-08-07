@@ -87,6 +87,11 @@ class UnitTask(BaseModel):
     #: URI scheme and must not learn what a volume or a prefix is. Optional: a kind that registers no
     #: `partition_of` sends nothing and the column is written null.
     partition_key: str | None = None
+    #: The source object's VERSION TOKEN at enumeration (S3 listing ETag) — identity material,
+    #: not metadata: `identity.unit_id` folds it into the row id, so a replaced object lands as
+    #: a NEW row. None for token-less kinds (snapshot semantics). Optional so tasks enqueued by
+    #: an older build still validate.
+    token: str | None = None
 
 
 def unit_subject(run_id: str) -> str:

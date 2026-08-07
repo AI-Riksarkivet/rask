@@ -50,6 +50,10 @@ def _dataset(tmp_path: Path, payloads: list[bytes | None], schema: pa.Schema = B
         columns["sha256"] = pa.array([hashlib.sha256(p or b"").hexdigest() for p in payloads], pa.string())
     if "stage" in schema.names:
         columns["stage"] = pa.array(["bronze"] * len(payloads), pa.string())
+    if "etag" in schema.names:
+        # Same reasoning as partition_key below: irrelevant to the blob APIs, present because
+        # the schema declares it.
+        columns["etag"] = pa.array([None] * len(payloads), pa.string())
     if "partition_key" in schema.names:
         # Nulls: these fixtures exercise the BLOB read APIs, and the grouping label is irrelevant to
         # them. Present because the schema declares it — a column omitted here is a `KeyError` from

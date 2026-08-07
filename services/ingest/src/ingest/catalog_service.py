@@ -188,6 +188,13 @@ class CatalogServiceClient:
         """
         located = self._describe(namespace, dataset)
         if located is not None:
+            # LOAD-BEARING, not best-effort: workers now ALWAYS write the `etag` column
+            # (identity material, owner ruling 2026-08-07), so a table created before the column
+            # existed would refuse its next append with a schema mismatch AFTER every byte had
+            # been fetched. Schema evolution is the format's own answer — an expression add of
+            # `cast(NULL as string)` extends the schema and NULL-fills existing rows without a
+            # rewrite (guide.md, Data Evolution) — and it runs at ensure, BEFORE any fan-out.
+            self._ensure_etag_column(namespace, dataset)
             return located
 
         self._ensure_namespace(namespace)
@@ -398,6 +405,32 @@ class CatalogServiceClient:
 
         location = response.json().get("location")
         return str(location) if location else None
+
+    def _ensure_etag_column(self, namespace: str, dataset: str) -> None:
+        """Add the nullable `etag` column to a pre-existing table. Idempotent by refusal.
+
+        `cast(NULL as string)` is the guide's own nullable-column idiom: the schema gains the
+        field and existing rows are NULL-filled — one new version, no data rewrite. The catalog's
+        add_columns door refuses a duplicate column name, and THAT refusal is the idempotence:
+        second and later ensures are a cheap 4xx no-op. Any other failure RAISES — a table the
+        column could not be added to would fail its append after the whole fetch, which is the
+        expensive place to learn it.
+        """
+        import httpx
+
+        url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/add_columns"
+        payload = {"new_columns": [{"name": "etag", "expression": "cast(NULL as string)"}]}
+        try:
+            response = httpx.post(url, json=payload, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+        except Exception as exc:
+            raise CatalogError(f"catalog unreachable for schema evolution: {exc}") from exc
+        if response.status_code < 400:
+            logger.info("added etag column to %s (schema evolution at ensure)", self.table_id(namespace, dataset))
+            return
+        body = response.text.lower()
+        if "already exists" in body or "duplicate" in body or "exists in schema" in body:
+            return  # the column is there — the ordinary case after the first ensure
+        raise CatalogError(f"catalog refused the etag column add ({response.status_code}): {response.text[:300]}")
 
     def describe_version(self, namespace: str, dataset: str) -> int:
         """The table's current version — the `read_version` a client-direct commit is built against."""
