@@ -3,6 +3,8 @@
 // gateway, whose /api/explorer row routes it to the viewer (`/api/explorer/objects` → viewer
 // `/api/objects`; the R6/R20 wave retired volumes-api). Shapes are hand-mirrored from
 // services/viewer/src/viewer/api/v1/endpoints/objects.py (no OpenAPI codegen for the fleet yet).
+import * as v from 'valibot';
+import { parsed } from '@rask/api/upstream';
 import {
 	bffPath,
 	requestBinary as binary,
@@ -44,33 +46,51 @@ export type StoreDraft = {
 	description: string;
 };
 
-/** One object under a prefix (mirrors `S3Object`). */
-export type S3Object = { key: string; size: number; last_modified: string | null };
+/** One object under a prefix (mirrors `S3Object`). Schemas, not bare types (#94): these shapes are
+ *  hand-mirrored from Python with no codegen, which is exactly the seam that drifts — so the wire
+ *  is parsed against them and a drift is a named 502, never a silently-wrong table. */
+const S3ObjectSchema = v.object({
+	key: v.string(),
+	size: v.number(),
+	last_modified: v.nullable(v.string()),
+});
+export type S3Object = v.InferOutput<typeof S3ObjectSchema>;
 
 /** One delimiter-listed level of a bucket (mirrors `S3Listing`): `prefixes` are the "folder"
  *  common-prefixes directly under `prefix`; `objects` are the leaf keys at this level. */
-export type S3Listing = { bucket: string; prefix: string; prefixes: string[]; objects: S3Object[] };
+const S3ListingSchema = v.object({
+	bucket: v.string(),
+	prefix: v.string(),
+	prefixes: v.array(v.string()),
+	objects: v.array(S3ObjectSchema),
+});
+export type S3Listing = v.InferOutput<typeof S3ListingSchema>;
 
 /** Metadata for a single object — S3 HEAD (mirrors `S3ObjectHead`). */
-export type S3ObjectHead = {
-	key: string;
-	size: number;
-	content_type: string | null;
-	last_modified: string | null;
-	etag: string | null;
-};
+const S3ObjectHeadSchema = v.object({
+	key: v.string(),
+	size: v.number(),
+	content_type: v.nullable(v.string()),
+	last_modified: v.nullable(v.string()),
+	etag: v.nullable(v.string()),
+});
+export type S3ObjectHead = v.InferOutput<typeof S3ObjectHeadSchema>;
 
-const requestJSON = <T>(path: string, init?: RequestInit) => request<T>('/api', path, init);
+const requestJSON = (path: string, init?: RequestInit) => request('/api', path, init);
 
 const q = (params: Record<string, string>): string => new URLSearchParams(params).toString();
 
 /** One delimiter-scoped level of `bucket`/`prefix` for the object browser. */
 export const listObjects = (bucket: Bucket, prefix: string): Promise<ApiResult<S3Listing>> =>
-	requestJSON<S3Listing>(`explorer/objects?${q({ bucket, prefix })}`);
+	requestJSON(`explorer/objects?${q({ bucket, prefix })}`).then((r) =>
+		parsed(r, S3ListingSchema, 'the object browser'),
+	);
 
 /** Size / content-type / modified / etag for a single object (404 when it vanished). */
 export const headObject = (bucket: Bucket, key: string): Promise<ApiResult<S3ObjectHead>> =>
-	requestJSON<S3ObjectHead>(`explorer/object?${q({ bucket, key })}`);
+	requestJSON(`explorer/object?${q({ bucket, key })}`).then((r) =>
+		parsed(r, S3ObjectHeadSchema, 'the object browser'),
+	);
 
 /** The object byte proxy (download disposition). Doubles as the inline `<img src>`: a disposition
  *  header never stops an `<img>` fetch from rendering, and it covers BOTH buckets and any key

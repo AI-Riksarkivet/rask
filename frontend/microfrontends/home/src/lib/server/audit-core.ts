@@ -1,4 +1,5 @@
 import { env } from '$env/dynamic/private';
+import * as v from 'valibot';
 
 // #77 the audit-trail read, ONE implementation for its two doors: the zone UI's remote function
 // (`admin/remote/audit.remote.ts`). The thin `/api/audit` route that shared it died with the
@@ -84,9 +85,27 @@ function flattenRow(o: Record<string, unknown>): Record<string, unknown> {
 	return { ...o, ...merged };
 }
 
-type SqlResponse = {
-	output?: { records?: { schema?: { column_schemas?: { name: string }[] }; rows?: unknown[][] } }[];
-};
+/** GreptimeDB's SQL envelope, as far as this reader walks it — a valibot schema (#94), because the
+ *  shape is hand-mirrored from Greptime's HTTP API with no codegen, and a cast here would let a
+ *  drifted envelope render as an EMPTY audit trail (rows silently undefined) instead of a failure. */
+const SqlResponseSchema = v.looseObject({
+	output: v.optional(
+		v.array(
+			v.looseObject({
+				records: v.optional(
+					v.looseObject({
+						schema: v.optional(
+							v.looseObject({
+								column_schemas: v.optional(v.array(v.looseObject({ name: v.string() }))),
+							}),
+						),
+						rows: v.optional(v.array(v.array(v.unknown()))),
+					}),
+				),
+			}),
+		),
+	),
+});
 
 /** Read the trail. `authEnabled`/`session` come from the caller's locals; both doors pass their own. */
 export async function readAuditTrail(
@@ -138,7 +157,11 @@ export async function readAuditTrail(
 		if (!res.ok) {
 			return { ok: false, status: 502, detail: `greptime ${res.status}` };
 		}
-		const body = (await res.json()) as SqlResponse;
+		const decoded = v.safeParse(SqlResponseSchema, await res.json().catch(() => null));
+		if (!decoded.success) {
+			return { ok: false, status: 502, detail: 'greptime answered a drifted envelope' };
+		}
+		const body = decoded.output;
 		const records = body.output?.[0]?.records;
 		const cols = (records?.schema?.column_schemas ?? []).map((c) => c.name);
 		const rows = records?.rows ?? [];

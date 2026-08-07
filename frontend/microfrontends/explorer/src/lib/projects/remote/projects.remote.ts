@@ -1,8 +1,17 @@
 import { command, query } from '$app/server';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
-import { projectsJSON, sessionGate, typedAs } from '$lib/server/doors';
-import type { CreatedProject, ProjectsList, SendItem, SendResult } from '../projects';
+import { parsed } from '@rask/api/upstream';
+import { projectsJSON, sessionGate } from '$lib/server/doors';
+import {
+	CreatedProjectSchema,
+	ProjectsListSchema,
+	SendResultSchema,
+	type CreatedProject,
+	type ProjectsList,
+	type SendItem,
+	type SendResult,
+} from '../projects';
 
 // The SEND half of the annotation funnel, in the zone's remote-function dialect (the transport ruling,
 // area 3) — same three operations, same shapes at the call site, transport only. The deleted
@@ -34,7 +43,11 @@ const SendItemSchema: v.GenericSchema<SendItem> = v.object({
 export const listProjects = query(
 	v.object({ tenant: v.string() }),
 	async ({ tenant }): Promise<ApiResult<ProjectsList>> =>
-		typedAs<ProjectsList>(await projectsJSON(`/projects?tenant=${encodeURIComponent(tenant)}`)),
+		parsed(
+			await projectsJSON(`/projects?tenant=${encodeURIComponent(tenant)}`),
+			ProjectsListSchema,
+			'annotator',
+		),
 );
 
 /** Create a project around a selection. Refreshes the picker in the same flight — this is the one write
@@ -44,8 +57,10 @@ export const createProject = command(
 	async (draft): Promise<ApiResult<CreatedProject>> => {
 		const refused = sessionGate();
 		if (refused) return refused;
-		const result = typedAs<CreatedProject>(
+		const result = parsed(
 			await projectsJSON('/projects', { method: 'POST', body: JSON.stringify(draft) }),
+			CreatedProjectSchema,
+			'annotator',
 		);
 		if (result.ok) void listProjects({ tenant: draft.tenant }).refresh();
 		return result;
@@ -59,11 +74,13 @@ export const sendProjectItems = command(
 	async ({ projectId, items }): Promise<ApiResult<SendResult>> => {
 		const refused = sessionGate();
 		if (refused) return refused;
-		return typedAs<SendResult>(
+		return parsed(
 			await projectsJSON(`/projects/${encodeURIComponent(projectId)}/items`, {
 				method: 'POST',
 				body: JSON.stringify({ items }),
 			}),
+			SendResultSchema,
+			'annotator',
 		);
 	},
 );

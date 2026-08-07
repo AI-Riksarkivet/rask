@@ -187,20 +187,7 @@ export async function postSave(
 export const assistUrlFor = (annotationsUrl: string): string =>
 	annotationsUrl.replace('/api/annotations/', '/api/assist/');
 
-/** Run an interactive producer (GroundingDINO text / SAM region) over the unit. */
-export async function requestAssist(
-	assistUrl: string,
-	body: {
-		producer: string;
-		prompt: string;
-		region: { x: number; y: number; width: number; height: number } | null;
-	},
-): Promise<{ shapes: AssistShape[]; source: string }> {
-	const res = await fetch(assistUrl, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(body),
-	});
-	if (!res.ok) throw new Error(`assist failed (HTTP ${res.status})`);
-	return (await res.json()) as { shapes: AssistShape[]; source: string };
-}
+// The `requestAssist` fetch transport that used to live here is DELETED (#94): the annotator rides
+// its own remote function (`viewer/remote/assist.remote.ts`) and no caller was left — a dead
+// transport with a cast is drift waiting to happen. `AssistShape` stays: it is the wire contract
+// that remote still imports.

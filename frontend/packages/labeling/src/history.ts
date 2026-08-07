@@ -13,6 +13,27 @@ export interface AnnotationVersion {
 	count: number;
 }
 
+/** Parsed at the wire (#94), not cast: a drifted /versions answer must fail with a named error,
+ *  not render an empty-looking history over a unit that has one. Hand-rolled rather than valibot
+ *  because this package deliberately carries no valibot dependency (arrow + explorer-api only). */
+function parseVersions(raw: unknown): AnnotationVersion[] {
+	if (!Array.isArray(raw)) throw new Error('versions answered a non-array body');
+	return raw.map((entry: unknown, i) => {
+		if (entry === null || typeof entry !== 'object') {
+			throw new Error(`versions[${i}] is not an object`);
+		}
+		const e = entry as { version?: unknown; timestamp?: unknown; count?: unknown };
+		if (
+			typeof e.version !== 'number' ||
+			typeof e.timestamp !== 'string' ||
+			typeof e.count !== 'number'
+		) {
+			throw new Error(`versions[${i}] has a drifted shape`);
+		}
+		return { version: e.version, timestamp: e.timestamp, count: e.count };
+	});
+}
+
 /** The review-visible fields a diff compares (geometry moves are not "review" changes). */
 export interface RowSig {
 	label: string;
@@ -52,7 +73,7 @@ export async function fetchVersions(
 ): Promise<AnnotationVersion[]> {
 	const res = await fetch(buildUrl(annotationsUrl, '/versions', { limit: String(limit) }));
 	if (!res.ok) throw new Error(`versions failed (HTTP ${res.status})`);
-	return (await res.json()) as AnnotationVersion[];
+	return parseVersions(await res.json());
 }
 
 /** A historical version's rows as id→signature (for diffing against the current rows). */

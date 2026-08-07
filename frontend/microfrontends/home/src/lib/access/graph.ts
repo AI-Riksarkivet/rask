@@ -12,8 +12,16 @@ import type { ExpandNode } from '../access';
 import { layout as placeLayered } from '@rask/flow';
 
 /** The three questions the query bar asks. Each is a different OpenFGA primitive, and they answer
- *  genuinely different things — which is why the bar offers all three rather than one "search". */
-export type QueryKind = 'what' | 'who' | 'why';
+ *  genuinely different things — which is why the bar offers all three rather than one "search".
+ *  A runtime list + a derived type (#94): the kind also arrives as a USER-EDITED url param, and a
+ *  pasted `?q=anything` must be checked against real values, not cast into the union. */
+export const QUERY_KINDS = ['what', 'who', 'why'] as const;
+export type QueryKind = (typeof QUERY_KINDS)[number];
+
+/** The url-param door: a real kind passes, anything else is null (the caller picks the default). */
+export function asQueryKind(raw: string | null): QueryKind | null {
+	return (QUERY_KINDS as readonly string[]).includes(raw ?? '') ? (raw as QueryKind) : null;
+}
 
 /** Why a node is on screen. `focus` is the seed, `path` is on the resolving derivation, `dim` is
  *  context that the current query did not touch. Dimming rather than hiding is deliberate: an

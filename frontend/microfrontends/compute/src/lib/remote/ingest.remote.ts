@@ -180,20 +180,27 @@ export const listIngestRuns = query(async (): Promise<IngestRunRow[]> => {
 	// message rather than a boundary error over a feed that is merely unavailable.
 	if (!res.ok) return [];
 
-	const body: unknown = await res.json();
-	const rows = (body as { runs?: unknown[] })?.runs ?? [];
+	// Field-typed picks, not casts (#94): `(r.state as string) ?? null` would hand a NUMBER through
+	// typed as string — a lie the board renders. A wrong-typed field degrades to null instead.
+	const str = (u: unknown): string | null => (typeof u === 'string' ? u : null);
+	const num = (u: unknown): number | null => (typeof u === 'number' ? u : null);
+	const body: unknown = await res.json().catch(() => null);
+	const rows =
+		body !== null && typeof body === 'object' && 'runs' in body && Array.isArray(body.runs)
+			? body.runs
+			: [];
 	return rows
 		.filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
 		.filter((r) => isIngestJob(r.job))
 		.slice(0, WINDOW)
 		.map((r) => ({
 			run_id: String(r.run_id ?? ''),
-			state: (r.state as string) ?? null,
-			progress_done: (r.progress_done as number) ?? null,
-			progress_total: (r.progress_total as number) ?? null,
-			error_message: (r.error_message as string) ?? null,
-			started_at: (r.started_at as string) ?? null,
-			updated_at: (r.updated_at as string) ?? null,
+			state: str(r.state),
+			progress_done: num(r.progress_done),
+			progress_total: num(r.progress_total),
+			error_message: str(r.error_message),
+			started_at: str(r.started_at),
+			updated_at: str(r.updated_at),
 		}))
 		.filter((r) => r.run_id);
 });

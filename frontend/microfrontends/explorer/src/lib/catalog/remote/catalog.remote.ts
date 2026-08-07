@@ -2,7 +2,8 @@ import { command, getRequestEvent, query } from '$app/server';
 import * as v from 'valibot';
 import { fetchMe, type Me } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
-import { CATALOG_API, catalogJSON, typedAs } from '$lib/server/doors';
+import { parsed } from '@rask/api/upstream';
+import { CATALOG_API, catalogJSON } from '$lib/server/doors';
 import type { UserStateEnvelope } from '$lib/user-state';
 
 // This zone's CATALOG plane, in the remote-function dialect (the transport ruling, area 3) — the two
@@ -30,6 +31,14 @@ const DocumentArg = v.object({
 	document: v.picklist(['workflow-graph', 'saved-views', 'dock-layout', 'dock-layout-library']),
 });
 
+/** The catalog's `{exists, value}` envelope, parsed (#94) — `value` stays `unknown` on purpose: the
+ *  three-outcome mapping in `$lib/user-state` owns what a value MEANS, this only vouches for the
+ *  envelope around it. */
+const UserStateEnvelopeSchema: v.GenericSchema<unknown, UserStateEnvelope> = v.looseObject({
+	exists: v.optional(v.boolean()),
+	value: v.unknown(),
+});
+
 /**
  * The navbar's frozen `/v1/me` identity.
  *
@@ -53,7 +62,7 @@ export const fetchMeViaBff = query(async (): Promise<Me | null> => {
 export const readUserStateDoc = query(
 	DocumentArg,
 	async ({ document }): Promise<ApiResult<UserStateEnvelope>> =>
-		typedAs<UserStateEnvelope>(await catalogJSON(`/v1/user-state/${document}`)),
+		parsed(await catalogJSON(`/v1/user-state/${document}`), UserStateEnvelopeSchema, 'catalog'),
 );
 
 /** Save the caller's own document. A refused write is reported as such — a mirror write is not a save.

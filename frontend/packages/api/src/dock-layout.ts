@@ -23,6 +23,7 @@
  * `localStorage` is a MIRROR, never the record: it serves an auth-off dev stack and an offline tab,
  * and is written only after the server accepted a write.
  */
+import * as v from 'valibot';
 
 export type StoredLayoutRead<T> =
 	| { readonly status: 'ok'; readonly layout: T }
@@ -39,10 +40,16 @@ interface DockLayoutsDocument<T> {
 	workbenches: Record<string, T>;
 }
 
-interface Envelope<T> {
-	exists?: boolean;
-	value?: DockLayoutsDocument<T>;
-}
+/** The envelope's checkable shape, parsed at the wire (#94) — everything except the per-workbench
+ *  layout VALUE, which stays the caller's `T`: this transport layer cannot name the dock library's
+ *  layout schema (see the module header), so that one level is structural trust, confined to a
+ *  single annotated line in `readDocument`. */
+const EnvelopeSchema = v.looseObject({
+	exists: v.optional(v.boolean()),
+	value: v.optional(
+		v.looseObject({ workbenches: v.optional(v.record(v.string(), v.unknown())) }),
+	),
+});
 
 export interface DockLayoutStoreOptions {
 	/** Namespaces this workbench inside the ONE per-subject document, so zones cannot collide. */
@@ -136,14 +143,20 @@ export function makeDockLayoutStore<T>(options: DockLayoutStoreOptions): StoredL
 			return { status: 'unreadable', detail: `the layout store answered ${response.status}` };
 		}
 
-		const body = (await response.json()) as Envelope<T>;
+		const raw: unknown = await response.json().catch(() => null);
+		const envelope = v.safeParse(EnvelopeSchema, raw);
+		if (!envelope.success) {
+			return { status: 'unreadable', detail: 'the layout store answered a non-envelope body' };
+		}
+		const body = envelope.output;
 		if (body.exists !== true) return { status: 'absent' };
-		const w = workbenchesOf(body.value);
-		if (w === null) {
+		const w = body.value?.workbenches;
+		if (typeof w !== 'object' || w === null) {
 			return { status: 'unreadable', detail: 'the stored dock document has no workbenches map' };
 		}
 		writeMirror(mirror, body.value);
-		return { status: 'ok', layout: w };
+		// The one structural-trust point (see EnvelopeSchema): the map is verified, each VALUE is T.
+		return { status: 'ok', layout: w as Record<string, T> };
 	}
 
 	return {

@@ -8,6 +8,8 @@
  * bun supports it), so the sealed-session codec is unit-testable too.
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import * as v from 'valibot';
+import { parse } from './parse';
 
 export const SESSION_COOKIE = 'lance_session';
 export const VERIFIER_COOKIE = 'oidc_verifier';
@@ -166,11 +168,20 @@ export function isExpired(session: Session, nowSeconds: number): boolean {
 	return session.expiresAt > 0 && session.expiresAt <= nowSeconds;
 }
 
-type Discovery = {
-	authorization_endpoint: string;
-	token_endpoint: string;
-	end_session_endpoint?: string;
-};
+/** The three discovery fields this module reads — parsed, not cast (#94): an issuer answering 200
+ *  with an error page must fail HERE with the parser's words, not later as `undefined` inside a
+ *  redirect URL. `looseObject` on purpose: the discovery document carries dozens of other keys. */
+const DiscoverySchema = v.looseObject({
+	authorization_endpoint: v.string(),
+	token_endpoint: v.string(),
+	end_session_endpoint: v.optional(v.string()),
+});
+type Discovery = v.InferOutput<typeof DiscoverySchema>;
+
+const TokenResponseSchema = v.looseObject({
+	access_token: v.string(),
+	id_token: v.string(),
+});
 
 /** Rewrite a discovered endpoint URL onto the internal issuer base for SERVER-side calls. The discovery
  * doc's endpoints are PUBLIC URLs (Dex renders them from its public issuer), which pods may not be able to
@@ -190,7 +201,7 @@ export async function discover(cfg: OidcConfig, fetchFn: typeof fetch = fetch): 
 	const base = cfg.internalIssuer ?? cfg.issuer;
 	const res = await fetchFn(`${base}/.well-known/openid-configuration`);
 	if (!res.ok) throw new Error(`OIDC discovery failed: ${res.status}`);
-	return (await res.json()) as Discovery;
+	return parse(DiscoverySchema, await res.json());
 }
 
 /** Exchange an authorization code (+ PKCE verifier) for tokens, returning the session. A SERVER-side
@@ -210,6 +221,6 @@ export async function exchangeCode(
 		body: tokenRequestBody(cfg, code, verifier),
 	});
 	if (!res.ok) throw new Error(`token exchange failed: ${res.status}`);
-	const tokens = (await res.json()) as { access_token: string; id_token: string };
+	const tokens = parse(TokenResponseSchema, await res.json());
 	return sessionFromTokens(tokens.id_token, tokens.access_token);
 }

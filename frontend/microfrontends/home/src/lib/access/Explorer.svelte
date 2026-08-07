@@ -39,6 +39,7 @@
 		type BuiltGraph,
 		buildNeighbourhood,
 		buildWholeGraph,
+		asQueryKind,
 		idType,
 		isSubject,
 		layout,
@@ -104,7 +105,7 @@
 		const q = params;
 		if (q.toString() === lastPushed) return;
 		untrack(() => {
-			kind = (q.get('q') as QueryKind | null) ?? 'why';
+			kind = asQueryKind(q.get('q')) ?? 'why';
 			user = q.get('user') ?? '';
 			relation = q.get('relation') ?? '';
 			object = q.get('object') ?? '';

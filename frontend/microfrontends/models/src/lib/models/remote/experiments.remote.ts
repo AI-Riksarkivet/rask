@@ -65,6 +65,38 @@ function bearerHeaders(): Record<string, string> | undefined {
 	return locals.session ? { authorization: `Bearer ${locals.session.accessToken}` } : undefined;
 }
 
+/** The two Prometheus-API envelopes, parsed (#94) — hand-mirrored wire shapes with no codegen, so
+ *  a cast would let a drifted answer render as an empty chart instead of the offline state the
+ *  caller already has for a throw. `looseObject` throughout: Prometheus answers carry more keys. */
+const RangeEnvelopeSchema = v.looseObject({
+	data: v.optional(
+		v.looseObject({
+			result: v.optional(
+				v.array(
+					v.looseObject({
+						values: v.optional(v.array(v.tuple([v.number(), v.string()]))),
+					}),
+				),
+			),
+		}),
+	),
+});
+
+const InstantEnvelopeSchema = v.looseObject({
+	data: v.optional(
+		v.looseObject({
+			result: v.optional(
+				v.array(
+					v.looseObject({
+						metric: v.optional(v.record(v.string(), v.string())),
+						value: v.optional(v.tuple([v.number(), v.string()])),
+					}),
+				),
+			),
+		}),
+	),
+});
+
 async function promqlRange(fetchFn: typeof fetch, promQuery: string): Promise<Point[]> {
 	const end = Math.floor(Date.now() / 1000);
 	const q = new URLSearchParams({
@@ -77,9 +109,7 @@ async function promqlRange(fetchFn: typeof fetch, promQuery: string): Promise<Po
 		headers: bearerHeaders(),
 	});
 	if (!res.ok) throw new Error(`greptime ${res.status}`);
-	const body = (await res.json()) as {
-		data?: { result?: { values?: [number, string][] }[] };
-	};
+	const body = v.parse(RangeEnvelopeSchema, await res.json());
 	// One series per query (aggregated by max); flatten its [unix, value] pairs.
 	return (body.data?.result ?? [])
 		.flatMap((r) => r.values ?? [])
@@ -94,9 +124,7 @@ async function promql(
 	const url = `${GREPTIME_API}/v1/prometheus/api/v1/query?query=${encodeURIComponent(promQuery)}`;
 	const res = await fetchFn(url, { headers: bearerHeaders() });
 	if (!res.ok) throw new Error(`greptime ${res.status}`);
-	const body = (await res.json()) as {
-		data?: { result?: { metric?: Record<string, string>; value?: [number, string] }[] };
-	};
+	const body = v.parse(InstantEnvelopeSchema, await res.json());
 	return (body.data?.result ?? [])
 		.map((r) => ({ model: r.metric?.lance_model ?? '?', value: Number(r.value?.[1] ?? '0') }))
 		.filter((s) => Number.isFinite(s.value))

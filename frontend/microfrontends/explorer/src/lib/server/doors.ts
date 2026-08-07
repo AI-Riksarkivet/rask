@@ -84,10 +84,3 @@ export function sessionGate(): { ok: false; status: number; detail: string } | n
 	return null;
 }
 
-/** The UNPARSED seam, in one place instead of three: these planes' own shapes are the contract
- *  (the deleted routes parsed nothing and neither did the clients), so the payload is handed on
- *  with the type the call site already used. This is a cast, not a check — #94 replaces it with
- *  real schemas through `@rask/api/upstream`'s `parsed`. */
-export function typedAs<T>(result: ApiResult<unknown>): ApiResult<T> {
-	return result.ok ? { ok: true, data: result.data as T } : result;
-}

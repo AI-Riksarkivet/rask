@@ -9,8 +9,6 @@
  * chunk tag is a first-class, reviewable, versioned annotation. See labeling/types.ts.
  */
 
-import { apiUrl } from '@rask/explorer-api/base';
-
 /** A chunk (or unit) + the tag labels to set. `keys` = the NON-doc identity fields,
  *  positional (pairs with keyFields minus the doc key). */
 export interface TagWrite {
@@ -73,17 +71,7 @@ export function tagRemovesFromEntries(
 		}));
 }
 
-/** POST a TagBatch to persist chunk tags as annotation rows (one Lance version). */
-export async function saveTagsAsAnnotations(
-	batch: TagBatch,
-	dataset?: string,
-): Promise<SaveResult> {
-	const q = dataset ? `?dataset=${encodeURIComponent(dataset)}` : '';
-	const res = await fetch(apiUrl(`/api/annotations/tags${q}`), {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(batch),
-	});
-	if (!res.ok) throw new Error(`tag save failed (HTTP ${res.status})`);
-	return (await res.json()) as SaveResult;
-}
+// The fetch transport that used to live here (`saveTagsAsAnnotations`) is DELETED (#94): the one
+// caller (explorer's ExportNode) rides the zone's remote function of the same name, and a dead
+// transport with an `as SaveResult` cast is drift waiting to happen. The batch builders above and
+// the `SaveResult` contract are what this module is.

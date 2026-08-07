@@ -20,6 +20,7 @@
  * Generic over the layout type for the same reason `dock-layout.ts` is: `@rask/api` is the transport
  * layer and must not depend on a UI package, so it never names `SerializedDockview`.
  */
+import * as v from 'valibot';
 import type { StoredLayoutRead } from './dock-layout';
 
 /** One saved view. `id` is stable across renames; the UI addresses views by it, never by name. */
@@ -36,10 +37,31 @@ interface LibraryDocument<T> {
 	workbenches: Record<string, { views: DockView<T>[] }>;
 }
 
-interface Envelope<T> {
-	exists?: boolean;
-	value?: LibraryDocument<T>;
-}
+/** The envelope + view SHELLS, parsed at the wire (#94): `id`/`name`/`updated` are checkable and
+ *  checked; each view's `layout` stays the caller's `T` (this transport layer never names the dock
+ *  layout schema — see `dock-layout.ts`'s header), confined to one annotated line in `read`. */
+const EnvelopeSchema = v.looseObject({
+	exists: v.optional(v.boolean()),
+	value: v.optional(
+		v.looseObject({
+			workbenches: v.optional(
+				v.record(
+					v.string(),
+					v.looseObject({
+						views: v.array(
+							v.looseObject({
+								id: v.string(),
+								name: v.string(),
+								layout: v.unknown(),
+								updated: v.string(),
+							}),
+						),
+					}),
+				),
+			),
+		}),
+	),
+});
 
 export interface DockViewsStore<T> {
 	/** Every saved view for this workbench, in sidebar order. Three outcomes, like every read here. */
@@ -112,13 +134,19 @@ export function makeDockViewsStore<T>(options: DockViewsStoreOptions): DockViews
 		if (!response.ok) {
 			return { status: 'unreadable', detail: `the view library answered ${response.status}` };
 		}
-		const body = (await response.json()) as Envelope<T>;
+		const raw: unknown = await response.json().catch(() => null);
+		const envelope = v.safeParse(EnvelopeSchema, raw);
+		if (!envelope.success) {
+			return { status: 'unreadable', detail: 'the view library answered a non-envelope body' };
+		}
+		const body = envelope.output;
 		if (body.exists !== true || body.value === undefined) return { status: 'absent' };
 		const w = body.value.workbenches;
 		if (typeof w !== 'object' || w === null) {
 			return { status: 'unreadable', detail: 'the stored library has no workbenches map' };
 		}
-		return { status: 'ok', layout: body.value };
+		// The one structural-trust point (see EnvelopeSchema): shells verified, each `layout` is T.
+		return { status: 'ok', layout: body.value as LibraryDocument<T> };
 	}
 
 	/**

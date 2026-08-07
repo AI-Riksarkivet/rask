@@ -32,7 +32,7 @@ export interface UpstreamRequest {
 	/** The upstream's base URL (env-resolved in the zone — each zone names its own). */
 	base: string;
 	path: string;
-	init?: RequestInit;
+	init?: RequestInit | undefined;
 	/** The signed-in session's bearer, when the caller has one. */
 	bearer?: string | undefined;
 	/** Names the upstream in failure details ("catalog answered 503") — a detail that cannot say

@@ -1,7 +1,8 @@
 import { command } from '$app/server';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
-import { annotatorJSON, sessionGate, typedAs } from '$lib/server/doors';
+import { parsed } from '@rask/api/upstream';
+import { annotatorJSON, sessionGate } from '$lib/server/doors';
 import type { SaveResult } from '@rask/labeling/tag-writer';
 import type { JobResult } from '@rask/labeling/jobs';
 
@@ -16,13 +17,31 @@ import type { JobResult } from '@rask/labeling/jobs';
 // `/api/annotations/**` and `/api/assist/**` belongs to the annotator zone and is not reachable from
 // here — which is what deleting the routes rather than widening them keeps true.
 //
-// Neither surface was parsed before (both clients cast the JSON), so neither is parsed now: moving a
-// transport is not the moment to invent a contract. Transport and gate live in `$lib/server/doors`
-// over `@rask/api/upstream` (#93); the cast rides `typedAs` until #94 gives these planes schemas.
+// Transport and gate live in `$lib/server/doors` over `@rask/api/upstream` (#93). The answers are
+// PARSED (#94): the schemas are typed against the wire contracts imported from `@rask/labeling`, so
+// a drift between this schema and the shared contract is a compile error, and a drifted wire answer
+// is a named 502 the caller renders — never a silently-wrong count.
 
-/** One media-plane POST, typed the way the call sites always were. */
-const annotatorPost = <T>(path: string, body: unknown): Promise<ApiResult<T>> =>
-	annotatorJSON(path, { method: 'POST', body: JSON.stringify(body) }).then((r) => typedAs<T>(r));
+const SaveResultSchema: v.GenericSchema<unknown, SaveResult> = v.looseObject({
+	saved: v.number(),
+	version: v.number(),
+});
+
+const JobResultSchema: v.GenericSchema<unknown, JobResult> = v.looseObject({
+	job_id: v.string(),
+	status: v.string(),
+	backend: v.string(),
+});
+
+/** One media-plane POST, parsed on the way out. */
+const annotatorPost = <T>(
+	path: string,
+	body: unknown,
+	schema: v.GenericSchema<unknown, T>,
+): Promise<ApiResult<T>> =>
+	annotatorJSON(path, { method: 'POST', body: JSON.stringify(body) }).then((r) =>
+		parsed(r, schema, 'annotator'),
+	);
 
 /** One tagged unit: the doc key plus the NON-doc identity fields, positional (pairs with the
  *  descriptor's `keyFields` minus the doc key) — the arity-generic shape `@rask/labeling/tag-writer`
@@ -48,11 +67,11 @@ export const saveTagsAsAnnotations = command(
 		const refused = sessionGate();
 		if (refused) return refused;
 		const suffix = dataset ? `?dataset=${encodeURIComponent(dataset)}` : '';
-		return annotatorPost<SaveResult>(`/api/annotations/tags${suffix}`, {
+		return annotatorPost(`/api/annotations/tags${suffix}`, {
 			adds,
 			removes,
 			base_version,
-		});
+		}, SaveResultSchema);
 	},
 );
 
@@ -90,13 +109,13 @@ export const submitBatchJob = command(
 	async ({ producer, op, scope, prompt, dataset, exemplars }): Promise<ApiResult<JobResult>> => {
 		const refused = sessionGate();
 		if (refused) return refused;
-		return annotatorPost<JobResult>('/api/jobs/apply', {
+		return annotatorPost('/api/jobs/apply', {
 			producer,
 			op,
 			scope: scopePayload(scope),
 			prompt: prompt ?? null,
 			dataset: dataset ?? null,
 			exemplars: exemplars ?? [],
-		});
+		}, JobResultSchema);
 	},
 );

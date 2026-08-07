@@ -7,6 +7,7 @@
  * card can show.
  */
 import { base } from '$app/paths';
+import * as v from 'valibot';
 import type { FlowPayload } from './types';
 import type { InvokeRequest } from './executor';
 
@@ -61,9 +62,19 @@ export async function invokeServe(req: InvokeRequest): Promise<FlowPayload> {
 			// Two failure shapes, both load-bearing (see @rask/api/serve-proxy): thrown
 			// kit error()s (401/413/400) answer `{ message }`, upstream problems answer
 			// `{ reason, detail }`. Normalise here or a 401 renders as a bare status.
-			const body = (await res.json()) as { reason?: string; detail?: string; message?: string };
-			reason = body.reason;
-			detail = body.detail ?? body.message;
+			// Parsed, not cast (#94): a non-string field degrades to the status line, never NaN-ish UI.
+			const body = v.safeParse(
+				v.looseObject({
+					reason: v.optional(v.string()),
+					detail: v.optional(v.string()),
+					message: v.optional(v.string()),
+				}),
+				await res.json(),
+			);
+			if (body.success) {
+				reason = body.output.reason;
+				detail = body.output.detail ?? body.output.message;
+			}
 		} catch {
 			// non-JSON failure body — the status alone will have to do
 		}

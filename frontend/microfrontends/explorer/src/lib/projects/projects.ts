@@ -7,36 +7,41 @@
  * zone, which owns the other end.
  *
  * The wire types stay HERE rather than in `projects.remote.ts` because a remote module may export only
- * remote functions.
+ * remote functions. The three RESPONSE shapes are valibot schemas with derived types (#94): they are
+ * hand-mirrored from the annotator service with no codegen, so the wire is parsed against them and a
+ * drift is a named failure the dialog renders, never a silently-empty picker.
  */
+import * as v from 'valibot';
 
 /** One project as the picker renders it (title/slug/state); `counts` rides along as the server sends it. */
-export interface ProjectRow {
-	project_id: string;
-	slug: string;
-	title: string;
-	state: string;
-	counts: Record<string, number>;
-}
+export const ProjectRowSchema = v.looseObject({
+	project_id: v.string(),
+	slug: v.string(),
+	title: v.string(),
+	state: v.string(),
+	counts: v.record(v.string(), v.number()),
+});
+export type ProjectRow = v.InferOutput<typeof ProjectRowSchema>;
 
-export interface ProjectsList {
-	projects: ProjectRow[];
-}
+export const ProjectsListSchema = v.looseObject({ projects: v.array(ProjectRowSchema) });
+export type ProjectsList = v.InferOutput<typeof ProjectsListSchema>;
 
 /** A created project. `project_id` is optional on the wire: a 2xx without one is a contract failure the
  *  dialog reports rather than a project it can send to. */
-export interface CreatedProject {
-	project_id?: string;
-	slug?: string;
-	title?: string;
-	state?: string;
-}
+export const CreatedProjectSchema = v.looseObject({
+	project_id: v.optional(v.string()),
+	slug: v.optional(v.string()),
+	title: v.optional(v.string()),
+	state: v.optional(v.string()),
+});
+export type CreatedProject = v.InferOutput<typeof CreatedProjectSchema>;
 
 /** What a send did — `sent` items, `created` of them new (a re-sent item is not duplicated). */
-export interface SendResult {
-	sent?: number;
-	created?: number;
-}
+export const SendResultSchema = v.looseObject({
+	sent: v.optional(v.number()),
+	created: v.optional(v.number()),
+});
+export type SendResult = v.InferOutput<typeof SendResultSchema>;
 
 /**
  * One item of a send: a descriptor key-path plus the provenance the task carries — which dataset, and

@@ -35,10 +35,17 @@ export interface BffClient {
 	/** Prefix this zone's base path to an absolute same-origin BFF path (`/api/…`, `/capi/…`). */
 	bffPath: (path: string) => string;
 	/** Null-on-any-error JSON read under `/api` — for chrome and best-effort panels where an empty
-	 *  state and an outage read the same to the user. */
+	 *  state and an outage read the same to the user. The generic rides `declaredAs` — see its
+	 *  contract for when a caller may name `T` at all. */
 	getJSON: <T>(path: string) => Promise<T | null>;
-	/** Status-aware JSON request against a same-origin BFF base ("/api" or "/capi"). */
-	requestJSON: <T>(base: string, path: string, init?: RequestInit) => Promise<ApiResult<T>>;
+	/** Status-aware JSON request against a same-origin BFF base ("/api" or "/capi"). Same
+	 *  `declaredAs` contract: name `T` only for a machine-generated wire type; a hand-written shape
+	 *  calls this bare and parses (see `@rask/api/upstream`'s `parsed`). */
+	requestJSON: <T = unknown>(
+		base: string,
+		path: string,
+		init?: RequestInit,
+	) => Promise<ApiResult<T>>;
 	/** The binary sibling of `requestJSON` — for BFF responses that are NOT JSON (the table-preview
 	 *  Arrow-IPC file). Success hands back the raw bytes; a failure still reads the JSON `detail`
 	 *  (error responses stay JSON on every BFF route), with the same 401 ≠ 403 ≠ 0 status split. */
@@ -63,10 +70,23 @@ export function createBffClient(base: string): BffClient {
 	const bffPath = (path: string): string => `${prefix}${path}`;
 
 	/** Lift `detail` out of an error body, tolerating a non-JSON error page. */
-	const detailFrom = (body: Record<string, unknown>, status: number): string =>
-		typeof body.detail === 'string' ? body.detail : `HTTP ${status}`;
+	const detailFrom = (body: unknown, status: number): string =>
+		body !== null &&
+		typeof body === 'object' &&
+		'detail' in body &&
+		typeof body.detail === 'string'
+			? body.detail
+			: `HTTP ${status}`;
 
-	const requestJSON = async <T>(
+	/** The ONE declaration seam (#94): stamp a verified-JSON `unknown` with the caller's wire type.
+	 *  Reserved for contracts that are MACHINE-GENERATED from a service's own OpenAPI
+	 *  (`generated/*.ts` — the lineage client's whole surface aliases them), where a hand-copied
+	 *  valibot schema would be a SECOND copy of the contract and its own drift surface. A
+	 *  hand-written shape never comes through here — it calls the transport bare (`T = unknown`)
+	 *  and parses at its boundary (`storage.ts`, the docks and `@rask/labeling` all do, post-#94). */
+	const declaredAs = <T>(body: unknown): T => body as T;
+
+	const requestJSON = async <T = unknown>(
 		apiBase: string,
 		path: string,
 		init?: RequestInit,
@@ -76,9 +96,9 @@ export function createBffClient(base: string): BffClient {
 				...init,
 				signal: timeoutSignal(FETCH_TIMEOUT_MS),
 			});
-			const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+			const body: unknown = await res.json().catch(() => ({}));
 			if (!res.ok) return { ok: false, status: res.status, detail: detailFrom(body, res.status) };
-			return { ok: true, data: body as T };
+			return { ok: true, data: declaredAs<T>(body) };
 		} catch (err) {
 			return { ok: false, status: 0, detail: String(err) };
 		}
@@ -95,7 +115,7 @@ export function createBffClient(base: string): BffClient {
 				signal: timeoutSignal(FETCH_TIMEOUT_MS),
 			});
 			if (!res.ok) {
-				const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+				const body: unknown = await res.json().catch(() => ({}));
 				return { ok: false, status: res.status, detail: detailFrom(body, res.status) };
 			}
 			return { ok: true, data: await res.arrayBuffer() };
@@ -108,7 +128,7 @@ export function createBffClient(base: string): BffClient {
 		try {
 			const res = await fetch(bffPath(`/api/${path}`), { signal: timeoutSignal(FETCH_TIMEOUT_MS) });
 			if (!res.ok) return null;
-			return (await res.json()) as T;
+			return declaredAs<T>(await res.json());
 		} catch {
 			return null;
 		}

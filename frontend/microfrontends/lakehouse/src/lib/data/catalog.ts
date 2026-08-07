@@ -50,7 +50,7 @@ export type TableDetail = {
 /** Compatibility alias — the status-aware Result shape now lives in http.ts, shared with the lineage client. */
 export type CatalogResult<T> = ApiResult<T>;
 
-const requestJSON = <T>(path: string, init?: RequestInit) => request<T>('/capi', path, init);
+const requestJSON = (path: string, init?: RequestInit) => request('/capi', path, init);
 
 const enc = encodeURIComponent;
 
@@ -116,14 +116,14 @@ export const fetchTableHistory = async (
 	table: string,
 	limit: number,
 ): Promise<ApiResult<TableHistory>> => {
-	const res = await requestJSON<unknown>(`v1/table/${enc(table)}/history?limit=${limit}`);
+	const res = await requestJSON(`v1/table/${enc(table)}/history?limit=${limit}`);
 	return res.ok ? { ok: true, data: parse(TableHistorySchema, res.data) } : res;
 };
 
 /** #64 data-plane row insert — append Arrow-IPC rows (built in the browser via apache-arrow). Writer-gated
  * (can_write_data) at the catalog, session-only BFF. `mode=append` never rewrites existing versions. */
 export const insertRows = (table: string, arrow: Uint8Array) =>
-	requestJSON<unknown>(`v1/table/${enc(table)}/insert?mode=append`, {
+	requestJSON(`v1/table/${enc(table)}/insert?mode=append`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/vnd.apache.arrow.stream' },
 		body: arrow as BodyInit,
