@@ -585,6 +585,12 @@ class WarehouseResponse(BaseModel):
 
 class CreateWarehouseNamespaceRequest(BaseModel):
     namespace: str  # a single TOP-LEVEL namespace name to create in + bind to this warehouse
+    #: ADOPT a namespace whose bytes were already migrated INTO this warehouse's bucket (the
+    #: sanctioned bytes-first migration): a native "already exists" AT THE WAREHOUSE ROOT converges
+    #: instead of refusing, and the binding + FGA trailer runs as on a fresh create. Both hazard
+    #: guards (write-once binding; default-root collision) apply IDENTICALLY — this flag never
+    #: bypasses them, it only accepts that the physical namespace preceded its governance record.
+    adopt_existing: bool = False
 
 
 # --------------------------------------------------------------------------- #

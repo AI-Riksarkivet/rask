@@ -456,7 +456,18 @@ async def create_warehouse_namespace(
 
     ns_conn = _namespace_for_root(request, settings, root_uri)
     req = CreateNamespaceRequest(id=segments)
-    response: CreateNamespaceResponse = await run_in_threadpool(native.call, ns_conn, "create_namespace", req)
+    try:
+        response: CreateNamespaceResponse = await run_in_threadpool(native.call, ns_conn, "create_namespace", req)
+    except NamespaceAlreadyExistsError:
+        # The namespace already exists AT THIS WAREHOUSE'S ROOT. With `adopt_existing` that is the
+        # bytes-first migration converging (the #54 flow: copy the datasets into the bucket, THEN
+        # bind) — the binding + FGA trailer below is exactly what it still needs. Without the flag
+        # it stays a refusal: silently adopting would let a typo'd create inherit a stranger's data.
+        # Both hazard guards above ran either way; this branch never relaxes them.
+        if not body.adopt_existing:
+            raise
+        log.info("adopting existing namespace %s at warehouse %s (bytes-first migration)", ns_name, warehouse_id)
+        response = CreateNamespaceResponse()
     # Persist + cache the binding BEFORE returning, so the very next table-create routes to this bucket.
     await run_in_threadpool(
         warehouses.bind_namespace,
