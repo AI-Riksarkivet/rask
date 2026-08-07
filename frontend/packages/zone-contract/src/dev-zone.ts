@@ -25,12 +25,28 @@
  *
  * WHAT IT DOES NOT DO — read this before assuming a blank page is a bug:
  *
- *   - POPULATED DATA IS PER ZONE, and only `lakehouse` has it. The mocks answer 404 to everything
- *     until seeded — deliberately, because a mock with baked-in fixtures cannot tell a live surface
- *     from a dead one — so a zone renders EMPTY unless it ships an `e2e/dev-seed.ts`. Where that file
- *     exists this launcher POSTs it in before the zone starts (lakehouse: 4 catalog routes, 2
- *     observability routes and 3 lineage runs, verified rendering as real table rows). Where it does
- *     not, the launcher says so instead of leaving you to guess whether blank means broken.
+ *   - POPULATED DATA IS PER ZONE — `lakehouse` and `annotator` have it; `explorer`, `home` and
+ *     `compute`/`studio` do not. The mocks answer 404 to everything until seeded (deliberately: a mock
+ *     with baked-in fixtures cannot tell a live surface from a dead one), so a zone renders EMPTY
+ *     unless it ships an `e2e/dev-seed.ts`, which this launcher POSTs in before the zone starts. Both
+ *     seeded zones are verified rendering real rows, not assumed. Where a zone has no fixture the
+ *     launcher SAYS so, rather than leaving blank ambiguous between "no data" and "broken".
+ *
+ *     SEED THE CURSOR OR NOTHING LOADS. This is the trap, and it cost a full debugging round: most
+ *     surfaces do not read on page load, they read on the LINEAGE CURSOR — `ModelRegistry.svelte` ends
+ *     with `liveRead(lineageTick, () => refresh())`, and its siblings do the same. A hydrated browser
+ *     showed the very first two requests are `GET /events?limit=1&summary=true` (the probe, whose
+ *     contract is `LineageProbeSchema` = `{events:[{seq:number}]}`) and `GET /runs`. Leave those
+ *     unseeded and the cursor never opens, `liveRead` never fires, and the zone asks its upstream for
+ *     NOTHING while sitting on "Loading…" — five perfectly-shaped data seeds and an empty page. The
+ *     cursor's env also defaults to a dead `:8001`, so a zone's stack must point `LINEAGE_API` at its
+ *     own mock. Corollary: `curl` cannot diagnose this. No hydration, no mount, no `liveRead`, no
+ *     requests at all — only a real browser shows the truth.
+ *
+ *     `home` is NOT seedable today and that is a zone decision, not a gap here: its project gallery is
+ *     identity-scoped, so with auth OFF it answers "No projects to show — sign-in is not configured on
+ *     this stack" without reading. Its mock served the seeds correctly; the page declined to ask.
+ *     Populating it needs a real session, not a fixture.
  *   - AUTH IS OFF, but the mocks still see an IDENTITY. The e2e configs set `OIDC_*` to force the
  *     governed path on; this omits them, so `locals.authEnabled` is false and the zone forwards no
  *     bearer — which the mocks 401 by design ("exactly like the real catalog"), meaning seeded reads
@@ -122,11 +138,15 @@ export const ZONE_STACKS: Record<string, ZoneStack> = {
 		}),
 	},
 	annotator: {
+		seedModule: 'e2e/dev-seed.ts',
 		mocks: ['e2e/mock-annotator.ts'],
 		env: (port) => ({
 			ANNOTATOR_API: url(port('MOCK_ANNOTATOR_PORT')),
 			ANNOTATOR_PROJECTS_API: url(port('MOCK_ANNOTATOR_PORT')),
 			SEARCH_API: url(port('MOCK_ANNOTATOR_PORT')),
+			// See home: the cursor defaults to a dead :8001, and a zone whose cursor never opens
+			// never fires the reads hanging off `liveRead`.
+			LINEAGE_API: url(port('MOCK_ANNOTATOR_PORT')),
 		}),
 	},
 	models: {
