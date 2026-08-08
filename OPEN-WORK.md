@@ -75,10 +75,14 @@ through the sidecar. Keep `tests/unit/test_invariants.py`'s scope check — an a
 four zones, shared `@repo/api/runs-feed`), because `GET /runs` already carries the lifecycle — but *read*
 and *dismissed* are per-subject state the run feed cannot carry.
 
-**Why it is open.** It needs B1.
+**Why it is open.** It needs B1. *(B1's "no actor type is registered" is stale since the open_anno
+build — the annotator registers three, `services/annotator/src/annotator/main.py:91-93`; the missing
+piece is an inbox host, not actor infrastructure.)*
 
 **What closes it.** One actor per subject inbox, unread counts that cannot race, expiry via reminders rather
-than a sweeper cron.
+than a sweeper cron. **Designed in full as `open_notifications.md`** (2026-08-08): a `services/notifications`
+deployable hosting the inbox actor, bus + reconciler ingress, project watches, channel fan-out — its slice
+S1 is what closes this item.
 
 ### B2b · ratch's runner imports become the Ray-native name seam *(new, 2026-07-27)*
 
