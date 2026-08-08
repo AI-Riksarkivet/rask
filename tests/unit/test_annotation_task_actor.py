@@ -217,6 +217,24 @@ async def test_leaving_claimed_disarms_the_reminder(event: str) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("event", ["submit", "release", "skip"])
+async def test_a_failed_store_leaves_the_lease_reminder_armed(event: str) -> None:
+    """Disarm AFTER persist, never before. If the store raises, the persisted state is still CLAIMED
+    and the reminder must still be armed — the reverse order strands a claimed task with no
+    self-expiry, exactly what the lease reminder exists to prevent. (open_dapr.md §2.6.)"""
+    actor = await _claimed()
+
+    async def _boom() -> None:
+        raise RuntimeError("state store down")
+
+    actor.sm.save_state = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError):
+        await actor.fire({"event": event, "actor": "gina"})
+
+    assert LEASE_REMINDER not in actor.unregistered, "a failed store disarmed the safety net"
+
+
+@pytest.mark.asyncio
 async def test_an_expired_lease_returns_the_task_and_KEEPS_the_draft() -> None:
     """The whole point of a lease: the work is not lost, only the hold on it."""
     actor = await _seeded()

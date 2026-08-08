@@ -189,7 +189,6 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
             # ASSIGNING pins the task: `lease_expires_at is None` while CLAIMED means never expires
             # (§4.2), because the assignee did not choose when to start.
             task.lease_expires_at = None
-            await self._disarm_lease()
         elif event == "save_draft":
             seconds = int(payload.get("lease_seconds") or task.lease_seconds)
             task.lease_expires_at = now + timedelta(seconds=seconds)
@@ -197,10 +196,8 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         elif event == "submit":
             task.submitted_by, task.submitted_at = actor, now
             task.assignee, task.lease_expires_at = None, None
-            await self._disarm_lease()
         elif event in {"release", "lease_expired", "skip"}:
             task.assignee, task.lease_expires_at = None, None
-            await self._disarm_lease()
         elif event in {"accept", "fix_and_accept", "request_changes"}:
             task.reviewed_by, task.reviewed_at = actor, now
             task.review_action = "accepted" if event == "accept" else event  # type: ignore[assignment]
@@ -219,6 +216,15 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
                 )
 
         await self._store(task)
+        # Disarm only AFTER the store succeeds. The reverse order — disarm, then a store that raises —
+        # leaves the PERSISTED state still CLAIMED with its safety net already gone: the lease stops
+        # self-expiring and only a human with `can_manage` can un-stick it. Mirror of the project
+        # actor's arm-BEFORE-persist rule: arm early, disarm late, so a persisted claim is never
+        # uncovered. A re-fired event re-runs disarm safely (`_disarm_lease` suppresses an absent
+        # reminder), and a reminder that survives a crash here is absorbed by `receive_reminder`'s
+        # stale-check.
+        if event in {"assign", "submit", "release", "lease_expired", "skip"}:
+            await self._disarm_lease()
         await self._report_state(task)
         return task.model_dump(mode="json")
 
