@@ -21,6 +21,10 @@ export interface AnnoRow {
 	uncertainty: number | null;
 	tStart: number | null;
 	tEnd: number | null;
+	/** The textual facet — set only on a SPAN row (a range into `parentId`'s text). */
+	parentId: string;
+	charStart: number | null;
+	charEnd: number | null;
 }
 
 /** The raw table cell as a string (null when absent). */
@@ -70,6 +74,9 @@ export function projectRows(
 			uncertainty: numField(t, 'uncertainty', i),
 			tStart: numField(t, 't_start', i),
 			tEnd: numField(t, 't_end', i),
+			parentId: rawField(t, 'parent_id', i) ?? '',
+			charStart: numField(t, 'char_start', i),
+			charEnd: numField(t, 'char_end', i),
 		});
 	}
 	return deletes.length ? out.filter((r) => !deletes.includes(r.id)) : out;

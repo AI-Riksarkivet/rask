@@ -725,8 +725,14 @@ export class AnnotatorController {
 	}
 
 	deleteSelected(): void {
-		const i = this.selectedIndex;
-		if (i == null) return;
+		if (this.selectedIndex == null) return;
+		this.deleteRow(this.selectedIndex);
+	}
+
+	/** Delete ANY row by index — the undoable delete the canvas and the span surface share. Split
+	 *  from deleteSelected so a child row (a text-span tag's ✕) can be removed without first
+	 *  stealing the selection from the parent being annotated. */
+	deleteRow(i: number): void {
 		const t = this.table;
 		const id = t ? rawField(t, 'id', i) : null;
 		if (id) {
@@ -740,7 +746,7 @@ export class AnnotatorController {
 		this.ctx?.plugins.arrow.setDeleted(i);
 		this.ctx?.plugins.arrow.sync();
 		this._geoDirty = true;
-		this.select(null);
+		if (this.selectedIndex === i) this.select(null);
 	}
 
 	// ── temporal (audio / video segments) ──
