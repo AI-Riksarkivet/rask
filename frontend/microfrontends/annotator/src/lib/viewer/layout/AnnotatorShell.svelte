@@ -14,6 +14,7 @@
 	import { ResizableSplit } from '@rask/ui/resizable-split';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
+	import { cn } from '@rask/ui/utils';
 	import AnnotatorToolbar from './AnnotatorToolbar.svelte';
 	import AnnotationSidebar from './AnnotationSidebar.svelte';
 	import ZoomControls from './ZoomControls.svelte';
@@ -155,6 +156,11 @@
 	// Audio is temporal-only (no canvas): hide the spatial chrome — drawing tools, zoom,
 	// and the GroundingDINO box-assist. Image + video keep it (video draws on its frame).
 	const spatial = $derived(unit.kind !== 'audio');
+	// Temporal units render a TRANSPORT BAR at the bottom of the viewer, inside the same
+	// positioned ancestor the floating pills anchor to — so `bottom-2` overlays the bar and eats
+	// its clicks (found by Playwright's interception check on the video seek slider). Raised, not
+	// force-clicked around: the overlap is the app's defect, not the test's.
+	const raisedOverTransport = $derived(unit.kind !== 'image' ? 'bottom-14' : undefined);
 
 	// Page nav = the review selection (else this single unit). Navigating drives the
 	// shared store, whose index change re-mounts this shell with the next unit.
@@ -278,52 +284,60 @@
 					     bottom-right — so it can render its full text. -->
 						<Badge
 							variant={loadFailed ? 'destructive' : 'secondary'}
-							class="pointer-events-none absolute bottom-2 left-2 z-10 font-mono shadow-sm backdrop-blur"
+							class={cn(
+	'pointer-events-none absolute bottom-2 left-2 z-10 font-mono shadow-sm backdrop-blur',
+	raisedOverTransport,
+)}
 							data-testid="annotate-status"
 						>
 							annotate · {unit.kind} · {status}{controller.saveStatus ? ` · ${controller.saveStatus}` : ''}
 						</Badge>
 						{#key reloadNonce}
-					<Viewer
-							{unit}
-							{controller}
-							onload={(n) => {
+							<Viewer
+								{unit}
+								{controller}
+								onload={(n) => {
 	status = `${n} annotations from Lance`;
 	loadFailed = false;
 }}
-							onerror={(message) => {
+								onerror={(message) => {
 	status = `load failed — ${message}`;
 	loadFailed = true;
 }}
-						/>
-					{/key}
+							/>
+						{/key}
 						{#if remoteNotice}
-						<!-- A change someone else made, on a canvas that has unsaved work. NEVER reloaded
+							<!-- A change someone else made, on a canvas that has unsaved work. NEVER reloaded
 						     over — the shapes on screen are theirs and cannot be got back. It names the
 						     consequence (the save will be refused) because "changed" alone leaves a person
 						     unable to decide. -->
-						<div
-							class="border-destructive/50 bg-card/95 text-card-foreground pointer-events-auto absolute top-2 left-1/2 z-20 flex max-w-md -translate-x-1/2 items-start gap-2 rounded-lg border p-2 shadow-sm backdrop-blur"
-							data-testid="remote-change-notice"
-						>
-							<p class="text-xs">{remoteNotice}</p>
-							<Button
-								variant="outline"
-								size="sm"
-								class="h-6 shrink-0 px-2 text-xs"
-								onclick={() => {
+							<div
+								class="border-destructive/50 bg-card/95 text-card-foreground pointer-events-auto absolute top-2 left-1/2 z-20 flex max-w-md -translate-x-1/2 items-start gap-2 rounded-lg border p-2 shadow-sm backdrop-blur"
+								data-testid="remote-change-notice"
+							>
+								<p class="text-xs">{remoteNotice}</p>
+								<Button
+									variant="outline"
+									size="sm"
+									class="h-6 shrink-0 px-2 text-xs"
+									onclick={() => {
 	remoteNotice = null;
 	reloadNonce += 1;
 }}
-							>
-								Reload
-							</Button>
-						</div>
-					{/if}
-					<TaskStreamNav {stream} />
-						<PageNav {pages} current={pageIndex} onNavigate={navigate} />
+								>
+									Reload
+								</Button>
+							</div>
+						{/if}
+						<TaskStreamNav {stream} />
+						<PageNav
+							{pages}
+							current={pageIndex}
+							onNavigate={navigate}
+							class={raisedOverTransport}
+						/>
 						{#if spatial}
-							<ZoomControls {controller} />
+							<ZoomControls {controller} class={raisedOverTransport} />
 						{/if}
 					</div>
 				{/snippet}

@@ -60,6 +60,11 @@ class NewAnnotation(BaseModel):
     source: str = "human"
     group: str = ""
     mask: str = ""
+    #: The active-learning scores a PREDICTION row carries (the review queue ranks by them). None —
+    #: the human-drawn default — lands as null: a person's shape has no model score, and inventing
+    #: one (1.0 "confidence") would let human rows shuffle into the model-ranked half of the queue.
+    confidence: float | None = None
+    uncertainty: float | None = None
 
 
 class GeometryEdit(BaseModel):

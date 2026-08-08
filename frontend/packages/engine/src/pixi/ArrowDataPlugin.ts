@@ -184,6 +184,16 @@ export class ArrowDataPlugin {
 		}
 	>();
 
+	// ── Track display overlay ──
+	// Where each tracked object IS at the current playhead: interpolated geometry for the row that
+	// REPRESENTS its track right now, and the row indices hidden because another row does. Display
+	// state, NEVER an edit — it lives beside `dirtyOverrides` precisely so it can never leak into
+	// `getDirtyOverrides()` and ride a save payload (interpolated boxes are computed, not authored,
+	// and persisting one would invent geometry nobody drew). Dirty wins over track everywhere: a
+	// live drag edit is an authored value and must beat the interpolation under it.
+	private trackOverrides = new Map<number, { x: number; y: number; w: number; h: number }>();
+	private trackHidden: Set<number> = new Set();
+
 	// Locally-deleted rows, by row INDEX — the same shape as every other overlay here.
 	//
 	// The Arrow table is immutable and only replaced on reload, so a delete cannot be expressed by
@@ -286,6 +296,19 @@ export class ArrowDataPlugin {
 	/** Check if there are unsaved geometry edits */
 	hasDirtyOverrides(): boolean {
 		return this.dirtyOverrides.size > 0;
+	}
+
+	/** Replace the track display overlay wholesale (the playhead moved — every track re-evaluates).
+	 *  `overrides` positions the row representing each live track; `hidden` removes the keyframe
+	 *  rows that row stands in for. Indices are row indices into the CURRENT table; the caller
+	 *  re-syncs after any reload, exactly as it does for the other index-keyed overlays. */
+	setTrackDisplay(
+		overrides: ReadonlyMap<number, { x: number; y: number; w: number; h: number }>,
+		hidden: ReadonlySet<number>,
+	): void {
+		this.trackOverrides = new Map(overrides);
+		this.trackHidden = new Set(hidden);
+		this.dirty = true;
 	}
 
 	/** Hide a row locally, because it is queued for deletion.
@@ -496,6 +519,12 @@ export class ArrowDataPlugin {
 		for (const i of this.deletedRows) {
 			if (i < numRows) this.hiddenMask[i] = 1;
 		}
+		// Track-hidden rows ride the same mask, for the same reason deleted rows do: draw,
+		// hit-testing and mask sprites all consult it, so a keyframe whose track is represented by
+		// another row (or is outside its lifetime) stops being drawn AND clickable in one place.
+		for (const i of this.trackHidden) {
+			if (i < numRows) this.hiddenMask[i] = 1;
+		}
 
 		// ── Phase 3.5: Compute heatmap colors ──
 		if (this.heatmapColumn && this.heatmapColors.length !== numRows) {
@@ -559,7 +588,7 @@ export class ArrowDataPlugin {
 
 			// Viewport culling
 			if (vp) {
-				const ovr = this.dirtyOverrides.get(i);
+				const ovr = this.dirtyOverrides.get(i) ?? this.trackOverrides.get(i);
 				const ax = ovr ? ovr.x : this.xArr[i];
 				const ay = ovr ? ovr.y : this.yArr[i];
 				const aw = ovr ? ovr.w : this.wArr[i];
@@ -711,6 +740,15 @@ export class ArrowDataPlugin {
 			return;
 		}
 
+		// The interpolated track box. A rect, not the row's stored polygon: tracks are box
+		// keyframes (tracks.ts), and drawing the stale keyframe polygon at an interpolated
+		// position would misstate both where the object is and what was authored.
+		const trk = this.trackOverrides.get(i);
+		if (trk) {
+			g.rect(trk.x, trk.y, trk.w, trk.h);
+			return;
+		}
+
 		if (st === 'point') {
 			const scale = this.app.stage.scale.x || 1;
 			g.circle(this.xArr[i]!, this.yArr[i]!, 4 / scale);
@@ -812,6 +850,12 @@ export class ArrowDataPlugin {
 				polygon: override.polygon,
 			};
 		}
+		const trk = this.trackOverrides.get(index);
+		if (trk) {
+			// Null polygon on purpose — the interpolated position is a BOX; the row's stored
+			// polygon belongs to its keyframe, not to this moment.
+			return { x: trk.x, y: trk.y, w: trk.w, h: trk.h, polygon: null };
+		}
 		return {
 			x: this.xArr[index]!,
 			y: this.yArr[index]!,
@@ -905,13 +949,16 @@ export class ArrowDataPlugin {
 			if (this.hiddenMask[i]) continue;
 
 			const override = this.dirtyOverrides.get(i);
-			const ax = override ? override.x : this.xArr[i];
-			const ay = override ? override.y : this.yArr[i];
-			const aw = override ? override.w : this.wArr[i];
-			const ah = override ? override.h : this.hArr[i];
+			const trk = override ? undefined : this.trackOverrides.get(i);
+			const ax = override ? override.x : trk ? trk.x : this.xArr[i];
+			const ay = override ? override.y : trk ? trk.y : this.yArr[i];
+			const aw = override ? override.w : trk ? trk.w : this.wArr[i];
+			const ah = override ? override.h : trk ? trk.h : this.hArr[i];
 
 			if (x >= ax! && x <= ax! + aw! && y >= ay! && y <= ay! + ah!) {
-				const poly = override?.polygon ?? this.getPolygonSlice(i);
+				// A track-positioned row hit-tests as its interpolated BOX — the stored keyframe
+				// polygon lives at another moment and would reject clicks on the visible shape.
+				const poly = override?.polygon ?? (trk ? null : this.getPolygonSlice(i));
 				if (poly && poly.length >= 6 && !isAxisAlignedRect(poly)) {
 					if (!pointInPolygon(x, y, poly)) continue;
 				}

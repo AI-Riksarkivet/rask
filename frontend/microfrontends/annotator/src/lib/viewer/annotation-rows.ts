@@ -43,7 +43,7 @@ export function effectiveField(
 }
 
 /** The raw numeric cell (null when absent or non-numeric). */
-function numField(t: Table, field: string, i: number): number | null {
+export function numField(t: Table, field: string, i: number): number | null {
 	const v = t.getChild(field)?.get(i);
 	return typeof v === 'number' ? v : null;
 }

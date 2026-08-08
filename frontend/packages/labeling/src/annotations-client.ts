@@ -36,6 +36,12 @@ export interface InsertRow {
 	parent_id: string;
 	char_start: number;
 	char_end: number;
+	/** The active-learning scores a PREDICTION carries — the review queue ranks by them
+	 *  (predictions first, highest uncertainty first). `null` — the human-drawn default — lands as
+	 *  a null column value: a person's shape has no model score, and inventing one would shuffle
+	 *  human rows into the model-ranked half of the queue. */
+	confidence: number | null;
+	uncertainty: number | null;
 }
 
 /** The ONE InsertRow factory — human-drawn defaults; callers override what differs
@@ -64,6 +70,8 @@ export function makeInsertRow(partial: Partial<InsertRow> & { shape_type: string
 		parent_id: '',
 		char_start: -1,
 		char_end: -1,
+		confidence: null,
+		uncertainty: null,
 		...partial,
 	};
 }
@@ -78,6 +86,9 @@ export interface AssistShape {
 	polygon?: number[];
 	label?: string;
 	confidence?: number;
+	/** The model's OWN uncertainty estimate — never derived client-side as `1 - confidence`
+	 *  (that carries no information beyond confidence). Absent = the backend made no estimate. */
+	uncertainty?: number | null;
 }
 
 /** A non-2xx annotations GET — distinguishable from network/parse failures so callers

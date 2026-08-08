@@ -8,14 +8,21 @@
 	// t_start/t_end). One annotations table + Save path with images + audio segments.
 	import { onDestroy } from 'svelte';
 	import { loadAnnotations } from '@rask/labeling/annotations-client';
-	
+
 	import type { PixiContext } from '@rask/engine';
 	import { Button } from '@rask/ui/button';
 	// @rask/ui has no slider yet, so the seek bar keeps the @rask/ui primitive — it is already
 	// token-styled, so it themes with the rest of the transport.
 	import { Slider } from '@rask/ui/slider';
 	import TransportBar from './layout/TransportBar.svelte';
-	import { clampTime, keyAction, nextRate, skip as skipBy, stepFrame, transportShouldHandle } from './transport';
+	import {
+		clampTime,
+		keyAction,
+		nextRate,
+		skip as skipBy,
+		stepFrame,
+		transportShouldHandle,
+	} from './transport';
 	import PixiCanvas from './PixiCanvas.svelte';
 	import type { ViewerProps } from './types';
 
@@ -52,6 +59,9 @@
 			c.plugins.arrow.sync();
 			// Spatial attach (this viewer HAS a canvas) — draw tools, zoom, layers all bind.
 			controller?.attach(c, table, unit.annotationsUrl, version);
+			// A time axis makes same-group rows KEYFRAMES (tracks.ts) — video only, on purpose:
+			// stills all sit at t=0 and would read as one-instant tracks.
+			controller?.setTrackMode(true);
 			onload?.(table.numRows);
 		} catch (e) {
 			// Honest failure over a hung "loading…" chip; not rethrown (onready is fired
@@ -127,11 +137,17 @@
 
 	function onKeydown(e: KeyboardEvent): void {
 		if (!transportShouldHandle(e.target)) return;
-		const action = keyAction(e.key, { shift: e.shiftKey, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey });
+		const action = keyAction(e.key, {
+			shift: e.shiftKey,
+			ctrl: e.ctrlKey,
+			meta: e.metaKey,
+			alt: e.altKey,
+		});
 		if (!action) return;
 		e.preventDefault();
 		if (action.kind === 'playPause') togglePlay();
-		else if (action.kind === 'skip') seekTo(skipBy(video?.currentTime ?? 0, action.delta, duration));
+		else if (action.kind === 'skip')
+			seekTo(skipBy(video?.currentTime ?? 0, action.delta, duration));
 		else if (action.kind === 'frame') frameStep(action.direction);
 		else setRate();
 	}
@@ -152,6 +168,8 @@
 
 	onDestroy(() => {
 		disposed = true;
+		// Track mode belongs to THIS viewer's time axis — the next unit may be a still.
+		controller?.setTrackMode(false);
 		// Release the seven engine closures attach() installed over the controller; without this
 		// the engine keeps writing a destroyed component's state.
 		controller?.detach();
@@ -206,5 +224,20 @@
 			onValueChange={seek}
 			aria-label="Seek"
 		/>
+		<!-- The CVAT gesture: select a box, seek, add a keyframe — frames between keyframes
+		     interpolate. Needs a selection; disabled says so rather than vanishing. -->
+		<Button
+			variant="ghost"
+			size="sm"
+			class="shrink-0 px-2 text-xs"
+			disabled={controller?.selectedIndex == null}
+			title={controller?.selectedIndex == null
+	? 'Select a shape, seek to where its motion changes, then add a keyframe'
+	: 'Add a keyframe for the selected object at this moment'}
+			data-testid="add-keyframe"
+			onclick={() => controller?.addTrackKeyframe()}
+		>
+			+ keyframe
+		</Button>
 	</TransportBar>
 </div>

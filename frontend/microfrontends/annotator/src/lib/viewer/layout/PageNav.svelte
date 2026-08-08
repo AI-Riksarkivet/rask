@@ -4,6 +4,7 @@
 	// a segment/scene strip — same controlled contract. (Ported from ra-anno PageNavBar.)
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
+	import { cn } from '@rask/ui/utils';
 
 	export interface PageRef {
 		key: string;
@@ -14,7 +15,13 @@
 		pages,
 		current = 0,
 		onNavigate,
-	}: { pages: PageRef[]; current?: number; onNavigate?: (index: number) => void } = $props();
+		class: className,
+	}: {
+		pages: PageRef[];
+		current?: number;
+		onNavigate?: (index: number) => void;
+		class?: string;
+	} = $props();
 
 	const total = $derived(pages.length);
 	const go = (i: number) => {
@@ -25,7 +32,10 @@
 <!-- Floating over the canvas: a card surface at the estate's rounded-lg + shadow-sm, matching
      the zoom cluster and the assist bar so the three read as one family of overlays. -->
 <nav
-	class="border-border bg-card/90 text-card-foreground pointer-events-auto absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-lg border p-1 shadow-sm backdrop-blur"
+	class={cn(
+	'border-border bg-card/90 text-card-foreground pointer-events-auto absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-lg border p-1 shadow-sm backdrop-blur',
+	className,
+)}
 	data-testid="page-nav"
 >
 	<Button

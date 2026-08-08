@@ -35,7 +35,8 @@ import {
 	payloadIsEmpty,
 	postSave,
 } from '@rask/labeling/annotations-client';
-import { type AnnoRow, effectiveField, projectRows, rawField } from './annotation-rows';
+import { type AnnoRow, effectiveField, numField, projectRows, rawField } from './annotation-rows';
+import { type TrackRow, boxAt, newTrackId, tracksFrom } from './tracks';
 import { requestAssist } from './remote/assist.remote';
 import { submitBatchJob } from './remote/jobs.remote';
 
@@ -65,6 +66,15 @@ export interface BrushOptions {
 	maskMode: 'instance' | 'semantic';
 	output: 'mask' | 'polygon';
 }
+
+/** Display-only image adjustments (1 = neutral on every axis) — see `imageAdjust`. */
+export interface ImageAdjust {
+	brightness: number;
+	contrast: number;
+	saturation: number;
+}
+
+const NEUTRAL_ADJUST: ImageAdjust = { brightness: 1, contrast: 1, saturation: 1 };
 
 /** Fields the sidebar can edit inline. */
 export type EditableField = 'label' | 'status' | 'group' | 'text';
@@ -181,6 +191,10 @@ export class AnnotatorController {
 		maskMode: 'instance',
 		output: 'mask',
 	});
+	// Image display adjustments (1 = neutral). View-only state, not annotation data: it rides a
+	// ColorMatrixFilter on the page sprite and is never saved — faded manuscript scans need a
+	// contrast lift to trace at all, and that lift must not survive into anyone's annotations.
+	imageAdjust = $state<ImageAdjust>({ ...NEUTRAL_ADJUST });
 
 	// ── layer grouping (mirrored from LayerStore) ──
 	readonly layers = new LayerStore();
@@ -389,6 +403,13 @@ export class AnnotatorController {
 		im.setEditMode(this.mode === 'edit');
 		im.setTool(this.activeTool);
 		im.setBrushOptions(this.brushOptions);
+		// Adjustments survive a unit change / video frame swap: a contrast lift chosen for a faded
+		// volume applies to the next page too, until reset. Guarded so a neutral state never touches
+		// the plugin (unit-test harnesses attach engine doubles without an image plugin).
+		if (this.imageAdjusted) this._applyImageAdjust();
+		// Track display is a function of (rows, playhead) — evaluate it for the newly attached
+		// table (no-op unless a viewer turned track mode on).
+		this._syncTracks();
 		this.cvCapable = im.cvCapable; // still image loaded ⇒ the magnetic CV tool is available
 		this.cvReady.clear();
 		im.onCvToolReady = (tool) => this.cvReady.add(tool);
@@ -495,6 +516,24 @@ export class AnnotatorController {
 	setBrushOptions(patch: Partial<BrushOptions>): void {
 		this.brushOptions = { ...this.brushOptions, ...patch };
 		this.ctx?.plugins.interaction.setBrushOptions(this.brushOptions);
+	}
+
+	// ── image adjustments (display-only; never saved) ──
+	get imageAdjusted(): boolean {
+		const a = this.imageAdjust;
+		return a.brightness !== 1 || a.contrast !== 1 || a.saturation !== 1;
+	}
+	setImageAdjust(patch: Partial<ImageAdjust>): void {
+		this.imageAdjust = { ...this.imageAdjust, ...patch };
+		this._applyImageAdjust();
+	}
+	resetImageAdjust(): void {
+		this.imageAdjust = { ...NEUTRAL_ADJUST };
+		this._applyImageAdjust();
+	}
+	private _applyImageAdjust(): void {
+		const { brightness, contrast, saturation } = this.imageAdjust;
+		this.ctx?.plugins.image.setImageAdjustments(brightness, contrast, saturation);
 	}
 
 	// ── selection ──
@@ -731,6 +770,105 @@ export class AnnotatorController {
 	/** Move the playhead (video scrub/play) so newly-drawn shapes pin to this moment. */
 	setTimeCursor(seconds: number): void {
 		this.timeCursor = seconds;
+		this._syncTracks();
+	}
+
+	// ── object tracks (video) ──
+	// Rows sharing a `group` + carrying a time are KEYFRAMES of one object (tracks.ts). While track
+	// mode is on, the canvas shows each track's INTERPOLATED box at the playhead instead of every
+	// keyframe at once. Gated by the viewer, never inferred: on an image every row has t_start=0,
+	// so reading stills as tracks would collapse any two same-group shapes into one.
+	trackMode = $state(false);
+	setTrackMode(on: boolean): void {
+		this.trackMode = on;
+		this._syncTracks();
+	}
+
+	/** Re-evaluate every track at the playhead and hand the canvas its display state.
+	 *  Wholesale on every call — the overlay is a pure function of (rows, timeCursor). */
+	private _syncTracks(): void {
+		const arrow = this.ctx?.plugins.arrow;
+		if (!arrow?.setTrackDisplay) return;
+		const t = this.table;
+		if (!this.trackMode || !t) {
+			arrow.setTrackDisplay(new Map(), new Set());
+			arrow.sync();
+			return;
+		}
+		const indexOf = new Map<string, number>();
+		const trackRows: TrackRow[] = [];
+		for (let i = 0; i < t.numRows; i++) {
+			const id = rawField(t, 'id', i) ?? String(i);
+			indexOf.set(id, i);
+			trackRows.push({
+				id,
+				// Overlay-aware: assigning a track id in the inspector (or via addTrackKeyframe)
+				// must form the track NOW, not after the save round-trips.
+				group: effectiveField(t, this._overrides, 'group', i) ?? '',
+				tStart: numField(t, 't_start', i),
+				x: numField(t, 'x', i),
+				y: numField(t, 'y', i),
+				width: numField(t, 'width', i),
+				height: numField(t, 'height', i),
+				label: effectiveField(t, this._overrides, 'label', i) ?? '',
+			});
+		}
+		const overrides = new Map<number, { x: number; y: number; w: number; h: number }>();
+		const hidden = new Set<number>();
+		// Two keyframes make a track; a lone grouped shape keeps its ordinary frame-pinned
+		// rendering, so turning track mode on never changes single-shape behaviour.
+		for (const track of tracksFrom(trackRows).filter((tr) => tr.keyframes.length >= 2)) {
+			const box = boxAt(track, this.timeCursor);
+			const [anchor, ...rest] = track.keyframes;
+			if (!anchor) continue;
+			const anchorIndex = indexOf.get(anchor.id);
+			if (box && anchorIndex != null) {
+				overrides.set(anchorIndex, { x: box.x, y: box.y, w: box.width, h: box.height });
+			} else if (anchorIndex != null) {
+				// Outside the track's lifetime: absent, not clamped — see boxAt's contract.
+				hidden.add(anchorIndex);
+			}
+			for (const kf of rest) {
+				const i = indexOf.get(kf.id);
+				if (i != null) hidden.add(i);
+			}
+		}
+		arrow.setTrackDisplay(overrides, hidden);
+		// The canvas renders on demand — setTrackDisplay only marks dirty, and a playhead move has
+		// no other reason to re-sync, so without this the overlay changes and nothing repaints.
+		arrow.sync();
+	}
+
+	/** Duplicate the SELECTED shape as a keyframe of its track at the current moment — the CVAT
+	 *  gesture: mark the object where its motion changes, let interpolation fill the frames
+	 *  between. An ungrouped shape is promoted to a track first (a fresh collision-safe id on the
+	 *  existing row, undoable like any field edit), so "select box → seek → add keyframe" works
+	 *  from a plain drawn box with no ceremony. */
+	addTrackKeyframe(): string | null {
+		const t = this.table;
+		const index = this.selectedIndex;
+		if (!this.trackMode || !t || index == null) return null;
+		let group = effectiveField(t, this._overrides, 'group', index) ?? '';
+		if (!group) {
+			group = newTrackId();
+			this.updateField(index, 'group', group);
+		}
+		const row = makeInsertRow({
+			shape_type: 'bbox',
+			x: numField(t, 'x', index) ?? 0,
+			y: numField(t, 'y', index) ?? 0,
+			width: numField(t, 'width', index) ?? 0,
+			height: numField(t, 'height', index) ?? 0,
+			t_start: this.timeCursor,
+			t_end: this.timeCursor,
+			label: effectiveField(t, this._overrides, 'label', index) ?? '',
+			group,
+			status: 'accepted',
+			source: 'human',
+		});
+		this._appendInsert(row);
+		this._syncTracks();
+		return row.id;
 	}
 
 	/** Forward a key to the engine's active tool — polygon/brush Enter-commit,
@@ -797,6 +935,9 @@ export class AnnotatorController {
 			this.table = next;
 			this.count = next.numRows;
 			this._reapplyOverrides();
+			// A new row may be a keyframe of an existing track (addTrackKeyframe, an assist
+			// prediction landing mid-clip) — re-evaluate before the next render.
+			this._syncTracks();
 		} else {
 			this.count = this._inserts.length;
 		}
@@ -863,6 +1004,12 @@ export class AnnotatorController {
 						label: s.label || prompt,
 						status: 'prediction',
 						source: result.source ?? `model:${producer}`,
+						// The scores the review queue ranks by — dropped here for a while, which
+						// left every prediction unrankable and the "active-learning order" reading
+						// as insertion order. Null (not 0) when the backend made no estimate — a 0
+						// is a CLAIM of certainty, and "no estimate" must stay distinguishable.
+						confidence: s.confidence ?? null,
+						uncertainty: s.uncertainty ?? null,
 					}),
 				);
 			}
@@ -1347,6 +1494,9 @@ export class AnnotatorController {
 		// table. Re-pushing here is what stops a reload — which renumbers every row — from leaving
 		// each edge pointing at whatever now happens to sit at its old index.
 		this._pushLinksToCanvas();
+		// Positional like the delete overlay, and reconciled the same way: recompute against the
+		// renumbered rows rather than letting stale indices hide unrelated shapes.
+		this._syncTracks();
 		this.select(null);
 	}
 

@@ -13,8 +13,11 @@
 		Undo2,
 		Redo2,
 		Save,
+		SlidersHorizontal,
 	} from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
+	import * as Popover from '@rask/ui/popover';
+	import { Slider } from '@rask/ui/slider';
 	import { cn } from '@rask/ui/utils';
 	import { COMMITS_SHAPE } from '@rask/labeling/shape-types';
 	import { TOOL_DEFS, bandsOf } from '../tool-defs';
@@ -150,7 +153,98 @@
 			>
 				<Eraser class="size-4" />
 			</Button>
+			<!-- The brush's other two knobs. These were engine-settable from day one and reachable from
+			     nowhere — the eraser above was the ONLY exposed control, so every stroke painted at the
+			     default 20 px and always committed a raster mask. -->
+			<div
+				class="flex shrink-0 items-center gap-1.5 px-1"
+				data-testid="brush-controls"
+				title="Brush size"
+			>
+				<Slider
+					class="w-24"
+					min={4}
+					max={80}
+					step={2}
+					value={controller.brushOptions.radius}
+					aria-label="Brush size"
+					onValueChange={(radius) => controller.setBrushOptions({ radius })}
+				/>
+				<span class="text-muted-foreground w-6 text-right text-[10px] tabular-nums">
+					{controller.brushOptions.radius}
+				</span>
+			</div>
+			<Button
+				variant="ghost"
+				size="sm"
+				class="shrink-0 px-2 text-[10px] font-medium uppercase tracking-wide"
+				title={controller.brushOptions.output === 'mask'
+	? 'Commits a raster mask (click to commit a traced polygon instead)'
+	: 'Commits a traced polygon (click to commit a raster mask instead)'}
+				data-testid="brush-output"
+				onclick={() =>
+	controller.setBrushOptions({
+		output: controller.brushOptions.output === 'mask' ? 'polygon' : 'mask',
+	})}
+			>
+				{controller.brushOptions.output === 'mask' ? 'Mask' : 'Poly'}
+			</Button>
 		{/if}
+	{/if}
+
+	{#if spatial}
+		<div class="bg-sidebar-border mx-1 h-6 w-px shrink-0"></div>
+		<!-- Display-only adjustments for the PAGE IMAGE (faded ink needs a contrast lift to trace).
+		     The engine seam (`ImagePlugin.setImageAdjustments`) existed with no caller — this popover
+		     is its first. Never persisted: it themes the view, not the data. -->
+		<Popover.Root>
+			<Popover.Trigger>
+				{#snippet child({ props })}
+					<Button
+						{...props}
+						variant={controller.imageAdjusted ? 'default' : 'ghost'}
+						size="icon-sm"
+						title={controller.imageAdjusted
+	? 'Image adjustments (active — not saved with annotations)'
+	: 'Image adjustments (brightness · contrast · saturation)'}
+						data-testid="image-adjust-trigger"
+					>
+						<SlidersHorizontal class="size-4" />
+					</Button>
+				{/snippet}
+			</Popover.Trigger>
+			<Popover.Content class="w-64 p-3" data-testid="image-adjust">
+				<div class="flex flex-col gap-3">
+					{#each [['brightness', 'Brightness'], ['contrast', 'Contrast'], ['saturation', 'Saturation']] as const as [key, label] (key)}
+						<div class="flex items-center gap-2">
+							<span class="text-muted-foreground w-20 shrink-0 text-xs">{label}</span>
+							<Slider
+								class="flex-1"
+								min={0.2}
+								max={2}
+								step={0.05}
+								value={controller.imageAdjust[key]}
+								aria-label={label}
+								onValueChange={(value) => controller.setImageAdjust({ [key]: value })}
+							/>
+							<span class="text-muted-foreground w-8 shrink-0 text-right text-[10px] tabular-nums">
+								{controller.imageAdjust[key].toFixed(2)}
+							</span>
+						</div>
+					{/each}
+					<Button
+						variant="ghost"
+						size="sm"
+						class="self-end"
+						disabled={!controller.imageAdjusted}
+						data-testid="image-adjust-reset"
+						onclick={() => controller.resetImageAdjust()}
+					>
+						Reset
+					</Button>
+				</div>
+			</Popover.Content>
+		</Popover.Root>
 	{/if}
 
 	{#if assist}
