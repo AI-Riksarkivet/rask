@@ -19,18 +19,37 @@ workflow/governance plane (task FSM, consensus, kappa, FGA, publish lineage) —
 comparison systems has an equivalent, there is nothing to import, and this document is a gap list,
 not a scoreboard.
 
+**STATUS 2026-08-08 (evening) — landed today, in-session** (each pushed to `main` with unit + e2e
+coverage; line references in §1–§3 predate these and are stale where they overlap):
+
+- Mock producers emit `confidence`/`uncertainty`; the client stops dropping them; the review queue
+  ranks for real (finding 0, the wire half; the RUNNER half remains open).
+- Brush radius/output controls and the image-adjustments popover (finding 3, the "built-but-unwired
+  engine surface" half; OBB tool + `unionMasks`/semantic mode remain open).
+- Video object tracks consumed: interpolated boxes at the playhead, keyframe promotion,
+  `+ keyframe` on the transport (finding 6's step 1; timeline rail + propagation remain open).
+- The doccano interaction, three stages: spans as in-text highlights with one-click/digit-hotkey
+  labeling (`TextSpanSurface`), the transcription as a lane of the image/video workspace
+  (`DocumentTextLane`), and `kind=text` rendering the DOCUMENT as the canvas (`TextViewer` — no
+  pixel medium, class legend as keymap).
+- The video workspace carries the soundtrack as a labelable waveform lane (flat "timeline only"
+  fallback for undecodable audio), bound to the same `<video>` clock.
+- Fixed at the source along the way: floating pills overlapping the temporal strips; unseekable
+  route-served media in e2e (206 ranges).
+
 **The findings in one table**, ranked by leverage:
 
 | # | Finding | Action shape |
 | --- | --- | --- |
-| **0** | Every assist path answers from an honest mock; no producer emits confidence/uncertainty; the train job trains column means. The AL **consumers** are all built and starving. | Deploy a runner; make producers emit scores; drop a real trainer into the seam. |
+| **0** | Every assist path answers from an honest mock; ~~no producer emits confidence/uncertainty~~ (mock emits, wire keeps — LANDED); the train job trains column means. | Deploy a runner; drop a real trainer into the seam. |
 | **1** | Interactive prompting is one-shot. XAL's session loop (±point, ±rect, finish-object) is the usability floor for SAM-style assist. | Wire interactive ops through `apply()`; add refinement UX + conf/IoU/class controls. |
-| **2** | HTR — the estate's purpose — never reaches the annotator. The `htr` producer is batch-only and routes to nothing. | HTR pre-annotations as `status='prediction'` rows. |
-| **3** | Rotated box is schema-complete and tool-absent; brush controls, image adjustments, `unionMasks`, semantic mask mode are all built-but-unwired. | Finish half-built engine surface before adding new tools. |
+| **2** | HTR — the estate's flagship workload — never reaches the annotator. The `htr` producer is batch-only and routes to nothing. | HTR pre-annotations as `status='prediction'` rows. |
+| **3** | Rotated box is schema-complete and tool-absent; ~~brush controls, image adjustments~~ (LANDED); `unionMasks`, semantic mask mode still unwired. | OBB tool; finish mask ops. |
 | **4** | Five annotations-table columns are written by nothing (`group_id`, `reading_order`, `difficult`, `links`, `metadata`); per-shape `attributes` never reach the canvas wire. | Extend `InsertRow`/save path; add inspector editing. |
 | **5** | Auto-accept-with-QA-sampling and a multi-signal retrain policy are the two ideas worth lifting from ALS — with the caveat that ALS's own loop is largely simulated (§7). | Policy work on our accept path + train trigger. |
-| **6** | `tracks.ts` (keyframes + interpolation) is complete, tested, and consumed by nothing; no timeline UI, no propagation. | Video tracking UI; SAM2-video propagation later. |
+| **6** | ~~tracks.ts consumed by nothing~~ (interpolation + keyframes LANDED); timeline rail, tracker-assist and mask propagation remain. | Timeline UI; tracking/propagation runners. |
 | **7** | The `scripts/` converters our import design defers to (COCO/YOLO ⇄ Arrow) do not exist. | Write them when the fine-tune loop starts. |
+| **8** | **Task templates** (the Label-Studio labeling-config concept): `ontology.kind` exists and drives tools/classes, but does not select LAYOUT, and project creation offers no template gallery. The annotator is a general multimodal tool — templates are its missing organizing mechanism. | kind → workspace template; gallery pre-filling ontologies at project creation. |
 
 ---
 
@@ -356,6 +375,111 @@ depends on it:
   (`XAL/anylabeling/views/labeling/widgets/canvas.py`, 5,525 lines), and the converters are all
   genuinely implemented, current (4.0.1 released the day of this pass), and tested. Where this file
   cites an XAL behavior as the reference UX, it was read, not assumed.
+
+---
+
+## 8. The PER-MODALITY diff — what each blob type still lacks (2026-08-08 evening)
+
+The annotator is a general multimodal tool; this section slices the remaining gaps by modality so
+each viewer's backlog is legible on its own. "Have" is one line of what landed; "missing" is
+ranked, reference tool named where the UX to copy is known. Cross-cutting gaps (runner, templates,
+converters, hotkey rebinding) live in the main table and are not repeated per modality.
+
+### 8a. IMAGE (`ImageViewer` — Pixi/WebGPU canvas)
+
+Have: rect · polygon · point · line · pencil/baseline · magnetic corner-snap · true raster brush
+(radius/output/eraser exposed) · lasso multi-select · heatmap coloring · image adjustments ·
+relations · per-group layers · uncertainty-ranked review.
+
+Missing, ranked:
+1. **Rotated box (OBB)** — schema-complete (`rotation` commit type + column), tool-absent. XAL's
+   drag rotation handle + coarse/fine key steps is the reference. Seals, marginalia, skewed blocks.
+2. **Per-shape attributes editing** — ontology declares typed attrs; the canvas wire (`InsertRow`)
+   and inspector still cannot carry/edit them (finding 4).
+3. **Mask boolean ops** — `unionMasks` still has zero callers; brush `semantic` mode settable,
+   never read. Cross-label pixel-exclusivity remains "a planned follow-up" in the file's own words.
+4. **Magic wand / flood fill** — XAL 4.0.1's tolerance-drag gesture; the cheap non-ML region tool
+   for clean scan backgrounds (live-wire was deliberately removed; this is its replacement).
+5. **Quadrilateral** (4 explicit corners → canonical polygon; what warped lines/seals and
+   PPOCR-style spotting emit) · circle · cuboid · keypoint SKELETONS (pose graphs w/ flip pairs).
+6. **Copy/paste/duplicate** (within + across items; system clipboard) — nothing exists.
+7. Editing ergonomics: vertex eraser (Alt-drag), wheel rect scale/nudge, per-shape lock + z-order +
+   hide-selected (per-group eye only today), shape converter beyond rect→polygon (XAL: 15 pairs).
+8. Navigation: minimap/navigator, loop-through-objects (pairs with the uncertainty queue),
+   crosshair + cursor readout, compare view (IR/RGB, before/after), 16-bit grayscale support.
+9. **Image-level classification template** — `tag` rows exist as data; no dedicated one-image
+   classification surface (XAL's Image Classifier; LS choices template).
+10. Assist-side: SAHI-style tiled inference for wall-sized scans; segment-everything (AMG).
+
+### 8b. VIDEO (`VideoViewer` — Pixi frame overlay + waveform lane + transport)
+
+Have: exact-frame annotation on paused frames · full spatial toolset · object tracks (keyframes +
+linear interpolation + lifetime absence + `+ keyframe`) · soundtrack waveform lane with segment
+drag (flat-timeline fallback) · one shared clock · frame stepping/rate.
+
+Missing, ranked:
+1. **Track timeline rail** — per-track rows with keyframe diamonds, click-to-seek, drag a diamond
+   to retime (CVAT's core video surface). Interpolation renders; its editing surface doesn't exist.
+2. **Real fps** — the transport steps on a stated 25 fps ESTIMATE; `requestVideoFrameCallback`
+   sampling during the first play would replace the guess with the measured rate.
+3. **Tracker-assisted ids** — no ByteTrack/BoT-SORT-style assist assigning `group` across frames
+   (XAL wires 13 tracking configs); today every track is hand-promoted.
+4. **Video mask propagation** — SAM2/SAM3-video masklets (prompt on one frame, propagate, SSE
+   progress + cancel — XAL-S's `/v1/video/*` session contract is the wire reference). Runner-gated.
+5. **Track interpolation is bbox-only** — polygon/mask keyframes render at authored geometry only.
+6. Clip-level classification + event timeline template (XAL's Video Classifier: I/O marking,
+   per-label digit keys, AI auto-segmentation of a clip into events).
+7. Seek-bar thumbnails; frame cache for smooth scrub (10 fps snapshot pump today); soundtrack
+   spectrogram; per-channel waveforms.
+
+### 8c. AUDIO (`AudioViewer` — waveform canvas)
+
+Have: waveform as the canvas · drag-to-create/resize/click segments · px/s zoom · rate · segment
+text/label editing via inspector · same rows/Save as everything else.
+
+Missing, ranked:
+1. **Spectrogram view** — the surface half of speech/bioacoustics work; wavesurfer ships a
+   spectrogram plugin, so this is wiring + a toggle, not research.
+2. **ASR-assisted pre-annotation** — no audio producer exists at all (the registry is vision+text);
+   a whisper-family producer emitting segments+transcripts as `prediction` rows is the audio twin
+   of HTR pre-annotation (finding 2).
+3. **Tiers** — one region lane today; overlapping speakers/phenomena want ELAN-style stacked tiers
+   (speaker A / speaker B / noise), i.e. a `group`-keyed lane split, data model already sufficient.
+4. Silence-detection auto-segmentation (energy threshold → proposed segments); A-B loop playback;
+   waveform minimap for long recordings.
+5. Segment-level classification template (sound-event tagging with digit keys — the audio twin of
+   8a.9/8b.6).
+
+### 8d. TEXT (`TextViewer` — the document as the canvas; `TextSpanSurface`; `DocumentTextLane`)
+
+Have: document-as-canvas (no pixel medium) · spans as class-tinted highlights w/ overlap stacking ·
+select→digit/click labeling · legend-as-keymap · per-line selection sync · lane composition under
+image/video · span remove/pick · offsets validated server-side.
+
+Missing, ranked:
+1. **Span offset REMAPPING on text edit** — correcting a transcription through the inspector's
+   input does not shift existing span offsets, so an early edit silently mis-points every later
+   span. Doccano forbids doc editing for this reason; we allow it (HTR correction is a first-class
+   act), so we must remap (splice arithmetic on `char_start/char_end`, refusing only on overlap
+   with the edited range). The sharpest text defect in the current build.
+2. **Span↔span relation ARCS in the text surface** — relations exist and draw between SHAPES on
+   the pixel canvas; two spans in the text canvas cannot be linked there (no arc rendering, no
+   click-click gesture on marks). LS relations-in-text is the reference.
+3. **Text pre-annotation producers** — nothing proposes spans: no NER model producer, and no
+   cheap gazetteer/regex assist (a lexicon of parish/person names would pre-mark most of a page).
+4. **Document/text classification template** — doc-level classes with digit keys (doccano's
+   classification project; Argilla's label questions). `tag` rows exist; the surface doesn't.
+5. **Long-document behaviour** — the canvas renders all lines eagerly; a 10k-line document wants
+   virtualization + a minimap/outline. Fine at page scale, unproven at book scale.
+6. **>9 classes** — digit hotkeys cap at 9; needs class paging or two-key chords.
+7. Argilla-class review templates — ranking/preference/chat-eval (RLHF-style response comparison)
+   are a different question type entirely; nothing in the estate models "compare two candidates".
+8. Entity linking/normalization — a span → knowledge-base id field (LS taxonomy/lookup); relevant
+   the moment indexing wants "which Gustav".
+9. Text export formats — CoNLL/spaCy JSONL/W3C annotations for the span plane (the text half of
+   finding 7's converters).
+
+---
 
 ---
 
