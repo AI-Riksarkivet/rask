@@ -38,9 +38,9 @@ def test_the_two_mock_producers_rank_DIFFERENTLY() -> None:
 
 
 def test_uncertainty_is_NOT_derived_from_confidence() -> None:
-    """`1 - confidence` carries no information beyond confidence (the ActiveLabelingSystem trap —
-    its 'entropy' was exactly this, a monotone re-encoding). The mock's pairs must not obey it, so
-    nobody can later 'simplify' the field into a derivation without a test going red."""
+    """`1 - confidence` carries no information beyond confidence — a derived "uncertainty" is just
+    confidence wearing a different sign, so ranking by it adds nothing. The mock's pairs must not
+    obey it, so nobody can later 'simplify' the field into a derivation without a test going red."""
     for producer in ("sam", "grounding-dino"):
         (shape,) = _mock(AssistRequest(producer=producer, prompt="x"))
         assert shape.uncertainty != 1.0 - shape.confidence
