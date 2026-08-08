@@ -4,9 +4,10 @@
 schedule — it is component config). Two bindings, two jobs:
 
 * the **sweep** discovers every Lance dataset across the configured buckets and runs one ORDERED pass
-  per dataset — ``compact_files()``, then ``cleanup_old_versions()``, then ``optimize_indices()``.
-  The order is the reason these live in one service: compaction obsoletes files, so cleanup must
-  follow it, and index optimization must follow that.
+  per dataset — ``compact_files()``, then ``optimize_indices()``, then ``cleanup_old_versions()``.
+  The order is the reason these live in one service: compaction leaves its new fragments unindexed,
+  so index optimization follows it, and cleanup runs last because it reclaims the superseded
+  versions both earlier steps produced, in one pass.
 * the **reconcile** pass reads OpenFGA, the control-root registries and object storage and REPORTS where
   they disagree — then, ONLY if that report ran clean, purges expired trash records (#79): revoke the
   object's grants, delete the bytes the catalog recorded at drop time, clear the record. Off by default.

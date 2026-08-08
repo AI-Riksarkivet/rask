@@ -117,10 +117,13 @@ def compact_one(
     """One ORDERED maintenance pass over one dataset. Never raises — a per-dataset failure is captured
     in ``error`` so one bad dataset can't abort the whole pass.
 
-    The order is compact → cleanup → optimize indices, and it is FIXED, not configurable: compaction
-    obsoletes files, so cleanup must follow it, and index optimization must follow that. The two
-    ``*_enabled`` flags let a policy skip a STEP without reordering them — an operator who wants
-    compaction but not version reclamation (a tier under legal hold, say) can have exactly that.
+    The order is compact → optimize indices → cleanup, and it is FIXED, not configurable: compaction
+    leaves its new fragments unindexed, so index optimization must follow it, and cleanup runs LAST
+    because it reclaims the superseded versions that BOTH earlier steps produced, in one pass. (This
+    sentence had the last two steps swapped until 2026-08-08 while the code and the inline comment
+    below were right — open_dapr.md §2.18.) The two ``*_enabled`` flags let a policy skip a STEP
+    without reordering them — an operator who wants compaction but not version reclamation (a tier
+    under legal hold, say) can have exactly that.
 
     ``scan_batch_size`` and ``compact_threads`` together bound the compaction read, and they only
     work together: the memory is their PRODUCT. Lance's default batch is 8192 ROWS, and rows are not a

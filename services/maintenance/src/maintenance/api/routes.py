@@ -6,7 +6,7 @@ cron tick may trigger them. Blocking Lance/S3 IO runs in the threadpool so the e
 
 Two bindings, not one route doing both:
 
-* the **sweep** (`binding_name`) compacts, cleans up old versions and optimizes indices — it REWRITES
+* the **sweep** (`binding_name`) compacts, optimizes indices and cleans up old versions — it REWRITES
   data files and is expensive;
 * the **reconcile** pass (`reconcile_binding_name`) reads three stores and reports their
   disagreements — cheap — and then, gated on THAT report running clean, reclaims expired trash (#79).
