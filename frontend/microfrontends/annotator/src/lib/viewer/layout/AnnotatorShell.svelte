@@ -11,7 +11,7 @@
 	import { AnnotatorController } from '$lib/viewer/annotator.svelte';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
 	import { ontologyTools } from '$lib/projects/types';
-	import { fetchTask } from '$lib/projects/remote/tasks.remote';
+	import { fetchDraft, fetchTask } from '$lib/projects/remote/tasks.remote';
 	import { ResizableSplit } from '@rask/ui/resizable-split';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
@@ -122,6 +122,32 @@
 			alive = false;
 		};
 	});
+	// RESTORE the draft's relations. Links live on the task DRAFT, not the annotations table, and
+	// nothing read them back — reopening a task showed zero links, so the next draft sync posted an
+	// empty list and silently destroyed every drawn relation. One keyed read at open closes the
+	// loop; `restoreLinks` declines to clobber links the person drew before this resolved.
+	$effect(() => {
+		const id = reviewSelection.taskId;
+		if (!id) return;
+		let alive = true;
+		const draftQuery = fetchDraft({ taskId: id });
+		void draftQuery
+			.refresh()
+			.then(() => {
+				if (!alive) return;
+				const current = draftQuery.current;
+				if (current?.ok && current.data.links.length > 0)
+					controller.restoreLinks(current.data.links);
+			})
+			.catch(() => {
+				// No draft (a fresh task) or an unreachable read — nothing to restore, and the draft
+				// sync's own revision guard still protects the next write.
+			});
+		return () => {
+			alive = false;
+		};
+	});
+
 	// AUTOSAVE. Started only for a canvas opened FROM A TASK: that is the surface where losing work
 	// costs someone their afternoon, and it is the one with a draft to reconcile against. The ad-hoc
 	// `?keys=` canvas keeps the explicit-save behaviour it has always had.

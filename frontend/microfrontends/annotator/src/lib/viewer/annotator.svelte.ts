@@ -674,6 +674,20 @@ export class AnnotatorController {
 		);
 	}
 
+	/** Restore the DRAFT's relations at open. Links live on the task draft, not the annotations
+	 *  table, and nothing read them back — reopening a task showed zero links and the next save
+	 *  posted an empty list, silently destroying every drawn relation. Declines to clobber: links
+	 *  drawn before the (async) draft read resolves win over the snapshot they are newer than. */
+	restoreLinks(links: AnnoLink[]): void {
+		if (this.links.length > 0) return;
+		this.links = links.map((l) => ({
+			name: l.name,
+			from_shape: l.from_shape,
+			to_shape: l.to_shape,
+		}));
+		this._pushLinksToCanvas();
+	}
+
 	/** Arm link-drawing for `name`, or disarm when it is already armed (a toggle, like the tools).
 	 *
 	 *  Arming ADOPTS the annotation currently being inspected as the source. The rail lives in that
