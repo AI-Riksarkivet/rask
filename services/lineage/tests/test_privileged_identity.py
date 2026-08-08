@@ -21,7 +21,7 @@ that subject". These tests pin the second question.
 from __future__ import annotations
 
 import pytest
-from lance_namespace import PermissionDeniedError, UnauthenticatedError
+from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 from lineage.api.security import _service_principal
 from lineage.core.config import LineageSettings
 
@@ -108,6 +108,53 @@ def test_an_UNLISTED_subject_is_still_refused_before_any_credential_check() -> N
     names is a lookup oracle."""
     with pytest.raises(PermissionDeniedError, match="not allowed"):
         _service_principal(_settings(privileged="service-trainer"), SHARED, "service-impostor")
+
+
+def test_an_UNREADABLE_store_is_a_503_not_a_missing_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+    """open_dapr.md §2.17: `fetch_dapr_secret` returns {} both when the store is down and when the
+    bundle is empty — and both used to produce the identical 401 "no dedicated credential", the
+    absent-vs-unreadable conflation the estate solved properly in the state plane. An outage must
+    say outage."""
+    from lineage.api import security
+
+    security._secret_bundle.cache_clear()
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {})
+
+    with pytest.raises(ServiceUnavailableError, match="unreadable"):
+        security._dedicated_token("service-trainer")
+
+
+def test_a_readable_bundle_without_the_field_is_a_genuine_absence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the store WAS read and the field is simply not provisioned, None is the honest answer —
+    the caller turns it into the loud fail-closed 401."""
+    from lineage.api import security
+
+    security._secret_bundle.cache_clear()
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {"unrelated": "field"})
+
+    assert security._dedicated_token("service-trainer") is None
+
+
+def test_the_bundle_is_fetched_once_and_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This runs inside a SYNC request dependency, not a boot lifespan — the boot retry budget
+    (10 attempts, exponential backoff) stalled a request worker for minutes per cold call. One
+    fetch, cached; retries=1 (the viewer precedent)."""
+    from lineage.api import security
+
+    security._secret_bundle.cache_clear()
+    calls: list[dict[str, object]] = []
+
+    def _fetch(store: str, key: str, **kwargs: object) -> dict[str, str]:
+        calls.append(kwargs)
+        return {"service-token-service-trainer": TRAINER_OWN}
+
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _fetch)
+
+    assert security._dedicated_token("service-trainer") == TRAINER_OWN
+    assert security._dedicated_token("service-trainer") == TRAINER_OWN
+    assert len(calls) == 1, "the bundle must be fetched once, not per request"
+    assert calls[0].get("retries") == 1, "a request-path fetch must not burn the boot retry budget"
+    security._secret_bundle.cache_clear()
 
 
 def test_a_missing_identity_is_refused() -> None:
