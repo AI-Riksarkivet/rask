@@ -503,8 +503,10 @@ Where rask stands, per question type:
    renders the ontology's `tag` classes as a chip bar over any modality's workspace; a chip is a
    `tag` row on the ordinary machinery. (Single-choice enforcement stays with the ontology
    validators at submit; per-shape enum attributes still never reach the canvas — finding 4.)
-2. **Rating** — nothing. `vlm-judge` writes a MODEL score into confidence; a human 1–5 has no
-   column and no control (`metadata`/attributes could carry it once finding 4 lands).
+2. **Rating** — the DATA plane landed with §9.3's attribute editor: a class declaring
+   `{name:'rating', type:'int'}` (or an enum 1–5) is now enterable per row and validated at
+   submit. Still missing the SURFACE: a star/segment control and an item-level (not per-shape)
+   question placement.
 3. **Ranking** — nothing models "order N candidates".
 4. **Pairwise / preference (A/B)** — ~~nothing models it~~ LANDED as predicted: the compare view
    IS the side-by-side re-composition of the multi-key item plus the choice question
@@ -548,7 +550,7 @@ ontology. Save-path identity stamping, prediction scores, tag rows, transcriptio
 | --- | --- | --- |
 | 9.1 | **Links wipe on reopen.** `controller.links` is never loaded back from the draft; the next save posts `links: []` — silent destruction of every drawn relation. | `annotator.svelte.ts` (no draft read), `draft-sync.ts` |
 | 9.2 | **Spans + links never publish.** `PUBLISHED_LABELS_SCHEMA` has no `parent_id`/`char_start`/`char_end`/link column — validated at submit, dropped at publish. | `projects/publish.py:66-116` |
-| 9.3 | **`reading-order` preset is unsatisfiable.** It declares a required int attribute; no surface can supply one; every submit 409s. No attribute editor exists anywhere. | `ProjectsLanding.svelte:69`, `AnnotationDetail` |
+| 9.3 | ~~`reading-order` preset is unsatisfiable~~ **FIXED**: per-row attributes ride the `metadata` JSON column (declared on both wire models + `EDITABLE_FIELDS`); the inspector grows an ontology-driven attribute editor (int/enum/bool/free, required marked); the draft snapshot maps them onto `Shape.attributes` so submit validation judges what was entered; a declared `order` beats `y` in the transcription lane. Rating-as-typed-int (§8e.2) falls out for free. | `AnnotationDetail`, `annotations/schema.py`, `draft-shapes.ts` |
 | 9.4 | **SAM click is unreachable.** `RectTool` refuses commits under 25 px²; the backend grows a zero-box into a 120 px patch and the bar's copy promises "click or drag". Drag-only in practice. | `RectTool.ts:58` vs `assist.py:363` |
 | 9.5 | **Two producer registries disagree.** Backend `_RETURNS` knows `grounding-dino`+`sam`; the frontend registry ships 7 (htr, vlm-judge, insid3, embed-propagate unknown to the service ⇒ compatibility "unknown"). | `assist.py:78` vs `producers.ts` |
 | 9.6 | **Jobs op vocabulary mismatch.** `submitBatchJob` accepts `set`/`verdict`; the service Literal does not — those submits 422. | `jobs.remote.ts:45` vs `jobs.py:59` |

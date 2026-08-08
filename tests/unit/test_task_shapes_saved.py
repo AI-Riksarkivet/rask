@@ -60,6 +60,7 @@ INSERT_ROW_FIELDS = frozenset(
         "char_end",
         "confidence",
         "uncertainty",
+        "metadata",
     }
 )
 
@@ -181,6 +182,35 @@ def test_the_composite_ocr_item_saves_as_one_coherent_version(tmp_path: Path) ->
     assert by_id["pg"]["shape_type"] == "tag"
     # Every row carries the SAME unit identity — the item stays one queryable thing.
     assert {(r["doc_id"], r["speech_id"], r["chunk_id"]) for r in rows} == {("d1", 0, 19)}
+
+
+def test_per_row_attributes_ride_metadata_and_survive_an_edit_patch(tmp_path: Path) -> None:
+    """The ontology's typed per-class attributes (`reading order`, `script`, …) live on the row as
+    a JSON object of string values in `metadata` — the same flat map the submit validator parses.
+    Both halves of the write path carry it: the insert, and the EDITABLE_FIELDS patch (the
+    inspector's attribute editor is a field edit like any other)."""
+    from annotator.annotations.save import build_delta
+
+    rows = _save(
+        tmp_path,
+        [
+            NewAnnotation(id="par", shape_type="polygon", label="paragraph", metadata='{"order": "2", "script": "cursive"}'),
+        ],
+    )
+    import json
+
+    (r,) = rows
+    # Compared PARSED: the pa.json_() column stores JSONB and canonicalizes whitespace.
+    assert json.loads(r["metadata"]) == {"order": "2", "script": "cursive"}
+
+    # The edit patch: correcting the reading order is one EDITABLE_FIELDS field edit.
+    uri = str(tmp_path / "annotations.lance")
+    ds = lance.dataset(uri)
+    delta = build_delta(ds.to_table(), {"par": {"metadata": '{"order": "1", "script": "cursive"}'}})
+    ds.merge_insert("id").when_matched_update_all().execute(delta)
+    (after,) = lance.dataset(uri).to_table().to_pylist()
+    assert json.loads(after["metadata"]) == {"order": "1", "script": "cursive"}
+    assert after["label"] == "paragraph"  # untouched fields carried forward
 
 
 @pytest.mark.asyncio

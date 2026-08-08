@@ -42,6 +42,10 @@ export interface InsertRow {
 	 *  human rows into the model-ranked half of the queue. */
 	confidence: number | null;
 	uncertainty: number | null;
+	/** Per-row ATTRIBUTES — the ontology's typed per-class fields (reading order, script, …) as a
+	 *  JSON object of string values (the submit validator parses int/bool/enum from strings).
+	 *  `'{}'` rather than `''`: the column is JSON-typed and an empty string is not valid JSON. */
+	metadata: string;
 }
 
 /** The ONE InsertRow factory — human-drawn defaults; callers override what differs
@@ -72,6 +76,7 @@ export function makeInsertRow(partial: Partial<InsertRow> & { shape_type: string
 		char_end: -1,
 		confidence: null,
 		uncertainty: null,
+		metadata: '{}',
 		...partial,
 	};
 }

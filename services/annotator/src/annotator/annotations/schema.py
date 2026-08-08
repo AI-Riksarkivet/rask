@@ -22,8 +22,10 @@ ANNOTATIONS_TABLE = "annotations"
 
 #: The fields a reviewer may edit — the local-first review overlay flushed on save.
 #: Only these are patched; geometry + provenance columns are carried forward from the
-#: current row, so a partial edit never wipes a shape.
-EDITABLE_FIELDS = ("label", "status", "text", "group", "reviewer")
+#: current row, so a partial edit never wipes a shape. ``metadata`` is the per-row
+#: ATTRIBUTES carrier: a JSON object of ``{attribute name: value-as-string}``, the same
+#: flat map the ontology's typed attributes are validated from at submit.
+EDITABLE_FIELDS = ("label", "status", "text", "group", "reviewer", "metadata")
 
 
 class AnnotationEdit(BaseModel):
@@ -35,6 +37,7 @@ class AnnotationEdit(BaseModel):
     text: str | None = None
     group: str | None = None
     reviewer: str | None = None
+    metadata: str | None = None
 
 
 class NewAnnotation(BaseModel):
@@ -69,6 +72,11 @@ class NewAnnotation(BaseModel):
     parent_id: str = ""
     char_start: int = -1
     char_end: int = -1
+    #: Per-row ATTRIBUTES — the ontology's typed per-class fields (`reading order`, `script`,
+    #: `damaged`…), as a JSON object of string values (the submit validator parses int/bool/enum
+    #: from strings). ``{}`` rather than ``""``: the column is `pa.json_()` and an empty string is
+    #: not valid JSON.
+    metadata: str = "{}"
     #: The active-learning scores a PREDICTION row carries (the review queue ranks by them). None —
     #: the human-drawn default — lands as null: a person's shape has no model score, and inventing
     #: one (1.0 "confidence") would let human rows shuffle into the model-ranked half of the queue.

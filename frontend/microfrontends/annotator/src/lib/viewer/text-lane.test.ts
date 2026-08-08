@@ -23,6 +23,8 @@ const row = (over: Partial<AnnoRow>): AnnoRow => ({
 	charStart: null,
 	charEnd: null,
 	y: null,
+	metadata: '{}',
+	order: null,
 	...over,
 });
 

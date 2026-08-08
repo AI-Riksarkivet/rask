@@ -61,6 +61,7 @@
 			controller.relationNames = [];
 			controller.textSpanClasses = [];
 			controller.tagClasses = [];
+			controller.classAttributes = {};
 			return;
 		}
 		let alive = true;
@@ -91,6 +92,23 @@
 							.filter((c) => c.tools.includes('tag'))
 							.map((c) => c.name)
 					: [];
+				// The typed per-class ATTRIBUTES (reading order, script, …) — the inspector's
+				// attribute editor renders from these, per selected row's class.
+				controller.classAttributes = result.ok
+					? Object.fromEntries(
+							(result.data.ontology?.classes ?? [])
+								.filter((c) => (c.attributes ?? []).length > 0)
+								.map((c) => [
+									c.name,
+									(c.attributes ?? []).map((a) => ({
+										name: a.name,
+										type: (a.type ?? 'free') as 'free' | 'int' | 'enum' | 'bool',
+										choices: a.choices ?? [],
+										required: a.required ?? false,
+									})),
+								]),
+						)
+					: {};
 			})
 			.catch(() => {
 				// A failed read must not silently narrow the rail: unconstrained is the honest

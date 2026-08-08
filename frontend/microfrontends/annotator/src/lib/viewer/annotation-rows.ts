@@ -25,8 +25,12 @@ export interface AnnoRow {
 	parentId: string;
 	charStart: number | null;
 	charEnd: number | null;
-	/** Vertical position — the transcription lane's reading order for HTR lines. */
+	/** Vertical position — the transcription lane's FALLBACK reading order for HTR lines. */
 	y: number | null;
+	/** Per-row attributes as a JSON object of string values (`metadata` column). */
+	metadata: string;
+	/** The declared reading order, when the row's attributes carry one (`order`) — beats `y`. */
+	order: number | null;
 }
 
 /** The raw table cell as a string (null when absent). */
@@ -56,6 +60,18 @@ export function numField(t: Table, field: string, i: number): number | null {
 
 /** Project the whole table to AnnoRows, overlay-aware, with pending deletes filtered
  *  (the sidebar reflects a delete immediately; the canvas reconciles on save+reload). */
+/** The `order` attribute out of a row's metadata JSON — null unless a finite number was declared.
+ *  Tolerant of malformed JSON (a bad row must not take the whole projection down). */
+export function orderOf(metadata: string): number | null {
+	if (!metadata || metadata === '{}') return null;
+	try {
+		const n = Number((JSON.parse(metadata) as Record<string, unknown>)['order']);
+		return Number.isFinite(n) ? n : null;
+	} catch {
+		return null;
+	}
+}
+
 export function projectRows(
 	t: Table,
 	overrides: ReadonlyMap<string, string>,
@@ -63,6 +79,7 @@ export function projectRows(
 ): AnnoRow[] {
 	const out: AnnoRow[] = [];
 	for (let i = 0; i < t.numRows; i++) {
+		const metadata = effectiveField(t, overrides, 'metadata', i) ?? '{}';
 		out.push({
 			index: i,
 			id: rawField(t, 'id', i) ?? String(i),
@@ -80,6 +97,8 @@ export function projectRows(
 			charStart: numField(t, 'char_start', i),
 			charEnd: numField(t, 'char_end', i),
 			y: numField(t, 'y', i),
+			metadata,
+			order: orderOf(metadata),
 		});
 	}
 	return deletes.length ? out.filter((r) => !deletes.includes(r.id)) : out;

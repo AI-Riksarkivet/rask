@@ -77,7 +77,15 @@ export interface ImageAdjust {
 const NEUTRAL_ADJUST: ImageAdjust = { brightness: 1, contrast: 1, saturation: 1 };
 
 /** Fields the sidebar can edit inline. */
-export type EditableField = 'label' | 'status' | 'group' | 'text';
+export type EditableField = 'label' | 'status' | 'group' | 'text' | 'metadata';
+
+/** One typed per-class attribute, as the ontology declares it (`OutputAttr` server-side). */
+export interface AttrSpec {
+	name: string;
+	type: 'free' | 'int' | 'enum' | 'bool';
+	choices: string[];
+	required: boolean;
+}
 
 /** One reversible field edit (relabel / status / text / group).
  *  `before`/`after` are the effective (overlay-aware) string values. */
@@ -617,6 +625,34 @@ export class AnnotatorController {
 	readonly activeTags = $derived(
 		new Set(this.rows.filter((r) => r.shape === 'tag' && r.label).map((r) => r.label)),
 	);
+	// ── per-row ATTRIBUTES (the ontology's typed per-class fields: reading order, script, …) ──
+	/** Attribute declarations per CLASS, from the task's ontology — set by the shell exactly like
+	 *  `tagClasses`. Empty ⇒ no attribute editor. Values are edited as STRINGS: the submit
+	 *  validator parses int/bool/enum from strings, so the string IS the wire value. */
+	classAttributes = $state<Record<string, AttrSpec[]>>({});
+	/** The declared attributes for a row's class — [] when its class declares none. */
+	attributesFor(label: string): AttrSpec[] {
+		return this.classAttributes[label] ?? [];
+	}
+	/** A row's current attribute values, parsed from its `metadata` JSON (overlay-aware). */
+	rowAttributes(index: number): Record<string, string> {
+		const raw = this.rows.find((r) => r.index === index)?.metadata ?? '{}';
+		try {
+			const parsed = JSON.parse(raw) as Record<string, unknown>;
+			return Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, String(v)]));
+		} catch {
+			return {};
+		}
+	}
+	/** Set (or clear, with '') ONE attribute on a row. A field edit like any other: the merged JSON
+	 *  goes through `updateField`, so it rides the same overlay, undo stack and Save delta. */
+	setAttribute(index: number, name: string, value: string): void {
+		const current = this.rowAttributes(index);
+		if (value === '') delete current[name];
+		else current[name] = value;
+		this.updateField(index, 'metadata', JSON.stringify(current));
+	}
+
 	/** Toggle an item-level choice: on ⇒ append a `tag` row (rides the same insert overlay, undo
 	 *  stack and Save delta as a drawn shape); off ⇒ delete that row. The chip IS the row. */
 	toggleTag(label: string): void {
