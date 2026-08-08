@@ -306,6 +306,31 @@ edge cases — pose group-pairing, OBB out-of-bounds, mask color mapping).
 
 ---
 
+## 6. Implementation conventions — non-negotiable when any finding lands
+
+Every finding above goes through the standard workflow (CLAUDE.md: brainstorm → spec → plan →
+subagent-driven-dev with reviews + TDD — no ad-hoc edits), with the skills loaded per plane.
+Route table, by finding:
+
+| Work | Skills to load (marketplace) | Project skills |
+| --- | --- | --- |
+| Assist runner, producers endpoint, jobs plane (§0, §2) | `fastapi`, `writing-python`, `testing-python` | `rask-services-fleet` (gateway rows, ports), `rask-architecture` (where the runner lives), `openfga` (assist auth doors) |
+| Ray Serve hosting + real trainer in the D6 seam (§0, §3.5) | `writing-python`, `testing-python`, `hf-cli` / `huggingface-trackio` (model pulls, run tracking) | `rask-htr-pipeline` (GPU packing, Serve replicas — the runner co-resides with `/transcribe`) |
+| Engine tools: OBB, magic wand, brush controls, `unionMasks` wiring (§1) | `writing-typescript` | `rask-frontend` (zone gates, vitest) |
+| Zone UI: inspector attributes form, assist bar refinement loop, tracks timeline (§1, §2) | `writing-typescript`, `svelte-skills` + the svelte MCP autofixer (Svelte 5 strict, SSR rules), `shadcn-svelte` | `rask-frontend`, `rask-styling` (components live in `@rask/ui`, not the zone) |
+| E2E coverage of every new tool/flow (all) | `playwright-cli` | `rask-frontend` § *Develop ONE zone, no cluster* — `make dev-zone ZONE=annotator` is the loop; new flows need seed-driven mocks in the zone's `e2e/` |
+| Schema/wire changes: `InsertRow` attributes, dead columns (§1.3) | `writing-python` + `writing-typescript` (both sides of the wire), `testing-python` | `rask-lance-catalog` (annotations table is catalog-governed), `rask-frontend` |
+| Converters in `scripts/` (§3.6) | `writing-python`, `testing-python` | `rask-architecture` (scripts contract: no production-state-changing CLIs) |
+| Micro-frontend seams if assist widgets go server-driven (§2.6) | `micro-frontends`, `turborepo` | `rask-frontend` |
+
+Two standing rules that bite here specifically: **Svelte 5 strict + SSR** — browser globals stay
+inside `onMount`/`$effect`/handlers, every `.svelte` change goes through the svelte MCP autofixer
+(CLAUDE.md Conventions); and **the annotator zone has no `/api` dev proxy** — it reaches
+`:8101/:8102/:8103` via its own BFF, so new endpoints need BFF routes, not proxy rows
+(CLAUDE.md Conventions; `rask-services-fleet`).
+
+---
+
 ## 7. Comparison-target caveats — what NOT to copy
 
 Recorded so future passes don't re-litigate, and because the weight given to each system's design
