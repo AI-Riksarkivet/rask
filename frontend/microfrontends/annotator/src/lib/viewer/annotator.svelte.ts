@@ -79,6 +79,10 @@ const NEUTRAL_ADJUST: ImageAdjust = { brightness: 1, contrast: 1, saturation: 1 
 /** Fields the sidebar can edit inline. */
 export type EditableField = 'label' | 'status' | 'group' | 'text' | 'metadata';
 
+/** A MANUALLY drawn rect below this (5×5 px) is an accidental click, not an annotation. Applied
+ *  here — not in the tool — because the same click IS meaningful when an assist producer is armed. */
+const MANUAL_MIN_AREA = 25;
+
 /** One typed per-class attribute, as the ontology declares it (`OutputAttr` server-side). */
 export interface AttrSpec {
 	name: string;
@@ -454,11 +458,15 @@ export class AnnotatorController {
 		};
 		im.onCommit = (shape) => {
 			// In SAM mode the drawn box/point is a region prompt (→ a mask prediction), not a
-			// manual annotation — its bbox travels as the region (a point = a zero box = click).
+			// manual annotation — its bbox travels as the region (a point = a zero box = click; the
+			// backend grows it into a patch). The tools now commit EVERYTHING, clicks included, so
+			// the accidental-click policy lives here, where the meaning is known: an armed producer
+			// honours the click, an unarmed canvas discards a sub-5×5 rect the way the tool itself
+			// used to — a gate in the tool made click-to-segment unreachable for everyone.
 			if (this.assistProducer) {
 				const region = { x: shape.x, y: shape.y, width: shape.width, height: shape.height };
 				void this.assist('', region, this.assistProducer);
-			} else {
+			} else if (shape.type !== 'rect' || shape.width * shape.height > MANUAL_MIN_AREA) {
 				this._appendInsert(this._buildInsert(shape));
 			}
 		};
