@@ -102,8 +102,9 @@ def authenticate(
                 # The shared resolver (open_dapr.md §2.8): without it, this door's privileged branch
                 # could never open — every privileged subject was hard-refused with "no dedicated
                 # credential provisioned" regardless of what the store held, because the callback
-                # defaulted to None.
-                dedicated_token=dedicated_token_from_store(settings.dapr_secret_store, settings.dapr_secret_key),
+                # defaulted to None. Deferred into the callback: the store coordinates are read only
+                # when a privileged subject is actually being verified, never on the shared-token path.
+                dedicated_token=lambda identity: dedicated_token_from_store(settings.dapr_secret_store, settings.dapr_secret_key)(identity),
             )
         except ServiceDoorClosed:
             # No APP_API_TOKEN here: nothing to verify, so fall through to OIDC rather than admitting
