@@ -102,3 +102,52 @@ def test_lineage_boot_fails_when_only_the_reconcile_route_mounts(
     monkeypatch.setattr(lineage_main, "get_settings", lambda: settings)
     with pytest.raises(RuntimeError, match="APP_API_TOKEN"):
         asyncio.run(lineage_main.lifespan(lineage_main.app).__aenter__())
+
+
+def test_the_privileged_door_OPENS_with_the_shared_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+    """open_dapr.md §2.8: `service_principal` grew `dedicated_token=` for the privileged branch, but
+    the catalog never passed a resolver — so its privileged door hard-refused every privileged
+    subject with 'no dedicated credential provisioned' no matter what the store held. This pins the
+    shared resolver end-to-end: the seeded credential admits its holder, the shared token cannot
+    claim the subject, and an unreadable store is a SecretStoreUnreadable (503 at the caller), never
+    a 401."""
+    from service_kit.governed import dapr_auth
+    from service_kit.governed.dapr_auth import SecretStoreUnreadable, dedicated_token_from_store, service_principal
+
+    monkeypatch.setenv("APP_API_TOKEN", "shared-token")
+    dapr_auth._secret_bundle.cache_clear()
+    monkeypatch.setattr(
+        "service_kit.governed.secrets.fetch_dapr_secret",
+        lambda *_a, **_k: {"service-token-service-trainer": "trainer-own"},
+    )
+    resolver = dedicated_token_from_store("lance-secrets", "lance")
+
+    admitted = service_principal(
+        token="trainer-own",
+        identity="service-trainer",
+        allowed_subjects="service-trainer",
+        privileged_subjects="service-trainer",
+        dedicated_token=resolver,
+    )
+    assert admitted.sub == "service-trainer"
+
+    with pytest.raises(Exception, match="may not claim"):
+        service_principal(
+            token="shared-token",
+            identity="service-trainer",
+            allowed_subjects="service-trainer",
+            privileged_subjects="service-trainer",
+            dedicated_token=resolver,
+        )
+
+    dapr_auth._secret_bundle.cache_clear()
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {})
+    with pytest.raises(SecretStoreUnreadable):
+        service_principal(
+            token="trainer-own",
+            identity="service-trainer",
+            allowed_subjects="service-trainer",
+            privileged_subjects="service-trainer",
+            dedicated_token=dedicated_token_from_store("lance-secrets", "lance"),
+        )
+    dapr_auth._secret_bundle.cache_clear()

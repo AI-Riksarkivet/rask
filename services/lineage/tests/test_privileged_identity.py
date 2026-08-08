@@ -116,8 +116,9 @@ def test_an_UNREADABLE_store_is_a_503_not_a_missing_credential(monkeypatch: pyte
     absent-vs-unreadable conflation the estate solved properly in the state plane. An outage must
     say outage."""
     from lineage.api import security
+    from service_kit.governed import dapr_auth
 
-    security._secret_bundle.cache_clear()
+    dapr_auth._secret_bundle.cache_clear()
     monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {})
 
     with pytest.raises(ServiceUnavailableError, match="unreadable"):
@@ -128,8 +129,9 @@ def test_a_readable_bundle_without_the_field_is_a_genuine_absence(monkeypatch: p
     """When the store WAS read and the field is simply not provisioned, None is the honest answer —
     the caller turns it into the loud fail-closed 401."""
     from lineage.api import security
+    from service_kit.governed import dapr_auth
 
-    security._secret_bundle.cache_clear()
+    dapr_auth._secret_bundle.cache_clear()
     monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {"unrelated": "field"})
 
     assert security._dedicated_token("service-trainer") is None
@@ -140,8 +142,9 @@ def test_the_bundle_is_fetched_once_and_cached(monkeypatch: pytest.MonkeyPatch) 
     (10 attempts, exponential backoff) stalled a request worker for minutes per cold call. One
     fetch, cached; retries=1 (the viewer precedent)."""
     from lineage.api import security
+    from service_kit.governed import dapr_auth
 
-    security._secret_bundle.cache_clear()
+    dapr_auth._secret_bundle.cache_clear()
     calls: list[dict[str, object]] = []
 
     def _fetch(store: str, key: str, **kwargs: object) -> dict[str, str]:
@@ -154,7 +157,7 @@ def test_the_bundle_is_fetched_once_and_cached(monkeypatch: pytest.MonkeyPatch) 
     assert security._dedicated_token("service-trainer") == TRAINER_OWN
     assert len(calls) == 1, "the bundle must be fetched once, not per request"
     assert calls[0].get("retries") == 1, "a request-path fetch must not burn the boot retry budget"
-    security._secret_bundle.cache_clear()
+    dapr_auth._secret_bundle.cache_clear()
 
 
 def test_a_missing_identity_is_refused() -> None:

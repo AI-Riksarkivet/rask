@@ -13,7 +13,6 @@ rather than silently letting requests through.
 
 from __future__ import annotations
 
-import functools
 import os
 import secrets as _secrets
 from typing import Annotated, Protocol
@@ -73,39 +72,25 @@ class ServicePrincipal:
         return self._sub
 
 
-@functools.lru_cache(maxsize=8)
-def _secret_bundle(store: str, key: str) -> tuple[tuple[str, str], ...]:
-    """The secret bundle, fetched ONCE and cached — this runs inside a sync request dependency
-    (AnyIO threadpool), not a boot lifespan, so the boot-budget defaults (10 retries, exponential
-    backoff) could stall a request worker for minutes per cold call (open_dapr.md §2.17; the
-    viewer's per-store reads set the retries=1 + lru_cache precedent). An UNREADABLE store RAISES
-    (503, fail-closed) and is deliberately not cached — lru_cache never caches exceptions, so the
-    next request retries. A successful bundle is cached for the process lifetime: rotating a
-    dedicated credential means a rollout, the same trade the viewer already made."""
-    from service_kit.governed.secrets import fetch_dapr_secret
-
-    bundle = fetch_dapr_secret(store, key, retries=1)
-    if not bundle:
-        # {} is fetch_dapr_secret's exhaustion signal. Treating it as "no credential" would produce
-        # the same 401 as a genuinely absent field — the absent-vs-unreadable conflation the estate
-        # solved properly in the state plane (user_state.UserStateUnreadable). An unreadable store
-        # is an outage, not an answer.
-        raise ServiceUnavailableError(f"secret store {store!r} unreadable — cannot verify a privileged service identity")
-    return tuple(bundle.items())
-
-
 def _dedicated_token(identity: str) -> str | None:
-    """The credential that is the ONLY one able to claim `identity`, from the SECRET STORE.
+    """The credential that is the ONLY one able to claim `identity`, via the estate's ONE resolver.
 
-    Returns None only when the bundle was READ and the field is genuinely absent — the caller
-    decides whether that is acceptable (an ordinary subject) or fatal (a privileged one). An
-    unreadable store raises 503 instead (see `_secret_bundle`). Deliberately no env fallback: a
-    credential readable from process env is the shape the estate's rule forbids, and it is exactly
-    how the shared token came to sit in seven web pods.
+    The resolution itself lives in ``service_kit.governed.dapr_auth.dedicated_token_from_store``
+    (open_dapr.md §2.8 — this used to be a private fork here while the catalog's door had no
+    resolver at all; §2.17's caching + retries=1 + absent-vs-unreadable split live there now).
+    This wrapper only maps the neutral unreadable-store error onto lineage's problem type. Returns
+    None only when the bundle was READ and the field is genuinely absent. Deliberately no env
+    fallback: a credential readable from process env is the shape the estate's rule forbids, and
+    it is exactly how the shared token came to sit in seven web pods.
     """
+    from service_kit.governed.dapr_auth import SecretStoreUnreadable, dedicated_token_from_store
+
     store = os.environ.get("LINEAGE_SECRET_STORE", "lance-secrets")
     key = os.environ.get("LINEAGE_SECRET_KEY", "lance")
-    return dict(_secret_bundle(store, key)).get(f"service-token-{identity}") or None
+    try:
+        return dedicated_token_from_store(store, key)(identity)
+    except SecretStoreUnreadable as exc:
+        raise ServiceUnavailableError(str(exc)) from exc
 
 
 def _service_principal(settings: SettingsDep, token: str | None, identity: str | None) -> ServicePrincipal:

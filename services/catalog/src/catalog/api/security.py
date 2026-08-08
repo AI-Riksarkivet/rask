@@ -21,7 +21,13 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError, Unau
 
 from catalog.api.dependencies import SettingsDep
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
-from service_kit.governed.dapr_auth import ServiceDoorClosed, is_public_caller, service_principal
+from service_kit.governed.dapr_auth import (
+    SecretStoreUnreadable,
+    ServiceDoorClosed,
+    dedicated_token_from_store,
+    is_public_caller,
+    service_principal,
+)
 from service_kit.governed.oidc import IDToken, OIDCVerifier
 
 
@@ -93,11 +99,19 @@ def authenticate(
                 identity=x_lance_service_identity,
                 allowed_subjects=settings.service_subjects,
                 privileged_subjects=settings.privileged_subjects,
+                # The shared resolver (open_dapr.md §2.8): without it, this door's privileged branch
+                # could never open — every privileged subject was hard-refused with "no dedicated
+                # credential provisioned" regardless of what the store held, because the callback
+                # defaulted to None.
+                dedicated_token=dedicated_token_from_store(settings.dapr_secret_store, settings.dapr_secret_key),
             )
         except ServiceDoorClosed:
             # No APP_API_TOKEN here: nothing to verify, so fall through to OIDC rather than admitting
             # a caller who merely named a subject.
             pass
+        except SecretStoreUnreadable as exc:
+            # An outage is an outage, never a 401: the absent-vs-unreadable rule (§2.17).
+            raise ServiceUnavailableError(str(exc)) from exc
         else:
             audit("authn", SUCCESS, subject=principal.sub)
             # A SYNTHETIC token, and every field is deliberate. `IDToken` requires the conformant

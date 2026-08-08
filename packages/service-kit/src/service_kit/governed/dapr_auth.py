@@ -15,6 +15,7 @@ default (documented); set it in any deployment that must be trusted.
 
 from __future__ import annotations
 
+import functools
 import os
 import secrets
 from collections.abc import Callable
@@ -138,6 +139,49 @@ class ServiceIdentity:
 
 class ServiceDoorClosed(Exception):
     """The service door is not configured here — the caller should fall through to OIDC."""
+
+
+class SecretStoreUnreadable(RuntimeError):
+    """The credential bundle could not be READ — distinct from a genuinely absent field.
+
+    Callers map this to their 503 problem type. Conflating it with "no credential provisioned"
+    would turn a secret-store outage into the same 401 as a misconfigured subject — the
+    absent-vs-unreadable rule the estate already enforces in the state plane."""
+
+
+@functools.lru_cache(maxsize=8)
+def _secret_bundle(store: str, key: str) -> tuple[tuple[str, str], ...]:
+    """The secret bundle, fetched once per (store, key) and cached for the process lifetime.
+
+    retries=1, not the boot budget: this is reached from sync REQUEST dependencies (the AnyIO
+    threadpool), where 10 exponential-backoff attempts stalled a worker for minutes per cold call
+    (open_dapr.md §2.17; the viewer's per-store reads set the precedent). An unreadable store
+    RAISES — lru_cache never caches exceptions, so the next request retries — and a successful
+    bundle is cached until restart: rotating a dedicated credential means a rollout, the same
+    trade the viewer already made."""
+    from service_kit.governed.secrets import fetch_dapr_secret  # noqa: PLC0415 - keeps this module import-light
+
+    bundle = fetch_dapr_secret(store, key, retries=1)
+    if not bundle:
+        raise SecretStoreUnreadable(f"secret store {store!r} unreadable — cannot verify a privileged service identity")
+    return tuple(bundle.items())
+
+
+def dedicated_token_from_store(store: str, key: str) -> Callable[[str], str | None]:
+    """The estate's ONE resolver for a privileged subject's dedicated credential.
+
+    Lifted from `services/lineage` (open_dapr.md §2.8): the shared `service_principal` grew the
+    `dedicated_token=` parameter for exactly this callback, but the catalog never passed one — so
+    its privileged door hard-refused every privileged subject with "no dedicated credential
+    provisioned" no matter what was seeded — while lineage kept a private fork of the resolver.
+    One resolver, two doors. Returns ``None`` only when the bundle was READ and
+    ``service-token-<identity>`` is genuinely absent; an unreadable store raises
+    :class:`SecretStoreUnreadable` (§2.17's absent-vs-unreadable split rides along)."""
+
+    def _resolve(identity: str) -> str | None:
+        return dict(_secret_bundle(store, key)).get(f"service-token-{identity}") or None
+
+    return _resolve
 
 
 def service_principal(
