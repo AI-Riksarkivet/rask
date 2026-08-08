@@ -21,7 +21,8 @@
     "huggingface-trackio@huggingface-skills": true,
     "shadcn-svelte@ra-skills": true,
     "micro-frontends@ra-skills": true,
-    "playwright-cli@ra-skills": true
+    "playwright-cli@ra-skills": true,
+    "gsap@ra-skills": true
   },
   "extraKnownMarketplaces": {
     "ra-skills": {

@@ -60,6 +60,15 @@ class NewAnnotation(BaseModel):
     source: str = "human"
     group: str = ""
     mask: str = ""
+    #: The TEXTUAL facet — a span INTO another row's ``text`` (token classification, the value half
+    #: of KIE). Sentinels match the client's ``makeInsertRow``: empty/-1 on every non-span row, so a
+    #: default never fakes a zero-length span at offset 0. These MUST be declared here even though
+    #: the table schema already carries the columns: pydantic ignores unknown payload fields, so an
+    #: undeclared field is not a 422 — it is a column that silently lands null. Text spans shipped
+    #: exactly that way: rendered from the client overlay, saved, and read back pointing at nothing.
+    parent_id: str = ""
+    char_start: int = -1
+    char_end: int = -1
     #: The active-learning scores a PREDICTION row carries (the review queue ranks by them). None —
     #: the human-drawn default — lands as null: a person's shape has no model score, and inventing
     #: one (1.0 "confidence") would let human rows shuffle into the model-ranked half of the queue.

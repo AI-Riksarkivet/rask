@@ -519,6 +519,49 @@ media, which is exactly what a template system expresses and hardcoded viewers c
 
 ---
 
+## 9. THE SAVE-PATH AUDIT (2026-08-08 late) — what each task's saved rows actually are
+
+The e2e suites stub the save POST, so a field the client sends and the server silently drops is
+invisible to them: canvas correct, payload asserted, row lands wrong. `tests/unit/
+test_task_shapes_saved.py` closes the hole — it drives the endpoint's own primitives
+(`NewAnnotation` validation → `new_rows` → real Lance `merge_insert`) per task shape and reads the
+rows back, plus a drift GATE: every `InsertRow` wire field must be declared on `NewAnnotation`,
+because pydantic ignores unknown fields — an undeclared field is not a 422 anywhere, it is a
+column that quietly lands null.
+
+**Found and FIXED by that gate:** text spans did not survive the save. `parent_id`/`char_start`/
+`char_end` were in the table schema, in `InsertRow`, written by the controller — and absent from
+`NewAnnotation`, so every real save landed them null: the span rendered from the client overlay,
+saved, and reloaded as an orphan. Now declared (sentinels `''`/`-1` matching `makeInsertRow`) and
+pinned by round-trip tests, composite item included (region + transcription + span + tag in one
+version).
+
+**Verified working (the interplay is real):** the assist route normalizes producer dialects
+(`rectangle`→`bbox` etc.) BEFORE `_within_contract` filters against the task's derived tool
+union, and drops are reported, not silent — proven against a composite polygon/bbox/text
+ontology. Save-path identity stamping, prediction scores, tag rows, transcription edits
+(`EDITABLE_FIELDS`), OCC base-version — all round-trip.
+
+**Found and OPEN, ranked (the assist-first defect list):**
+
+| # | Defect | Where |
+| --- | --- | --- |
+| 9.1 | **Links wipe on reopen.** `controller.links` is never loaded back from the draft; the next save posts `links: []` — silent destruction of every drawn relation. | `annotator.svelte.ts` (no draft read), `draft-sync.ts` |
+| 9.2 | **Spans + links never publish.** `PUBLISHED_LABELS_SCHEMA` has no `parent_id`/`char_start`/`char_end`/link column — validated at submit, dropped at publish. | `projects/publish.py:66-116` |
+| 9.3 | **`reading-order` preset is unsatisfiable.** It declares a required int attribute; no surface can supply one; every submit 409s. No attribute editor exists anywhere. | `ProjectsLanding.svelte:69`, `AnnotationDetail` |
+| 9.4 | **SAM click is unreachable.** `RectTool` refuses commits under 25 px²; the backend grows a zero-box into a 120 px patch and the bar's copy promises "click or drag". Drag-only in practice. | `RectTool.ts:58` vs `assist.py:363` |
+| 9.5 | **Two producer registries disagree.** Backend `_RETURNS` knows `grounding-dino`+`sam`; the frontend registry ships 7 (htr, vlm-judge, insid3, embed-propagate unknown to the service ⇒ compatibility "unknown"). | `assist.py:78` vs `producers.ts` |
+| 9.6 | **Jobs op vocabulary mismatch.** `submitBatchJob` accepts `set`/`verdict`; the service Literal does not — those submits 422. | `jobs.remote.ts:45` vs `jobs.py:59` |
+| 9.7 | **`model_version` has no writer** — every model prediction is unattributable to a model version. | `AssistShape`, `NewAnnotation` |
+| 9.8 | **No task→text-canvas path.** `kind=text` is hand-URL-only; server `MediaKind` lacks `text` (an honest `modality:'text'` task would 422). | `models.py:69`, `task-stream.ts:107` |
+| 9.9 | **Relation model is thin.** `directed` is declared and never read; no cardinality beyond per-relation `required`; rail lives only in the inspector. | `ontology.py:121` |
+
+Also verified: interactive assist is strictly ONE-SHOT (no session, no point arrays, no
+encode/decode split despite `sam-click`'s description); the review queue's ranking is exactly
+predictions-first + uncertainty-desc, client-side, per-unit; batch jobs are a deterministic mock
+that never runs; bulk tags (`TagBatch`/`tag_rows`) are idempotent insert-only rows with arity
+checks (covered by `test_annotate.py`).
+
 ---
 
 ## Method note
