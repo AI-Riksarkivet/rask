@@ -612,9 +612,11 @@ context** (dapr/dapr#6950) — is an expectation-setter for ingest/flows traces,
 
 ## 11. Open questions
 
-1. **Should authorship bypass the output-visibility check for the author's own terminal
-   events?** (§3.) Default no — one rule everywhere — but the START-invisibility consequence
-   makes "my run started" impossible under FGA until answered.
+1. ~~Should authorship bypass the output-visibility check?~~ **RESOLVED 2026-08-08 (owner):
+   terminal states only, as the PRODUCT decision, not just the technical default.** The
+   notification best-practice rule is notify-on-needs-attention — failures loudest, completions
+   second; "your run started" tells the person who clicked start nothing and is noise to everyone
+   else. One visibility rule everywhere stands; START events notify nobody.
 2. **Watch granularity below project?** The hierarchy has rungs (warehouse/namespace/table) and
    the FGA model inherits along them; v2 ships project-only to avoid building a subscription
    matrix nobody asked for. Reopen on the first real request.

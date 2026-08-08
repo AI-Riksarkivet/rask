@@ -1301,10 +1301,11 @@ Three of the first draft's seven are now answered and have been struck.
 3. ~~What is the runtime symptom of the 3500-to-gRPC-client bug?~~ **ANSWERED.** There is none:
    the seam has no consumer at all and gRPC channels are lazy. The medallion builds its own
    correct client. Dead-code hygiene — §2.1, §2.22.
-4. **Should the two `medallion.bronze` movers be one app, or should the double-cascade be
-   accepted in writing?** §2.12 forces the choice, and §2.11's DLQ fix is different in each
-   case. **See `open_ingest_design.md` §4** — its recommendation (retire the lineage head, make
-   the `published` tag the single trigger) dissolves the question rather than answering it.
+4. ~~Two heads or accept the double-cascade?~~ **DIRECTION SET 2026-08-08 (owner): retire the
+   lineage head; the `published` tag becomes the single cascade trigger** — exactly
+   `open_ingest_design.md` §4's recommendation (one owner per signal). Implementation is
+   ingest-plane work and still open; until it lands, §2.12's honest double-cascade comment is the
+   accurate description.
 5. **Does the ingest → Ray-dashboard egress pass under `networkPolicy.enabled`?** §5.7.
 6. **Is `app-id: lance-ray` worth renaming now, or does it ride the next state-store change?**
    The rename touches component scopes, DLQ topics, resiliency targets and the scope list, and
