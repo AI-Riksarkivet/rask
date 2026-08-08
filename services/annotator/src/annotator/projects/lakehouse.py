@@ -96,7 +96,12 @@ def publish_token(settings: Any) -> str | None:
         "password": bundle["publisher-oidc-password"],
         "scope": "openid profile email",
     }
-    auth = (settings.publish_client_id, settings.publish_client_secret or "") if settings.publish_client_id else None
+    # The client secret comes from the SAME bundle when the store serves it — this credential was the
+    # one outside the estate's fail-closed secrets guard, riding plaintext pod env while the comment
+    # above its chart row claimed otherwise (open_dapr.md §2.9). The env field stays only as the
+    # no-OpenBao fallback, the same shape as every other guarded credential.
+    client_secret = bundle.get("publisher-oidc-client-secret") or settings.publish_client_secret or ""
+    auth = (settings.publish_client_id, client_secret) if settings.publish_client_id else None
     response = httpx.post(settings.publish_token_url, data=data, auth=auth, timeout=15.0)
     if response.status_code >= 400:
         raise RuntimeError(f"the IdP refused the publish identity: HTTP {response.status_code} {response.text[:200]}")
