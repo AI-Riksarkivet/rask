@@ -2,9 +2,11 @@
 	// Floating zoom cluster (bottom-right over the canvas). Controlled by the facade.
 	import { ZoomIn, ZoomOut, Maximize } from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
+	import { cn } from '@rask/ui/utils';
 	import type { AnnotatorController } from '../annotator.svelte';
 
-	let { controller }: { controller: AnnotatorController } = $props();
+	let { controller, class: className }: { controller: AnnotatorController; class?: string } =
+		$props();
 
 	const pct = $derived(Math.round(controller.zoomPercent * 100));
 </script>
@@ -12,7 +14,10 @@
 <!-- Same floating-card treatment as PageNav and the assist bar (card surface, rounded-lg,
      shadow-sm) so the canvas overlays read as one family. -->
 <div
-	class="border-border bg-card/90 text-card-foreground pointer-events-auto absolute right-2 bottom-2 z-10 flex items-center gap-0.5 rounded-lg border p-1 shadow-sm backdrop-blur"
+	class={cn(
+	'border-border bg-card/90 text-card-foreground pointer-events-auto absolute right-2 bottom-2 z-10 flex items-center gap-0.5 rounded-lg border p-1 shadow-sm backdrop-blur',
+	className,
+)}
 	data-testid="zoom-controls"
 >
 	<Button variant="ghost" size="icon-xs" title="Zoom out" onclick={() => controller.zoomOut()}>
