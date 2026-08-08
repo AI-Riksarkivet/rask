@@ -66,6 +66,15 @@ export interface BrushOptions {
 	output: 'mask' | 'polygon';
 }
 
+/** Display-only image adjustments (1 = neutral on every axis) — see `imageAdjust`. */
+export interface ImageAdjust {
+	brightness: number;
+	contrast: number;
+	saturation: number;
+}
+
+const NEUTRAL_ADJUST: ImageAdjust = { brightness: 1, contrast: 1, saturation: 1 };
+
 /** Fields the sidebar can edit inline. */
 export type EditableField = 'label' | 'status' | 'group' | 'text';
 
@@ -181,6 +190,10 @@ export class AnnotatorController {
 		maskMode: 'instance',
 		output: 'mask',
 	});
+	// Image display adjustments (1 = neutral). View-only state, not annotation data: it rides a
+	// ColorMatrixFilter on the page sprite and is never saved — faded manuscript scans need a
+	// contrast lift to trace at all, and that lift must not survive into anyone's annotations.
+	imageAdjust = $state<ImageAdjust>({ ...NEUTRAL_ADJUST });
 
 	// ── layer grouping (mirrored from LayerStore) ──
 	readonly layers = new LayerStore();
@@ -389,6 +402,10 @@ export class AnnotatorController {
 		im.setEditMode(this.mode === 'edit');
 		im.setTool(this.activeTool);
 		im.setBrushOptions(this.brushOptions);
+		// Adjustments survive a unit change / video frame swap: a contrast lift chosen for a faded
+		// volume applies to the next page too, until reset. Guarded so a neutral state never touches
+		// the plugin (unit-test harnesses attach engine doubles without an image plugin).
+		if (this.imageAdjusted) this._applyImageAdjust();
 		this.cvCapable = im.cvCapable; // still image loaded ⇒ the magnetic CV tool is available
 		this.cvReady.clear();
 		im.onCvToolReady = (tool) => this.cvReady.add(tool);
@@ -495,6 +512,24 @@ export class AnnotatorController {
 	setBrushOptions(patch: Partial<BrushOptions>): void {
 		this.brushOptions = { ...this.brushOptions, ...patch };
 		this.ctx?.plugins.interaction.setBrushOptions(this.brushOptions);
+	}
+
+	// ── image adjustments (display-only; never saved) ──
+	get imageAdjusted(): boolean {
+		const a = this.imageAdjust;
+		return a.brightness !== 1 || a.contrast !== 1 || a.saturation !== 1;
+	}
+	setImageAdjust(patch: Partial<ImageAdjust>): void {
+		this.imageAdjust = { ...this.imageAdjust, ...patch };
+		this._applyImageAdjust();
+	}
+	resetImageAdjust(): void {
+		this.imageAdjust = { ...NEUTRAL_ADJUST };
+		this._applyImageAdjust();
+	}
+	private _applyImageAdjust(): void {
+		const { brightness, contrast, saturation } = this.imageAdjust;
+		this.ctx?.plugins.image.setImageAdjustments(brightness, contrast, saturation);
 	}
 
 	// ── selection ──
@@ -863,6 +898,12 @@ export class AnnotatorController {
 						label: s.label || prompt,
 						status: 'prediction',
 						source: result.source ?? `model:${producer}`,
+						// The scores the review queue ranks by — dropped here for a while, which
+						// left every prediction unrankable and the "active-learning order" reading
+						// as insertion order. Null (not 0) when the backend made no estimate — a 0
+						// is a CLAIM of certainty, and "no estimate" must stay distinguishable.
+						confidence: s.confidence ?? null,
+						uncertainty: s.uncertainty ?? null,
 					}),
 				);
 			}

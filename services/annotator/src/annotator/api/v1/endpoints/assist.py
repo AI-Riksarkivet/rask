@@ -119,7 +119,15 @@ class ProducerListing(BaseModel):
 
 
 class AssistShape(BaseModel):
-    """One predicted shape in image coordinates (box or polygon) with confidence."""
+    """One predicted shape in image coordinates (box or polygon) with its scores.
+
+    ``confidence``/``uncertainty`` are the active-learning columns the review queue ranks by
+    (predictions first, highest uncertainty first). They are part of the WIRE contract so a real
+    backend must state them — the columns exist end-to-end (schema, sidebar, queue order) and a
+    producer that omits them leaves its predictions unrankable, which reads as "the queue is
+    alphabetical" with nowhere to see why. ``uncertainty`` is the model's OWN estimate, never
+    derived here as ``1 - confidence`` — that derivation carries no information beyond confidence
+    and is exactly the trap this field exists to avoid."""
 
     shape_type: str = "bbox"
     x: float
@@ -129,6 +137,8 @@ class AssistShape(BaseModel):
     polygon: list[float] = Field(default_factory=list)
     label: str = ""
     confidence: float = 0.0
+    #: None = the backend made no estimate; the row lands with a null and sorts last in the queue.
+    uncertainty: float | None = None
 
 
 class AssistResult(BaseModel):
@@ -308,7 +318,12 @@ def _mock(body: AssistRequest) -> list[AssistShape]:
     """Deterministic stand-in for a model server, so both interactive loops round-trip
     in-repo. GroundingDINO → a box at the drawn region (or a default), labeled with the
     prompt. SAM → a polygon 'mask' around the region/click (a click is a zero box, so a
-    default patch is grown around the point). Both render + review like real predictions."""
+    default patch is grown around the point). Both render + review like real predictions.
+
+    Scores are stated (not derived from each other) for the same reason the mock exists at all:
+    the wire contract must round-trip in-repo, and the review queue's uncertainty ordering is only
+    exercisable when the two producers rank DIFFERENTLY — the segmenter reports lower uncertainty
+    than the detector, so a mixed queue has a visible, deterministic order."""
     r = body.region
     if body.producer.startswith("sam"):
         x, y, w, h = _region_box(r)
@@ -322,6 +337,7 @@ def _mock(body: AssistRequest) -> list[AssistShape]:
                 polygon=_diamond(x, y, w, h),
                 label=(body.prompt or "object").strip(),
                 confidence=0.85,
+                uncertainty=0.3,
             )
         ]
     label = (body.prompt or "region").strip()
@@ -335,9 +351,10 @@ def _mock(body: AssistRequest) -> list[AssistShape]:
                 height=r.height,
                 label=label,
                 confidence=0.7,
+                uncertainty=0.45,
             )
         ]
-    return [AssistShape(shape_type="rectangle", x=100.0, y=100.0, width=200.0, height=80.0, label=label, confidence=0.7)]
+    return [AssistShape(shape_type="rectangle", x=100.0, y=100.0, width=200.0, height=80.0, label=label, confidence=0.7, uncertainty=0.45)]
 
 
 def _region_box(r: Region | None) -> tuple[float, float, float, float]:
