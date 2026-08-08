@@ -66,7 +66,7 @@ coverage; line references in §1–§3 predate these and are stale where they ov
 | **5** | Auto-accept-with-QA-sampling and a multi-signal retrain policy are the two ideas worth lifting from ALS — with the caveat that ALS's own loop is largely simulated (§7). | Policy work on our accept path + train trigger. |
 | **6** | ~~tracks.ts consumed by nothing~~ (interpolation + keyframes LANDED); timeline rail, tracker-assist and mask propagation remain. | Timeline UI; tracking/propagation runners. |
 | **7** | The `scripts/` converters our import design defers to (COCO/YOLO ⇄ Arrow) do not exist. | Write them when the fine-tune loop starts. |
-| **8** | **Task templates** (the Label-Studio labeling-config concept): `ontology.kind` exists and drives tools/classes, but does not select LAYOUT, and project creation offers no template gallery. The annotator is a general multimodal tool — templates are its missing organizing mechanism. | kind → workspace template; gallery pre-filling ontologies at project creation. |
+| **8** | ~~Task templates~~ **LANDED as the ontology-driven gallery**: 8 full-ontology templates at project creation (composite OCR/HTR, detection, segmentation, classification, NER, DocQA+relation, comparison, reading-order) — per-class tools/attributes/relations the free-form path could never author, summarized in the dialog before create. Layout follows the ontology everywhere already (tag→bar, text→spans, relations→rail, attributes→inspector), so a template IS a layout choice with zero template-specific code. | Per-class EDITOR (customizing a template's classes) remains. |
 
 ---
 

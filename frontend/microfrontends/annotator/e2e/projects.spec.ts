@@ -1296,3 +1296,51 @@ test('a non-manager is told WHY, not shown an empty list', async ({ page }) => {
 	await expect(page.getByTestId('members-error')).toContainText('lacks can_manage');
 	await expect(page.getByTestId('member-row')).toHaveCount(0);
 });
+
+test('template gallery: picking a template sends its COMPLETE ontology — per-class tools, attributes, relations', async ({
+	page,
+}) => {
+	await seed(page, {
+		'GET /projects': { projects: [], total: 0 },
+		'POST /projects': project('draft'),
+	});
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	const dialog = page.getByRole('dialog');
+	await dialog.getByPlaceholder('vasa-portraits').fill('court-records');
+
+	// Keyboard selection (see the task-type test: Bits UI's portal breaks later clicks after a
+	// mouse pick). 'custom' is focused when the listbox opens; the composite template is next.
+	await dialog.getByLabel('Task template').press('Enter');
+	await page.getByRole('option', { name: /OCR \/ HTR layout/ }).waitFor();
+	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('Enter');
+	await expect(dialog.getByLabel('Task template')).toContainText('OCR / HTR');
+
+	// The summary SHOWS the contract being created — classes with their own tools, the relation —
+	// and the free-form knobs are gone: a template already answered them.
+	const summary = dialog.getByTestId('template-summary');
+	await expect(summary).toContainText('paragraph');
+	await expect(summary).toContainText('[polygon, bbox]');
+	await expect(summary).toContainText('annotates');
+	await expect(dialog.getByPlaceholder('person, ship, signature')).toHaveCount(0);
+
+	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
+
+	const create = await createCall(page);
+	const ontology = (create.body as { ontology: Record<string, unknown> }).ontology;
+	expect(ontology).toMatchObject({ kind: 'ocr-layout' });
+	const classes = ontology.classes as Record<string, unknown>[];
+	expect(classes).toHaveLength(8);
+	const byName = Object.fromEntries(classes.map((c) => [c.name as string, c]));
+	// PER-CLASS tools — the thing the free-form path could never author.
+	expect(byName['paragraph']).toMatchObject({ tools: ['polygon', 'bbox'], required: true });
+	expect(byName['person']).toMatchObject({ tools: ['text'] });
+	expect(byName['damaged']).toMatchObject({ tools: ['tag'] });
+	// Typed attributes ride the classes; the relation rides the document.
+	expect((byName['paragraph']!.attributes as { name: string }[]).map((a) => a.name)).toContain(
+		'script',
+	);
+	expect((ontology.relations as { name: string }[])[0]).toMatchObject({ name: 'annotates' });
+});

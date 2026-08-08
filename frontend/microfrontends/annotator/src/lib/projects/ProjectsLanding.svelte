@@ -21,6 +21,7 @@
 	import { createProject, listProjects } from './remote/projects.remote';
 	import type { Project } from './types.js';
 	import { projectStateVariant, taskProgress } from './presentation.js';
+	import { PROJECT_TEMPLATES, templateById } from './templates.js';
 
 	let tenant = $state('');
 	let projects = $state<Project[]>([]);
@@ -77,10 +78,20 @@
 			.filter(Boolean),
 	);
 
+	// THE TEMPLATE GALLERY (finding 8). A template is a COMPLETE ontology — per-class tools,
+	// typed attributes, relations — everything the free-form path below cannot author (it applies
+	// one uniform tool list to every typed name). Picking one seeds the whole contract verbatim;
+	// 'custom' keeps the free-form path exactly as it was.
+	let templateId = $state('custom');
+	const pickedTemplate = $derived(templateId === 'custom' ? undefined : templateById(templateId));
+
 	// Derived, not a function: a pure projection of taskKind + classesText + the two toggles, which
 	// is exactly what $derived is for. One payload — there is nothing left for a second to disagree
 	// with.
 	const ontologyPayload = $derived.by(() => {
+		// A template wins whole: its per-class declarations are the point, and re-deriving them
+		// from the comma list would collapse them back to uniform tools.
+		if (pickedTemplate) return pickedTemplate.ontology;
 		if (classNames.length === 0 && taskKind === 'free') return undefined;
 		const preset = TASK_PRESETS[taskKind];
 		// The preset's tools when one is picked, else the single shape kind. Per-class tools are
@@ -288,42 +299,84 @@
 			</label>
 			<label class="flex flex-col gap-1 text-sm">
 				<span
-					>Label classes <span class="text-muted-foreground">(comma-separated — the labeling task)</span
-					></span
-				>
-				<Input bind:value={classesText} placeholder="person, ship, signature" />
-			</label>
-			<label class="flex flex-col gap-1 text-sm">
-				<span>Shape kind</span>
-				<Select
-					bind:value={shapeKind}
-					ariaLabel="Shape kind"
-					options={SHAPE_KINDS.map((kind) => ({ value: kind, label: kind }))}
-				/>
-			</label>
-			<label class="flex flex-col gap-1 text-sm">
-				<span
-					>Task type <span class="text-muted-foreground"
-						>(seeds each class's tools — enforced at submit)</span
+					>Template <span class="text-muted-foreground"
+						>(a complete task — per-class tools, attributes, relations)</span
 					></span
 				>
 				<Select
-					bind:value={taskKind}
-					ariaLabel="Task type"
+					bind:value={templateId}
+					ariaLabel="Task template"
 					options={[
-	{ value: 'free', label: 'free (no task type)' },
-	...Object.keys(TASK_PRESETS).map((kind) => ({ value: kind, label: kind })),
+	{ value: 'custom', label: 'custom (type your own classes)' },
+	...PROJECT_TEMPLATES.map((t) => ({ value: t.id, label: t.name })),
 ]}
 				/>
 			</label>
-			<label class="flex items-center gap-2 text-sm">
-				<Checkbox bind:checked={classesRequired} aria-label="Every class is required" />
-				<span
-					>Every class is required <span class="text-muted-foreground"
-						>(each must appear on every completed item)</span
-					></span
+			{#if pickedTemplate}
+				<div
+					class="border-border bg-muted/40 flex flex-col gap-1 rounded-md border p-2 text-xs"
+					data-testid="template-summary"
 				>
-			</label>
+					<p class="text-muted-foreground">{pickedTemplate.description}</p>
+					<p>
+						{#each pickedTemplate.ontology.classes as c (c.name)}
+							<span class="mr-1 inline-flex items-center gap-0.5">
+								<Badge variant="outline">{c.name}</Badge>
+								<span class="text-muted-foreground">[{c.tools.join(', ')}]</span>
+							</span>
+						{/each}
+					</p>
+					{#if pickedTemplate.ontology.relations?.length}
+						<p class="text-muted-foreground">
+							relations: {pickedTemplate.ontology.relations.map((r) => r.name).join(', ')}
+						</p>
+					{/if}
+				</div>
+			{:else}
+				<label class="flex flex-col gap-1 text-sm">
+					<span
+						>Label classes <span class="text-muted-foreground">(comma-separated — the labeling task)</span
+						></span
+					>
+					<Input bind:value={classesText} placeholder="person, ship, signature" />
+				</label>
+			{/if}
+			{#if !pickedTemplate}
+				<!-- The free-form knobs are the CUSTOM path's; a template already answered all three,
+				     and dead controls under a picked template would advertise overrides that do not
+				     apply. -->
+				<label class="flex flex-col gap-1 text-sm">
+					<span>Shape kind</span>
+					<Select
+						bind:value={shapeKind}
+						ariaLabel="Shape kind"
+						options={SHAPE_KINDS.map((kind) => ({ value: kind, label: kind }))}
+					/>
+				</label>
+				<label class="flex flex-col gap-1 text-sm">
+					<span
+						>Task type <span class="text-muted-foreground"
+							>(seeds each class's tools — enforced at submit)</span
+						></span
+					>
+					<Select
+						bind:value={taskKind}
+						ariaLabel="Task type"
+						options={[
+	{ value: 'free', label: 'free (no task type)' },
+	...Object.keys(TASK_PRESETS).map((kind) => ({ value: kind, label: kind })),
+]}
+					/>
+				</label>
+				<label class="flex items-center gap-2 text-sm">
+					<Checkbox bind:checked={classesRequired} aria-label="Every class is required" />
+					<span
+						>Every class is required <span class="text-muted-foreground"
+							>(each must appear on every completed item)</span
+						></span
+					>
+				</label>
+			{/if}
 			<label class="flex flex-col gap-1 text-sm">
 				<span
 					>Consensus <span class="text-muted-foreground"
