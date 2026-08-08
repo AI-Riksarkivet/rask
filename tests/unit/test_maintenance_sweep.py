@@ -117,6 +117,31 @@ def test_summarize_reports_refusals_as_their_own_category() -> None:
     assert summary["datasets"] == 4
 
 
+def test_a_tick_aborted_before_the_loop_still_counts_as_started(monkeypatch: Any) -> None:
+    """open_dapr.md §2.20: `compaction.runs` fired only AFTER the sweep loop, so a pass killed
+    mid-flight was observationally identical to a tick that never arrived. The started counter must
+    fire before anything abortable — here the policy-registry read, whose failure aborts the tick by
+    design — so started-minus-completed is a real lost-pass count."""
+    import pytest
+    from maintenance.core.config import MaintenanceSettings
+    from maintenance.services import sweep as sweep_mod
+
+    calls: list[str] = []
+    monkeypatch.setattr(sweep_mod, "record_run_started", lambda: calls.append("started"))
+    monkeypatch.setattr(sweep_mod, "record_run", lambda: calls.append("completed"))
+    monkeypatch.setattr(sweep_mod, "_s3fs", lambda _settings: object())
+
+    def _registry_down(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("policy registry unreachable")
+
+    monkeypatch.setattr(sweep_mod.maintenance_policies, "list_policies", _registry_down)
+
+    with pytest.raises(RuntimeError):
+        sweep_mod.run_sweep(MaintenanceSettings())
+
+    assert calls == ["started"], "an aborted tick must be visible as started-but-not-completed"
+
+
 def test_on_cron_single_flight_skips_an_overlapping_sweep(monkeypatch: Any) -> None:
     """A cron tick that finds a prior sweep still in flight SKIPS instead of starting a SECOND concurrent
     sweep — two sweeps would race compact_files()/cleanup_old_versions() on the same datasets. The sweep is
