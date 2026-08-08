@@ -32,7 +32,8 @@ async def test_an_unconfigured_service_still_lists_the_mock_producers() -> None:
     work against the in-repo mock. The honest report is "present, and mocked"."""
     rows = _by_name(producer_listing(_settings()))
 
-    assert set(rows) == {"grounding-dino", "sam"}
+    # The FULL family — the batch producers included (§9.5: one registry, not two truths).
+    assert {"grounding-dino", "sam", "htr", "insid3", "vlm-judge", "embed-propagate"} <= set(rows)
     assert not rows["grounding-dino"].configured
     assert not rows["sam"].configured
 
@@ -114,8 +115,8 @@ async def test_an_unreadable_task_makes_no_claim_rather_than_a_wrong_one(monkeyp
 
     listing = producer_listing(_settings(), await enforced_shape_types("t1"))
 
-    assert [p.compatible for p in listing.producers] == [None, None]
-    assert len(listing.producers) == 2, "a transport failure emptied the settings surface"
+    assert all(p.compatible is None for p in listing.producers)
+    assert len(listing.producers) >= 2, "a transport failure emptied the settings surface"
 
 
 def test_the_returns_table_uses_the_SAME_longest_prefix_rule_as_the_registry() -> None:

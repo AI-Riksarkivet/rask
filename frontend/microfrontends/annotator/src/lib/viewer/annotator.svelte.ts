@@ -1222,6 +1222,15 @@ export class AnnotatorController {
 		// Batch locus = a silver deriver over a chunk-level selection: enqueue via the jobs
 		// seam (lance-ns runs it; the result surfaces async by media id + Lance version).
 		if (op.execution === 'batch') {
+			// The jobs seam runs DERIVERS (predict/propagate/judge). A batch `set`/`verdict` is a
+			// bulk field-write — the TAGS plane's job — and the service Literal refuses it; posting
+			// it anyway was a guaranteed 422 the fire-and-forget toast reported as a failed submit.
+			if (op.op !== 'predict' && op.op !== 'propagate' && op.op !== 'judge') {
+				return {
+					status: 'unsupported',
+					reason: `batch '${op.op}' is not a jobs op — bulk field-writes ride the tags plane`,
+				};
+			}
 			if (isChunkSelection(op.target)) {
 				// Fire-and-forget submit; the toasts are the only submit-side feedback (results
 				// surface async on the read plane by media id + Lance version). HONEST MOCK:

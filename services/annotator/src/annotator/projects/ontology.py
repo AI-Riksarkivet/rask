@@ -299,6 +299,17 @@ def membership_violation(ontology: LabelOntology, shapes: list[ShapeLike]) -> st
         if klass.tools and shape.shape_type not in klass.tools:
             return f"class {klass.name!r} allows tools {sorted(klass.tools)} — shape {shape.shape_id} is {shape.shape_type}"
 
+        # A class that DECLARES attributes closes the set — an undeclared name is a vocabulary
+        # violation, same stance as `extra="forbid"` on the models: a typo'd `ordr` accepted
+        # silently would publish beside a "requires attribute 'order'" refusal, and nothing
+        # anywhere would say the two are the same mistake. A class declaring NO attributes stays
+        # unconstrained, mirroring how empty `tools` means any tool.
+        if klass.attributes:
+            declared_attrs = {a.name for a in klass.attributes}
+            for name in shape.attributes:
+                if name not in declared_attrs:
+                    return f"attribute {name!r} is not declared on class {klass.name!r} (declares {sorted(declared_attrs)}) — shape {shape.shape_id}"
+
         for attr in klass.attributes:
             value = shape.attributes.get(attr.name)
             if value is None or value == "":

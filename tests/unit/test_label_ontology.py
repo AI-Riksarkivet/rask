@@ -332,3 +332,23 @@ def test_a_NON_text_shape_is_never_span_checked() -> None:
     """Every other shape type carries no parent and no range, and must not be refused for it."""
     ontology = LabelOntology(classes=[LabelClass(name="region", tools=["bbox"])])
     assert validate_against_ontology(ontology, [_shape(label="region")]) is None
+
+
+def test_an_UNDECLARED_attribute_name_is_refused_when_the_class_declares_any() -> None:
+    """A typo'd attribute name (`ordr` for `order`) used to pass silently — accepted, published,
+    with the required-`order` refusal as the only symptom, and nothing saying the two were the same
+    mistake. A class that declares attributes closes the set; one that declares none stays
+    unconstrained, mirroring how empty `tools` means any tool."""
+    ontology = LabelOntology(
+        classes=[
+            LabelClass(name="paragraph", attributes=[OutputAttr(name="order", type="int")]),
+            LabelClass(name="stamp"),
+        ]
+    )
+
+    violation = validate_against_ontology(ontology, [_shape(label="paragraph", ordr="2")])
+    assert violation is not None and "ordr" in violation and "order" in violation
+
+    # Declared names still pass; a class with NO declared attributes accepts anything.
+    assert validate_against_ontology(ontology, [_shape(label="paragraph", order="2")]) is None
+    assert validate_against_ontology(ontology, [_shape(label="stamp", anything="goes")]) is None

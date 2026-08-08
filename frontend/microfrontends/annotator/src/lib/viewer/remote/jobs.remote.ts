@@ -42,7 +42,10 @@ export const submitBatchJob = command(
 	v.object({
 		/** Producer registry key (grounding-dino | insid3 | vlm-judge | embed-propagate | …). */
 		producer: v.string(),
-		op: v.picklist(['set', 'verdict', 'predict', 'propagate', 'judge']),
+		// EXACTLY the service's `Literal["predict","propagate","judge"]` — this used to also accept
+		// `set`/`verdict`, which the server refuses, so the wire schema advertised submits that
+		// could only ever 422. The two vocabularies must not drift apart again.
+		op: v.picklist(['predict', 'propagate', 'judge']),
 		scope: ScopeSchema,
 		prompt: v.optional(v.string()),
 		dataset: v.optional(v.string()),

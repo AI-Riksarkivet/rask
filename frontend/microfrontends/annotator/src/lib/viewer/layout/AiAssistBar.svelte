@@ -38,9 +38,13 @@
 			// Mocked unless SOMETHING real is reachable. Per-producer state lives in the registry
 			// panel; this chip answers the coarser question the canvas needs at a glance.
 			assistMocked = !result.data.producers.some((p) => p.configured);
-			// The two built-ins already have their own buttons.
+			// The two built-ins already have their own buttons; BATCH-ONLY families (htr,
+			// vlm-judge, …) are jobs-seam producers the interactive POST cannot reach — a mode
+			// button for one could only ever answer from the mock, so the registry's
+			// `interactive` flag gates them out of the bar (they still show in the registry
+			// panel, where batch-ness is a fact rather than a dead control).
 			extraProducers = result.data.producers
-				.filter((p) => p.name !== 'grounding-dino' && p.name !== 'sam')
+				.filter((p) => p.name !== 'grounding-dino' && p.name !== 'sam' && p.interactive !== false)
 				.map((p) => p.name);
 		} catch {
 			// unreachable — keep the fail-honest mock chip
@@ -81,10 +85,7 @@
      No surface of its own now (no card, no border, no shadow): it is a SEGMENT of the toolbar, and
      giving it a card inside a bar would re-draw the same separation in a smaller box. `shrink-0`
      because the toolbar scrolls horizontally rather than wrapping. -->
-<div
-	class="flex shrink-0 items-center gap-1.5"
-	data-testid="ai-assist"
->
+<div class="flex shrink-0 items-center gap-1.5" data-testid="ai-assist">
 	<div class="border-border flex overflow-hidden rounded-lg border p-0.5">
 		<Button
 			variant={mode === 'detect' ? 'secondary' : 'ghost'}

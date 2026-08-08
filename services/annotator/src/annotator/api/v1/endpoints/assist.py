@@ -78,7 +78,22 @@ _CANONICAL_SHAPE: dict[str, str] = {
 _RETURNS: dict[str, tuple[str, ...]] = {
     "grounding-dino": ("bbox",),
     "sam": ("polygon",),
+    # The BATCH families. Absent from this map, the service's registry and the frontend's diverged
+    # into two truths: `/assist/producers` never listed htr/insid3/vlm-judge/embed-propagate, so
+    # their compatibility rendered "unknown" forever and the settings surface denied producers the
+    # jobs seam happily accepts. Listed ⇒ compatibility computes; batch-ness rides `interactive`.
+    "htr": ("text",),
+    "insid3": ("mask",),
+    # vlm-judge/embed-propagate emit VERDICTS/FIELD writes, not shapes — an empty tuple is honest
+    # ("emits no drawable shape"), and compatibility correctly stays a non-claim.
+    "vlm-judge": (),
+    "embed-propagate": (),
 }
+
+#: Families that only run through the JOBS seam (`/api/jobs/apply`) — the interactive assist POST
+#: has no transport for them. The registry says so instead of letting the bar offer a mode that
+#: could only ever answer from the mock.
+_BATCH_ONLY: frozenset[str] = frozenset({"htr", "vlm-judge", "embed-propagate"})
 
 
 def returns_for(producer: str) -> tuple[str, ...]:
@@ -105,6 +120,9 @@ class ProducerInfo(BaseModel):
     #: its ontology constrains nothing, or when `returns` is unknown — three genuinely different
     #: reasons not to make a claim, all of which the UI renders as "unknown" rather than as a pass.
     compatible: bool | None = None
+    #: False ⇒ this family runs only through the jobs seam; the interactive assist POST cannot
+    #: reach it, and the bar must not offer it as a mode.
+    interactive: bool = True
 
 
 class ProducerListing(BaseModel):
@@ -209,6 +227,7 @@ def producer_listing(settings: Any, allowed: set[str] | None = None) -> Producer
                 # No task, no enforcement, or nothing known about what it emits ⇒ NO CLAIM. Only the
                 # case where both sides are actually known produces a true/false.
                 compatible=bool(set(emits) & allowed) if (allowed and emits) else None,
+                interactive=name not in _BATCH_ONLY,
             )
         )
     return ProducerListing(producers=rows, default_configured=bool(default_url))

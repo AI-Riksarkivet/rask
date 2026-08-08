@@ -37,3 +37,45 @@ def test_a_prefix_never_matches_mid_name() -> None:
     """`insid3` must not catch `not-insid3` — prefix means STARTSWITH, not substring."""
     s = _settings({"insid3": "http://insid3:1"})
     assert backend_for(s, "not-insid3") is None
+
+
+def test_the_listing_names_every_known_family_including_the_batch_ones() -> None:
+    """One registry, not two. The frontend ships producer metadata for htr/insid3/vlm-judge/
+    embed-propagate; while `_RETURNS` knew only the two interactive families, `/assist/producers`
+    never listed the rest — their compatibility rendered "unknown" forever and the settings
+    surface denied producers the jobs seam happily accepts."""
+    from annotator.api.v1.endpoints.assist import producer_listing
+
+    listing = producer_listing(_settings())
+    by_name = {p.name: p for p in listing.producers}
+
+    assert {"grounding-dino", "sam", "htr", "insid3", "vlm-judge", "embed-propagate"} <= set(by_name)
+    assert by_name["htr"].returns == ["text"]
+    assert by_name["insid3"].returns == ["mask"]
+    # Verdict/field producers emit no drawable shape — an honest empty, not a guess.
+    assert by_name["vlm-judge"].returns == []
+
+
+def test_batch_only_families_say_so_and_interactive_ones_do_not() -> None:
+    """The flag the assist BAR gates on: a mode button for a jobs-seam producer could only ever
+    answer from the mock."""
+    from annotator.api.v1.endpoints.assist import producer_listing
+
+    by_name = {p.name: p for p in producer_listing(_settings()).producers}
+
+    assert by_name["htr"].interactive is False
+    assert by_name["vlm-judge"].interactive is False
+    assert by_name["embed-propagate"].interactive is False
+    assert by_name["grounding-dino"].interactive is True
+    assert by_name["sam"].interactive is True
+    assert by_name["insid3"].interactive is True
+
+
+def test_compatibility_now_computes_for_batch_families_too() -> None:
+    """An `htr` producer against a task allowing `text` is a YES, not an eternal unknown."""
+    from annotator.api.v1.endpoints.assist import producer_listing
+
+    by_name = {p.name: p for p in producer_listing(_settings(), allowed={"text"}).producers}
+
+    assert by_name["htr"].compatible is True
+    assert by_name["grounding-dino"].compatible is False

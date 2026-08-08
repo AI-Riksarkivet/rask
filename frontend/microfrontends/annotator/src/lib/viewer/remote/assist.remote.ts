@@ -64,6 +64,9 @@ export interface ProducerInfo {
 	returns: string[];
 	/** null = no claim (no task, an unenforced one, or nothing known about what it emits). */
 	compatible: boolean | null;
+	/** False ⇒ jobs-seam only; the bar must not offer it as an interactive mode. Optional so an
+	 *  older service (no flag) keeps every producer interactive, the previous behaviour. */
+	interactive?: boolean;
 }
 
 export interface ProducerListing {
