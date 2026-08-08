@@ -128,6 +128,9 @@ export interface SavePayload {
 		polygon: number[];
 	}>;
 	temporal: Array<{ id: string; t_start: number; t_end: number }>;
+	/** Re-anchored TEXT SPANS (the transcription-edit remap) — offsets only, keyed by id. The one
+	 *  legal writer of offsets after birth; they are deliberately not free-form editable fields. */
+	spans: Array<{ id: string; char_start: number; char_end: number }>;
 	deletes: string[];
 	base_version: number | null;
 }
@@ -141,6 +144,7 @@ export function buildSavePayload(args: {
 		{ x: number; y: number; w: number; h: number; polygon?: number[] | null }
 	>;
 	temporalEdits: ReadonlyMap<number, { t_start: number; t_end: number }>;
+	spanEdits?: ReadonlyMap<number, { char_start: number; char_end: number }>;
 	inserts: InsertRow[];
 	deletes: string[];
 	version: number | null;
@@ -172,6 +176,11 @@ export function buildSavePayload(args: {
 			t_start: s.t_start,
 			t_end: s.t_end,
 		})),
+		spans: [...(args.spanEdits ?? [])].map(([index, s]) => ({
+			id: id(index),
+			char_start: s.char_start,
+			char_end: s.char_end,
+		})),
 		deletes: args.deletes,
 		base_version: args.version,
 	};
@@ -182,7 +191,8 @@ export const payloadIsEmpty = (p: SavePayload): boolean =>
 	p.inserts.length === 0 &&
 	p.deletes.length === 0 &&
 	p.geometry.length === 0 &&
-	p.temporal.length === 0;
+	p.temporal.length === 0 &&
+	p.spans.length === 0;
 
 /** POST a Save. `conflict` = the table advanced under the client (HTTP 409). */
 export async function postSave(

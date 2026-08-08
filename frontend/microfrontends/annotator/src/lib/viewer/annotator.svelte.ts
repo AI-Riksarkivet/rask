@@ -26,6 +26,7 @@ import { canonicalShapeType, engineToolsFor } from '@rask/labeling/shape-types';
 import { isChunkSelection } from '@rask/labeling/types';
 import { PRODUCERS } from '@rask/labeling/producers';
 import { rowSignature } from '@rask/labeling/history';
+import { remapSpans } from './span-remap';
 import {
 	AnnotationsHttpError,
 	type InsertRow,
@@ -240,6 +241,10 @@ export class AnnotatorController {
 	// Segment-TIME resizes of EXISTING audio/video annotations, keyed by row index (the
 	// waveform region already reflects the drag; this queues {t_start,t_end} for Save).
 	private readonly _temporalEdits = new SvelteMap<number, { t_start: number; t_end: number }>();
+	// Re-anchored SPAN offsets, keyed by row index — written only by the transcription-edit remap
+	// (offsets are deliberately not editable fields; a free-form edit of one is a corruption
+	// vector). Display overlay + Save channel in one, like the temporal map beside it.
+	private readonly _spanEdits = new SvelteMap<number, { char_start: number; char_end: number }>();
 
 	private _detachViewport: (() => void) | null = null;
 	// POST target for Save (same URL the annotations are GET from). Null ⇒ read-only.
@@ -265,7 +270,16 @@ export class AnnotatorController {
 	/** Flat rows for the sidebar list, overlay-aware (pure projection in annotation-rows). */
 	readonly rows = $derived.by<AnnoRow[]>(() => {
 		const t = this.table;
-		return t ? projectRows(t, this._overrides, [...this._deletes, ...this._suppressed]) : [];
+		if (!t) return [];
+		const projected = projectRows(t, this._overrides, [...this._deletes, ...this._suppressed]);
+		// The span-offset overlay (the transcription-edit remap) wins over the table, exactly as
+		// the field overlay does inside projectRows — a remapped span must RENDER remapped, or the
+		// highlight sits on the wrong characters until the save round-trips.
+		if (this._spanEdits.size === 0) return projected;
+		return projected.map((r) => {
+			const edit = this._spanEdits.get(r.index);
+			return edit ? { ...r, charStart: edit.char_start, charEnd: edit.char_end } : r;
+		});
 	});
 
 	/** Distinct groups for the current group-by column, with counts. */
@@ -399,7 +413,8 @@ export class AnnotatorController {
 			this._geoDirty ||
 			this._inserts.length > 0 ||
 			this._deletes.length > 0 ||
-			this._temporalEdits.size > 0,
+			this._temporalEdits.size > 0 ||
+			this._spanEdits.size > 0,
 	);
 	readonly canSave = $derived(this.dirty && !this.saving && this._saveUrl !== null);
 
@@ -1160,6 +1175,40 @@ export class AnnotatorController {
 		if (before === value) return;
 		this._pushUndo({ kind: 'field', index, field, before, after: value });
 		this._setField(index, field, value);
+		// A TEXT edit shifts the text under every span anchored to this row — re-anchor them or
+		// they silently point at the wrong characters (§8d.1). Known limitation, said out loud:
+		// undoing the text edit restores the text but not the offsets; before this existed the
+		// offsets were wrong after EVERY edit, undone or not.
+		if (field === 'text') this._remapChildSpans(index, before, value);
+	}
+
+	/** Re-anchor `parentIndex`'s child spans for an `oldText → newText` edit: shifted/stretched
+	 *  spans land on the span-edit overlay (display + Save channel in one); spans whose anchored
+	 *  text was edited away are DELETED rather than guessed at. Insert rows additionally update
+	 *  their own pending payload — their ids are unknown to the server's patch path. */
+	private _remapChildSpans(parentIndex: number, oldText: string, newText: string): void {
+		const parentId = this.rows.find((r) => r.index === parentIndex)?.id;
+		if (!parentId) return;
+		const spans = this.rows
+			.filter((r) => r.parentId === parentId && r.charStart != null && r.charStart >= 0)
+			.map((r) => ({ index: r.index, start: r.charStart ?? 0, end: r.charEnd ?? 0 }));
+		if (spans.length === 0) return;
+		for (const s of remapSpans(oldText, newText, spans)) {
+			const row = this.rows.find((r) => r.index === s.index);
+			if (!row) continue;
+			if (s.start === null || s.end === null) {
+				this.deleteRow(s.index);
+				continue;
+			}
+			const original = spans.find((sp) => sp.index === s.index);
+			if (original && original.start === s.start && original.end === s.end) continue;
+			this._spanEdits.set(s.index, { char_start: s.start, char_end: s.end });
+			const insert = this._inserts.find((ins) => ins.id === row.id);
+			if (insert) {
+				insert.char_start = s.start;
+				insert.char_end = s.end;
+			}
+		}
 	}
 	setStatus(index: number, status: string): void {
 		// Manual mode = ONE instance of the LabelOp abstraction (human · verdict ·
@@ -1512,6 +1561,7 @@ export class AnnotatorController {
 			overrides: this._overrides,
 			geoEdits: this._geoEdits,
 			temporalEdits: this._temporalEdits,
+			spanEdits: this._spanEdits,
 			inserts: this._inserts,
 			deletes: this._deletes,
 			version: this._version,
@@ -1588,6 +1638,7 @@ export class AnnotatorController {
 		this._suppressed.clear();
 		this._geoEdits.clear();
 		this._temporalEdits.clear();
+		this._spanEdits.clear();
 		this._geoDirty = false;
 	}
 

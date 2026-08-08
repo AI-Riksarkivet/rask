@@ -103,6 +103,19 @@ class TemporalEdit(BaseModel):
     t_end: float
 
 
+class SpanEdit(BaseModel):
+    """A re-anchored TEXT SPAN — its offsets only, keyed by id.
+
+    Exists for the transcription-edit remap: correcting a parent's text shifts the text under
+    every span anchored to it, and the client recomputes each span's `[start, end)` to follow.
+    Offsets are deliberately NOT in `EDITABLE_FIELDS` — a free-form field edit of a char offset
+    is a corruption vector; this channel is the one legal writer, mirroring `TemporalEdit`."""
+
+    id: str
+    char_start: int
+    char_end: int
+
+
 class SaveAnnotations(BaseModel):
     """The delta a Save flushes for one media unit: field edits + newly drawn shapes
     + moved geometry + deleted ids. Edits/inserts/geometry commit together (one
@@ -116,6 +129,7 @@ class SaveAnnotations(BaseModel):
     inserts: list[NewAnnotation] = Field(default_factory=list)
     geometry: list[GeometryEdit] = Field(default_factory=list)
     temporal: list[TemporalEdit] = Field(default_factory=list)
+    spans: list[SpanEdit] = Field(default_factory=list)
     deletes: list[str] = Field(default_factory=list)
     base_version: int | None = None
 

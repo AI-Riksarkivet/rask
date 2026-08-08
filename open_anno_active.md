@@ -42,6 +42,10 @@ coverage; line references in §1–§3 predate these and are stale where they ov
   with the ontology's choices under each; a pick saves a version-guarded `tag` row onto the winning
   unit through the plain transport (no canvas controller, so no autosave race). Text panes render
   the document lines, image/AV panes the frame. Entry/exit are plain links from the page bar.
+- SPAN OFFSETS FOLLOW THE TEXT (§8d.1 — the sharpest textual defect): correcting a transcription
+  re-anchors every child span (prefix/suffix diff → shift, stretch, or DROP when the anchored text
+  was edited away — never a clamped guess). A new `SpanEdit` save channel patches offsets by id
+  (they are deliberately not editable fields), mirroring the temporal channel.
 - FEW-SHOT PROPAGATION HAS A BUTTON: `PropagatePanel` in the sidebar — the picked annotations
   are the exemplars, a scope select (this item / entire dataset), one `insid3` job on the jobs
   seam with exemplar IDS, and an outcome line that reports the WIRE truth (job id + the honest

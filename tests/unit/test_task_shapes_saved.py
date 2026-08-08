@@ -251,3 +251,31 @@ async def test_assist_predictions_are_filtered_by_the_composite_ontology(monkeyp
     # `rectangle` (a producer dialect) normalized to `bbox` and accepted; `mask` refused.
     assert [s.shape_type for s in kept] == ["polygon", "bbox"]
     assert len(dropped) == 1 and "mask" in dropped[0]
+
+
+def test_a_span_reanchors_through_the_span_edit_channel(tmp_path: Path) -> None:
+    """The transcription-edit remap (§8d.1): offsets are not editable fields — `SpanEdit` is the
+    one legal writer, and the patch lands like geometry/temporal do, everything else carried."""
+    from annotator.annotations.save import build_delta
+    from annotator.annotations.schema import SaveAnnotations, SpanEdit
+
+    _save(
+        tmp_path,
+        [
+            NewAnnotation(id="line", shape_type="text", text="Gustaf Eriksson Vasa"),
+            NewAnnotation(id="span", shape_type="text", label="person", parent_id="line", char_start=16, char_end=20),
+        ],
+    )
+    # The wire model carries the channel (a client edit of 'Eriksson' → 'Erikssonn' shifts +1).
+    body = SaveAnnotations(spans=[SpanEdit(id="span", char_start=17, char_end=21)])
+    edits_by_id: dict[str, dict[str, object]] = {}
+    for s in body.spans:
+        edits_by_id.setdefault(s.id, {}).update({"char_start": s.char_start, "char_end": s.char_end})
+
+    uri = str(tmp_path / "annotations.lance")
+    ds = lance.dataset(uri)
+    ds.merge_insert("id").when_matched_update_all().execute(build_delta(ds.to_table(), edits_by_id))
+
+    rows = {r["id"]: r for r in lance.dataset(uri).to_table().to_pylist()}
+    assert (rows["span"]["char_start"], rows["span"]["char_end"]) == (17, 21)
+    assert rows["span"]["parent_id"] == "line" and rows["span"]["label"] == "person"  # carried

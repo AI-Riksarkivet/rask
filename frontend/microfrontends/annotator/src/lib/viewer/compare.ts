@@ -67,6 +67,7 @@ export function toggleTagPayload(
 				],
 		geometry: [],
 		temporal: [],
+		spans: [],
 		deletes: existing ? [existing.id] : [],
 		base_version: version,
 	};
