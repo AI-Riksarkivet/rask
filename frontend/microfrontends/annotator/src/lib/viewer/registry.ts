@@ -5,6 +5,7 @@
 import type { Component } from 'svelte';
 import AudioViewer from './AudioViewer.svelte';
 import ImageViewer from './ImageViewer.svelte';
+import TextViewer from './TextViewer.svelte';
 import VideoViewer from './VideoViewer.svelte';
 import type { MediaKind, ViewerProps } from './types';
 
@@ -12,6 +13,7 @@ const VIEWERS: Record<MediaKind, Component<ViewerProps>> = {
 	image: ImageViewer,
 	audio: AudioViewer,
 	video: VideoViewer,
+	text: TextViewer,
 };
 
 /** The viewer component for a media kind. */

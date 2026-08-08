@@ -154,9 +154,10 @@
 	// destructive and carries the reason (never a silent, eternal "loading…").
 	let loadFailed = $state(false);
 
-	// Audio is temporal-only (no canvas): hide the spatial chrome — drawing tools, zoom,
-	// and the GroundingDINO box-assist. Image + video keep it (video draws on its frame).
-	const spatial = $derived(unit.kind !== 'audio');
+	// Audio is temporal-only and TEXT is the document-as-canvas — neither has a pixel surface, so
+	// both hide the spatial chrome (drawing tools, zoom, the box-assist). Image + video keep it
+	// (video draws on its frame).
+	const spatial = $derived(unit.kind !== 'audio' && unit.kind !== 'text');
 	// Temporal units render a TRANSPORT BAR at the bottom of the viewer, inside the same
 	// positioned ancestor the floating pills anchor to — so `bottom-2` overlays the bar and eats
 	// its clicks (found by Playwright's interception check on the video seek slider). Raised, not
@@ -353,7 +354,11 @@
 								<ZoomControls {controller} class={raisedOverTransport} />
 							{/if}
 						</div>
-						<DocumentTextLane {controller} />
+						{#if unit.kind !== 'text'}
+							<!-- The OCR composition: image/video on top, its transcription under it. A TEXT
+							     unit's viewer IS the document, so a lane would render the same text twice. -->
+							<DocumentTextLane {controller} />
+						{/if}
 					</div>
 				{/snippet}
 				{#snippet right()}

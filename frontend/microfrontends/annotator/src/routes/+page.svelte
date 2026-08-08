@@ -35,7 +35,8 @@
 		// the picked dataset (`dataset=` — absent for the backend default), so a reload
 		// reopens the same unit IN the same dataset (frame/annotations/save alike).
 		const rawKind = params.get('kind');
-		const kind: MediaKind = rawKind === 'audio' || rawKind === 'video' ? rawKind : 'image';
+		const kind: MediaKind =
+			rawKind === 'audio' || rawKind === 'video' || rawKind === 'text' ? rawKind : 'image';
 		const rawMedia = params.get('media');
 		const media = rawMedia?.startsWith('/') ? rawMedia : undefined; // same-origin only
 		reviewSelection.openKeys(
