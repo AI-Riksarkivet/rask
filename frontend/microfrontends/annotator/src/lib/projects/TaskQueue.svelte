@@ -6,6 +6,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
+	import { taskCanvasHref } from '$lib/viewer/task-stream';
 	import {
 		createSvelteTable,
 		DataTable,
@@ -373,12 +374,13 @@
 	}
 
 	function canvasHref(task: TaskDetail): string {
-		const keys = task.source.keys.join(',');
-		const dataset = task.source.where ? `dataset=${encodeURIComponent(task.source.where)}&` : '';
-		// `project` rides along beside `task`: the canvas's exit needs to address the QUEUE PAGE, and
-		// a task id alone cannot — building /projects/<task_id> from it would 404. Without this the
-		// exit fell back to the corpus browser and the queue you were working through vanished.
-		return `${base}/?${dataset}keys=${encodeURIComponent(keys)}&task=${task.task_id}&project=${encodeURIComponent(projectId)}`;
+		// The ONE href builder (`taskCanvasHref`) — this was a second spelling of the same URL, and
+		// it drifted exactly the way second spellings do: when the stream's links learned to carry
+		// the task's modality (`kind=`), the queue's links didn't, so a text/audio/video task opened
+		// its own canvas from the filmstrip and the image canvas from the queue. `project` rides
+		// along because the canvas's exit needs to address the QUEUE PAGE, and a task id alone
+		// cannot.
+		return taskCanvasHref(task, projectId, base);
 	}
 
 	/** The task's own legal events, minus `save_draft` (that belongs to the canvas). `assign`

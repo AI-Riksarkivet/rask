@@ -555,7 +555,7 @@ ontology. Save-path identity stamping, prediction scores, tag rows, transcriptio
 | 9.5 | **Two producer registries disagree.** Backend `_RETURNS` knows `grounding-dino`+`sam`; the frontend registry ships 7 (htr, vlm-judge, insid3, embed-propagate unknown to the service ⇒ compatibility "unknown"). | `assist.py:78` vs `producers.ts` |
 | 9.6 | **Jobs op vocabulary mismatch.** `submitBatchJob` accepts `set`/`verdict`; the service Literal does not — those submits 422. | `jobs.remote.ts:45` vs `jobs.py:59` |
 | 9.7 | **`model_version` has no writer** — every model prediction is unattributable to a model version. | `AssistShape`, `NewAnnotation` |
-| 9.8 | **No task→text-canvas path.** `kind=text` is hand-URL-only; server `MediaKind` lacks `text` (an honest `modality:'text'` task would 422). | `models.py:69`, `task-stream.ts:107` |
+| 9.8 | ~~No task→text-canvas path~~ **FIXED**: `MediaKind` (models + ontology) accepts `text`, and `taskCanvasHref` emits the task's modality as `kind=` (audio/video/text; image and unknowns fall back to the default canvas). `TaskQueue.canvasHref` now DELEGATES to the one href builder — the second spelling had already drifted. | `task-stream.ts`, `models.py` |
 | 9.9 | **Relation model is thin.** `directed` is declared and never read; no cardinality beyond per-relation `required`; rail lives only in the inspector. | `ontology.py:121` |
 
 Also verified: interactive assist is strictly ONE-SHOT (no session, no point arrays, no
