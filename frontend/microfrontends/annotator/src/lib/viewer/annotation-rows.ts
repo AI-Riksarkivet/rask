@@ -25,6 +25,8 @@ export interface AnnoRow {
 	parentId: string;
 	charStart: number | null;
 	charEnd: number | null;
+	/** Vertical position — the transcription lane's reading order for HTR lines. */
+	y: number | null;
 }
 
 /** The raw table cell as a string (null when absent). */
@@ -77,6 +79,7 @@ export function projectRows(
 			parentId: rawField(t, 'parent_id', i) ?? '',
 			charStart: numField(t, 'char_start', i),
 			charEnd: numField(t, 'char_end', i),
+			y: numField(t, 'y', i),
 		});
 	}
 	return deletes.length ? out.filter((r) => !deletes.includes(r.id)) : out;

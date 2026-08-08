@@ -14,6 +14,8 @@
 		marks,
 		classes,
 		selectedIndex = null,
+		testid = 'span-surface',
+		hint = true,
 		onlabel,
 		onpick,
 		onremove,
@@ -23,6 +25,12 @@
 		/** The task's text classes — the label buttons a fresh selection offers. */
 		classes: string[];
 		selectedIndex?: number | null;
+		/** Test handle — the surface mounts in the inspector AND per-line in the transcription
+		 *  lane, and two anonymous copies would be unlocatable apart. */
+		testid?: string;
+		/** Show the idle "select text…" hint. Off in the transcription lane, where one hint per
+		 *  line would repeat itself down the whole page. */
+		hint?: boolean;
 		onlabel?: (start: number, end: number, label: string) => void;
 		onpick?: (index: number) => void;
 		onremove?: (index: number) => void;
@@ -70,7 +78,7 @@
 		`color-mix(in oklab, ${spanColor(label, classes)} 26%, transparent)`;
 </script>
 
-<div class="flex flex-col gap-1.5" data-testid="span-surface">
+<div class="flex flex-col gap-1.5" data-testid={testid}>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="border-input bg-background selection:bg-primary/25 rounded-md border p-2.5 text-sm leading-8 select-text"
@@ -127,7 +135,7 @@
 				</Button>
 			{/each}
 		</div>
-	{:else}
+	{:else if hint}
 		<span class="text-muted-foreground text-[11px]">
 			Select text above to label a span{classes.length ? '' : ' — this task declares no text classes'}.
 		</span>

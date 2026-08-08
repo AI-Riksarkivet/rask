@@ -44,6 +44,15 @@ export interface WaveSurfaceCallbacks {
 export interface WaveSurfaceOptions {
 	/** Audio source (the `<audio>` URL). */
 	url: string;
+	/** Bind to an EXISTING media element (a video's own soundtrack) instead of letting wavesurfer
+	 *  create an `<audio>`: playback, seeking and the playhead stay in lockstep with that element,
+	 *  so a waveform lane under a video needs no second transport. */
+	media?: HTMLMediaElement;
+	/** Precomputed peaks (+ `duration`) render WITHOUT decoding — the video lane's fallback for a
+	 *  clip whose audio cannot be decoded (or that has no audio track at all): a flat timeline
+	 *  whose REGIONS still work, because labeling events on a silent clip is still labeling. */
+	peaks?: number[][];
+	duration?: number;
 	waveColor?: string;
 	progressColor?: string;
 	regionColor?: string;
@@ -77,6 +86,9 @@ export class WaveSurface {
 		this.ws = WaveSurfer.create({
 			container,
 			url: opts.url,
+			...(opts.media ? { media: opts.media } : {}),
+			...(opts.peaks ? { peaks: opts.peaks } : {}),
+			...(opts.duration != null ? { duration: opts.duration } : {}),
 			height: opts.height ?? DEFAULTS.height,
 			waveColor: opts.waveColor ?? DEFAULTS.waveColor,
 			progressColor: opts.progressColor ?? DEFAULTS.progressColor,
