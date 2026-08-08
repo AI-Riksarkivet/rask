@@ -165,6 +165,24 @@ Recorded so nobody spends a day rediscovering it:
 Ordered by what to fix first. Severity is about blast radius, not about how hard the fix is.
 Every entry below carries a verdict from the adversarial pass.
 
+**Fix status (2026-08-08, branch `claude/notifications-service-separation-h9bi73`).** Landed, each
+re-verified at the then-HEAD before editing and pinned by tests: **§2.6** (`19677ff` — disarm after
+persist), **§2.10** (`c316d74` — dedicated durable DLQ component for lineage), **§2.11** (`57ef374`
+— per-app mover DLQ + honest label), **§2.12+§2.18** (`a5a7901` — both false doc claims corrected),
+**§2.17** (`fb7ee0a` — cached retries=1 fetch, 503-vs-absent), **§2.8** (`1e26bae`+`b889fed` — one
+shared `dedicated_token_from_store`, catalog passes it, lineage fork deleted), **§2.19+§2.20**
+(`a2a1ab2` — sweep shuffle + started/per-dataset counters), **§2.9** (`ec7b860` — publish client
+secret seeded + bundle-read + guarded env). §3's flows auth door was already fixed upstream
+(`31b161e`). **Still open:** **§2.7** — designed (etag from `get`, optional `etag` + `first-write`
+concurrency on `put` for the ESTATE-scoped document only, 409→`ConflictError`, one retry in
+`attach_store`) but NOT landed: it hinges on one wire fact this sandbox cannot observe — the exact
+status the Dapr HTTP state API returns on a Postgres etag mismatch (409 vs the documented
+500/`ERR_STATE_SAVE`) — and a concurrency fix built on a guessed status code would be the §2.12
+shape: a safety property that exists only in intention. One live-sidecar probe decides it. Also
+untouched: the deep ingest-workflow items (§2.3/§2.4/§2.5/§2.13 — replay-semantics surgery needing
+the full red-first treatment) and the owner-gated calls (§2.12's head retirement, the `lance-ray`
+rename, any state-store scope change).
+
 ### 2.3 No error boundary in `ingest_run` — one failing chunk kills the run before `finalize`
 
 **CONFIRMED · severity high. The highest-blast-radius item in this file.**
