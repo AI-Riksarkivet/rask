@@ -18,7 +18,7 @@ its FGA doors explicitly. Cross-references to `open_dapr.md` §-numbers are to t
 same HEAD — several of its confirmed defects are *design inputs* here (they are the traps this
 plane must not re-dig).
 
-**The eight decisions in one table.**
+**The nine decisions in one table.**
 
 | Question | Decision |
 | --- | --- |
@@ -30,6 +30,7 @@ plane must not re-dig).
 | **D6** — channels | Dapr **output bindings** (SMTP, Slack webhook), per-user prefs, delivery idempotent by `(event_id, subject, channel)`. **No Dapr Workflow** (the idempotency criterion holds); the **outbox** is documented as the future dual-component path, not adopted. |
 | **D7** — FGA | No new object type. Watching requires `project#member`; every render/delivery re-checks `can_get_metadata` on the run's outputs — the same rule `governed()` already enforces on `/runs`. Refusal is a 403, never an empty 200. |
 | **D8** — the bell | Badge = **inbox unread only**. The panel splits **Inbox / Activity**. The component's existing `onseen`/`ondismiss` seam (built for exactly this) gets its backend. |
+| **D9** — code quality | The implementation is **bound to four skills, read in full for this spec**: `writing-python`, `fastapi`, `python-infrastructure` (the Dapr/NATS/OTel doctrine), and `openfga` (all from ra-skills / vendored). §10 distills the rules that bind this service and pins precedence where a generic skill default conflicts with a repo pin. Review happens against §10, not against memory. |
 
 ---
 
@@ -397,7 +398,168 @@ Per `CLAUDE.md`: a skill claim that contradicts a file is fixed in the same comm
 
 ---
 
-## 10. Open questions
+## 10. Code-quality contract — the four binding skills (D9)
+
+The four skills were read **in full** (every reference file) against this design on 2026-08-08:
+`writing-python` + `python-infrastructure` + `fastapi` from `AI-Riksarkivet/ra-skills@main`, and the
+vendored `openfga` skill (`.claude/skills/openfga`). What follows is not a summary to be re-derived —
+it is the distilled subset that **binds this implementation**, plus the precedence calls. A reviewer
+checks the diff against this section and the skills' own anti-pattern checklists
+(`writing-python/references/anti-patterns.md` § Quick review checklist,
+`fastapi/references/anti-patterns.md` § The table).
+
+### 10.0 Precedence — where a skill default and a repo pin disagree, the repo wins
+
+The skills are generic house style; `CLAUDE.md` + the root `pyproject.toml` are this repo's law.
+Stated here so nobody "fixes" the repo toward the skill:
+
+| Skill default | Repo pin that wins | Where pinned |
+| --- | --- | --- |
+| ruff `line-length = 120`, `target-version = "py314"` | **160**, Python **3.13**, `ANN` family selected | root `pyproject.toml`; `CLAUDE.md` § Conventions |
+| Redis for cache / dedup windows / rate limits | **No Redis exists in the estate.** Hot-state = the Dapr state store; dedup = natural keys + JetStream duplicate window; single-flight = actor turn-based concurrency | `CLAUDE.md` § Architecture ("No Redis"); `OPEN-WORK.md:2243-2249` |
+| `fastapi dev` CLI, hand-rolled CORS/middleware/handlers | **`make_service_app`** owns middleware, exception handlers, slash-tolerance, OTel, the Dapr client; services run under uvicorn via `dev-micro.sh` / the chart | `packages/service-kit/src/service_kit/__init__.py:90-145` |
+| `microservices.md` "use Dapr ONLY for Workflow + pubsub; secrets/state stay native" | The estate deliberately uses Dapr **actors, state, and the secret store** — audited and upheld in `open_dapr.md` §1.4 | `open_dapr.md`; `chart/templates/dapr-statestore.yaml` |
+| "duplicate shared types across services" | `service_kit` sharing **one** event model for producer and consumers is a deliberate estate override (`control_events.py` docstring: "producers and consumers import ONE model") — it is a contracts-only lib, which is the exception the skill itself allows | `packages/service-kit/src/service_kit/control_events.py:10` |
+| SQLModel/Alembic/database.md, websockets, file-handling | **N/A** — this service has no SQL database, no websockets, no file surface | §4 (state = actor partitions) |
+| `tests/` layout with `integration` marker | Repo markers/testpaths are law (`testing-python` owns wiring); add `services/notifications/tests` to `testpaths` | root `pyproject.toml:183-203` |
+
+### 10.1 `writing-python` — the language contract
+
+- **Pydantic everywhere, `@dataclass` banned.** Every wire/config/value shape — the inbox pointer
+  record, watch prefs, handler payload models — is a `BaseModel`; settings are `pydantic-settings`
+  (fail-fast at boot, `SecretStr` for anything secret, no bare `os.getenv` sprinkled through code).
+  Frozen models (`model_config = {"frozen": True}`) for records that cross the actor boundary.
+- **Types on every public signature**, modern syntax only: `X | None`, PEP 695 generics/`type`
+  aliases, `Self`, `@override` on the actor-interface overrides, `**P, R` on any decorator.
+  `Protocol` only where 2+ implementations exist (the delivery channel seam qualifies: SMTP + Slack
+  + a test fake; the inbox repository does not — the actor IS the implementation).
+- **Design defaults:** functions and modules first; classes only for state; no Java-shape patterns —
+  channel dispatch is a **dict of callables**, not a Strategy hierarchy; rule of three before any
+  abstraction; guard clauses; ≤3 positional args, else a model; **no boolean flag params** (split
+  `send_digest()` from `send_immediate()`); names describe side effects (`get_` is pure;
+  `record_`/`mark_` mutate).
+- **Errors:** validate at boundaries; domain exceptions with structured context, chained `from e`;
+  the fan-out is **batch-with-partial-failure** (`BatchResult`-shaped: one bad recipient never
+  aborts the audience — the exact rule `anti-patterns.md` § Ignored partial failures pins).
+  Never `except Exception: pass`; the one sanctioned broad-catch is the estate's own fail-open
+  emit wrapper pattern (`control_emit.py:79-84`), which logs + counts.
+- **Comments:** few, why-only. No restating, no metadata, no commented-out code, no
+  docstring-per-private-helper. The estate's dense docstrings (§0-§5 quotes) are *why*-comments —
+  that register, not narration.
+- **Testing:** F.I.R.S.T.; boundary conditions by name (empty inbox, exactly-`limit` rows, one
+  over, unknown subject); **cluster tests near any bug found** (T6); one concept per test,
+  parametrized; **`respx` for every httpx seam** — never `@patch` a client method; no
+  `@pytest.mark.skip` without a concrete unblock condition; conftest per the flows doctrine
+  (function-scoped `MonkeyPatch.context()`, never module-scope env writes).
+
+### 10.2 `python-infrastructure` — the reliability contract
+
+- **One retry layer, and here it is the sidecar.** The Dapr resiliency policy
+  (`chart/templates/dapr-resiliency.yaml`) owns redelivery for subscriptions — handlers **must not**
+  wrap themselves in tenacity (the skill's "double retry" anti-pattern, which here would multiply
+  4 sidecar retries × N app retries). Tenacity (exponential + jitter, transient-only:
+  never `ValueError`, never 4xx-except-429) is reserved for the service's **own egress** — the
+  `/events` reconciler poll and channel sends — where no sidecar policy applies.
+- **Idempotency over exactly-once.** Delivery key `(event_id, subject, channel)` checked
+  before send (check-before-write on the subject's actor); ingest dedupe on lineage's natural keys
+  (§2). The JetStream `duplicate_window` is 2 min (`nats-stream-job.yaml:58`) — never assumed to
+  cover a pod restart (the `open_dapr.md` §3 `publish_units` lesson).
+- **Handler discipline** (the skill's worker rules mapped onto Dapr ingress): permanent failure
+  (unparseable payload) → **DROP** with a log, never RETRY (poisons the subscription —
+  `DATA-CONTRACT.md:154-160` says the same); transient → RETRY and let the sidecar back off;
+  exhaustion → the DLQ parks it with `record_dead_letter`. Every outbound call carries an explicit
+  timeout **below** the effective redelivery window.
+- **Every job/digest has a hard timeout** (`asyncio.timeout`) so a hung send fails before the next
+  reminder tick stacks on top of it.
+- **OTel:** `service_kit.setup_otel` owns the SDK — no hand-rolled providers, no hard-coded OTLP
+  endpoints, no SDK-side sampling. Four golden signals per boundary (subscription handler, reconciler,
+  channel egress). **Bounded cardinality is the security rule here:** the *subject* is
+  per-user data — it goes on spans/logs only, **never** on a metric label; delivery metrics label by
+  `{channel, outcome}` only. No `span.record_exception` (deprecated) — `log.exception` inside the
+  active span. Manual spans wrap business operations (`inbox.fanout`, `channel.send`), never whole
+  routes.
+- **Dapr Workflow determinism rules** (`dapr-workflows.md` § Critical rules) are recorded as the
+  bar **if** D6's no-engine call is ever reopened; until then they bind nothing here.
+
+### 10.3 `fastapi` — the HTTP contract
+
+- **Route style, non-negotiable:** `Annotated` for every param and dep (aliased `XxxDep`, matching
+  the estate's `CheckerDep`/`CurrentSubject` register); no `...`; no `RootModel`; a **return type on
+  every route** (that is the serialization *and* the sensitive-field filter — an inbox row model
+  can never leak another subject's fields it doesn't declare); `response_model=` only when it
+  differs from the return type, never both for the same class; `prefix`/`tags` on the router;
+  **one HTTP operation per function**; `StrEnum` for constrained query values (the inbox filter:
+  `state: unread|all`).
+- **`async def` only when genuinely async.** Everything this service awaits (Dapr client, httpx,
+  actor proxies) is async, so routes are `async def` — but any sync SDK call that sneaks in
+  (e.g. a sync workflow client, per `dapr-workflows.md`) goes through `asyncify`, never inline.
+- **Lifespan owns every client** — Dapr client, httpx, the FGA client, actor registration — built
+  once onto `app.state`, disposed in reverse order after `yield`; routes reach them only through
+  dep wrappers. `make_service_app`'s injectable lifespan is the estate's implementation of this
+  rule; the service adds its own lifespan pieces (actor registration **in the lifespan, never at
+  import** — both the skill and `annotator/main.py:79-100` pin it).
+- **Errors:** routes raise **domain exceptions**; handlers (service-kit's) shape the response —
+  RFC 9457 `application/problem+json`, internals never in the body, `log.exception` in the handler
+  inside the active span. No route-level `except Exception`. Refusal is 403-with-reason (§3).
+- **Health:** `/livez` touches no dependency; `/readyz` reports per-component
+  (state store reachable, sidecar up) with **three states** — degraded is 200-plus-flag, not 503;
+  `startup_complete`/`shutting_down` flags from the lifespan. Excluded from tracing
+  (`excluded_urls="/livez,/readyz"`).
+- **Pagination:** the inbox list is a **feed → cursor pagination** (the skill's own decision
+  table), opaque base64 cursor over `(occurred_at, notification_id)` with `limit+1` has-more
+  detection, `le=` cap on limit, deterministic tiebreaker. No offset, no count queries.
+- **Authz wiring** (`authz.md`): permission deps at the route/router level for single-object ops;
+  **`batch_check` for list filtering** (one round-trip over the candidate set — exactly the
+  `governed()` shape lineage already uses); `list_objects`/`list_users` for the audit surfaces if
+  ever exposed. The `require_permission` dep reads `request.path_params` — **never `**path_params`
+  in a dep signature** (becomes a required query param, 422s every call). Tuple writes, if any,
+  through the single estate path (`service_kit.governed.fga`), never sprinkled in routes.
+- **Anti-pattern table sweep before every merge** — the ones most likely here: `BackgroundTasks`
+  for anything durable (banned — the bus and reminders exist), per-request `httpx.AsyncClient`,
+  module-level clients, middleware error handlers, `ContextVar` set without `finally`-reset.
+
+### 10.4 `openfga` — the authorization contract
+
+The estate model (`packages/service-kit/src/service_kit/governed/auth/model.fga`) already follows
+this skill's shape — concentric rungs, `member from project` chaining, conditions for time-boxed
+grants. This plane's rules for touching it:
+
+- **v1/v2 add no type and no relation** — the watch gate is the existing `project#member`, checked
+  at watch-create (create-on-parent doctrine: the check runs against the *project*, the object that
+  exists) and re-checked at delivery/render via `can_get_metadata` batch checks. The watch registry
+  is **application state, not tuples** — per `core-separation.md`, tuples are authorization facts;
+  "alice wants Slack pings about project X" is a preference, not a permission, and modeling it as
+  tuples would put per-user mutable app state on the authz hot path.
+- **If a relation is ever added** (e.g. an explicit `can_watch`): `can_*` relations **never take
+  direct assignments** — name a role, reference it; concentric ordering, most restrictive first,
+  each role appearing exactly once; parent links only on the top-level type with roles chained
+  through computed relations (`org_admin` naming pattern); precise type restrictions (no kitchen-sink
+  `[user, team, team#member, …]`); snake_case, `can_` prefix, singular lowercase types.
+- **Testing is non-negotiable** (`workflow-validate.md`: "an untested authorization model may grant
+  access to users who shouldn't have it"): any model or fixture change lands with `.fga.yaml`
+  `check` cases (positive **and** negative **and** boundary — unknown user, unknown object),
+  plus `list_objects`/`list_users` where the plane relies on enumeration; `fga model test` green
+  and `model.json` regenerated + drift-diffed before delivery (the `ms-authz` CI job,
+  `.github/workflows/ci.yml:190-216`, enforces exactly this).
+- **SDK usage** goes through the estate wrapper (`service_kit.governed.fga` — `check`,
+  `batch_check`, `write_tuples`, `grant_on_create`), which already encodes the skill's best
+  practices (async client, retries, one client per process in the lifespan). Prefer `batch_check`
+  over N `check`s for audience filtering; the three-outcome checker rule stands: FGA on + client
+  unwired → **503, never permissive** (`deps.py:109-125`).
+
+### 10.5 How this section is enforced
+
+- The **review gate for every slice** (S1–S6) includes a pass over §10.0's precedence table and the
+  two anti-pattern checklists cited at the top of this section.
+- `make check` (ruff + ty `error-on-warning` + knip) and the `ms-authz` job are the mechanical
+  halves; §10.1's comment/test discipline and §10.3's route-style rules are the review halves.
+- When implementation reveals a rule here that contradicts a file, the fix follows `CLAUDE.md`'s
+  standing order: correct the skill (in ra-skills) or this section **in the same commit** as the
+  code.
+
+---
+
+## 11. Open questions
 
 1. **Should authorship bypass the output-visibility check for the author's own terminal
    events?** (§3.) Default no — one rule everywhere — but the START-invisibility consequence
