@@ -400,3 +400,18 @@ async def test_mcp_refuses_and_names_the_missing_piece() -> None:
     async with httpx.AsyncClient() as client:
         with pytest.raises(NodeError, match="scaffold"):
             await dispatch(node, [], None, client=client, serve_url=SERVE)
+
+
+def test_regex_refuses_an_oversized_subject_by_name() -> None:
+    """FLOWS-REDOS-ON-LOOP: the CPU arms now run off the loop, but a thread cannot stop a GIL stall,
+    so the subject-length cap is the load-bearing half — an unbounded caller-influenced subject under
+    a backtracking pattern froze the pod, probes included."""
+    from flows.executor import _REGEX_MAX_SUBJECT, NodeError, _regex
+    from flows.models import FlowNode, Payload
+
+    node = FlowNode(id="r1", kind="regex", config={"regexPattern": "(a+)+$"})
+    big = Payload(text="a" * (_REGEX_MAX_SUBJECT + 1))
+    with pytest.raises(NodeError, match="too large"):
+        _regex(node, [big])
+    small = _regex(node, [Payload(text="aaa")])
+    assert small.text  # a bounded subject still runs

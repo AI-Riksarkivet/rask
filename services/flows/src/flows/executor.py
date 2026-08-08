@@ -160,18 +160,26 @@ async def dispatch(
             return await _call_serve(node, inputs, client=client, serve_url=serve_url, serve_timeout=serve_timeout)
         case "mcp":
             return _mcp(node)
+        # The pure-CPU arms run OFF the loop: caller-supplied regex (and the DOTALL scans inside
+        # alto_lines/compare_texts) are unbounded CPU work, and inline they froze the whole process —
+        # probes included, since /api/health shares the loop (open_python-audit
+        # FLOWS-REDOS-ON-LOOP). A thread does not stop a GIL stall, so the subject-length cap in
+        # `_regex` is the load-bearing half; the threadpool keeps well-behaved work from starving
+        # concurrent requests.
         case "alto":
-            return Payload(text="\n".join(alto_lines(_one_input(node, inputs).text)))
+            text = _one_input(node, inputs).text
+            return Payload(text="\n".join(await asyncio.to_thread(alto_lines, text)))
         case "extract":
-            return _extract(node, inputs)
+            return await asyncio.to_thread(_extract, node, inputs)
         case "regex":
-            return _regex(node, inputs)
+            return await asyncio.to_thread(_regex, node, inputs)
         case "compare":
             # The MULTI-input kind, so it does NOT go through `_one_input`: comparing one thing is not
             # comparing. Same report shape as the frontend's `compareTexts`.
             if not inputs:
                 raise NodeError("compare node has no upstream")
-            return Payload(text=compare_texts([p.text for p in inputs]))
+            texts = [p.text for p in inputs]
+            return Payload(text=await asyncio.to_thread(compare_texts, texts))
         case "inspect":
             # Passthrough sink: it exists to be READ, so it must not transform. Several upstreams
             # concatenate in edge order rather than one silently winning.
@@ -235,6 +243,13 @@ def _extract(node: FlowNode, inputs: list[Payload]) -> Payload:
     return Payload(text=value if isinstance(value, str) else json.dumps(value, indent=2, ensure_ascii=False))
 
 
+#: The regex arm's subject-length cap. Python's `re` is backtracking: a nested-quantifier pattern
+#: over N chars is O(2^N)-ish, and the pattern AND the subject are both caller-influenced. Running
+#: off the loop does not stop a GIL stall, so bounding the input is the load-bearing defence
+#: (open_python-audit FLOWS-REDOS-ON-LOOP). 256 KiB dwarfs any real ALTO/transcription payload.
+_REGEX_MAX_SUBJECT = 256 * 1024
+
+
 def _regex(node: FlowNode, inputs: list[Payload]) -> Payload:
     """Extract matches or replace them. An unconfigured pattern PASSES THROUGH rather than failing —
     a node you have not filled in yet is not an error — and a bad pattern is a precise message."""
@@ -242,6 +257,8 @@ def _regex(node: FlowNode, inputs: list[Payload]) -> Payload:
     pattern = node.config.get("regexPattern")
     if not isinstance(pattern, str) or not pattern.strip():
         return payload
+    if len(payload.text) > _REGEX_MAX_SUBJECT:
+        raise NodeError(f"regex input too large: {len(payload.text)} chars (max {_REGEX_MAX_SUBJECT}) — split the flow upstream")
     try:
         compiled = re.compile(pattern)
     except re.error as exc:

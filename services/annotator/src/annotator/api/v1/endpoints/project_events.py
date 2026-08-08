@@ -27,6 +27,7 @@ import logging
 from typing import Annotated, Any, Final, cast
 
 from fastapi import APIRouter, Path, status
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from annotator.api.security import CheckerDep, CurrentSubject
@@ -404,8 +405,10 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: St
 
     # REFUSE an item whose media dataset does not resolve. Deliberately after the FGA check: the
     # refusal names the datasets that DO exist, which is what makes it actionable and also what
-    # makes it something an unauthorised caller must not be able to enumerate.
-    _refuse_unknown_datasets(state, payload)
+    # makes it something an unauthorised caller must not be able to enumerate. Off the loop: the
+    # body loops dataset_handle (blocking Lance/S3 under a threading.Lock) per named dataset —
+    # inline it froze every in-flight request on a cold miss (open_python-audit ANN-01).
+    await run_in_threadpool(_refuse_unknown_datasets, state, payload)
 
     # Consensus v1: N>1 seeds N independent replica items per source item, deterministic sibling
     # ids (`{gid}-r{k}`) — determinism is what lets the one-replica-per-annotator guard find them.

@@ -7,8 +7,10 @@ existing ``/api/explorer`` gateway row (``/api/explorer/objects`` → ``/api/obj
 here), so the gateway grows zero new rows.
 
 Uses ``storage.s3_client`` (never raw boto3); endpoint/creds resolve from env
-(``RASK_S3_ENDPOINT_URL`` / ``AWS_*``). Routes are sync ``def`` — FastAPI runs
-the blocking boto calls in its threadpool.
+(``RASK_S3_ENDPOINT_URL`` / ``AWS_*``). Routes are ``async def`` for the awaited
+FGA prologue; every blocking boto3 body then runs via ``run_in_threadpool`` — it
+must never run inline on the loop (open_python-audit VS-01: this docstring
+claimed sync ``def`` while all three routes were coroutines doing boto3 inline).
 
 **Failure posture (live-proof 2026-07-28, defect 2).** A bucket that does not exist
 on the S3 backend is an EXPECTED, diagnosable state — the chart provisions
@@ -234,11 +236,12 @@ async def list_objects(
     404s (never 500s) when the bucket itself is absent — see the module docstring.
     """
     await _require_browse(checker, subject, settings, bucket, "viewer.objects.list")
-    client = _client_for(bucket)
-    paginator = client.get_paginator("list_objects_v2")
-    prefixes: list[str] = []
-    objects: list[S3Object] = []
-    try:
+
+    def _blocking() -> S3Listing:
+        client = _client_for(bucket)
+        paginator = client.get_paginator("list_objects_v2")
+        prefixes: list[str] = []
+        objects: list[S3Object] = []
         # The pagination itself is inside the block: boto3's paginator is LAZY, so the
         # first HTTP call — and therefore NoSuchBucket — happens on iteration, not on
         # `paginate(...)`. Wrapping only the call would translate nothing.
@@ -257,9 +260,12 @@ async def list_objects(
                             last_modified=last_modified.isoformat() if last_modified is not None else None,
                         )
                     )
+        return S3Listing(bucket=bucket, prefix=prefix, prefixes=prefixes, objects=objects)
+
+    try:
+        return await run_in_threadpool(_blocking)
     except BucketNotFoundError as exc:
         raise _missing_bucket(exc.bucket) from exc
-    return S3Listing(bucket=bucket, prefix=prefix, prefixes=prefixes, objects=objects)
 
 
 @router.get("/object")
@@ -278,14 +284,18 @@ async def head_object(
     the same lie in the other direction.
     """
     await _require_browse(checker, subject, settings, bucket, "viewer.object.head")
-    client = _client_for(bucket)
-    try:
-        with s3_errors(bucket=bucket, key=key):
-            resp = client.head_object(Bucket=_registered_bucket(bucket), Key=key)
-    except BucketNotFoundError as exc:
-        raise _missing_bucket(exc.bucket) from exc
-    except ObjectNotFoundError as exc:
-        raise _resolve_missing(client, exc) from exc
+
+    def _blocking() -> dict:
+        client = _client_for(bucket)
+        try:
+            with s3_errors(bucket=bucket, key=key):
+                return client.head_object(Bucket=_registered_bucket(bucket), Key=key)
+        except BucketNotFoundError as exc:
+            raise _missing_bucket(exc.bucket) from exc
+        except ObjectNotFoundError as exc:
+            raise _resolve_missing(client, exc) from exc
+
+    resp = await run_in_threadpool(_blocking)
     last_modified = resp.get("LastModified")
     etag = (resp.get("ETag") or "").strip('"')
     return S3ObjectHead(
@@ -316,15 +326,19 @@ async def download_object(
     surface as outages.
     """
     await _require_browse(checker, subject, settings, bucket, "viewer.object.download")
-    client = _client_for(bucket)
-    try:
-        with s3_errors(bucket=bucket, key=key):
-            resp = client.get_object(Bucket=_registered_bucket(bucket), Key=key)
-            data = resp["Body"].read()
-    except BucketNotFoundError as exc:
-        raise _missing_bucket(exc.bucket) from exc
-    except ObjectNotFoundError as exc:
-        raise _resolve_missing(client, exc) from exc
+
+    def _blocking() -> tuple[dict, bytes]:
+        client = _client_for(bucket)
+        try:
+            with s3_errors(bucket=bucket, key=key):
+                resp = client.get_object(Bucket=_registered_bucket(bucket), Key=key)
+                return resp, resp["Body"].read()
+        except BucketNotFoundError as exc:
+            raise _missing_bucket(exc.bucket) from exc
+        except ObjectNotFoundError as exc:
+            raise _resolve_missing(client, exc) from exc
+
+    resp, data = await run_in_threadpool(_blocking)
     content_type = resp.get("ContentType") or "application/octet-stream"
     filename = key.rsplit("/", 1)[-1] or "download"
     return Response(

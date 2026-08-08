@@ -33,6 +33,7 @@ reviews, and a door whose allows are invisible cannot be reviewed at all.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import secrets
 from typing import TYPE_CHECKING, Annotated
@@ -148,7 +149,11 @@ async def authorize_ingest(
         if scheme.lower() != "bearer" or not raw:
             raise UnauthenticatedError("malformed bearer")
         try:
-            token = verifier.verify(raw)
+            # Off the loop: verify() does synchronous OIDC discovery + JWKS fetches (up to 15s) on a
+            # cold cache or key rotation — inline it stalled every in-flight request in the pod,
+            # probes included (open_python-audit ING-02). Same rule _DaprWorkflowStarter.start
+            # already states one module over.
+            token = await asyncio.to_thread(verifier.verify, raw)
         except UnauthenticatedError:
             raise UnauthenticatedError("invalid token") from None
         client = getattr(request.app.state, "fga", None)
