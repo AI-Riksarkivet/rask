@@ -1318,3 +1318,27 @@ Three of the first draft's seven are now answered and have been struck.
 9. **Does an orphaned `drain_chunk` fail loudly or silently after §2.4 deletes its consumer?**
    Needs a run, not a read. It decides whether the deadline path is noisy-broken or
    silently-broken.
+
+*(10–12 added 2026-08-08 from an external-material scan — the OneUptime Dapr corpus, 2,122 posts
+enumerated, 10 read against the estate's positions; shallow source, every claim marked verify.)*
+
+10. **Stream retention mode is a fan-out correctness invariant nothing asserts.** `--retention=work`
+    on a shared stream makes per-app durables steal from each other (first ack deletes);
+    `--retention=interest` empties the stream for the ephemeral `deliverPolicy=all` replay
+    consumer whenever nothing is attached. `nats-stream-job.yaml` pins `limits` correctly, but the
+    drift reconcile compares only `maxDeliver`/`backOff` — extend it to assert `retention=limits`
+    per stream and fail loudly.
+11. **UNVERIFIED: reminders may persist in the Scheduler service, not the actor state store, since
+    Dapr 1.15** (cluster runs 1.18.1). If true, arm-before-persist/disarm-after-persist is
+    protecting a genuine two-store split with no transaction available, and Scheduler (etcd)
+    loss/rollback skew becomes a named failure domain for every reminder-carrying actor (incl. the
+    planned InboxActor). Verify against the runtime source, then record as fact or strike.
+12. **Resiliency shape guards, cheap:** (a) `targets.apps.<id>.retry` does NOT govern inbound
+    pub/sub delivery — only `targets.components.<pubsub>.inbound.retry` does; a render assertion
+    should refuse any inbound retry declared under `targets.apps`. (b) Confirm every `dlq.*`
+    handler unconditionally acks (a RETRY from a DLQ handler requeues forever) — ours do today
+    (`dlq.py`, `dapr.py`), pin it. (c) INVESTIGATE (30 min, component source): whether
+    `pubsub.jetstream` honours per-subscription `metadata.deliverPolicy` in `/dapr/subscribe` —
+    if real, the one-component-per-subscriber sprawl collapses to one shared component with
+    per-subscription overrides. While there: decide `maxAckPending`/`flowControl`/`heartbeat`
+    explicitly (we currently ride component defaults).

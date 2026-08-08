@@ -637,3 +637,11 @@ context** (dapr/dapr#6950) — is an expectation-setter for ingest/flows traces,
    `@wfr.workflow`/`@wfr.activity`/workflow-management code in `ingest`/`flows`? (§10.5b.) The
    estate already reviews against their rule IDs by hand; installing them (marketplace or
    vendored) makes it mechanical. Owner call — it changes `.claude/settings.json`.
+8. **InboxActor saturation signal + delivery-in-turn question** *(added 2026-08-08, external-scan
+   yield)*: `dapr_runtime_actor_pending_actor_calls{actor_type="InboxActor"}` is the turn-queue
+   depth — the one metric that shows a slow SMTP/Slack call serializing every subsequent call for
+   that user, because any output-binding call made INSIDE the actor turn holds the turn.
+   S5 must decide: channel sends inside the turn (simple, serialized per user — probably fine) or
+   handed off outside it (a queue hop, parallel) — and either way the vmalert rule on that series
+   (start ~`>10 for 2m`) lands with S6. Also verify open_dapr.md q11 (Scheduler-held reminders)
+   before trusting reminder durability semantics.
