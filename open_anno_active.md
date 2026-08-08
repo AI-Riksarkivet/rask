@@ -479,6 +479,36 @@ Missing, ranked:
 9. Text export formats — CoNLL/spaCy JSONL/W3C annotations for the span plane (the text half of
    finding 7's converters).
 
+### 8e. QUESTION TYPES & COMPARISON SURFACES (cross-modal — the Label-Studio/Argilla family)
+
+The family of "ask a question about the item" tasks, orthogonal to modality. The references split
+cleanly: **CVAT does not have this family at all** (its classification story is image tags +
+per-shape radio/select/checkbox attributes; no pairwise, ranking or rating). **Label Studio** does
+it entirely through config templates (`<Choices>` single/multiple, `<Rating>`, `<Ranker>`,
+`<Pairwise>`; its LLM-eval templates compose prompt + N responses side by side with per-response
+ratings + an overall preference). **Argilla** is the purpose-built reference — label/multi-label,
+rating, ranking and pairwise questions are its whole product (the RLHF/DPO collection shapes).
+
+Where rask stands, per question type:
+
+1. **Classification (multiclass/multilabel)** — data plane EXISTS (one `label` per row =
+   single-class; N `tag` rows per chunk = multilabel; ontology enum attributes = per-shape
+   categorical), surface ABSENT: no choice-chip bar over an item, on any modality.
+2. **Rating** — nothing. `vlm-judge` writes a MODEL score into confidence; a human 1–5 has no
+   column and no control (`metadata`/attributes could carry it once finding 4 lands).
+3. **Ranking** — nothing models "order N candidates".
+4. **Pairwise / preference (A/B)** — nothing models "N candidates for one item, pick one". The
+   nearest primitive is consensus replicas + manager adjudication (compares ANNOTATORS, not
+   candidates; list-pick, not side-by-side). NOTE the half-built half: the multi-key item
+   (`keys=a,b` → one item, pages 1/N) already presents N units under one decision — a pairwise
+   template is largely a side-by-side re-composition of that plus a preference question.
+5. **Compare view ("seeing 2")** — no side-by-side surface anywhere: XAL ships a split Compare
+   View (parallel directory, IR/RGB, before/after); our version history diffs counts, not pixels;
+   adjudication picks from a list.
+
+All five are finding 8 in miniature: none is a new modality — each is a new QUESTION over existing
+media, which is exactly what a template system expresses and hardcoded viewers cannot.
+
 ---
 
 ---

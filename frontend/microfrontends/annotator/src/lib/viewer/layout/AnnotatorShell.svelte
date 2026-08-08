@@ -17,6 +17,7 @@
 	import { cn } from '@rask/ui/utils';
 	import AnnotatorToolbar from './AnnotatorToolbar.svelte';
 	import AnnotationSidebar from './AnnotationSidebar.svelte';
+	import ClassificationBar from './ClassificationBar.svelte';
 	import DocumentTextLane from './DocumentTextLane.svelte';
 	import ZoomControls from './ZoomControls.svelte';
 	import PageNav from './PageNav.svelte';
@@ -58,6 +59,7 @@
 			controller.allowedShapeTypes = [];
 			controller.relationNames = [];
 			controller.textSpanClasses = [];
+			controller.tagClasses = [];
 			return;
 		}
 		let alive = true;
@@ -80,6 +82,12 @@
 				controller.textSpanClasses = result.ok
 					? (result.data.ontology?.classes ?? [])
 							.filter((c) => c.tools.includes('text'))
+							.map((c) => c.name)
+					: [];
+				// The classes the ITEM may be tagged with — the classification question's choices.
+				controller.tagClasses = result.ok
+					? (result.data.ontology?.classes ?? [])
+							.filter((c) => c.tools.includes('tag'))
 							.map((c) => c.name)
 					: [];
 			})
@@ -286,6 +294,7 @@
 					     The overlays' positioned ancestor is the VIEWER box, so the pills never stray
 					     onto the lane. -->
 					<div class="flex h-full w-full flex-col">
+						<ClassificationBar {controller} />
 						<div class="relative min-h-0 w-full flex-1">
 							<!-- The load/status chip is a real Badge — secondary while healthy, destructive when
 					     the unit failed to load — instead of a hand-rolled black pill that ignored the

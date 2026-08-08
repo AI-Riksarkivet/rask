@@ -219,6 +219,9 @@ export class AnnotatorController {
 	// deletes immediately (filtered from `rows`); new shapes render after save+reload.
 	private _inserts = $state<InsertRow[]>([]);
 	private _deletes = $state<string[]>([]);
+	// Row ids of UNDONE inserts — the sidebar's twin of the canvas hide an insert-undo performs.
+	// Not `_deletes`: these rows were never saved, so nothing about them may reach the wire.
+	private readonly _suppressed = new SvelteSet<string>();
 	// Geometry moves of EXISTING shapes, keyed by row index (the canvas already renders
 	// them via the plugin's dirty overlay; this queues them for Save).
 	private readonly _geoEdits = new SvelteMap<number, GeometryUpdate>();
@@ -250,7 +253,7 @@ export class AnnotatorController {
 	/** Flat rows for the sidebar list, overlay-aware (pure projection in annotation-rows). */
 	readonly rows = $derived.by<AnnoRow[]>(() => {
 		const t = this.table;
-		return t ? projectRows(t, this._overrides, this._deletes) : [];
+		return t ? projectRows(t, this._overrides, [...this._deletes, ...this._suppressed]) : [];
 	});
 
 	/** Distinct groups for the current group-by column, with counts. */
@@ -603,6 +606,37 @@ export class AnnotatorController {
 	 *
 	 *  Empty on an unconstrained canvas, where the caller falls back to a plain name. */
 	textSpanClasses = $state<string[]>([]);
+
+	// ── item-level classification (the Label-Studio "Choices" question, over any modality) ──
+	/** Classes the TASK declares as `tag`-drawable — item-level choices, not shapes. Set from the
+	 *  ontology by the shell, exactly like `textSpanClasses`. Empty ⇒ no classification bar. */
+	tagClasses = $state<string[]>([]);
+	/** The item's current tags — one `tag` row per active choice, deletes respected. MULTILABEL by
+	 *  design (the safe superset — CVAT's image tags and LS's `choice="multiple"` behave so);
+	 *  single-choice enforcement belongs to the ontology's validators at submit, not to the bar. */
+	readonly activeTags = $derived(
+		new Set(this.rows.filter((r) => r.shape === 'tag' && r.label).map((r) => r.label)),
+	);
+	/** Toggle an item-level choice: on ⇒ append a `tag` row (rides the same insert overlay, undo
+	 *  stack and Save delta as a drawn shape); off ⇒ delete that row. The chip IS the row. */
+	toggleTag(label: string): void {
+		const existing = this.rows.find((r) => r.shape === 'tag' && r.label === label);
+		if (existing) {
+			this.deleteRow(existing.index);
+			return;
+		}
+		this._appendInsert(
+			makeInsertRow({
+				shape_type: 'tag',
+				label,
+				// Pin to the current moment like every insert (0 for images/text).
+				t_start: this.timeCursor,
+				t_end: this.timeCursor,
+				status: 'accepted',
+				source: 'human',
+			}),
+		);
+	}
 
 	/** Arm link-drawing for `name`, or disarm when it is already armed (a toggle, like the tools).
 	 *
@@ -1246,12 +1280,16 @@ export class AnnotatorController {
 			case 'insert': {
 				// A drawn row cannot be removed from an immutable Arrow table, so undo HIDES it (the
 				// same overlay a delete uses) and drops it from the save payload — the row never
-				// reaches the server either way, which is what "undone" has to mean.
+				// reaches the server either way, which is what "undone" has to mean. `_suppressed`
+				// is the SIDEBAR half of that hiding: `rows` cannot read the canvas overlay, and
+				// without it an undone draw kept a ghost row (and a ghost tag chip) in the queue.
 				if (direction === 'undo') {
 					this._inserts = this._inserts.filter((_, i) => i !== op.at);
+					this._suppressed.add(op.row.id);
 					arrow?.setDeleted(op.index);
 				} else {
 					this._inserts = [...this._inserts.slice(0, op.at), op.row, ...this._inserts.slice(op.at)];
+					this._suppressed.delete(op.row.id);
 					arrow?.unsetDeleted(op.index);
 				}
 				arrow?.sync();
@@ -1461,6 +1499,7 @@ export class AnnotatorController {
 		this._redo = [];
 		this._inserts = [];
 		this._deletes = [];
+		this._suppressed.clear();
 		this._geoEdits.clear();
 		this._temporalEdits.clear();
 		this._geoDirty = false;
