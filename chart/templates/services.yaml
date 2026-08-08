@@ -276,6 +276,10 @@ spec:
             # Dapr-native DLQ (ships with the Resiliency CRD): ingest deliveries that exhaust the
             # sidecar retry schedule park here (visibility only — replay-from-stream stays the recovery).
             - { name: LINEAGE_DLQ_TOPIC, value: "dlq.lineage.events" }
+            # The parking subscription's OWN durable component (dapr-component.yaml, `-dlq` suffix) —
+            # never the main ephemeral deliverPolicy=all component, which re-parked the whole retained
+            # DLQ backlog on every pod restart (open_dapr.md §2.10).
+            - { name: LINEAGE_DLQ_PUBSUB, value: "{{ include "lance.subPubsub" (list $root .Values.services.lineage.daprAppId) }}-dlq" }
             {{- end }}
             {{- if .Values.services.lineage.freshnessBudgetHours }}
             # Freshness budget (data-contract gap #2): reconcile flags `stale` datasets whose newest

@@ -150,6 +150,38 @@ spec:
 scopes:
   - {{ .appId }}
 {{- end }}
+{{- if .Values.dapr.resiliency.enabled }}
+---
+{{- /* The lineage DLQ PARKING consumer — its own component, never the app's main one. The main
+     lineage component is deliverPolicy=all + EPHEMERAL on purpose (replay rebuilds the graph), but
+     the /lineage-dlq parking subscription rode it too — so every pod restart re-attached at the
+     beginning of the retained stream and re-parked up to 168h of already-parked dead letters:
+     ERROR logs + DEAD_LETTERED counts spiking on every rollout with no new loss, training operators
+     to ignore the one metric that means provenance is missing (open_dapr.md §2.10). deliverPolicy=new
+     plus a durable cursor parks each dead letter exactly once. Consumer config matches the
+     resiliency-mode values the nats-stream-job's durable-drift reconcile expects (EXP_MAXD/EXP_BOFF) —
+     this component only renders when resiliency is on, which is also the only time LINEAGE_DLQ_TOPIC
+     exists. */}}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "lance.subPubsub" (list . .Values.services.lineage.daprAppId) }}-dlq
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
+    - { name: name, value: "lance-dapr-{{ .Values.services.lineage.daprAppId }}-dlq" }
+    - { name: queueGroupName, value: "{{ .Values.services.lineage.daprAppId }}-dlq" }
+    - { name: deliverPolicy, value: "new" }
+    - { name: durableName, value: "{{ .Values.services.lineage.daprAppId }}-dlq-durable" }
+    - { name: ackWait, value: "720s" }
+    - { name: maxDeliver, value: "3" }
+    - { name: backOff, value: "720s,720s" }
+scopes:
+  - {{ .Values.services.lineage.daprAppId }}
+{{- end }}
 {{- if include "lance.secretsViaDapr" . }}
 ---
 # Dapr secret store fronting OpenBao / an external Vault (Vault-API compatible). Apps read secrets via

@@ -94,6 +94,12 @@ class LineageSettings(BaseSettings):
     # stays replay-from-stream (ephemeral deliverPolicy=all consumer); the DLQ adds operator
     # VISIBILITY for deliveries that exhausted retries, it does not replace the replay.
     dapr_dlq_topic: str = Field(default="", alias="LINEAGE_DLQ_TOPIC")
+    # The PARKING subscription's own pubsub component (durable, deliverPolicy=new). "" (default) falls
+    # back to `dapr_pubsub` — but that component is deliverPolicy=all + ephemeral BY DESIGN (replay
+    # rebuilds the graph), so riding it re-parked the whole retained DLQ backlog on every pod restart
+    # (open_dapr.md §2.10). The chart always sets this alongside LINEAGE_DLQ_TOPIC; the fallback only
+    # exists so a dev stack without the extra component keeps working.
+    dapr_dlq_pubsub: str = Field(default="", alias="LINEAGE_DLQ_PUBSUB")
     # Freshness budget in hours (data-contract gap #2): 0 (default) = the axis is OFF (no probe).
     # >0 = the reconcile sweep + per-dataset GET flag `stale: true` for any dataset whose newest
     # version commit is older — arrival cadence becomes an ASSERTED contract clause, not a dashboard.
