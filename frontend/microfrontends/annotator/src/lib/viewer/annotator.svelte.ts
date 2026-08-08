@@ -989,6 +989,17 @@ export class AnnotatorController {
 		return indices.map((i) => rawField(t, 'id', i)).filter((id): id is string => !!id);
 	}
 
+	/** The last batch submit's WIRE outcome — the honest half of a fire-and-forget. The sync
+	 *  LabelOutcome says only "a submit left"; whether it landed, as what job, on which backend
+	 *  (mock ⇒ nothing will run) arrives here for any surface that stays on screen. */
+	lastJob = $state<{ id: string; backend: string } | { error: string } | null>(null);
+
+	/** The open unit's key-path (`doc/speech/chunk`), parsed from the annotations URL — the value a
+	 *  chunk-level Selection needs to say "this item". Null on an unattached canvas. */
+	get unitKey(): string | null {
+		return this._saveUrl ? (assistTargetFor(this._saveUrl)?.key ?? null) : null;
+	}
+
 	/** INSID3 few-shot propagate: take the picked annotations as EXEMPLARS and propagate
 	 *  their masks over a chunk-level target selection — a batch deriver over the DINOv3
 	 *  space ("1–few exemplars → apply to all from small data"). Flows through apply()/the
@@ -1246,18 +1257,26 @@ export class AnnotatorController {
 					// the open unit — resolve to stable ids the deriver can fetch masks/features by.
 					exemplars: this._exemplarIds(op.payload.exemplars),
 				})
-					.then((res) =>
-						!res.ok
+					.then((res) => {
+						// The wire truth, recorded for surfaces that outlive the toast (the
+						// propagate panel's outcome line): a sync "queued" that the transport then
+						// refused must not stand as the last word on screen.
+						this.lastJob = !res.ok
+							? { error: res.detail }
+							: { id: res.data.job_id, backend: res.data.backend };
+						return !res.ok
 							? toast.error(`Job submit failed: ${res.detail}`)
 							: res.data.backend === 'mock'
 								? toast.warning(
 										`Batch job mocked (${op.producer} · ${res.data.job_id}) — no jobs runner deployed, nothing will run`,
 									)
-								: toast.success(`Batch job queued (${op.producer} · ${res.data.job_id})`),
-					)
-					.catch((e: unknown) =>
-						toast.error(`Job submit failed: ${e instanceof Error ? e.message : String(e)}`),
-					);
+								: toast.success(`Batch job queued (${op.producer} · ${res.data.job_id})`);
+					})
+					.catch((e: unknown) => {
+						const detail = e instanceof Error ? e.message : String(e);
+						this.lastJob = { error: detail };
+						toast.error(`Job submit failed: ${detail}`);
+					});
 			}
 			return { status: 'queued', job: `${spec.source}:${op.op}`, note: 'batch deriver enqueued' };
 		}

@@ -42,8 +42,13 @@ coverage; line references in §1–§3 predate these and are stale where they ov
   with the ontology's choices under each; a pick saves a version-guarded `tag` row onto the winning
   unit through the plain transport (no canvas controller, so no autosave race). Text panes render
   the document lines, image/AV panes the frame. Entry/exit are plain links from the page bar.
+- FEW-SHOT PROPAGATION HAS A BUTTON: `PropagatePanel` in the sidebar — the picked annotations
+  are the exemplars, a scope select (this item / entire dataset), one `insid3` job on the jobs
+  seam with exemplar IDS, and an outcome line that reports the WIRE truth (job id + the honest
+  mock warning), not the synchronous guess. The seam existed end to end and nothing called it.
 - Fixed at the source along the way: floating pills overlapping the temporal strips; unseekable
-  route-served media in e2e (206 ranges).
+  route-served media in e2e (206 ranges); the e2e mock treating any seeded body carrying a string
+  `status` field as its {status, body} response shape (every seeded jobs route answered 500).
 
 **The findings in one table**, ranked by leverage:
 
