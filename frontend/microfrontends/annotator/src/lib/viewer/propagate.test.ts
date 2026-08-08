@@ -6,7 +6,7 @@
  */
 
 import { tableFromArrays } from 'apache-arrow';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('svelte-sonner', () => ({
 	toast: {
@@ -59,6 +59,10 @@ const TABLE = tableFromArrays({
 });
 
 describe('few-shot propagation', () => {
+	beforeEach(() => {
+		jobs.length = 0;
+	});
+
 	it('unitKey parses the open unit out of the annotations URL', () => {
 		const c = new AnnotatorController();
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural double
@@ -73,6 +77,29 @@ describe('few-shot propagation', () => {
 		c.attach(harness() as any, TABLE);
 
 		expect(c.unitKey).toBeNull();
+	});
+
+	it('MANY exemplars propagate over MANY items in one job — keys is plural on purpose', async () => {
+		// The INSID3 shape: a few normally-labelled objects on ONE page become the instruction;
+		// the deriver applies the pattern across every unit the scope names. Neither side is
+		// singular — two exemplar masks here, three items there, one job.
+		const c = new AnnotatorController();
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural double
+		c.attach(harness() as any, TABLE, '/annotator/api/annotations/doc9/0/19');
+
+		const outcome = c.propagate(
+			{ level: 'chunks', keys: ['doc9/0/19', 'doc9/0/20', 'doc9/0/21'] },
+			[0, 1],
+		);
+
+		expect(outcome.status).toBe('queued');
+		await vi.waitFor(() => expect(jobs.length).toBeGreaterThan(0));
+		expect(jobs.at(-1)).toMatchObject({
+			producer: 'insid3',
+			op: 'propagate',
+			scope: { level: 'chunks', keys: ['doc9/0/19', 'doc9/0/20', 'doc9/0/21'] },
+			exemplars: ['ex-1', 'ex-2'],
+		});
 	});
 
 	it('propagate() posts ONE job: exemplar indices resolved to ids, over the given scope', async () => {

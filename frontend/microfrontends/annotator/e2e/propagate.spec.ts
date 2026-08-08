@@ -19,16 +19,17 @@ const PNG = Buffer.from(
 );
 
 function ipc(): Buffer {
+	// MANY objects on the page — two of them will be picked as the few-shot exemplars.
 	const table = tableFromArrays({
-		id: ['ex-1', 'other'],
-		shape_type: ['bbox', 'bbox'],
-		x: Float32Array.from([40, 300]),
-		y: Float32Array.from([40, 200]),
-		width: Float32Array.from([180, 90]),
-		height: Float32Array.from([120, 60]),
-		label: ['stamp', 'line'],
-		status: ['accepted', 'accepted'],
-		source: ['human', 'human'],
+		id: ['ex-1', 'ex-2', 'other'],
+		shape_type: ['bbox', 'bbox', 'bbox'],
+		x: Float32Array.from([40, 240, 300]),
+		y: Float32Array.from([40, 60, 200]),
+		width: Float32Array.from([180, 160, 90]),
+		height: Float32Array.from([120, 110, 60]),
+		label: ['stamp', 'stamp', 'line'],
+		status: ['accepted', 'accepted', 'accepted'],
+		source: ['human', 'human', 'human'],
 	});
 	return Buffer.from(tableToIPC(table, 'stream'));
 }
@@ -64,25 +65,39 @@ test('picking an exemplar and pressing Propagate posts ONE honest job', async ({
 		});
 	});
 
-	await page.goto(`/annotator/?keys=${encodeURIComponent(KEY)}`);
+	// A MULTI-KEY ITEM: three units under one decision. Exemplars are labelled on page 1; the
+	// pattern applies across all three — the INSID3 shape ("few normally-labelled objects become
+	// the instruction"), where neither side is singular.
+	const keys = [KEY, `${DOC}/0/20`, `${DOC}/0/21`];
+	await page.goto(`/annotator/?keys=${encodeURIComponent(keys.join(','))}`);
 
 	// No selection ⇒ no panel — a control that could submit "nothing" reads as broken.
 	await expect(page.getByTestId('propagate-panel')).toHaveCount(0);
 
-	// Pick the exemplar in the queue; the panel appears with the count.
-	await page
-		.getByTestId('annotation-list')
+	// Pick TWO exemplars (Ctrl-click = the list's multi-select); the panel counts them.
+	// BOTH picks are Ctrl-clicks: a plain click swaps the list for the inspector, and the second
+	// exemplar would have nothing to be picked from.
+	const list = page.getByTestId('annotation-list');
+	await list
 		.getByRole('button')
 		.filter({ hasText: 'stamp' })
-		.click();
+		.first()
+		.click({ modifiers: ['Control'] });
+	await list
+		.getByRole('button')
+		.filter({ hasText: 'stamp' })
+		.nth(1)
+		.click({ modifiers: ['Control'] });
 	const panel = page.getByTestId('propagate-panel');
 	await expect(panel).toBeVisible();
-	await expect(panel.getByTestId('propagate-count')).toHaveText('1 exemplar');
+	await expect(panel.getByTestId('propagate-count')).toHaveText('2 exemplars');
 
-	await panel.getByTestId('propagate-scope').selectOption('item');
+	// The multi-item scope exists BECAUSE the item has 3 units, and says so.
+	await panel.getByTestId('propagate-scope').selectOption('selection');
+	await expect(panel.getByTestId('propagate-scope')).toContainText('all 3 items here');
 	await panel.getByTestId('propagate-run').click();
 
-	// The wire: one insid3 propagate job, exemplar addressed by STABLE ID, scope = this unit.
+	// The wire: ONE job — both exemplars by STABLE ID, all three unit keys in the scope.
 	await expect
 		.poll(
 			async () => (await calls(page)).filter((c) => c.path.endsWith('/api/jobs/apply')).length,
@@ -93,8 +108,8 @@ test('picking an exemplar and pressing Propagate posts ONE honest job', async ({
 	expect(job.body).toMatchObject({
 		producer: 'insid3',
 		op: 'propagate',
-		exemplars: ['ex-1'],
-		scope: { level: 'chunks', keys: [KEY] },
+		exemplars: ['ex-1', 'ex-2'],
+		scope: { level: 'chunks', keys },
 	});
 
 	// The WIRE answer, not the sync guess: job id + the honest mock warning, in the panel.

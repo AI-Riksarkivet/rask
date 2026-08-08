@@ -12,9 +12,15 @@
 	// honest mock and the toast says so; this panel repeats it rather than reading as success.
 	import { Send } from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
+	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
 	import type { AnnotatorController } from '../annotator.svelte';
 
 	let { controller }: { controller: AnnotatorController } = $props();
+
+	/** Every unit of the OPEN ITEM — the multi-key selection the canvas is walking. The scope's
+	 *  useful middle: exemplars labelled on THIS page, pattern applied across all N pages of the
+	 *  item (`keys` is plural on the wire for exactly this). */
+	const itemKeys = $derived(reviewSelection.units.map((u) => u.key));
 
 	/** The exemplar rows: the multi-selection when there is one, else the inspected row. */
 	const exemplars = $derived(
@@ -25,7 +31,7 @@
 				: [],
 	);
 
-	let scope = $state<'item' | 'corpus'>('item');
+	let scope = $state<'item' | 'selection' | 'corpus'>('item');
 	let submitted = $state<string | null>(null);
 
 	// The WIRE truth wins over the synchronous "a submit left": the fire-and-forget's answer
@@ -44,7 +50,13 @@
 	function run(): void {
 		const key = controller.unitKey;
 		const target: import('@rask/labeling/types').Selection | null =
-			scope === 'corpus' ? { level: 'corpus' } : key ? { level: 'chunks', keys: [key] } : null;
+			scope === 'corpus'
+				? { level: 'corpus' }
+				: scope === 'selection' && itemKeys.length > 0
+					? { level: 'chunks', keys: itemKeys }
+					: key
+						? { level: 'chunks', keys: [key] }
+						: null;
 		if (!target) {
 			submitted = 'this canvas has no unit key — open an item first';
 			return;
@@ -79,6 +91,9 @@
 				data-testid="propagate-scope"
 			>
 				<option value="item">this item</option>
+				{#if itemKeys.length > 1}
+					<option value="selection">all {itemKeys.length} items here</option>
+				{/if}
 				<option value="corpus">entire dataset</option>
 			</select>
 			<Button size="sm" data-testid="propagate-run" onclick={run}>
