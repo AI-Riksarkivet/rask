@@ -547,7 +547,58 @@ grants. This plane's rules for touching it:
   over N `check`s for audience filtering; the three-outcome checker rule stands: FGA on + client
   unwired → **503, never permissive** (`deps.py:109-125`).
 
-### 10.5 How this section is enforced
+### 10.5 `diagrid-labs/dapr-skills` — the workflow review rules, and what transfers here
+
+Read in full 2026-08-08 (github.com/diagrid-labs/dapr-skills): three **static review skills** with
+stable rule IDs — `review-workflow-determinism` (`DWF-DET-001..015`), `review-workflow-activity`
+(`DWF-ACT-001..011`), `review-workflow-management` (`DWF-MGT-001..015`) — plus a shared reference
+library (core/python/ops) and three `create-workflow-*` scaffolding generators. The estate
+**already uses the rule IDs**: `open_dapr.md` §1.4 verified `flows/workflow.py` "clause by clause
+against DWF-DET-001..015". Three findings for this plane:
+
+**(a) What binds `services/notifications` directly — the ACT rules generalize to every
+at-least-once callback.** Our pub/sub handlers and actor reminder callbacks have exactly the
+activity execution model (at-least-once, retried by the runtime), so the checklist maps:
+ACT-002 (external calls carry an idempotency key — our `(event_id, subject, channel)`),
+ACT-003 (never `except: pass` — our DROP is explicit, logged and counted),
+ACT-004 (payloads are pointers with a size discipline — the claim-check invariant),
+ACT-007 (no module-level mutable state in handler scope), ACT-009 (Pydantic-typed I/O).
+The ops references add two **concrete S1 checks** that were missing from this spec:
+- **`ActorStateTTL` must be enabled in the Dapr `Configuration`** for D5's `ttlInSeconds`
+  backstop to function at all — verify against the chart's `lance-tracing`/Dapr Configuration
+  before relying on it (open question 6).
+- Actor runtime tuning knobs (`actorIdleTimeout`, `actorScanInterval`,
+  `drainOngoingCallTimeout`, `drainRebalancedActors`) are the levers for inbox-actor
+  memory-vs-reactivation cost — defaults are fine for S1; recorded so scaling work knows where
+  the dials are.
+The ops guidance also **confirms two decisions**: `state.postgresql` satisfies the three actor
+state-store requirements (ETag, multi-item transactions, first-write-wins), and "use a dedicated
+state store component per concern" is the documented best practice behind §5's dual-component
+outbox path.
+
+**(b) What the estate should adopt beyond this plane — the review skills as gates.** Running the
+three review skills against `services/ingest` + `services/flows` would formalize findings
+`open_dapr.md` already made by hand: the unauthenticated `POST /flows/runs` **is** DWF-MGT-010;
+the missing terminate/purge surface (§2.23) **is** DWF-MGT-003/012; "nothing collects workflow
+history" (open_dapr q7) has its concrete answer in `ops/troubleshooting-ops.md` § State Cleanup
+(purge only terminal instances, batch purge on a retention window — the direct-SQL variant is
+the last resort, it bypasses Dapr's key management). The versioning reference
+(`core/versioning.md`) supplies what the estate has no ruling on yet: **never deploy a
+command-sequence-changing workflow edit while instances are in flight** — blue/green drain or a
+new workflow type are the two strategies available to Python SDKs (named versioning and
+`IsPatched` are Go-only today). Recommended: wire the three review skills into the estate's
+review flow for any diff touching `@wfr.workflow`/`@wfr.activity` code — proposed as open
+question 7, since installing skills is an owner call.
+
+**(c) What does not transfer.** The `create-workflow-*` scaffolds conflict with the estate's
+layout (`make_service_app`, uv workspace, chart-owned components — no `dapr init`, no per-project
+`components/`); the monitoring reference's `runtime/workflow/*` sidecar metrics are Prometheus-
+scrape-shaped where the estate is OTLP→GreptimeDB (useful as a menu of what the sidecar can
+expose, not as wiring); and its documented gap — **workflow activities get no propagated trace
+context** (dapr/dapr#6950) — is an expectation-setter for ingest/flows traces, not something to
+"fix" locally.
+
+### 10.6 How this section is enforced
 
 - The **review gate for every slice** (S1–S6) includes a pass over §10.0's precedence table and the
   two anti-pattern checklists cited at the top of this section.
@@ -575,3 +626,14 @@ grants. This plane's rules for touching it:
 5. **Does the annotator eventually emit its own notification-worthy events** (review requested,
    task reassigned)? The design accepts them as a third topic with zero structural change —
    named here so the first implementer doesn't special-case it.
+6. **Is `ActorStateTTL` enabled on the cluster's Dapr `Configuration`?** (§10.5a.) D5's
+   `ttlInSeconds` backstop silently no-ops without it — S1 verifies against the chart and the
+   running sidecar (Dapr 1.18.1) before the compaction reminder is allowed to assume the
+   backstop exists. Related check: the state store component is `state.postgresql` **v1**
+   (`chart/values.yaml:963`) while the diagrid ops reference recommends v2 for production —
+   changing it rides the same coordinated no-hot-reload rollout as everything else on that
+   component, so decide it in the §4 rollout window or not at all.
+7. **Adopt the three `dapr-skills` review skills as estate review gates** for any diff touching
+   `@wfr.workflow`/`@wfr.activity`/workflow-management code in `ingest`/`flows`? (§10.5b.) The
+   estate already reviews against their rule IDs by hand; installing them (marketplace or
+   vendored) makes it mechanical. Owner call — it changes `.claude/settings.json`.
