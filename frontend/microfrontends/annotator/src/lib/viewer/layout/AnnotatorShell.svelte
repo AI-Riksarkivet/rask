@@ -3,6 +3,7 @@
 	// review inspector) over ONE media unit. Owns the AnnotatorController + the keyboard
 	// controller; every child is dumb + controlled. The /annotator route re-mounts this
 	// per unit (via {#key}) so navigating a review selection loads each unit fresh.
+	import { page } from '$app/state';
 	import { viewerFor } from '$lib/viewer/registry';
 	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
 	import { onRemoteChange } from '../remote-change';
@@ -188,6 +189,16 @@
 		if (reviewSelection.total > 0) reviewSelection.go(i);
 	}
 
+	// A multi-key item can also be judged BETWEEN its units — the compare view (the route swaps
+	// this shell for it on `?view=compare`). Offered from the page bar because that is the control
+	// that already knows the item has more than one unit.
+	const compareHref = $derived.by(() => {
+		if (reviewSelection.total < 2) return null;
+		const u = new URL(page.url);
+		u.searchParams.set('view', 'compare');
+		return u.pathname + u.search;
+	});
+
 	function onKeydown(e: KeyboardEvent): void {
 		const el = e.target as HTMLElement | null;
 		if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
@@ -357,6 +368,7 @@
 								{pages}
 								current={pageIndex}
 								onNavigate={navigate}
+								{compareHref}
 								class={raisedOverTransport}
 							/>
 							{#if spatial}

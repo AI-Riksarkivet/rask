@@ -13,6 +13,7 @@
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
 	import ProjectsLanding from '$lib/projects/ProjectsLanding.svelte';
 	import AnnotatorShell from '$lib/viewer/layout/AnnotatorShell.svelte';
+	import CompareView from '$lib/viewer/layout/CompareView.svelte';
 	import { exitHref } from '$lib/viewer/exit-target';
 	import { fetchMeViaBff } from '$lib/http';
 	import { listTasks } from '$lib/projects/remote/projects.remote';
@@ -125,9 +126,24 @@
 	const stream = $derived(
 		streamPosition(claimedStream(queue, me, data.authEnabled), taskId, projectId, base),
 	);
+
+	// `?view=compare` swaps the one-at-a-time canvas for the side-by-side COMPARE view — the
+	// pairwise/preference question over the item's candidates. The two never mount together: the
+	// compare view writes each pane directly over the plain transport, and a concurrently mounted
+	// canvas controller would be a second writer racing its autosave on the same tables.
+	const comparing = $derived(
+		page.url.searchParams.get('view') === 'compare' && reviewSelection.total > 1,
+	);
+	const canvasHref = $derived.by(() => {
+		const u = new URL(page.url);
+		u.searchParams.delete('view');
+		return u.pathname + u.search;
+	});
 </script>
 
-{#if unit}
+{#if unit && comparing}
+	<CompareView units={reviewSelection.units} taskId={reviewSelection.taskId} {canvasHref} />
+{:else if unit}
 	{#key unit.key}
 		<AnnotatorShell {unit} onexit={exit} {stream} />
 	{/key}

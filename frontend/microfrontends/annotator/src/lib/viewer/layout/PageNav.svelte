@@ -2,7 +2,7 @@
 	// Bottom page-navigation bar. Controlled: renders a pages list + current index
 	// and emits navigate. Document-plane today (pages); for audio/video this becomes
 	// a segment/scene strip — same controlled contract. (Ported from ra-anno PageNavBar.)
-	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
+	import { ChevronLeft, ChevronRight, Columns2 } from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
 	import { cn } from '@rask/ui/utils';
 
@@ -15,11 +15,15 @@
 		pages,
 		current = 0,
 		onNavigate,
+		compareHref = null,
 		class: className,
 	}: {
 		pages: PageRef[];
 		current?: number;
 		onNavigate?: (index: number) => void;
+		/** When the item has candidates to judge BETWEEN, the bar offers the compare view — the
+		 *  side-by-side twin of this one-at-a-time walk. Null hides the affordance. */
+		compareHref?: string | null;
 		class?: string;
 	} = $props();
 
@@ -59,4 +63,15 @@
 	>
 		<ChevronRight class="size-4" />
 	</Button>
+	{#if compareHref !== null}
+		<Button
+			variant="ghost"
+			size="icon-xs"
+			title="Compare candidates side by side"
+			href={compareHref}
+			data-testid="enter-compare"
+		>
+			<Columns2 class="size-4" />
+		</Button>
+	{/if}
 </nav>

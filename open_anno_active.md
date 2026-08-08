@@ -34,6 +34,14 @@ coverage; line references in §1–§3 predate these and are stale where they ov
   pixel medium, class legend as keymap).
 - The video workspace carries the soundtrack as a labelable waveform lane (flat "timeline only"
   fallback for undecodable audio), bound to the same `<video>` clock.
+- Item-level classification (§8e.1): ontology `tag` classes render a choice-chip bar over ANY
+  modality's workspace (`ClassificationBar`); an active chip IS a `tag` row on the ordinary
+  insert/undo/Save machinery. En route, a ghost-row fix: undone inserts now leave the sidebar
+  projection too (`_suppressed`), not only the canvas.
+- The compare view (§8e.4–5): `?view=compare` lays a multi-key item out as side-by-side CANDIDATES
+  with the ontology's choices under each; a pick saves a version-guarded `tag` row onto the winning
+  unit through the plain transport (no canvas controller, so no autosave race). Text panes render
+  the document lines, image/AV panes the frame. Entry/exit are plain links from the page bar.
 - Fixed at the source along the way: floating pills overlapping the temporal strips; unseekable
   route-served media in e2e (206 ranges).
 
@@ -491,20 +499,20 @@ rating, ranking and pairwise questions are its whole product (the RLHF/DPO colle
 
 Where rask stands, per question type:
 
-1. **Classification (multiclass/multilabel)** — data plane EXISTS (one `label` per row =
-   single-class; N `tag` rows per chunk = multilabel; ontology enum attributes = per-shape
-   categorical), surface ABSENT: no choice-chip bar over an item, on any modality.
+1. **Classification (multiclass/multilabel)** — ~~surface ABSENT~~ LANDED: `ClassificationBar`
+   renders the ontology's `tag` classes as a chip bar over any modality's workspace; a chip is a
+   `tag` row on the ordinary machinery. (Single-choice enforcement stays with the ontology
+   validators at submit; per-shape enum attributes still never reach the canvas — finding 4.)
 2. **Rating** — nothing. `vlm-judge` writes a MODEL score into confidence; a human 1–5 has no
    column and no control (`metadata`/attributes could carry it once finding 4 lands).
 3. **Ranking** — nothing models "order N candidates".
-4. **Pairwise / preference (A/B)** — nothing models "N candidates for one item, pick one". The
-   nearest primitive is consensus replicas + manager adjudication (compares ANNOTATORS, not
-   candidates; list-pick, not side-by-side). NOTE the half-built half: the multi-key item
-   (`keys=a,b` → one item, pages 1/N) already presents N units under one decision — a pairwise
-   template is largely a side-by-side re-composition of that plus a preference question.
-5. **Compare view ("seeing 2")** — no side-by-side surface anywhere: XAL ships a split Compare
-   View (parallel directory, IR/RGB, before/after); our version history diffs counts, not pixels;
-   adjudication picks from a list.
+4. **Pairwise / preference (A/B)** — ~~nothing models it~~ LANDED as predicted: the compare view
+   IS the side-by-side re-composition of the multi-key item plus the choice question
+   (`?view=compare` — a pick is a `tag` row on the winning unit, version-guarded per pane).
+   Consensus adjudication still compares ANNOTATORS, not candidates — unchanged.
+5. **Compare view ("seeing 2")** — LANDED for candidates of one item (see 4: image frames or
+   document text side by side). Still open in the other two senses: version history diffs counts
+   not pixels, and there is no split view of two LAYERS of the same unit (IR/RGB, before/after).
 
 All five are finding 8 in miniature: none is a new modality — each is a new QUESTION over existing
 media, which is exactly what a template system expresses and hardcoded viewers cannot.
