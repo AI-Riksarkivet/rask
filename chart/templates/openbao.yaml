@@ -4,6 +4,14 @@
 #   devMode=true  → `server -dev`: in-memory, auto-unsealed, fixed root token (DEMO ONLY).
 #   devMode=false → `server -config`: sealed, file-backed on a PVC; an operator must init + unseal it and
 #                   set up real auth (no fixed root token, no auto-seed). This is the prod path.
+#
+# THE FIELDS `secret/lance` MUST HOLD (prod / externalAddr — nothing auto-seeds them, and the chart
+# omits every plaintext env row behind the secretsViaDapr guard, so an unseeded field is a fail-closed
+# outage at first use, not a fallback): rustfs-secret-key, postgres-password, publisher-oidc-password,
+# publisher-oidc-client-secret (the Dex client secret — added 2026-08-08 when the last plaintext env
+# credential moved behind the guard), dapr-state-connection-string, plus one service-token-<identity>
+# per subject listed in any *_PRIVILEGED_SUBJECTS. The devMode seed below is the authoritative list —
+# keep this comment and that `bao kv put` in sync.
 {{- if not .Values.openbao.devMode }}
 apiVersion: v1
 kind: ConfigMap

@@ -396,8 +396,9 @@ class PolicyRequest(BaseModel):
     target_rows_per_fragment: int | None = Field(default=None, ge=1024, le=10_000_000)
     # Per-OPERATION opt-outs. `compact_enabled` historically gated the whole pass; these split the
     # ordered per-dataset pass into its three real steps, because they have different costs and
-    # different risks. The ORDER is fixed and not configurable — compaction obsoletes files, so
-    # cleanup must follow it, and index optimization must follow that.
+    # different risks. The ORDER is fixed and not configurable — compact, then optimize indices
+    # (compaction leaves its new fragments unindexed), then cleanup LAST, because it reclaims the
+    # superseded versions both earlier steps produced, in one pass.
     cleanup_enabled: bool = True
     optimize_indices_enabled: bool = True
     # The sweep's READ batch, passed to `compact_files`. Lance's default is 8192 ROWS, and rows are

@@ -165,23 +165,78 @@ Recorded so nobody spends a day rediscovering it:
 Ordered by what to fix first. Severity is about blast radius, not about how hard the fix is.
 Every entry below carries a verdict from the adversarial pass.
 
-**Fix status (2026-08-08, branch `claude/notifications-service-separation-h9bi73`).** Landed, each
-re-verified at the then-HEAD before editing and pinned by tests: **§2.6** (`19677ff` — disarm after
-persist), **§2.10** (`c316d74` — dedicated durable DLQ component for lineage), **§2.11** (`57ef374`
-— per-app mover DLQ + honest label), **§2.12+§2.18** (`a5a7901` — both false doc claims corrected),
-**§2.17** (`fb7ee0a` — cached retries=1 fetch, 503-vs-absent), **§2.8** (`1e26bae`+`b889fed` — one
-shared `dedicated_token_from_store`, catalog passes it, lineage fork deleted), **§2.19+§2.20**
-(`a2a1ab2` — sweep shuffle + started/per-dataset counters), **§2.9** (`ec7b860` — publish client
-secret seeded + bundle-read + guarded env). §3's flows auth door was already fixed upstream
-(`31b161e`). **Still open:** **§2.7** — designed (etag from `get`, optional `etag` + `first-write`
-concurrency on `put` for the ESTATE-scoped document only, 409→`ConflictError`, one retry in
-`attach_store`) but NOT landed: it hinges on one wire fact this sandbox cannot observe — the exact
-status the Dapr HTTP state API returns on a Postgres etag mismatch (409 vs the documented
-500/`ERR_STATE_SAVE`) — and a concurrency fix built on a guessed status code would be the §2.12
-shape: a safety property that exists only in intention. One live-sidecar probe decides it. Also
-untouched: the deep ingest-workflow items (§2.3/§2.4/§2.5/§2.13 — replay-semantics surgery needing
-the full red-first treatment) and the owner-gated calls (§2.12's head retirement, the `lance-ray`
-rename, any state-store scope change).
+**Fix status (2026-08-08, branch `claude/notifications-service-separation-h9bi73`) — then
+RE-AUDITED the same day by a 29-agent adversarial workflow** (11 finders re-opening every fix +
+DWF-DET/ACT/MGT rule sweeps + 4 fresh sweeps; every new finding independently refuted-or-confirmed;
+full evidence in the workflow journal, synthesized here). Verdicts on the landed fixes:
+
+- **FIXED, verified:** §2.6 (`19677ff`), §2.12-comment + §2.19 + §2.20 (`a5a7901`/`a2a1ab2`),
+  §2.17 (`fb7ee0a`). §3's flows auth was already fixed upstream (`31b161e`).
+- **§2.11 `57ef374` was a REGRESSION on existing clusters** — correct on fresh installs, but the
+  renamed DLQ topics meant the sidecar re-requested the SAME DLQ-stream durable names with a NEW
+  filter subject: the documented "consumer name already in use" silent-dead-subscription failure,
+  invisible to the drift reconcile (which compares only maxDeliver/backOff). **Closed same day:**
+  a filter-based one-time migration in `nats-stream-job.yaml` deletes DLQ-stream `*-durable`
+  consumers still filtering `dlq.medallion.*` (no post-rename consumer uses that prefix); the
+  sidecar recreates them with the per-app filter.
+- **INCOMPLETE → completed same day:** §2.8 (no test pinned the catalog *call site* — the exact
+  shape of the original defect; now `test_catalog_gateway_proxied_human` drives the privileged
+  door through `catalog.authenticate` itself), §2.10 (nothing pinned the parking subscription's
+  pubsub component; now `test_dapr_dlq` asserts it and the dev fallback), §2.18 (a FOURTH
+  backwards-order site the section never listed: `catalog/schemas.py` — corrected), §2.9 (no
+  runbook named the new seed field for prod/external-Vault — the `openbao.yaml` header now carries
+  the authoritative required-fields list).
+- **§2.8 residual, still open:** lineage still carries a full duplicate `_service_principal` door
+  with divergent no-APP_API_TOKEN semantics (hard-refuse vs the shared door's fall-through-to-OIDC)
+  — the resolver is unified, the door is not. A deliberate follow-up, not an oversight.
+- **Still open, unchanged:** §2.7 (designed; gated on one live-sidecar probe of the Dapr state
+  API's etag-mismatch status), the deep ingest-workflow items (§2.3/§2.4/§2.5/§2.13), and the
+  owner-gated calls (§2.12 head retirement, `lance-ray` rename, state-store scope changes).
+
+**New findings from the re-audit (17 confirmed by independent refutation, 1 refuted, 4 over the
+verify cap and reported unverified; the `KNOWN:` re-confirmations of already-filed items are not
+repeated).** The confirmed set, by weight:
+
+1. **(critical)** `ingest/api.py:151` — the advertised 503 recovery ("retry with the same
+   Idempotency-Key") can never re-schedule: the run record is stored BEFORE the schedule call, so
+   the retry hits the dedupe early-return — a permanent zombie run.
+2. `flows/routes.py:109` — the schedule-timeout fallback can DOUBLE-execute a run:
+   `asyncio.wait_for` cancellation does not stop the `to_thread` gRPC call, so a slow-but-successful
+   schedule still creates the durable instance while the except-branch runs the same graph inline.
+3. `flows/lifespan.py:139` — a fresh uuid4 per POST with no Idempotency-Key support; the
+   scheduler's own comment claims a retry-safety the code does not have.
+4. `flows/routes.py:141` — `GET /flows/runs/{run_id}` carries NO auth: anonymous read of node
+   outputs/errors behind a 48-bit id, right after the estate gated the POST.
+5. `medallion/services/transform.py:211` — `token`/`from_uri` consumed off the bus with no shape
+   validation; an arbitrary `from_uri` becomes a Lance read URI with the mover's S3 credentials
+   (train.py validates the identical fields — the rule exists, this handler skips it).
+6. `chart/dapr-resiliency.yaml:54` — the publication head's RETRY is dead on arrival: the
+   Resiliency CRD targets only the `lance.subPubsub` components, never the control component the
+   `/publication-arrival` subscription rides.
+7. `medallion/core/config.py:282` — `catalog.control.v1` re-defined as a literal instead of
+   importing `CONTROL_TOPIC`, and the duplicate is NOT in the invariants pin list.
+8. `ingest/api.py:163` — only `TimeoutError` from the schedule call is mapped; any other sidecar
+   failure escapes as a raw 500 on top of finding 1's already-stored record.
+9. `annotator/main.py:94` — `app.state.actors_registered` is written and read by NOTHING; the
+   comment describes a 503 gate that does not exist (registration failure surfaces as opaque
+   sidecar errors per request).
+10. `annotator/api/v1/endpoints/tasks.py:203` — the identity-bound task rules (lease-holder-only,
+    self-review-forbidden, frozen-project) are checked against a PRE-TURN snapshot and never
+    re-checked inside the actor turn — a race the `save_draft` path already solves in-turn.
+11. `chart/rustfs-tenant.yaml:53` — `RUSTFS_IDENTITY_OPENID_CLIENT_SECRET` renders the Dex client
+    secret as plaintext env on the Tenant CR, outside every guard (the §2.9 class, one more site).
+12. DWF-ACT sweep, ingest: `runtime.py:341` finalize replay re-commits the carried fragment list
+    (the §2.5 mechanism, now confirmed under Dapr's own replay model); `workflow.py:67`
+    MAX_RUN_HOURS/MAX_UNITS module-level env branching workflow bodies (rolling-deploy replay
+    divergence — escalates the §2.23 held item); `workflow.py:448` bare `except Exception` around
+    the anti-join converts transient S3 errors into "ingest everything" (silent full re-duplication);
+    `workflow.py:318` the unbounded per-unit `errors` dict persisted to history ≥4×;
+    `lineage.py:57` `_EVENTS` module-level list appended per activity, never cleared in production.
+13. DWF-ACT, flows: `activities.py:47` `NodeResult.payload_text` deliberately uncapped into
+    workflow history, re-persisted as input for every dependent node.
+
+**Unverified (over the cap, honestly listed):** four further warnings from the sweeps parked in
+the workflow journal — re-run the verify phase over them before acting.
 
 ### 2.3 No error boundary in `ingest_run` — one failing chunk kills the run before `finalize`
 

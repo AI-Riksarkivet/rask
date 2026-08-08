@@ -181,3 +181,55 @@ def test_direct_call_with_no_dapr_header_is_unaffected() -> None:
     """The shape every pre-existing test used — must keep behaving identically."""
     token = security.authenticate(_request(oidc=_verifier()), _settings(), _creds())
     assert token is not None and token.sub == _SUB
+
+
+# --------------------------------------------------------------------------- #
+# §2.8 — the privileged door OPENS through catalog.authenticate itself
+# --------------------------------------------------------------------------- #
+
+
+def test_catalog_authenticate_passes_the_resolver_so_the_privileged_door_opens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """open_dapr.md §2.8: the original defect was one missing kwarg at THIS call site — the shared
+    service_principal had the dedicated_token parameter and the catalog never passed it, so its
+    privileged branch hard-refused every privileged subject no matter what was seeded. The prior
+    tests all built the resolver in-test and called service_principal directly, so deleting the
+    kwarg reproduced the defect with everything green. This goes through catalog.authenticate:
+    delete `dedicated_token=` from security.py and it fails."""
+    from service_kit.governed import dapr_auth
+
+    monkeypatch.setenv("APP_API_TOKEN", "shared-token")
+    dapr_auth._secret_bundle.cache_clear()
+    monkeypatch.setattr(
+        "service_kit.governed.secrets.fetch_dapr_secret",
+        lambda *_a, **_k: {"service-token-service-trainer": "trainer-own"},
+    )
+    settings = _settings(
+        service_subjects="service-trainer",
+        privileged_subjects="service-trainer",
+        dapr_secret_store="lance-secrets",
+        dapr_secret_key="lance",
+    )
+
+    admitted = security.authenticate(
+        _request(oidc=_verifier()),
+        settings,
+        None,
+        dapr_api_token="trainer-own",
+        x_lance_service_identity="service-trainer",
+        dapr_caller_app_id="lance-ray",
+    )
+    assert admitted is not None and admitted.sub == "service-trainer"
+    assert admitted.iss == "rask://service-door"
+
+    # The refusal is the shared door's 401 (fastapi.HTTPException — the shared service_principal's
+    # own type, not the catalog's problem classes; the status is what matters to the caller).
+    with pytest.raises(Exception, match="may not claim"):
+        security.authenticate(
+            _request(oidc=_verifier()),
+            settings,
+            None,
+            dapr_api_token="shared-token",
+            x_lance_service_identity="service-trainer",
+            dapr_caller_app_id="lance-ray",
+        )
+    dapr_auth._secret_bundle.cache_clear()
