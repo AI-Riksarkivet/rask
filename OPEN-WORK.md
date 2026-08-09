@@ -3458,3 +3458,48 @@ straight from the browser to RustFS (creds from the Dapr secret store, never env
   end to end.
 - **Server-declared palette** — `services/flows` declares the node catalog and the frontend still
   ships its own registry; the seam exists and is unused.
+
+---
+
+## J. OpenFGA weighted-graph readiness — audited 2026-08-08, model is COMPATIBLE
+
+OpenFGA is moving Check/BatchCheck/ListObjects/Expand/ListUsers onto a weighted-graph resolution
+algorithm ([openfga.dev blog, 2026-07-21](https://openfga.dev/blog/weighted-graph-upcoming-changes);
+ListObjects already runs on it, incompatible models fall back to the legacy algorithm, and **that
+fallback will be removed** — no date announced). Incompatible models will then FAIL TO BUILD.
+`packages/service-kit/src/service_kit/governed/auth/model.fga` was audited against all five
+incompatibility classes. **Nothing to migrate** — recorded so nobody re-derives it:
+
+1. **Missing relation on a multi-type TTU** (the class that kills a model): CLEAN, verified
+   mechanically — 26/26 `X from Y` × allowed-parent-type pairs resolve. The genuinely at-risk spot is
+   `transaction.parent: [namespace, warehouse]`, and all three of its TTUs (`owner`/`writer`/`reader
+   from parent`) exist on BOTH types; `namespace.parent: [warehouse, namespace]` likewise for all
+   four rungs — `warehouse.validator` (model.fga:59) exists only to serve that TTU and is what keeps
+   it whole. **Adding a type to any `parent`-style union means adding every rung that TTUs it.**
+2. **Tuple cycles in `and` / `but not`**: N/A — the model contains ZERO intersection and ZERO
+   exclusion; every relation is a pure union. Our two recursions (`role.assignee` accepting
+   `role#assignee`, self-nesting `namespace.parent`) are pure-union recursion, which is explicitly
+   the *supported* form.
+3. **Userset/wildcard check subject against an exclusion → hard error**: N/A — no `but not`, and no
+   wildcard (`:*`) anywhere in the model.
+4. **Alias traversal at check time removed** (only the exact relation stored in the tuple matches):
+   no impact. We DO accept group refs as subjects (`role#assignee`, `team#member`) and we DO have one
+   path that passes usersets as the check subject — the catalog access simulator / admin endpoints
+   (`access.py:157`, `access_admin.py:347,385,501-503`, all `qualify=False`). But the model defines
+   no alias of `assignee`/`member` that any type list accepts, so a probe names the same relation the
+   tuple stores.
+5. **Self-referential usersets now return FALSE** instead of a schema-only TRUE: no impact, and an
+   improvement. Type lists accept only `user`, `role#assignee`, `team#member` as subjects — never
+   `table#reader` — so a probe like `check("table:t1#reader","reader","table:t1")` was always
+   meaningless yet answered TRUE under the legacy algorithm; the simulator will now answer FALSE,
+   which is correct. No test depends on the old answer: every `check:` in `model.fga.yaml` uses a
+   concrete `user:<id>` subject.
+
+**What IS open is the version, not the model.** The server is pinned to **v1.8.0** with a documented
+blocker (`chart/values.yaml:1513-1516`): v1.18.0's migration 006 (`DROP INDEX CONCURRENTLY`) breaks
+against the AGE-shared Postgres. The weighted-graph rollout lands in newer releases, so the fallback's
+eventual removal makes that upgrade path mandatory rather than optional — and the migration blocker is
+what has to be solved first, on a store whose schema is shared with the lineage graph. Two follow-ups:
+(a) unblock the OpenFGA upgrade (own the migration against AGE-shared Postgres, or move OpenFGA to its
+own database); (b) when the announced `fga model validate` ships, add it to the `ms-authz` CI job
+beside the existing `fga model test` so compatibility is machine-checked, not re-audited by hand.
