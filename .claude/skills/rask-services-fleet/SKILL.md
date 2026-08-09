@@ -11,7 +11,7 @@ The day-to-day backend map. The **gateway** on `:8888` is a stateless reverse pr
 
 | Zones | `/api` proxies to |
 |---|---|
-| `compute`, `studio`, `train` | `VIEWER_BACKEND` → `:8888`, the gateway |
+| `compute`, `studio`, `models` | `VIEWER_BACKEND` → `:8888`, the gateway |
 | `home`, `lakehouse` | `LANCE_BACKEND` → **`:8001`**, the lineage service — and nothing in `dev-micro.sh` serves `:8001` |
 | `explorer`, `annotator` | no `/api` proxy at all; they reach `:8101`/`:8102`/`:8103` through their own BFF |
 
@@ -41,7 +41,7 @@ For FastAPI app/router/lifespan idioms see `fastapi`. This skill is *only* the t
 | **ingest** | 8830 | `RASK_INGEST_URL` | the pre-bronze acquisition plane (control API + workers + the lander) — **`dev-micro.sh` does NOT start it**, so `/api/ingest/*` answers `502 upstream unreachable` against the local fleet |
 | **flows** | 8840 | `RASK_FLOWS_URL` | the studio flow-builder's server half (`/api/flows/{catalog,validate,runs}`): an httpx client + an in-memory run store, and a Dapr `WorkflowRuntime` that starts **only** when `DAPR_GRPC_PORT` is set (no sidecar → the inline lane, logged once). `dev-micro.sh` DOES start it. Its row is prefix-interpolated (`f"{prefix}/flows"`), not a literal `/api/flows` — the ingest `/v1` lesson applied rather than restated |
 
-The gateway also carries the lakehouse rows (`/api/catalog`, `/api/lineage`, `/api/produce`, `/api/train`) plus the **ingest** row `/api/ingest` → the ingest plane (`RASK_INGEST_URL`, `:8830`) — see `gateway/__init__.py::_routes()`. Two traps in that row. It rewrites to **`/api`, not `/v1`**: the ingest module's own docstrings say `/v1/ingests`, which is the ROUTER's path *before* `make_service_app` prepends `settings.api_prefix`, and the `/v1` version that shipped 404'd every call through the gateway. And `/api/ingest-iiif` is a **DEPRECATED** sibling pointing at the medallion's IIIF head, kept one window so the frontend can move to `/api/ingest` first. They are siblings, not nested: `_pick_route` requires `path == prefix or path.startswith(prefix + "/")`, so `/api/ingest-iiif` can never match the `/api/ingest` row (the next char is `-`, not `/`) — `tests/test_routing.py` pins both facts.
+The gateway also carries the lakehouse rows (`/api/catalog`, `/api/lineage`, `/api/produce`, `/api/train`) plus the **ingest** row `/api/ingest` → the ingest plane (`RASK_INGEST_URL`, `:8830`) — see `gateway/__init__.py::_routes()`. Two traps in that row. It rewrites to **`/api`, not `/v1`**: the ingest module's own docstrings say `/v1/ingests`, which is the ROUTER's path *before* `make_service_app` prepends `settings.api_prefix`, and the `/v1` version that shipped 404'd every call through the gateway. And the `/api/ingest-iiif` row is **GONE** (corrected 2026-08-09 — this skill described it as a live deprecated sibling long after A12 removed it). A12 deleted the medallion route it pointed at, so keeping the row made it **502 rather than 404** — the worse failure of the two, because it names a backend as broken instead of the path as absent. The ORDERING PROPERTY it demonstrated is still load-bearing and still tested: `_pick_route` requires `path == prefix or path.startswith(prefix + "/")`, so a `/api/ingest-iiif` row could never have matched the `/api/ingest` row anyway — the next character is `-`, not `/`. `services/gateway/tests/test_routing.py` pins that.
 
 ## Load-bearing invariants
 

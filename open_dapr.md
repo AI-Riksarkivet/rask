@@ -238,6 +238,180 @@ repeated).** The confirmed set, by weight:
 **Unverified (over the cap, honestly listed):** four further warnings from the sweeps parked in
 the workflow journal — re-run the verify phase over them before acting.
 
+---
+
+**Fix status (2026-08-09, a separate clone at `~/rask-notifications` off `b087cec2`).** The 17
+confirmed findings above were landed by a 7-unit workflow, each unit followed by an adversarial
+reviewer, plus a re-run of the DWF-DET/ACT/MGT + fresh sweeps to recover the four capped warnings —
+**the prior run's journal is not reachable from another session, so they were re-derived rather than
+read.** Verification runs through `dagger call test`; `uv sync` cannot work on that host (lancedb
+publishes no `macosx_15_0_x86_64` wheel), so agents verified by EXECUTING the real modules in
+isolated interpreters with the missing deps stubbed, not by reading them.
+
+**The four capped warnings, recovered and independently refuted-or-confirmed. All four survived:**
+
+1. **(high)** `dapr-resiliency.yaml:54` — extends F6 above: the publication head does not merely lack
+   a retry, it **dead-letters on the FIRST failure** (a `dead_letter_topic` is declared, and Dapr
+   sends there immediately when no retry policy targets the component), and it carries none of the
+   `ackWait`/`maxDeliver`/`backOff` every other subscriber gets. FIXED: the control component is now
+   a `targets.components` entry rendered from the same expression `dapr-component.yaml:71` uses, and
+   carries the sibling redelivery schedule. Verified in the rendered manifest.
+2. **(high)** `flows/routes.py` — **this promotes §2.23's first held item from "neither confirmed nor
+   refuted" to CONFIRMED.** The durable lane is write-only: `app.state.runs` is written only by
+   `_remember` and read only by `get_run`, so a completed run reads as `running` forever, a FAILED
+   one never surfaces its error, records evict after `max_runs`, and every prior run 404s after a
+   restart. FIXED: a `FlowRunReader` seam + Dapr implementation + an engine-first overlay, since
+   `flow_run_workflow` returns `RunState.model_dump()` — the instance's `serialized_output` IS the
+   run document.
+3. **(high, CROSS-TENANT)** `ingest/runs.py:57` — the run id is not injective. `uuid5` over
+   `f"{project}-ingest-{key}"` collides: `("ra", "batch-ingest-7")` and `("ra-ingest-batch", "7")`
+   render one string. `PROJECT_PATTERN` permits `-` and `IngestRequest.project` declares no pattern
+   at all, while the key is a caller-supplied header. The id is the **workflow instance id AND the
+   dedupe key**, so one tenant's POST is answered `deduplicated: true` against another's run. FIXED
+   in both services with a NUL-joined seed — `flows` had just acquired the identical shape in its own
+   new code. Each fix ships a test that pins the OLD form as actually colliding, so it cannot
+   silently stop gating.
+4. **(low)** `annotator/.../jobs.py:81` — `POST /api/jobs/apply` submits a corpus-scale deriver with
+   no auth dependency while every sibling route is gated. FIXED as `require_dapr_token`, not the
+   neighbours' FGA pair: `JobRequest` names no project to check a relation against, and the gateway
+   proxies only `/api/explorer/annotations`, so this path has **no public row** and is in-cluster
+   only. The seam is now declared service-only rather than accidentally open.
+
+**Every review found real defects in the fix it reviewed** — the stage earned its cost:
+
+- `ingest-api`: a **lost update the fix introduced** — a stalled attempt's lease release blindly
+  wrote its pre-dispatch snapshot, erasing a concurrent re-drive's `scheduled=True` and permanently
+  marking an executing run re-drivable. Also: a re-drive reused the abandoned attempt's
+  `dataset`/`kind` while dispatching the current body's spec.
+- `service-principal-door`: a lambda turned into an eagerly-evaluated argument, moving two settings
+  reads onto every request and breaking a landed test with `AttributeError`.
+- `annotator`: the new 503 gate read a flag that is True in every real deployment, so it could not
+  fire for the outage its own docstring described — and `/readyz` actively misreported a dead task
+  plane as `actors: registered`.
+- `flows`: the new dedupe comment claimed a dispatch-level guarantee the record's write ordering did
+  not provide.
+
+All were repaired in the same pass.
+
+**Corrections to THIS file, found while fixing it:**
+
+- **§2.5's body text is stale.** It says "the run id never reaches the wire"; `bde07314`
+  (2026-08-07) put it there — `catalog_service.py` posts `run_id` and
+  `dataplane.commit_appended_fragments` accepts it, keyed on a `__lance_commit_message` marker. That
+  commit also landed §2.3's error boundary. Finding 12a is still CONFIRMED, but one layer in:
+  `read_version` was re-read per attempt, and is now carried through workflow history on a
+  `DatasetHandle`. A residual remains on the LocalCatalog branch (`lander.py:122`), dev/test-only.
+- **Three landed fixes had regression tests that had never executed.** `services/lineage/tests` and
+  `services/catalog/tests` existed but were absent from the root `testpaths`, which is verbatim what
+  `dagger call test` runs — so the suites for the §2.8 resolver fix, the external-source authz fix
+  and §2.5's idempotent commit were collected by nothing. Both directories are now enrolled. This is
+  the sibling of the §2.11 lesson: not only "fixes that only work on fresh installs", but **fixes
+  whose proof never runs**.
+- **The chart does not render under helm 4.** `values.yaml:1556` sets
+  `openfga.experimentals: [weighted_graph_check]`, which is not in the vendored `openfga-0.3.9`
+  schema's enum, so helm 4.2.3 refuses the whole render. Reproduced against a pristine HEAD
+  worktree, so it predates this work. CI cannot see it: `.dagger/charts.go` pins helm **3.16.4**, and
+  that pin's own comment says it exists to prevent exactly this drift — but it pins CI, not the local
+  `make k3s-up` path. **Open, owner call**: drop the flag, express it through a mechanism the
+  subchart allows, or bump the subchart.
+- **A third non-injective id seed — filed, not fixed.** `medallion/schemas/events.py:243` composes
+  `f"{project}-{operation}-{token}"` and claims the result is "distinct across tenants". It is not,
+  and the consequence is graph-level: two tenants' runs MERGE onto one lineage run id. Unlike the
+  other two sites this seed is half of a cross-emitter contract — the aligned-namespace equality that
+  keeps ids already in the graph MERGEing — so re-keying it is a graph migration decision, not a bug
+  fix.
+
+**A root cause found while trying to VERIFY this work, and it was hiding in the verifier itself.**
+`dagger call test` would not complete — two runs abandoned, one at 22 min, one at 56 min. It was not
+slow, it was **sleeping**: the pytest worker sat in `wchan=hrtimer_nanosleep` accumulating 2 seconds
+of CPU per 2 minutes of wall clock (~1.7%). Bisecting by temporarily narrowing `testpaths` — the
+scoping the dagger module does not expose, reached through the config it reads — put
+`packages/*` + `services/*` at 761 passed in 1m47s and left exactly one failure:
+`packages/service-kit/tests/test_otel.py::test_setup_otel_noop_when_disabled`, `assert True is False`,
+beside a log full of *"Transient error … retrying in %.2fs"*.
+
+`service_kit/otel.py:28` was:
+
+```python
+enabled = (settings is not None and settings.otel_enabled) or bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+```
+
+The `or` made ambient env an override **nothing could turn off** — a caller passing
+`RASK_OTEL_ENABLED=false` still got a live exporter. And Dagger injects `OTEL_EXPORTER_OTLP_ENDPOINT`
+into every container it runs, for its own telemetry. So inside CI every app a test built wired a real
+exporter at Dagger's collector, which rejects application metrics (`unknown aggregation from pb`,
+visible in the engine's own log) — and the SDK retried with exponential backoff. **The suite did not
+fail; it slept.** Measured on `packages/service-kit/tests`:
+
+| tree | result | time |
+| --- | --- | --- |
+| pristine HEAD `b087cec2` | 31 passed, **1 failed** | 33.0s |
+| this branch, before the fix | 47 passed, **1 failed** | 128.8s |
+| this branch, after the fix | **51 passed, 0 failed** | **16.4s** |
+
+Fixed by making an explicit `Settings` decide and leaving the endpoint env as the fallback for callers
+that pass none — which `services/gateway` genuinely does. Production is unaffected:
+`_helpers.tpl` renders `RASK_OTEL_ENABLED: "true"` and `OTEL_EXPORTER_OTLP_ENDPOINT` from the **same**
+`observability.enabled` guard, so the two can never disagree there. Pinned by three new tests,
+including the ambient-endpoint case that was the actual bug.
+
+Two things worth keeping from this: **`test_setup_otel_noop_when_disabled` had been failing on main
+and was right** — it reported a real defect for however long it has been red; and an estate that runs
+its tests inside a telemetry-injecting harness needs its own telemetry switch to be *authoritative*,
+not advisory. **Residual: a second sleeper remains** somewhere in `tests/unit` / `tests/integration`
+(CPU is up from 1.7% to ~15%, still `hrtimer_nanosleep`), not yet isolated.
+
+**Two other CI gates are RED on main, independently of this work** — both measured against a pristine
+`b087cec2` worktree, so neither is damage from these fixes. `dagger call typecheck` exits 1 with
+**77 diagnostics** (`ci.yml:76-91` runs it as a blocking matrix gate, no `continue-on-error`), and the
+Helm chart **does not render under helm 4.2.3** at all — `values.yaml:1556` sets
+`openfga.experimentals: [weighted_graph_check]`, which is absent from the vendored `openfga-0.3.9`
+schema's enum. CI cannot see the second one because `.dagger/charts.go` pins helm **3.16.4**, and that
+pin's own comment says it exists to prevent exactly this drift — but it pins CI, not `make k3s-up`.
+This branch's own contribution to the typecheck backlog was +21, all in test files, all fixed
+(structural doubles `cast` to the declared type, per the estate's documented idiom).
+
+**§2.8's residual is CLOSED.** lineage's forked `_service_principal` is deleted; there is one door
+body, in `service_kit.governed.dapr_auth`, raising a neutral `ServiceDoorError` hierarchy that each
+call site maps onto its own vocabulary (the shared door previously raised `fastapi.HTTPException`,
+coupling a platform primitive to a web framework). **The unified no-credential semantics is
+HARD-REFUSE** — a 401 naming the missing `APP_API_TOKEN`, not fall-through-to-OIDC — because
+reaching the door requires both caller-chosen headers (so the request explicitly asked for the
+service door), and because fall-through made the LESS-configured deployment the MORE permissive one.
+It is security-neutral: OIDC admits only a valid bearer either way. Two further residuals surfaced
+and were fixed with it — a second undocumented pre-gate in the catalog (`settings.service_subjects
+and …`), and a resolver reading env names nothing sets.
+
+**Residuals the reviewers left ON PURPOSE, each with the reason** — recorded so the next reader does
+not mistake "landed" for "closed everywhere":
+
+- **Same key, different spec has no defined semantics** (`ingest/api.py`). Only `project` feeds
+  `run_id_for`, so a retry on one `Idempotency-Key` with a different `dataset`/`kind` resolves to the
+  same run. The re-drive now records the spec it actually dispatches, but if the earlier schedule
+  LANDED, the engine is running volume-A while the record says volume-B. The honest close is a **409
+  on spec mismatch** (standard `Idempotency-Key` semantics) applied to both the dedupe and re-drive
+  branches — a new public status code on a documented endpoint, so it was recorded rather than
+  shipped by a reviewer.
+- **F8's classifier is untested against a live exception.** `_DaprWorkflowStarter.start` has no test,
+  and the 503-mapping test raises `ScheduleUnavailable` directly from a fake starter — it exercises
+  `api.py`'s mapping, never the code that produces the class. The real dapr path raises
+  `grpc.RpcError`, which IS classified, but that is an assumption. Note the important half holds
+  regardless: an UNclassified failure now leaves a **FAILED** record, not F1's ACCEPTED zombie.
+- **Dapr's duplicate-instance refusal is scoped to an ACTIVE instance**, so a re-drive arriving after
+  the workflow COMPLETED recreates it and re-harvests the whole volume. `reuse_id_policy` on
+  `schedule_new_workflow` would close it; not added, because its existence in dapr-ext-workflow 1.18
+  could not be verified offline.
+- **`list_ingests` renders a fail-closed auth 503 as an empty list** (`except Exception: continue`) —
+  a refusal shown as an empty 200, which is the estate's own named anti-pattern. Pre-existing;
+  flagged by both the unit and its reviewer, fixed by neither.
+- **`uri_within` containment is LEXICAL**, so a percent-encoded traversal (`%2e%2e`) passes it. The
+  medallion reviewer documented this in the guard and its test table rather than silently "fixing"
+  it — the sinks decode at different layers, so the right answer is a decision, not a regex.
+
+**Still not attempted, deliberately:** §2.7 (needs a live-sidecar probe of the Dapr state API's
+etag-mismatch status) and the owner-gated calls (§2.12 head retirement, the `lance-ray` rename,
+state-store scope changes).
+
 ### 2.3 No error boundary in `ingest_run` — one failing chunk kills the run before `finalize`
 
 **CONFIRMED · severity high. The highest-blast-radius item in this file.**
@@ -1329,11 +1503,29 @@ enumerated, 10 read against the estate's positions; shallow source, every claim 
     consumer whenever nothing is attached. `nats-stream-job.yaml` pins `limits` correctly, but the
     drift reconcile compares only `maxDeliver`/`backOff` — extend it to assert `retention=limits`
     per stream and fail loudly.
-11. **UNVERIFIED: reminders may persist in the Scheduler service, not the actor state store, since
-    Dapr 1.15** (cluster runs 1.18.1). If true, arm-before-persist/disarm-after-persist is
-    protecting a genuine two-store split with no transaction available, and Scheduler (etcd)
-    loss/rollback skew becomes a named failure domain for every reminder-carrying actor (incl. the
-    planned InboxActor). Verify against the runtime source, then record as fact or strike.
+11. ~~**UNVERIFIED: reminders may persist in the Scheduler service, not the actor state store, since
+    Dapr 1.15**~~ **CONFIRMED 2026-08-09, from the chart rather than the runtime source.** The
+    vendored `chart/charts/dapr-1.18.1.tgz` ships a `dapr_scheduler` subchart
+    (`dapr/charts/dapr_scheduler/templates/dapr_scheduler_statefulset.yaml`), and the rendered
+    manifest deploys **`dapr-scheduler-server` at 3 replicas with an etcd PVC (16 Gi,
+    `etcd-client`/`etcd-peer` ports)**. So the conditional in this entry resolves to true, and both
+    consequences it named now hold:
+
+    - **arm-before-persist / disarm-after-persist protects a genuine two-store split** — the
+      reminder in the Scheduler's etcd, the state in `lance-statestore`'s Postgres, no transaction
+      between them. §2.6's ordering fix (`19677ff`) is an invariant, not a style preference, and any
+      future actor gets the same rule for the same reason.
+    - **Scheduler etcd loss or rollback skew is a named failure domain** for every reminder-carrying
+      actor: the annotator's lease reminder and publish watchdog today, the planned InboxActor next.
+      **Nothing alerts on it.** Worth a rule alongside the notification plane's own (`open_notifications.md`
+      §11 q8), because the symptom of a lost reminder is silence — a lease that never expires, a
+      publish that never re-drives, an inbox that never compacts.
+
+    Compounding, and the reason this is filed rather than merely noted: `ActorStateTTL` is **not
+    enabled** on this estate (one Dapr `Configuration`, `lance-tracing`, whose whole spec is
+    `tracing.samplingRate`, and which is itself gated on `lance.otelEnabled`). So for actor state
+    bounded by a reminder there is no TTL backstop underneath the reminder — the durable-looking
+    guarantee rests entirely on a store that can be lost independently of the data it bounds.
 12. **Resiliency shape guards, cheap:** (a) `targets.apps.<id>.retry` does NOT govern inbound
     pub/sub delivery — only `targets.components.<pubsub>.inbound.retry` does; a render assertion
     should refuse any inbound retry declared under `targets.apps`. (b) Confirm every `dlq.*`

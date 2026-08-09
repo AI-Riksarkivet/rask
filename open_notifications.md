@@ -28,7 +28,7 @@ plane must not re-dig).
 | **D4** — targeting | v1 **authorship** (the run's verified `author` facet). v2 **project watch** (explicit, gated on `project#member`). v3 **governance events naming you** (`grant_added`/`grant_revoked` `extra.subject`). Never "everyone sees everything" on the badge again. |
 | **D5** — the inbox | **One `InboxActor` per subject** on `lance-statestore` (single-activation is the lock — no etags needed), storing **pointers only** (claim-check), TTL backstop + compaction reminder. Closes `OPEN-WORK.md` B2. |
 | **D6** — channels | Dapr **output bindings** (SMTP, Slack webhook), per-user prefs, delivery idempotent by `(event_id, subject, channel)`. **No Dapr Workflow** (the idempotency criterion holds); the **outbox** is documented as the future dual-component path, not adopted. |
-| **D7** — FGA | No new object type. Watching requires `project#member`; every render/delivery re-checks `can_get_metadata` on the run's outputs — the same rule `governed()` already enforces on `/runs`. Refusal is a 403, never an empty 200. |
+| **D7** — FGA | No new object type. Watching requires `project#member`; every render/delivery re-checks visibility on the run's outputs — the same rule `governed()` already enforces on `/runs`. **Render checks `can_get_metadata`; delivery checks the object itself** (§3.1 — the concurrent upward-visibility change makes `can_get_metadata` on a *container* true for anyone holding `reader` on anything beneath it, which is right for a breadcrumb and wrong for a push). On `table` the two are the same set, so S1 is unaffected and the split costs nothing until S4. Refusal is a 403, never an empty 200. |
 | **D8** — the bell | Badge = **inbox unread only**. The panel splits **Inbox / Activity**. The component's existing `onseen`/`ondismiss` seam (built for exactly this) gets its backend. |
 | **D9** — code quality | The implementation is **bound to four skills, read in full for this spec**: `writing-python`, `fastapi`, `python-infrastructure` (the Dapr/NATS/OTel doctrine), and `openfga` (all from ra-skills / vendored). §10 distills the rules that bind this service and pins precedence where a generic skill default conflicts with a repo pin. Review happens against §10, not against memory. |
 
@@ -206,6 +206,65 @@ pointers through the governed read path). The rule is the one `/runs` already en
 - A **revoked** user's stale inbox pointers degrade at render (the re-read 403s → the row is
   dropped), and the FGA outage behaviour is inherited fail-closed: enabled-but-unwired → 503,
   never permissive (`packages/service-kit/src/service_kit/governed/deps.py:109-125`).
+
+### 3.1 Upward visibility changes what `can_get_metadata` means — decided, not discovered
+
+**Decision: delivery gates on `reader` on the notified object; render keeps `can_get_metadata`.
+For S1 the two are the same set, so S1 ships with zero behavioural difference — the split is free
+now and load-bearing from S2 on.**
+
+A concurrent change (landing on `warehouse` and `namespace`) adds a `child` edge — the inverse of
+`parent`, which OpenFGA cannot derive because it cannot traverse a tuple backwards — and redefines
+the action as `can_get_metadata: reader or can_get_metadata from child`. Upward visibility: a
+subject granted `reader` on ONE table now passes `can_get_metadata` on every namespace and
+warehouse above it, so the breadcrumb to their own data renders instead of 403ing. That is right
+for browsing and it is the wrong question for a push.
+
+Three facts bound the blast radius here, all read at this HEAD:
+
+- **`table#can_get_metadata` is unchanged — still bare `reader`.** So is
+  `materialized_view#can_get_metadata`. The `child` clause is on the two container types only.
+- **The lineage governed path checks `table:` objects.** `DatasetFilter.visible` builds
+  `f"{object_type}:{n}"` from `settings.fga_object_type`
+  (`services/lineage/src/lineage/api/fga_deps.py:215`), which is
+  `Field(default="table", alias="LINEAGE_FGA_OBJECT_TYPE")`
+  (`services/lineage/src/lineage/core/config.py:54`) and is **set by nothing in `chart/`**.
+- **`governed()` requires the full output set, not any of it** — `if names <= visible` (`:246`), a
+  subset test. One invisible output drops the row.
+
+So the widening **does not reach S1 at all**: S1 notifies on terminal lineage states whose outputs
+are datasets, checked as `table:`, on the one type the change does not touch. The audience is
+unchanged, and the answer is evidence, not inference.
+
+It reaches **S4**, where v3 targeting reads `CatalogControlEvent.extra.subject` on governance
+events whose `object_id` can be a namespace or a warehouse. Under one-rule-everywhere, a
+namespace-scoped event would then be delivered to every subject holding `reader` on any single
+table anywhere beneath it — an audience nobody chose, arriving as a push. That is the failure this
+plane exists to end (§6: "a badge that counts other people's work"), reintroduced through a
+relation whose own purpose is unrelated.
+
+The principle, stated once so both sides stay derivable: **`can_get_metadata` answers "is there
+anything beneath this you may see?" — the right question for rendering a path, the wrong one for
+interrupting someone. A notification asserts a stake in the object itself.** Render stays
+permissive so breadcrumbs work; delivery stays tight so the badge stays honest.
+
+**What this costs to implement: nothing in S1, one coordinated model change later.** `table` and
+`materialized_view` define `can_get_metadata: reader`, so on those types the two checks are the
+same set and S1's delivery may keep calling `can_get_metadata` today with no behavioural
+difference. The tighter check is only *expressible* as a container-type rule, and checking a bare
+`reader` rung from application code would violate the model's own header doctrine ("the model, not
+the app, owns the op→privilege mapping"). The correct shape is therefore a new action relation —
+`define can_be_notified: reader` on the notifiable types, which also satisfies §10.4's rule that a
+`can_*` never takes a direct assignment. That is **an S4 change, coordinated**: `model.fga`,
+`model.fga.yaml` and `model.json` must move together or CI's transform-and-diff gate fails
+(`ms-authz`, `.github/workflows/ci.yml:190-216`), and it lands with `check:` cases proving the
+split — a table-only grantee is `can_be_notified` on that table and NOT on its namespace, while
+still `can_get_metadata` on both.
+
+`UNVERIFIED`: whether `warehouse#child` / `namespace#child` tuples are in fact written by
+`grant_on_create` for every existing object, or only for objects created after the change. If the
+backfill is partial, upward visibility is partial too — which S1 does not depend on, and S4 must
+check before relying on either direction.
 
 **Auth on the service's own API**: `make_auth_deps` from `service_kit.governed.deps:71` — the
 subject is `token.sub` with **deliberately no header fallback** (`deps.py:99-108`), the module
@@ -617,33 +676,127 @@ context** (dapr/dapr#6950) — is an expectation-setter for ingest/flows traces,
    notification best-practice rule is notify-on-needs-attention — failures loudest, completions
    second; "your run started" tells the person who clicked start nothing and is noise to everyone
    else. One visibility rule everywhere stands; START events notify nobody.
-2. **Watch granularity below project?** The hierarchy has rungs (warehouse/namespace/table) and
-   the FGA model inherits along them; v2 ships project-only to avoid building a subscription
-   matrix nobody asked for. Reopen on the first real request.
-3. **Retention numbers.** Inbox TTL 30 d, reconciler tick 30 s, digest window 24 h — all
-   `UNVERIFIED` defaults to be measured against real volume in S2.
+2. ~~**Watch granularity below project?**~~ **ANSWERED 2026-08-09: project-only for v2, and §3.1
+   is now a second reason rather than just "nobody asked".** A sub-project watch would target a
+   `namespace` or a `warehouse` — the two types the concurrent upward-visibility change gives
+   `can_get_metadata: reader or can_get_metadata from child`. So a namespace-granular watch is
+   exactly the case where the render check and the delivery check must diverge, and it cannot ship
+   before `can_be_notified` does. Ordering, not preference: **v2 stays project-only; sub-project
+   granularity is gated on the S4 model change**, and reopening it earlier would silently ship the
+   audience §3.1 exists to prevent.
+3. ~~**Retention numbers.**~~ **PARTLY ANSWERED 2026-08-09.** They stay `UNVERIFIED` as *values* —
+   only real volume can set them — but two things about them are now settled. (a) Each is a **named
+   setting**, not a literal: inbox TTL, reconciler tick and digest window are `pydantic-settings`
+   fields, so measuring in S2 is a config change rather than a code change. (b) The inbox TTL is
+   **not load-bearing for correctness**, because of q6: `ActorStateTTL` is off, so the compaction
+   reminder is authoritative and the TTL is belt-only. A wrong TTL therefore costs storage, never
+   correctness — which is what makes deferring the measurement safe rather than merely convenient.
 4. **The `notifications` app-id in `list_repos`-style enumerations** — none; but the
    `lance-ray` rename (open_dapr q6) and this plane's scope addition should share one rollout
-   window. Owner call.
-5. **Does the annotator eventually emit its own notification-worthy events** (review requested,
-   task reassigned)? The design accepts them as a third topic with zero structural change —
-   named here so the first implementer doesn't special-case it.
-6. **Is `ActorStateTTL` enabled on the cluster's Dapr `Configuration`?** (§10.5a.) D5's
-   `ttlInSeconds` backstop silently no-ops without it — S1 verifies against the chart and the
-   running sidecar (Dapr 1.18.1) before the compaction reminder is allowed to assume the
-   backstop exists. Related check: the state store component is `state.postgresql` **v1**
+   window. **Owner call, and the window now has a third and fourth passenger** (2026-08-09): q6's
+   Dapr `Configuration` change — a sidecar reads its config at boot, so it needs the same restart —
+   and, if it is ever wanted, the `state.postgresql` v1→v2 move. Four changes, one rollout, because
+   `lance-statestore` carries `actorStateStore: "true"` and daprd refuses to hot-reload any actor
+   state store (`open_dapr.md` §2.21, measured). S1 lands the `stateStore.scopes` value and NAMES
+   the rollout rather than assuming it — scheduling it is not a code decision.
+5. ~~**Does the annotator eventually emit its own notification-worthy events?**~~ **ANSWERED
+   2026-08-09: yes, and the plane already has the shape for it — a third topic, zero structural
+   change.** Confirmed rather than assumed: the annotator is already a Dapr app with three
+   registered actors and a state-store scope, so it can publish through the one wrapper
+   (`service_kit.dapr_publish.publish_event`) exactly as catalog and medallion do. The targeting is
+   also already modelled: "review requested" and "task reassigned" name a SUBJECT, which is v3's
+   `extra.subject` shape (§3), not a new derivation. What such events must NOT do is reuse the
+   lineage door — their objects are `annotation_project`, whose rungs are the annotator's own
+   (`can_review`/`can_annotate`), so the delivery check is a different relation on a different type.
+   Named here so the first implementer adds a topic and a door rather than special-casing a lane.
+6. ~~**Is `ActorStateTTL` enabled on the cluster's Dapr `Configuration`?**~~ **ANSWERED 2026-08-09
+   — NO, and the shape of the "no" is the finding.** Read from the chart, not inferred:
+
+   - The chart declares **exactly one** Dapr `Configuration`, `lance-tracing`
+     (`chart/templates/observability.yaml:28-35`). Its whole `spec` is `tracing.samplingRate`.
+     There is **no `features:` block anywhere in `chart/`**, so `ActorStateTTL` is off — D5's
+     `ttlInSeconds` backstop would silently no-op today.
+   - Worse than absent: **both** the `Configuration` and the `dapr.io/config: "lance-tracing"`
+     annotation are gated on `lance.otelEnabled` (`observability.yaml:18`;
+     `_helpers.tpl:203-205`). A sidecar on an otel-disabled deployment therefore carries **no Dapr
+     Configuration at all** and cannot receive a feature flag even in principle.
+
+   **Consequence, and it changes S1's design rather than adding a chart line.** Putting
+   `features: [{name: ActorStateTTL, enabled: true}]` on `lance-tracing` would make inbox-row
+   expiry **conditional on observability being enabled** — a silent dependency between a telemetry
+   toggle and a data-retention guarantee, which is precisely the class of defect the Dapr audit
+   keeps surfacing (a safety property that exists only under a condition nobody states). So:
+
+   - **The compaction reminder is AUTHORITATIVE; the TTL is belt, never braces.** S1 must not ship
+     a design in which "rows eventually disappear" depends on a feature that is off.
+   - If the TTL is wanted as a real backstop, it needs its **own unconditional `Configuration`**
+     referenced by the actor-hosting apps, not a `features:` line bolted onto the tracing one.
+   - Either way it is **free inside the §4 rollout window and expensive outside it**: a sidecar
+     reads its `Configuration` at boot, so changing it needs the same pod restart that
+     `stateStore.scopes` already forces (`open_dapr.md` §2.21). Same window, one decision.
+
+   `UNVERIFIED`: whether `ActorStateTTL` is still a *preview* feature in Dapr 1.18.1 — not
+   establishable from this repo, and it decides whether enabling it is a one-line `features:` entry
+   or also needs the preview-feature opt-in. Check against the runtime before the rollout.
+
+   Still open, unchanged: the state store component is `state.postgresql` **v1**
    (`chart/values.yaml:963`) while the diagrid ops reference recommends v2 for production —
-   changing it rides the same coordinated no-hot-reload rollout as everything else on that
-   component, so decide it in the §4 rollout window or not at all.
+   changing it rides the same coordinated no-hot-reload rollout, so decide it in the §4 rollout
+   window or not at all.
 7. **Adopt the three `dapr-skills` review skills as estate review gates** for any diff touching
    `@wfr.workflow`/`@wfr.activity`/workflow-management code in `ingest`/`flows`? (§10.5b.) The
    estate already reviews against their rule IDs by hand; installing them (marketplace or
    vendored) makes it mechanical. Owner call — it changes `.claude/settings.json`.
+
+   **Evidence for, gathered 2026-08-09 rather than argued.** The hand-run sweep was done a THIRD
+   time this session (DWF-DET over both orchestrator bodies, DWF-ACT over the activity and
+   handler surface, DWF-MGT over the schedule/query surfaces) and returned four findings that
+   survived independent refutation — two high, and one of them cross-tenant:
+
+   - `dapr-resiliency.yaml` — the publication head has no retry target, so with a
+     `dead_letter_topic` declared it parks on the FIRST failure (DWF-ACT / delivery).
+   - `flows/routes.py` — the durable lane is write-only: a completed run reads as running forever
+     (DWF-MGT-003/012, the query-surface rule; this also promoted `open_dapr.md` §2.23's first
+     held item from unverified to CONFIRMED).
+   - `ingest/runs.py` — the instance id is not injective, so two tenants collide on one workflow
+     instance (DWF-MGT, instance-id collisions).
+   - `annotator/.../jobs.py` — an unauthenticated schedule surface (DWF-MGT-010, the same rule the
+     `POST /flows/runs` finding was).
+
+   Three of the four map onto a rule ID that a mechanical gate would have caught on the diff that
+   introduced them. **That is the argument: the by-hand sweep keeps working, and keeps finding the
+   same rule families late.** Still an owner call, since installing skills changes
+   `.claude/settings.json` — but it is no longer a question of whether the rules pay for
+   themselves.
 8. **InboxActor saturation signal + delivery-in-turn question** *(added 2026-08-08, external-scan
    yield)*: `dapr_runtime_actor_pending_actor_calls{actor_type="InboxActor"}` is the turn-queue
    depth — the one metric that shows a slow SMTP/Slack call serializing every subsequent call for
    that user, because any output-binding call made INSIDE the actor turn holds the turn.
    S5 must decide: channel sends inside the turn (simple, serialized per user — probably fine) or
    handed off outside it (a queue hop, parallel) — and either way the vmalert rule on that series
-   (start ~`>10 for 2m`) lands with S6. Also verify open_dapr.md q11 (Scheduler-held reminders)
-   before trusting reminder durability semantics.
+   (start ~`>10 for 2m`) lands with S6.
+
+   **The reminder half is now ANSWERED, and it lands on S1 rather than S5** (2026-08-09).
+   `open_dapr.md` q11 asked whether reminders live in the Scheduler service rather than the actor
+   state store since Dapr 1.15. They do, on this estate, read from the chart: the vendored
+   `dapr-1.18.1` subchart ships a `dapr_scheduler` StatefulSet, and the rendered manifest deploys
+   **`dapr-scheduler-server` at 3 replicas with an etcd PVC (16 Gi, `etcd-client`/`etcd-peer`)**.
+   So a reminder-carrying actor spans TWO stores with no transaction between them: the reminder in
+   the Scheduler's etcd, the state in `lance-statestore`'s Postgres.
+
+   Two consequences, and the second is the one that binds S1:
+
+   - **The arm-before-persist / disarm-after-persist rule (§4) is protecting a real two-store
+     split**, not a stylistic ordering. That upgrades it from convention to invariant, and it is
+     why `19677ff` was a genuine fix rather than a tidy-up.
+   - **A lost reminder must be recoverable, because there is no backstop under it.** Compose this
+     with q6: `ActorStateTTL` is off, so the compaction reminder is *authoritative* for bounding an
+     inbox — and it now turns out to live in a store that can be lost or rolled back independently
+     of the rows it is responsible for trimming. Armed-once-and-trusted therefore has no floor at
+     all. **S1's InboxActor must re-arm its compaction reminder from the read path**, so the next
+     interaction with a subject repairs a reminder the Scheduler lost, rather than that inbox
+     growing without bound and nothing noticing.
+
+   Filed alongside: Scheduler etcd loss/rollback is now a **named failure domain** for every
+   reminder-carrying actor in the estate — the annotator's lease and publish watchdogs as well as
+   the InboxActor — and nothing currently alerts on it.

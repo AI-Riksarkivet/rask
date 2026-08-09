@@ -163,7 +163,16 @@ garbage), and a handler never raises on malformed input — a crash would poison
   (events are refresh hints; the audit trail is the durable record — `services/catalog/api/dapr.py`).
 - medallion triggers: strict field guards (`_safe_name` / `_safe_dataset` / int-version / the 8 KiB
   config cap) → `_DROP`; deny-by-FGA is also `DROP` (redelivery won't grant the rung), only
-  transient outages `RETRY` (`services/medallion/services/{transform,train}.py`).
+  transient outages `RETRY`. The guards live in **two** places and the split is deliberate:
+  `services/medallion/services/train.py` keeps its own segment/int-version/8 KiB guards for the
+  TRAINING trigger, while the STAGE trigger validates through
+  `services/medallion/services/trigger_guards.py` (`parse_stage_trigger` + `uri_within`) — a module
+  neither handler owns, so the name grammar the two must agree on cannot drift inside one of them.
+  `uri_within` is the half that is a security boundary rather than a shape rule: a trigger may NAME
+  the upstream it wants read, but the mover reads that location with its OWN object-store
+  credentials, so the name is honoured only inside the storage root the stage already resolved.
+  Both refusals are counted (`medallion.stage.refused`) — a `DROP` is an ack, so an uncounted drop
+  makes the event simply cease to exist.
 
 ### 7.4 Evolution: additive-only within a topic; breaking = a new `.vN` topic
 
