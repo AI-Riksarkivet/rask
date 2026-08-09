@@ -91,6 +91,17 @@ coverage; line references in §1–§3 predate these and are stale where they ov
   fields/options/relations), STRICT like the server's extra=forbid (a typo'd key is a named
   error that blocks create, never a silent drop) — the wire stays JSON, `task-yaml.ts` maps
   both ways, and a 'define in YAML' scaffold starts from scratch.
+- THE ONTOLOGY IS A DECODE-TIME CONTRACT (the owner's observation: "is not the schema we use
+  perfect to give a vLLM for structured generation like dottxt/Outlines?" — yes, literally):
+  `generation_schema(ontology)` derives a JSON Schema with one branch per (class, tool) — consts
+  pin the choice, geometry follows the tool, typed attributes with `required`, `transcribe` adds
+  the text field, `allow_empty` mirrors the submit rule, `additionalProperties: false`
+  throughout. Served at `GET /api/assist/generation-schema?task_id=` and threaded into every
+  remote assist call as `output_schema`, so a vLLM backend hands it to `guided_json`
+  (Outlines/xgrammar) and an off-contract annotation cannot be GENERATED — the drop-and-report
+  filter becomes belt-and-braces. Validated by use: the test suite judges good/bad payloads
+  through `jsonschema` exactly as a constrained decoder would. En route, the assist route now
+  reads the task ontology ONCE per call (schema + filter from one read; the filter is pure).
 - THE POINT SESSION (finding 1's core loop): while armed, clicks ACCUMULATE as signed ±points
   (`AssistRequest.points`, stateless — every request carries the whole session), the producer
   re-runs over the full set, and each answer REPLACES the previous prediction (retract-on-success,

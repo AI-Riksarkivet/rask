@@ -27,8 +27,8 @@ import logging
 from typing import Annotated, Any, Final, cast
 
 from fastapi import APIRouter, Path, status
-from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.projects.machines import FROZEN_PROJECT_STATES, PROJECT_EDGES, IllegalTransition, legal_task_events, project_transition

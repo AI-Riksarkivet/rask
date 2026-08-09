@@ -17,7 +17,8 @@ entry. So both are resolved once, server-side, where the task's captured ontolog
 from __future__ import annotations
 
 import pytest
-from annotator.api.v1.endpoints.assist import _CANONICAL_SHAPE, AssistShape, _within_contract
+from annotator.api.v1.endpoints.assist import _CANONICAL_SHAPE, AssistShape, _task_ontology, _within_contract
+from annotator.projects.ontology import LabelClass, LabelOntology
 
 
 def _shape(shape_type: str) -> AssistShape:
@@ -41,38 +42,35 @@ def test_a_producers_dialect_is_normalized_to_the_canonical_vocabulary(produced:
     assert _CANONICAL_SHAPE[produced] == canonical
 
 
-@pytest.mark.asyncio
-async def test_an_assist_with_no_task_is_unconstrained() -> None:
-    """The ad-hoc canvas has no contract, so there is nothing to check against."""
+def test_an_assist_with_no_task_is_unconstrained() -> None:
+    """The ad-hoc canvas has no contract (the route hands the filter None), so nothing to check."""
     shapes = [_shape("polygon"), _shape("bbox")]
-    kept, dropped = await _within_contract(shapes, None)
+    kept, dropped = _within_contract(shapes, None)
     assert len(kept) == 2
     assert dropped == []
 
 
-@pytest.mark.asyncio
-async def test_a_prediction_the_task_refuses_is_dropped_and_REPORTED(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_prediction_the_task_refuses_is_dropped_and_REPORTED() -> None:
     """Dropped, not silently: the operator has to learn the backend disagrees with the task.
 
     Silently filtering would leave a producer permanently returning work nobody sees, with nothing
     anywhere saying so — the failure mode where a model looks configured and does nothing.
     """
-    _stub_task(monkeypatch, {"kind": "object-detection", "classes": [{"name": "region", "tools": ["bbox"]}]})
+    ontology = LabelOntology(kind="object-detection", classes=[LabelClass(name="region", tools=["bbox"])])
 
-    kept, dropped = await _within_contract([_shape("bbox"), _shape("polygon")], "t1")
+    kept, dropped = _within_contract([_shape("bbox"), _shape("polygon")], ontology)
 
     assert [s.shape_type for s in kept] == ["bbox"]
     assert len(dropped) == 1
     assert "polygon" in dropped[0] and "bbox" in dropped[0]
 
 
-@pytest.mark.asyncio
-async def test_an_ontology_that_CONSTRAINS_NOTHING_filters_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An ontology with no classes declares no rule, so there is no rule to drop a prediction for.
+def test_an_ontology_that_CONSTRAINS_NOTHING_filters_nothing() -> None:
+    """An unconstrained class voids the tool rule, so there is no rule to drop a prediction for.
     Filtering here would discard work the server would happily have accepted at submit."""
-    _stub_task(monkeypatch, {"kind": "object-detection", "classes": []})
+    ontology = LabelOntology(kind="object-detection", classes=[LabelClass(name="anything")])
 
-    kept, dropped = await _within_contract([_shape("polygon")], "t1")
+    kept, dropped = _within_contract([_shape("polygon")], ontology)
 
     assert len(kept) == 1
     assert dropped == []
@@ -85,7 +83,8 @@ async def test_an_unreadable_task_returns_the_predictions_unfiltered(monkeypatch
     Everywhere a write is gated this codebase fails closed. This is not a gate: submit still refuses
     a violating shape, so the contract holds regardless. Losing a real prediction because a rule
     could not be READ would be a worse failure than the mismatch this guards against — and it would
-    be invisible, because the annotator would simply see fewer suggestions.
+    be invisible, because the annotator would simply see fewer suggestions. The route composes the
+    read (`_task_ontology`, None on failure) with the pure filter — exercised here as it composes.
     """
 
     class _Boom:
@@ -96,17 +95,8 @@ async def test_an_unreadable_task_returns_the_predictions_unfiltered(monkeypatch
 
     monkeypatch.setattr(tasks_mod, "_proxy", lambda _tid: _Boom())
 
-    kept, dropped = await _within_contract([_shape("polygon")], "t1")
+    ontology = await _task_ontology("t1")
+    kept, dropped = _within_contract([_shape("polygon")], ontology)
 
     assert len(kept) == 1, "a prediction was lost because a rule could not be read"
     assert dropped == []
-
-
-def _stub_task(monkeypatch: pytest.MonkeyPatch, ontology: dict) -> None:
-    class _Task:
-        async def get(self) -> dict:
-            return {"ontology": ontology}
-
-    import annotator.api.v1.endpoints.tasks as tasks_mod
-
-    monkeypatch.setattr(tasks_mod, "_proxy", lambda _tid: _Task())

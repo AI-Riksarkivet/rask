@@ -246,7 +246,9 @@ async def test_assist_predictions_are_filtered_by_the_composite_ontology(monkeyp
     for s in shapes:
         s.shape_type = _CANONICAL_SHAPE.get(s.shape_type, s.shape_type)
 
-    kept, dropped = await _within_contract(shapes, "t1")
+    from annotator.api.v1.endpoints.assist import _task_ontology
+
+    kept, dropped = _within_contract(shapes, await _task_ontology("t1"))
 
     # `rectangle` (a producer dialect) normalized to `bbox` and accepted; `mask` refused.
     assert [s.shape_type for s in kept] == ["polygon", "bbox"]

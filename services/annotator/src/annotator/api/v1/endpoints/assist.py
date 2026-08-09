@@ -19,6 +19,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from annotator.projects.generation_schema import generation_schema
 from annotator.projects.ontology import LabelOntology
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.lancekit.keys import validate_doc_key
@@ -251,6 +252,22 @@ def producer_listing(settings: Any, allowed: set[str] | None = None) -> Producer
     return ProducerListing(producers=rows, default_configured=bool(default_url))
 
 
+class GenerationContract(BaseModel):
+    """The task's ontology as a JSON Schema for structured decoding — what a vLLM-style
+    backend passes to ``guided_json`` (Outlines/xgrammar) so an off-contract annotation
+    cannot be generated. ``null`` when the task constrains nothing: a schema fabricated from
+    no contract would constrain to nothing while reading as if it enforced something."""
+
+    output_schema: dict[str, Any] | None
+
+
+@router.get("/assist/generation-schema")
+async def generation_contract(task_id: str) -> GenerationContract:
+    """The decode-time contract for `task_id` — also useful standalone: a batch deriver or an
+    external labeling script can fetch it and constrain its own generation the same way."""
+    return GenerationContract(output_schema=generation_schema(await _task_ontology(task_id)))
+
+
 @router.post("/assist/{doc_id}/{speech_id}/{chunk_id}")
 async def assist(
     state: StateDep,
@@ -268,12 +285,15 @@ async def assist(
     doc_id = validate_doc_key(handle.descriptor.declared, doc_id)
     source = f"model:{body.producer}"
     url = backend_for(state.settings, body.producer)
+    # ONE task read serves both halves of the contract: the schema a constrained decoder
+    # enforces at GENERATION time, and the filter that checks whatever came back.
+    ontology = await _task_ontology(body.task_id) if body.task_id else None
     # The producer call uses a SYNC httpx client, so it rides the threadpool rather than blocking
     # the event loop — the endpoint is async only because reading the task's template is.
-    shapes = await run_in_threadpool(_remote, state, url, (doc_id, speech_id, chunk_id), body) if url else _mock(body)
+    shapes = await run_in_threadpool(_remote, state, url, (doc_id, speech_id, chunk_id), body, generation_schema(ontology)) if url else _mock(body)
     for shape in shapes:
         shape.shape_type = _CANONICAL_SHAPE.get(shape.shape_type, shape.shape_type)
-    shapes, dropped = await _within_contract(shapes, body.task_id)
+    shapes, dropped = _within_contract(shapes, ontology)
     # Prompt CONTENT is user free-text — never logged (PII/leak surface); length only.
     logger.info(
         "assist %s (prompt %d chars) → %d shape(s), %d dropped",
@@ -285,20 +305,19 @@ async def assist(
     return AssistResult(shapes=shapes, source=source, dropped=dropped)
 
 
-async def _within_contract(shapes: list[AssistShape], task_id: str | None) -> tuple[list[AssistShape], list[str]]:
+def _within_contract(shapes: list[AssistShape], ontology: LabelOntology | None) -> tuple[list[AssistShape], list[str]]:
     """Keep the predictions the task's template permits; report the rest.
 
     A producer is not obliged to know the task's rules — the whole point of the registry is that a
     backend is a config entry. So the mismatch is resolved HERE, once, rather than by every model
-    server or (as before) by a human at submit time.
+    server or (as before) by a human at submit time. PURE: the route reads the ontology once and
+    both contract halves (the generation schema and this filter) derive from that one read.
 
-    A task-less assist (the ad-hoc canvas) has no contract, so nothing is dropped. A read that fails
-    is treated the same way: the assist still returns its shapes, because refusing a prediction
-    because we could not read a rule would be a worse failure than the mismatch it guards against.
+    A task-less assist (the ad-hoc canvas) has no contract, so nothing is dropped. A read that
+    failed arrives as ``None`` and is treated the same way: the assist still returns its shapes,
+    because refusing a prediction because we could not read a rule would be a worse failure than
+    the mismatch it guards against.
     """
-    if not task_id:
-        return shapes, []
-    ontology = await _task_ontology(task_id)
     if ontology is None:
         return shapes, []
     allowed = {_CANONICAL_SHAPE.get(t, t) for t in ontology.tools}
@@ -439,12 +458,23 @@ def _diamond(x: float, y: float, w: float, h: float) -> list[float]:
     return [cx, y, x + w, cy, cx, y + h, x, cy]
 
 
-def _remote(state: AppState, url: str, key: tuple[str, int, int], body: AssistRequest) -> list[AssistShape]:
+def _remote(
+    state: AppState,
+    url: str,
+    key: tuple[str, int, int],
+    body: AssistRequest,
+    output_schema: dict[str, Any] | None = None,
+) -> list[AssistShape]:
     """Proxy to the model endpoint — a Ray Serve deployment (GroundingDINO/SAM) per the
     merge runtime stack. WIRED, not exercised in-repo: posts the chunk-frame image URL +
     prompt + region and expects ``{shapes: [...]}``. A failing or misbehaving model
     server (HTTP error, bad JSON, invalid shape) raises
-    :class:`ServiceUnavailableError` — a stable 503, never a raw 500."""
+    :class:`ServiceUnavailableError` — a stable 503, never a raw 500.
+
+    ``output_schema`` is the task's ontology as a JSON Schema — a vLLM-style backend hands it
+    to its structured decoder (``guided_json``) so an off-contract annotation cannot be
+    GENERATED, rather than merely being filtered after. Null when the task constrains nothing;
+    a non-LLM backend is free to ignore it."""
     doc_id, speech_id, chunk_id = key
     http = state.http
     if http is None:
@@ -454,6 +484,7 @@ def _remote(state: AppState, url: str, key: tuple[str, int, int], body: AssistRe
         "prompt": body.prompt,
         "region": body.region.model_dump() if body.region else None,
         "points": [p.model_dump() for p in body.points],
+        "output_schema": output_schema,
     }
     try:
         resp = http.post(url, json=payload, timeout=30.0)
