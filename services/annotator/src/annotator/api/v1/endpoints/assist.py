@@ -19,6 +19,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from annotator.api.v1.endpoints.serve_discovery import discovered_backends
 from annotator.projects.generation_schema import generation_schema
 from annotator.projects.ontology import LabelOntology
 from service_kit.exceptions import ServiceUnavailableError
@@ -210,7 +211,7 @@ async def producers(state: StateDep, task_id: str | None = None) -> ProducerList
     other half of "schemas must align from the ml backend": a producer emitting polygons for a
     bbox-only task is answerable BEFORE anyone runs it, and this is where you can see it.
     """
-    return producer_listing(state.settings, await enforced_shape_types(task_id))
+    return producer_listing(state.settings, await enforced_shape_types(task_id), await _discovered(state))
 
 
 async def enforced_shape_types(task_id: str | None) -> set[str] | None:
@@ -231,10 +232,14 @@ async def enforced_shape_types(task_id: str | None) -> set[str] | None:
     return {_CANONICAL_SHAPE.get(t, t) for t in ontology.tools} or None
 
 
-def producer_listing(settings: Any, allowed: set[str] | None = None) -> ProducerListing:
+def producer_listing(
+    settings: Any,
+    allowed: set[str] | None = None,
+    discovered: dict[str, AssistBackend] | None = None,
+) -> ProducerListing:
     """Build the registry report. Takes `settings` structurally, like `backend_for` — the routing
     rules are the interesting part and they should be testable without standing up an `AppState`."""
-    registry = registry_of(settings)
+    registry = merged_registry(settings, discovered)
     default_url = getattr(settings, "assist_url", None)
 
     rows: list[ProducerInfo] = []
@@ -250,7 +255,7 @@ def producer_listing(settings: Any, allowed: set[str] | None = None) -> Producer
         rows.append(
             ProducerInfo(
                 name=name,
-                configured=backend_for(settings, name) is not None,
+                configured=backend_for(settings, name, discovered) is not None,
                 returns=list(emits),
                 inputs=list(declared.inputs) if declared else [],
                 # No task, no enforcement, or nothing known about what it emits ⇒ NO CLAIM. Only the
@@ -294,7 +299,7 @@ async def assist(
     handle = await run_in_threadpool(dataset_handle, state, dataset)
     doc_id = validate_doc_key(handle.descriptor.declared, doc_id)
     source = f"model:{body.producer}"
-    url = backend_for(state.settings, body.producer)
+    url = backend_for(state.settings, body.producer, await _discovered(state))
     # ONE task read serves both halves of the contract: the schema a constrained decoder
     # enforces at GENERATION time, and the filter that checks whatever came back.
     ontology = await _task_ontology(body.task_id) if body.task_id else None
@@ -368,6 +373,27 @@ async def _task_ontology(task_id: str) -> LabelOntology | None:
     return ontology if ontology.constrains else None
 
 
+async def _discovered(state: AppState) -> dict[str, AssistBackend]:
+    """What Ray Serve is serving right now, TTL-cached — fetched off the event loop (sync
+    httpx), and empty when discovery is unconfigured or the control plane is unreachable."""
+    settings = state.settings
+    if not getattr(settings, "serve_discovery_url", None):
+        return {}
+    return await run_in_threadpool(
+        discovered_backends,
+        state.http,
+        settings.serve_discovery_url,
+        getattr(settings, "serve_proxy_url", None),
+    )
+
+
+def merged_registry(settings: Any, discovered: dict[str, AssistBackend] | None) -> dict[str, AssistBackend]:
+    """Discovery under config: what Ray Serve is OBSERVED to serve, overlaid by what the
+    operator DECLARED — an env entry with the same producer name wins, because config is
+    intent and discovery is observation."""
+    return {**(discovered or {}), **registry_of(settings)}
+
+
 def registry_of(settings: Any) -> dict[str, AssistBackend]:
     """The registry, NORMALIZED: config may carry structured `AssistBackend` entries or bare URL
     strings (back-compat), and structural test doubles pass plain dicts — every consumer reads
@@ -376,12 +402,12 @@ def registry_of(settings: Any) -> dict[str, AssistBackend]:
     return {name: AssistBackend.model_validate(entry) for name, entry in raw.items()}
 
 
-def backend_for(settings: Any, producer: str) -> str | None:
-    """Resolve the producer's backend: LONGEST matching prefix in the registry wins (so `"sam"`
-    covers `sam-click` while `"sam-hq"` can still override it), else the default `assist_url`,
-    else None (→ the honest in-repo mock). The registry is what makes a new model a CONFIG entry
-    rather than a code change — the CVAT-functions shape without the function orchestrator."""
-    backends = registry_of(settings)
+def backend_for(settings: Any, producer: str, discovered: dict[str, AssistBackend] | None = None) -> str | None:
+    """Resolve the producer's backend: LONGEST matching prefix in the merged registry wins (so
+    `"sam"` covers `sam-click` while `"sam-hq"` can still override it), else the default
+    `assist_url`, else None (→ the honest in-repo mock). With Serve discovery on, DEPLOYING a
+    model is what registers it — the env registry stays the operator override."""
+    backends = merged_registry(settings, discovered)
     best = max((p for p in backends if producer.startswith(p)), key=len, default=None)
     if best is not None:
         return backends[best].url

@@ -91,6 +91,16 @@ coverage; line references in §1–§3 predate these and are stale where they ov
   fields/options/relations), STRICT like the server's extra=forbid (a typo'd key is a named
   error that blocks create, never a silent drop) — the wire stays JSON, `task-yaml.ts` maps
   both ways, and a 'define in YAML' scaffold starts from scratch.
+- THE REGISTRY IS SERVE-NATIVE (the owner's ruling: model endpoints are and will always be
+  Ray Serve deployments — discovery, not hand-config): the annotator now reads
+  `GET /api/serve/applications/` on the Ray dashboard (`ServeInstanceDetails`, verified
+  against installed Ray 2.56.1 source) and offers every RUNNING application whose deployment
+  declares a `labeling` block in its `user_config` ({producer?, returns, inputs}) — chosen
+  because user_config is hot-updatable without replica restarts, so DEPLOYING a model IS
+  registering it and its contract can be corrected live. Endpoint = Serve proxy base (pinned
+  via MEDIA_SERVE_PROXY_URL or derived from Serve's own http_options) + route_prefix.
+  `MEDIA_ASSIST_BACKENDS` stays as the operator OVERRIDE (config is intent, discovery is
+  observation); unreachable control plane degrades to config + mock, TTL-cached 15s.
 - THE ONTOLOGY IS A DECODE-TIME CONTRACT (the owner's observation: "is not the schema we use
   perfect to give a vLLM for structured generation like dottxt/Outlines?" — yes, literally):
   `generation_schema(ontology)` derives a JSON Schema with one branch per (class, tool) — consts

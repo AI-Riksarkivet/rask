@@ -137,6 +137,15 @@ class Settings(BaseSettings):
     # and task compatibility could never compute. Declared here, the registry entry really is the
     # whole of adding a model.
     assist_backends: dict[str, AssistBackend] = Field(default_factory=dict, alias="MEDIA_ASSIST_BACKENDS")
+    # Producer DISCOVERY from the Ray Serve control plane (the primary registry source —
+    # model endpoints in this estate are Ray Serve deployments, and a deployment that carries
+    # a `labeling` block in its user_config IS registered by being deployed). The discovery
+    # URL is the Ray dashboard base (:8265); the proxy URL is the Serve HTTP ingress the
+    # discovered route_prefixes hang under (:8000) — unset, it is derived from the dashboard
+    # host plus the port Serve reports in its own http_options. Env entries above stay the
+    # operator OVERRIDE on name conflicts. Unset discovery ⇒ config + mock only, as before.
+    serve_discovery_url: str | None = Field(default=None, alias="MEDIA_SERVE_DISCOVERY_URL")
+    serve_proxy_url: str | None = Field(default=None, alias="MEDIA_SERVE_PROXY_URL")
 
     # Batch labeling job runner — a lance-ns RayJob submit endpoint (the silver-deriver
     # enqueue for bulk/auto-labeling over a read-plane selection). Unset ⇒ a deterministic
