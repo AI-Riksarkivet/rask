@@ -14,6 +14,7 @@
 	import { Textarea } from '@rask/ui/textarea';
 	import { Progress } from '@rask/ui/progress';
 	import { Select } from '@rask/ui/select';
+	import * as Tabs from '@rask/ui/tabs';
 	import { projectFromHost } from '@rask/ui/shell';
 	import { FolderPlus, RefreshCw } from '@lucide/svelte';
 
@@ -421,38 +422,32 @@
 						<p class="text-muted-foreground">
 							{pickedTemplate?.description ?? 'A task defined from scratch, in YAML.'}
 						</p>
-						<div class="flex shrink-0 rounded-md border" role="tablist" aria-label="Editor view">
-							<Button
-								variant={editorView === 'form' ? 'secondary' : 'ghost'}
-								size="xs"
-								class="h-5 rounded-r-none px-1.5 text-[10px]"
-								aria-pressed={editorView === 'form'}
-								data-testid="task-view-form"
-								onclick={() => (editorView = 'form')}
-							>
-								Form
-							</Button>
-							<Button
-								variant={editorView === 'yaml' ? 'secondary' : 'ghost'}
-								size="xs"
-								class="h-5 rounded-l-none px-1.5 text-[10px]"
-								aria-pressed={editorView === 'yaml'}
-								data-testid="task-view-yaml"
-								onclick={showYaml}
-							>
-								YAML
-							</Button>
-						</div>
+						<!-- The estate's Tabs primitive, not hand-rolled toggle buttons: Bits UI owns the
+						     selected state and the keyboard interaction. Controlled, because switching TO
+						     the YAML view must serialize the current draft first. -->
+						<Tabs.Root
+							value={editorView}
+							onValueChange={(view) => (view === 'yaml' ? showYaml() : (editorView = 'form'))}
+						>
+							<Tabs.List class="h-6" aria-label="Editor view">
+								<Tabs.Trigger value="form" class="px-2 text-[10px]" data-testid="task-view-form">
+									Form
+								</Tabs.Trigger>
+								<Tabs.Trigger value="yaml" class="px-2 text-[10px]" data-testid="task-view-yaml">
+									YAML
+								</Tabs.Trigger>
+							</Tabs.List>
+						</Tabs.Root>
 					</div>
 					{#if editorView === 'yaml'}
-						<textarea
-							class="border-input bg-background min-h-40 w-full rounded-md border p-2 font-mono text-[11px] leading-relaxed"
+						<Textarea
+							class="min-h-40 font-mono text-[11px] leading-relaxed"
 							value={yamlText}
 							spellcheck="false"
 							aria-label="Task definition YAML"
 							data-testid="task-yaml"
 							oninput={(e) => onYamlInput(e.currentTarget.value)}
-						></textarea>
+						/>
 						{#if yamlErrors.length}
 							<ul class="text-destructive flex flex-col gap-0.5" data-testid="task-yaml-errors">
 								{#each yamlErrors as err (err)}<li>{err}</li>{/each}

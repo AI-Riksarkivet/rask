@@ -90,6 +90,20 @@ const emptyClass = (): DraftClass => ({
 	fields: [],
 });
 
+const FIELD_TYPES = new Set(['free', 'int', 'enum', 'bool']);
+
+/** The type-predicate narrow — `Set.has` alone doesn't narrow a string to the union. */
+function isFieldType(value: string): value is DraftField['type'] {
+	return FIELD_TYPES.has(value);
+}
+
+/** Narrow a wire type string to the closed field-type union — 'free' for anything unknown,
+ *  because a wire value is data, not a proof, and an `as` cast here would silently launder
+ *  whatever a stored ontology happens to carry. */
+function fieldType(type: string | undefined): DraftField['type'] {
+	return type !== undefined && isFieldType(type) ? type : 'free';
+}
+
 /** Split a wire `tools` list into the vocabulary's three capabilities. */
 export function draftClassFromWire(c: {
 	name: string;
@@ -107,7 +121,7 @@ export function draftClassFromWire(c: {
 		required: c.required ?? false,
 		fields: (c.attributes ?? []).map((a) => ({
 			name: a.name,
-			type: (a.type as DraftField['type']) ?? 'free',
+			type: a.choices?.length ? 'enum' : fieldType(a.type),
 			options: a.choices ? [...a.choices] : [],
 			required: a.required ?? false,
 		})),
@@ -216,7 +230,6 @@ const KNOWN_TOP = new Set(['task', 'labels', 'relations', 'allow_empty']);
 const KNOWN_LABEL = new Set(['name', 'draw', 'span', 'tag', 'transcribe', 'required', 'fields']);
 const KNOWN_FIELD = new Set(['name', 'type', 'options', 'required']);
 const KNOWN_RELATION = new Set(['name', 'from', 'to', 'directed', 'required']);
-const FIELD_TYPES = new Set(['free', 'int', 'enum', 'bool']);
 
 /** Parse the YAML back into a draft. Returns errors instead of throwing — the editor shows
  *  them in place — and is STRICT: unknown keys, wrong shapes and unknown draw tools are named,
@@ -235,10 +248,7 @@ export function parseTaskYaml(text: string): { draft: TaskDraft; errors: string[
 		return { draft, errors: ['the document must be a mapping (task / labels / relations)'] };
 	}
 	const top = doc as Record<string, unknown>;
-	for (const k of Object.keys(top)) {
-		if (!KNOWN_TOP.has(k))
-			errors.push(`unknown key \`${k}\` — expected task, labels, relations, allow_empty`);
-	}
+	checkKeys(top, KNOWN_TOP, 'the document', errors);
 	if (top.task !== undefined) {
 		if (typeof top.task === 'string') draft.kind = top.task;
 		else errors.push('`task` must be a string');
@@ -248,88 +258,100 @@ export function parseTaskYaml(text: string): { draft: TaskDraft; errors: string[
 		else errors.push('`allow_empty` must be true or false');
 	}
 	for (const [i, raw] of asList(top.labels, 'labels', errors).entries()) {
-		const where = `labels[${i}]`;
-		if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-			errors.push(`${where} must be a mapping with a \`name\``);
-			continue;
-		}
-		const label = raw as Record<string, unknown>;
-		for (const k of Object.keys(label)) {
-			if (!KNOWN_LABEL.has(k))
-				errors.push(`${where}: unknown key \`${k}\` — expected ${[...KNOWN_LABEL].join(', ')}`);
-		}
-		const c = emptyClass();
-		c.name =
-			typeof label.name === 'string'
-				? label.name
-				: (errors.push(`${where} needs a string \`name\``), '');
-		for (const t of asList(label.draw, `${where}.draw`, errors)) {
-			if (typeof t === 'string' && (DRAW_TOOLS as readonly string[]).includes(t)) c.draw.push(t);
-			else errors.push(`${where}.draw: \`${String(t)}\` is not one of ${DRAW_TOOLS.join(', ')}`);
-		}
-		c.span = asBool(label.span, `${where}.span`, errors);
-		c.tag = asBool(label.tag, `${where}.tag`, errors);
-		c.transcribe = asBool(label.transcribe, `${where}.transcribe`, errors);
-		c.required = asBool(label.required, `${where}.required`, errors);
-		for (const [j, rawField] of asList(label.fields, `${where}.fields`, errors).entries()) {
-			const at = `${where}.fields[${j}]`;
-			if (typeof rawField !== 'object' || rawField === null || Array.isArray(rawField)) {
-				errors.push(`${at} must be a mapping with a \`name\``);
-				continue;
-			}
-			const field = rawField as Record<string, unknown>;
-			for (const k of Object.keys(field)) {
-				if (!KNOWN_FIELD.has(k))
-					errors.push(`${at}: unknown key \`${k}\` — expected ${[...KNOWN_FIELD].join(', ')}`);
-			}
-			const options = asList(field.options, `${at}.options`, errors).map(String);
-			let type: DraftField['type'] = options.length > 0 ? 'enum' : 'free';
-			if (field.type !== undefined) {
-				if (typeof field.type === 'string' && FIELD_TYPES.has(field.type))
-					type = field.type as DraftField['type'];
-				else
-					errors.push(
-						`${at}.type: \`${String(field.type)}\` is not one of ${[...FIELD_TYPES].join(', ')}`,
-					);
-			}
-			if (type === 'enum' && options.length === 0)
-				errors.push(`${at}: type enum needs \`options\``);
-			c.fields.push({
-				name:
-					typeof field.name === 'string'
-						? field.name
-						: (errors.push(`${at} needs a string \`name\``), ''),
-				type,
-				options,
-				required: asBool(field.required, `${at}.required`, errors),
-			});
-		}
-		draft.classes.push(c);
+		const label = asMapping(raw, `labels[${i}]`, errors);
+		if (label) draft.classes.push(parseLabel(label, `labels[${i}]`, errors));
 	}
 	for (const [i, raw] of asList(top.relations, 'relations', errors).entries()) {
-		const where = `relations[${i}]`;
-		if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-			errors.push(`${where} must be a mapping with name/from/to`);
-			continue;
-		}
-		const rel = raw as Record<string, unknown>;
-		for (const k of Object.keys(rel)) {
-			if (!KNOWN_RELATION.has(k))
-				errors.push(`${where}: unknown key \`${k}\` — expected ${[...KNOWN_RELATION].join(', ')}`);
-		}
-		draft.relations.push({
-			name:
-				typeof rel.name === 'string'
-					? rel.name
-					: (errors.push(`${where} needs a string \`name\``), ''),
-			from: asList(rel.from, `${where}.from`, errors).map(String),
-			to: asList(rel.to, `${where}.to`, errors).map(String),
-			directed:
-				rel.directed === undefined ? true : asBool(rel.directed, `${where}.directed`, errors),
-			required: asBool(rel.required, `${where}.required`, errors),
-		});
+		const rel = asMapping(raw, `relations[${i}]`, errors);
+		if (rel) draft.relations.push(parseRelation(rel, `relations[${i}]`, errors));
 	}
 	return { draft, errors };
+}
+
+function parseLabel(label: Record<string, unknown>, where: string, errors: string[]): DraftClass {
+	checkKeys(label, KNOWN_LABEL, where, errors);
+	const c = emptyClass();
+	c.name = requireName(label.name, where, errors);
+	for (const t of asList(label.draw, `${where}.draw`, errors)) {
+		if (typeof t === 'string' && (DRAW_TOOLS as readonly string[]).includes(t)) c.draw.push(t);
+		else errors.push(`${where}.draw: \`${String(t)}\` is not one of ${DRAW_TOOLS.join(', ')}`);
+	}
+	c.span = asBool(label.span, `${where}.span`, errors);
+	c.tag = asBool(label.tag, `${where}.tag`, errors);
+	c.transcribe = asBool(label.transcribe, `${where}.transcribe`, errors);
+	c.required = asBool(label.required, `${where}.required`, errors);
+	for (const [j, raw] of asList(label.fields, `${where}.fields`, errors).entries()) {
+		const field = asMapping(raw, `${where}.fields[${j}]`, errors);
+		if (field) c.fields.push(parseField(field, `${where}.fields[${j}]`, errors));
+	}
+	return c;
+}
+
+function parseField(field: Record<string, unknown>, where: string, errors: string[]): DraftField {
+	checkKeys(field, KNOWN_FIELD, where, errors);
+	const options = asList(field.options, `${where}.options`, errors).map(String);
+	let type: DraftField['type'] = options.length > 0 ? 'enum' : 'free';
+	if (field.type !== undefined) {
+		if (typeof field.type === 'string' && isFieldType(field.type)) type = field.type;
+		else
+			errors.push(
+				`${where}.type: \`${String(field.type)}\` is not one of ${[...FIELD_TYPES].join(', ')}`,
+			);
+	}
+	if (type === 'enum' && options.length === 0) errors.push(`${where}: type enum needs \`options\``);
+	return {
+		name: requireName(field.name, where, errors),
+		type,
+		options,
+		required: asBool(field.required, `${where}.required`, errors),
+	};
+}
+
+function parseRelation(
+	rel: Record<string, unknown>,
+	where: string,
+	errors: string[],
+): DraftRelation {
+	checkKeys(rel, KNOWN_RELATION, where, errors);
+	return {
+		name: requireName(rel.name, where, errors),
+		from: asList(rel.from, `${where}.from`, errors).map(String),
+		to: asList(rel.to, `${where}.to`, errors).map(String),
+		directed: rel.directed === undefined ? true : asBool(rel.directed, `${where}.directed`, errors),
+		required: asBool(rel.required, `${where}.required`, errors),
+	};
+}
+
+// ── the strict little narrows every parser shares ──
+
+function checkKeys(
+	obj: Record<string, unknown>,
+	known: Set<string>,
+	where: string,
+	errors: string[],
+): void {
+	for (const k of Object.keys(obj)) {
+		if (!known.has(k))
+			errors.push(`${where}: unknown key \`${k}\` — expected ${[...known].join(', ')}`);
+	}
+}
+
+function asMapping(
+	value: unknown,
+	where: string,
+	errors: string[],
+): Record<string, unknown> | null {
+	if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+		return value as Record<string, unknown>;
+	}
+	errors.push(`${where} must be a mapping with a \`name\``);
+	return null;
+}
+
+function requireName(value: unknown, where: string, errors: string[]): string {
+	if (typeof value === 'string') return value;
+	errors.push(`${where} needs a string \`name\``);
+	return '';
 }
 
 function asList(value: unknown, where: string, errors: string[]): unknown[] {

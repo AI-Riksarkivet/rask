@@ -507,7 +507,7 @@ export class AnnotatorController {
 					// (its last prediction stays — the box is a new object, not a refinement).
 					this.finishAssistSession();
 					const region = { x: shape.x, y: shape.y, width: shape.width, height: shape.height };
-					void this.assist('', region, this.assistProducer);
+					void this.assist('', { region, producer: this.assistProducer });
 				}
 			} else if (shape.type !== 'rect' || shape.width * shape.height > MANUAL_MIN_AREA) {
 				this._appendInsert(this._buildInsert(shape));
@@ -1051,7 +1051,7 @@ export class AnnotatorController {
 	addAssistPoint(x: number, y: number): void {
 		if (!this.assistProducer) return;
 		this.assistPoints = [...this.assistPoints, { x, y, positive: this.assistPointPositive }];
-		void this.assist('', undefined, this.assistProducer, this.assistPoints);
+		void this.assist('', { producer: this.assistProducer, points: this.assistPoints });
 	}
 
 	/** End the point session KEEPING its last prediction ("Done" on the armed pill — the
@@ -1155,10 +1155,13 @@ export class AnnotatorController {
 	 *  `source=model:…` — reviewed/accepted like any prediction, persisted on Save. */
 	async assist(
 		prompt: string,
-		region?: { x: number; y: number; width: number; height: number },
-		producer = 'grounding-dino',
-		points?: AssistPoint[],
+		opts: {
+			region?: { x: number; y: number; width: number; height: number };
+			producer?: string;
+			points?: AssistPoint[];
+		} = {},
 	): Promise<void> {
+		const { region, producer = 'grounding-dino', points } = opts;
 		const url = this._saveUrl;
 		// GroundingDINO detects from a TEXT prompt; SAM segments from the REGION alone.
 		const needsPrompt = producer === 'grounding-dino';
