@@ -397,6 +397,76 @@ test('act-first ＋column: one action derives the declaration, PATCHes the ontol
 	expect(acceptSaves[0].edits).toEqual([{ id: 'r0', status: 'accepted' }]);
 });
 
+test('the Bulk TAB + the embedding view: anchor a row, the neighborhood orders and narrows the grid', async ({
+	page,
+}) => {
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/reset`);
+	const KEYS = ['doc1/0/1', 'doc1/0/2', 'doc1/0/3'];
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/seed`, {
+		data: {
+			routes: {
+				'GET /projects/p1': { project: PROJECT, legal_events: [] },
+				'GET /projects/p1/tasks': {
+					tasks: Object.fromEntries(KEYS.map((_, i) => [`t${i + 1}`, 'claimed'])),
+					counts: { claimed: KEYS.length },
+					total: KEYS.length,
+					terminal: 0,
+					may_publish: false,
+					details: KEYS.map((key, i) => taskItem(`t${i + 1}`, key, 'claimed', 'gina')),
+				},
+				// The by-key door answers the DECLARED identity — what associates hits onto rows.
+				'POST /api/atlas/chunks/by-key': {
+					rows: [],
+					key_fields: ['doc_id', 'speech_id', 'chunk_id'],
+				},
+				// The estate's ONE similarity seam: nearest itself, then /3 close, then /2 far.
+				'GET /api/search/similar': [
+					{ doc_id: 'doc1', speech_id: 0, chunk_id: 1, _distance: 0 },
+					{ doc_id: 'doc1', speech_id: 0, chunk_id: 3, _distance: 0.2 },
+					{ doc_id: 'doc1', speech_id: 0, chunk_id: 2, _distance: 0.9 },
+				],
+			},
+		},
+	});
+	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/api/chunk-frame/**', (route) =>
+		route.fulfill({ status: 200, contentType: 'image/png', body: PNG }),
+	);
+	await page.route('**/annotator/api/annotations/**', (route) =>
+		route.fulfill({
+			status: 200,
+			contentType: 'application/vnd.apache.arrow.stream',
+			headers: { 'X-Annotations-Version': '1' },
+			body: ipc([]),
+		}),
+	);
+
+	// Bulk is a MODE of the labeling task — a tab beside Labeling, not a separate destination.
+	await page.goto('/annotator/tasks/p1');
+	await page.getByTestId('tab-bulk').click();
+	const rows = page.getByTestId('bulk-row');
+	await expect(rows).toHaveCount(3);
+	await expect(rows.nth(1)).toContainText('doc1/0/2');
+
+	// Anchor the first row: the grid re-orders nearest-first and shows each row's distance.
+	await rows.first().getByTestId('bulk-similar').click();
+	await expect(page.getByTestId('bulk-similarity-bar')).toContainText('similar to doc1/0/1');
+	await expect(rows.nth(1)).toContainText('doc1/0/3'); // 0.2 before 0.9
+	await expect(rows.nth(1).getByTestId('bulk-distance')).toContainText('0.200');
+	await expect(rows.nth(2)).toContainText('doc1/0/2');
+	await expect(page.getByTestId('bulk-similarity-count')).toContainText('3 of 3');
+
+	// Tightening the cutoff narrows the working set — the rows every set action operates on.
+	await page.getByTestId('bulk-similarity-cutoff').fill('0.5');
+	await expect(rows).toHaveCount(2);
+	await expect(page.getByTestId('bulk-similarity-count')).toContainText('2 of 3');
+
+	// Clearing restores the whole session.
+	await page.getByTestId('bulk-similarity-clear').click();
+	await expect(rows).toHaveCount(3);
+	await expect(rows.nth(1)).toContainText('doc1/0/2');
+});
+
 test('without a labeling task, the page says where to come from — no dead chrome', async ({
 	page,
 }) => {

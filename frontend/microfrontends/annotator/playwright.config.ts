@@ -57,6 +57,9 @@ export default defineConfig({
 				ANNOTATOR_API: MOCK_ANNOTATOR,
 				ANNOTATOR_PROJECTS_API: MOCK_ANNOTATOR,
 				SEARCH_API: MOCK_ANNOTATOR,
+				// The corpus-rows by-key door (`fetchCorpusRows`) — the bulk grid's similarity view
+				// needs the response's key_fields to associate search hits back onto rows.
+				VIEWER_API: MOCK_ANNOTATOR,
 			},
 		},
 		{

@@ -16,6 +16,7 @@
 
 	import { fetchMeViaBff } from '$lib/http';
 	import AdjudicationPanel from '$lib/projects/AdjudicationPanel.svelte';
+	import BulkGrid from '$lib/bulk/BulkGrid.svelte';
 	import AnnotatorMetrics from '$lib/projects/AnnotatorMetrics.svelte';
 	import MembersPanel from '$lib/projects/MembersPanel.svelte';
 	import PublishPanel from '$lib/projects/PublishPanel.svelte';
@@ -237,18 +238,17 @@
 		     fixing once already by a different route (auto-placement putting the queue in a 320px
 		     track). One surface per tab, and the surface you are on is the whole page. -->
 		<Tabs.Root value="labeling">
-			<div class="flex items-center justify-between gap-2">
 			<Tabs.List>
 				<Tabs.Trigger value="labeling" data-testid="tab-labeling">Labeling</Tabs.Trigger>
+				<!-- BULK IS A MODE OF THE TASK, not a destination (owner ruling, open_bulk_active.md
+				     §5): the same labeling task worked as a table over all its items instead of a
+				     canvas over one. A tab beside Labeling says exactly that; the old external
+				     "Bulk grid" button said "somewhere else". The /bulk route survives for deep
+				     links; this is the same component over the same snapshot. -->
+				<Tabs.Trigger value="bulk" data-testid="tab-bulk">Bulk</Tabs.Trigger>
 				<Tabs.Trigger value="settings" data-testid="tab-settings">Task settings</Tabs.Trigger>
 				<Tabs.Trigger value="publish" data-testid="tab-publish">Publish</Tabs.Trigger>
 			</Tabs.List>
-			<!-- The OPEN-BULK grid: the same items as a scannable table with live annotation
-			     state per row — the queue audits workflow, the grid scans content. -->
-			<Button variant="outline" size="sm" href="{base}/bulk?task={projectId}" data-testid="open-bulk-grid">
-				Bulk grid
-			</Button>
-			</div>
 
 			<!-- THE WORK. `min-w-0` so a wide table scrolls inside its own container rather than forcing
 			     the panel wider than its parent (a flex/grid item's default `min-width:auto`). -->
@@ -263,6 +263,10 @@
 					adjudications={project?.adjudications ?? {}}
 					onchanged={() => void load()}
 				/>
+			</Tabs.Content>
+
+			<Tabs.Content value="bulk" class="flex min-w-0 flex-col gap-4">
+				<BulkGrid {projectId} tasks={listing?.details ?? []} ontology={project.ontology} />
 			</Tabs.Content>
 
 			<!-- WHAT the labelling job IS, and who may do it. The taxonomy moved here from the page

@@ -133,8 +133,10 @@ test('grid mode renders the table’s current PAGE, not the whole queue', async 
 	await expect(page.getByTestId('task-grid')).toBeVisible();
 	await expect(page.getByTestId('task-tile')).toHaveCount(20);
 	// The queue's table is REPLACED, not hidden beside it — two live tables would mean two sources
-	// of truth about what is in view.
-	await expect(page.locator('table')).toHaveCount(0);
+	// of truth about what is in view. VISIBLE tables specifically: the page also mounts the Bulk
+	// tab's grid (inactive tab content is in the DOM, hidden), and that table is a different
+	// surface over the same items, not a second view of the queue.
+	await expect(page.locator('table:visible')).toHaveCount(0);
 });
 
 test('a tile with no loadable image is still a TILE', async ({ page }) => {

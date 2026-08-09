@@ -216,6 +216,17 @@ filter-by-similarity ("rows like these"), exemplar-neighborhood selection ("labe
 neighbors of these 3"), and dedup/cluster views ride the same hybrid FTS+vector+RRF query
 aisheets demonstrated. This is where open-bulk meets `insid3`/`embed-propagate`: the grid is
 the natural exemplar picker at corpus scale.
+**First slice LANDED 2026-08-09**: ≈ on any row anchors it against the estate's ONE similarity
+seam (`/api/search/similar`, the same wire the select surface uses, hits associated onto rows
+via the by-key door's declared `key_fields`); the grid re-orders nearest-first with per-row
+distances, a continuous cutoff slider narrows the neighborhood (wide-open default; honest
+"N of M neighbours in view" count), and every set-level action — ▶ column apply, accepts,
+autofilters — already operates on the filtered rows, so "label the neighborhood of this page"
+is anchor → tighten → apply. Unrankable corpora keep every row with a stated note (never a
+silent "nothing similar"). Remaining: cluster/dedup views, multi-anchor exemplar sets.
+**Bulk is a TAB of the labeling task since the same day** (`/tasks/[id]` → Labeling | Bulk |
+Task settings | Publish) — the ruling made navigable: a mode of the task, not a destination;
+the `/bulk` route survives for deep links only.
 
 ## §6 Implementation plan (phased, each phase shippable)
 

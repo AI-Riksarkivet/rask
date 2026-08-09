@@ -36,9 +36,22 @@
 	import { taskCanvasHref } from '$lib/viewer/task-stream';
 	import { updateProjectOntology } from '$lib/projects/remote/projects.remote';
 	import { assistProducers, requestAssist } from '$lib/viewer/remote/assist.remote';
+	import { fetchCorpusRows } from '$lib/projects/remote/rows.remote';
+	import { rowKeysFor } from '$lib/projects/corpus-rows';
+	import { findSimilar } from '$lib/select/remote/similar.remote';
+	import { MAX_SIMILAR_N } from '$lib/select/similar-limits';
+	import { distanceBounds } from '$lib/select/similar';
 	import type { TaskDetail } from '$lib/projects/types';
 	import { type AnnotationSummary, summarize } from './summary.js';
 	import { deriveColumnName, recipeColumns, withRecipeClass, type Ontology } from './recipe.js';
+	import {
+		distanceOf,
+		inNeighborhood,
+		neighborhoodOf,
+		orderedByDistance,
+		taskKeyOf,
+		type Neighborhood,
+	} from './similarity.js';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 	let {
@@ -118,6 +131,64 @@
 		if (value.trim()) filters.set(column, value);
 		else filters.delete(column);
 	};
+
+	// ── the EMBEDDING view: anchor a row, work its neighborhood ──────────────────────────────
+	// ≈ on a row asks the estate's ONE similarity seam (`/api/search/similar`, the same wire the
+	// select surface uses) for its nearest items; the grid re-orders nearest-first, shows each
+	// row's distance, and a cutoff slider narrows the set. Every set-level action — the ▶
+	// column apply, accepts, the autofilters — already operates on the FILTERED rows, so
+	// "label the neighborhood of this page" is: anchor → tighten → apply. The corpus read
+	// below exists to map hits back onto rows by the declared identity fields.
+	const rowsQuery = $derived(fetchCorpusRows({ keys: rowKeysFor(tasks), dataset: null }));
+	const keyFields = $derived(rowsQuery.current?.keyFields ?? []);
+	let anchor = $state<{ taskId: string; key: string } | null>(null);
+	/** The raw hits — the association into a Neighborhood is DERIVED, because `keyFields`
+	 *  arrives from its own read and a hood built against a not-yet-landed identity would
+	 *  silently associate nothing and render an unranked grid that looks like an answer. */
+	let hits = $state<Record<string, unknown>[] | null>(null);
+	let similarError = $state('');
+	/** null = untouched: the slider starts at the furthest returned distance (wide open — the
+	 *  cutoff tightens by LOOKING, select-surface rule); a drag overrides. */
+	let cutoffOverride = $state<number | null>(null);
+	const hood = $derived.by((): Neighborhood | null => {
+		if (hits === null || keyFields.length === 0) return null;
+		return neighborhoodOf(hits, keyFields);
+	});
+	const bounds = $derived(hits === null ? null : distanceBounds(hits));
+	const cutoff = $derived(cutoffOverride ?? bounds?.furthest ?? 1);
+	const similarNote = $derived.by(() => {
+		if (similarError) return similarError;
+		if (hits !== null && keyFields.length === 0 && (rowsQuery.current?.status ?? 0) !== 200)
+			return 'row identity is unavailable — neighbours cannot be matched onto rows';
+		if (hood !== null && !hood.hasDistances)
+			return 'this corpus declares no vector space — rows are unranked';
+		return '';
+	});
+
+	async function anchorSimilar(task: TaskDetail): Promise<void> {
+		anchor = { taskId: task.task_id, key: taskKeyOf(task) };
+		hits = null;
+		similarError = '';
+		cutoffOverride = null;
+		const result = await findSimilar({
+			key: taskKeyOf(task),
+			dataset: task.source.where ?? null,
+			n: MAX_SIMILAR_N,
+		});
+		if (!result.ok) {
+			// The service's own refusal words are the actionable part ("this corpus declares no
+			// vector space", "the search service is unreachable") — shown, never swallowed.
+			similarError = result.detail || 'the search service is unreachable';
+			return;
+		}
+		hits = result.data;
+	}
+	function clearSimilar(): void {
+		anchor = null;
+		hits = null;
+		similarError = '';
+		cutoffOverride = null;
+	}
 	const contentFilterActive = $derived([...filters.keys()].some((k) => k !== 'key'));
 	function passes(task: TaskDetail): boolean {
 		const summary = items.get(task.task_id)?.summary;
@@ -139,7 +210,19 @@
 		}
 		return true;
 	}
-	const visibleTasks = $derived(tasks.filter((task) => passes(task)));
+	const visibleTasks = $derived.by(() => {
+		const kept = tasks.filter(
+			(task) => passes(task) && (hood === null || inNeighborhood(task, hood, cutoff)),
+		);
+		return hood === null ? kept : orderedByDistance(kept, hood);
+	});
+	/** How many rows the neighborhood holds BEFORE the cutoff — the slider's honest label. */
+	const neighborhoodSize = $derived(
+		hood === null
+			? 0
+			: tasks.filter((t) => hood !== null && inNeighborhood(t, hood, Number.POSITIVE_INFINITY))
+					.length,
+	);
 	let loadingAll = false;
 	$effect(() => {
 		if (contentFilterActive) void loadAllSummaries();
@@ -384,6 +467,48 @@
 </script>
 
 <div class="border-border overflow-auto rounded-md border" data-testid="bulk-grid">
+	{#if anchor}
+		<!-- The similarity rail: what is anchored, how tight the neighborhood is, and the honest
+		     count — every set-level action below operates on exactly these rows. -->
+		<div
+			class="bg-muted/40 border-border/60 flex flex-wrap items-center gap-3 border-b px-3 py-1.5 text-xs"
+			data-testid="bulk-similarity-bar"
+		>
+			<span class="font-medium">≈ similar to <span class="font-mono">{anchor.key}</span></span>
+			{#if hood === null && !similarNote}
+				<span class="text-muted-foreground">searching…</span>
+			{:else if hood?.hasDistances}
+				<label class="text-muted-foreground flex items-center gap-2">
+					cutoff
+					<input
+						type="range"
+						min={bounds?.nearest ?? 0}
+						max={bounds?.furthest ?? 1}
+						step="any"
+						value={cutoff}
+						oninput={(e) => (cutoffOverride = Number(e.currentTarget.value))}
+						data-testid="bulk-similarity-cutoff"
+					/>
+					<span class="font-mono">{cutoff.toFixed(3)}</span>
+				</label>
+				<span class="text-muted-foreground" data-testid="bulk-similarity-count">
+					{visibleTasks.length} of {neighborhoodSize} neighbours in view
+				</span>
+			{/if}
+			{#if similarNote}
+				<span class="text-warning">{similarNote}</span>
+			{/if}
+			<Button
+				variant="ghost"
+				size="sm"
+				class="h-5 px-1.5 text-[10px]"
+				data-testid="bulk-similarity-clear"
+				onclick={clearSimilar}
+			>
+				✕ clear
+			</Button>
+		</div>
+	{/if}
 	<table class="w-full text-left text-xs">
 		<thead class="bg-muted/60 text-muted-foreground sticky top-0 z-10">
 			<tr>
@@ -535,14 +660,33 @@
 							/>
 						</a>
 					</td>
-					<td class="max-w-40 truncate px-2 py-1 font-mono text-[11px]">
-						<a
-							class="hover:underline"
-							href={taskCanvasHref(task, projectId, base)}
-							data-sveltekit-preload-data="off"
-						>
-							{task.source.keys?.join(',')}
-						</a>
+					<td class="max-w-48 px-2 py-1 font-mono text-[11px]">
+						<span class="flex items-center gap-1">
+							<a
+								class="truncate hover:underline"
+								href={taskCanvasHref(task, projectId, base)}
+								data-sveltekit-preload-data="off"
+							>
+								{task.source.keys?.join(',')}
+							</a>
+							{#if hood !== null && distanceOf(task, hood) !== undefined}
+								<span class="text-muted-foreground shrink-0" data-testid="bulk-distance">
+									{distanceOf(task, hood)?.toFixed(3)}
+								</span>
+							{/if}
+							<Button
+								variant="ghost"
+								size="sm"
+								class="h-5 shrink-0 px-1 text-[10px] {anchor?.taskId === task.task_id
+									? 'text-primary'
+									: ''}"
+								title="Find items similar to this one (embedding neighbours)"
+								data-testid="bulk-similar"
+								onclick={() => anchorSimilar(task)}
+							>
+								≈
+							</Button>
+						</span>
 					</td>
 					<td class="px-2 py-1" data-testid="bulk-regions">
 						{#if summary === undefined}
