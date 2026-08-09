@@ -1,6 +1,10 @@
-# AI-assist model discovery — the Serve-native producer registry
+# open-assist-discovery — the Serve-native producer registry
 
-Settled 2026-08-09. The ruling this design serves, verbatim from the owner: *"endpoints of
+Working design doc, **2026-08-09** — same convention as the other `open_*` files: this file is
+deleted (or graduates to `docs/`, the owner's call) when the design fully lands, which here
+means a REAL model deployed on the cluster and discovered end-to-end. Implemented and tested
+against the mock/config path; the live-cluster half is unexercised. The ruling this design
+serves, verbatim from the owner: *"endpoints of
 models will and always be models by Ray Serve from our ray-cluster, and the discovery based on
 models for labeling."* Grounded in the Ray Serve REST API reference, the KubeRay RayService
 guide and the RayService HA guide (read in full against Ray 2.56.1 / KubeRay ≥ 1.6), and in
