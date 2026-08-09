@@ -3503,3 +3503,30 @@ what has to be solved first, on a store whose schema is shared with the lineage 
 (a) unblock the OpenFGA upgrade (own the migration against AGE-shared Postgres, or move OpenFGA to its
 own database); (b) when the announced `fga model validate` ships, add it to the `ms-authz` CI job
 beside the existing `fga model test` so compatibility is machine-checked, not re-audited by hand.
+
+### J-followups — what the v1.18.3 upgrade opened (2026-08-08)
+
+The image is v1.18.3 and `weighted_graph_check` is ON (chart/values.yaml `openfga.experimentals`).
+Three things it made available that are NOT wired, each deliberately left as its own change:
+
+1. **Subchart 0.3.9 → 0.3.12** (its appVersion IS v1.18.3). Needs `helm dependency update ./chart`
+   with helm on PATH — `Chart.lock` carries a digest over the dependency set, so hand-editing the
+   version desyncs it and `helm dependency build` (run by `make k3s-install` and both
+   `scripts/*_e2e_stack.sh`) fails outright. Every value key we set was verified present in 0.3.12.
+2. **OpenFGA is outside the estate's telemetry plane.** v1.11.3 added `OTEL_*` env support and
+   v1.17.0 a configurable trace sampler (`OPENFGA_TRACE_SAMPLER`, `traceidratio` default); v1.10.4/
+   v1.14.0 added `datastore_item_count` and `openfga_iter_query_duration_ms`. Today nothing exports
+   them: the subchart's `telemetry.metrics` is a Prometheus `/metrics` endpoint and **this estate does
+   not scrape** (zero `prometheus.io/scrape` in `chart/templates/`; the model is OTLP-push → Vector →
+   GreptimeDB). So the real work is pointing `telemetry.trace.otlp.endpoint` at the collector and
+   deciding how metrics reach GreptimeDB — including the trace header GreptimeDB requires
+   (`x-greptime-pipeline-name=greptime_trace_v1`, see `docs/DEPLOY.md`). Every governed request pays
+   an FGA check and we currently have **no FGA panel at all**, so this is the highest-value follow-up.
+3. **Connection contention on the shared Postgres, now with different pooling.** v1.10.4/v1.11.0 was a
+   BREAKING switch from `database/sql` to `pgxpool`. OpenFGA defaults to `MaxOpenConns: 30` /
+   `MaxIdleConns: 10` (upstream `pkg/server/config/config.go`), and the AGE Postgres sets no
+   `max_connections` so it runs on Postgres' default 100 — shared with the lineage graph, the Dapr
+   state store (`lance-statestore`) and the backup Job. 30 of 100 to one consumer is worth measuring
+   before it is tuned; `datastore.maxOpenConns`/`maxIdleConns` are the levers, and
+   `datastore_throttling` (experimental) is the other. **Deliberately not set blind** — pick numbers
+   from observed connection counts, which needs (2) first.

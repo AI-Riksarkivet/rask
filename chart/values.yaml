@@ -1519,25 +1519,41 @@ openfga:
   # the MODEL side; nothing to migrate there. (Weighted-graph Check is still experimental behind a
   # flag in 1.18.x, so this buys readiness, not new behaviour.)
   #
-  # THE HAZARD THIS CROSSES, and it is UNVERIFIED here (no cluster in the authoring sandbox — this
-  # needs one `make k3s-up` to confirm before it is trusted):
-  #   * The old pin comment blamed "v1.18.0 migration 006"; that attribution is WRONG. v1.18.0's
-  #     migration 008 is MySQL-only. The Postgres schema change we cross is v1.10.0's
-  #     `!!REQUIRES MIGRATION!!` COLLATION migration (openfga#2661) — it rewrites indexes for sort
-  #     order, which is where the observed `DROP INDEX CONCURRENTLY` came from. Postgres refuses that
-  #     statement inside a transaction block, and it runs against the Postgres that ALSO holds the
-  #     AGE lineage graph (the openfga db's search_path is already forced off `ag_catalog` —
-  #     docs/DEPLOY.md — which is the mitigation that made v1.8.0 migrate cleanly).
-  #   * SYMPTOM IF IT STILL FAILS: the openfga-migrate Job never completes (backoffLimit 30), the
-  #     server can never become Ready against an unmigrated schema, and `helm upgrade --wait` times
-  #     out — leaving the release in `pending-upgrade`, which refuses every later upgrade until
-  #     `helm rollback rask <last-good-rev>` (see CLAUDE.md).
-  #   * RECOVERY: `helm rollback`, then revert this tag to v1.8.0 (a one-line revert; the schema is
-  #     versioned and v1.8.0's own migrations are unaffected by a failed later step).
-  #   * DO NOT deploy this to a data-bearing estate without a maintenance window: it is a 10-minor
-  #     jump across a collation change on a SHARED database.
+  # THE MIGRATION HISTORY, kept because the old comment's diagnosis was WRONG and someone will
+  # otherwise re-derive it: the blocker was never "v1.18.0 migration 006" — v1.18.0's migration 008
+  # is MySQL-only. What this upgrade crosses is v1.10.0's `!!REQUIRES MIGRATION!!` COLLATION
+  # migration (openfga#2661), which rewrites indexes for sort order; that is where the observed
+  # `DROP INDEX CONCURRENTLY` came from, and Postgres refuses that statement inside a transaction
+  # block.
+  #
+  # WHY IT IS NOT A BLOCKER HERE: the estate's stated posture is that RESEEDING THE FGA STORE IS
+  # ACCEPTABLE (owner ruling 2026-08-08 — the tuples are re-seedable from `scripts/fga_seed_*` and
+  # the model is version-controlled), so we do not need an in-place collation migration to succeed.
+  # On a fresh/reseeded database the migrations run 001..N from scratch and the question does not
+  # arise. If an in-place upgrade of a data-bearing store is ever wanted instead, THAT is when the
+  # collation migration has to be proven first.
+  #
+  # If the migrate Job does fail: it never completes (backoffLimit 30), the server never becomes
+  # Ready against an unmigrated schema, `helm upgrade --wait` times out and leaves the release in
+  # `pending-upgrade` (refusing later upgrades until `helm rollback rask <rev>` — CLAUDE.md). The
+  # answer then is to drop and recreate the openfga database rather than to revert the tag.
   image:
     tag: v1.18.3
+  # THE FEATURE this upgrade is for. `weighted_graph_check` puts Check on the weighted-graph
+  # algorithm now instead of waiting for it to become the default — OpenFGA is moving every query
+  # endpoint onto it and will remove the legacy fallback (openfga.dev, 2026-07-21). Turning it on is
+  # safe for us specifically: the model was audited against all five incompatibility classes and is
+  # clean (OPEN-WORK.md §J) — no `and`/`but not` anywhere, every multi-type TTU resolves on every
+  # allowed parent type, and no check call passes a userset/wildcard subject outside the catalog's
+  # access simulator. Incompatible models silently FALL BACK to the legacy algorithm rather than
+  # breaking, and 1.18.x logs a diagnostic when v2 would differ from v1 — so the flag is also the
+  # cheapest way to find out we are wrong.
+  #
+  # NOT set here, deliberately: `pipeline_list_objects` is already the DEFAULT since v1.11.6, and
+  # `datastore_throttling` changes behaviour under load on a Postgres THREE consumers share — decide
+  # that one against measurements, not by switching it on blind.
+  experimentals:
+    - weighted_graph_check
   datastore:
     engine: postgres
     # DSN comes from the infra-credentials Secret (key openfga-datastore-uri) — the SAME secret the AGE
@@ -1549,9 +1565,12 @@ openfga:
     existingSecret: rask-infra-credentials
     secretKeys:
       uriKey: openfga-datastore-uri
-    # The chart's bundled migrate (both job + initContainer types) fails to pass the datastore flags in
+    # The chart's bundled migrate (both job + initContainer types) failed to pass the datastore flags in
     # 0.3.9, so we disable it and run our own proven migrate Job (templates/openfga-migrate.yaml) that
-    # waits for the AGE Postgres first. The server then connects to the already-migrated db.
+    # waits for the AGE Postgres first. The server then connects to the already-migrated db. KEPT on the
+    # 0.3.12 bump on purpose — our Job also carries the NetworkPolicy component label and the wait-age
+    # init that the bundled one has no equivalent for, so re-testing the bundled path is its own change,
+    # not a side effect of a version bump.
     applyMigrations: false
     waitForMigrations: false
 
