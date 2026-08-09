@@ -1510,10 +1510,34 @@ openfga:
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { memory: 512Mi }
-  # Pin to v1.8.0: v1.18.0's migration 006 (DROP INDEX CONCURRENTLY) breaks against the AGE-shared
-  # Postgres; v1.8.0 migrates cleanly. Server + our migrate Job both use this tag (schema match).
+  # v1.18.3 (2026-08-05), moved off the long-standing v1.8.0 pin. Server + our migrate Job use the
+  # SAME tag (templates/openfga-migrate.yaml) so the migrated schema always matches the binary.
+  #
+  # WHY: weighted-graph resolution. OpenFGA is moving Check/ListObjects/Expand/ListUsers onto it and
+  # will REMOVE the legacy fallback (openfga.dev blog 2026-07-21). Our model was audited against all
+  # five incompatibility classes and is compatible — OPEN-WORK.md §J — so this upgrade is safe from
+  # the MODEL side; nothing to migrate there. (Weighted-graph Check is still experimental behind a
+  # flag in 1.18.x, so this buys readiness, not new behaviour.)
+  #
+  # THE HAZARD THIS CROSSES, and it is UNVERIFIED here (no cluster in the authoring sandbox — this
+  # needs one `make k3s-up` to confirm before it is trusted):
+  #   * The old pin comment blamed "v1.18.0 migration 006"; that attribution is WRONG. v1.18.0's
+  #     migration 008 is MySQL-only. The Postgres schema change we cross is v1.10.0's
+  #     `!!REQUIRES MIGRATION!!` COLLATION migration (openfga#2661) — it rewrites indexes for sort
+  #     order, which is where the observed `DROP INDEX CONCURRENTLY` came from. Postgres refuses that
+  #     statement inside a transaction block, and it runs against the Postgres that ALSO holds the
+  #     AGE lineage graph (the openfga db's search_path is already forced off `ag_catalog` —
+  #     docs/DEPLOY.md — which is the mitigation that made v1.8.0 migrate cleanly).
+  #   * SYMPTOM IF IT STILL FAILS: the openfga-migrate Job never completes (backoffLimit 30), the
+  #     server can never become Ready against an unmigrated schema, and `helm upgrade --wait` times
+  #     out — leaving the release in `pending-upgrade`, which refuses every later upgrade until
+  #     `helm rollback rask <last-good-rev>` (see CLAUDE.md).
+  #   * RECOVERY: `helm rollback`, then revert this tag to v1.8.0 (a one-line revert; the schema is
+  #     versioned and v1.8.0's own migrations are unaffected by a failed later step).
+  #   * DO NOT deploy this to a data-bearing estate without a maintenance window: it is a 10-minor
+  #     jump across a collation change on a SHARED database.
   image:
-    tag: v1.8.0
+    tag: v1.18.3
   datastore:
     engine: postgres
     # DSN comes from the infra-credentials Secret (key openfga-datastore-uri) — the SAME secret the AGE

@@ -67,7 +67,8 @@ dependencies:
     repository: oci://registry.k8s.io/kueue/charts
     condition: kueue.enabled
   # Shared with lance-ns at the same version — one authz control plane. lance-ns's values win:
-  # datastore.engine=postgres against the AGE Postgres, image tag pinned v1.8.0, and the
+  # datastore.engine=postgres against the AGE Postgres, image tag pinned v1.18.3 (see the hazard
+  # note in values.yaml under `openfga.image` before changing it), and the
   # subchart's own migrate DISABLED (applyMigrations/waitForMigrations false) in favour of the
   # first-party templates/openfga-migrate.yaml Job. That replaces rask's `engine: memory`.
   - name: openfga
