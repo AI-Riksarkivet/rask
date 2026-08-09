@@ -109,13 +109,14 @@ test('the grid: one row per item, live annotation state per visible row, canvas 
 
 	await page.goto('/annotator/bulk?task=p1');
 
-	// One row per item, titled from the project.
+	// One row per item, titled from the project. NO queue chrome: items are already claimed
+	// into the bulk session, so claim state and assignee have no column here.
 	await expect(page.getByTestId('bulk-title')).toContainText('Court records');
 	const rows = page.getByTestId('bulk-row');
 	await expect(rows).toHaveCount(2);
 	await expect(rows.first()).toContainText('doc1/0/1');
-	await expect(rows.first()).toContainText('claimed');
-	await expect(rows.first()).toContainText('gina');
+	await expect(rows.first()).not.toContainText('claimed');
+	await expect(rows.first()).not.toContainText('gina');
 
 	// The LIVE annotation state, from the Arrow wire: counts by status, the item tag, the excerpt.
 	const first = rows.first();
@@ -133,6 +134,16 @@ test('the grid: one row per item, live annotation state per visible row, canvas 
 	expect(href).toContain('task=t1');
 	expect(href).toContain('project=p1');
 	expect(href).toContain('dataset=demo');
+
+	// The AUTOFILTER: a content filter narrows rows to matches (both summaries are read here,
+	// so the eager load is a no-op); clearing it restores the set.
+	await page.getByTestId('bulk-filter-text').fill('Anno');
+	await expect(rows).toHaveCount(1);
+	await expect(rows.first()).toContainText('doc1/0/1');
+	await page.getByTestId('bulk-filter-text').fill('nothing-matches-this');
+	await expect(page.getByTestId('bulk-no-match')).toBeVisible();
+	await page.getByTestId('bulk-filter-text').fill('');
+	await expect(rows).toHaveCount(2);
 });
 
 test('accept and inline edit ride the save wire — OCC version echoed, attribution rendered back', async ({
@@ -226,6 +237,10 @@ test('act-first ＋column: one action derives the declaration, PATCHes the ontol
 	page,
 }) => {
 	await page.request.post(`${MOCK_ANNOTATOR}/__mock/reset`);
+	// SIX items: the act-first add fills the first 5 (preview economics); the 6th stays empty
+	// until the column-level ▶ apply runs the recipe over the remaining empty cells.
+	const ITEMS = [1, 2, 3, 4, 5, 6].map((n) => `doc1/0/${n}`);
+	const centuryOf = (key: string) => (key.endsWith('6') ? '18th' : '17th');
 	const PATCHED_ONTOLOGY = {
 		kind: '',
 		modality: 'image',
@@ -246,15 +261,12 @@ test('act-first ＋column: one action derives the declaration, PATCHes the ontol
 			routes: {
 				'GET /projects/p1': { project: PROJECT, legal_events: [] },
 				'GET /projects/p1/tasks': {
-					tasks: { t1: 'claimed', t2: 'unassigned' },
-					counts: { claimed: 1, unassigned: 1 },
-					total: 2,
+					tasks: Object.fromEntries(ITEMS.map((_, i) => [`t${i + 1}`, 'claimed'])),
+					counts: { claimed: ITEMS.length },
+					total: ITEMS.length,
 					terminal: 0,
 					may_publish: false,
-					details: [
-						taskItem('t1', 'doc1/0/1', 'claimed', 'gina'),
-						taskItem('t2', 'doc1/0/2', 'unassigned', null),
-					],
+					details: ITEMS.map((key, i) => taskItem(`t${i + 1}`, key, 'claimed', 'gina')),
 				},
 				// The picker lists DISCOVERED producers only — the vlm family, returning `tag`.
 				'GET /api/assist/producers': {
@@ -270,21 +282,27 @@ test('act-first ＋column: one action derives the declaration, PATCHes the ontol
 					default_configured: false,
 				},
 				'PATCH /projects/p1/ontology': { ...PROJECT, ontology: PATCHED_ONTOLOGY },
-				// The producer's answer: a `tag` shape whose text IS the cell value.
-				'POST /api/assist/doc1/0/1': {
-					shapes: [
-						{ shape_type: 'tag', x: 0, y: 0, width: 0, height: 0, text: '17th', confidence: 0.8 },
-					],
-					source: 'model:vlm',
-					dropped: [],
-				},
-				'POST /api/assist/doc1/0/2': {
-					shapes: [
-						{ shape_type: 'tag', x: 0, y: 0, width: 0, height: 0, text: '18th', confidence: 0.8 },
-					],
-					source: 'model:vlm',
-					dropped: [],
-				},
+				// The producer's answer per item: a `tag` shape whose text IS the cell value.
+				...Object.fromEntries(
+					ITEMS.map((key) => [
+						`POST /api/assist/${key}`,
+						{
+							shapes: [
+								{
+									shape_type: 'tag',
+									x: 0,
+									y: 0,
+									width: 0,
+									height: 0,
+									text: centuryOf(key),
+									confidence: 0.8,
+								},
+							],
+							source: 'model:vlm',
+							dropped: [],
+						},
+					]),
+				),
 			},
 		},
 	});
@@ -297,7 +315,7 @@ test('act-first ＋column: one action derives the declaration, PATCHes the ontol
 	const filled = new Set<string>();
 	await page.route('**/annotator/api/annotations/**', async (route) => {
 		const path = new URL(route.request().url()).pathname;
-		const item = path.includes('doc1/0/1') ? 'doc1/0/1' : 'doc1/0/2';
+		const item = ITEMS.find((key) => path.includes(key)) ?? ITEMS[0];
 		if (route.request().method() === 'POST') {
 			const body = route.request().postDataJSON();
 			if (body.inserts?.length) {
@@ -306,9 +324,10 @@ test('act-first ＋column: one action derives the declaration, PATCHes the ontol
 			}
 			return json(route, { version: 2, touched: 1 });
 		}
-		const century = item === 'doc1/0/1' ? '17th' : '18th';
 		const rows = filled.has(item)
-			? ipc([{ shape: 'tag', label: 'century-document', status: 'prediction', text: century }])
+			? ipc([
+					{ shape: 'tag', label: 'century-document', status: 'prediction', text: centuryOf(item) },
+				])
 			: ipc([]);
 		return route.fulfill({
 			status: 200,
@@ -326,11 +345,19 @@ test('act-first ＋column: one action derives the declaration, PATCHes the ontol
 	await expect(page.getByTestId('bulk-column-producer')).toHaveValue('vlm');
 	await page.getByTestId('bulk-column-go').click();
 
-	// The column exists immediately (named from the action) and the preview rows fill.
+	// The column exists immediately (named from the action) and the PREVIEW rows fill — the
+	// first 5, not all 6: judge the prompt cheaply before running everything.
 	await expect(page.getByTestId('bulk-column-century-document')).toBeVisible();
 	const rows = page.getByTestId('bulk-row');
 	await expect(rows.first().getByTestId('bulk-cell-century-document')).toContainText('17th');
-	await expect(rows.nth(1).getByTestId('bulk-cell-century-document')).toContainText('18th');
+	await expect(rows.nth(4).getByTestId('bulk-cell-century-document')).toContainText('17th');
+	await expect(rows.nth(5).getByTestId('bulk-cell-century-document')).toContainText('—');
+
+	// The column-level APPLY (▶): the recipe runs over the remaining EMPTY cells only.
+	await page.getByTestId('bulk-fill-century-document').click();
+	await expect(rows.nth(5).getByTestId('bulk-cell-century-document')).toContainText('18th');
+	// 6 fills total — filled cells were skipped, not re-run.
+	expect(saves).toHaveLength(6);
 
 	// The silent PATCH carried the DERIVED declaration: tag-tooled, transcribing.
 	const calls = await (await page.request.get(`${MOCK_ANNOTATOR}/__mock/calls`)).json();

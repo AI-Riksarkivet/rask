@@ -1,22 +1,24 @@
 <script lang="ts">
-	// OPEN-BULK phases 1+2 — the labeling task as a GRID.
+	// OPEN-BULK — the labeling task as a SPREADSHEET.
 	//
-	// Rows are the task's ITEMS; columns are what a reviewer scans for: the media, the item's
-	// corpus facts, its workflow state, and its LIVE annotation state (status counts, item
-	// tags, a transcription excerpt). The annotation columns are fetched LAZILY, per row, when
-	// the row scrolls into view — a task holds up to SEND_TASK_CAP (1000) items, and reading a
-	// thousand Arrow tables up front to render twenty rows would be the bulk-spec §3.5 mistake
-	// this surface explicitly refuses. Row height is fixed and off-screen rows skip layout
-	// (`content-visibility`), which carries a 1000-row grid without a virtualization library;
-	// real windowing is later work if measured to matter.
+	// Bulk labeling is a special case of labeling, done in bulk: the SAME task, the SAME
+	// ontology — only the modality changes, a table over all the session's items instead of a
+	// canvas over one. Two consequences shape everything here:
 	//
-	// Phase 2 makes two cells ACT, through the same save wire the canvas uses (per-field edits +
-	// base_version OCC — never a second store): ✓ flips every `prediction` row to `accepted` in
-	// one atomic save, and ✎ edits the transcription excerpt in place. The server stamps
-	// `reviewer`/`updated_at` on every touched row; the grid re-fetches and renders that
-	// attribution rather than claiming it client-side. A 409 (someone else saved first) is
-	// resolved by re-fetching — the refreshed row IS the answer for a status flip; an edit
-	// collision keeps the draft open over the fresh state so nothing typed is lost silently.
+	// * Items arrive ALREADY CLAIMED into the bulk session. Claiming is a precondition of
+	//   being in this grid, never something done here — so there is no State/Assignee/queue
+	//   chrome. The grid shows LABELING state (statuses, cells, attribution), not dispatch.
+	// * Columns are the ontology, and the ontology is fluid: each recipe column is a
+	//   declaration appended act-first (one textarea, the name derived from the action, a
+	//   silent ontology PATCH), fillable by a discovered model, filterable like a spreadsheet.
+	//
+	// Annotation state is fetched LAZILY per visible row (IntersectionObserver +
+	// `content-visibility` rows — a task holds up to 1000 items and reading a thousand Arrow
+	// tables to render twenty rows is the mistake the spec refuses); activating a
+	// content filter eagerly loads the rest, because a filter over unread rows would silently
+	// filter nothing. All writes ride the canvas's save wire (per-field edits + base_version
+	// OCC — never a second store); the server stamps reviewer/updated_at and the grid renders
+	// the stamp, never claiming identity client-side.
 	import { onDestroy } from 'svelte';
 	import { base } from '$app/paths';
 	import {
@@ -32,10 +34,8 @@
 	import MediaThumb from '$lib/viewer/layout/MediaThumb.svelte';
 	import { statusVariant } from '$lib/viewer/layout/statusStyle';
 	import { taskCanvasHref } from '$lib/viewer/task-stream';
-	import { fetchCorpusRows } from '$lib/projects/remote/rows.remote';
 	import { updateProjectOntology } from '$lib/projects/remote/projects.remote';
 	import { assistProducers, requestAssist } from '$lib/viewer/remote/assist.remote';
-	import { indexRows, rowFor, rowKeysFor, rowText } from '$lib/projects/corpus-rows';
 	import type { TaskDetail } from '$lib/projects/types';
 	import { type AnnotationSummary, summarize } from './summary.js';
 	import { deriveColumnName, recipeColumns, withRecipeClass, type Ontology } from './recipe.js';
@@ -53,16 +53,10 @@
 	} = $props();
 
 	/** How many rows an act-first column fills IMMEDIATELY — judge the prompt cheaply before
-	 *  running thousands (the preview-5 economics; scoped/whole-task runs are the jobs seam). */
+	 *  running many (the preview-5 economics; whole-task runs are the jobs seam). */
 	const PREVIEW_ROWS = 5;
-
-	// Corpus facets are DECORATION on a grid that works without them (the queue's own rule):
-	// `?? []` everywhere, never a loading gate.
-	const rowsQuery = $derived(fetchCorpusRows({ keys: rowKeysFor(tasks), dataset: null }));
-	const rowIndex = $derived(
-		indexRows(rowsQuery.current?.rows ?? [], rowsQuery.current?.keyFields ?? []),
-	);
-	const rowKeyFields = $derived(rowsQuery.current?.keyFields ?? []);
+	/** How many empty cells one ▶ apply fills — bounded like the drag-fill it stands in for. */
+	const FILL_BATCH = 25;
 
 	// The lazy annotation-state cache, keyed by task id. The VERSION rides along because it is
 	// the OCC handshake a save must echo. `null` = fetch failed (rendered as an honest "—",
@@ -77,7 +71,7 @@
 	// textarea binds to, kept OUTSIDE the cache so a background refresh cannot eat a keystroke.
 	let editing = $state<{ taskId: string; draft: string } | null>(null);
 
-	// ── act-first "＋ column" (phase 3) ───────────────────────────────────────────────────────
+	// ── act-first "＋ column" ─────────────────────────────────────────────────────────────────
 	// One textarea; Enter DERIVES the declaration (name from the action, tag+transcribe class),
 	// PATCHes the ontology silently, and fills the first rows through the assist wire. The
 	// column list unions the prop's ontology with names added THIS session, so the new column
@@ -89,6 +83,10 @@
 	const localColumns = new SvelteSet<string>();
 	/** Cells with a fill in flight, keyed `taskId:column` — rendered as a streaming cell. */
 	const filling = new SvelteSet<string>();
+	/** Each column's recipe as authored THIS session — what ▶ re-applies to empty cells.
+	 *  Persisting the recipe with the task (so it survives a reload and travels to the next
+	 *  annotator) is phase 3b (spec §6.3). */
+	const recipes = new SvelteMap<string, { producer: string; prompt: string }>();
 
 	const producersQuery = $derived(assistProducers(null));
 	// Recipe producers: interactive families whose declared returns include the `tag` an
@@ -109,92 +107,54 @@
 	const chipTags = (summary: AnnotationSummary): string[] =>
 		summary.tags.filter((t) => !columns.includes(t));
 
-	async function addColumn(): Promise<void> {
-		const action = columnAction.trim();
-		if (!action || !ontology || !selectedProducer || addingColumn) return;
-		addingColumn = true;
+	// ── per-column filters (the spreadsheet's autofilter) ────────────────────────────────────
+	// Contains-match per column, case-insensitive. A row whose summary is still unread passes
+	// every content filter (it filters IN once read); setting any content filter eagerly loads
+	// the remaining summaries, because filtering rows nobody has read would silently show a
+	// subset and call it the result. Embedding-similarity filters ride the same row-predicate
+	// seam later (spec §5 — the reason bulk sees all items at once).
+	const filters = new SvelteMap<string, string>();
+	const setFilter = (column: string, value: string) => {
+		if (value.trim()) filters.set(column, value);
+		else filters.delete(column);
+	};
+	const contentFilterActive = $derived([...filters.keys()].some((k) => k !== 'key'));
+	function passes(task: TaskDetail): boolean {
+		const summary = items.get(task.task_id)?.summary;
+		for (const [column, raw] of filters) {
+			const needle = raw.trim().toLowerCase();
+			if (!needle) continue;
+			if (column === 'key') {
+				if (!(task.source.keys ?? []).join(',').toLowerCase().includes(needle)) return false;
+				continue;
+			}
+			if (!summary) continue; // unread rows stay visible until their read lands
+			const haystack =
+				column === 'tags'
+					? chipTags(summary).join(' ')
+					: column === 'text'
+						? summary.text
+						: (summary.tagCells[column]?.text ?? '');
+			if (!haystack.toLowerCase().includes(needle)) return false;
+		}
+		return true;
+	}
+	const visibleTasks = $derived(tasks.filter((task) => passes(task)));
+	let loadingAll = false;
+	$effect(() => {
+		if (contentFilterActive) void loadAllSummaries();
+	});
+	async function loadAllSummaries(): Promise<void> {
+		if (loadingAll) return;
+		loadingAll = true;
 		try {
-			const name = deriveColumnName(action, [...ontology.classes.map((c) => c.name), ...columns]);
-			// The command single-flights the project re-fetch itself; `localColumns` renders the
-			// column before that read lands.
-			const result = await updateProjectOntology({
-				projectId,
-				ontology: withRecipeClass(ontology, name),
-			});
-			if (!result.ok) return;
-			localColumns.add(name);
-			columnOpen = false;
-			columnAction = '';
-			// Preview-first: fill the FIRST rows immediately so the prompt is judged cheaply;
-			// sequential on purpose (one cell visibly lands after another, and the mock/model
-			// is not hammered with a burst).
-			for (const task of tasks.slice(0, PREVIEW_ROWS)) {
-				await fillCell(task, name, action);
+			const missing = tasks.filter((t) => !items.has(t.task_id));
+			for (let i = 0; i < missing.length; i += 6) {
+				await Promise.all(missing.slice(i, i + 6).map((t) => fetchSummary(t)));
 			}
 		} finally {
-			addingColumn = false;
+			loadingAll = false;
 		}
-	}
-
-	/** One cell fill: ask the producer, land the answer as a `tag` row with `status='prediction'`
-	 *  through the ordinary save wire. The cell's provenance is the row's `source`; a re-fetch
-	 *  renders whatever the server committed. */
-	async function fillCell(task: TaskDetail, column: string, prompt: string): Promise<void> {
-		const url = annotationsUrl(task);
-		const cellKey = `${task.task_id}:${column}`;
-		if (!url || filling.has(cellKey)) return;
-		filling.add(cellKey);
-		try {
-			// The save needs the row's current version — make sure it is loaded.
-			if (!items.has(task.task_id)) await fetchSummary(task);
-			const state = items.get(task.task_id);
-			if (!state) return;
-			// `taskId: null` DELIBERATELY: each item captured its ontology at send, so a column
-			// appended NOW is absent from that capture by definition — passing the task id would
-			// have the contract filter drop the very answers this fill exists to produce. The
-			// membership rules still apply where they mean something (submit). Capture-refresh
-			// semantics are phase 3b's open question (open_bulk_active.md §6.3).
-			const result = await requestAssist({
-				key: (task.source.keys ?? []).join(','),
-				dataset: task.source.where ?? null,
-				producer: selectedProducer,
-				prompt,
-				taskId: null,
-				region: null,
-				points: null,
-			});
-			if (!result.ok) return;
-			const answer = result.data.shapes.find((s) => (s.text ?? '') !== '');
-			if (!answer) return;
-			const row = makeInsertRow({
-				shape_type: 'tag',
-				label: column,
-				text: answer.text ?? '',
-				status: 'prediction',
-				source: result.data.source,
-				confidence: answer.confidence ?? null,
-				uncertainty: answer.uncertainty ?? null,
-			});
-			await postSave(url, {
-				edits: [],
-				inserts: [row],
-				geometry: [],
-				temporal: [],
-				spans: [],
-				deletes: [],
-				base_version: state.version,
-			});
-			await fetchSummary(task, { force: true });
-		} catch {
-			// A failed cell stays empty — visibly unfilled, retryable by re-running the column.
-		} finally {
-			filling.delete(cellKey);
-		}
-	}
-
-	/** Accept ONE recipe cell — the same status flip as the row-level accept, scoped to a cell. */
-	async function acceptCell(task: TaskDetail, cell: { id: string }): Promise<void> {
-		await saveEdits(task, [{ id: cell.id, status: 'accepted' }]);
 	}
 
 	function annotationsUrl(task: TaskDetail): string | null {
@@ -273,6 +233,115 @@
 		if (outcome === 'ok') editing = null;
 	}
 
+	async function addColumn(): Promise<void> {
+		const action = columnAction.trim();
+		if (!action || !ontology || !selectedProducer || addingColumn) return;
+		addingColumn = true;
+		try {
+			const name = deriveColumnName(action, [...ontology.classes.map((c) => c.name), ...columns]);
+			// The command single-flights the project re-fetch itself; `localColumns` renders the
+			// column before that read lands.
+			const result = await updateProjectOntology({
+				projectId,
+				ontology: withRecipeClass(ontology, name),
+			});
+			if (!result.ok) return;
+			localColumns.add(name);
+			recipes.set(name, { producer: selectedProducer, prompt: action });
+			columnOpen = false;
+			columnAction = '';
+			// Preview-first: fill the FIRST rows immediately so the prompt is judged cheaply;
+			// sequential on purpose (one cell visibly lands after another, and the mock/model
+			// is not hammered with a burst).
+			for (const task of tasks.slice(0, PREVIEW_ROWS)) {
+				await fillCell(task, name, action, selectedProducer);
+			}
+		} finally {
+			addingColumn = false;
+		}
+	}
+
+	/** The column-level APPLY (▶): run the column's recipe over the next empty cells among the
+	 *  currently FILTERED rows — filters scope the run, exactly the excel-grade move the spec
+	 *  steals ("run on this filtered slice" before "run on all N"). Filled cells are skipped;
+	 *  validated cells are never touched by construction (a fill INSERTS, an accept EDITS). */
+	async function fillEmptyCells(column: string): Promise<void> {
+		const recipe = recipes.get(column);
+		if (!recipe) return;
+		const targets = visibleTasks
+			.filter((t) => !items.get(t.task_id)?.summary.tagCells[column])
+			.slice(0, FILL_BATCH);
+		for (const task of targets) {
+			await fillCell(task, column, recipe.prompt, recipe.producer);
+		}
+	}
+
+	/** One cell fill: ask the producer, land the answer as a `tag` row with `status='prediction'`
+	 *  through the ordinary save wire. The cell's provenance is the row's `source`; a re-fetch
+	 *  renders whatever the server committed. */
+	async function fillCell(
+		task: TaskDetail,
+		column: string,
+		prompt: string,
+		producer: string,
+	): Promise<void> {
+		const url = annotationsUrl(task);
+		const cellKey = `${task.task_id}:${column}`;
+		if (!url || filling.has(cellKey)) return;
+		filling.add(cellKey);
+		try {
+			// The save needs the row's current version — make sure it is loaded.
+			if (!items.has(task.task_id)) await fetchSummary(task);
+			const state = items.get(task.task_id);
+			if (!state) return;
+			// `taskId: null` DELIBERATELY: each item captured its ontology at send, so a column
+			// appended NOW is absent from that capture by definition — passing the task id would
+			// have the contract filter drop the very answers this fill exists to produce. The
+			// membership rules still apply where they mean something (submit). Capture-refresh
+			// semantics are phase 3b's open question (open_bulk_active.md §6.3).
+			const result = await requestAssist({
+				key: (task.source.keys ?? []).join(','),
+				dataset: task.source.where ?? null,
+				producer,
+				prompt,
+				taskId: null,
+				region: null,
+				points: null,
+			});
+			if (!result.ok) return;
+			const answer = result.data.shapes.find((s) => (s.text ?? '') !== '');
+			if (!answer) return;
+			const row = makeInsertRow({
+				shape_type: 'tag',
+				label: column,
+				text: answer.text ?? '',
+				status: 'prediction',
+				source: result.data.source,
+				confidence: answer.confidence ?? null,
+				uncertainty: answer.uncertainty ?? null,
+			});
+			await postSave(url, {
+				edits: [],
+				inserts: [row],
+				geometry: [],
+				temporal: [],
+				spans: [],
+				deletes: [],
+				base_version: state.version,
+			});
+			await fetchSummary(task, { force: true });
+		} catch {
+			// A failed cell stays empty — visibly unfilled, retryable by re-applying the column.
+		} finally {
+			filling.delete(cellKey);
+		}
+	}
+
+	/** Accept ONE recipe cell — the same status flip as the row-level accept, scoped to a cell. */
+	async function acceptCell(task: TaskDetail, cell: { id: string }): Promise<void> {
+		await saveEdits(task, [{ id: cell.id, status: 'accepted' }]);
+	}
+
 	/** Fetch-on-visibility: one shared observer, rows register through a `use:` action. */
 	const byElement = new WeakMap<Element, TaskDetail>();
 	const observer =
@@ -320,14 +389,27 @@
 			<tr>
 				<th class="w-20 px-2 py-1.5 font-medium">Item</th>
 				<th class="px-2 py-1.5 font-medium">Key</th>
-				<th class="px-2 py-1.5 font-medium">State</th>
-				<th class="px-2 py-1.5 font-medium">Assignee</th>
-				<th class="px-2 py-1.5 font-medium">Corpus</th>
-				<th class="px-2 py-1.5 font-medium">Regions</th>
+				<th class="px-2 py-1.5 font-medium">Labels</th>
 				<th class="px-2 py-1.5 font-medium">Tags</th>
 				<th class="px-2 py-1.5 font-medium">Text</th>
 				{#each columns as column (column)}
-					<th class="px-2 py-1.5 font-medium" data-testid="bulk-column-{column}">{column}</th>
+					<th class="px-2 py-1.5 font-medium" data-testid="bulk-column-{column}">
+						<span class="flex items-center gap-1">
+							{column}
+							{#if recipes.has(column)}
+								<Button
+									variant="ghost"
+									size="sm"
+									class="h-5 shrink-0 px-1 text-[10px]"
+									title="Apply this column's recipe to the next {FILL_BATCH} empty cells (filtered rows only)"
+									data-testid="bulk-fill-{column}"
+									onclick={() => fillEmptyCells(column)}
+								>
+									▶
+								</Button>
+							{/if}
+						</span>
+					</th>
 				{/each}
 				<th class="px-2 py-1.5 font-normal">
 					<Popover.Root bind:open={columnOpen}>
@@ -393,9 +475,49 @@
 					</Popover.Root>
 				</th>
 			</tr>
+			<!-- The autofilter row: contains-match per column; content filters eager-load the rest. -->
+			<tr class="border-border/60 border-t">
+				<th class="px-2 py-1"></th>
+				<th class="px-2 py-1">
+					<input
+						class="border-input bg-background h-5 w-full rounded border px-1 font-normal"
+						placeholder="filter…"
+						data-testid="bulk-filter-key"
+						oninput={(e) => setFilter('key', e.currentTarget.value)}
+					/>
+				</th>
+				<th class="px-2 py-1"></th>
+				<th class="px-2 py-1">
+					<input
+						class="border-input bg-background h-5 w-full rounded border px-1 font-normal"
+						placeholder="filter…"
+						data-testid="bulk-filter-tags"
+						oninput={(e) => setFilter('tags', e.currentTarget.value)}
+					/>
+				</th>
+				<th class="px-2 py-1">
+					<input
+						class="border-input bg-background h-5 w-full rounded border px-1 font-normal"
+						placeholder="filter…"
+						data-testid="bulk-filter-text"
+						oninput={(e) => setFilter('text', e.currentTarget.value)}
+					/>
+				</th>
+				{#each columns as column (column)}
+					<th class="px-2 py-1">
+						<input
+							class="border-input bg-background h-5 w-full rounded border px-1 font-normal"
+							placeholder="filter…"
+							data-testid="bulk-filter-{column}"
+							oninput={(e) => setFilter(column, e.currentTarget.value)}
+						/>
+					</th>
+				{/each}
+				<th class="px-2 py-1"></th>
+			</tr>
 		</thead>
 		<tbody>
-			{#each tasks as task (task.task_id)}
+			{#each visibleTasks as task (task.task_id)}
 				{@const state = items.get(task.task_id)}
 				{@const summary = state === undefined ? undefined : (state?.summary ?? null)}
 				<tr
@@ -421,13 +543,6 @@
 						>
 							{task.source.keys?.join(',')}
 						</a>
-					</td>
-					<td class="px-2 py-1">
-						<Badge variant={statusVariant(task.state)}>{task.state}</Badge>
-					</td>
-					<td class="text-muted-foreground max-w-28 truncate px-2 py-1">{task.assignee ?? '—'}</td>
-					<td class="text-muted-foreground max-w-56 truncate px-2 py-1">
-						{rowText(rowFor(task, rowIndex), rowKeyFields) || '—'}
 					</td>
 					<td class="px-2 py-1" data-testid="bulk-regions">
 						{#if summary === undefined}
@@ -574,5 +689,9 @@
 	</table>
 	{#if tasks.length === 0}
 		<p class="text-muted-foreground p-4 text-sm">No items in this labeling task yet.</p>
+	{:else if visibleTasks.length === 0}
+		<p class="text-muted-foreground p-4 text-sm" data-testid="bulk-no-match">
+			No items match the filters.
+		</p>
 	{/if}
 </div>

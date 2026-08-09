@@ -133,6 +133,17 @@ filtered+labeled view); cancellation with guaranteed UI cleanup.
 
 ## §5 The open-bulk design (rask mapping)
 
+**The ruling that frames the surface (owner, 2026-08-09): bulk labeling is a SPECIAL CASE of
+labeling, done in bulk.** The same labeling task, the same ontology, the same "what should be
+done" — only the modality changes: a table over all the session's items instead of a canvas
+over one. Two consequences are binding: (1) **items arrive already claimed into the bulk
+session** — claiming is a precondition of being in the grid, never an action taken there, so
+the grid carries NO queue chrome (no State/Assignee columns, no claim pills; it shows labeling
+state — cell values, statuses, attribution — not dispatch); (2) because the surface sees ALL
+items at once, its power tools are set-level: per-column autofilters (Excel-style contains
+today; embedding-similarity rides the same row-predicate seam), column-level apply (run the
+recipe down the filtered column), and fluid columns (append what you want, act-first).
+
 **Surface**: a `/bulk` area in the annotator zone (nav exists). The grid is a virtualized table
 over a **selection** — a labeling task's items, or a filtered corpus slice (the same
 `Selection {level, keys, where}` the jobs seam already speaks). Rows are items; columns are:
@@ -236,6 +247,14 @@ the natural exemplar picker at corpus scale.
    absent from every existing capture by definition — passing the id would have the contract
    filter drop the fill's own answers). Decide: refresh captures on ontology PATCH, or scope
    the generation contract to the column. (was: large)
+   **v2 rework LANDED same day (owner UX ruling)**: queue chrome REMOVED (State/Assignee/
+   Corpus columns gone — items are pre-claimed into the session, spec §5 ruling); an
+   Excel-style autofilter row under the headers (contains-match per column: key, tags, text,
+   every recipe column; activating a content filter eagerly loads unread summaries so a
+   filter never silently filters a subset); column-level ▶ APPLY on each recipe column (runs
+   the recipe over the next 25 EMPTY cells among the FILTERED rows — filters scope the run;
+   filled cells skipped). Recipe persistence is still session-local — a reload forgets the
+   prompt/producer pair, so ▶ disappears until 3b persists the recipe with the task.
 4. **Jobs-seam bulk runs**: recipe → job with skip-validated, SSE cell streaming, cancel with
    cleanup, run record + lineage; content-hash memoization. (large)
 5. **The flywheel**: validated cells → few-shot examples in recipes + exemplars for propagate;
