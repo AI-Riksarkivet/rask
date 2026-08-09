@@ -508,3 +508,79 @@ Attack these first — they are where I am most likely wrong.
    drop the model's claim to a distinction nothing enforces.
 7. **P9 — re-examine an `estate` type.** Lowest urgency; genuinely fragile; the `store`-type
    argument that rejected a dedicated type does not transfer.
+
+---
+
+## 9 · Raised but not audited (2026-08-09) — the zone/governance questions
+
+Four questions came in after this audit was written. They are **out of its scope** and deserve their
+own pass. What follows is only the facts I established while writing §1–§8 that bear on them —
+leads, not conclusions. Do not treat any of this as an answer.
+
+**Q: Is there FGA per zone — who may run compute, who may read/post in explorer, annotator, …?**
+
+The model has **no notion of a zone, a compute job, or a run**. Grepping the whole 246-line
+`model.fga` for `compute|zone|run|submit|job` returns **zero matches**. The ten types are `user`,
+`team`, `role`, `project`, `warehouse`, `namespace`, `table`, `materialized_view`, `transaction`,
+`annotation_project` — a *data* hierarchy plus labeling. Nothing models the right to execute.
+
+Consistent with that: `services/compute/src/compute/proxy.py:17` says in as many words that the Ray
+Serve proxy "is unauthenticated (see docs/architecture: no app auth)". The only door anywhere in
+`services/compute` is `require_dapr_token` on the prune cron binding (`pruner.py:61`) — sidecar-only,
+not a user gate. CLAUDE.md's architecture section still states "No auth, no app middleware. The
+services assume localhost / trusted network" for this plane.
+
+So the honest current answer looks like **no** — the governed plane is the lakehouse, and compute is
+outside it. Whether that is a deliberate boundary or an unfinished one is exactly the question, and
+it is not written down anywhere I found. **UNVERIFIED** beyond the greps above.
+
+**Q: Should a user be able to see what they are allowed to do inside a project?**
+
+Some of the primitives exist; there is no coherent surface over them.
+
+- `GET /v1/me` (`catalog/.../endpoints/me.py:60,137`) returns `MeProject{project, role}` with role
+  narrowed to `admin | member`. That is the whole self-view: a coarse label per project, no actions.
+- `access.py` has the richer primitives — `_can_relations` enumerates every `can_*` the model
+  defines on a type (`:75-83`), `/v1/access/check` probes one (`:137`), `list-objects`,
+  `list-users`, `expand`, `simulate` all exist — but the grant-listing route is **`can_manage`-gated**
+  ("who has access is itself sensitive, and a viewer has no business enumerating the people worth
+  phishing", `annotator/.../projects.remote.ts` comment on the same pattern). A *self*-view needs no
+  such gate: "what may **I** do here" is not an enumeration of other people.
+- The only UI over any of this is `/settings/access` in `home` — the raw tuple editor, estate-admin
+  gated (`home/src/lib/remote/access.remote.ts:106`).
+
+So: primitives yes, product no. A per-project "your permissions" panel built on
+`_can_relations` + a batched check would need no model change.
+
+**Q: Are there admins who can grant within a namespace, and see what they can/cannot do?**
+
+Partly, and the split is sharp — see P6 (§4.1). Namespace/table/warehouse rungs *are* delegable:
+`access.py`'s grant route writes `owner|writer|reader|validator` (`_GRANTABLE_BASE`, `:61`) on those
+objects. **Project membership is not** — `type project`'s rungs are `admin`/`member`/`team`, none of
+which is in that tuple, so the per-object route resolves to an empty grantable set and the only
+writer left is the estate-gated tuple editor.
+
+**The strongest evidence that this is an oversight rather than a policy** turned up while checking
+this: the *child* type already has the API the parent lacks. `services/annotator/.../members.py`
+ships `GET`/`PUT`/`DELETE /{project_id}/members`, each gated on `can_manage` on the
+`annotation_project` object itself (`_require_manage`, `:77-80`), writing only relations in its own
+`GRANTABLE` set, fully audited (`:132`, `:173`). That is precisely the shape P6 says `type project`
+needs, built one level down, by the same estate, already shipped. Whoever picks up P6 should copy
+that file's shape rather than design a new one.
+
+**Q: Is zone FGA handled at namespace level?**
+
+There is no zone dimension in the model at all (first answer above), so nothing is scoped to a zone
+at any level. What *is* namespace-scoped is the data hierarchy: `type namespace` self-nests under a
+warehouse and carries the create-on-parent doors and the reader/writer/owner/validator rungs
+(`model.fga:109-128`). A zone is a frontend deployment surface, not a governed object — the question
+is whether it should become one, or whether "who may use the explorer" is better expressed as
+"who holds `reader` on what the explorer reads". I lean strongly toward the latter (a zone-typed
+permission would duplicate the data rungs and immediately drift from them), but that is an opinion
+formed in ten minutes, not a finding.
+
+**Q: Should the catalog layer have its own `/governance` page, since it was removed from that zone?**
+
+Not audited at all — I did not trace what was removed, from where, or why. `home`'s
+`/settings/access` is the surviving governance surface. Establishing the history is step one for
+whoever takes this.
