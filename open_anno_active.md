@@ -159,6 +159,36 @@ coverage; line references in §1–§3 predate these and are stale where they ov
   is exercisable end-to-end in-repo. Conf/IoU/class-filter knobs beyond the min-confidence slider
   remain open.
 
+**STATUS 2026-08-09 — landed today, in-session** (each pushed to `main` with unit + e2e coverage):
+
+- THE BULK GRID EXISTS (open-bulk phase 1, `/bulk?task=<id>`, linked from the task detail):
+  one row per ITEM — thumbnail, key, workflow state, assignee, corpus facet, then LIVE
+  annotation state (status counts, item tags, transcription excerpt) fetched per VISIBLE row
+  only (IntersectionObserver + the Arrow wire, `content-visibility` rows). Rows deep-link into
+  the canvas with full context (keys/task/project/dataset).
+- THE GRID ACTS (open-bulk phase 2): ✓-accept flips every `prediction` row on an item to
+  `accepted` in ONE save; ✎ edits the transcription excerpt inline — both through the existing
+  save wire (per-field edits + `base_version` OCC; the grid is a view over the canvas's table,
+  never a second store). Attribution required NO new schema: the save path already stamps
+  `reviewer`/`updated_at` server-side, and the grid re-fetches and renders the server's stamp.
+  409 on accept re-fetches; 409 on edit keeps the draft open over the fresh state.
+- THE DYNAMISM BAR IS PINNED (first-hand audit of the reference sheet tool's add/edit/
+  regenerate path, receipts in `open_bulk_active.md` §5): one sentence → a living column;
+  generation auto-starts; type inferred, never asked; `{{refs}}` are the dependency edges;
+  re-runs skip validated cells; editing a cell IS validating it. Consequence adopted for
+  phase 3: ACT-FIRST add-column — the ontology declaration is DERIVED from the action (auto-
+  name, progressive typing born `free`, silent ontology PATCH), never demanded up front;
+  tightening a type later retro-validates cells and upgrades the guided_json branch.
+- Where model answers COME FROM, said once and bindingly (owner ruling + spec §5): every
+  producer — detectors, segmenters, HTR, and LLM/VLM recipes alike — is a **Ray Serve
+  deployment on the ray-cluster**, discovered via the Serve REST API. vLLM is not a separate
+  integration: it IS a Serve app (`ray.serve.llm.build_openai_app` / `LLMConfig`) declaring
+  the same `labeling` user_config block, and `output_schema` (from `generation_schema`) rides
+  every remote call so vLLM's guided decoding enforces the ontology. Discovery is AUTOMATIC —
+  no per-user settings; operators pin two URLs in deploy config and may override via
+  `MEDIA_ASSIST_BACKENDS`; users only ever pick from what is discovered (full policy +
+  recommendation: `open_assist_discovery.md` §"Who configures what").
+
 **The findings in one table**, ranked by leverage:
 
 | # | Finding | Action shape |

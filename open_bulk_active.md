@@ -184,6 +184,16 @@ tightening `free → enum(choices)` later retro-validates existing cells and upg
 column's guided_json branch. The YAML view shows the derived declaration after the fact for
 whoever wants to see or tighten it; nobody is forced through it.
 
+**Where recipe models come from (binding, cross-ref `open_assist_discovery.md`).** The recipe
+column's model picker is the SAME Serve-native registry the canvas assist uses: every option
+is a RUNNING Ray Serve application declaring a `labeling` user_config block, filtered by
+declared `inputs`/`returns` against the column's task — vLLM/VLM apps included
+(`ray.serve.llm.build_openai_app` is just one kind of Serve app, and `output_schema` from
+`generation_schema` rides every call so guided decoding enforces the column's type). A recipe
+pins its producer by NAME, never by URL, so redeploys and zero-downtime upgrades re-resolve
+automatically. Discovery is automatic; users configure no endpoints anywhere (the full
+who-configures-what policy lives in `open_assist_discovery.md` §"Who configures what").
+
 **Runs**: preview (≤5 rows) executes through the assist plane synchronously; full runs submit
 one job per column execution with `{recipe, selection, skip: validated}` on the jobs seam,
 streaming per-cell claim/result events back (SSE), each cell landing as a `status='prediction'`

@@ -98,3 +98,41 @@ contract-declared, and receives `output_schema` for constrained decoding with ze
 annotator-side changes. `serve.multiplexed` + `LoraConfig` are the future shape for per-task
 fine-tuned adapters (many adapters, one deployment, selected per request) and slot into this
 convention unchanged.
+
+**Said once, bindingly: there is no second model plane.** The canvas's assist popover and the
+bulk grid's recipe columns consume the SAME registry — detectors, segmenters, HTR and LLM/VLM
+recipes are all Serve applications, resolved by producer NAME through `backend_for()`. "vLLM"
+is not an alternative to "Ray Serve"; it is one kind of Serve app. Anything not running on the
+cluster does not exist to the annotator (the operator override below is the one escape hatch,
+and it is operator-owned, not user-owned).
+
+## Who configures what (automatic vs settings — the recommendation)
+
+The question "is discovery automatic, or something users set in settings for the AI-assisted
+stuff?" has a three-plane answer, and the recommendation is: **automatic everywhere a user
+could touch it; explicit only where an operator already lives.**
+
+1. **Model authors declare, by deploying.** The `labeling` block in the deployment's
+   `user_config` (serveConfigV2) is the registration — deploying a model IS registering it,
+   and because `user_config` is hot-updatable, a wrong contract is corrected live without a
+   replica restart. Nothing else to fill in anywhere.
+2. **Operators pin two URLs, once, in deploy config** — `MEDIA_SERVE_DISCOVERY_URL` (the Ray
+   dashboard, `:8265`) and `MEDIA_SERVE_PROXY_URL` (the serve-svc, `:8000`), already templated
+   in the chart by precedence (`ray.dashboardUrl` wins; singleTenant derives both from the
+   release's stable service names). `MEDIA_ASSIST_BACKENDS` remains the operator OVERRIDE for
+   the exceptional case (a producer that must be reachable before its cluster is, an external
+   dev endpoint): config is intent, discovery is observation, and a name declared in both is
+   won by config.
+3. **Users configure NOTHING topological.** No endpoint fields, no URL settings page. The
+   assist panel and the recipe-column model picker list what discovery returns, filtered by
+   declared `inputs`/`returns` against the task at hand. The only user-held choices are
+   task-scoped preferences, not plumbing: which producer a recipe PINS (stored by producer
+   name, never URL — a redeploy or zero-downtime upgrade re-resolves automatically), and
+   knobs like the confidence threshold. Those live with the task/recipe, not in a settings
+   area — a recipe must reproduce for the next annotator without their settings following it.
+
+Failure stays honest rather than configurable: an unreachable dashboard degrades to
+config + mock within one 15 s TTL window, and producers carry `configured`/`compatible`
+flags the UI already renders — a dead cluster LOOKS dead in the picker instead of silently
+narrowing choices. If a future need arises to hide mock producers in production, that is one
+more operator env flag, not a user setting.
