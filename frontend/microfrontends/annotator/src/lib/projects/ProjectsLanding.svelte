@@ -9,7 +9,6 @@
 	import { Button } from '@rask/ui/button';
 	import { Card } from '@rask/ui/card';
 	import { Checkbox } from '@rask/ui/checkbox';
-	import { Dialog } from '@rask/ui/dialog';
 	import { Input } from '@rask/ui/input';
 	import { Textarea } from '@rask/ui/textarea';
 	import { Progress } from '@rask/ui/progress';
@@ -295,6 +294,10 @@
 		</div>
 	</div>
 
+	{#if createOpen}
+		{@render createTaskPanel()}
+	{/if}
+
 	{#if status === 'loading'}
 		<p class="text-muted-foreground text-sm">Loading projects…</p>
 	{:else if status === 'forbidden'}
@@ -350,221 +353,244 @@
 	{/if}
 </div>
 
-<Dialog.Root bind:open={createOpen}>
-	<!-- Scrollable: the create form grew past a laptop viewport (slug → title → description →
-	     instructions → classes → shape kind → task type → consensus → review), which pushed the
-	     submit button off-screen. A dialog taller than the window is broken for a user and for a
-	     driver alike — the button is reachable only by a scroll that races every click. -->
-	<Dialog.Content class="max-h-[85vh] overflow-y-auto sm:max-w-md">
-		<Dialog.Title>New labeling task</Dialog.Title>
-		<Dialog.Description>
-			Born in <span class="font-mono">draft</span> — open it for labeling once items are sent.
-		</Dialog.Description>
+{#snippet createTaskPanel()}
+	<!-- INLINE, deliberately — this was a `sm:max-w-md` scrolling Dialog, and a task DESIGNER
+	     (template gallery, per-label rows, a YAML pane, relations) crammed into a narrow modal
+	     put the editor below the fold of its own popup. In the page flow it gets the page's
+	     width: what the task is ABOUT on the left, the task DESIGN — the part that needs the
+	     room — on the right. -->
+	<Card class="flex flex-col gap-4 p-4" data-testid="create-task">
+		<div>
+			<h2 class="text-base font-semibold">New labeling task</h2>
+			<p class="text-muted-foreground text-sm">
+				Born in <span class="font-mono">draft</span> — open it for labeling once items are sent.
+			</p>
+		</div>
 		<form
-			class="flex flex-col gap-3"
+			class="grid grid-cols-1 items-start gap-x-8 gap-y-3 lg:grid-cols-[minmax(15rem,2fr)_3fr]"
 			onsubmit={(e) => {
 	e.preventDefault();
 	void create();
 }}
 		>
-			<label class="flex flex-col gap-1 text-sm">
-				<span>Slug</span>
-				<Input bind:value={slug} placeholder="vasa-portraits" required pattern="[a-z0-9-]+" />
-			</label>
-			<label class="flex flex-col gap-1 text-sm">
-				<span>Title</span>
-				<Input bind:value={title} placeholder="Vasa portraits" />
-			</label>
-			<label class="flex flex-col gap-1 text-sm">
-				<span>Description</span>
-				<Textarea bind:value={description} rows={3} placeholder="What is being labelled, and why" />
-			</label>
-			<label class="flex flex-col gap-1 text-sm">
-				<span
-					>Instructions <span class="text-muted-foreground">(shown to annotators — how to label)</span
-					></span
-				>
-				<Textarea
-					bind:value={instructions}
-					rows={3}
-					placeholder="Label every visible portrait; skip seals and marginalia."
-				/>
-			</label>
-			<label class="flex flex-col gap-1 text-sm">
-				<span
-					>Template <span class="text-muted-foreground"
-						>(a complete task — per-class tools, attributes, relations)</span
-					></span
-				>
-				<Select
-					bind:value={templateId}
-					ariaLabel="Task template"
-					options={[
+			<div class="flex flex-col gap-3">
+				<label class="flex flex-col gap-1 text-sm">
+					<span>Slug</span>
+					<Input bind:value={slug} placeholder="vasa-portraits" required pattern="[a-z0-9-]+" />
+				</label>
+				<label class="flex flex-col gap-1 text-sm">
+					<span>Title</span>
+					<Input bind:value={title} placeholder="Vasa portraits" />
+				</label>
+				<label class="flex flex-col gap-1 text-sm">
+					<span>Description</span>
+					<Textarea
+						bind:value={description}
+						rows={3}
+						placeholder="What is being labelled, and why"
+					/>
+				</label>
+				<label class="flex flex-col gap-1 text-sm">
+					<span
+						>Instructions <span class="text-muted-foreground">(shown to annotators — how to label)</span
+						></span
+					>
+					<Textarea
+						bind:value={instructions}
+						rows={3}
+						placeholder="Label every visible portrait; skip seals and marginalia."
+					/>
+				</label>
+				<label class="flex flex-col gap-1 text-sm">
+					<span
+						>Consensus <span class="text-muted-foreground"
+							>(annotators per item — 1 is ordinary, up to 5)</span
+						></span
+					>
+					<Input type="number" bind:value={consensusN} min={1} max={5} step={1} />
+				</label>
+				<label class="flex items-center gap-2 text-sm">
+					<Checkbox bind:checked={reviewRequired} />
+					Review required before a task is accepted
+				</label>
+			</div>
+
+			<div class="flex flex-col gap-3">
+				<label class="flex flex-col gap-1 text-sm">
+					<span
+						>Template <span class="text-muted-foreground"
+							>(a complete task — per-class tools, attributes, relations)</span
+						></span
+					>
+					<Select
+						bind:value={templateId}
+						ariaLabel="Task template"
+						options={[
 	{ value: 'custom', label: 'custom (type your own classes)' },
 	{ value: 'yaml', label: 'custom (define in YAML)' },
 	...PROJECT_TEMPLATES.map((t) => ({ value: t.id, label: t.name })),
 ]}
-				/>
-			</label>
-			{#if templateId !== 'custom'}
-				<!-- THE TASK EDITOR — one working copy, two views. The FORM speaks plain language:
+					/>
+				</label>
+				{#if templateId !== 'custom'}
+					<!-- THE TASK EDITOR — one working copy, two views. The FORM speaks plain language:
 				     a LABEL is what an annotator marks; HOW it is captured is stated per label
 				     (drawn on the canvas / ranges in the text / a whole-item choice); TRANSCRIBE
 				     declares that its regions carry transcribed text (the primary content, not a
 				     tool and not a field); FIELDS are the typed extras (reading order, script).
 				     The YAML view is the same draft as text — the full-power surface and the
 				     copy-out/paste-in exchange format. -->
-				<div
-					class="border-border bg-muted/40 flex flex-col gap-2 rounded-md border p-2 text-xs"
-					data-testid="template-summary"
-				>
-					<div class="flex items-start justify-between gap-2">
-						<p class="text-muted-foreground">
-							{pickedTemplate?.description ?? 'A task defined from scratch, in YAML.'}
-						</p>
-						<!-- The estate's Tabs primitive, not hand-rolled toggle buttons: Bits UI owns the
+					<div
+						class="border-border bg-muted/40 flex flex-col gap-2 rounded-md border p-2 text-xs"
+						data-testid="template-summary"
+					>
+						<div class="flex items-start justify-between gap-2">
+							<p class="text-muted-foreground">
+								{pickedTemplate?.description ?? 'A task defined from scratch, in YAML.'}
+							</p>
+							<!-- The estate's Tabs primitive, not hand-rolled toggle buttons: Bits UI owns the
 						     selected state and the keyboard interaction. Controlled, because switching TO
 						     the YAML view must serialize the current draft first. -->
-						<Tabs.Root
-							value={editorView}
-							onValueChange={(view) => (view === 'yaml' ? showYaml() : (editorView = 'form'))}
-						>
-							<Tabs.List class="h-6" aria-label="Editor view">
-								<Tabs.Trigger value="form" class="px-2 text-[10px]" data-testid="task-view-form">
-									Form
-								</Tabs.Trigger>
-								<Tabs.Trigger value="yaml" class="px-2 text-[10px]" data-testid="task-view-yaml">
-									YAML
-								</Tabs.Trigger>
-							</Tabs.List>
-						</Tabs.Root>
-					</div>
-					{#if editorView === 'yaml'}
-						<Textarea
-							class="min-h-40 font-mono text-[11px] leading-relaxed"
-							value={yamlText}
-							spellcheck="false"
-							aria-label="Task definition YAML"
-							data-testid="task-yaml"
-							oninput={(e) => onYamlInput(e.currentTarget.value)}
-						/>
-						{#if yamlErrors.length}
-							<ul class="text-destructive flex flex-col gap-0.5" data-testid="task-yaml-errors">
-								{#each yamlErrors as err (err)}<li>{err}</li>{/each}
-							</ul>
-						{:else}
-							<p class="text-muted-foreground text-[10px]">
-								draw = geometry on the canvas · span = ranges in the text · tag = whole-item choice ·
-								transcribe = regions carry transcribed text · fields = typed extras per region
-							</p>
-						{/if}
-					{:else}
-						{#each draft.classes as row, i (i)}
-							<div
-								class="border-border/60 flex flex-col gap-1 rounded border-b pb-1.5 last:border-b-0"
-								data-testid="template-class-row"
+							<Tabs.Root
+								value={editorView}
+								onValueChange={(view) => (view === 'yaml' ? showYaml() : (editorView = 'form'))}
 							>
-								<div class="flex flex-wrap items-center gap-1.5">
-									<Input
-										class="h-6 w-36 text-xs"
-										bind:value={row.name}
-										aria-label="Class name"
-										placeholder="label name"
-									/>
-									<label class="text-muted-foreground flex items-center gap-1 text-[10px]">
-										<Checkbox
-											bind:checked={row.required}
-											aria-label="Required on every item"
-											class="size-3"
+								<Tabs.List class="h-6" aria-label="Editor view">
+									<Tabs.Trigger value="form" class="px-2 text-[10px]" data-testid="task-view-form">
+										Form
+									</Tabs.Trigger>
+									<Tabs.Trigger value="yaml" class="px-2 text-[10px]" data-testid="task-view-yaml">
+										YAML
+									</Tabs.Trigger>
+								</Tabs.List>
+							</Tabs.Root>
+						</div>
+						{#if editorView === 'yaml'}
+							<Textarea
+								class="min-h-72 font-mono text-[11px] leading-relaxed"
+								value={yamlText}
+								spellcheck="false"
+								aria-label="Task definition YAML"
+								data-testid="task-yaml"
+								oninput={(e) => onYamlInput(e.currentTarget.value)}
+							/>
+							{#if yamlErrors.length}
+								<ul class="text-destructive flex flex-col gap-0.5" data-testid="task-yaml-errors">
+									{#each yamlErrors as err (err)}<li>{err}</li>{/each}
+								</ul>
+							{:else}
+								<p class="text-muted-foreground text-[10px]">
+									draw = geometry on the canvas · span = ranges in the text · tag = whole-item choice ·
+									transcribe = regions carry transcribed text · fields = typed extras per region
+								</p>
+							{/if}
+						{:else}
+							{#each draft.classes as row, i (i)}
+								<div
+									class="border-border/60 flex flex-col gap-1 rounded border-b pb-1.5 last:border-b-0"
+									data-testid="template-class-row"
+								>
+									<div class="flex flex-wrap items-center gap-1.5">
+										<Input
+											class="h-6 w-36 text-xs"
+											bind:value={row.name}
+											aria-label="Class name"
+											placeholder="label name"
 										/>
-										required
-									</label>
-									<span class="flex-1"></span>
-									<Button
-										variant="ghost"
-										size="icon-xs"
-										title="Remove this label"
-										data-testid={`remove-class-${i}`}
-										onclick={() => (draft.classes = draft.classes.filter((_, j) => j !== i))}
-									>
-										✕
-									</Button>
-								</div>
-								<div class="flex flex-wrap items-center gap-1">
-									<span class="text-muted-foreground w-14 shrink-0 text-[10px]">drawn as</span>
-									{#each DRAW_TOOLS as tool (tool)}
+										<label class="text-muted-foreground flex items-center gap-1 text-[10px]">
+											<Checkbox
+												bind:checked={row.required}
+												aria-label="Required on every item"
+												class="size-3"
+											/>
+											required
+										</label>
+										<span class="flex-1"></span>
 										<Button
-											variant={row.draw.includes(tool) ? 'secondary' : 'ghost'}
+											variant="ghost"
+											size="icon-xs"
+											title="Remove this label"
+											data-testid={`remove-class-${i}`}
+											onclick={() => (draft.classes = draft.classes.filter((_, j) => j !== i))}
+										>
+											✕
+										</Button>
+									</div>
+									<div class="flex flex-wrap items-center gap-1">
+										<span class="text-muted-foreground w-14 shrink-0 text-[10px]">drawn as</span>
+										{#each DRAW_TOOLS as tool (tool)}
+											<Button
+												variant={row.draw.includes(tool) ? 'secondary' : 'ghost'}
+												size="xs"
+												class="h-5 px-1.5 text-[10px]"
+												aria-pressed={row.draw.includes(tool)}
+												data-testid={`class-${i}-tool-${tool}`}
+												onclick={() => toggleDraw(row, tool)}
+											>
+												{tool}
+											</Button>
+										{/each}
+										<span class="text-muted-foreground px-0.5">·</span>
+										<Button
+											variant={row.transcribe ? 'secondary' : 'ghost'}
 											size="xs"
 											class="h-5 px-1.5 text-[10px]"
-											aria-pressed={row.draw.includes(tool)}
-											data-testid={`class-${i}-tool-${tool}`}
-											onclick={() => toggleDraw(row, tool)}
+											aria-pressed={row.transcribe}
+											title="Each region of this label carries transcribed text"
+											data-testid={`class-${i}-cap-transcribe`}
+											onclick={() => (row.transcribe = !row.transcribe)}
 										>
-											{tool}
+											transcribe
 										</Button>
-									{/each}
-									<span class="text-muted-foreground px-0.5">·</span>
-									<Button
-										variant={row.transcribe ? 'secondary' : 'ghost'}
-										size="xs"
-										class="h-5 px-1.5 text-[10px]"
-										aria-pressed={row.transcribe}
-										title="Each region of this label carries transcribed text"
-										data-testid={`class-${i}-cap-transcribe`}
-										onclick={() => (row.transcribe = !row.transcribe)}
-									>
-										transcribe
-									</Button>
-									<Button
-										variant={row.span ? 'secondary' : 'ghost'}
-										size="xs"
-										class="h-5 px-1.5 text-[10px]"
-										aria-pressed={row.span}
-										title="Marks character ranges in the text (NER)"
-										data-testid={`class-${i}-cap-span`}
-										onclick={() => (row.span = !row.span)}
-									>
-										span
-									</Button>
-									<Button
-										variant={row.tag ? 'secondary' : 'ghost'}
-										size="xs"
-										class="h-5 px-1.5 text-[10px]"
-										aria-pressed={row.tag}
-										title="A whole-item choice — the classification chip bar"
-										data-testid={`class-${i}-cap-tag`}
-										onclick={() => (row.tag = !row.tag)}
-									>
-										tag
-									</Button>
-								</div>
-								{#if row.fields.length}
-									<div class="flex flex-wrap items-center gap-1">
-										<span class="text-muted-foreground w-14 shrink-0 text-[10px]">fields</span>
-										{#each row.fields as field (field.name)}
-											<span
-												class="border-border bg-background inline-flex items-center gap-1 rounded border px-1 py-0.5 text-[10px]"
-												title="A typed per-region field — edit in the YAML view"
-											>
-												{field.name}
-												<span class="text-muted-foreground">
-													{field.options.length ? field.options.join(' | ') : field.type}{field.required
-														? ' · required'
-														: ''}
-												</span>
-											</span>
-										{/each}
+										<Button
+											variant={row.span ? 'secondary' : 'ghost'}
+											size="xs"
+											class="h-5 px-1.5 text-[10px]"
+											aria-pressed={row.span}
+											title="Marks character ranges in the text (NER)"
+											data-testid={`class-${i}-cap-span`}
+											onclick={() => (row.span = !row.span)}
+										>
+											span
+										</Button>
+										<Button
+											variant={row.tag ? 'secondary' : 'ghost'}
+											size="xs"
+											class="h-5 px-1.5 text-[10px]"
+											aria-pressed={row.tag}
+											title="A whole-item choice — the classification chip bar"
+											data-testid={`class-${i}-cap-tag`}
+											onclick={() => (row.tag = !row.tag)}
+										>
+											tag
+										</Button>
 									</div>
-								{/if}
-							</div>
-						{/each}
-						<div class="flex items-center justify-between gap-2">
-							<Button
-								variant="outline"
-								size="xs"
-								data-testid="add-class"
-								onclick={() =>
+									{#if row.fields.length}
+										<div class="flex flex-wrap items-center gap-1">
+											<span class="text-muted-foreground w-14 shrink-0 text-[10px]">fields</span>
+											{#each row.fields as field (field.name)}
+												<span
+													class="border-border bg-background inline-flex items-center gap-1 rounded border px-1 py-0.5 text-[10px]"
+													title="A typed per-region field — edit in the YAML view"
+												>
+													{field.name}
+													<span class="text-muted-foreground">
+														{field.options.length ? field.options.join(' | ') : field.type}{field.required
+															? ' · required'
+															: ''}
+													</span>
+												</span>
+											{/each}
+										</div>
+									{/if}
+								</div>
+							{/each}
+							<div class="flex items-center justify-between gap-2">
+								<Button
+									variant="outline"
+									size="xs"
+									data-testid="add-class"
+									onclick={() =>
 	(draft.classes = [
 		...draft.classes,
 		{
@@ -577,94 +603,83 @@
 			fields: [],
 		},
 	])}
-							>
-								+ add label
-							</Button>
-							<span class="text-muted-foreground text-[10px]"
-								>typed fields &amp; relations: the YAML view</span
-							>
-						</div>
-					{/if}
-					{#if draft.relations.length}
-						<p class="text-muted-foreground" data-testid="template-relations">
-							relations: {liveRelations.length
-								? liveRelations.map((r) => r.name).join(', ')
-								: 'none'}
-							{#if liveRelations.length < draft.relations.length}
-								<span class="text-warning">
-									— {draft.relations.length - liveRelations.length} dropped (an endpoint class was renamed
-									or removed)</span
 								>
-							{/if}
-						</p>
-					{/if}
-				</div>
-			{:else}
-				<label class="flex flex-col gap-1 text-sm">
-					<span
-						>Label classes <span class="text-muted-foreground">(comma-separated — the labeling task)</span
-						></span
-					>
-					<Input bind:value={classesText} placeholder="person, ship, signature" />
-				</label>
-			{/if}
-			{#if templateId === 'custom'}
-				<!-- The free-form knobs are the CUSTOM path's; a template (or the YAML editor)
+									+ add label
+								</Button>
+								<span class="text-muted-foreground text-[10px]"
+									>typed fields &amp; relations: the YAML view</span
+								>
+							</div>
+						{/if}
+						{#if draft.relations.length}
+							<p class="text-muted-foreground" data-testid="template-relations">
+								relations: {liveRelations.length ? liveRelations.map((r) => r.name).join(', ') : 'none'}
+								{#if liveRelations.length < draft.relations.length}
+									<span class="text-warning">
+										— {draft.relations.length - liveRelations.length} dropped (an endpoint class was renamed or
+										removed)</span
+									>
+								{/if}
+							</p>
+						{/if}
+					</div>
+				{:else}
+					<label class="flex flex-col gap-1 text-sm">
+						<span
+							>Label classes <span class="text-muted-foreground"
+								>(comma-separated — the labeling task)</span
+							></span
+						>
+						<Input bind:value={classesText} placeholder="person, ship, signature" />
+					</label>
+				{/if}
+				{#if templateId === 'custom'}
+					<!-- The free-form knobs are the CUSTOM path's; a template (or the YAML editor)
 				     already answered all three, and dead controls under either would advertise
 				     overrides that do not apply. -->
-				<label class="flex flex-col gap-1 text-sm">
-					<span>Shape kind</span>
-					<Select
-						bind:value={shapeKind}
-						ariaLabel="Shape kind"
-						options={SHAPE_KINDS.map((kind) => ({ value: kind, label: kind }))}
-					/>
-				</label>
-				<label class="flex flex-col gap-1 text-sm">
-					<span
-						>Task type <span class="text-muted-foreground"
-							>(seeds each class's tools — enforced at submit)</span
-						></span
-					>
-					<Select
-						bind:value={taskKind}
-						ariaLabel="Task type"
-						options={[
+					<label class="flex flex-col gap-1 text-sm">
+						<span>Shape kind</span>
+						<Select
+							bind:value={shapeKind}
+							ariaLabel="Shape kind"
+							options={SHAPE_KINDS.map((kind) => ({ value: kind, label: kind }))}
+						/>
+					</label>
+					<label class="flex flex-col gap-1 text-sm">
+						<span
+							>Task type <span class="text-muted-foreground"
+								>(seeds each class's tools — enforced at submit)</span
+							></span
+						>
+						<Select
+							bind:value={taskKind}
+							ariaLabel="Task type"
+							options={[
 	{ value: 'free', label: 'free (no task type)' },
 	...Object.keys(TASK_PRESETS).map((kind) => ({ value: kind, label: kind })),
 ]}
-					/>
-				</label>
-				<label class="flex items-center gap-2 text-sm">
-					<Checkbox bind:checked={classesRequired} aria-label="Every class is required" />
-					<span
-						>Every class is required <span class="text-muted-foreground"
-							>(each must appear on every completed item)</span
-						></span
-					>
-				</label>
-			{/if}
-			<label class="flex flex-col gap-1 text-sm">
-				<span
-					>Consensus <span class="text-muted-foreground"
-						>(annotators per item — 1 is ordinary, up to 5)</span
-					></span
-				>
-				<Input type="number" bind:value={consensusN} min={1} max={5} step={1} />
-			</label>
-			<label class="flex items-center gap-2 text-sm">
-				<Checkbox bind:checked={reviewRequired} />
-				Review required before a task is accepted
-			</label>
-			{#if createError}
-				<p class="text-destructive text-sm">{createError}</p>
-			{/if}
-			<div class="flex justify-end gap-2">
+						/>
+					</label>
+					<label class="flex items-center gap-2 text-sm">
+						<Checkbox bind:checked={classesRequired} aria-label="Every class is required" />
+						<span
+							>Every class is required <span class="text-muted-foreground"
+								>(each must appear on every completed item)</span
+							></span
+						>
+					</label>
+				{/if}
+			</div>
+
+			<div class="border-border col-span-full flex items-center justify-end gap-2 border-t pt-3">
+				{#if createError}
+					<p class="text-destructive mr-auto text-sm">{createError}</p>
+				{/if}
 				<Button type="button" variant="outline" onclick={() => (createOpen = false)}>Cancel</Button>
 				<Button type="submit" disabled={creating || !slug.trim() || yamlErrors.length > 0}>
 					{creating ? 'Creating…' : 'Create labeling task'}
 				</Button>
 			</div>
 		</form>
-	</Dialog.Content>
-</Dialog.Root>
+	</Card>
+{/snippet}

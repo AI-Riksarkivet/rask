@@ -332,6 +332,7 @@ test('A4: the confirm step states what lands and whose names travel; a running p
 	await page.getByRole('button', { name: 'Publish…' }).click();
 	// The confirm step BEFORE anything runs: counts, sentinel honesty, and the names.
 	// (Scoped to the dialog; template line breaks mean a `.*` regex can't span the phrases.)
+	// The publish CONFIRM is still a real modal dialog — only task CREATION moved inline.
 	const dialog = page.getByRole('dialog');
 	await expect(dialog.getByText(/accepted item/)).toBeVisible();
 	await expect(dialog.getByText(/sentinel rows/)).toBeVisible();
@@ -506,7 +507,8 @@ test('consensus: the create dialog carries the field and the create POST carries
 	await page.goto('/annotator/');
 	await page.getByRole('button', { name: 'New labeling task' }).first().click();
 
-	const dialog = page.getByRole('dialog');
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
 	await expect(dialog.getByText(/annotators per item/)).toBeVisible();
 	await dialog.getByPlaceholder('vasa-portraits').fill('vasa-portraits');
 	await dialog.getByRole('spinbutton').fill('3');
@@ -697,7 +699,8 @@ test('instructions: the create dialog sends them and the detail page shows them 
 
 	await page.goto('/annotator/');
 	await page.getByRole('button', { name: 'New labeling task' }).first().click();
-	const dialog = page.getByRole('dialog');
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
 	await dialog.getByPlaceholder('vasa-portraits').fill('vasa-portraits');
 	await dialog.getByPlaceholder(/skip seals and marginalia/).fill('Portraits only; ignore seals.');
 	// See the consensus test: the binding must have landed before Enter submits the form.
@@ -755,7 +758,8 @@ test('ontology: picking a task type sends ONE document; the detail page wears it
 
 	await page.goto('/annotator/');
 	await page.getByRole('button', { name: 'New labeling task' }).first().click();
-	const dialog = page.getByRole('dialog');
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
 	await dialog.getByPlaceholder('vasa-portraits').fill('reading-order-live');
 	await dialog.getByPlaceholder('person, ship, signature').fill('region');
 	// See the consensus test: the binding must have landed before Enter submits the form.
@@ -815,7 +819,8 @@ test('ontology: "every class is required" is an explicit choice, not a side effe
 
 	await page.goto('/annotator/');
 	await page.getByRole('button', { name: 'New labeling task' }).first().click();
-	const dialog = page.getByRole('dialog');
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
 	await dialog.getByPlaceholder('vasa-portraits').fill('required-classes');
 	await dialog.getByPlaceholder('person, ship, signature').fill('person, ship, signature');
 	await expect(dialog.getByPlaceholder('person, ship, signature')).toHaveValue(
@@ -1307,7 +1312,8 @@ test('template gallery: picking a template sends its COMPLETE ontology — per-c
 
 	await page.goto('/annotator/');
 	await page.getByRole('button', { name: 'New labeling task' }).first().click();
-	const dialog = page.getByRole('dialog');
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
 	await dialog.getByPlaceholder('vasa-portraits').fill('court-records');
 
 	// Keyboard selection (see the task-type test: Bits UI's portal breaks later clicks after a
@@ -1357,7 +1363,8 @@ test('a template is a STARTING POINT: rename, retool, remove and add classes bef
 
 	await page.goto('/annotator/');
 	await page.getByRole('button', { name: 'New labeling task' }).first().click();
-	const dialog = page.getByRole('dialog');
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
 	await dialog.getByPlaceholder('vasa-portraits').fill('customized');
 	await dialog.getByLabel('Task template').press('Enter');
 	await page.getByRole('option', { name: /OCR \/ HTR layout/ }).waitFor();
@@ -1410,7 +1417,8 @@ test('the YAML view IS the task — template edits round-trip through text into 
 
 	await page.goto('/annotator/');
 	await page.getByRole('button', { name: 'New labeling task' }).first().click();
-	const dialog = page.getByRole('dialog');
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
 	await dialog.getByPlaceholder('vasa-portraits').fill('yaml-authored');
 	await dialog.getByLabel('Task template').press('Enter');
 	await page.getByRole('option', { name: /OCR \/ HTR layout/ }).waitFor();
@@ -1489,7 +1497,8 @@ test('unparseable YAML NAMES its errors and blocks create — never a silently s
 
 	await page.goto('/annotator/');
 	await page.getByRole('button', { name: 'New labeling task' }).first().click();
-	const dialog = page.getByRole('dialog');
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
 	await dialog.getByPlaceholder('vasa-portraits').fill('bad-yaml');
 	// 'custom (define in YAML)' sits right after 'custom' — the from-scratch scaffold.
 	await dialog.getByLabel('Task template').press('Enter');

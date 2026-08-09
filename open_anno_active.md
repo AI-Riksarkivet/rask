@@ -66,6 +66,11 @@ coverage; line references in §1–§3 predate these and are stale where they ov
 - Fixed at the source along the way: floating pills overlapping the temporal strips; unseekable
   route-served media in e2e (206 ranges); the e2e mock treating any seeded body carrying a string
   `status` field as its {status, body} response shape (every seeded jobs route answered 500).
+- THE DESIGNER IS INLINE, NOT A POPUP: task creation left its `sm:max-w-md` scrolling modal —
+  a task DESIGNER crammed into a narrow dialog put its own editor below the fold. It now
+  unfolds in the page flow as a two-column panel (what the task is ABOUT | the task DESIGN),
+  and the YAML pane gets real height. The publish confirm stays a modal — it is a confirm,
+  not a workspace.
 - TEMPLATING SAID HONESTLY, AND AS YAML: the create editor's one `tools` toggle row conflated
   three concepts (drawing geometry / span-into-text / whole-item tag) and TRANSCRIPTION had no
   place in the model at all — the workspace offered a text editor on every row of every task.
