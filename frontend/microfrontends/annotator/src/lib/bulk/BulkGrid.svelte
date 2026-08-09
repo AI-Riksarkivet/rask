@@ -5,9 +5,12 @@
 	// ontology — only the modality changes, a table over all the session's items instead of a
 	// canvas over one. Two consequences shape everything here:
 	//
-	// * Items arrive ALREADY CLAIMED into the bulk session. Claiming is a precondition of
-	//   being in this grid, never something done here — so there is no State/Assignee/queue
-	//   chrome. The grid shows LABELING state (statuses, cells, attribution), not dispatch.
+	// * Claiming is NOT bulk's job. The grid works the TASK's item set as data; the per-item
+	//   claim/lease/review lifecycle is the queue's plane, and bulk neither takes nor blocks a
+	//   claim — the two planes coexist through the save wire's OCC (every bulk write states its
+	//   base_version, so colliding with a canvas session is a 409 + re-fetch, never a lost
+	//   edit). Bulk labels are ordinary rows the per-item flow sees, and vice versa. Hence no
+	//   State/Assignee/queue chrome here: the grid shows LABELING state, not dispatch.
 	// * Columns are the ontology, and the ontology is fluid: each recipe column is a
 	//   declaration appended act-first (one textarea, the name derived from the action, a
 	//   silent ontology PATCH), fillable by a discovered model, filterable like a spreadsheet.
@@ -605,8 +608,8 @@
 				<th class="px-2 py-1"></th>
 				<th class="px-2 py-1">
 					<input
-						class="border-input bg-background h-5 w-full rounded border px-1 font-normal"
-						placeholder="filter…"
+						class="placeholder:text-muted-foreground/50 focus:border-ring h-5 w-full rounded-none border-0 border-b border-transparent bg-transparent px-0 font-normal focus:outline-none"
+						placeholder="⌕"
 						data-testid="bulk-filter-key"
 						oninput={(e) => setFilter('key', e.currentTarget.value)}
 					/>
@@ -614,16 +617,16 @@
 				<th class="px-2 py-1"></th>
 				<th class="px-2 py-1">
 					<input
-						class="border-input bg-background h-5 w-full rounded border px-1 font-normal"
-						placeholder="filter…"
+						class="placeholder:text-muted-foreground/50 focus:border-ring h-5 w-full rounded-none border-0 border-b border-transparent bg-transparent px-0 font-normal focus:outline-none"
+						placeholder="⌕"
 						data-testid="bulk-filter-tags"
 						oninput={(e) => setFilter('tags', e.currentTarget.value)}
 					/>
 				</th>
 				<th class="px-2 py-1">
 					<input
-						class="border-input bg-background h-5 w-full rounded border px-1 font-normal"
-						placeholder="filter…"
+						class="placeholder:text-muted-foreground/50 focus:border-ring h-5 w-full rounded-none border-0 border-b border-transparent bg-transparent px-0 font-normal focus:outline-none"
+						placeholder="⌕"
 						data-testid="bulk-filter-text"
 						oninput={(e) => setFilter('text', e.currentTarget.value)}
 					/>
@@ -631,8 +634,8 @@
 				{#each columns as column (column)}
 					<th class="px-2 py-1">
 						<input
-							class="border-input bg-background h-5 w-full rounded border px-1 font-normal"
-							placeholder="filter…"
+							class="placeholder:text-muted-foreground/50 focus:border-ring h-5 w-full rounded-none border-0 border-b border-transparent bg-transparent px-0 font-normal focus:outline-none"
+							placeholder="⌕"
 							data-testid="bulk-filter-{column}"
 							oninput={(e) => setFilter(column, e.currentTarget.value)}
 						/>

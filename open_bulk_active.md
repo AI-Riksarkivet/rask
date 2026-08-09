@@ -136,13 +136,21 @@ filtered+labeled view); cancellation with guaranteed UI cleanup.
 **The ruling that frames the surface (owner, 2026-08-09): bulk labeling is a SPECIAL CASE of
 labeling, done in bulk.** The same labeling task, the same ontology, the same "what should be
 done" — only the modality changes: a table over all the session's items instead of a canvas
-over one. Two consequences are binding: (1) **items arrive already claimed into the bulk
-session** — claiming is a precondition of being in the grid, never an action taken there, so
-the grid carries NO queue chrome (no State/Assignee columns, no claim pills; it shows labeling
-state — cell values, statuses, attribution — not dispatch); (2) because the surface sees ALL
-items at once, its power tools are set-level: per-column autofilters (Excel-style contains
-today; embedding-similarity rides the same row-predicate seam), column-level apply (run the
-recipe down the filtered column), and fluid columns (append what you want, act-first).
+over one. Two consequences are binding: (1) **claiming is not bulk's job, and bulk must never
+block or collide with normal labeling** (owner clarification, same day): the grid works the
+task's item set as data; the per-item claim/lease/review lifecycle is the queue's separate
+plane, and bulk neither takes nor blocks a claim. The two write planes coexist through the
+save wire's OCC — every bulk write states its `base_version`, so colliding with a canvas
+session is a 409 + re-fetch, never a lost edit — and bulk labels are ordinary annotation rows
+the per-item flow sees (and vice versa). Hence NO queue chrome in the grid (no State/Assignee
+columns, no claim pills; labeling state only — cell values, statuses, attribution);
+(2) because the surface sees ALL items at once, its power tools are set-level: per-column
+autofilters (Excel-style contains today), **embedding labeling in exactly three selection
+modes (owner): SIMILARITY (anchor a row → its neighborhood — LANDED), CLUSTERING (group rows
+by embedding clusters, work cluster by cluster), and LASSO (select on a 2D projection — the
+atlas lasso seam)** — all three produce the same thing, a filtered working set every
+set-level action (▶ apply, accepts, filters) operates on — plus column-level apply and fluid
+act-first columns.
 
 **Surface**: a `/bulk` area in the annotator zone (nav exists). The grid is a virtualized table
 over a **selection** — a labeling task's items, or a filtered corpus slice (the same
