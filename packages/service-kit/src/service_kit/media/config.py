@@ -139,11 +139,16 @@ class Settings(BaseSettings):
     assist_backends: dict[str, AssistBackend] = Field(default_factory=dict, alias="MEDIA_ASSIST_BACKENDS")
     # Producer DISCOVERY from the Ray Serve control plane (the primary registry source —
     # model endpoints in this estate are Ray Serve deployments, and a deployment that carries
-    # a `labeling` block in its user_config IS registered by being deployed). The discovery
-    # URL is the Ray dashboard base (:8265); the proxy URL is the Serve HTTP ingress the
-    # discovered route_prefixes hang under (:8000) — unset, it is derived from the dashboard
-    # host plus the port Serve reports in its own http_options. Env entries above stay the
-    # operator OVERRIDE on name conflicts. Unset discovery ⇒ config + mock only, as before.
+    # a `labeling` block in its user_config IS registered by being deployed; per the KubeRay
+    # RayService guide, user_config edits are IN-PLACE reconfigurations, no new cluster).
+    # The discovery URL is the Ray dashboard base (:8265); the proxy URL is the Serve HTTP
+    # ingress the discovered route_prefixes hang under (:8000). Under KubeRay set BOTH
+    # explicitly to the CR's stable Services — discovery at `<rayservice>-head-svc:8265`,
+    # proxy at `<rayservice>-serve-svc:8000` — because the serve-svc load-balances across
+    # every worker holding Serve replicas, while the derived fallback (dashboard host +
+    # Serve's http_options port) reaches only the HEAD's proxy. Both svc names are stable
+    # across zero-downtime upgrades (KubeRay repoints their selectors). Env entries above
+    # stay the operator OVERRIDE on name conflicts. Unset discovery ⇒ config + mock only.
     serve_discovery_url: str | None = Field(default=None, alias="MEDIA_SERVE_DISCOVERY_URL")
     serve_proxy_url: str | None = Field(default=None, alias="MEDIA_SERVE_PROXY_URL")
 
