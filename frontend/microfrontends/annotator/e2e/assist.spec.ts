@@ -251,6 +251,84 @@ test('the panel names what will ANSWER — live/mock per producer, task fit, bac
 	await expect(page.getByTestId('arm-segment')).toBeVisible();
 });
 
+test('point clicks ACCUMULATE into one refined prediction — the session loop, on the wire', async ({
+	page,
+}) => {
+	// The SAM convention: each click adds a signed point, the producer re-runs over the FULL
+	// set, and the new answer REPLACES the old — a session refines ONE object, so N clicks must
+	// never leave N stacked ghost masks in the review queue.
+	await seedProducers(page, [
+		{ name: 'sam', configured: true, returns: ['polygon'], compatible: null },
+	]);
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/seed`, {
+		data: {
+			routes: {
+				[`POST /api/assist/${KEY}`]: {
+					shapes: [
+						{
+							shape_type: 'polygon',
+							x: 100,
+							y: 100,
+							width: 120,
+							height: 120,
+							polygon: [160, 100, 220, 160, 160, 220, 100, 160],
+							label: 'seal',
+							confidence: 0.8,
+							uncertainty: 0.2,
+						},
+					],
+					source: 'model:sam-click',
+				},
+			},
+		},
+	});
+
+	await page.goto(`/annotator/?dataset=demo&keys=${encodeURIComponent(KEY)}`);
+	await page.getByTestId('ai-assist-open').click();
+	await page.getByTestId('assist-model-select').selectOption('sam');
+	await page.getByTestId('arm-segment').click();
+
+	const canvas = page.locator('canvas').first();
+	await expect(canvas).toBeVisible();
+
+	// First click: a one-point session.
+	await canvas.click({ position: { x: 200, y: 200 }, force: true });
+	await expect.poll(() => assistCalls(page), { timeout: 10_000 }).toHaveLength(1);
+	const [first] = await assistCalls(page);
+	const firstPoints = (first!.body as { points: Body[] }).points;
+	expect(firstPoints).toHaveLength(1);
+	expect(firstPoints[0]).toMatchObject({ positive: true });
+	await expect(page.getByTestId('assist-point-count')).toContainText('1 point');
+	await expect(page.getByText(/prediction\s*1/)).toBeVisible();
+
+	// Second click REFINES: the request carries BOTH points (the first one verbatim), and the
+	// queue still holds exactly ONE prediction — replaced, not stacked.
+	await canvas.click({ position: { x: 260, y: 240 }, force: true });
+	await expect.poll(() => assistCalls(page), { timeout: 10_000 }).toHaveLength(2);
+	const second = (await assistCalls(page))[1]!;
+	const secondPoints = (second.body as { points: Body[] }).points;
+	expect(secondPoints).toHaveLength(2);
+	expect(secondPoints[0]).toEqual(firstPoints[0]);
+	await expect(page.getByTestId('assist-point-count')).toContainText('2 points');
+	await expect(page.getByText(/prediction\s*1/)).toBeVisible();
+	await expect(page.getByText(/prediction\s*2/)).not.toBeVisible();
+
+	// The ± toggle signs the NEXT click as background.
+	await page.getByTestId('assist-sign-negative').click();
+	await canvas.click({ position: { x: 320, y: 300 }, force: true });
+	await expect.poll(() => assistCalls(page), { timeout: 10_000 }).toHaveLength(3);
+	const third = (await assistCalls(page))[2]!;
+	const thirdPoints = (third.body as { points: Body[] }).points;
+	expect(thirdPoints).toHaveLength(3);
+	expect(thirdPoints[2]).toMatchObject({ positive: false });
+
+	// Done keeps the prediction and ends the session — the pill returns to its resting copy.
+	await page.getByTestId('assist-session-done').click();
+	await expect(page.getByTestId('assist-point-count')).not.toBeVisible();
+	await expect(page.getByTestId('assist-armed')).toContainText('Click or drag');
+	await expect(page.getByText(/prediction\s*1/)).toBeVisible();
+});
+
 test('region tools are ABSENT on a text unit, with the reason on screen', async ({ page }) => {
 	// Region-driven producers need a canvas to draw the region ON. A text document has none —
 	// the section says why instead of offering a tool that cannot work there. Detect stays:

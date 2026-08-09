@@ -13,7 +13,7 @@
 	//    video frame. On a text or audio unit the section says why it is absent instead of
 	//    offering a tool that cannot work there.
 	import { onDestroy, onMount } from 'svelte';
-	import { FlaskConical, MousePointerClick, Sparkles, X } from '@lucide/svelte';
+	import { Check, FlaskConical, Minus, MousePointerClick, Plus, Sparkles, X } from '@lucide/svelte';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import * as Popover from '@rask/ui/popover';
@@ -234,7 +234,10 @@
 
 	{#if controller.assistProducer}
 		<!-- The ARMED state lives on the toolbar, not in the closed panel: the next click is a
-		     region prompt, and a mode nothing announces reads as a canvas that stopped drawing. -->
+		     region prompt, and a mode nothing announces reads as a canvas that stopped drawing.
+		     Clicks ACCUMULATE as a refinement session (the SAM convention): the ± toggle signs
+		     the next click foreground/background, the count says how many steer the current
+		     mask, and Done keeps the prediction and starts fresh on the next object. -->
 		<span
 			class={cn(
 	'text-muted-foreground flex items-center gap-1 text-xs',
@@ -242,7 +245,49 @@
 )}
 			data-testid="assist-armed"
 		>
-			{controller.saving ? 'segmenting…' : `Click or drag a box — ${controller.assistProducer}`}
+			{#if controller.saving}
+				segmenting…
+			{:else if controller.assistPoints.length > 0}
+				<span data-testid="assist-point-count">
+					{controller.assistPoints.length} point{controller.assistPoints.length === 1 ? '' : 's'} — click
+					to refine
+				</span>
+			{:else}
+				Click or drag a box — {controller.assistProducer}
+			{/if}
+			<span class="border-border ml-0.5 flex items-center rounded-md border">
+				<Button
+					variant={controller.assistPointPositive ? 'secondary' : 'ghost'}
+					size="icon-xs"
+					title="Next click includes (foreground)"
+					aria-pressed={controller.assistPointPositive}
+					data-testid="assist-sign-positive"
+					onclick={() => (controller.assistPointPositive = true)}
+				>
+					<Plus class="size-3" />
+				</Button>
+				<Button
+					variant={controller.assistPointPositive ? 'ghost' : 'secondary'}
+					size="icon-xs"
+					title="Next click excludes (background)"
+					aria-pressed={!controller.assistPointPositive}
+					data-testid="assist-sign-negative"
+					onclick={() => (controller.assistPointPositive = false)}
+				>
+					<Minus class="size-3" />
+				</Button>
+			</span>
+			{#if controller.assistPoints.length > 0}
+				<Button
+					variant="outline"
+					size="xs"
+					title="Keep this prediction and start the next object"
+					data-testid="assist-session-done"
+					onclick={() => controller.finishAssistSession()}
+				>
+					<Check class="size-3" /> Done
+				</Button>
+			{/if}
 			<Button variant="ghost" size="icon-xs" title="Disarm" onclick={disarm}>
 				<X class="size-3" />
 			</Button>

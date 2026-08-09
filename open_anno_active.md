@@ -66,13 +66,22 @@ coverage; line references in §1–§3 predate these and are stale where they ov
 - Fixed at the source along the way: floating pills overlapping the temporal strips; unseekable
   route-served media in e2e (206 ranges); the e2e mock treating any seeded body carrying a string
   `status` field as its {status, body} response shape (every seeded jobs route answered 500).
+- THE POINT SESSION (finding 1's core loop): while armed, clicks ACCUMULATE as signed ±points
+  (`AssistRequest.points`, stateless — every request carries the whole session), the producer
+  re-runs over the full set, and each answer REPLACES the previous prediction (retract-on-success,
+  so a failed refinement keeps the old mask; N clicks never leave N stacked ghosts). The armed
+  pill grows the ± sign toggle, the live point count, and Done (keep the mask, next click starts a
+  new object); a drag stays a box prompt and ends the session. The backend mock refines visibly —
+  the patch follows the positive points' bounding box and confidence grows per point — so the loop
+  is exercisable end-to-end in-repo. Conf/IoU/class-filter knobs beyond the min-confidence slider
+  remain open.
 
 **The findings in one table**, ranked by leverage:
 
 | # | Finding | Action shape |
 | --- | --- | --- |
 | **0** | Every assist path answers from an honest mock; ~~no producer emits confidence/uncertainty~~ (mock emits, wire keeps — LANDED); the train job trains column means. | Deploy a runner; drop a real trainer into the seam. |
-| **1** | Interactive prompting is one-shot. XAL's session loop (±point, ±rect, finish-object) is the usability floor for SAM-style assist. | Wire interactive ops through `apply()`; add refinement UX + conf/IoU/class controls. |
+| **1** | ~~Interactive prompting is one-shot~~ (the ±point session loop with finish-object LANDED — points on the wire, replace-on-refine, sign toggle + Done on the armed pill). Remaining: ±rect refinement, IoU/NMS + class-filter controls beyond the min-confidence slider. | Conf/IoU/class knobs; rect-refinement. |
 | **2** | HTR — the estate's flagship workload — never reaches the annotator. The `htr` producer is batch-only and routes to nothing. | HTR pre-annotations as `status='prediction'` rows. |
 | **3** | Rotated box is schema-complete and tool-absent; ~~brush controls, image adjustments~~ (LANDED); `unionMasks`, semantic mask mode still unwired. | OBB tool; finish mask ops. |
 | **4** | Five annotations-table columns are written by nothing (`group_id`, `reading_order`, `difficult`, `links`, `metadata`); per-shape `attributes` never reach the canvas wire. | Extend `InsertRow`/save path; add inspector editing. |

@@ -40,12 +40,30 @@ class Region(BaseModel):
     height: float
 
 
+class Point(BaseModel):
+    """One interactive prompt point (image coords). ``positive=False`` marks background —
+    the SAM click convention: foreground clicks say "include this", background clicks say
+    "not this". Points ACCUMULATE across a refinement session; each request carries the
+    full set so the backend is stateless."""
+
+    x: float
+    y: float
+    positive: bool = True
+
+
 class AssistRequest(BaseModel):
-    """What to run: the producer + its prompt (free text and/or a drawn region)."""
+    """What to run: the producer + its prompt (free text, a drawn region, and/or clicked
+    points). A SAM-family backend takes any combination — box, points, box+points; a
+    text-prompt backend reads ``prompt``. Everything is optional so one wire shape serves
+    every producer family."""
 
     producer: str = "grounding-dino"
     prompt: str | None = None
     region: Region | None = None
+    #: The interactive point-prompt session: every point clicked so far, in order. The
+    #: request is the whole session state — re-running with one more point REFINES the
+    #: same object rather than predicting a new one.
+    points: list[Point] = Field(default_factory=list)
     #: The labeling task this assist is for, when there is one. The SERVER reads that task's
     #: captured ontology — the client does not send the rules it is judged by, same posture as
     #: `review_required` and the submit-time contract check.
@@ -348,7 +366,18 @@ def _mock(body: AssistRequest) -> list[AssistShape]:
     than the detector, so a mixed queue has a visible, deterministic order."""
     r = body.region
     if body.producer.startswith("sam"):
-        x, y, w, h = _region_box(r)
+        if body.points:
+            # A refinement session: the mask follows the POSITIVE points (their bounding
+            # box, padded), and each added point visibly improves the scores — so the
+            # client's replace-on-refine loop is exercisable end-to-end: same session,
+            # different geometry, monotonically better confidence.
+            x, y, w, h = _points_box(body.points)
+            n = len(body.points)
+            confidence = min(0.95, 0.7 + 0.05 * n)
+            uncertainty = max(0.05, 0.3 - 0.04 * n)
+        else:
+            x, y, w, h = _region_box(r)
+            confidence, uncertainty = 0.85, 0.3
         return [
             AssistShape(
                 shape_type="polygon",
@@ -358,8 +387,8 @@ def _mock(body: AssistRequest) -> list[AssistShape]:
                 height=h,
                 polygon=_diamond(x, y, w, h),
                 label=(body.prompt or "object").strip(),
-                confidence=0.85,
-                uncertainty=0.3,
+                confidence=confidence,
+                uncertainty=uncertainty,
             )
         ]
     label = (body.prompt or "region").strip()
@@ -377,6 +406,18 @@ def _mock(body: AssistRequest) -> list[AssistShape]:
             )
         ]
     return [AssistShape(shape_type="rectangle", x=100.0, y=100.0, width=200.0, height=80.0, label=label, confidence=0.7, uncertainty=0.45)]
+
+
+def _points_box(points: list[Point]) -> tuple[float, float, float, float]:
+    """The patch a point session selects: the positive points' bounding box, padded by
+    half the click patch on every side. Background (negative) points steer a real model
+    but select nothing themselves — they only anchor the box when NO positive point
+    exists (a session of pure background clicks still needs an answer somewhere)."""
+    anchors = [p for p in points if p.positive] or points
+    xs = [p.x for p in anchors]
+    ys = [p.y for p in anchors]
+    pad = _SAM_CLICK_PATCH / 2
+    return (min(xs) - pad, min(ys) - pad, max(xs) - min(xs) + 2 * pad, max(ys) - min(ys) + 2 * pad)
 
 
 def _region_box(r: Region | None) -> tuple[float, float, float, float]:
@@ -412,6 +453,7 @@ def _remote(state: AppState, url: str, key: tuple[str, int, int], body: AssistRe
         "image_url": f"/api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}",
         "prompt": body.prompt,
         "region": body.region.model_dump() if body.region else None,
+        "points": [p.model_dump() for p in body.points],
     }
     try:
         resp = http.post(url, json=payload, timeout=30.0)

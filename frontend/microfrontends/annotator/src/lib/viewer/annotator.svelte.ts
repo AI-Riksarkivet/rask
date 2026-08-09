@@ -84,6 +84,14 @@ export type EditableField = 'label' | 'status' | 'group' | 'text' | 'metadata';
  *  here — not in the tool — because the same click IS meaningful when an assist producer is armed. */
 const MANUAL_MIN_AREA = 25;
 
+/** One signed prompt point of an interactive refinement session (image coords).
+ *  `positive: false` is a background click — "not this", the SAM convention. */
+export interface AssistPoint {
+	x: number;
+	y: number;
+	positive: boolean;
+}
+
 /** One typed per-class attribute, as the ontology declares it (`OutputAttr` server-side). */
 export interface AttrSpec {
 	name: string;
@@ -186,6 +194,17 @@ export class AnnotatorController {
 	// segmenter as its region prompt instead of being inserted as a manual shape — the
 	// ra-atr SAM click-to-segment loop. Null = normal drawing.
 	assistProducer = $state<string | null>(null);
+	// ── the interactive point-prompt session (SAM click convention) ──
+	// While armed, CLICKS accumulate as signed points and each one re-runs the producer with
+	// the FULL set — refining ONE object, so each answer REPLACES the previous prediction
+	// instead of stacking beside it. A drag (a real box) starts over as a region prompt.
+	assistPoints = $state<AssistPoint[]>([]);
+	/** The sign the NEXT click carries: true = foreground ("include this"), false =
+	 *  background ("not this") — the ± toggle on the armed pill. */
+	assistPointPositive = $state(true);
+	/** The rows the session's LATEST refinement inserted — retracted before the next one
+	 *  lands. Cleared (keeping the last prediction) by Done/disarm/save-reload. */
+	private _assistSessionRows: { id: string; index: number }[] = [];
 	// True when the magnetic corner-snap tool can run — a still image is loaded
 	// (video frames don't qualify). Gates their toolbar buttons.
 	cvCapable = $state(false);
@@ -479,8 +498,17 @@ export class AnnotatorController {
 			// honours the click, an unarmed canvas discards a sub-5×5 rect the way the tool itself
 			// used to — a gate in the tool made click-to-segment unreachable for everyone.
 			if (this.assistProducer) {
-				const region = { x: shape.x, y: shape.y, width: shape.width, height: shape.height };
-				void this.assist('', region, this.assistProducer);
+				if (shape.type === 'rect' && shape.width * shape.height <= MANUAL_MIN_AREA) {
+					// A CLICK is a session point: it accumulates with every previous click and the
+					// producer re-runs over the full signed set, REFINING the same object.
+					this.addAssistPoint(shape.x + shape.width / 2, shape.y + shape.height / 2);
+				} else {
+					// A real DRAG starts over: the box is the prompt, any point session is finished
+					// (its last prediction stays — the box is a new object, not a refinement).
+					this.finishAssistSession();
+					const region = { x: shape.x, y: shape.y, width: shape.width, height: shape.height };
+					void this.assist('', region, this.assistProducer);
+				}
 			} else if (shape.type !== 'rect' || shape.width * shape.height > MANUAL_MIN_AREA) {
 				this._appendInsert(this._buildInsert(shape));
 			}
@@ -991,9 +1019,43 @@ export class AnnotatorController {
 	}
 
 	/** Arm/disarm an interactive segmenter (SAM): while armed, the next drawn box/point
-	 *  becomes its region prompt rather than a manual annotation. Null = normal drawing. */
+	 *  becomes its region prompt rather than a manual annotation. Null = normal drawing.
+	 *  Switching producer (or disarming) FINISHES any point session — the last prediction
+	 *  stays, as a reviewable `status=prediction` row like any other. */
 	setAssistProducer(producer: string | null): void {
+		if (producer !== this.assistProducer) this.finishAssistSession();
 		this.assistProducer = producer;
+	}
+
+	/** Append one signed click to the point session and re-run the armed producer over the
+	 *  FULL set — the response REPLACES the session's previous prediction. */
+	addAssistPoint(x: number, y: number): void {
+		if (!this.assistProducer) return;
+		this.assistPoints = [...this.assistPoints, { x, y, positive: this.assistPointPositive }];
+		void this.assist('', undefined, this.assistProducer, this.assistPoints);
+	}
+
+	/** End the point session KEEPING its last prediction ("Done" on the armed pill — the
+	 *  object is segmented; the next click starts a fresh session on a new object). */
+	finishAssistSession(): void {
+		this.assistPoints = [];
+		this.assistPointPositive = true;
+		this._assistSessionRows = [];
+	}
+
+	/** Retract the session's previous prediction rows so the refinement REPLACES them —
+	 *  the same hide an insert-undo performs: never saved, so nothing reaches the wire. */
+	private _retractSessionRows(): void {
+		if (this._assistSessionRows.length === 0) return;
+		const arrow = this.ctx?.plugins.arrow;
+		const ids = new Set(this._assistSessionRows.map((r) => r.id));
+		this._inserts = this._inserts.filter((r) => !ids.has(r.id));
+		for (const row of this._assistSessionRows) {
+			this._suppressed.add(row.id);
+			arrow?.setDeleted(row.index);
+		}
+		arrow?.sync();
+		this._assistSessionRows = [];
 	}
 
 	/** Map exemplar row INDICES → stable annotation ids (the few-shot reference an INSID3
@@ -1038,14 +1100,10 @@ export class AnnotatorController {
 	 *  (index = numRows, so the index-keyed overlay/selection stay valid), re-render the
 	 *  WebGPU canvas, re-apply pending field patches (sync re-materializes caches).
 	 *  Shared by manual draws (onCommit) and AI-assist predictions. */
-	private _appendInsert(row: InsertRow): void {
+	private _appendInsert(row: InsertRow): number {
 		// Recorded BEFORE the append, so `index` is the row index the appended row will occupy.
-		this._pushUndo({
-			kind: 'insert',
-			index: this.table?.numRows ?? this._inserts.length,
-			at: this._inserts.length,
-			row,
-		});
+		const index = this.table?.numRows ?? this._inserts.length;
+		this._pushUndo({ kind: 'insert', index, at: this._inserts.length, row });
 		this._inserts = [...this._inserts, row];
 		const t = this.table;
 		if (t) {
@@ -1070,6 +1128,7 @@ export class AnnotatorController {
 			this.count = this._inserts.length;
 		}
 		this._geoDirty = true;
+		return index;
 	}
 
 	/** Interactive AI-assist (the ra-atr "draw/prompt → shapes" loop): run a producer
@@ -1079,6 +1138,7 @@ export class AnnotatorController {
 		prompt: string,
 		region?: { x: number; y: number; width: number; height: number },
 		producer = 'grounding-dino',
+		points?: AssistPoint[],
 	): Promise<void> {
 		const url = this._saveUrl;
 		// GroundingDINO detects from a TEXT prompt; SAM segments from the REGION alone.
@@ -1098,6 +1158,7 @@ export class AnnotatorController {
 				producer,
 				prompt,
 				region: region ?? null,
+				points: points ?? null,
 				// The SERVER checks the producer's return against this task's captured template. The
 				// id is all the client sends — never the rules it is judged by.
 				taskId: reviewSelection.taskId ?? null,
@@ -1131,6 +1192,11 @@ export class AnnotatorController {
 					`${below} prediction${below === 1 ? '' : 's'} below the ${this.assistMinConfidence.toFixed(2)} confidence threshold`,
 				);
 			}
+			// A point-session refinement answers about the SAME object — retract the session's
+			// previous rows (only once the new answer is IN HAND, so a failed request keeps the
+			// old prediction) and record the new ones for the next round to replace.
+			const refining = points !== undefined && points.length > 0;
+			if (refining) this._retractSessionRows();
 			for (const s of result.shapes) {
 				if (
 					this.assistMinConfidence > 0 &&
@@ -1138,28 +1204,28 @@ export class AnnotatorController {
 					s.confidence < this.assistMinConfidence
 				)
 					continue;
-				this._appendInsert(
-					makeInsertRow({
-						shape_type: canonicalShapeType(s.shape_type) ?? 'bbox',
-						x: s.x,
-						y: s.y,
-						width: s.width,
-						height: s.height,
-						polygon: s.polygon ?? [],
-						// Pin the prediction to the current video moment (0 for images).
-						t_start: this.timeCursor,
-						t_end: this.timeCursor,
-						label: s.label || prompt,
-						status: 'prediction',
-						source: result.source ?? `model:${producer}`,
-						// The scores the review queue ranks by — dropped here for a while, which
-						// left every prediction unrankable and the "active-learning order" reading
-						// as insertion order. Null (not 0) when the backend made no estimate — a 0
-						// is a CLAIM of certainty, and "no estimate" must stay distinguishable.
-						confidence: s.confidence ?? null,
-						uncertainty: s.uncertainty ?? null,
-					}),
-				);
+				const row = makeInsertRow({
+					shape_type: canonicalShapeType(s.shape_type) ?? 'bbox',
+					x: s.x,
+					y: s.y,
+					width: s.width,
+					height: s.height,
+					polygon: s.polygon ?? [],
+					// Pin the prediction to the current video moment (0 for images).
+					t_start: this.timeCursor,
+					t_end: this.timeCursor,
+					label: s.label || prompt,
+					status: 'prediction',
+					source: result.source ?? `model:${producer}`,
+					// The scores the review queue ranks by — dropped here for a while, which
+					// left every prediction unrankable and the "active-learning order" reading
+					// as insertion order. Null (not 0) when the backend made no estimate — a 0
+					// is a CLAIM of certainty, and "no estimate" must stay distinguishable.
+					confidence: s.confidence ?? null,
+					uncertainty: s.uncertainty ?? null,
+				});
+				const index = this._appendInsert(row);
+				if (refining) this._assistSessionRows.push({ id: row.id, index });
 			}
 		} catch (e) {
 			this.saveError = e instanceof Error ? e.message : String(e);
@@ -1664,6 +1730,9 @@ export class AnnotatorController {
 		this._temporalEdits.clear();
 		this._spanEdits.clear();
 		this._geoDirty = false;
+		// A save-reload renumbers rows, so the point session's index-keyed replacement set is
+		// invalid — the session ends (its last prediction is now a SAVED row like any other).
+		this.finishAssistSession();
 	}
 
 	/** Re-fetch the persisted annotations into the canvas + controller, clearing the

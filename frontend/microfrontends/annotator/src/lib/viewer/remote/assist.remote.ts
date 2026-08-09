@@ -43,13 +43,25 @@ export const requestAssist = command(
 		region: v.nullable(
 			v.object({ x: v.number(), y: v.number(), width: v.number(), height: v.number() }),
 		),
+		/** The interactive point-prompt session (SAM click convention): every point clicked so
+		 *  far, foreground/background signed. The request carries the FULL set each time — the
+		 *  backend is stateless, so re-running with one more point REFINES the same object. */
+		points: v.nullable(v.array(v.object({ x: v.number(), y: v.number(), positive: v.boolean() }))),
 	}),
-	async ({ key, dataset, producer, prompt, region, taskId }): Promise<ApiResult<AssistResult>> => {
+	async ({
+		key,
+		dataset,
+		producer,
+		prompt,
+		region,
+		taskId,
+		points,
+	}): Promise<ApiResult<AssistResult>> => {
 		if (signedOut()) return SIGN_IN_REQUIRED;
 		const search = dataset ? `?dataset=${encodeURIComponent(dataset)}` : '';
 		const result = await annotatorJSON(`/api/assist/${key}${search}`, {
 			method: 'POST',
-			body: JSON.stringify({ producer, prompt, region, task_id: taskId }),
+			body: JSON.stringify({ producer, prompt, region, task_id: taskId, points: points ?? [] }),
 		});
 		// The runner contract is the backend's — hand it on with the type the client already read
 		// it as (the cast is #94's, not this transport's).

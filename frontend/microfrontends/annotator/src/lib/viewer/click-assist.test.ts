@@ -8,7 +8,7 @@
  */
 
 import { tableFromArrays } from 'apache-arrow';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('svelte-sonner', () => ({
 	toast: {
@@ -99,7 +99,11 @@ const TABLE = tableFromArrays({
 const CLICK: CommitShape = { type: 'rect', x: 120, y: 80, width: 0, height: 0, polygon: [] };
 
 describe('click policy at the commit seam', () => {
-	it('an ARMED producer honours a click as a zero-box region prompt', async () => {
+	beforeEach(() => {
+		assistCalls.length = 0;
+	});
+
+	it('an ARMED producer honours a click as a signed session POINT', async () => {
 		const h = harness();
 		const c = new AnnotatorController();
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural double
@@ -111,9 +115,25 @@ describe('click policy at the commit seam', () => {
 		await vi.waitFor(() => expect(assistCalls).toHaveLength(1));
 		expect(assistCalls[0]).toMatchObject({
 			producer: 'sam-click',
-			region: { x: 120, y: 80, width: 0, height: 0 },
+			points: [{ x: 120, y: 80, positive: true }],
 		});
 		// And nothing was inserted as a manual annotation.
+		expect(c.pendingInserts).toBe(0);
+	});
+
+	it('an ARMED producer still takes a real DRAG as a region prompt', async () => {
+		const h = harness();
+		const c = new AnnotatorController();
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural double
+		c.attach(h.ctx as any, TABLE, '/annotator/api/annotations/d/0/1');
+		c.setAssistProducer('sam-click');
+
+		h.commit({ type: 'rect', x: 10, y: 20, width: 60, height: 40, polygon: [] });
+		await vi.waitFor(() => expect(assistCalls).toHaveLength(1));
+		expect(assistCalls[0]).toMatchObject({
+			producer: 'sam-click',
+			region: { x: 10, y: 20, width: 60, height: 40 },
+		});
 		expect(c.pendingInserts).toBe(0);
 	});
 
