@@ -138,6 +138,50 @@ test('selecting text in the surface labels a span in place — one click per cla
 	await expect(surface.getByTestId('span-tag').filter({ hasText: 'place' })).toBeVisible();
 });
 
+test('the transcription is IN the workspace — a lane under the canvas, selection-synced', async ({
+	page,
+}) => {
+	// The Label-Studio composition: page image on top, the document's text as a surface of the
+	// SAME workspace under it — not a field in the side panel. The lane appears whenever rows
+	// carry text (an HTR page), each line a full span surface in reading order.
+	await page.goto(`/annotator/?keys=${encodeURIComponent(KEY)}&task=t1`);
+	const lane = page.getByTestId('text-lane');
+	await expect(lane).toBeVisible();
+	await expect(lane).toContainText('Transcription · 1 line');
+
+	// The line renders with its existing span as a highlight — in the lane, not just the pane.
+	const laneSurface = page.getByTestId('lane-surface-0');
+	await expect(laneSurface.locator('mark')).toHaveText('Gustaf Eriksson Vasa');
+
+	// Picking the line here is the same selection the canvas and inspector share.
+	await lane.getByTestId('text-lane-pick').first().click();
+	await expect(page.getByTestId('annotation-detail')).toBeVisible();
+
+	// And labeling happens IN the lane: select "Dalarna" on the lane surface, one click on a
+	// class, and the new span is a highlight right there.
+	await page.evaluate(() => {
+		const seg = [...document.querySelectorAll('[data-testid="lane-surface-0"] [data-start]')].find(
+			(el) => el.textContent?.includes('Dalarna'),
+		)!;
+		const node = seg.firstChild!;
+		const text = node.textContent!;
+		const at = text.indexOf('Dalarna');
+		const range = document.createRange();
+		range.setStart(node, at);
+		range.setEnd(node, at + 'Dalarna'.length);
+		const sel = window.getSelection()!;
+		sel.removeAllRanges();
+		sel.addRange(range);
+		seg.parentElement!.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+	});
+	await laneSurface.getByTestId('label-as-place').click();
+	await expect(laneSurface.locator('mark').filter({ hasText: 'Dalarna' })).toBeVisible();
+
+	// The lane collapses out of the way without leaving the workspace.
+	await lane.getByTestId('text-lane-toggle').click();
+	await expect(laneSurface).not.toBeVisible();
+});
+
 test('a tag’s ✕ removes its span without stealing the selection from the parent', async ({
 	page,
 }) => {

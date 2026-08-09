@@ -42,6 +42,10 @@ export interface InsertRow {
 	 *  human rows into the model-ranked half of the queue. */
 	confidence: number | null;
 	uncertainty: number | null;
+	/** Per-row ATTRIBUTES — the ontology's typed per-class fields (reading order, script, …) as a
+	 *  JSON object of string values (the submit validator parses int/bool/enum from strings).
+	 *  `'{}'` rather than `''`: the column is JSON-typed and an empty string is not valid JSON. */
+	metadata: string;
 }
 
 /** The ONE InsertRow factory — human-drawn defaults; callers override what differs
@@ -72,6 +76,7 @@ export function makeInsertRow(partial: Partial<InsertRow> & { shape_type: string
 		char_end: -1,
 		confidence: null,
 		uncertainty: null,
+		metadata: '{}',
 		...partial,
 	};
 }
@@ -85,6 +90,9 @@ export interface AssistShape {
 	height: number;
 	polygon?: number[];
 	label?: string;
+	/** The TEXTUAL answer — a transcription, or an LLM/VLM recipe's cell value (item-level
+	 *  answers land as `tag` shapes whose `text` is the bulk grid's cell). */
+	text?: string;
 	confidence?: number;
 	/** The model's OWN uncertainty estimate — never derived client-side as `1 - confidence`
 	 *  (that carries no information beyond confidence). Absent = the backend made no estimate. */
@@ -123,6 +131,9 @@ export interface SavePayload {
 		polygon: number[];
 	}>;
 	temporal: Array<{ id: string; t_start: number; t_end: number }>;
+	/** Re-anchored TEXT SPANS (the transcription-edit remap) — offsets only, keyed by id. The one
+	 *  legal writer of offsets after birth; they are deliberately not free-form editable fields. */
+	spans: Array<{ id: string; char_start: number; char_end: number }>;
 	deletes: string[];
 	base_version: number | null;
 }
@@ -136,6 +147,7 @@ export function buildSavePayload(args: {
 		{ x: number; y: number; w: number; h: number; polygon?: number[] | null }
 	>;
 	temporalEdits: ReadonlyMap<number, { t_start: number; t_end: number }>;
+	spanEdits?: ReadonlyMap<number, { char_start: number; char_end: number }>;
 	inserts: InsertRow[];
 	deletes: string[];
 	version: number | null;
@@ -167,6 +179,11 @@ export function buildSavePayload(args: {
 			t_start: s.t_start,
 			t_end: s.t_end,
 		})),
+		spans: [...(args.spanEdits ?? [])].map(([index, s]) => ({
+			id: id(index),
+			char_start: s.char_start,
+			char_end: s.char_end,
+		})),
 		deletes: args.deletes,
 		base_version: args.version,
 	};
@@ -177,7 +194,8 @@ export const payloadIsEmpty = (p: SavePayload): boolean =>
 	p.inserts.length === 0 &&
 	p.deletes.length === 0 &&
 	p.geometry.length === 0 &&
-	p.temporal.length === 0;
+	p.temporal.length === 0 &&
+	p.spans.length === 0;
 
 /** POST a Save. `conflict` = the table advanced under the client (HTTP 409). */
 export async function postSave(

@@ -213,7 +213,7 @@ test('A2: claim takes the lease, Annotate routes into the EXISTING canvas, submi
 		listing([task('t1', 'unassigned')]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await expect(page.getByRole('heading', { name: /Vasa portraits/ })).toBeVisible();
 
 	// The post-claim world, seeded before the click: the event answers with the moved task and the
@@ -264,7 +264,7 @@ test('A2: an expired lease is shown EXPIRED, never as held', async ({ page }) =>
 		listing([stale]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 
 	await expect(page.getByText('dave · expired')).toBeVisible();
 	await expect(page.getByText(/dave · \d{2}:\d{2}/)).not.toBeVisible();
@@ -286,7 +286,7 @@ test('A3: accept, fix & accept and request changes are three distinct actions; t
 		'POST /tasks/t2/events': task('t2', 'changes_requested', { submitted_by: 'gina' }),
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 
 	// All three, simultaneously visible, separately actionable — never collapsed.
 	await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeVisible();
@@ -326,12 +326,13 @@ test('A4: the confirm step states what lands and whose names travel; a running p
 	]);
 	await snapshot(page, { project: project('frozen'), legal_events: LEGAL.frozen }, done);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-publish').click();
 
 	await page.getByRole('button', { name: 'Publish…' }).click();
 	// The confirm step BEFORE anything runs: counts, sentinel honesty, and the names.
 	// (Scoped to the dialog; template line breaks mean a `.*` regex can't span the phrases.)
+	// The publish CONFIRM is still a real modal dialog — only task CREATION moved inline.
 	const dialog = page.getByRole('dialog');
 	await expect(dialog.getByText(/accepted item/)).toBeVisible();
 	await expect(dialog.getByText(/sentinel rows/)).toBeVisible();
@@ -405,7 +406,7 @@ test('a server 403 surfaces as the refusal it is — named door, no silent no-op
 		},
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('button', { name: 'Claim' }).click();
 
 	await expect(page.getByText('gina lacks can_claim on annotation_project:p1')).toBeVisible();
@@ -438,7 +439,7 @@ test('bulk accept fires one gated event per selected reviewable task', async ({ 
 		}),
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
 	// The bar's summary is just the count now: the per-action counts moved onto the buttons, because
 	// the vocabulary is DERIVED from the rows' own `legal_events` rather than being the two hardcoded
@@ -472,7 +473,7 @@ test('assign names a recipient and the row comes back pinned', async ({ page }) 
 		listing([assignable]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('button', { name: 'Assign…' }).click();
 	await page.getByPlaceholder(/annotator \(OIDC subject/).fill('dave');
 
@@ -506,7 +507,8 @@ test('consensus: the create dialog carries the field and the create POST carries
 	await page.goto('/annotator/');
 	await page.getByRole('button', { name: 'New labeling task' }).first().click();
 
-	const dialog = page.getByRole('dialog');
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
 	await expect(dialog.getByText(/annotators per item/)).toBeVisible();
 	await dialog.getByPlaceholder('vasa-portraits').fill('vasa-portraits');
 	await dialog.getByRole('spinbutton').fill('3');
@@ -533,7 +535,7 @@ test('consensus: replica items wear a replica k/N chip from their deterministic 
 		]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 
 	await expect(page.getByText('replica 1/2')).toBeVisible();
 	await expect(page.getByText('replica 2/2')).toBeVisible();
@@ -559,7 +561,7 @@ test('consensus: the one-replica-per-annotator 409 surfaces verbatim, and the ro
 		},
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('button', { name: 'Claim' }).click();
 
 	await expect(
@@ -588,7 +590,7 @@ test('adjudication: the manager picks a canonical replica; the pick PUTs and the
 	});
 	await snapshot(page, detail({}), replicas);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-publish').click();
 
 	const panel = page.getByTestId('adjudication-panel');
@@ -646,7 +648,7 @@ test('adjudication: non-accepted replicas offer no Pick at all', async ({ page }
 		]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-publish').click();
 
 	const panel = page.getByTestId('adjudication-panel');
@@ -669,7 +671,7 @@ test('adjudication: a stale-pick 409 from the server surfaces verbatim', async (
 		},
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-publish').click();
 	await page
 		.getByTestId('adjudication-panel')
@@ -697,7 +699,8 @@ test('instructions: the create dialog sends them and the detail page shows them 
 
 	await page.goto('/annotator/');
 	await page.getByRole('button', { name: 'New labeling task' }).first().click();
-	const dialog = page.getByRole('dialog');
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
 	await dialog.getByPlaceholder('vasa-portraits').fill('vasa-portraits');
 	await dialog.getByPlaceholder(/skip seals and marginalia/).fill('Portraits only; ignore seals.');
 	// See the consensus test: the binding must have landed before Enter submits the form.
@@ -712,7 +715,7 @@ test('instructions: the create dialog sends them and the detail page shows them 
 	);
 
 	// And the detail page renders them where the work is picked up.
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await expect(page.getByTestId('instructions')).toContainText(
 		'Label every visible portrait; skip seals.',
 	);
@@ -755,7 +758,8 @@ test('ontology: picking a task type sends ONE document; the detail page wears it
 
 	await page.goto('/annotator/');
 	await page.getByRole('button', { name: 'New labeling task' }).first().click();
-	const dialog = page.getByRole('dialog');
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
 	await dialog.getByPlaceholder('vasa-portraits').fill('reading-order-live');
 	await dialog.getByPlaceholder('person, ship, signature').fill('region');
 	// See the consensus test: the binding must have landed before Enter submits the form.
@@ -796,7 +800,7 @@ test('ontology: picking a task type sends ONE document; the detail page wears it
 	expect(classes[0]).toMatchObject({ required: false });
 
 	// The detail page names the task type and the taxonomy, from the same document.
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await expect(page.getByTestId('task-kind-chip')).toContainText('reading-order');
 	await expect(page.getByTestId('label-taxonomy')).toContainText('region');
 	await expect(page.getByTestId('label-taxonomy')).toContainText('bbox');
@@ -815,7 +819,8 @@ test('ontology: "every class is required" is an explicit choice, not a side effe
 
 	await page.goto('/annotator/');
 	await page.getByRole('button', { name: 'New labeling task' }).first().click();
-	const dialog = page.getByRole('dialog');
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
 	await dialog.getByPlaceholder('vasa-portraits').fill('required-classes');
 	await dialog.getByPlaceholder('person, ship, signature').fill('person, ship, signature');
 	await expect(dialog.getByPlaceholder('person, ship, signature')).toHaveValue(
@@ -854,7 +859,7 @@ test('ontology: a manager edits the taxonomy after create, and the PATCH carries
 	);
 	await seed(page, { 'PATCH /projects/p1/ontology': project('labeling') });
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('edit-ontology-trigger').click();
 
@@ -911,7 +916,7 @@ test('ontology: the editor REFUSES to flatten structure it cannot express', asyn
 		listing([]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('edit-ontology-trigger').click();
 
@@ -928,7 +933,7 @@ test('ontology: the edit button is ABSENT once the project is frozen', async ({ 
 	// this only stops offering the door.
 	await snapshot(page, { project: project('frozen'), legal_events: LEGAL.labeling }, listing([]));
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-settings').click();
 	await expect(page.getByTestId('edit-ontology-trigger')).toHaveCount(0);
 });
@@ -949,7 +954,7 @@ test('an unfinishable item can be REMOVED — otherwise one of them wedges the p
 	});
 	page.on('dialog', (d) => void d.accept());
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('drop-task').first().click();
 
 	await expect
@@ -971,7 +976,7 @@ test('the remove control is ABSENT once the project is frozen', async ({ page })
 		listing([task('t1', 'accepted')]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await expect(page.getByTestId('drop-task')).toHaveCount(0);
 });
 
@@ -991,7 +996,7 @@ test('the queue filters by STATE, and says how many of how many', async ({ page 
 		]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	// The DataTable renders semantic <tr>; `rowgroup` scopes to the BODY so the header row is not
 	// counted as an item — a count that is always one too high hides an off-by-one in the filter.
 	const rows = page.getByRole('rowgroup').last().getByRole('row');
@@ -1020,7 +1025,7 @@ test('the queue filters by ASSIGNEE, and the two filters COMPOSE', async ({ page
 		]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	// The DataTable renders semantic <tr>; `rowgroup` scopes to the BODY so the header row is not
 	// counted as an item — a count that is always one too high hides an off-by-one in the filter.
 	const rows = page.getByRole('rowgroup').last().getByRole('row');
@@ -1043,7 +1048,7 @@ test('an EMPTY filter result says why it is empty, rather than looking broken', 
 		listing([task('t1', 'claimed', { assignee: 'gina' }), task('t2', 'accepted')]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByLabel('Filter by assignee').fill('nobody-by-that-name');
 
 	// "No items yet — send data points in" would be a LIE here: there are items, they just do not
@@ -1067,7 +1072,7 @@ test('changing a filter CLEARS the selection — a hidden row must never stay se
 		]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
 	// "Accept 2", not "Accept 2 reviewed": each bulk action now names its own count.
 	await expect(page.getByTestId('bulk-accept')).toContainText('2');
@@ -1108,7 +1113,7 @@ test('bulk assign fires ONE gated event per selected item, carrying the assignee
 		'POST /tasks/t2/events': task('t2', 'claimed', { assignee: 'gina' }),
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
 
 	// Only the ASSIGNABLE rows are offered — t3 is accepted and its machine has no `assign` edge.
@@ -1142,7 +1147,7 @@ test('a PARTIAL failure names what failed and reports what landed', async ({ pag
 		'POST /tasks/t2/events': { status: 409, body: { detail: 'task t2 is already held by omar' } },
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
 	await page.getByTestId('bulk-assign').click();
 	await page.getByTestId('bulk-assign-dialog').getByRole('textbox').fill('gina');
@@ -1161,7 +1166,7 @@ test('bulk assign is not offered when nothing selected can take it', async ({ pa
 		listing([task('t1', 'accepted'), task('t2', 'skipped')]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
 
 	// WITHHELD, not disabled. The bar renders only actions the selection can actually take, so "not
@@ -1190,7 +1195,7 @@ test('the metrics panel reports throughput and accept-rate, and includes a perso
 		]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	const panel = page.getByTestId('annotator-metrics');
 	await expect(panel).toBeVisible();
 	await expect(panel.getByTestId('metrics-row')).toHaveCount(2);
@@ -1213,7 +1218,7 @@ test('the metrics panel is ABSENT on a project nobody has touched', async ({ pag
 		listing([task('t1', 'unassigned')]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await expect(page.getByTestId('annotator-metrics')).toHaveCount(0);
 });
 
@@ -1237,7 +1242,7 @@ test('membership lists direct grants and grants a new one', async ({ page }) => 
 		},
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('load-members').click();
 	await expect(page.getByTestId('member-row')).toHaveCount(1);
@@ -1270,7 +1275,7 @@ test('revoking the LAST administrator is refused, and the refusal is shown', asy
 		},
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('load-members').click();
 	await page.getByTestId('revoke-member').click();
@@ -1289,10 +1294,270 @@ test('a non-manager is told WHY, not shown an empty list', async ({ page }) => {
 		'GET /projects/p1/members': { status: 403, body: { detail: 'omar lacks can_manage' } },
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('load-members').click();
 
 	await expect(page.getByTestId('members-error')).toContainText('lacks can_manage');
 	await expect(page.getByTestId('member-row')).toHaveCount(0);
+});
+
+test('template gallery: picking a template sends its COMPLETE ontology — per-class tools, attributes, relations', async ({
+	page,
+}) => {
+	await seed(page, {
+		'GET /projects': { projects: [], total: 0 },
+		'POST /projects': project('draft'),
+	});
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
+	await dialog.getByPlaceholder('vasa-portraits').fill('court-records');
+
+	// Keyboard selection (see the task-type test: Bits UI's portal breaks later clicks after a
+	// mouse pick). 'custom' is focused when the listbox opens; then the YAML scaffold; the
+	// composite template is after both.
+	await dialog.getByLabel('Task template').press('Enter');
+	await page.getByRole('option', { name: /OCR \/ HTR layout/ }).waitFor();
+	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('Enter');
+	await expect(dialog.getByLabel('Task template')).toContainText('OCR / HTR');
+
+	// The EDITOR shows the contract being created — one row per class, its tools as pressed
+	// toggles, the relation named — and the free-form knobs are gone: a template answered them.
+	const summary = dialog.getByTestId('template-summary');
+	await expect(dialog.getByTestId('template-class-row')).toHaveCount(8);
+	await expect(dialog.getByTestId('class-1-tool-polygon')).toHaveAttribute('aria-pressed', 'true');
+	await expect(summary).toContainText('annotates');
+	await expect(dialog.getByPlaceholder('person, ship, signature')).toHaveCount(0);
+
+	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
+
+	const create = await createCall(page);
+	const ontology = (create.body as { ontology: Record<string, unknown> }).ontology;
+	expect(ontology).toMatchObject({ kind: 'ocr-layout' });
+	const classes = ontology.classes as Record<string, unknown>[];
+	expect(classes).toHaveLength(8);
+	const byName = Object.fromEntries(classes.map((c) => [c.name as string, c]));
+	// PER-CLASS tools — the thing the free-form path could never author.
+	expect(byName['paragraph']).toMatchObject({ tools: ['polygon', 'bbox'], required: true });
+	expect(byName['person']).toMatchObject({ tools: ['text'] });
+	expect(byName['damaged']).toMatchObject({ tools: ['tag'] });
+	// Typed attributes ride the classes; the relation rides the document.
+	expect((byName['paragraph']!.attributes as { name: string }[]).map((a) => a.name)).toContain(
+		'script',
+	);
+	expect((ontology.relations as { name: string }[])[0]).toMatchObject({ name: 'annotates' });
+});
+
+test('a template is a STARTING POINT: rename, retool, remove and add classes before create', async ({
+	page,
+}) => {
+	await seed(page, {
+		'GET /projects': { projects: [], total: 0 },
+		'POST /projects': project('draft'),
+	});
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
+	await dialog.getByPlaceholder('vasa-portraits').fill('customized');
+	await dialog.getByLabel('Task template').press('Enter');
+	await page.getByRole('option', { name: /OCR \/ HTR layout/ }).waitFor();
+	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('Enter');
+
+	const rows = dialog.getByTestId('template-class-row');
+	await expect(rows).toHaveCount(8);
+
+	// REMOVE marginalia (index 2) — the `annotates` relation loses an endpoint and SAYS so.
+	await dialog.getByTestId('remove-class-2').click();
+	await expect(dialog.getByTestId('template-relations')).toContainText('none');
+	await expect(dialog.getByTestId('template-relations')).toContainText('1 dropped');
+
+	// RETOOL the header (row 0): allow polygon beside bbox.
+	await dialog.getByTestId('class-0-tool-polygon').click();
+
+	// ADD a brand-new class and give it a name + keep default bbox.
+	await dialog.getByTestId('add-class').click();
+	await dialog.getByTestId('template-class-row').last().getByLabel('Class name').fill('table');
+
+	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
+
+	const create = await createCall(page);
+	const ontology = (create.body as { ontology: Record<string, unknown> }).ontology;
+	const classes = ontology.classes as Record<string, unknown>[];
+	const byName = Object.fromEntries(classes.map((c) => [c.name as string, c]));
+	expect(byName['marginalia']).toBeUndefined();
+	expect(byName['header']).toMatchObject({ tools: ['bbox', 'polygon'] });
+	expect(byName['table']).toMatchObject({ tools: ['bbox'] });
+	// The template's typed attributes SURVIVED the editing on untouched rows.
+	expect((byName['paragraph']!.attributes as { name: string }[]).map((a) => a.name)).toContain(
+		'script',
+	);
+	// No ghost edge reaches the server.
+	expect(ontology.relations).toEqual([]);
+});
+
+test('the YAML view IS the task — template edits round-trip through text into the create payload', async ({
+	page,
+}) => {
+	// The YAML is the full-power authoring surface over the SAME draft the form edits: switching
+	// views must not lose anything, and what is typed as YAML must be what the server receives —
+	// with the human vocabulary (draw/span/tag/transcribe/fields) mapped onto the wire's.
+	await seed(page, {
+		'GET /projects': { projects: [], total: 0 },
+		'POST /projects': project('draft'),
+	});
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
+	await dialog.getByPlaceholder('vasa-portraits').fill('yaml-authored');
+	await dialog.getByLabel('Task template').press('Enter');
+	await page.getByRole('option', { name: /OCR \/ HTR layout/ }).waitFor();
+	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('Enter');
+
+	// The template, serialized: the YAML view states the task in ITS vocabulary.
+	await dialog.getByTestId('task-view-yaml').click();
+	const yaml = dialog.getByTestId('task-yaml');
+	await expect(yaml).toHaveValue(/task: ocr-layout/);
+	await expect(yaml).toHaveValue(/transcribe: true/);
+	await expect(yaml).toHaveValue(/span: true/);
+	// The wire dialect never leaks into the human surface.
+	await expect(yaml).not.toHaveValue(/tools:/);
+
+	// Replace the whole task from text.
+	await yaml.fill(
+		[
+			'task: my-ocr',
+			'labels:',
+			'  - name: line',
+			'    draw: [bbox]',
+			'    transcribe: true',
+			'    fields:',
+			'      - name: order',
+			'        type: int',
+			'        required: true',
+			'  - name: person',
+			'    span: true',
+			'  - name: damaged',
+			'    tag: true',
+			'relations:',
+			'  - name: annotates',
+			'    from: [person]',
+			'    to: [line]',
+		].join('\n'),
+	);
+
+	// The FORM shows the same task — one draft, two views.
+	await dialog.getByTestId('task-view-form').click();
+	await expect(dialog.getByTestId('template-class-row')).toHaveCount(3);
+	await expect(dialog.getByTestId('class-0-cap-transcribe')).toHaveAttribute(
+		'aria-pressed',
+		'true',
+	);
+	await expect(dialog.getByTestId('class-1-cap-span')).toHaveAttribute('aria-pressed', 'true');
+	await expect(dialog.getByTestId('template-relations')).toContainText('annotates');
+
+	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
+	const create = await createCall(page);
+	const ontology = (create.body as { ontology: Record<string, unknown> }).ontology;
+	expect(ontology).toMatchObject({ kind: 'my-ocr' });
+	const byName = Object.fromEntries(
+		(ontology.classes as Record<string, unknown>[]).map((c) => [c.name as string, c]),
+	);
+	expect(byName['line']).toMatchObject({ tools: ['bbox'], transcribe: true });
+	expect((byName['line']!.attributes as unknown[])[0]).toMatchObject({
+		name: 'order',
+		type: 'int',
+		required: true,
+	});
+	expect(byName['person']).toMatchObject({ tools: ['text'] });
+	expect(byName['damaged']).toMatchObject({ tools: ['tag'] });
+	expect((ontology.relations as Record<string, unknown>[])[0]).toMatchObject({
+		name: 'annotates',
+		from_classes: ['person'],
+		to_classes: ['line'],
+	});
+});
+
+test('unparseable YAML NAMES its errors and blocks create — never a silently stale payload', async ({
+	page,
+}) => {
+	await seed(page, { 'GET /projects': { projects: [], total: 0 } });
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	// The create surface is an INLINE panel in the page flow now, not a modal dialog.
+	const dialog = page.getByTestId('create-task');
+	await dialog.getByPlaceholder('vasa-portraits').fill('bad-yaml');
+	// 'custom (define in YAML)' sits right after 'custom' — the from-scratch scaffold.
+	await dialog.getByLabel('Task template').press('Enter');
+	await page.getByRole('option', { name: /define in YAML/ }).waitFor();
+	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('Enter');
+
+	// The scaffold opens IN the YAML view, already valid.
+	const yaml = dialog.getByTestId('task-yaml');
+	await expect(yaml).toBeVisible();
+	await expect(dialog.getByRole('button', { name: 'Create labeling task' })).toBeEnabled();
+
+	// A typo'd key is an ERROR, not a silent drop — mirroring the server's extra="forbid".
+	await yaml.fill('labels:\n  - name: a\n    draw: [bbox]\n    atributes: []');
+	await expect(dialog.getByTestId('task-yaml-errors')).toContainText('atributes');
+	await expect(dialog.getByRole('button', { name: 'Create labeling task' })).toBeDisabled();
+
+	// Fixing the text lifts the block.
+	await yaml.fill('labels:\n  - name: a\n    draw: [bbox]');
+	await expect(dialog.getByTestId('task-yaml-errors')).toHaveCount(0);
+	await expect(dialog.getByRole('button', { name: 'Create labeling task' })).toBeEnabled();
+});
+
+test('the designer previews the workspace LIVE — from the form and from YAML edits alike', async ({
+	page,
+}) => {
+	// "Customize how the labeling task is supposed to look" needs to SHOW the look while it is
+	// being customized: every strip mirrors a surface the ontology drives, and the preview reads
+	// from the same draft both views edit — so a YAML keystroke moves it too.
+	await seed(page, { 'GET /projects': { projects: [], total: 0 } });
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	const panel = page.getByTestId('create-task');
+	await panel.getByLabel('Task template').press('Enter');
+	await page.getByRole('option', { name: /OCR \/ HTR layout/ }).waitFor();
+	await panel.getByLabel('Task template').press('ArrowDown');
+	await panel.getByLabel('Task template').press('ArrowDown');
+	await panel.getByLabel('Task template').press('Enter');
+
+	// The composite template lights every strip.
+	const preview = panel.getByTestId('task-preview');
+	await expect(preview.getByTestId('preview-toolbar')).toContainText('polygon');
+	await expect(preview.getByTestId('preview-labels')).toContainText('paragraph');
+	await expect(preview.getByTestId('preview-tags')).toContainText('damaged');
+	await expect(preview.getByTestId('preview-spans')).toContainText('person');
+	await expect(preview.getByTestId('preview-inspector').first()).toContainText('transcription');
+	await expect(preview.getByTestId('preview-relations')).toContainText('annotates');
+
+	// A FORM edit moves it: dropping marginalia takes the relation strip with it.
+	await panel.getByTestId('remove-class-2').click();
+	await expect(preview.getByTestId('preview-relations')).toHaveCount(0);
+
+	// A YAML edit moves it too — same draft, other view.
+	await panel.getByTestId('task-view-yaml').click();
+	await panel
+		.getByTestId('task-yaml')
+		.fill('labels:\n  - name: seal\n    draw: [bbox]\n  - name: broken\n    tag: true');
+	await expect(preview.getByTestId('preview-labels')).toContainText('seal');
+	await expect(preview.getByTestId('preview-tags')).toContainText('broken');
+	await expect(preview.getByTestId('preview-spans')).toHaveCount(0);
 });

@@ -16,6 +16,7 @@
 
 	import { fetchMeViaBff } from '$lib/http';
 	import AdjudicationPanel from '$lib/projects/AdjudicationPanel.svelte';
+	import BulkGrid from '$lib/bulk/BulkGrid.svelte';
 	import AnnotatorMetrics from '$lib/projects/AnnotatorMetrics.svelte';
 	import MembersPanel from '$lib/projects/MembersPanel.svelte';
 	import PublishPanel from '$lib/projects/PublishPanel.svelte';
@@ -58,7 +59,7 @@
 			await Promise.all([projectQuery.refresh(), tasksQuery.refresh()]);
 		} catch (err) {
 			// The ZONE SERVER is unreachable (the remote call itself failed, not the annotation service
-			// behind it). Still the offline state — never a permanent "Loading project…".
+			// behind it). Still the offline state — never a permanent "Loading labeling task…".
 			if (seq !== inflight) return;
 			detail = null;
 			listing = null;
@@ -73,7 +74,7 @@
 			detail = null;
 			listing = null;
 			status = 'offline';
-			statusDetail = 'the project read returned nothing';
+			statusDetail = 'the labeling-task read returned nothing';
 			return;
 		}
 		if (projectResult.ok) {
@@ -146,7 +147,7 @@
 </script>
 
 {#if status === 'loading'}
-	<p class="text-muted-foreground p-6 text-sm">Loading project…</p>
+	<p class="text-muted-foreground p-6 text-sm">Loading labeling task…</p>
 {:else if status === 'forbidden'}
 	<div class="p-6 text-sm">
 		<p class="font-medium">You can't view this labeling task.</p>
@@ -239,6 +240,12 @@
 		<Tabs.Root value="labeling">
 			<Tabs.List>
 				<Tabs.Trigger value="labeling" data-testid="tab-labeling">Labeling</Tabs.Trigger>
+				<!-- BULK IS A MODE OF THE TASK, not a destination (owner ruling, open_bulk_active.md
+				     §5): the same labeling task worked as a table over all its items instead of a
+				     canvas over one. A tab beside Labeling says exactly that; the old external
+				     "Bulk grid" button said "somewhere else". The /bulk route survives for deep
+				     links; this is the same component over the same snapshot. -->
+				<Tabs.Trigger value="bulk" data-testid="tab-bulk">Bulk</Tabs.Trigger>
 				<Tabs.Trigger value="settings" data-testid="tab-settings">Task settings</Tabs.Trigger>
 				<Tabs.Trigger value="publish" data-testid="tab-publish">Publish</Tabs.Trigger>
 			</Tabs.List>
@@ -256,6 +263,10 @@
 					adjudications={project?.adjudications ?? {}}
 					onchanged={() => void load()}
 				/>
+			</Tabs.Content>
+
+			<Tabs.Content value="bulk" class="flex min-w-0 flex-col gap-4">
+				<BulkGrid {projectId} tasks={listing?.details ?? []} ontology={project.ontology} />
 			</Tabs.Content>
 
 			<!-- WHAT the labelling job IS, and who may do it. The taxonomy moved here from the page

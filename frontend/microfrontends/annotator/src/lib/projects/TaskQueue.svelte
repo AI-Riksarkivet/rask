@@ -6,6 +6,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
+	import { taskCanvasHref } from '$lib/viewer/task-stream';
 	import {
 		createSvelteTable,
 		DataTable,
@@ -98,7 +99,7 @@
 	//
 	// Fetched for the WHOLE task list, not the visible page, and that is load-bearing: filtering is
 	// what these rows are for, and filtering a page by data only fetched for that page is circular —
-	// you could never filter TO a row that is not already on screen. A project is bounded by
+	// you could never filter TO a row that is not already on screen. A labeling task is bounded by
 	// SEND_TASK_CAP (1000), which is also the endpoint's own cap, so the two agree by construction.
 	const rowsQuery = $derived(fetchCorpusRows({ keys: rowKeysFor(tasks), dataset: null }));
 	// Rows are DECORATION on a queue that already works without them: `?? []` everywhere, never a
@@ -373,12 +374,13 @@
 	}
 
 	function canvasHref(task: TaskDetail): string {
-		const keys = task.source.keys.join(',');
-		const dataset = task.source.where ? `dataset=${encodeURIComponent(task.source.where)}&` : '';
-		// `project` rides along beside `task`: the canvas's exit needs to address the QUEUE PAGE, and
-		// a task id alone cannot — building /projects/<task_id> from it would 404. Without this the
-		// exit fell back to the corpus browser and the queue you were working through vanished.
-		return `${base}/?${dataset}keys=${encodeURIComponent(keys)}&task=${task.task_id}&project=${encodeURIComponent(projectId)}`;
+		// The ONE href builder (`taskCanvasHref`) — this was a second spelling of the same URL, and
+		// it drifted exactly the way second spellings do: when the stream's links learned to carry
+		// the task's modality (`kind=`), the queue's links didn't, so a text/audio/video task opened
+		// its own canvas from the filmstrip and the image canvas from the queue. `project` rides
+		// along because the canvas's exit needs to address the QUEUE PAGE, and a task id alone
+		// cannot.
+		return taskCanvasHref(task, projectId, base);
 	}
 
 	/** The task's own legal events, minus `save_draft` (that belongs to the canvas). `assign`
@@ -659,7 +661,7 @@
 					disabled={busy !== null}
 					title={task.submitted_by && me !== null && task.submitted_by === me
 	? 'you submitted this — the server will refuse a self-review'
-	: 'send the task back with a note'}
+	: 'send the item back with a note'}
 					onclick={() => {
 	changesFor = task;
 	changesMessage = '';

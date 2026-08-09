@@ -3,6 +3,7 @@
 	// review inspector) over ONE media unit. Owns the AnnotatorController + the keyboard
 	// controller; every child is dumb + controlled. The /annotator route re-mounts this
 	// per unit (via {#key}) so navigating a review selection loads each unit fresh.
+	import { page } from '$app/state';
 	import { viewerFor } from '$lib/viewer/registry';
 	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
 	import { onRemoteChange } from '../remote-change';
@@ -10,13 +11,15 @@
 	import { AnnotatorController } from '$lib/viewer/annotator.svelte';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
 	import { ontologyTools } from '$lib/projects/types';
-	import { fetchTask } from '$lib/projects/remote/tasks.remote';
+	import { fetchDraft, fetchTask } from '$lib/projects/remote/tasks.remote';
 	import { ResizableSplit } from '@rask/ui/resizable-split';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import { cn } from '@rask/ui/utils';
 	import AnnotatorToolbar from './AnnotatorToolbar.svelte';
 	import AnnotationSidebar from './AnnotationSidebar.svelte';
+	import ClassificationBar from './ClassificationBar.svelte';
+	import DocumentTextLane from './DocumentTextLane.svelte';
 	import ZoomControls from './ZoomControls.svelte';
 	import PageNav from './PageNav.svelte';
 	import TaskStreamNav from './TaskStreamNav.svelte';
@@ -57,6 +60,9 @@
 			controller.allowedShapeTypes = [];
 			controller.relationNames = [];
 			controller.textSpanClasses = [];
+			controller.tagClasses = [];
+			controller.classAttributes = {};
+			controller.classTranscribe = {};
 			return;
 		}
 		let alive = true;
@@ -81,6 +87,36 @@
 							.filter((c) => c.tools.includes('text'))
 							.map((c) => c.name)
 					: [];
+				// The classes the ITEM may be tagged with — the classification question's choices.
+				controller.tagClasses = result.ok
+					? (result.data.ontology?.classes ?? [])
+							.filter((c) => c.tools.includes('tag'))
+							.map((c) => c.name)
+					: [];
+				// The typed per-class ATTRIBUTES (reading order, script, …) — the inspector's
+				// attribute editor renders from these, per selected row's class.
+				controller.classAttributes = result.ok
+					? Object.fromEntries(
+							(result.data.ontology?.classes ?? [])
+								.filter((c) => (c.attributes ?? []).length > 0)
+								.map((c) => [
+									c.name,
+									(c.attributes ?? []).map((a) => ({
+										name: a.name,
+										type: (a.type ?? 'free') as 'free' | 'int' | 'enum' | 'bool',
+										choices: a.choices ?? [],
+										required: a.required ?? false,
+									})),
+								]),
+						)
+					: {};
+				// Which classes CARRY TRANSCRIPTION — the inspector offers the text editor per
+				// this declaration once any class declares; a task with none stays unconstrained.
+				controller.classTranscribe = result.ok
+					? Object.fromEntries(
+							(result.data.ontology?.classes ?? []).map((c) => [c.name, c.transcribe ?? false]),
+						)
+					: {};
 			})
 			.catch(() => {
 				// A failed read must not silently narrow the rail: unconstrained is the honest
@@ -94,6 +130,32 @@
 			alive = false;
 		};
 	});
+	// RESTORE the draft's relations. Links live on the task DRAFT, not the annotations table, and
+	// nothing read them back — reopening a task showed zero links, so the next draft sync posted an
+	// empty list and silently destroyed every drawn relation. One keyed read at open closes the
+	// loop; `restoreLinks` declines to clobber links the person drew before this resolved.
+	$effect(() => {
+		const id = reviewSelection.taskId;
+		if (!id) return;
+		let alive = true;
+		const draftQuery = fetchDraft({ taskId: id });
+		void draftQuery
+			.refresh()
+			.then(() => {
+				if (!alive) return;
+				const current = draftQuery.current;
+				if (current?.ok && current.data.links.length > 0)
+					controller.restoreLinks(current.data.links);
+			})
+			.catch(() => {
+				// No draft (a fresh task) or an unreachable read — nothing to restore, and the draft
+				// sync's own revision guard still protects the next write.
+			});
+		return () => {
+			alive = false;
+		};
+	});
+
 	// AUTOSAVE. Started only for a canvas opened FROM A TASK: that is the surface where losing work
 	// costs someone their afternoon, and it is the one with a draft to reconcile against. The ad-hoc
 	// `?keys=` canvas keeps the explicit-save behaviour it has always had.
@@ -153,14 +215,19 @@
 	// destructive and carries the reason (never a silent, eternal "loading…").
 	let loadFailed = $state(false);
 
-	// Audio is temporal-only (no canvas): hide the spatial chrome — drawing tools, zoom,
-	// and the GroundingDINO box-assist. Image + video keep it (video draws on its frame).
-	const spatial = $derived(unit.kind !== 'audio');
+	// Audio is temporal-only and TEXT is the document-as-canvas — neither has a pixel surface, so
+	// both hide the spatial chrome (drawing tools, zoom, the box-assist). Image + video keep it
+	// (video draws on its frame).
+	const spatial = $derived(unit.kind !== 'audio' && unit.kind !== 'text');
 	// Temporal units render a TRANSPORT BAR at the bottom of the viewer, inside the same
 	// positioned ancestor the floating pills anchor to — so `bottom-2` overlays the bar and eats
 	// its clicks (found by Playwright's interception check on the video seek slider). Raised, not
 	// force-clicked around: the overlap is the app's defect, not the test's.
-	const raisedOverTransport = $derived(unit.kind !== 'image' ? 'bottom-14' : undefined);
+	const raisedOverTransport = $derived(
+		// Video stacks TWO strips under the frame (the audio lane + the transport); audio only the
+		// transport. The pills clear whatever their unit actually renders beneath them.
+		unit.kind === 'video' ? 'bottom-32' : unit.kind === 'audio' ? 'bottom-14' : undefined,
+	);
 
 	// Page nav = the review selection (else this single unit). Navigating drives the
 	// shared store, whose index change re-mounts this shell with the next unit.
@@ -173,6 +240,16 @@
 	function navigate(i: number): void {
 		if (reviewSelection.total > 0) reviewSelection.go(i);
 	}
+
+	// A multi-key item can also be judged BETWEEN its units — the compare view (the route swaps
+	// this shell for it on `?view=compare`). Offered from the page bar because that is the control
+	// that already knows the item has more than one unit.
+	const compareHref = $derived.by(() => {
+		if (reviewSelection.total < 2) return null;
+		const u = new URL(page.url);
+		u.searchParams.set('view', 'compare');
+		return u.pathname + u.search;
+	});
 
 	function onKeydown(e: KeyboardEvent): void {
 		const el = e.target as HTMLElement | null;
@@ -257,8 +334,13 @@
 <div class="flex h-full w-full flex-col">
 	<AnnotatorToolbar {controller} {spatial} {onexit}>
 		{#snippet assist()}
-			{#if spatial && controller.canDraw}
-				<AiAssistBar {controller} taskId={reviewSelection.taskId} />
+			<!-- Gated on WRITABILITY, not on modality: assist writes predictions, so a canvas that
+			     cannot accept shapes (view mode, or a unit that failed to load and bound no save
+			     URL) must not offer it — but prompt-driven producers are model-dependent, not
+			     modality-dependent, so text/audio units keep the entry point (they bind their save
+			     URL through attachData). The panel itself gates its REGION tools on the media. -->
+			{#if controller.mode === 'edit' && controller.annotationsUrl !== null}
+				<AiAssistBar {controller} taskId={reviewSelection.taskId} kind={unit.kind} />
 			{/if}
 		{/snippet}
 	</AnnotatorToolbar>
@@ -274,70 +356,86 @@
 		<div class="min-w-0 flex-1">
 			<ResizableSplit storageKey="lance-media-annotate" initial={0.72} minLeft={420} minRight={320}>
 				{#snippet left()}
-					<div class="relative h-full w-full">
-						<!-- The load/status chip is a real Badge — secondary while healthy, destructive when
+					<!-- The central WORKSPACE is a column: the media viewer (with its floating overlays)
+					     on top, the transcription lane under it — the Label-Studio composition, where
+					     the document's text is part of the labeling canvas rather than a side panel.
+					     The overlays' positioned ancestor is the VIEWER box, so the pills never stray
+					     onto the lane. -->
+					<div class="flex h-full w-full flex-col">
+						<ClassificationBar {controller} />
+						<div class="relative min-h-0 w-full flex-1">
+							<!-- The load/status chip is a real Badge — secondary while healthy, destructive when
 					     the unit failed to load — instead of a hand-rolled black pill that ignored the
 					     theme entirely (it stayed dark-on-white in light mode). It also moves off the
 					     TOP-left, where the centred assist bar painted over the tail of any message
 					     longer than a few words (a load failure, always, exactly when you need to read
 					     it); bottom-left is the one free corner — page nav is bottom-centre, zoom is
 					     bottom-right — so it can render its full text. -->
-						<Badge
-							variant={loadFailed ? 'destructive' : 'secondary'}
-							class={cn(
+							<Badge
+								variant={loadFailed ? 'destructive' : 'secondary'}
+								class={cn(
 	'pointer-events-none absolute bottom-2 left-2 z-10 font-mono shadow-sm backdrop-blur',
 	raisedOverTransport,
 )}
-							data-testid="annotate-status"
-						>
-							annotate · {unit.kind} · {status}{controller.saveStatus ? ` · ${controller.saveStatus}` : ''}
-						</Badge>
-						{#key reloadNonce}
-							<Viewer
-								{unit}
-								{controller}
-								onload={(n) => {
+								data-testid="annotate-status"
+							>
+								annotate · {unit.kind} · {status}{controller.saveStatus
+									? ` · ${controller.saveStatus}`
+									: ''}
+							</Badge>
+							{#key reloadNonce}
+								<Viewer
+									{unit}
+									{controller}
+									onload={(n) => {
 	status = `${n} annotations from Lance`;
 	loadFailed = false;
 }}
-								onerror={(message) => {
+									onerror={(message) => {
 	status = `load failed — ${message}`;
 	loadFailed = true;
 }}
-							/>
-						{/key}
-						{#if remoteNotice}
-							<!-- A change someone else made, on a canvas that has unsaved work. NEVER reloaded
+								/>
+							{/key}
+							{#if remoteNotice}
+								<!-- A change someone else made, on a canvas that has unsaved work. NEVER reloaded
 						     over — the shapes on screen are theirs and cannot be got back. It names the
 						     consequence (the save will be refused) because "changed" alone leaves a person
 						     unable to decide. -->
-							<div
-								class="border-destructive/50 bg-card/95 text-card-foreground pointer-events-auto absolute top-2 left-1/2 z-20 flex max-w-md -translate-x-1/2 items-start gap-2 rounded-lg border p-2 shadow-sm backdrop-blur"
-								data-testid="remote-change-notice"
-							>
-								<p class="text-xs">{remoteNotice}</p>
-								<Button
-									variant="outline"
-									size="sm"
-									class="h-6 shrink-0 px-2 text-xs"
-									onclick={() => {
+								<div
+									class="border-destructive/50 bg-card/95 text-card-foreground pointer-events-auto absolute top-2 left-1/2 z-20 flex max-w-md -translate-x-1/2 items-start gap-2 rounded-lg border p-2 shadow-sm backdrop-blur"
+									data-testid="remote-change-notice"
+								>
+									<p class="text-xs">{remoteNotice}</p>
+									<Button
+										variant="outline"
+										size="sm"
+										class="h-6 shrink-0 px-2 text-xs"
+										onclick={() => {
 	remoteNotice = null;
 	reloadNonce += 1;
 }}
-								>
-									Reload
-								</Button>
-							</div>
-						{/if}
-						<TaskStreamNav {stream} />
-						<PageNav
-							{pages}
-							current={pageIndex}
-							onNavigate={navigate}
-							class={raisedOverTransport}
-						/>
-						{#if spatial}
-							<ZoomControls {controller} class={raisedOverTransport} />
+									>
+										Reload
+									</Button>
+								</div>
+							{/if}
+							<TaskStreamNav {stream} />
+							<PageNav
+								{pages}
+								current={pageIndex}
+								onNavigate={navigate}
+								{compareHref}
+								class={raisedOverTransport}
+							/>
+							{#if spatial}
+								<ZoomControls {controller} class={raisedOverTransport} />
+							{/if}
+						</div>
+						{#if unit.kind !== 'text'}
+							<!-- The OCR composition: image/video on top, its transcription under it. A TEXT
+							     unit's viewer IS the document, so a lane would render the same text twice. -->
+							<DocumentTextLane {controller} />
 						{/if}
 					</div>
 				{/snippet}

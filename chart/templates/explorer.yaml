@@ -219,6 +219,26 @@ spec:
             - { name: MEDIA_RERANK_URL, value: {{ . | quote }} }
             {{- end }}
             {{- end }}
+            {{- if eq $name "annotator" }}
+            {{- /* Serve-native producer DISCOVERY: the assist registry's primary source is the ray
+                 cluster itself — a Serve app whose deployment carries a `labeling` block in its
+                 user_config IS a registered producer (serve_discovery.py). Discovery reads the
+                 DASHBOARD with the same precedence as compute's RAY_DASHBOARD_URL above (external
+                 wins; the in-cluster head-svc exists only under singleTenant; neither ⇒ the env is
+                 absent and discovery is off). Producer CALLS go to Serve's HTTP ingress with the
+                 same derivation as studio's serveOrigin: the external dashboard host serves the
+                 apps too (verified live 2026-08-06), in-cluster it is the load-balanced
+                 `-ray-serve-svc:8000` — never the head's own :8000, which reaches one proxy.
+                 MEDIA_ASSIST_BACKENDS and the runner's MEDIA_ASSIST_URL below stay the operator
+                 override: config is intent, discovery is observation. */}}
+            {{- if $root.Values.ray.dashboardUrl }}
+            - { name: MEDIA_SERVE_DISCOVERY_URL, value: {{ $root.Values.ray.dashboardUrl | quote }} }
+            - { name: MEDIA_SERVE_PROXY_URL, value: {{ $root.Values.frontend.serveUrl | default $root.Values.ray.dashboardUrl | quote }} }
+            {{- else if $root.Values.singleTenant.enabled }}
+            - { name: MEDIA_SERVE_DISCOVERY_URL, value: {{ printf "http://%s-ray-head-svc:%v" (include "rask.fullname" $root) $root.Values.ray.dashboardPort | quote }} }
+            - { name: MEDIA_SERVE_PROXY_URL, value: {{ printf "http://%s-ray-serve-svc:8000" (include "rask.fullname" $root) | quote }} }
+            {{- end }}
+            {{- end }}
             {{- if and (eq $name "annotator") $root.Values.runners.enabled }}
             # The assist runner (runners.yaml): flips the annotator's in-repo assist mock to REAL
             # GroundingDINO+SAM predictions — same request/response wire shape, zero code change.

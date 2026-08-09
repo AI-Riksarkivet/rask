@@ -1,6 +1,13 @@
 /**
  * Wire types for the annotation-projects plane, validated with valibot at the BFF boundary.
  *
+ * VOCABULARY: the wire says `project` for what every reader-facing surface calls a LABELING TASK
+ * (the campaign: ontology + review policy + sent items), and `task` for one item's assignment
+ * (the claim/submit/review FSM unit, which readers meet as an "item"). The reader vocabulary is
+ * unified — routes say `/tasks/<id>`, copy says "labeling task"/"item" — while the wire keeps
+ * these names: renaming the service's aggregate touches the actor types, the FGA model and the
+ * publish lineage, and is a separate decision from what a person reads.
+ *
  * The backend supplies `legal_events` derived from its own transition tables (machines.py) — the
  * UI renders THAT list and never hardcodes a second copy of the state machine. Each legal event
  * carries the permission that gates it so the UI can explain an action; the actual gate stays
@@ -61,6 +68,9 @@ const LabelClassSchema = v.object({
 	colour: v.nullish(v.string()),
 	/** Which primitives this class may be drawn with. Empty = any. */
 	tools: v.optional(v.array(v.string()), []),
+	/** This class's regions carry TRANSCRIBED TEXT (the row's `text` facet) — the inspector
+	 *  offers transcription editing per this declaration once any class declares. */
+	transcribe: v.optional(v.boolean(), false),
 	attributes: v.optional(v.array(OutputAttrSchema), []),
 	/** At-least-once. EXPLICIT per class — it used to be a project-level `required_labels` list the
 	 *  create dialog filled from "every class name", which silently made every class mandatory on

@@ -29,6 +29,9 @@ export type DraftShape = {
 	source?: string | null;
 	model_version?: string | null;
 	confidence?: number | null;
+	/** The ontology's typed per-class attributes, as string values — parsed out of the row's
+	 *  `metadata` JSON so the submit validator judges what the annotator actually entered. */
+	attributes?: Record<string, string>;
 };
 
 const NUMERIC = [
@@ -86,6 +89,19 @@ export function rowsToShapes(table: Table): DraftShape[] {
 		if (polygon != null) {
 			const values = Array.from(polygon as ArrayLike<number>, Number).filter(Number.isFinite);
 			if (values.length > 0) shape.polygon = values;
+		}
+		// Attributes ride the `metadata` JSON column; the draft (and so the submit validator)
+		// gets them as the flat string map the Shape model declares. Malformed JSON is skipped
+		// rather than fatal — one bad row must not sink the whole draft snapshot.
+		const metadata = row['metadata'];
+		if (typeof metadata === 'string' && metadata && metadata !== '{}') {
+			try {
+				const parsed = JSON.parse(metadata) as Record<string, unknown>;
+				const entries = Object.entries(parsed).map(([k, v]) => [k, String(v)] as const);
+				if (entries.length > 0) shape.attributes = Object.fromEntries(entries);
+			} catch {
+				// leave attributes unset
+			}
 		}
 		shapes.push(shape);
 	}

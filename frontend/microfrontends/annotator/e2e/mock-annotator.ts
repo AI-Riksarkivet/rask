@@ -75,8 +75,12 @@ Bun.serve({
 				},
 			});
 		}
-		const shaped = hit as { status?: number; body?: unknown };
-		return shaped && typeof shaped === 'object' && 'status' in shaped
+		// A NUMERIC `status` marks the {status, body} response shape. The check must be on the
+		// type, not on key presence: a seeded BODY legitimately carries its own string `status`
+		// field (the jobs plane's JobResult.status='queued' is one), and treating that as an HTTP
+		// status made `new Response` throw — every seeded jobs route answered 500.
+		const shaped = hit as { status?: unknown; body?: unknown };
+		return shaped && typeof shaped === 'object' && typeof shaped.status === 'number'
 			? json(shaped.body ?? {}, shaped.status)
 			: json(hit);
 	},

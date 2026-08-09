@@ -19,18 +19,217 @@ workflow/governance plane (task FSM, consensus, kappa, FGA, publish lineage) —
 comparison systems has an equivalent, there is nothing to import, and this document is a gap list,
 not a scoreboard.
 
+## §0 SESSION HANDOFF — how any session continues this work
+
+Everything below assumes no memory of prior conversations; these are the working agreements.
+
+- **Docs to read, in order**: this file (findings + STATUS), `open_bulk_active.md` (the grid
+  plane spec), `open_assist_discovery.md` (Serve-native registry design). Working docs stay
+  `open_*`; graduation to `docs/` is the OWNER's call, never the session's.
+- **Branch + push**: develop on `claude/annotation-zone-feature-diff-c61n5o`; push every
+  landed slice to BOTH that branch and `main` directly (the owner's standing instruction).
+  One slice = one commit with tests, honest scope-cuts stated in the message.
+- **Naming hygiene**: the comparison repos (X-AnyLabeling/ALS/aisheets/doccano/…) may be
+  named in these open_* docs and commit messages ABOUT the analysis — NEVER in shipped code,
+  code comments, or identifiers.
+- **Verification workflow**: backend — targeted `uv run pytest tests/unit/<suites>` (the FULL
+  suite hangs in cloud sandboxes: Dapr actor tests block in wait_for_sidecar; say so, don't
+  wait); frontend — `bun run check` + `bunx vitest run` + `CI=1 bunx playwright test` from
+  `frontend/microfrontends/annotator/` (mock service seeds via `POST /__mock/seed`, ledger at
+  `/__mock/calls`). UI slices get screenshots via TEMP `e2e/screens-*.spec.ts` drivers —
+  written, run, DELETED before committing, images sent to the owner. Formatter drift: package
+  -wide `bun run fmt` reformats untouched files — `git checkout --` them before committing.
+- **Sandbox limits (cloud)**: no helm binary (chart edits get a stated render-check
+  scope-cut); egress blocks `docs.ray.io`/`get.helm.sh` (read Ray from the installed package
+  or raw.githubusercontent); no k3s/Dagger.
+- **Backlog, recommended order** (updated at session close 2026-08-09 evening):
+  (1) **BulkGrid decomposition** — the component is ~800 lines; extract FilterRow,
+  SimilarityRail, AddColumnPopover children before it becomes the 965-line form the reference
+  repo warns about; fold in the UX debts seen on live screenshots: the Labels column's chip
+  pile reads like debug output (condense), empty ontology columns should auto-hide, and the
+  media-first density pass (bigger thumbs/cells) is still owed.
+  (2) **Recipe persistence (3b)** — persist each column's {producer, prompt} with the task
+  (today it is session-local: ▶ dies on reload) + decide capture-refresh (ontology PATCH vs
+  per-item captured templates — recipe fills pass taskId:null until then, spec §6.3).
+  (3) **Embedding modes 2+3** — clustering view and atlas-lasso selection, landing as the
+  same row-predicate the similarity mode uses (spec §5 three-mode ruling).
+  (4) **{{reference}} materialization** into recipe prompts per row.
+  (5) **Jobs-seam bulk runs** (phase 4: SSE cell streaming, cancel, run record + lineage).
+  (6) deploy ONE real Serve model with a `labeling` user_config block — closes finding 0's
+  runner half AND exercises discovery live (open_assist_discovery.md exit criterion).
+  Then: IoU/NMS + class-filter knobs (finding
+  1 rest); (5) embedding selection; (6) timeline rail (6), OBB + mask ops (3); (7) COCO/YOLO
+  converters (7), QA-sampling accept (5), relation cardinality (9.9), `difficult` flag (4),
+  sample-item designer backdrop.
+
+**STATUS 2026-08-08 (evening) — landed today, in-session** (each pushed to `main` with unit + e2e
+coverage; line references in §1–§3 predate these and are stale where they overlap):
+
+- Mock producers emit `confidence`/`uncertainty`; the client stops dropping them; the review queue
+  ranks for real (finding 0, the wire half; the RUNNER half remains open).
+- Brush radius/output controls and the image-adjustments popover (finding 3, the "built-but-unwired
+  engine surface" half; OBB tool + `unionMasks`/semantic mode remain open).
+- Video object tracks consumed: interpolated boxes at the playhead, keyframe promotion,
+  `+ keyframe` on the transport (finding 6's step 1; timeline rail + propagation remain open).
+- The doccano interaction, three stages: spans as in-text highlights with one-click/digit-hotkey
+  labeling (`TextSpanSurface`), the transcription as a lane of the image/video workspace
+  (`DocumentTextLane`), and `kind=text` rendering the DOCUMENT as the canvas (`TextViewer` — no
+  pixel medium, class legend as keymap).
+- The video workspace carries the soundtrack as a labelable waveform lane (flat "timeline only"
+  fallback for undecodable audio), bound to the same `<video>` clock.
+- Item-level classification (§8e.1): ontology `tag` classes render a choice-chip bar over ANY
+  modality's workspace (`ClassificationBar`); an active chip IS a `tag` row on the ordinary
+  insert/undo/Save machinery. En route, a ghost-row fix: undone inserts now leave the sidebar
+  projection too (`_suppressed`), not only the canvas.
+- The compare view (§8e.4–5): `?view=compare` lays a multi-key item out as side-by-side CANDIDATES
+  with the ontology's choices under each; a pick saves a version-guarded `tag` row onto the winning
+  unit through the plain transport (no canvas controller, so no autosave race). Text panes render
+  the document lines, image/AV panes the frame. Entry/exit are plain links from the page bar.
+- SPAN OFFSETS FOLLOW THE TEXT (§8d.1 — the sharpest textual defect): correcting a transcription
+  re-anchors every child span (prefix/suffix diff → shift, stretch, or DROP when the anchored text
+  was edited away — never a clamped guess). A new `SpanEdit` save channel patches offsets by id
+  (they are deliberately not editable fields), mirroring the temporal channel.
+- FEW-SHOT PROPAGATION HAS A BUTTON: `PropagatePanel` in the sidebar — the picked annotations
+  are the exemplars, a scope select (this item / entire dataset), one `insid3` job on the jobs
+  seam with exemplar IDS, and an outcome line that reports the WIRE truth (job id + the honest
+  mock warning), not the synchronous guess. The seam existed end to end and nothing called it.
+- ONE AI entry point: the toolbar's rainbow `AI assist` button (the estate's only loud
+  affordance — it summons a model; quiet buttons draw) opens one panel grouping every model tool
+  by what it needs from you — a PROMPT (detect), a REGION (segment + interactive producers; arming
+  closes the panel, the canvas is where regions are drawn), or EXEMPLARS (propagation, moved OUT
+  of the right sidebar). The honesty chip and the registry stay on the toolbar — a warning behind
+  a click is a warning most people never see. `@rask/ui/rainbow-button` is the new primitive.
+- THE PANEL TELLS THE TRUTH ABOUT WHAT ANSWERS: every producer row wears its registry facts —
+  live/mock dot, what it returns, fits-task/off-contract against the open task — and the panel
+  adapts to the MEDIA: region tools only where there is a canvas to draw a region on (image/
+  video; elsewhere the section states why), while prompt-driven Detect stays on every modality
+  (model-dependent, not modality-dependent — a VLM labels any media from text) and NAMES its
+  backend. The assist entry point is gated on WRITABILITY (edit mode + a bound save URL), no
+  longer on being spatial.
+- Fixed at the source along the way: floating pills overlapping the temporal strips; unseekable
+  route-served media in e2e (206 ranges); the e2e mock treating any seeded body carrying a string
+  `status` field as its {status, body} response shape (every seeded jobs route answered 500).
+- THE DESIGNER SHOWS THE LOOK, LIVE: a preview strip under the editor renders the workspace
+  the current draft would build — toolbar from the draw union, quick-label chips (required
+  starred), the item-tag bar, span classes with their digit hotkeys, per-class inspector rows
+  (transcription + typed fields), surviving relations with direction. A pure projection
+  (`task-preview.ts`, separately pinned) of the SAME draft both views edit, so a YAML
+  keystroke moves the preview too. Remaining for the full designer: previewing over a sample
+  ITEM (a real page image behind the strips).
+- THE DESIGNER IS INLINE, NOT A POPUP: task creation left its `sm:max-w-md` scrolling modal —
+  a task DESIGNER crammed into a narrow dialog put its own editor below the fold. It now
+  unfolds in the page flow as a two-column panel (what the task is ABOUT | the task DESIGN),
+  and the YAML pane gets real height. The publish confirm stays a modal — it is a confirm,
+  not a workspace.
+- TEMPLATING SAID HONESTLY, AND AS YAML: the create editor's one `tools` toggle row conflated
+  three concepts (drawing geometry / span-into-text / whole-item tag) and TRANSCRIPTION had no
+  place in the model at all — the workspace offered a text editor on every row of every task.
+  Now (a) `LabelClass.transcribe` declares "regions of this class carry transcribed text" per
+  class (neither a tool nor an attribute: the primary content column), and the inspector offers
+  the Transcription editor per that declaration once a task declares classes (unconstrained
+  canvas keeps the old everywhere behaviour); (b) the form editor speaks plain language — per
+  label: name, "drawn as" (bbox/polygon/mask/segment), then transcribe / span / tag as separate
+  capabilities with explanations, fields listed readably; (c) a YAML view over the SAME draft is
+  the full-power authoring surface and exchange format (task/labels/draw/span/tag/transcribe/
+  fields/options/relations), STRICT like the server's extra=forbid (a typo'd key is a named
+  error that blocks create, never a silent drop) — the wire stays JSON, `task-yaml.ts` maps
+  both ways, and a 'define in YAML' scaffold starts from scratch.
+- THE REGISTRY IS SERVE-NATIVE — full design in `open_assist_discovery.md` (a working doc, like this one)
+  (the declaration convention, KubeRay service topology, health/single-writer semantics, HA
+  posture, the vLLM path). Summary here stays for continuity: (the owner's ruling: model
+  endpoints are and will always be
+  Ray Serve deployments — discovery, not hand-config): the annotator now reads
+  `GET /api/serve/applications/` on the Ray dashboard (`ServeInstanceDetails`, verified
+  against installed Ray 2.56.1 source) and offers every RUNNING application whose deployment
+  declares a `labeling` block in its `user_config` ({producer?, returns, inputs}) — chosen
+  because user_config is hot-updatable without replica restarts, so DEPLOYING a model IS
+  registering it and its contract can be corrected live. Endpoint = Serve proxy base (pinned
+  via MEDIA_SERVE_PROXY_URL or derived from Serve's own http_options) + route_prefix.
+  `MEDIA_ASSIST_BACKENDS` stays as the operator OVERRIDE (config is intent, discovery is
+  observation); unreachable control plane degrades to config + mock, TTL-cached 15s.
+- THE ONTOLOGY IS A DECODE-TIME CONTRACT (the owner's observation: "is not the schema we use
+  perfect to give a vLLM for structured generation like dottxt/Outlines?" — yes, literally):
+  `generation_schema(ontology)` derives a JSON Schema with one branch per (class, tool) — consts
+  pin the choice, geometry follows the tool, typed attributes with `required`, `transcribe` adds
+  the text field, `allow_empty` mirrors the submit rule, `additionalProperties: false`
+  throughout. Served at `GET /api/assist/generation-schema?task_id=` and threaded into every
+  remote assist call as `output_schema`, so a vLLM backend hands it to `guided_json`
+  (Outlines/xgrammar) and an off-contract annotation cannot be GENERATED — the drop-and-report
+  filter becomes belt-and-braces. Validated by use: the test suite judges good/bad payloads
+  through `jsonschema` exactly as a constrained decoder would. En route, the assist route now
+  reads the task ontology ONCE per call (schema + filter from one read; the filter is pure).
+- THE POINT SESSION (finding 1's core loop): while armed, clicks ACCUMULATE as signed ±points
+  (`AssistRequest.points`, stateless — every request carries the whole session), the producer
+  re-runs over the full set, and each answer REPLACES the previous prediction (retract-on-success,
+  so a failed refinement keeps the old mask; N clicks never leave N stacked ghosts). The armed
+  pill grows the ± sign toggle, the live point count, and Done (keep the mask, next click starts a
+  new object); a drag stays a box prompt and ends the session. The backend mock refines visibly —
+  the patch follows the positive points' bounding box and confidence grows per point — so the loop
+  is exercisable end-to-end in-repo. Conf/IoU/class-filter knobs beyond the min-confidence slider
+  remain open.
+
+**STATUS 2026-08-09 — landed today, in-session** (each pushed to `main` with unit + e2e coverage):
+
+- THE BULK GRID EXISTS (open-bulk phase 1, `/bulk?task=<id>`, linked from the task detail):
+  one row per ITEM — thumbnail, key, workflow state, assignee, corpus facet, then LIVE
+  annotation state (status counts, item tags, transcription excerpt) fetched per VISIBLE row
+  only (IntersectionObserver + the Arrow wire, `content-visibility` rows). Rows deep-link into
+  the canvas with full context (keys/task/project/dataset).
+- THE GRID ACTS (open-bulk phase 2): ✓-accept flips every `prediction` row on an item to
+  `accepted` in ONE save; ✎ edits the transcription excerpt inline — both through the existing
+  save wire (per-field edits + `base_version` OCC; the grid is a view over the canvas's table,
+  never a second store). Attribution required NO new schema: the save path already stamps
+  `reviewer`/`updated_at` server-side, and the grid re-fetches and renders the server's stamp.
+  409 on accept re-fetches; 409 on edit keeps the draft open over the fresh state.
+- THE DYNAMISM BAR IS PINNED (first-hand audit of the reference sheet tool's add/edit/
+  regenerate path, receipts in `open_bulk_active.md` §5): one sentence → a living column;
+  generation auto-starts; type inferred, never asked; `{{refs}}` are the dependency edges;
+  re-runs skip validated cells; editing a cell IS validating it. Consequence adopted for
+  phase 3: ACT-FIRST add-column — the ontology declaration is DERIVED from the action (auto-
+  name, progressive typing born `free`, silent ontology PATCH), never demanded up front;
+  tightening a type later retro-validates cells and upgrades the guided_json branch.
+- THE GRID BECAME A SPREADSHEET AND GREW ITS SET-TOOLS (same day, owner UX steering across
+  four rounds — read `open_bulk_active.md` §5 rulings + §6.1–6.3 before touching this
+  surface): act-first "＋ column" (one textarea, declaration DERIVED — auto-name, silent
+  ontology PATCH, preview-5 fill through a new `AssistShape.text` facet + interactive `vlm`
+  mock family); queue chrome REMOVED (claiming is NOT bulk's job — the queue's plane; OCC
+  base_version keeps the two write planes collision-safe); Excel-style minimal autofilters
+  (ghost inputs, eager summary load when filtering); column-level ▶ apply over the FILTERED
+  rows (skip-filled, session-local recipe); the EMBEDDING view's first mode — ≈ anchors a row
+  against `/api/search/similar` (the select surface's wire, helpers REUSED: keyOfHit,
+  distanceBounds, MAX_SIMILAR_N), nearest-first ordering + per-row distances + cutoff slider,
+  association derived from the by-key door's key_fields; and BULK IS A TAB of /tasks/[id]
+  (Labeling | Bulk | Task settings | Publish) — /bulk survives for deep links only.
+  Owner rulings pinned in spec §5: bulk = labeling done in bulk; claiming never bulk's;
+  embedding labeling has EXACTLY three modes — similarity (landed), clustering, lasso.
+- SKILLS IN THIS SANDBOX: the ra-skills marketplace is enabled in .claude/settings.json but
+  NOT installed in the remote container (installed_plugins.json empty; /plugin is CLI-side).
+  Workaround used: `add_repo` read clone of AI-Riksarkivet/ra-skills at
+  /workspace/ai-riksarkivet/ra-skills, skills applied from source (writing-typescript,
+  shadcn-svelte). Run `make claude-bootstrap` on a host with egress to install properly.
+- Where model answers COME FROM, said once and bindingly (owner ruling + spec §5): every
+  producer — detectors, segmenters, HTR, and LLM/VLM recipes alike — is a **Ray Serve
+  deployment on the ray-cluster**, discovered via the Serve REST API. vLLM is not a separate
+  integration: it IS a Serve app (`ray.serve.llm.build_openai_app` / `LLMConfig`) declaring
+  the same `labeling` user_config block, and `output_schema` (from `generation_schema`) rides
+  every remote call so vLLM's guided decoding enforces the ontology. Discovery is AUTOMATIC —
+  no per-user settings; operators pin two URLs in deploy config and may override via
+  `MEDIA_ASSIST_BACKENDS`; users only ever pick from what is discovered (full policy +
+  recommendation: `open_assist_discovery.md` §"Who configures what").
+
 **The findings in one table**, ranked by leverage:
 
 | # | Finding | Action shape |
 | --- | --- | --- |
-| **0** | Every assist path answers from an honest mock; no producer emits confidence/uncertainty; the train job trains column means. The AL **consumers** are all built and starving. | Deploy a runner; make producers emit scores; drop a real trainer into the seam. |
-| **1** | Interactive prompting is one-shot. XAL's session loop (±point, ±rect, finish-object) is the usability floor for SAM-style assist. | Wire interactive ops through `apply()`; add refinement UX + conf/IoU/class controls. |
-| **2** | HTR — the estate's purpose — never reaches the annotator. The `htr` producer is batch-only and routes to nothing. | HTR pre-annotations as `status='prediction'` rows. |
-| **3** | Rotated box is schema-complete and tool-absent; brush controls, image adjustments, `unionMasks`, semantic mask mode are all built-but-unwired. | Finish half-built engine surface before adding new tools. |
-| **4** | Five annotations-table columns are written by nothing (`group_id`, `reading_order`, `difficult`, `links`, `metadata`); per-shape `attributes` never reach the canvas wire. | Extend `InsertRow`/save path; add inspector editing. |
+| **0** | Every assist path answers from an honest mock; ~~no producer emits confidence/uncertainty~~ (mock emits, wire keeps — LANDED); the train job trains column means. | Deploy a runner; drop a real trainer into the seam. |
+| **1** | ~~Interactive prompting is one-shot~~ (the ±point session loop with finish-object LANDED — points on the wire, replace-on-refine, sign toggle + Done on the armed pill). Remaining: ±rect refinement, IoU/NMS + class-filter controls beyond the min-confidence slider. | Conf/IoU/class knobs; rect-refinement. |
+| **2** | HTR — the estate's flagship workload — never reaches the annotator. The `htr` producer is batch-only and routes to nothing. | HTR pre-annotations as `status='prediction'` rows. |
+| **3** | Rotated box is schema-complete and tool-absent; ~~brush controls, image adjustments~~ (LANDED); `unionMasks`, semantic mask mode still unwired. | OBB tool; finish mask ops. |
+| **4** | ~~Five annotations-table columns written by nothing~~ (LANDED: `metadata` carries ontology-typed per-class ATTRIBUTES with an inspector editor + submit validation; reading order rides them as the `order` attribute; `links` land from the relations rail and publish; `group` is an editable field). Remaining: `difficult` has no writer or surface. | A difficult/flag affordance, if wanted. |
 | **5** | Auto-accept-with-QA-sampling and a multi-signal retrain policy are the two ideas worth lifting from ALS — with the caveat that ALS's own loop is largely simulated (§7). | Policy work on our accept path + train trigger. |
-| **6** | `tracks.ts` (keyframes + interpolation) is complete, tested, and consumed by nothing; no timeline UI, no propagation. | Video tracking UI; SAM2-video propagation later. |
+| **6** | ~~tracks.ts consumed by nothing~~ (interpolation + keyframes LANDED); timeline rail, tracker-assist and mask propagation remain. | Timeline UI; tracking/propagation runners. |
 | **7** | The `scripts/` converters our import design defers to (COCO/YOLO ⇄ Arrow) do not exist. | Write them when the fine-tune loop starts. |
+| **8** | ~~Task templates~~ **LANDED as the ontology-driven gallery**: 8 full-ontology templates at project creation (composite OCR/HTR, detection, segmentation, classification, NER, DocQA+relation, comparison, reading-order) — per-class tools/attributes/relations the free-form path could never author, summarized in the dialog before create. Layout follows the ontology everywhere already (tag→bar, text→spans, relations→rail, attributes→inspector), so a template IS a layout choice with zero template-specific code. | ~~Per-class EDITOR remains~~ — LANDED (draft editor with draw/transcribe/span/tag capabilities, the YAML authoring view, and the live workspace preview). |
 
 ---
 
@@ -356,6 +555,186 @@ depends on it:
   (`XAL/anylabeling/views/labeling/widgets/canvas.py`, 5,525 lines), and the converters are all
   genuinely implemented, current (4.0.1 released the day of this pass), and tested. Where this file
   cites an XAL behavior as the reference UX, it was read, not assumed.
+
+---
+
+## 8. The PER-MODALITY diff — what each blob type still lacks (2026-08-08 evening)
+
+The annotator is a general multimodal tool; this section slices the remaining gaps by modality so
+each viewer's backlog is legible on its own. "Have" is one line of what landed; "missing" is
+ranked, reference tool named where the UX to copy is known. Cross-cutting gaps (runner, templates,
+converters, hotkey rebinding) live in the main table and are not repeated per modality.
+
+### 8a. IMAGE (`ImageViewer` — Pixi/WebGPU canvas)
+
+Have: rect · polygon · point · line · pencil/baseline · magnetic corner-snap · true raster brush
+(radius/output/eraser exposed) · lasso multi-select · heatmap coloring · image adjustments ·
+relations · per-group layers · uncertainty-ranked review.
+
+Missing, ranked:
+1. **Rotated box (OBB)** — schema-complete (`rotation` commit type + column), tool-absent. XAL's
+   drag rotation handle + coarse/fine key steps is the reference. Seals, marginalia, skewed blocks.
+2. **Per-shape attributes editing** — ontology declares typed attrs; the canvas wire (`InsertRow`)
+   and inspector still cannot carry/edit them (finding 4).
+3. **Mask boolean ops** — `unionMasks` still has zero callers; brush `semantic` mode settable,
+   never read. Cross-label pixel-exclusivity remains "a planned follow-up" in the file's own words.
+4. **Magic wand / flood fill** — XAL 4.0.1's tolerance-drag gesture; the cheap non-ML region tool
+   for clean scan backgrounds (live-wire was deliberately removed; this is its replacement).
+5. **Quadrilateral** (4 explicit corners → canonical polygon; what warped lines/seals and
+   PPOCR-style spotting emit) · circle · cuboid · keypoint SKELETONS (pose graphs w/ flip pairs).
+6. **Copy/paste/duplicate** (within + across items; system clipboard) — nothing exists.
+7. Editing ergonomics: vertex eraser (Alt-drag), wheel rect scale/nudge, per-shape lock + z-order +
+   hide-selected (per-group eye only today), shape converter beyond rect→polygon (XAL: 15 pairs).
+8. Navigation: minimap/navigator, loop-through-objects (pairs with the uncertainty queue),
+   crosshair + cursor readout, compare view (IR/RGB, before/after), 16-bit grayscale support.
+9. **Image-level classification template** — `tag` rows exist as data; no dedicated one-image
+   classification surface (XAL's Image Classifier; LS choices template).
+10. Assist-side: SAHI-style tiled inference for wall-sized scans; segment-everything (AMG).
+
+### 8b. VIDEO (`VideoViewer` — Pixi frame overlay + waveform lane + transport)
+
+Have: exact-frame annotation on paused frames · full spatial toolset · object tracks (keyframes +
+linear interpolation + lifetime absence + `+ keyframe`) · soundtrack waveform lane with segment
+drag (flat-timeline fallback) · one shared clock · frame stepping/rate.
+
+Missing, ranked:
+1. **Track timeline rail** — per-track rows with keyframe diamonds, click-to-seek, drag a diamond
+   to retime (CVAT's core video surface). Interpolation renders; its editing surface doesn't exist.
+2. **Real fps** — the transport steps on a stated 25 fps ESTIMATE; `requestVideoFrameCallback`
+   sampling during the first play would replace the guess with the measured rate.
+3. **Tracker-assisted ids** — no ByteTrack/BoT-SORT-style assist assigning `group` across frames
+   (XAL wires 13 tracking configs); today every track is hand-promoted.
+4. **Video mask propagation** — SAM2/SAM3-video masklets (prompt on one frame, propagate, SSE
+   progress + cancel — XAL-S's `/v1/video/*` session contract is the wire reference). Runner-gated.
+5. **Track interpolation is bbox-only** — polygon/mask keyframes render at authored geometry only.
+6. Clip-level classification + event timeline template (XAL's Video Classifier: I/O marking,
+   per-label digit keys, AI auto-segmentation of a clip into events).
+7. Seek-bar thumbnails; frame cache for smooth scrub (10 fps snapshot pump today); soundtrack
+   spectrogram; per-channel waveforms.
+
+### 8c. AUDIO (`AudioViewer` — waveform canvas)
+
+Have: waveform as the canvas · drag-to-create/resize/click segments · px/s zoom · rate · segment
+text/label editing via inspector · same rows/Save as everything else.
+
+Missing, ranked:
+1. **Spectrogram view** — the surface half of speech/bioacoustics work; wavesurfer ships a
+   spectrogram plugin, so this is wiring + a toggle, not research.
+2. **ASR-assisted pre-annotation** — no audio producer exists at all (the registry is vision+text);
+   a whisper-family producer emitting segments+transcripts as `prediction` rows is the audio twin
+   of HTR pre-annotation (finding 2).
+3. **Tiers** — one region lane today; overlapping speakers/phenomena want ELAN-style stacked tiers
+   (speaker A / speaker B / noise), i.e. a `group`-keyed lane split, data model already sufficient.
+4. Silence-detection auto-segmentation (energy threshold → proposed segments); A-B loop playback;
+   waveform minimap for long recordings.
+5. Segment-level classification template (sound-event tagging with digit keys — the audio twin of
+   8a.9/8b.6).
+
+### 8d. TEXT (`TextViewer` — the document as the canvas; `TextSpanSurface`; `DocumentTextLane`)
+
+Have: document-as-canvas (no pixel medium) · spans as class-tinted highlights w/ overlap stacking ·
+select→digit/click labeling · legend-as-keymap · per-line selection sync · lane composition under
+image/video · span remove/pick · offsets validated server-side.
+
+Missing, ranked:
+1. **Span offset REMAPPING on text edit** — correcting a transcription through the inspector's
+   input does not shift existing span offsets, so an early edit silently mis-points every later
+   span. Doccano forbids doc editing for this reason; we allow it (HTR correction is a first-class
+   act), so we must remap (splice arithmetic on `char_start/char_end`, refusing only on overlap
+   with the edited range). The sharpest text defect in the current build.
+2. **Span↔span relation ARCS in the text surface** — relations exist and draw between SHAPES on
+   the pixel canvas; two spans in the text canvas cannot be linked there (no arc rendering, no
+   click-click gesture on marks). LS relations-in-text is the reference.
+3. **Text pre-annotation producers** — nothing proposes spans: no NER model producer, and no
+   cheap gazetteer/regex assist (a lexicon of parish/person names would pre-mark most of a page).
+4. **Document/text classification template** — doc-level classes with digit keys (doccano's
+   classification project; Argilla's label questions). `tag` rows exist; the surface doesn't.
+5. **Long-document behaviour** — the canvas renders all lines eagerly; a 10k-line document wants
+   virtualization + a minimap/outline. Fine at page scale, unproven at book scale.
+6. **>9 classes** — digit hotkeys cap at 9; needs class paging or two-key chords.
+7. Argilla-class review templates — ranking/preference/chat-eval (RLHF-style response comparison)
+   are a different question type entirely; nothing in the estate models "compare two candidates".
+8. Entity linking/normalization — a span → knowledge-base id field (LS taxonomy/lookup); relevant
+   the moment indexing wants "which Gustav".
+9. Text export formats — CoNLL/spaCy JSONL/W3C annotations for the span plane (the text half of
+   finding 7's converters).
+
+### 8e. QUESTION TYPES & COMPARISON SURFACES (cross-modal — the Label-Studio/Argilla family)
+
+The family of "ask a question about the item" tasks, orthogonal to modality. The references split
+cleanly: **CVAT does not have this family at all** (its classification story is image tags +
+per-shape radio/select/checkbox attributes; no pairwise, ranking or rating). **Label Studio** does
+it entirely through config templates (`<Choices>` single/multiple, `<Rating>`, `<Ranker>`,
+`<Pairwise>`; its LLM-eval templates compose prompt + N responses side by side with per-response
+ratings + an overall preference). **Argilla** is the purpose-built reference — label/multi-label,
+rating, ranking and pairwise questions are its whole product (the RLHF/DPO collection shapes).
+
+Where rask stands, per question type:
+
+1. **Classification (multiclass/multilabel)** — ~~surface ABSENT~~ LANDED: `ClassificationBar`
+   renders the ontology's `tag` classes as a chip bar over any modality's workspace; a chip is a
+   `tag` row on the ordinary machinery. (Single-choice enforcement stays with the ontology
+   validators at submit; per-shape enum attributes still never reach the canvas — finding 4.)
+2. **Rating** — the DATA plane landed with §9.3's attribute editor: a class declaring
+   `{name:'rating', type:'int'}` (or an enum 1–5) is now enterable per row and validated at
+   submit. Still missing the SURFACE: a star/segment control and an item-level (not per-shape)
+   question placement.
+3. **Ranking** — nothing models "order N candidates".
+4. **Pairwise / preference (A/B)** — ~~nothing models it~~ LANDED as predicted: the compare view
+   IS the side-by-side re-composition of the multi-key item plus the choice question
+   (`?view=compare` — a pick is a `tag` row on the winning unit, version-guarded per pane).
+   Consensus adjudication still compares ANNOTATORS, not candidates — unchanged.
+5. **Compare view ("seeing 2")** — LANDED for candidates of one item (see 4: image frames or
+   document text side by side). Still open in the other two senses: version history diffs counts
+   not pixels, and there is no split view of two LAYERS of the same unit (IR/RGB, before/after).
+
+All five are finding 8 in miniature: none is a new modality — each is a new QUESTION over existing
+media, which is exactly what a template system expresses and hardcoded viewers cannot.
+
+---
+
+## 9. THE SAVE-PATH AUDIT (2026-08-08 late) — what each task's saved rows actually are
+
+The e2e suites stub the save POST, so a field the client sends and the server silently drops is
+invisible to them: canvas correct, payload asserted, row lands wrong. `tests/unit/
+test_task_shapes_saved.py` closes the hole — it drives the endpoint's own primitives
+(`NewAnnotation` validation → `new_rows` → real Lance `merge_insert`) per task shape and reads the
+rows back, plus a drift GATE: every `InsertRow` wire field must be declared on `NewAnnotation`,
+because pydantic ignores unknown fields — an undeclared field is not a 422 anywhere, it is a
+column that quietly lands null.
+
+**Found and FIXED by that gate:** text spans did not survive the save. `parent_id`/`char_start`/
+`char_end` were in the table schema, in `InsertRow`, written by the controller — and absent from
+`NewAnnotation`, so every real save landed them null: the span rendered from the client overlay,
+saved, and reloaded as an orphan. Now declared (sentinels `''`/`-1` matching `makeInsertRow`) and
+pinned by round-trip tests, composite item included (region + transcription + span + tag in one
+version).
+
+**Verified working (the interplay is real):** the assist route normalizes producer dialects
+(`rectangle`→`bbox` etc.) BEFORE `_within_contract` filters against the task's derived tool
+union, and drops are reported, not silent — proven against a composite polygon/bbox/text
+ontology. Save-path identity stamping, prediction scores, tag rows, transcription edits
+(`EDITABLE_FIELDS`), OCC base-version — all round-trip.
+
+**Found and OPEN, ranked (the assist-first defect list):**
+
+| # | Defect | Where |
+| --- | --- | --- |
+| 9.1 | ~~Links wipe on reopen~~ **FIXED**: the shell reads the task draft once at open and `restoreLinks` puts the snapshot back into state and onto the canvas (no-clobber: links drawn before the async read resolved win). E2e pins the loop at the wire — the reopened inspector lists the link AND the next draft PUT carries it, not `[]`. | `AnnotatorShell.svelte`, `annotator.svelte.ts` |
+| 9.2 | ~~Spans + links never publish~~ **FIXED**: the published schema grew the textual facet (`parent_id`/`char_start`/`char_end`) and a `links` JSON column (`[{"name","to"}]`, outgoing edges per row, sorted for replay determinism, `[]` never `""`); `_row` emits both from the draft. 34 → 38 columns, pin updated. | `projects/publish.py` |
+| 9.3 | ~~`reading-order` preset is unsatisfiable~~ **FIXED**: per-row attributes ride the `metadata` JSON column (declared on both wire models + `EDITABLE_FIELDS`); the inspector grows an ontology-driven attribute editor (int/enum/bool/free, required marked); the draft snapshot maps them onto `Shape.attributes` so submit validation judges what was entered; a declared `order` beats `y` in the transcription lane. Rating-as-typed-int (§8e.2) falls out for free. | `AnnotationDetail`, `annotations/schema.py`, `draft-shapes.ts` |
+| 9.4 | ~~SAM click is unreachable~~ **FIXED**: the tool commits everything (clicks included, as zero-size rects) and the accidental-click policy moved to the controller's commit seam, where the meaning is known — an armed producer honours the click as a region prompt (the backend grows it into a patch), an unarmed canvas discards sub-5×5 rects exactly as before. "Click or drag to segment" is now both halves true. | `RectTool.ts`, `annotator.svelte.ts` |
+| 9.5 | ~~Two producer registries disagree~~ **FIXED**: `_RETURNS` knows the full family (htr→text, insid3→mask, vlm-judge/embed-propagate→verdicts, honestly empty), so `/assist/producers` lists all six, compatibility computes for the batch producers, and a new `interactive` flag lets the assist bar gate batch-only families out of its mode buttons (they stay in the registry panel as facts). | `assist.py` |
+| 9.6 | ~~Jobs op vocabulary mismatch~~ **FIXED**: the wire picklist is exactly the service's `predict|propagate|judge`, and `apply()` returns an honest `unsupported` for a batch `set`/`verdict` (bulk field-writes are the tags plane) instead of posting a guaranteed 422. | `jobs.remote.ts`, `annotator.svelte.ts` |
+| 9.7 | **`model_version` has no writer** — every model prediction is unattributable to a model version. | `AssistShape`, `NewAnnotation` |
+| 9.8 | ~~No task→text-canvas path~~ **FIXED**: `MediaKind` (models + ontology) accepts `text`, and `taskCanvasHref` emits the task's modality as `kind=` (audio/video/text; image and unknowns fall back to the default canvas). `TaskQueue.canvasHref` now DELEGATES to the one href builder — the second spelling had already drifted. | `task-stream.ts`, `models.py` |
+| 9.9 | **Relation model is thin.** `directed` is declared and never read; no cardinality beyond per-relation `required`; rail lives only in the inspector. | `ontology.py:121` |
+
+Also verified: interactive assist is strictly ONE-SHOT (no session, no point arrays, no
+encode/decode split despite `sam-click`'s description); the review queue's ranking is exactly
+predictions-first + uncertainty-desc, client-side, per-unit; batch jobs are a deterministic mock
+that never runs; bulk tags (`TagBatch`/`tag_rows`) are idempotent insert-only rows with arity
+checks (covered by `test_annotate.py`).
 
 ---
 

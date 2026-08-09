@@ -160,6 +160,30 @@ test('seeking MOVES the interpolated box; outside the lifetime the object is abs
 	}
 });
 
+test('the video carries an AUDIO LANE — drag on the timeline labels an event segment', async ({
+	page,
+}) => {
+	// The CVAT/Label-Studio composition: frame on top, the soundtrack as a labelable waveform
+	// lane under it, one transport for both. This fixture has NO audio track, which is the lane's
+	// hardest honest case: it must fall back to a flat timeline that says so — and still label,
+	// because events on a silent clip are still events.
+	await openClip(page);
+	const lane = page.getByTestId('video-waveform');
+	await expect(lane).toBeVisible();
+	await expect(page.getByTestId('video-waveform-silent')).toBeVisible();
+
+	// Drag across the timeline — the audio-event gesture, identical to the audio viewer's.
+	const bb = (await lane.boundingBox())!;
+	const y = bb.y + bb.height / 2;
+	await page.mouse.move(bb.x + bb.width * 0.2, y);
+	await page.mouse.down();
+	await page.mouse.move(bb.x + bb.width * 0.5, y, { steps: 8 });
+	await page.mouse.up();
+
+	// The segment landed as a row beside the two keyframes — same rows, same Save.
+	await expect(page.getByTestId('annotation-list').getByRole('button')).toHaveCount(3);
+});
+
 test('+ keyframe extends the track from the current selection at the current moment', async ({
 	page,
 }) => {

@@ -39,6 +39,14 @@
 					}))
 			: [],
 	);
+
+	// ATTRIBUTES. The ontology's typed per-class fields (reading order, script, damaged, …), edited
+	// HERE because an attribute belongs to one annotation the way its label does. Values are strings
+	// on the wire — the submit validator parses int/bool/enum — so every control writes a string and
+	// clearing writes '' (which drops the key). Rendered only when the row's CLASS declares any: an
+	// attribute form on a class with none is a control that can produce nothing.
+	const attrSpecs = $derived(row ? controller.attributesFor(row.label) : []);
+	const attrValues = $derived(row ? controller.rowAttributes(row.index) : {});
 </script>
 
 {#if row}
@@ -70,14 +78,22 @@
 			</div>
 		</div>
 
-		<label class="flex flex-col gap-1.5 text-xs">
-			<span class="text-muted-foreground">Text</span>
-			<TextInput
-				value={row.text}
-				placeholder="—"
-				oninput={(e) => controller.updateField(row.index, 'text', e.currentTarget.value)}
-			/>
-		</label>
+		<!-- TRANSCRIPTION — the row's text facet, offered per the CLASS's declaration: an OCR
+		     paragraph declares `transcribe`, a detection box does not, and an unconstrained
+		     canvas (no task, or a label no class covers) keeps the historical everywhere-
+		     editable behaviour. This is the answer to "is transcription an attribute?": it is
+		     neither a tool nor an attribute — it is the primary content column, declared per
+		     class in the ontology. -->
+		{#if controller.offersTranscription(row.label)}
+			<label class="flex flex-col gap-1.5 text-xs" data-testid="transcription-field">
+				<span class="text-muted-foreground">Transcription</span>
+				<TextInput
+					value={row.text}
+					placeholder="—"
+					oninput={(e) => controller.updateField(row.index, 'text', e.currentTarget.value)}
+				/>
+			</label>
+		{/if}
 
 		<!-- Offered only when the TASK declares a class that can be drawn as text. A labeling
 		     surface on a task with no text class is a control that can produce nothing. -->
@@ -127,6 +143,57 @@
 				oninput={(e) => controller.updateField(row.index, 'group', e.currentTarget.value)}
 			/>
 		</label>
+
+		{#if attrSpecs.length > 0}
+			<div class="flex flex-col gap-2 border-t pt-3" data-testid="attributes-panel">
+				<span class="text-muted-foreground text-xs font-medium">Attributes</span>
+				{#each attrSpecs as spec (spec.name)}
+					<label class="flex items-center justify-between gap-2 text-xs">
+						<span class="text-muted-foreground">
+							{spec.name}{#if spec.required}<span
+									class="text-destructive"
+									title="required — submit refuses a {row.label} without it">*</span
+								>{/if}
+						</span>
+						{#if spec.type === 'enum'}
+							<select
+								class="border-input bg-background h-7 rounded-md border px-2 text-xs"
+								value={attrValues[spec.name] ?? ''}
+								data-testid={`attr-${spec.name}`}
+								onchange={(e) =>
+	controller.setAttribute(row.index, spec.name, e.currentTarget.value)}
+							>
+								<option value="">—</option>
+								{#each spec.choices as c (c)}<option value={c}>{c}</option>{/each}
+							</select>
+						{:else if spec.type === 'bool'}
+							<input
+								type="checkbox"
+								class="accent-primary size-4"
+								checked={attrValues[spec.name] === 'true'}
+								data-testid={`attr-${spec.name}`}
+								onchange={(e) =>
+	controller.setAttribute(
+		row.index,
+		spec.name,
+		e.currentTarget.checked ? 'true' : 'false',
+	)}
+							/>
+						{:else}
+							<input
+								type={spec.type === 'int' ? 'number' : 'text'}
+								class="border-input bg-background h-7 w-24 rounded-md border px-2 text-right text-xs"
+								value={attrValues[spec.name] ?? ''}
+								placeholder="—"
+								data-testid={`attr-${spec.name}`}
+								oninput={(e) =>
+	controller.setAttribute(row.index, spec.name, e.currentTarget.value)}
+							/>
+						{/if}
+					</label>
+				{/each}
+			</div>
+		{/if}
 
 		<dl class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
 			<dt class="text-muted-foreground">Source</dt>

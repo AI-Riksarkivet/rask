@@ -344,7 +344,9 @@ def test_the_column_tuple_is_derived_from_the_schema_not_maintained_beside_it() 
     from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA
 
     assert tuple(PUBLISHED_LABELS_SCHEMA.names) == PUBLISHED_COLUMNS
-    assert len(PUBLISHED_COLUMNS) == 34, "DESIGN §7.1 specifies 34 columns"
+    # §7.1's 34, + the textual facet (parent_id/char_start/char_end) and `links` (§9.2): work that
+    # submit VALIDATED — spans and relations — was dropped at publish until these columns existed.
+    assert len(PUBLISHED_COLUMNS) == 38, "34 (DESIGN §7.1) + 4 (§9.2 spans + links)"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -622,3 +624,54 @@ def test_the_facets_TWO_class_lists_became_ONE_and_cannot_disagree() -> None:
     whole = sorted(c["name"] for c in facet["ontology"]["classes"])
     assert summary == whole == ["person", "ship"]
     assert table_properties(project, plan)["annotation.label_classes"] == "person,ship"
+
+
+# --------------------------------------------------------------------------------------------------
+# The textual facet + relations publish — §9.2 (validated at submit, previously dropped here)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_a_span_publishes_its_anchor_not_just_its_substring() -> None:
+    """A published NER dataset without parent_id/offsets is substrings a trainer cannot use."""
+    import json
+
+    from annotator.projects.models import Link
+
+    draft = Draft(
+        task_id="t0",
+        project_id="p1",
+        author="gina",
+        shapes=[
+            Shape(shape_id="line", shape_type="text", text="Gustaf Eriksson Vasa", label="line"),
+            Shape(shape_id="span", shape_type="text", label="person", parent_id="line", char_start=0, char_end=20),
+        ],
+        links=[Link(name="mentions", from_shape="span", to_shape="line")],
+        revision=1,
+    )
+    plan = _plan([(_task("t0", TaskState.ACCEPTED), draft)])
+
+    rows = {r["annotation_id"]: r for r in plan.rows}
+    span = rows["span"]
+    assert span["parent_id"] == "line"
+    assert (span["char_start"], span["char_end"]) == (0, 20)
+    # The edge leaves the span row, addressed by annotation_id; the line row carries none.
+    assert json.loads(span["links"]) == [{"name": "mentions", "to": "line"}]
+    assert json.loads(rows["line"]["links"]) == []
+
+
+def test_sentinel_rows_carry_valid_empty_json_for_links() -> None:
+    """`pa.json_()` refuses '' at write time — the sentinel must say [] like attributes say {}."""
+    plan = _plan([(_task("t0", TaskState.SKIPPED), _draft("t0", 2))])
+    (sentinel,) = plan.rows
+    assert sentinel["links"] == "[]"
+    assert sentinel["parent_id"] is None
+
+
+def test_every_row_key_is_a_published_column() -> None:
+    """The row dict and the Arrow schema are one contract — a key the schema lacks surfaces as an
+    opaque conversion error in a cluster instead of here."""
+    from annotator.projects.publish import PUBLISHED_COLUMNS
+
+    plan = _plan([(_task("t0", TaskState.ACCEPTED), _draft("t0", 1))])
+    (row,) = plan.rows
+    assert set(row.keys()) == set(PUBLISHED_COLUMNS)

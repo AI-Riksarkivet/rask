@@ -14,6 +14,9 @@
 		marks,
 		classes,
 		selectedIndex = null,
+		testid = 'span-surface',
+		hint = true,
+		textClass = 'text-sm leading-8',
 		onlabel,
 		onpick,
 		onremove,
@@ -23,6 +26,15 @@
 		/** The task's text classes — the label buttons a fresh selection offers. */
 		classes: string[];
 		selectedIndex?: number | null;
+		/** Test handle — the surface mounts in the inspector AND per-line in the transcription
+		 *  lane, and two anonymous copies would be unlocatable apart. */
+		testid?: string;
+		/** Show the idle "select text…" hint. Off in the transcription lane, where one hint per
+		 *  line would repeat itself down the whole page. */
+		hint?: boolean;
+		/** Typography of the text body — the document canvas reads at document size, the
+		 *  inspector's copy stays compact. */
+		textClass?: string;
 		onlabel?: (start: number, end: number, label: string) => void;
 		onpick?: (index: number) => void;
 		onremove?: (index: number) => void;
@@ -42,9 +54,20 @@
 		return Number(seg.dataset.start) + offset;
 	}
 
+	let container = $state<HTMLElement | null>(null);
+
+	/** Window-level on purpose: many surfaces mount at once (one per document line), and each
+	 *  clears its pending unless the selection landed INSIDE it — so exactly one surface holds a
+	 *  pending span at a time, and the digit hotkeys below can never label two lines with one key. */
 	function captureSelection(): void {
 		const sel = window.getSelection();
-		if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+		if (
+			!sel ||
+			sel.isCollapsed ||
+			sel.rangeCount === 0 ||
+			!container ||
+			!container.contains(sel.anchorNode)
+		) {
 			pending = null;
 			return;
 		}
@@ -55,6 +78,19 @@
 			return;
 		}
 		pending = { start: Math.min(a, b), end: Math.max(a, b) };
+	}
+
+	/** The doccano keyboard: with a selection pending, digits 1–9 label it with the nth class —
+	 *  the whole gesture is select · press · next. Only the surface holding the selection reacts. */
+	function onHotkey(e: KeyboardEvent): void {
+		if (!pending) return;
+		const el = e.target as HTMLElement | null;
+		const tag = el?.tagName?.toLowerCase();
+		if (tag === 'input' || tag === 'textarea' || el?.isContentEditable) return;
+		const n = Number(e.key);
+		if (!Number.isInteger(n) || n < 1 || n > classes.length) return;
+		e.preventDefault();
+		commit(classes[n - 1]!);
 	}
 
 	function commit(label: string): void {
@@ -70,11 +106,15 @@
 		`color-mix(in oklab, ${spanColor(label, classes)} 26%, transparent)`;
 </script>
 
-<div class="flex flex-col gap-1.5" data-testid="span-surface">
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
+<svelte:window onmouseup={captureSelection} onkeydown={onHotkey} />
+
+<div class="flex flex-col gap-1.5" data-testid={testid}>
 	<div
-		class="border-input bg-background selection:bg-primary/25 rounded-md border p-2.5 text-sm leading-8 select-text"
-		onmouseup={captureSelection}
+		bind:this={container}
+		class={cn(
+	'border-input bg-background selection:bg-primary/25 rounded-md border p-2.5 select-text',
+	textClass,
+)}
 	>
 		{#each segments as seg (seg.start)}
 			{#if seg.marks.length > 0}
@@ -127,7 +167,7 @@
 				</Button>
 			{/each}
 		</div>
-	{:else}
+	{:else if hint}
 		<span class="text-muted-foreground text-[11px]">
 			Select text above to label a span{classes.length ? '' : ' — this task declares no text classes'}.
 		</span>
