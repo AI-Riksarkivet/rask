@@ -22,8 +22,16 @@ corrected live, and deploying a model IS registering it. Nothing here imports ``
 response is walked structurally (the schema is pinned by Ray's own ``extra="forbid"`` models,
 and a structural walk survives additive evolution).
 
-Only RUNNING applications are offered — a deploying or unhealthy app is not an endpoint
-anyone can call. The env registry (``MEDIA_ASSIST_BACKENDS``) stays as the OPERATOR OVERRIDE:
+Only RUNNING applications are offered — per the Serve status vocabulary, RUNNING means
+"all deployments are healthy", so the app-level filter is the whole health check (a
+DEPLOYING/DEPLOY_FAILED/DELETING app is not an endpoint anyone can call).
+
+DEPLOYMENT DISCIPLINE (from the REST API docs): ``PUT /api/serve/applications/`` is
+declarative and REPLACES — "removes all applications not listed in the new config". One
+writer owns the Serve config: under KubeRay that is the RayService CR's serveConfigV2, and
+ad-hoc ``serve deploy`` PUTs against a cluster carrying /transcribe + /htrflow would DELETE
+them unless the full application list rides along. Same single-writer rule as the Helm
+release; discovery only ever READS. The env registry (``MEDIA_ASSIST_BACKENDS``) stays as the OPERATOR OVERRIDE:
 an env entry with the same producer name wins over discovery, because config is intent and
 discovery is observation. Discovery failing (cluster down, dashboard unreachable) degrades to
 the env registry + mock — the same fail-honest posture as everything else in this plane.
