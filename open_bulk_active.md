@@ -204,8 +204,14 @@ the natural exemplar picker at corpus scale.
    per VISIBLE row (IntersectionObserver + the Arrow wire; `content-visibility` rows), the
    sparse-fetch discipline §3.5 demands. Rows deep-link into the canvas with full context.
    Filtered-slice selections (beyond one task) ride phase 6's selection work. (was: medium)
-2. **Cell state overlay + inline accept/edit**: the sparse overlay schema (validated +
-   attribution + provenance), thumbs-up accept, inline edit through the save wire. (medium)
+2. ~~Cell state overlay + inline accept/edit~~ **LANDED 2026-08-09**: ✓-accept flips every
+   `prediction` row to `accepted` in one save; ✎ edits the transcription excerpt inline —
+   both through the EXISTING save wire (per-field edits + base_version OCC, no second store).
+   Attribution needed no new schema: the save path already stamps `reviewer`/`updated_at`
+   server-side on every touched row, so the grid re-fetches and renders the server's stamp
+   (`✓ gina · time`) rather than claiming identity client-side. A 409 re-fetches; an edit
+   conflict keeps the draft open over the fresh state. `summarize()` grew the actionable
+   fields (predictionIds, textId, reviewer/reviewedAt). (was: medium)
 3. **Recipe columns + preview-first**: act-first add-column (one textarea; declaration
    derived — auto-name, inferred/progressive type, silent ontology PATCH), producer picker
    registry-driven, `{{column}}` templating, auto-run 5 rows through the assist plane,

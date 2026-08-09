@@ -48,13 +48,17 @@ const taskItem = (id: string, key: string, state: string, assignee: string | nul
 	media: { kind: 'image' },
 });
 
-function ipc(rows: { shape: string; label: string; status: string; text: string }[]): Buffer {
+function ipc(
+	rows: { shape: string; label: string; status: string; text: string; reviewer?: string }[],
+): Buffer {
 	const table = tableFromArrays({
 		id: rows.map((_, i) => `r${i}`),
 		shape_type: rows.map((r) => r.shape),
 		label: rows.map((r) => r.label),
 		status: rows.map((r) => r.status),
 		text: rows.map((r) => r.text),
+		reviewer: rows.map((r) => r.reviewer ?? ''),
+		updated_at: rows.map((r, i) => (r.reviewer ? 1000 + i : 0)),
 	});
 	return Buffer.from(tableToIPC(table, 'stream'));
 }
@@ -129,6 +133,93 @@ test('the grid: one row per item, live annotation state per visible row, canvas 
 	expect(href).toContain('task=t1');
 	expect(href).toContain('project=p1');
 	expect(href).toContain('dataset=demo');
+});
+
+test('accept and inline edit ride the save wire — OCC version echoed, attribution rendered back', async ({
+	page,
+}) => {
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/reset`);
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/seed`, {
+		data: {
+			routes: {
+				'GET /projects/p1': { project: PROJECT, legal_events: [] },
+				'GET /projects/p1/tasks': {
+					tasks: { t1: 'claimed' },
+					counts: { claimed: 1 },
+					total: 1,
+					terminal: 0,
+					may_publish: false,
+					details: [taskItem('t1', 'doc1/0/1', 'claimed', 'gina')],
+				},
+			},
+		},
+	});
+	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/api/chunk-frame/**', (route) =>
+		route.fulfill({ status: 200, contentType: 'image/png', body: PNG }),
+	);
+
+	// A STATEFUL wire: each save advances the table version and the served rows, the way the
+	// real backend's merge-commit does — so the test proves the grid re-fetches and re-renders
+	// what the SERVER stamped (reviewer), never what the client claimed.
+	const saves: Array<{ edits: Array<Record<string, string>>; base_version: number | null }> = [];
+	let phase: 'initial' | 'accepted' | 'edited' = 'initial';
+	const served = () => {
+		if (phase === 'initial')
+			return {
+				version: '1',
+				body: ipc([
+					{ shape: 'bbox', label: 'paragraph', status: 'accepted', text: 'Anno 1632' },
+					{ shape: 'bbox', label: 'stamp', status: 'prediction', text: '' },
+				]),
+			};
+		const text = phase === 'edited' ? 'Anno 1632 den 14 maij' : 'Anno 1632';
+		return {
+			version: phase === 'accepted' ? '2' : '3',
+			body: ipc([
+				{ shape: 'bbox', label: 'paragraph', status: 'accepted', text, reviewer: 'gina@dev' },
+				{ shape: 'bbox', label: 'stamp', status: 'accepted', text: '', reviewer: 'gina@dev' },
+			]),
+		};
+	};
+	await page.route('**/annotator/api/annotations/**', async (route) => {
+		if (route.request().method() === 'POST') {
+			const body = route.request().postDataJSON();
+			saves.push({ edits: body.edits, base_version: body.base_version });
+			phase = body.edits.some((e: Record<string, string>) => e.status) ? 'accepted' : 'edited';
+			return json(route, { version: saves.length + 1, touched: body.edits.length });
+		}
+		const { version, body } = served();
+		return route.fulfill({
+			status: 200,
+			contentType: 'application/vnd.apache.arrow.stream',
+			headers: { 'X-Annotations-Version': version },
+			body,
+		});
+	});
+
+	await page.goto('/annotator/bulk?task=p1');
+	const row = page.getByTestId('bulk-row').first();
+
+	// ✓ ACCEPT: one save flips every prediction row, echoing the version the row rendered from.
+	await row.getByTestId('bulk-accept').click();
+	await expect(row.getByTestId('bulk-reviewed')).toContainText('gina@dev');
+	expect(saves[0]).toEqual({ edits: [{ id: 'r1', status: 'accepted' }], base_version: 1 });
+	await expect(row.getByTestId('bulk-regions')).not.toContainText('prediction');
+	await expect(row.getByTestId('bulk-accept')).toHaveCount(0);
+
+	// ✎ EDIT: the excerpt's own row is patched, against the version the accept advanced to.
+	await row.getByTestId('bulk-text-edit').click();
+	const editor = row.getByTestId('bulk-text-editor');
+	await expect(editor).toHaveValue('Anno 1632');
+	await editor.fill('Anno 1632 den 14 maij');
+	await row.getByTestId('bulk-text-save').click();
+	await expect(row.getByTestId('bulk-text')).toContainText('Anno 1632 den 14 maij');
+	expect(saves[1]).toEqual({
+		edits: [{ id: 'r0', text: 'Anno 1632 den 14 maij' }],
+		base_version: 2,
+	});
+	await expect(row.getByTestId('bulk-text-editor')).toHaveCount(0);
 });
 
 test('without a labeling task, the page says where to come from — no dead chrome', async ({

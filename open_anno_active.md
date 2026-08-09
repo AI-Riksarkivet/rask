@@ -42,10 +42,13 @@ Everything below assumes no memory of prior conversations; these are the working
 - **Sandbox limits (cloud)**: no helm binary (chart edits get a stated render-check
   scope-cut); egress blocks `docs.ray.io`/`get.helm.sh` (read Ray from the installed package
   or raw.githubusercontent); no k3s/Dagger.
-- **Backlog, recommended order**: (1) open-bulk phase 1–2 (grid over a selection + cell-state
-  overlay, per `open_bulk_active.md` §6); (2) deploy ONE real Serve model with a `labeling`
+- **Backlog, recommended order**: (1) ~~open-bulk phase 1–2~~ BOTH LANDED 2026-08-09 (the grid +
+  ✓-accept/✎-edit through the save wire with server-stamped attribution, per
+  `open_bulk_active.md` §6.1–6.2); (2) deploy ONE real Serve model with a `labeling`
   user_config block — closes finding 0's runner half AND exercises discovery live; (3)
-  open-bulk 3–4 (recipe columns + jobs-seam runs); (4) IoU/NMS + class-filter knobs (finding
+  open-bulk 3–4 (recipe columns + jobs-seam runs — phase 3 is ACT-FIRST per the audited
+  dynamism bar in `open_bulk_active.md` §5: one textarea, derived declaration, progressive
+  typing); (4) IoU/NMS + class-filter knobs (finding
   1 rest); (5) embedding selection; (6) timeline rail (6), OBB + mask ops (3); (7) COCO/YOLO
   converters (7), QA-sampling accept (5), relation cardinality (9.9), `difficult` flag (4),
   sample-item designer backdrop.
