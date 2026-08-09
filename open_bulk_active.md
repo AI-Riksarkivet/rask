@@ -154,8 +154,12 @@ the natural exemplar picker at corpus scale.
 
 ## §6 Implementation plan (phased, each phase shippable)
 
-1. **The grid over a selection** (read-only): virtualized table over task items/filtered slice,
-   ontology-derived columns, media thumbnails, existing label state rendered. (medium)
+1. ~~The grid over a selection~~ **LANDED 2026-08-09** (`/bulk?task=<id>`, linked from the task
+   detail): one row per item — thumbnail, key, workflow state, assignee, corpus facet,
+   then LIVE annotation state (status counts, item tags, transcription excerpt) fetched
+   per VISIBLE row (IntersectionObserver + the Arrow wire; `content-visibility` rows), the
+   sparse-fetch discipline §3.5 demands. Rows deep-link into the canvas with full context.
+   Filtered-slice selections (beyond one task) ride phase 6's selection work. (was: medium)
 2. **Cell state overlay + inline accept/edit**: the sparse overlay schema (validated +
    attribution + provenance), thumbs-up accept, inline edit through the save wire. (medium)
 3. **Recipe columns + preview-first**: add-column with producer picker (registry-driven),

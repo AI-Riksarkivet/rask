@@ -237,11 +237,18 @@
 		     fixing once already by a different route (auto-placement putting the queue in a 320px
 		     track). One surface per tab, and the surface you are on is the whole page. -->
 		<Tabs.Root value="labeling">
+			<div class="flex items-center justify-between gap-2">
 			<Tabs.List>
 				<Tabs.Trigger value="labeling" data-testid="tab-labeling">Labeling</Tabs.Trigger>
 				<Tabs.Trigger value="settings" data-testid="tab-settings">Task settings</Tabs.Trigger>
 				<Tabs.Trigger value="publish" data-testid="tab-publish">Publish</Tabs.Trigger>
 			</Tabs.List>
+			<!-- The OPEN-BULK grid: the same items as a scannable table with live annotation
+			     state per row — the queue audits workflow, the grid scans content. -->
+			<Button variant="outline" size="sm" href="{base}/bulk?task={projectId}" data-testid="open-bulk-grid">
+				Bulk grid
+			</Button>
+			</div>
 
 			<!-- THE WORK. `min-w-0` so a wide table scrolls inside its own container rather than forcing
 			     the panel wider than its parent (a flex/grid item's default `min-width:auto`). -->
