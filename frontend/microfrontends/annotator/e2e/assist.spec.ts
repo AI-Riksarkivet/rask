@@ -130,6 +130,8 @@ test('a real-runner Detect drops a prediction the reviewer can Accept — never 
 	await page.goto(`/annotator/?dataset=demo&keys=${encodeURIComponent(KEY)}`);
 	await expect(page.getByTestId('assist-mock-chip')).not.toBeVisible();
 
+	// Every model tool lives behind the ONE rainbow entry point now.
+	await page.getByTestId('ai-assist-open').click();
 	await page.getByPlaceholder(/AI detect/).fill('text');
 	await page.getByRole('button', { name: 'Run', exact: true }).click();
 

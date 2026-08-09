@@ -50,6 +50,12 @@ coverage; line references in §1–§3 predate these and are stale where they ov
   are the exemplars, a scope select (this item / entire dataset), one `insid3` job on the jobs
   seam with exemplar IDS, and an outcome line that reports the WIRE truth (job id + the honest
   mock warning), not the synchronous guess. The seam existed end to end and nothing called it.
+- ONE AI entry point: the toolbar's rainbow `AI assist` button (the estate's only loud
+  affordance — it summons a model; quiet buttons draw) opens one panel grouping every model tool
+  by what it needs from you — a PROMPT (detect), a REGION (segment + interactive producers; arming
+  closes the panel, the canvas is where regions are drawn), or EXEMPLARS (propagation, moved OUT
+  of the right sidebar). The honesty chip and the registry stay on the toolbar — a warning behind
+  a click is a warning most people never see. `@rask/ui/rainbow-button` is the new primitive.
 - Fixed at the source along the way: floating pills overlapping the temporal strips; unseekable
   route-served media in e2e (206 ranges); the e2e mock treating any seeded body carrying a string
   `status` field as its {status, body} response shape (every seeded jobs route answered 500).

@@ -12,7 +12,6 @@
 	import AnnotationTable from './AnnotationTable.svelte';
 	import BulkActions from './BulkActions.svelte';
 	import LayerPanel from './LayerPanel.svelte';
-	import PropagatePanel from './PropagatePanel.svelte';
 	import VersionHistoryPanel from './VersionHistoryPanel.svelte';
 	import type { AnnotatorController } from '../annotator.svelte';
 
@@ -96,11 +95,6 @@
 			<AnnotationList {controller} />
 		{/if}
 	</div>
-
-	<!-- Visible whenever exemplars are picked, in EITHER mode (multi-select or the inspector) —
-	     the panel gates itself. Few-shot propagation is an act ON the selection, like bulk
-	     accept, so it lives with the selection surfaces rather than behind a producer menu. -->
-	<PropagatePanel {controller} />
 
 	<LayerPanel {controller} />
 	<VersionHistoryPanel {controller} />

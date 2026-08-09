@@ -71,8 +71,13 @@ test('picking an exemplar and pressing Propagate posts ONE honest job', async ({
 	const keys = [KEY, `${DOC}/0/20`, `${DOC}/0/21`];
 	await page.goto(`/annotator/?keys=${encodeURIComponent(keys.join(','))}`);
 
-	// No selection ⇒ no panel — a control that could submit "nothing" reads as broken.
+	// Propagation lives in the ONE assist panel now. With nothing selected it shows its empty
+	// state — what feeds it — never a control that could submit "nothing".
+	await page.getByTestId('ai-assist-open').click();
+	await expect(page.getByTestId('ai-assist-panel')).toBeVisible();
+	await expect(page.getByTestId('propagate-empty')).toBeVisible();
 	await expect(page.getByTestId('propagate-panel')).toHaveCount(0);
+	await page.keyboard.press('Escape'); // close, to pick exemplars from the list
 
 	// Pick TWO exemplars (Ctrl-click = the list's multi-select); the panel counts them.
 	// BOTH picks are Ctrl-clicks: a plain click swaps the list for the inspector, and the second
@@ -88,6 +93,7 @@ test('picking an exemplar and pressing Propagate posts ONE honest job', async ({
 		.filter({ hasText: 'stamp' })
 		.nth(1)
 		.click({ modifiers: ['Control'] });
+	await page.getByTestId('ai-assist-open').click();
 	const panel = page.getByTestId('propagate-panel');
 	await expect(panel).toBeVisible();
 	await expect(panel.getByTestId('propagate-count')).toHaveText('2 exemplars');

@@ -72,7 +72,17 @@
 	}
 </script>
 
-{#if exemplars.length > 0}
+{#if exemplars.length === 0}
+	<!-- The empty state SAYS what feeds it — inside the assist panel, a section that silently
+	     vanished would read as a missing feature rather than as "nothing selected yet". -->
+	<div class="border-border flex flex-col gap-1 border-t p-3" data-testid="propagate-empty">
+		<span class="text-muted-foreground text-xs font-medium">Propagate from exemplars</span>
+		<p class="text-muted-foreground text-[11px]">
+			Select one or more annotations first — they become the few-shot examples a batch run applies
+			across the scope.
+		</p>
+	</div>
+{:else}
 	<div class="border-border flex flex-col gap-2 border-t p-3" data-testid="propagate-panel">
 		<div class="flex items-center justify-between">
 			<span class="text-muted-foreground text-xs font-medium">Propagate</span>
