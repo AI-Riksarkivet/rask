@@ -492,22 +492,33 @@ Attack these first — they are where I am most likely wrong.
 
 ## 8 · Recommended order
 
-1. **Settle §7.1** (does the operator exist). One question to whoever owns the platform CRDs. Every
-   §3 decision hangs on it, and it costs a message.
-2. **P6 — project membership API.** The only finding that blocks real users today. Needs the
-   admin-vs-member product ruling in §4.1 first.
-3. **P1+P2+P3 — delete the controlplane**, assuming §7.1 comes back "no operator". One commit:
-   service, gateway row, chart template, values block, `@rask/api/projects.ts`, `getProjects`. Keep
-   `/api/projects` unassigned.
-4. **P8 — enumerate `can_observe_events`'s consumers in the model comment.** Comment-only, no
-   semantic change, immediately reduces the audit hazard. The rename to `can_administer_estate` is a
-   separate, larger change.
-5. **P7 — one line in `projects.py`'s docstring** stating the create/delete asymmetry is deliberate.
-6. **§6 — decide whether `alter_transaction` authorizes per-action.** If yes, the two "dead"
+**Owner ruling, 2026-08-09: the controlplane/CRD strand (P1–P5, §7.1) is DEPRIORITIZED.** It is
+dead code plus archaeology on an operator that may not exist, and chasing it now is premature. It
+keeps its findings below for whenever someone does a cleanup pass, but it is not the reason to open
+this file. Ordered accordingly:
+
+1. **P6 — the project membership API.** The only finding here that blocks real users, and it is
+   independent of everything in §3: no CRDs, no controlplane, no k8s. A project admin cannot invite
+   anyone into their own tenant. Copy the shape of `annotator/.../members.py`, which already ships
+   exactly this API one level down in the same estate. Needs the admin-vs-member product ruling in
+   §4.1 first.
+2. **P8 — enumerate `can_observe_events`'s consumers in the model comment.** Comment-only, no
+   semantic change, immediately reduces the audit hazard of a relation named "read the feed" that
+   actually confers estate-wide tuple writing. The rename to `can_administer_estate` is a separate,
+   larger change.
+3. **P7 — one line in `projects.py`'s docstring** stating the create/delete asymmetry is deliberate.
+4. **§6 — decide whether `alter_transaction` authorizes per-action.** If yes, the two "dead"
    permissions become live and the question closes. If no, delete them (with `fga model test`) and
    drop the model's claim to a distinction nothing enforces.
-7. **P9 — re-examine an `estate` type.** Lowest urgency; genuinely fragile; the `store`-type
-   argument that rejected a dedicated type does not transfer.
+5. **P9 — re-examine an `estate` type.** Genuinely fragile; the `store`-type argument that rejected
+   a dedicated type does not transfer.
+6. **§9 — the zone/governance questions.** Their own pass; §9 has the leads, not the answers.
+
+**Parked (the deprioritized strand), in the order it would run if picked up:** settle §7.1 (does a
+`platform.rask.io` operator exist outside this repo — one message to whoever owns platform CRDs),
+then P1+P2+P3, deleting the controlplane in one commit: service, gateway row, chart template, values
+block, `@rask/api/projects.ts`, `getProjects`, leaving `/api/projects` unassigned. Nothing else in
+this file depends on that strand.
 
 ---
 
