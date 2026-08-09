@@ -1004,6 +1004,10 @@ export class AnnotatorController {
 		return indices.map((i) => rawField(t, 'id', i)).filter((id): id is string => !!id);
 	}
 
+	/** Minimum confidence an assist prediction needs to reach the queue (0 = keep everything).
+	 *  Scoreless shapes always pass: absence of a score is not a low score. */
+	assistMinConfidence = $state(0);
+
 	/** The last batch submit's WIRE outcome — the honest half of a fire-and-forget. The sync
 	 *  LabelOutcome says only "a submit left"; whether it landed, as what job, on which backend
 	 *  (mock ⇒ nothing will run) arrives here for any surface that stays on screen. */
@@ -1113,7 +1117,27 @@ export class AnnotatorController {
 					{ description: result.dropped[0] },
 				);
 			}
+			// The CONFIDENCE THRESHOLD — the reviewer's knob, applied at arrival: a prediction below
+			// it never reaches the queue, and the count is said out loud (a silent filter reads as a
+			// model that found less). Scoreless shapes pass — absence of a score is not a low score.
+			const below = result.shapes.filter(
+				(s) =>
+					this.assistMinConfidence > 0 &&
+					s.confidence != null &&
+					s.confidence < this.assistMinConfidence,
+			).length;
+			if (below > 0) {
+				toast.info(
+					`${below} prediction${below === 1 ? '' : 's'} below the ${this.assistMinConfidence.toFixed(2)} confidence threshold`,
+				);
+			}
 			for (const s of result.shapes) {
+				if (
+					this.assistMinConfidence > 0 &&
+					s.confidence != null &&
+					s.confidence < this.assistMinConfidence
+				)
+					continue;
 				this._appendInsert(
 					makeInsertRow({
 						shape_type: canonicalShapeType(s.shape_type) ?? 'bbox',

@@ -233,15 +233,22 @@ test('the panel names what will ANSWER — live/mock per producer, task fit, bac
 	await page.goto(`/annotator/?keys=${KEY}`);
 	await page.getByTestId('ai-assist-open').click();
 
-	const detect = page.getByTestId('assist-detect');
-	await expect(detect).toContainText('grounding-dino');
-	await expect(detect.locator('[data-live="true"]')).toHaveCount(1);
-	await expect(detect).toContainText('fits task');
+	// The ACTIVE MODEL is a dropdown; its contract line states input → output, live/mock, fit.
+	const contract = page.getByTestId('assist-contract');
+	await expect(page.getByTestId('assist-model-select')).toContainText('sam (mocked)');
+	await expect(contract).toContainText('text prompt');
+	await expect(contract).toContainText('returns: bbox');
+	await expect(contract.locator('[data-live="true"]')).toHaveCount(1);
+	await expect(contract).toContainText('fits task');
+	await expect(page.getByTestId('assist-detect')).toBeVisible();
 
-	const region = page.getByTestId('assist-region');
-	await expect(region.getByTestId('arm-segment')).toContainText('polygon');
-	await expect(region.locator('[data-live="false"]')).toHaveCount(1);
-	await expect(region).toContainText('off-contract');
+	// Switching the model switches the CONTRACT and the input area with it.
+	await page.getByTestId('assist-model-select').selectOption('sam');
+	await expect(contract).toContainText('a click or a box');
+	await expect(contract).toContainText('returns: polygon');
+	await expect(contract.locator('[data-live="false"]')).toHaveCount(1);
+	await expect(contract).toContainText('off-contract');
+	await expect(page.getByTestId('arm-segment')).toBeVisible();
 });
 
 test('region tools are ABSENT on a text unit, with the reason on screen', async ({ page }) => {
@@ -262,7 +269,9 @@ test('region tools are ABSENT on a text unit, with the reason on screen', async 
 	await page.goto(`/annotator/?keys=${KEY}&kind=text`);
 	await page.getByTestId('ai-assist-open').click();
 
+	// The default (prompt-driven) model works on any media; a REGION model states why it cannot.
 	await expect(page.getByTestId('assist-detect')).toBeVisible();
+	await page.getByTestId('assist-model-select').selectOption('sam');
 	await expect(page.getByTestId('assist-region')).toHaveCount(0);
-	await expect(page.getByTestId('assist-region-absent')).toContainText('text item');
+	await expect(page.getByTestId('assist-region-absent')).toContainText('text');
 });

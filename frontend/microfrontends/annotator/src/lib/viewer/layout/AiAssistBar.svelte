@@ -21,6 +21,7 @@
 	import { RainbowButton } from '@rask/ui/rainbow-button';
 	import { cn } from '@rask/ui/utils';
 	import TextInput from '$lib/ui/TextInput.svelte';
+	import { Slider } from '@rask/ui/slider';
 	import { assistProducers, type ProducerInfo } from '../remote/assist.remote';
 	import AssistRegistry from './AssistRegistry.svelte';
 	import PropagatePanel from './PropagatePanel.svelte';
@@ -48,10 +49,24 @@
 		{ name: 'sam', configured: false, returns: ['polygon'], compatible: null },
 	];
 	const rows = $derived(producers.length > 0 ? producers : FALLBACK);
-	const detectInfo = $derived(rows.find((p) => p.name === 'grounding-dino') ?? null);
-	const regionProducers = $derived(
-		rows.filter((p) => p.name !== 'grounding-dino' && p.interactive !== false),
-	);
+	const interactive = $derived(rows.filter((p) => p.interactive !== false));
+
+	/** THE ACTIVE MODEL — one dropdown, not one section per hardcoded producer. What each model
+	 *  takes as INPUT is part of its identity (SAM-family models take points/boxes, DINO a text
+	 *  prompt, INSID3 exemplar masks — and richer combinations as backends grow), so the contract
+	 *  line states input → output beside live/mock and task fit, and the input AREA below follows
+	 *  the pick. Known families get their real contract; unknown ones default to a region. */
+	let model = $state('grounding-dino');
+	const active = $derived(interactive.find((p) => p.name === model) ?? interactive[0] ?? null);
+	const INPUTS: Record<string, string> = {
+		'grounding-dino': 'text prompt (+ optional box)',
+		sam: 'a click or a box on the canvas',
+		'sam-click': 'a click or a box on the canvas',
+		insid3: 'a region — or exemplars via Propagate',
+	};
+	const inputFor = (name: string): string =>
+		INPUTS[Object.keys(INPUTS).find((k) => name.startsWith(k)) ?? ''] ?? 'a region on the canvas';
+	const takesPrompt = $derived(active?.name.startsWith('grounding-dino') ?? false);
 
 	// HONEST MOCK: until a real model runner is deployed, the backend answers assist calls with a
 	// deterministic mock — the shapes LOOK real. FAIL-HONEST: mock is the stack's default state,
@@ -120,63 +135,92 @@
 		</Popover.Trigger>
 		<Popover.Content class="w-80 p-0" data-testid="ai-assist-panel">
 			<div class="flex flex-col">
-				<!-- PROMPT-driven: model-dependent, not modality-dependent — a VLM labels any media
-				     from text. The section names the backend that will answer. -->
-				<div class="flex flex-col gap-2 p-3" data-testid="assist-detect">
-					<span class="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
-						Detect from a prompt
-						{#if detectInfo}
-							{@render liveDot(detectInfo)}
-							<span class="font-mono text-[10px]">
-								{detectInfo.name}{detectInfo.configured ? '' : ' · mocked'}
-							</span>
-							{@render fitBadge(detectInfo)}
-						{/if}
-					</span>
-					<div class="flex items-center gap-1.5">
-						<TextInput
-							bind:value={prompt}
-							placeholder="AI detect… (e.g. 'text line')"
-							aria-label="AI detect prompt"
-							class="h-7 flex-1"
-							onkeydown={(e) => e.key === 'Enter' && detect()}
-						/>
-						<Button size="sm" disabled={!prompt.trim() || controller.saving} onclick={detect}>Run</Button>
-					</div>
+				<!-- THE MODEL, chosen — and its CONTRACT stated: what it takes, what it returns,
+				     whether it is live or mocked, whether its output fits the open task. -->
+				<div class="flex flex-col gap-2 p-3" data-testid="assist-model">
+					<span class="text-muted-foreground text-xs font-medium">Model</span>
+					<select
+						class="border-input bg-background h-7 rounded-md border px-2 text-xs"
+						bind:value={model}
+						aria-label="Assist model"
+						data-testid="assist-model-select"
+					>
+						{#each interactive as p (p.name)}
+							<option value={p.name}>{p.name}{p.configured ? '' : ' (mocked)'}</option>
+						{/each}
+					</select>
+					{#if active}
+						<div
+							class="text-muted-foreground flex flex-wrap items-center gap-1.5 text-[11px]"
+							data-testid="assist-contract"
+						>
+							{@render liveDot(active)}
+							<span>input: {inputFor(active.name)}</span>
+							<span>·</span>
+							<span>returns: {active.returns.length ? active.returns.join(', ') : 'unknown'}</span>
+							{@render fitBadge(active)}
+						</div>
+					{/if}
 				</div>
 
-				<!-- REGION-driven: needs a canvas to draw ON. Absent WITH A REASON off it. -->
-				{#if spatial}
-					<div class="border-border flex flex-col gap-2 border-t p-3" data-testid="assist-region">
-						<span class="text-muted-foreground text-xs font-medium"> Segment from a click or box </span>
-						<div class="flex flex-wrap gap-1">
-							{#each regionProducers as p (p.name)}
-								<Button
-									variant={armedAs(p.name) ? 'secondary' : 'outline'}
-									size="sm"
-									aria-pressed={armedAs(p.name)}
-									data-testid={p.name === 'sam' ? 'arm-segment' : `arm-${p.name}`}
-									onclick={() => arm(p.name)}
-								>
-									<MousePointerClick class="size-3.5" />
-									{p.name === 'sam' ? 'Segment' : p.name}
-									{@render liveDot(p)}
-									{#if p.returns.length}
-										<span class="text-muted-foreground text-[9px]">→ {p.returns.join('/')}</span>
-									{/if}
-									{@render fitBadge(p)}
-								</Button>
-							{/each}
+				<!-- The INPUT AREA follows the model's contract. -->
+				{#if takesPrompt}
+					<div class="border-border flex flex-col gap-2 border-t p-3" data-testid="assist-detect">
+						<div class="flex items-center gap-1.5">
+							<TextInput
+								bind:value={prompt}
+								placeholder="AI detect… (e.g. 'text line')"
+								aria-label="AI detect prompt"
+								class="h-7 flex-1"
+								onkeydown={(e) => e.key === 'Enter' && detect()}
+							/>
+							<Button size="sm" disabled={!prompt.trim() || controller.saving} onclick={detect}>Run</Button
+							>
 						</div>
+					</div>
+				{:else if spatial}
+					<div class="border-border flex flex-col gap-2 border-t p-3" data-testid="assist-region">
+						<Button
+							variant={active && armedAs(active.name) ? 'secondary' : 'outline'}
+							size="sm"
+							class="self-start"
+							aria-pressed={active ? armedAs(active.name) : false}
+							data-testid="arm-segment"
+							onclick={() => active && arm(active.name)}
+						>
+							<MousePointerClick class="size-3.5" /> Arm — then {inputFor(active?.name ?? '')}
+						</Button>
 					</div>
 				{:else}
 					<p
 						class="border-border text-muted-foreground border-t p-3 text-[11px]"
 						data-testid="assist-region-absent"
 					>
-						Region tools apply to image and video — a {kind} item is labeled on its own surface.
+						{active?.name} takes a region, and region tools apply to image and video — a {kind}
+						item is labeled on its own surface.
 					</p>
 				{/if}
+
+				<!-- The reviewer's THRESHOLD: predictions below it never reach the queue, and the
+				     drop is counted out loud. 0 keeps everything; scoreless shapes always pass. -->
+				<div
+					class="border-border flex items-center gap-2 border-t p-3"
+					data-testid="assist-threshold"
+				>
+					<span class="text-muted-foreground w-24 shrink-0 text-[11px]">Min confidence</span>
+					<Slider
+						class="flex-1"
+						min={0}
+						max={0.95}
+						step={0.05}
+						value={controller.assistMinConfidence}
+						aria-label="Minimum confidence"
+						onValueChange={(value) => (controller.assistMinConfidence = value)}
+					/>
+					<span class="text-muted-foreground w-8 shrink-0 text-right text-[10px] tabular-nums">
+						{controller.assistMinConfidence === 0 ? 'off' : controller.assistMinConfidence.toFixed(2)}
+					</span>
+				</div>
 
 				<!-- EXEMPLAR-driven: few-shot propagation over the current selection. -->
 				<PropagatePanel {controller} />

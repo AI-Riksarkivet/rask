@@ -1318,11 +1318,11 @@ test('template gallery: picking a template sends its COMPLETE ontology — per-c
 	await dialog.getByLabel('Task template').press('Enter');
 	await expect(dialog.getByLabel('Task template')).toContainText('OCR / HTR');
 
-	// The summary SHOWS the contract being created — classes with their own tools, the relation —
-	// and the free-form knobs are gone: a template already answered them.
+	// The EDITOR shows the contract being created — one row per class, its tools as pressed
+	// toggles, the relation named — and the free-form knobs are gone: a template answered them.
 	const summary = dialog.getByTestId('template-summary');
-	await expect(summary).toContainText('paragraph');
-	await expect(summary).toContainText('[polygon, bbox]');
+	await expect(dialog.getByTestId('template-class-row')).toHaveCount(8);
+	await expect(dialog.getByTestId('class-1-tool-polygon')).toHaveAttribute('aria-pressed', 'true');
 	await expect(summary).toContainText('annotates');
 	await expect(dialog.getByPlaceholder('person, ship, signature')).toHaveCount(0);
 
@@ -1343,4 +1343,53 @@ test('template gallery: picking a template sends its COMPLETE ontology — per-c
 		'script',
 	);
 	expect((ontology.relations as { name: string }[])[0]).toMatchObject({ name: 'annotates' });
+});
+
+test('a template is a STARTING POINT: rename, retool, remove and add classes before create', async ({
+	page,
+}) => {
+	await seed(page, {
+		'GET /projects': { projects: [], total: 0 },
+		'POST /projects': project('draft'),
+	});
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	const dialog = page.getByRole('dialog');
+	await dialog.getByPlaceholder('vasa-portraits').fill('customized');
+	await dialog.getByLabel('Task template').press('Enter');
+	await page.getByRole('option', { name: /OCR \/ HTR layout/ }).waitFor();
+	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('Enter');
+
+	const rows = dialog.getByTestId('template-class-row');
+	await expect(rows).toHaveCount(8);
+
+	// REMOVE marginalia (index 2) — the `annotates` relation loses an endpoint and SAYS so.
+	await dialog.getByTestId('remove-class-2').click();
+	await expect(dialog.getByTestId('template-relations')).toContainText('none');
+	await expect(dialog.getByTestId('template-relations')).toContainText('1 dropped');
+
+	// RETOOL the header (row 0): allow polygon beside bbox.
+	await dialog.getByTestId('class-0-tool-polygon').click();
+
+	// ADD a brand-new class and give it a name + keep default bbox.
+	await dialog.getByTestId('add-class').click();
+	await dialog.getByTestId('template-class-row').last().getByLabel('Class name').fill('table');
+
+	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
+
+	const create = await createCall(page);
+	const ontology = (create.body as { ontology: Record<string, unknown> }).ontology;
+	const classes = ontology.classes as Record<string, unknown>[];
+	const byName = Object.fromEntries(classes.map((c) => [c.name as string, c]));
+	expect(byName['marginalia']).toBeUndefined();
+	expect(byName['header']).toMatchObject({ tools: ['bbox', 'polygon'] });
+	expect(byName['table']).toMatchObject({ tools: ['bbox'] });
+	// The template's typed attributes SURVIVED the editing on untouched rows.
+	expect((byName['paragraph']!.attributes as { name: string }[]).map((a) => a.name)).toContain(
+		'script',
+	);
+	// No ghost edge reaches the server.
+	expect(ontology.relations).toEqual([]);
 });

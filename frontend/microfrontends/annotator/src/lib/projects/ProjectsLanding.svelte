@@ -80,18 +80,66 @@
 
 	// THE TEMPLATE GALLERY (finding 8). A template is a COMPLETE ontology — per-class tools,
 	// typed attributes, relations — everything the free-form path below cannot author (it applies
-	// one uniform tool list to every typed name). Picking one seeds the whole contract verbatim;
-	// 'custom' keeps the free-form path exactly as it was.
+	// one uniform tool list to every typed name). Picking one seeds an EDITABLE working copy:
+	// "customize how the labeling task is supposed to look" means the template is a starting
+	// point, not a contract you can only take or leave. 'custom' keeps the free-form path.
 	let templateId = $state('custom');
 	const pickedTemplate = $derived(templateId === 'custom' ? undefined : templateById(templateId));
+
+	/** The editable per-class working copy, seeded when a template is picked. Rows carry the
+	 *  template's attributes along by OBJECT (rename a class and its attributes follow); relations
+	 *  are filtered at payload time to edges whose endpoints still exist. */
+	type DraftClass = {
+		name: string;
+		tools: string[];
+		attributes: { name: string; type?: string; choices?: string[]; required?: boolean }[];
+		required: boolean;
+	};
+	let draftClasses = $state<DraftClass[]>([]);
+	// Re-seed when the PICK changes (guarded — a reset-on-pick, not a reactive loop): editing the
+	// rows must never re-trigger it, or every keystroke would restore the template.
+	let seededFor = $state('custom');
+	$effect(() => {
+		if (templateId === seededFor) return;
+		seededFor = templateId;
+		const t = templateById(templateId);
+		draftClasses = (t?.ontology.classes ?? []).map((c) => ({
+			name: c.name,
+			tools: [...c.tools],
+			attributes: (c.attributes ?? []).map((a) => ({ ...a, choices: a.choices && [...a.choices] })),
+			required: c.required ?? false,
+		}));
+	});
+	const TOOL_CHOICES = ['bbox', 'polygon', 'mask', 'segment', 'tag', 'text'];
+	function toggleTool(row: DraftClass, tool: string): void {
+		row.tools = row.tools.includes(tool)
+			? row.tools.filter((t) => t !== tool)
+			: [...row.tools, tool];
+	}
 
 	// Derived, not a function: a pure projection of taskKind + classesText + the two toggles, which
 	// is exactly what $derived is for. One payload — there is nothing left for a second to disagree
 	// with.
 	const ontologyPayload = $derived.by(() => {
-		// A template wins whole: its per-class declarations are the point, and re-deriving them
-		// from the comma list would collapse them back to uniform tools.
-		if (pickedTemplate) return pickedTemplate.ontology;
+		// The EDITED working copy wins: the template's per-class declarations, as the person left
+		// them. Relations survive only while both endpoints still exist — a renamed or removed
+		// class must not leave an edge naming a ghost (the server would refuse the whole create).
+		if (pickedTemplate) {
+			const classes = draftClasses
+				.filter((c) => c.name.trim() !== '' && c.tools.length > 0)
+				.map((c) => ({ ...c, name: c.name.trim() }));
+			const names = new Set(classes.map((c) => c.name));
+			return {
+				kind: pickedTemplate.ontology.kind,
+				classes,
+				relations: (pickedTemplate.ontology.relations ?? []).filter((r) =>
+					[...r.from_classes, ...r.to_classes].every((n) => names.has(n)),
+				),
+				...(pickedTemplate.ontology.allow_empty !== undefined
+					? { allow_empty: pickedTemplate.ontology.allow_empty }
+					: {}),
+			};
+		}
 		if (classNames.length === 0 && taskKind === 'free') return undefined;
 		const preset = TASK_PRESETS[taskKind];
 		// The preset's tools when one is picked, else the single shape kind. Per-class tools are
@@ -313,22 +361,77 @@
 				/>
 			</label>
 			{#if pickedTemplate}
+				<!-- THE PER-CLASS EDITOR — the template as a STARTING POINT. Rename a class (its
+				     typed attributes follow the row), flip which tools it may be drawn with, drop
+				     it, add another. Relations auto-drop when an endpoint stops existing, and say
+				     so, instead of letting the server refuse the whole create over a ghost edge. -->
 				<div
-					class="border-border bg-muted/40 flex flex-col gap-1 rounded-md border p-2 text-xs"
+					class="border-border bg-muted/40 flex flex-col gap-2 rounded-md border p-2 text-xs"
 					data-testid="template-summary"
 				>
 					<p class="text-muted-foreground">{pickedTemplate.description}</p>
-					<p>
-						{#each pickedTemplate.ontology.classes as c (c.name)}
-							<span class="mr-1 inline-flex items-center gap-0.5">
-								<Badge variant="outline">{c.name}</Badge>
-								<span class="text-muted-foreground">[{c.tools.join(', ')}]</span>
-							</span>
-						{/each}
-					</p>
+					{#each draftClasses as row, i (i)}
+						<div class="flex flex-wrap items-center gap-1.5" data-testid="template-class-row">
+							<Input
+								class="h-6 w-32 text-xs"
+								bind:value={row.name}
+								aria-label="Class name"
+								placeholder="class name"
+							/>
+							{#each TOOL_CHOICES as tool (tool)}
+								<Button
+									variant={row.tools.includes(tool) ? 'secondary' : 'ghost'}
+									size="xs"
+									class="h-5 px-1.5 text-[10px]"
+									aria-pressed={row.tools.includes(tool)}
+									data-testid={`class-${i}-tool-${tool}`}
+									onclick={() => toggleTool(row, tool)}
+								>
+									{tool}
+								</Button>
+							{/each}
+							{#if row.attributes.length}
+								<span class="text-muted-foreground text-[10px]">
+									+{row.attributes.length} attr{row.attributes.length === 1 ? '' : 's'}
+								</span>
+							{/if}
+							<Button
+								variant="ghost"
+								size="icon-xs"
+								title="Remove this class"
+								data-testid={`remove-class-${i}`}
+								onclick={() => (draftClasses = draftClasses.filter((_, j) => j !== i))}
+							>
+								✕
+							</Button>
+						</div>
+					{/each}
+					<Button
+						variant="outline"
+						size="xs"
+						class="self-start"
+						data-testid="add-class"
+						onclick={() =>
+	(draftClasses = [
+		...draftClasses,
+		{ name: '', tools: ['bbox'], attributes: [], required: false },
+	])}
+					>
+						+ add class
+					</Button>
 					{#if pickedTemplate.ontology.relations?.length}
-						<p class="text-muted-foreground">
-							relations: {pickedTemplate.ontology.relations.map((r) => r.name).join(', ')}
+						{@const names = new Set(draftClasses.map((c) => c.name.trim()))}
+						{@const kept = (pickedTemplate.ontology.relations ?? []).filter((r) =>
+							[...r.from_classes, ...r.to_classes].every((n) => names.has(n)),
+						)}
+						<p class="text-muted-foreground" data-testid="template-relations">
+							relations: {kept.length ? kept.map((r) => r.name).join(', ') : 'none'}
+							{#if kept.length < (pickedTemplate.ontology.relations?.length ?? 0)}
+								<span class="text-warning">
+									— {(pickedTemplate.ontology.relations?.length ?? 0) - kept.length} dropped (an endpoint class
+									was renamed or removed)</span
+								>
+							{/if}
 						</p>
 					{/if}
 				</div>
