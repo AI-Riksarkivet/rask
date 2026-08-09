@@ -3530,3 +3530,29 @@ Three things it made available that are NOT wired, each deliberately left as its
    before it is tuned; `datastore.maxOpenConns`/`maxIdleConns` are the levers, and
    `datastore_throttling` (experimental) is the other. **Deliberately not set blind** — pick numbers
    from observed connection counts, which needs (2) first.
+
+### J-model — two model changes that need the `fga` CLI (2026-08-08)
+
+Found by sweeping the model against the openfga skill's own checklists. Both are recorded rather than
+applied because the skill's non-negotiable rule is that no `.fga`/`.fga.yaml` change ships without
+`fga model test` green, and the CLI cannot be installed in the authoring sandbox (GitHub release
+downloads return 403; `make bootstrap` installs it into `.localbin` on a normal dev box). The
+create-on-parent coverage audit itself IS applied — as comments in `model.fga`, which cannot change
+DSL semantics (proven: the comment-stripped model is byte-identical, so `fga model transform` and the
+`model.json` drift-diff are unaffected).
+
+1. **`transaction.can_set_property` and `transaction.can_cancel` are dead** — defined, but referenced
+   by no other relation and by no string in `services/` or `packages/`. `api/fga_deps.py` picks only
+   between `can_describe` and `can_set_status`. They are leaf permissions so nothing inherits through
+   them. Per `optimize-simplify` they are removal candidates; that rule also forbids deleting on a
+   usage sweep alone, so the change is: run the dependency scan, delete, `fga model test`, regenerate
+   `model.json`. Alternatively keep them and grow `alter_transaction` into the property/cancel actions —
+   they are already the right doors.
+2. **Test the shapes the weighted graph changes.** `weighted_graph_check` is now ON (chart values), and
+   `model.fga.yaml` currently carries 21 cases / 18 `check` blocks / 2 `list_objects` / 1 `list_users`,
+   every one with a concrete `user:<id>` subject. The behaviours the weighted graph alters are exactly
+   the ones with no coverage: a USERSET subject (`role:x#assignee`, `team:eng#member`) as the check
+   user — which the catalog access simulator does pass (`qualify=False`) — and the self-referential
+   userset case. Adding `check` cases for those pins the answers our simulator will now give, so a
+   future flag/version flip is caught by CI instead of by an operator reading a wrong TRUE. Also worth
+   adding: `list_users` coverage for the rungs the admin console reads, since only one exists today.
