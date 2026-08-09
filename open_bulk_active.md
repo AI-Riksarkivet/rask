@@ -266,6 +266,11 @@ the `/bulk` route survives for deep links only.
    absent from every existing capture by definition — passing the id would have the contract
    filter drop the fill's own answers). Decide: refresh captures on ontology PATCH, or scope
    the generation contract to the column. (was: large)
+   **UI debts seen on live screenshots (session close)**: the Labels column's chip pile
+   ("accepted 1 · prediction 1 · ✓ accept 1") reads like debug output — condense to one
+   compact summary; EMPTY ontology columns should auto-hide; the media-first density pass
+   (bigger thumbnails/cells, the reference's tall rows) is still owed; the zone nav's "Bulk
+   labeling" entry duplicates the task tab — point it at the tasks landing or drop it.
    **v2 rework LANDED same day (owner UX ruling)**: queue chrome REMOVED (State/Assignee/
    Corpus columns gone — items are pre-claimed into the session, spec §5 ruling); an
    Excel-style autofilter row under the headers (contains-match per column: key, tags, text,

@@ -42,13 +42,22 @@ Everything below assumes no memory of prior conversations; these are the working
 - **Sandbox limits (cloud)**: no helm binary (chart edits get a stated render-check
   scope-cut); egress blocks `docs.ray.io`/`get.helm.sh` (read Ray from the installed package
   or raw.githubusercontent); no k3s/Dagger.
-- **Backlog, recommended order**: (1) ~~open-bulk phase 1–2~~ BOTH LANDED 2026-08-09 (the grid +
-  ✓-accept/✎-edit through the save wire with server-stamped attribution, per
-  `open_bulk_active.md` §6.1–6.2); (2) deploy ONE real Serve model with a `labeling`
-  user_config block — closes finding 0's runner half AND exercises discovery live; (3)
-  open-bulk 3–4 (recipe columns + jobs-seam runs — phase 3 is ACT-FIRST per the audited
-  dynamism bar in `open_bulk_active.md` §5: one textarea, derived declaration, progressive
-  typing); (4) IoU/NMS + class-filter knobs (finding
+- **Backlog, recommended order** (updated at session close 2026-08-09 evening):
+  (1) **BulkGrid decomposition** — the component is ~800 lines; extract FilterRow,
+  SimilarityRail, AddColumnPopover children before it becomes the 965-line form the reference
+  repo warns about; fold in the UX debts seen on live screenshots: the Labels column's chip
+  pile reads like debug output (condense), empty ontology columns should auto-hide, and the
+  media-first density pass (bigger thumbs/cells) is still owed.
+  (2) **Recipe persistence (3b)** — persist each column's {producer, prompt} with the task
+  (today it is session-local: ▶ dies on reload) + decide capture-refresh (ontology PATCH vs
+  per-item captured templates — recipe fills pass taskId:null until then, spec §6.3).
+  (3) **Embedding modes 2+3** — clustering view and atlas-lasso selection, landing as the
+  same row-predicate the similarity mode uses (spec §5 three-mode ruling).
+  (4) **{{reference}} materialization** into recipe prompts per row.
+  (5) **Jobs-seam bulk runs** (phase 4: SSE cell streaming, cancel, run record + lineage).
+  (6) deploy ONE real Serve model with a `labeling` user_config block — closes finding 0's
+  runner half AND exercises discovery live (open_assist_discovery.md exit criterion).
+  Then: IoU/NMS + class-filter knobs (finding
   1 rest); (5) embedding selection; (6) timeline rail (6), OBB + mask ops (3); (7) COCO/YOLO
   converters (7), QA-sampling accept (5), relation cardinality (9.9), `difficult` flag (4),
   sample-item designer backdrop.
@@ -179,6 +188,25 @@ coverage; line references in §1–§3 predate these and are stale where they ov
   phase 3: ACT-FIRST add-column — the ontology declaration is DERIVED from the action (auto-
   name, progressive typing born `free`, silent ontology PATCH), never demanded up front;
   tightening a type later retro-validates cells and upgrades the guided_json branch.
+- THE GRID BECAME A SPREADSHEET AND GREW ITS SET-TOOLS (same day, owner UX steering across
+  four rounds — read `open_bulk_active.md` §5 rulings + §6.1–6.3 before touching this
+  surface): act-first "＋ column" (one textarea, declaration DERIVED — auto-name, silent
+  ontology PATCH, preview-5 fill through a new `AssistShape.text` facet + interactive `vlm`
+  mock family); queue chrome REMOVED (claiming is NOT bulk's job — the queue's plane; OCC
+  base_version keeps the two write planes collision-safe); Excel-style minimal autofilters
+  (ghost inputs, eager summary load when filtering); column-level ▶ apply over the FILTERED
+  rows (skip-filled, session-local recipe); the EMBEDDING view's first mode — ≈ anchors a row
+  against `/api/search/similar` (the select surface's wire, helpers REUSED: keyOfHit,
+  distanceBounds, MAX_SIMILAR_N), nearest-first ordering + per-row distances + cutoff slider,
+  association derived from the by-key door's key_fields; and BULK IS A TAB of /tasks/[id]
+  (Labeling | Bulk | Task settings | Publish) — /bulk survives for deep links only.
+  Owner rulings pinned in spec §5: bulk = labeling done in bulk; claiming never bulk's;
+  embedding labeling has EXACTLY three modes — similarity (landed), clustering, lasso.
+- SKILLS IN THIS SANDBOX: the ra-skills marketplace is enabled in .claude/settings.json but
+  NOT installed in the remote container (installed_plugins.json empty; /plugin is CLI-side).
+  Workaround used: `add_repo` read clone of AI-Riksarkivet/ra-skills at
+  /workspace/ai-riksarkivet/ra-skills, skills applied from source (writing-typescript,
+  shadcn-svelte). Run `make claude-bootstrap` on a host with egress to install properly.
 - Where model answers COME FROM, said once and bindingly (owner ruling + spec §5): every
   producer — detectors, segmenters, HTR, and LLM/VLM recipes alike — is a **Ray Serve
   deployment on the ray-cluster**, discovered via the Serve REST API. vLLM is not a separate
