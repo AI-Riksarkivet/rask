@@ -91,7 +91,10 @@ coverage; line references in §1–§3 predate these and are stale where they ov
   fields/options/relations), STRICT like the server's extra=forbid (a typo'd key is a named
   error that blocks create, never a silent drop) — the wire stays JSON, `task-yaml.ts` maps
   both ways, and a 'define in YAML' scaffold starts from scratch.
-- THE REGISTRY IS SERVE-NATIVE (the owner's ruling: model endpoints are and will always be
+- THE REGISTRY IS SERVE-NATIVE — design settled and PROMOTED to `docs/ASSIST-DISCOVERY.md`
+  (the declaration convention, KubeRay service topology, health/single-writer semantics, HA
+  posture, the vLLM path). Summary here stays for continuity: (the owner's ruling: model
+  endpoints are and will always be
   Ray Serve deployments — discovery, not hand-config): the annotator now reads
   `GET /api/serve/applications/` on the Ray dashboard (`ServeInstanceDetails`, verified
   against installed Ray 2.56.1 source) and offers every RUNNING application whose deployment
