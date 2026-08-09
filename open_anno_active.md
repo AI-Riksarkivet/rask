@@ -66,6 +66,13 @@ coverage; line references in §1–§3 predate these and are stale where they ov
 - Fixed at the source along the way: floating pills overlapping the temporal strips; unseekable
   route-served media in e2e (206 ranges); the e2e mock treating any seeded body carrying a string
   `status` field as its {status, body} response shape (every seeded jobs route answered 500).
+- THE DESIGNER SHOWS THE LOOK, LIVE: a preview strip under the editor renders the workspace
+  the current draft would build — toolbar from the draw union, quick-label chips (required
+  starred), the item-tag bar, span classes with their digit hotkeys, per-class inspector rows
+  (transcription + typed fields), surviving relations with direction. A pure projection
+  (`task-preview.ts`, separately pinned) of the SAME draft both views edit, so a YAML
+  keystroke moves the preview too. Remaining for the full designer: previewing over a sample
+  ITEM (a real page image behind the strips).
 - THE DESIGNER IS INLINE, NOT A POPUP: task creation left its `sm:max-w-md` scrolling modal —
   a task DESIGNER crammed into a narrow dialog put its own editor below the fold. It now
   unfolds in the page flow as a two-column panel (what the task is ABOUT | the task DESIGN),

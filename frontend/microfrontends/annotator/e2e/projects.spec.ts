@@ -1521,3 +1521,43 @@ test('unparseable YAML NAMES its errors and blocks create — never a silently s
 	await expect(dialog.getByTestId('task-yaml-errors')).toHaveCount(0);
 	await expect(dialog.getByRole('button', { name: 'Create labeling task' })).toBeEnabled();
 });
+
+test('the designer previews the workspace LIVE — from the form and from YAML edits alike', async ({
+	page,
+}) => {
+	// "Customize how the labeling task is supposed to look" needs to SHOW the look while it is
+	// being customized: every strip mirrors a surface the ontology drives, and the preview reads
+	// from the same draft both views edit — so a YAML keystroke moves it too.
+	await seed(page, { 'GET /projects': { projects: [], total: 0 } });
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	const panel = page.getByTestId('create-task');
+	await panel.getByLabel('Task template').press('Enter');
+	await page.getByRole('option', { name: /OCR \/ HTR layout/ }).waitFor();
+	await panel.getByLabel('Task template').press('ArrowDown');
+	await panel.getByLabel('Task template').press('ArrowDown');
+	await panel.getByLabel('Task template').press('Enter');
+
+	// The composite template lights every strip.
+	const preview = panel.getByTestId('task-preview');
+	await expect(preview.getByTestId('preview-toolbar')).toContainText('polygon');
+	await expect(preview.getByTestId('preview-labels')).toContainText('paragraph');
+	await expect(preview.getByTestId('preview-tags')).toContainText('damaged');
+	await expect(preview.getByTestId('preview-spans')).toContainText('person');
+	await expect(preview.getByTestId('preview-inspector').first()).toContainText('transcription');
+	await expect(preview.getByTestId('preview-relations')).toContainText('annotates');
+
+	// A FORM edit moves it: dropping marginalia takes the relation strip with it.
+	await panel.getByTestId('remove-class-2').click();
+	await expect(preview.getByTestId('preview-relations')).toHaveCount(0);
+
+	// A YAML edit moves it too — same draft, other view.
+	await panel.getByTestId('task-view-yaml').click();
+	await panel
+		.getByTestId('task-yaml')
+		.fill('labels:\n  - name: seal\n    draw: [bbox]\n  - name: broken\n    tag: true');
+	await expect(preview.getByTestId('preview-labels')).toContainText('seal');
+	await expect(preview.getByTestId('preview-tags')).toContainText('broken');
+	await expect(preview.getByTestId('preview-spans')).toHaveCount(0);
+});

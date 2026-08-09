@@ -22,6 +22,7 @@
 	import type { Project } from './types.js';
 	import { projectStateVariant, taskProgress } from './presentation.js';
 	import { PROJECT_TEMPLATES, templateById } from './templates.js';
+	import TaskPreview from './TaskPreview.svelte';
 	import {
 		DRAW_TOOLS,
 		type DraftClass,
@@ -623,6 +624,9 @@
 							</p>
 						{/if}
 					</div>
+					<!-- LIVE, from the same draft either view edits — "customize how the labeling task
+					     is supposed to look" needs to SHOW the look while it is being customized. -->
+					<TaskPreview {draft} />
 				{:else}
 					<label class="flex flex-col gap-1 text-sm">
 						<span
