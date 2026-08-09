@@ -56,6 +56,13 @@ coverage; line references in §1–§3 predate these and are stale where they ov
   closes the panel, the canvas is where regions are drawn), or EXEMPLARS (propagation, moved OUT
   of the right sidebar). The honesty chip and the registry stay on the toolbar — a warning behind
   a click is a warning most people never see. `@rask/ui/rainbow-button` is the new primitive.
+- THE PANEL TELLS THE TRUTH ABOUT WHAT ANSWERS: every producer row wears its registry facts —
+  live/mock dot, what it returns, fits-task/off-contract against the open task — and the panel
+  adapts to the MEDIA: region tools only where there is a canvas to draw a region on (image/
+  video; elsewhere the section states why), while prompt-driven Detect stays on every modality
+  (model-dependent, not modality-dependent — a VLM labels any media from text) and NAMES its
+  backend. The assist entry point is gated on WRITABILITY (edit mode + a bound save URL), no
+  longer on being spatial.
 - Fixed at the source along the way: floating pills overlapping the temporal strips; unseekable
   route-served media in e2e (206 ranges); the e2e mock treating any seeded body carrying a string
   `status` field as its {status, body} response shape (every seeded jobs route answered 500).

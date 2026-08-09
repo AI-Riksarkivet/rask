@@ -326,8 +326,13 @@
 <div class="flex h-full w-full flex-col">
 	<AnnotatorToolbar {controller} {spatial} {onexit}>
 		{#snippet assist()}
-			{#if spatial && controller.canDraw}
-				<AiAssistBar {controller} taskId={reviewSelection.taskId} />
+			<!-- Gated on WRITABILITY, not on modality: assist writes predictions, so a canvas that
+			     cannot accept shapes (view mode, or a unit that failed to load and bound no save
+			     URL) must not offer it — but prompt-driven producers are model-dependent, not
+			     modality-dependent, so text/audio units keep the entry point (they bind their save
+			     URL through attachData). The panel itself gates its REGION tools on the media. -->
+			{#if controller.mode === 'edit' && controller.annotationsUrl !== null}
+				<AiAssistBar {controller} taskId={reviewSelection.taskId} kind={unit.kind} />
 			{/if}
 		{/snippet}
 	</AnnotatorToolbar>

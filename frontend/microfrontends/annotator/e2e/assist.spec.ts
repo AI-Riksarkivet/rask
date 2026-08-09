@@ -220,3 +220,49 @@ test('a registry the service refuses to answer is NAMED, not rendered as an empt
 	await page.getByTestId('assist-registry-trigger').click();
 	await expect(page.getByTestId('assist-registry-error')).toContainText('upstream down');
 });
+
+test('the panel names what will ANSWER — live/mock per producer, task fit, backend returns', async ({
+	page,
+}) => {
+	// One live backend, one mocked, compatibility computed against the task server-side — the
+	// panel must wear all three facts per row instead of hiding them in the settings popover.
+	await seedProducers(page, [
+		{ name: 'grounding-dino', configured: true, returns: ['bbox'], compatible: true },
+		{ name: 'sam', configured: false, returns: ['polygon'], compatible: false },
+	]);
+	await page.goto(`/annotator/?keys=${KEY}`);
+	await page.getByTestId('ai-assist-open').click();
+
+	const detect = page.getByTestId('assist-detect');
+	await expect(detect).toContainText('grounding-dino');
+	await expect(detect.locator('[data-live="true"]')).toHaveCount(1);
+	await expect(detect).toContainText('fits task');
+
+	const region = page.getByTestId('assist-region');
+	await expect(region.getByTestId('arm-segment')).toContainText('polygon');
+	await expect(region.locator('[data-live="false"]')).toHaveCount(1);
+	await expect(region).toContainText('off-contract');
+});
+
+test('region tools are ABSENT on a text unit, with the reason on screen', async ({ page }) => {
+	// Region-driven producers need a canvas to draw the region ON. A text document has none —
+	// the section says why instead of offering a tool that cannot work there. Detect stays:
+	// prompt-driven producers are model-dependent, not modality-dependent.
+	await page.route('**/annotator/api/annotations/**', (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (route.request().method() !== 'GET') return json(route, { detail: 'no' }, 404);
+		if (path.endsWith('/versions')) return json(route, { versions: [] });
+		return route.fulfill({
+			status: 200,
+			contentType: 'application/vnd.apache.arrow.stream',
+			headers: { 'X-Annotations-Version': '1' },
+			body: EMPTY_ARROW,
+		});
+	});
+	await page.goto(`/annotator/?keys=${KEY}&kind=text`);
+	await page.getByTestId('ai-assist-open').click();
+
+	await expect(page.getByTestId('assist-detect')).toBeVisible();
+	await expect(page.getByTestId('assist-region')).toHaveCount(0);
+	await expect(page.getByTestId('assist-region-absent')).toContainText('text item');
+});

@@ -1,39 +1,57 @@
 <script lang="ts">
-	// ONE entry point for everything model-driven — the rainbow button.
+	// ONE entry point for everything model-driven — the rainbow button — and a panel that tells
+	// the truth about WHAT will answer.
 	//
-	// Reported: "all of them should be put in a component and have a button you press that says
-	// ai-assist". The bar used to lay its internals across the toolbar — Detect and Segment as
-	// sibling buttons, a prompt input beside them, Run after that, extra producers as more
-	// buttons, and Propagate parked in the RIGHT SIDEBAR as if it were a setting. Five fragments
-	// of one act ("ask a model") competing with the drawing tools for a row of space.
+	// Two facts drive what the panel offers, and both were previously invisible in it:
 	//
-	// Now: one deliberately loud button (the estate's ONLY rainbow affordance — loud because it
-	// summons a model, quiet buttons draw) opening one panel with every AI tool grouped by what it
-	// needs from you: a PROMPT (detect), a REGION (segment + interactive producers — arming closes
-	// the panel, the canvas is where a region is drawn), or EXEMPLARS (few-shot propagation, fed
-	// by the current selection). The honest-mock chip stays OUTSIDE on the toolbar: a warning that
-	// only shows once a panel is opened is a warning most people never see.
+	//  · THE REGISTRY. Which producers exist, which are LIVE vs answering from the honest mock,
+	//    what each returns, and whether that output fits the open task — the service computes all
+	//    of it, and the panel now wears it per row instead of hiding it in a settings popover.
+	//    A prompt-driven producer is model-dependent, not modality-dependent: a VLM backend can
+	//    label any media from text, so Detect stays on every modality and NAMES its backend.
+	//  · THE MEDIA. Region-driven producers need a canvas to draw the region ON — image or a
+	//    video frame. On a text or audio unit the section says why it is absent instead of
+	//    offering a tool that cannot work there.
 	import { onDestroy, onMount } from 'svelte';
 	import { FlaskConical, MousePointerClick, Sparkles, X } from '@lucide/svelte';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import * as Popover from '@rask/ui/popover';
+	import * as Tooltip from '@rask/ui/tooltip';
 	import { RainbowButton } from '@rask/ui/rainbow-button';
 	import { cn } from '@rask/ui/utils';
 	import TextInput from '$lib/ui/TextInput.svelte';
-	import { assistProducers } from '../remote/assist.remote';
+	import { assistProducers, type ProducerInfo } from '../remote/assist.remote';
 	import AssistRegistry from './AssistRegistry.svelte';
 	import PropagatePanel from './PropagatePanel.svelte';
+	import type { MediaKind } from '../types';
 	import type { AnnotatorController } from '../annotator.svelte';
 
-	let { controller, taskId = null }: { controller: AnnotatorController; taskId?: string | null } =
-		$props();
+	let {
+		controller,
+		taskId = null,
+		kind = 'image',
+	}: { controller: AnnotatorController; taskId?: string | null; kind?: MediaKind } = $props();
 
 	let open = $state(false);
 	let prompt = $state('');
-	// Registry producers beyond the two built-ins (the swap-a-model-without-code seam), asked of
-	// the SERVICE — the only source that cannot disagree with what actually answers.
-	let extraProducers = $state<string[]>([]);
+	/** The registry rows, verbatim — the panel renders FROM these, so it cannot disagree with
+	 *  what actually answers. Fetched WITH the task id so per-producer compatibility computes. */
+	let producers = $state<ProducerInfo[]>([]);
+
+	// Region prompts need a canvas to draw ON — image, or a video frame.
+	const spatial = $derived(kind === 'image' || kind === 'video');
+	/** An unreachable registry must not empty the panel: the two built-in families answer from
+	 *  the honest mock regardless, so they are the floor the panel never drops below. */
+	const FALLBACK: ProducerInfo[] = [
+		{ name: 'grounding-dino', configured: false, returns: ['bbox'], compatible: null },
+		{ name: 'sam', configured: false, returns: ['polygon'], compatible: null },
+	];
+	const rows = $derived(producers.length > 0 ? producers : FALLBACK);
+	const detectInfo = $derived(rows.find((p) => p.name === 'grounding-dino') ?? null);
+	const regionProducers = $derived(
+		rows.filter((p) => p.name !== 'grounding-dino' && p.interactive !== false),
+	);
 
 	// HONEST MOCK: until a real model runner is deployed, the backend answers assist calls with a
 	// deterministic mock — the shapes LOOK real. FAIL-HONEST: mock is the stack's default state,
@@ -41,26 +59,25 @@
 	let assistMocked = $state(true);
 	onMount(async () => {
 		try {
-			const result = await assistProducers(null);
+			const result = await assistProducers(taskId ?? null);
 			if (!result.ok) return; // unreachable — keep the fail-honest mock chip
 			assistMocked = !result.data.producers.some((p) => p.configured);
-			// The built-ins have their own controls; BATCH-ONLY families are jobs-seam producers
-			// the interactive POST cannot reach — the registry's `interactive` flag gates them out.
-			extraProducers = result.data.producers
-				.filter((p) => p.name !== 'grounding-dino' && p.name !== 'sam' && p.interactive !== false)
-				.map((p) => p.name);
+			producers = result.data.producers;
 		} catch {
 			// unreachable — keep the fail-honest mock chip
 		}
 	});
 
 	/** Arm a region-driven producer and CLOSE the panel — the canvas is where a region is drawn,
-	 *  and a panel floating over it would cover the thing being segmented. */
+	 *  and a panel floating over it would cover the thing being segmented. `sam` routes as
+	 *  `sam-click` (the backend registry resolves by longest prefix). */
 	function arm(producer: string): void {
-		controller.setAssistProducer(producer);
+		controller.setAssistProducer(producer === 'sam' ? 'sam-click' : producer);
 		controller.setTool('rect');
 		open = false;
 	}
+	const armedAs = (name: string): boolean =>
+		controller.assistProducer === (name === 'sam' ? 'sam-click' : name);
 	function disarm(): void {
 		controller.setAssistProducer(null);
 	}
@@ -74,20 +91,48 @@
 	onDestroy(disarm);
 </script>
 
+{#snippet liveDot(p: ProducerInfo)}
+	<!-- Live vs mocked, PER producer — the "which ML backend serves this" fact, in the panel. -->
+	<span
+		class={cn('size-1.5 shrink-0 rounded-full', p.configured ? 'bg-success' : 'bg-warning')}
+		data-live={p.configured}
+	></span>
+{/snippet}
+
+{#snippet fitBadge(p: ProducerInfo)}
+	{#if p.compatible !== null && p.compatible !== undefined}
+		<Badge variant={p.compatible ? 'secondary' : 'destructive'} class="text-[9px]">
+			{p.compatible ? 'fits task' : 'off-contract'}
+		</Badge>
+	{/if}
+{/snippet}
+
 <div class="flex shrink-0 items-center gap-1.5" data-testid="ai-assist">
 	<Popover.Root bind:open>
 		<Popover.Trigger>
 			{#snippet child({ props })}
-				<RainbowButton {...props} data-testid="ai-assist-open" title="Every model-driven tool">
+				<!-- No tooltip HERE: the label already says what it is, and stacking a tooltip
+				     trigger's props onto the popover trigger's clobbers the click handler. -->
+				<RainbowButton {...props} data-testid="ai-assist-open">
 					<Sparkles class="size-3.5" /> AI assist
 				</RainbowButton>
 			{/snippet}
 		</Popover.Trigger>
 		<Popover.Content class="w-80 p-0" data-testid="ai-assist-panel">
 			<div class="flex flex-col">
-				<!-- PROMPT-driven: describe what to find; boxes come back as predictions. -->
-				<div class="flex flex-col gap-2 p-3">
-					<span class="text-muted-foreground text-xs font-medium">Detect from a prompt</span>
+				<!-- PROMPT-driven: model-dependent, not modality-dependent — a VLM labels any media
+				     from text. The section names the backend that will answer. -->
+				<div class="flex flex-col gap-2 p-3" data-testid="assist-detect">
+					<span class="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+						Detect from a prompt
+						{#if detectInfo}
+							{@render liveDot(detectInfo)}
+							<span class="font-mono text-[10px]">
+								{detectInfo.name}{detectInfo.configured ? '' : ' · mocked'}
+							</span>
+							{@render fitBadge(detectInfo)}
+						{/if}
+					</span>
 					<div class="flex items-center gap-1.5">
 						<TextInput
 							bind:value={prompt}
@@ -100,33 +145,38 @@
 					</div>
 				</div>
 
-				<!-- REGION-driven: arm, then click or drag ON the canvas (arming closes this panel). -->
-				<div class="border-border flex flex-col gap-2 border-t p-3">
-					<span class="text-muted-foreground text-xs font-medium"> Segment from a click or box </span>
-					<div class="flex flex-wrap gap-1">
-						<Button
-							variant={controller.assistProducer === 'sam-click' ? 'secondary' : 'outline'}
-							size="sm"
-							aria-pressed={controller.assistProducer === 'sam-click'}
-							data-testid="arm-segment"
-							onclick={() => arm('sam-click')}
-						>
-							<MousePointerClick class="size-3.5" /> Segment
-						</Button>
-						{#each extraProducers as producer (producer)}
-							<Button
-								variant={controller.assistProducer === producer ? 'secondary' : 'outline'}
-								size="sm"
-								aria-pressed={controller.assistProducer === producer}
-								title="draw a region — the {producer} backend answers"
-								onclick={() => arm(producer)}
-							>
-								<MousePointerClick class="size-3.5" />
-								{producer}
-							</Button>
-						{/each}
+				<!-- REGION-driven: needs a canvas to draw ON. Absent WITH A REASON off it. -->
+				{#if spatial}
+					<div class="border-border flex flex-col gap-2 border-t p-3" data-testid="assist-region">
+						<span class="text-muted-foreground text-xs font-medium"> Segment from a click or box </span>
+						<div class="flex flex-wrap gap-1">
+							{#each regionProducers as p (p.name)}
+								<Button
+									variant={armedAs(p.name) ? 'secondary' : 'outline'}
+									size="sm"
+									aria-pressed={armedAs(p.name)}
+									data-testid={p.name === 'sam' ? 'arm-segment' : `arm-${p.name}`}
+									onclick={() => arm(p.name)}
+								>
+									<MousePointerClick class="size-3.5" />
+									{p.name === 'sam' ? 'Segment' : p.name}
+									{@render liveDot(p)}
+									{#if p.returns.length}
+										<span class="text-muted-foreground text-[9px]">→ {p.returns.join('/')}</span>
+									{/if}
+									{@render fitBadge(p)}
+								</Button>
+							{/each}
+						</div>
 					</div>
-				</div>
+				{:else}
+					<p
+						class="border-border text-muted-foreground border-t p-3 text-[11px]"
+						data-testid="assist-region-absent"
+					>
+						Region tools apply to image and video — a {kind} item is labeled on its own surface.
+					</p>
+				{/if}
 
 				<!-- EXEMPLAR-driven: few-shot propagation over the current selection. -->
 				<PropagatePanel {controller} />
@@ -156,12 +206,18 @@
 	{/if}
 
 	{#if assistMocked}
-		<Badge
-			variant="warning"
-			data-testid="assist-mock-chip"
-			title="No model runner is deployed (MEDIA_ASSIST_URL unset) — assist returns deterministic mock shapes, not model predictions."
-		>
-			<FlaskConical class="size-3" /> mocked — needs runner
-		</Badge>
+		<Tooltip.Root>
+			<Tooltip.Trigger>
+				{#snippet child({ props })}
+					<Badge {...props} variant="warning" data-testid="assist-mock-chip">
+						<FlaskConical class="size-3" /> mocked — needs runner
+					</Badge>
+				{/snippet}
+			</Tooltip.Trigger>
+			<Tooltip.Content class="max-w-64">
+				No model runner is deployed (MEDIA_ASSIST_URL unset) — assist returns deterministic mock shapes,
+				not model predictions.
+			</Tooltip.Content>
+		</Tooltip.Root>
 	{/if}
 </div>
