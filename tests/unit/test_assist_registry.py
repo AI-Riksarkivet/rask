@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from annotator.api.v1.endpoints.assist import backend_for
 
 
-def _settings(backends: dict[str, str] | None = None, default: str | None = None) -> SimpleNamespace:
+def _settings(backends: dict[str, object] | None = None, default: str | None = None) -> SimpleNamespace:
     return SimpleNamespace(assist_backends=backends or {}, assist_url=default)
 
 
@@ -79,3 +79,48 @@ def test_compatibility_now_computes_for_batch_families_too() -> None:
 
     assert by_name["htr"].compatible is True
     assert by_name["grounding-dino"].compatible is False
+
+
+def test_a_structured_entry_declares_its_own_contract() -> None:
+    """The registry entry IS the whole of adding a model now. A bare URL used to be all an entry
+    could say, so a registered `vlm` rendered "returns unknown" forever (the family map in code
+    only knows the built-ins) and task compatibility could never compute."""
+    from annotator.api.v1.endpoints.assist import producer_listing
+
+    s = _settings(
+        {
+            "vlm": {"url": "http://vllm:8000", "returns": ["bbox"], "inputs": ["prompt"]},
+            "sam": "http://sam:9000",  # bare-URL back-compat, side by side
+        }
+    )
+    by_name = {p.name: p for p in producer_listing(s, allowed={"bbox"}).producers}
+
+    assert by_name["vlm"].configured is True
+    assert by_name["vlm"].returns == ["bbox"]
+    assert by_name["vlm"].inputs == ["prompt"]
+    assert by_name["vlm"].compatible is True  # the eternal unknown, ended
+    assert by_name["sam"].returns == ["polygon"]  # family fallback still answers for built-ins
+    assert backend_for(s, "vlm-qwen") == "http://vllm:8000"
+    assert backend_for(s, "sam-click") == "http://sam:9000"
+
+
+def test_a_declared_return_in_a_producer_dialect_is_canonicalised() -> None:
+    """A backend declaring "rectangle" and a task allowing "bbox" must still meet — the same
+    normalization a RESPONSE gets applies to the declaration."""
+    from annotator.api.v1.endpoints.assist import producer_listing
+
+    s = _settings({"legacy-detector": {"url": "http://d:1", "returns": ["rectangle"]}})
+    by_name = {p.name: p for p in producer_listing(s, allowed={"bbox"}).producers}
+
+    assert by_name["legacy-detector"].returns == ["bbox"]
+    assert by_name["legacy-detector"].compatible is True
+
+
+def test_a_declaration_OVERRIDES_the_family_map() -> None:
+    """A `sam-hq` registered as emitting masks must not be presented with the family's polygon."""
+    from annotator.api.v1.endpoints.assist import producer_listing
+
+    s = _settings({"sam-hq": {"url": "http://hq:1", "returns": ["mask"]}})
+    by_name = {p.name: p for p in producer_listing(s).producers}
+
+    assert by_name["sam-hq"].returns == ["mask"]

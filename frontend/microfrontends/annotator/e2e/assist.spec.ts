@@ -227,7 +227,13 @@ test('the panel names what will ANSWER — live/mock per producer, task fit, bac
 	// One live backend, one mocked, compatibility computed against the task server-side — the
 	// panel must wear all three facts per row instead of hiding them in the settings popover.
 	await seedProducers(page, [
-		{ name: 'grounding-dino', configured: true, returns: ['bbox'], compatible: true },
+		{
+			name: 'grounding-dino',
+			configured: true,
+			returns: ['bbox'],
+			compatible: true,
+			inputs: ['image + instruction prompt'],
+		},
 		{ name: 'sam', configured: false, returns: ['polygon'], compatible: false },
 	]);
 	await page.goto(`/annotator/?keys=${KEY}`);
@@ -236,7 +242,8 @@ test('the panel names what will ANSWER — live/mock per producer, task fit, bac
 	// The ACTIVE MODEL is a dropdown; its contract line states input → output, live/mock, fit.
 	const contract = page.getByTestId('assist-contract');
 	await expect(page.getByTestId('assist-model-select')).toContainText('sam (mocked)');
-	await expect(contract).toContainText('text prompt');
+	// The backend's DECLARED inputs win over the panel's family knowledge.
+	await expect(contract).toContainText('image + instruction prompt');
 	await expect(contract).toContainText('returns: bbox');
 	await expect(contract.locator('[data-live="true"]')).toHaveCount(1);
 	await expect(contract).toContainText('fits task');

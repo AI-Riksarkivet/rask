@@ -14,8 +14,28 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class AssistBackend(BaseModel):
+    """One registered assist producer: its endpoint plus its DECLARED contract.
+
+    ``returns``/``inputs`` are what the backend itself claims (shape types out, prompt kinds
+    in) — the registry surface, the panel's contract line and task compatibility all derive
+    from these declarations rather than from a hardcoded family map in code. Empty means
+    undeclared, and every surface must keep saying "unknown" rather than guess.
+    A bare URL string is accepted for back-compat: ``{"sam": "http://sam:9000"}``.
+    """
+
+    url: str
+    returns: list[str] = Field(default_factory=list)
+    inputs: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_bare_url(cls, value: object) -> object:
+        return {"url": value} if isinstance(value, str) else value
 
 
 class Settings(BaseSettings):
@@ -104,11 +124,19 @@ class Settings(BaseSettings):
     # the draw/prompt→shapes round-trip is testable in-repo (drop-in for the Ray Serve
     # HTTP endpoint, like the catalog transport).
     assist_url: str | None = Field(default=None, alias="MEDIA_ASSIST_URL")
-    # The producer REGISTRY (the CVAT-Nuclio-shaped seam): producer name/prefix → backend URL, as a
+    # The producer REGISTRY (the CVAT-Nuclio-shaped seam): producer name/prefix → backend, as a
     # JSON object. Routing is longest-prefix, so `"sam": …` covers `sam-click`/`sam-box`;
     # `assist_url` stays the fallback for anything unmapped. One flat env var, because a registry
     # that needs a config FILE would be a second deployment surface for what is one map.
-    assist_backends: dict[str, str] = Field(default_factory=dict, alias="MEDIA_ASSIST_BACKENDS")
+    #
+    # An entry is either a bare URL string (back-compat) or a STRUCTURED declaration:
+    #   {"sam": "http://sam:9000",
+    #    "vlm": {"url": "http://vllm:8000", "returns": ["bbox"], "inputs": ["prompt"]}}
+    # `returns`/`inputs` are the backend's DECLARED contract — without them a registered producer
+    # rendered "returns unknown" forever (the shape map in code only knows the built-in families)
+    # and task compatibility could never compute. Declared here, the registry entry really is the
+    # whole of adding a model.
+    assist_backends: dict[str, AssistBackend] = Field(default_factory=dict, alias="MEDIA_ASSIST_BACKENDS")
 
     # Batch labeling job runner — a lance-ns RayJob submit endpoint (the silver-deriver
     # enqueue for bulk/auto-labeling over a read-plane selection). Unset ⇒ a deterministic
@@ -199,9 +227,7 @@ class Settings(BaseSettings):
             raise RuntimeError("MEDIA_S3_ENDPOINT is set but MEDIA_S3_ACCESS_KEY_ID is not — the id is config, set it")
         secret = _store_secret(self.s3_secret_store, self.s3_secret_key, self.s3_secret_field)
         if not secret:
-            raise RuntimeError(
-                f"S3 secret {self.s3_secret_field!r} unavailable from Dapr store {self.s3_secret_store!r} — failing closed"
-            )
+            raise RuntimeError(f"S3 secret {self.s3_secret_field!r} unavailable from Dapr store {self.s3_secret_store!r} — failing closed")
         opts["access_key_id"] = self.s3_access_key_id
         opts["secret_access_key"] = secret
         return opts

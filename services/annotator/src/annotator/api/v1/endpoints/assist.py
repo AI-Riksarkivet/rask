@@ -23,6 +23,7 @@ from annotator.projects.generation_schema import generation_schema
 from annotator.projects.ontology import LabelOntology
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.lancekit.keys import validate_doc_key
+from service_kit.media.config import AssistBackend
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import AppState, dataset_handle
 
@@ -133,8 +134,12 @@ class ProducerInfo(BaseModel):
     name: str
     #: False ⇒ this name answers from the in-repo mock (no endpoint resolves for it).
     configured: bool
-    #: The shape types it emits; EMPTY means unknown, not "none".
+    #: The shape types it emits; EMPTY means unknown, not "none". A registered backend's own
+    #: declaration wins over the built-in family map — the entry, not code, is the contract.
     returns: list[str] = Field(default_factory=list)
+    #: What the backend DECLARES it takes (e.g. ["prompt"], ["points", "region"]). Empty means
+    #: undeclared — the panel falls back to its family knowledge and says so no stronger.
+    inputs: list[str] = Field(default_factory=list)
     #: Whether those shapes satisfy the task named in `?task_id=`. None when there is no task, when
     #: its ontology constrains nothing, or when `returns` is unknown — three genuinely different
     #: reasons not to make a claim, all of which the UI renders as "unknown" rather than as a pass.
@@ -229,7 +234,7 @@ async def enforced_shape_types(task_id: str | None) -> set[str] | None:
 def producer_listing(settings: Any, allowed: set[str] | None = None) -> ProducerListing:
     """Build the registry report. Takes `settings` structurally, like `backend_for` — the routing
     rules are the interesting part and they should be testable without standing up an `AppState`."""
-    registry: dict[str, str] = getattr(settings, "assist_backends", None) or {}
+    registry = registry_of(settings)
     default_url = getattr(settings, "assist_url", None)
 
     rows: list[ProducerInfo] = []
@@ -237,12 +242,17 @@ def producer_listing(settings: Any, allowed: set[str] | None = None) -> Producer
     # service reports an EMPTY settings surface, which reads as "assist is unavailable" when in fact
     # both interactive loops work against the mock.
     for name in sorted(set(registry) | set(_RETURNS)):
-        emits = returns_for(name)
+        declared = registry.get(name)
+        # The backend's OWN declaration wins; the built-in family map is the fallback for the
+        # families the mock answers for. Canonicalised like a response would be, so a backend
+        # declaring "rectangle" and a task allowing "bbox" still meet.
+        emits = tuple(_CANONICAL_SHAPE.get(r, r) for r in declared.returns) if declared and declared.returns else returns_for(name)
         rows.append(
             ProducerInfo(
                 name=name,
                 configured=backend_for(settings, name) is not None,
                 returns=list(emits),
+                inputs=list(declared.inputs) if declared else [],
                 # No task, no enforcement, or nothing known about what it emits ⇒ NO CLAIM. Only the
                 # case where both sides are actually known produces a true/false.
                 compatible=bool(set(emits) & allowed) if (allowed and emits) else None,
@@ -358,15 +368,23 @@ async def _task_ontology(task_id: str) -> LabelOntology | None:
     return ontology if ontology.constrains else None
 
 
+def registry_of(settings: Any) -> dict[str, AssistBackend]:
+    """The registry, NORMALIZED: config may carry structured `AssistBackend` entries or bare URL
+    strings (back-compat), and structural test doubles pass plain dicts — every consumer reads
+    through this one coercion instead of re-deciding what an entry is."""
+    raw = getattr(settings, "assist_backends", None) or {}
+    return {name: AssistBackend.model_validate(entry) for name, entry in raw.items()}
+
+
 def backend_for(settings: Any, producer: str) -> str | None:
     """Resolve the producer's backend: LONGEST matching prefix in the registry wins (so `"sam"`
     covers `sam-click` while `"sam-hq"` can still override it), else the default `assist_url`,
     else None (→ the honest in-repo mock). The registry is what makes a new model a CONFIG entry
     rather than a code change — the CVAT-functions shape without the function orchestrator."""
-    backends = getattr(settings, "assist_backends", None) or {}
+    backends = registry_of(settings)
     best = max((p for p in backends if producer.startswith(p)), key=len, default=None)
     if best is not None:
-        return backends[best]
+        return backends[best].url
     return settings.assist_url
 
 

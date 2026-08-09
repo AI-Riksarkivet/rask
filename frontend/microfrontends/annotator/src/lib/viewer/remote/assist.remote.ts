@@ -74,6 +74,9 @@ export interface ProducerInfo {
 	name: string;
 	configured: boolean;
 	returns: string[];
+	/** What the backend DECLARES it takes (e.g. ['prompt']). Empty/absent = undeclared — the
+	 *  panel falls back to its family knowledge and claims no more than it knows. */
+	inputs?: string[];
 	/** null = no claim (no task, an unenforced one, or nothing known about what it emits). */
 	compatible: boolean | null;
 	/** False ⇒ jobs-seam only; the bar must not offer it as an interactive mode. Optional so an

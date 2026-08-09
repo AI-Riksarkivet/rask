@@ -64,8 +64,13 @@
 		'sam-click': 'a click or a box on the canvas',
 		insid3: 'a region — or exemplars via Propagate',
 	};
-	const inputFor = (name: string): string =>
-		INPUTS[Object.keys(INPUTS).find((k) => name.startsWith(k)) ?? ''] ?? 'a region on the canvas';
+	/** The backend's OWN declaration wins (the registry carries `inputs` per entry now); the
+	 *  family map answers for the built-ins; a region is the last-resort guess. */
+	const inputFor = (p: ProducerInfo | null): string => {
+		if (p?.inputs?.length) return p.inputs.join(' + ');
+		const name = p?.name ?? '';
+		return INPUTS[Object.keys(INPUTS).find((k) => name.startsWith(k)) ?? ''] ?? 'a region on the canvas';
+	};
 	const takesPrompt = $derived(active?.name.startsWith('grounding-dino') ?? false);
 
 	// HONEST MOCK: until a real model runner is deployed, the backend answers assist calls with a
@@ -155,7 +160,7 @@
 							data-testid="assist-contract"
 						>
 							{@render liveDot(active)}
-							<span>input: {inputFor(active.name)}</span>
+							<span>input: {inputFor(active)}</span>
 							<span>·</span>
 							<span>returns: {active.returns.length ? active.returns.join(', ') : 'unknown'}</span>
 							{@render fitBadge(active)}
@@ -188,7 +193,7 @@
 							data-testid="arm-segment"
 							onclick={() => active && arm(active.name)}
 						>
-							<MousePointerClick class="size-3.5" /> Arm — then {inputFor(active?.name ?? '')}
+							<MousePointerClick class="size-3.5" /> Arm — then {inputFor(active)}
 						</Button>
 					</div>
 				{:else}
