@@ -19,6 +19,37 @@ workflow/governance plane (task FSM, consensus, kappa, FGA, publish lineage) —
 comparison systems has an equivalent, there is nothing to import, and this document is a gap list,
 not a scoreboard.
 
+## §0 SESSION HANDOFF — how any session continues this work
+
+Everything below assumes no memory of prior conversations; these are the working agreements.
+
+- **Docs to read, in order**: this file (findings + STATUS), `open_bulk_active.md` (the grid
+  plane spec), `open_assist_discovery.md` (Serve-native registry design). Working docs stay
+  `open_*`; graduation to `docs/` is the OWNER's call, never the session's.
+- **Branch + push**: develop on `claude/annotation-zone-feature-diff-c61n5o`; push every
+  landed slice to BOTH that branch and `main` directly (the owner's standing instruction).
+  One slice = one commit with tests, honest scope-cuts stated in the message.
+- **Naming hygiene**: the comparison repos (X-AnyLabeling/ALS/aisheets/doccano/…) may be
+  named in these open_* docs and commit messages ABOUT the analysis — NEVER in shipped code,
+  code comments, or identifiers.
+- **Verification workflow**: backend — targeted `uv run pytest tests/unit/<suites>` (the FULL
+  suite hangs in cloud sandboxes: Dapr actor tests block in wait_for_sidecar; say so, don't
+  wait); frontend — `bun run check` + `bunx vitest run` + `CI=1 bunx playwright test` from
+  `frontend/microfrontends/annotator/` (mock service seeds via `POST /__mock/seed`, ledger at
+  `/__mock/calls`). UI slices get screenshots via TEMP `e2e/screens-*.spec.ts` drivers —
+  written, run, DELETED before committing, images sent to the owner. Formatter drift: package
+  -wide `bun run fmt` reformats untouched files — `git checkout --` them before committing.
+- **Sandbox limits (cloud)**: no helm binary (chart edits get a stated render-check
+  scope-cut); egress blocks `docs.ray.io`/`get.helm.sh` (read Ray from the installed package
+  or raw.githubusercontent); no k3s/Dagger.
+- **Backlog, recommended order**: (1) open-bulk phase 1–2 (grid over a selection + cell-state
+  overlay, per `open_bulk_active.md` §6); (2) deploy ONE real Serve model with a `labeling`
+  user_config block — closes finding 0's runner half AND exercises discovery live; (3)
+  open-bulk 3–4 (recipe columns + jobs-seam runs); (4) IoU/NMS + class-filter knobs (finding
+  1 rest); (5) embedding selection; (6) timeline rail (6), OBB + mask ops (3); (7) COCO/YOLO
+  converters (7), QA-sampling accept (5), relation cardinality (9.9), `difficult` flag (4),
+  sample-item designer backdrop.
+
 **STATUS 2026-08-08 (evening) — landed today, in-session** (each pushed to `main` with unit + e2e
 coverage; line references in §1–§3 predate these and are stale where they overlap):
 
