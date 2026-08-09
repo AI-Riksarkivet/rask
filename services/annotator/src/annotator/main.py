@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from dapr.ext.fastapi import DaprActor
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from annotator.api.v1.router import router as api_router
 from annotator.core.config import get_annotator_settings
@@ -27,7 +27,8 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.media.middleware import register_middleware
 from service_kit.media.state import AppState, dataset_handle
 from service_kit.obs import configure_app_logging
-from service_kit.probes import router as probes_router
+from service_kit.probes import make_probes_router
+from service_kit.schemas.health import Readiness, ReadinessStatus
 
 
 logger = logging.getLogger(__name__)
@@ -77,15 +78,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("annotator: FGA client failed to build — authorized routes will 503")
 
-    # Register the actor type with the sidecar. This is the estate's FIRST actor: `lance-statestore`
-    # has carried `actorStateStore: "true"` scoped to catalog+annotator since it was provisioned, and
-    # nothing used it. Registration must happen in the LIFESPAN, not at import — `register_actor`
-    # calls the sidecar's actor API, so doing it at module scope would make importing this module
-    # perform I/O and fail wherever daprd is absent (tests, `--help`, an image build).
+    # Register the actor types. This is the estate's FIRST actor: `lance-statestore` has carried
+    # `actorStateStore: "true"` scoped to catalog+annotator since it was provisioned, and nothing used
+    # it. Registration happens in the LIFESPAN, not at import, because it mutates process-global
+    # runtime state (`ActorRuntime._actor_managers`, and the entity list `/dapr/config` advertises) —
+    # a side effect that merely importing this module for `--help` or an image build must not have.
+    #
+    # **What it proves is LOCAL, and the flag below must not be read as more.** `register_actor`
+    # builds the type info, constructs an actor client WITHOUT invoking it, and stores an
+    # `ActorManager` in a dict; daprd learns the entity list afterwards by POLLING `/dapr/config`.
+    # Nothing here talks to the sidecar, so this block raises only for an actor CLASS this service
+    # cannot register — never because daprd is absent, which is why `actors_registered` is `True` in a
+    # no-sidecar composition (dev-micro, the e2e-py harness) and the task plane there fails per
+    # request exactly as it did before.
     #
     # A failure here is logged and left non-fatal: the read-plane annotation routes do not need
-    # actors, so a task-plane outage must not take the media surface down with it. The task
-    # endpoints surface it as a 503 instead.
+    # actors, so a broken task plane must not take the media surface down with it. `actors_registered`
+    # is what makes that survivable rather than merely quiet — `tasks.require_actor_plane` gates every
+    # task route on it (503, with the reason), and `/readyz` reports it as a component.
     if actor_ext is not None:
         try:
             await actor_ext.register_actor(AnnotationTaskActor)
@@ -135,7 +145,34 @@ except Exception:  # pragma: no cover - a broken ext must not take the read plan
     actor_ext = None
     logger.exception("annotator: could not mount the actor routes — the task plane is unavailable")
 
-app.include_router(probes_router)
+#: The task plane's own health, defined HERE and not only in the lifespan so it is never merely
+#: absent: a mount that failed above never reaches the registration block, and a flag that only
+#: exists on the happy path cannot be the thing a route gates on. False until the lifespan proves
+#: otherwise — the honest default, since nothing is registered yet at import.
+app.state.actors_registered = False
+
+
+async def _actor_plane_ready(request: Request) -> Readiness:
+    """Report the actor plane as a COMPONENT of a 200, never as `degraded`.
+
+    `service_kit.probes` renders `degraded` as a 503, which would pull the pod from rotation and take
+    the read-plane annotation routes down with the task plane — the exact coupling the non-fatal
+    registration in the lifespan exists to avoid. Refusing the task plane is the task routes' job
+    (`tasks.require_actor_plane`); this probe's job is to report, not to act.
+
+    **`registered` is not a health check on the sidecar.** The flag records only that this process
+    could register its actor CLASSES (see the lifespan) — a daprd that is absent, unreachable or not
+    placing actors reports `registered` here and still fails every task invocation. Reporting THAT
+    means probing daprd live on each `/readyz`, which couples this pod's readiness to its sidecar and
+    is a deliberate decision nobody has taken; until it is, read this component as "the process's own
+    actor registration", not as "the task plane works".
+    """
+    registered = bool(getattr(request.app.state, "actors_registered", False))
+    return Readiness(status=ReadinessStatus.ready, components={"actors": "registered" if registered else "unregistered"})
+
+
+# /livez + /readyz — the shared router (service_kit.probes), not a hand-rolled copy.
+app.include_router(make_probes_router(_actor_plane_ready))
 app.include_router(api_router)
 
 

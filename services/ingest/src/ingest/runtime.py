@@ -180,15 +180,29 @@ def _rows_in(fragments_json: list[str]) -> int:
     return total
 
 
-def ensure_dataset_at(spec: RunSpec) -> str:
-    """Create the run's dataset empty if absent, and return the URI to write into. D6 step 1.
+def ensure_dataset_at(spec: RunSpec) -> tuple[str, int]:
+    """Create the run's dataset empty if absent; return (URI to write into, BASE VERSION). D6 step 1.
 
     The URI is whatever the CATALOG says it is. In-cluster that is a location the catalog vends;
     locally it is composed from the warehouse env. Either way the caller never names a path — I2's
     "no hardcoded dataset paths", which exists because two callers composing the same logical table
     from different env is how volume B overwrote volume A.
+
+    THE VERSION IS RESOLVED HERE FOR THE SAME REASON THE LOCATION IS. It is the `read_version` the
+    run's client-direct commit is built against, and re-deriving it inside `finalize` is what made
+    the catalog's per-run commit dedupe unreachable: the catalog recognizes a replayed commit by
+    scanning versions AFTER the presented `read_version`, and a retry that re-read the version got
+    the one its own first attempt had just produced — an empty scan window, and a second Append of
+    the same rows. Resolved once, carried on `DatasetHandle`, presented identically by every attempt.
+
+    Zero for a catalog with no version door (`LocalCatalog`): that path commits through the lander,
+    which reads the dataset's own current version, and never sends a `read_version` anywhere.
     """
-    return _catalog().ensure(spec.namespace, spec.dataset)
+    catalog = _catalog()
+    location = str(catalog.ensure(spec.namespace, spec.dataset))
+    describe_version = getattr(catalog, "describe_version", None)
+    read_version = int(describe_version(spec.namespace, spec.dataset)) if describe_version is not None else 0
+    return location, read_version
 
 
 async def publish_chunk_units(chunk: ChunkSpec) -> int:
@@ -248,7 +262,15 @@ async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
         # which numbers the run actually used.
         worker = Worker(queue, UriFetcher(), PayloadValidator(), name=chunk.chunk_id, sizing=chunk.sizing)
         outcome = await worker.drain_chunk(chunk.run_id, chunk.chunk_id, len(chunk.keys), chunk.dataset_uri)
-        return outcome.model_dump()
+        # BOUNDED HERE, at the first point the result becomes workflow history. The map is keyed by
+        # UNIT, so a chunk whose every key is corrupt carries one entry per page — and this dict is
+        # then persisted as the activity result, returned by the child, merged by the parent and fed
+        # back in as `finalize`'s input. The COUNT is what an operator acts on; the per-unit reasons
+        # are already durable on the queue's DLQ.
+        from ingest.workflow import bound_errors
+
+        listed, total = bound_errors(outcome.errors)
+        return {**outcome.model_dump(), "errors": listed, "errors_total": total}
     finally:
         await queue.close()
 
@@ -312,12 +334,22 @@ async def reconcile_from_queue(chunk: ChunkSpec) -> dict[str, Any]:
         await queue.close()
 
 
-def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) -> dict[str, Any]:
+def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *, read_version: int = 0) -> dict[str, Any]:
     """Commit the run's fragments as ONE version, through the lander.
 
     `COMPLETE_WITH_ERRORS` is a real terminal state, not a failure: a run where 3 of 10,000 pages
     were corrupt DID deliver 9,997 pages, and calling that FAILED would either discard good data or
     train operators to ignore the status field.
+
+    `read_version` is the version resolved at `ensure_dataset` and CARRIED — it is not re-read here,
+    and that is the whole of finding F12a. This activity is re-executed whenever Dapr did not durably
+    record its result, so a commit that landed and then lost its pod runs again; the catalog answers
+    a repeat of the same `(run_id, read_version)` with the version that run already committed, which
+    it can only do while the presented base version stays put. Re-reading it moved the scan window
+    past the run's own commit and the retry appended every row a second time.
+
+    The default of 0 is the LANDER path (`LocalCatalog`), which sends no `read_version` anywhere and
+    reads the dataset's current version itself. The workflow always passes the carried one.
     """
     from ingest.lander import CommitResult, Lander
     from ingest.staging import discover_staged, purge_staged
@@ -408,7 +440,8 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
             spec.namespace,
             spec.dataset,
             all_fragments,
-            read_version=catalog.describe_version(spec.namespace, spec.dataset),
+            # CARRIED, never re-read. See this function's docstring and `workflow.DatasetHandle`.
+            read_version=read_version,
             run_id=spec.run_id,
         )
         # `row_count` from the catalog is the DATASET's total after the commit, not this run's work —

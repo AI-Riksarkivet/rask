@@ -20,6 +20,15 @@ permission is `None`, because no principal fires it.
 **Authorization is NOT performed here.** `annotator.projects.machines` says which `can_*` an event
 requires and the HTTP layer checks it against OpenFGA before invoking. Keeping the split means the
 actor stays testable without OpenFGA, and the op→privilege map has exactly one home.
+
+**The identity-bound STATE predicates are a different thing, and they DO live here** (§5.2: is this
+subject still the lease holder, is this subject the author of the submission being reviewed, is the
+project frozen). The HTTP layer checks them too — against a PRE-TURN snapshot, which is what lets it
+answer 403 without spending a turn — but a snapshot is not a precondition: between that read and
+this turn the lease can move, the reviewer can become the author, and the transition would then
+apply with its precondition already false. Re-evaluated inside the turn the rows cannot move under
+the check. Facts this actor cannot compute (`can_manage`, the project's own state) are carried in as
+VERIFIED INPUTS the caller states — never as an FGA call from here.
 """
 
 from __future__ import annotations
@@ -32,10 +41,17 @@ from typing import Any
 
 from dapr.actor import Actor, ActorInterface, Remindable, actormethod
 
-from annotator.projects.machines import IllegalTransition, submit_target, task_transition
+from annotator.projects.machines import (
+    FROZEN_PROJECT_STATES,
+    IllegalTransition,
+    identity_violation,
+    submit_target,
+    task_transition,
+)
 from annotator.projects.models import (
     Draft,
     Link,
+    ProjectState,
     ReviewNote,
     Shape,
     Task,
@@ -143,6 +159,44 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         links = [LinkLike.model_validate(link) for link in (raw or {}).get("links", [])]
         return validate_against_ontology(task.ontology, shapes, links)
 
+    @staticmethod
+    def _refuse_if_frozen(task: Task, event: str, payload: dict[str, Any], *, principal: bool) -> None:
+        """§5.2 rule 5 — nothing escapes a published project — asserted against the project state the
+        caller VERIFIED and stated.
+
+        Every principal-caused action must state one. The key is REQUIRED, not merely honoured when
+        present: an optional precondition is not a precondition (the lesson `save_draft`'s
+        `base_revision` already carries), and a future caller of `fire` that simply did not know
+        about rule 5 would otherwise skip it in silence. Its VALUE may be `None` — "I looked, and
+        this task's project record is gone" — which is the orphaned-task case the HTTP layer already
+        lets through on the transition's own preconditions. System edges state nothing: the only one
+        is `lease_expired`, fired by this actor's own reminder, which carries no permission because
+        no principal causes it.
+
+        **This narrows the window; it does not close it.** The project's state lives in ANOTHER
+        actor, so what arrives here is what the caller observed just before this turn — a freeze
+        landing in between is still applied. Closing it would mean reading the project actor from
+        inside this turn: a second cross-actor round-trip on every task event, taken while holding
+        this task's lock, for a residual the publish saga already covers — it re-reads every task
+        from its own actor and refuses a project whose tasks are not all terminal (`saga.collect`,
+        `saga._refuse_if_not_terminal`), so a task that moves during `publishing` fails the publish
+        rather than riding into silver.
+        """
+        if not principal:
+            return
+        if "project_state" not in payload:
+            raise IllegalTransition("task", task.state, f"{event} (the caller stated no verified project state)")
+        observed = payload["project_state"]
+        if observed is None:
+            return  # an orphaned task; the transition's own preconditions still apply
+        try:
+            state = ProjectState(observed)
+        except ValueError:
+            # Fail closed: an unrecognised state is a caller that cannot have verified rule 5.
+            raise IllegalTransition("task", task.state, f"{event} (unrecognised project state {observed!r})") from None
+        if state in FROZEN_PROJECT_STATES:
+            raise IllegalTransition("task", task.state, f"{event} (project {task.project_id} is {state} — provenance is frozen with the published artifact)")
+
     async def fire(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Apply one event from `TASK_EDGES`. The transition table is the spec — an edge absent from
         it raises `IllegalTransition`, which is the closed-world guarantee of §5.2 rather than a
@@ -151,7 +205,21 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         actor = payload.get("actor")
         task = await self._require()
 
-        target, _permission = task_transition(task.state, event)
+        target, permission = task_transition(task.state, event)
+
+        # The identity-bound predicates of §5.2, applied to the rows of THIS turn rather than to the
+        # caller's snapshot of them. See the module docstring for why the HTTP layer's copy is not
+        # enough; `save_draft` below makes the same move for the same reason.
+        violation = identity_violation(
+            event=event,
+            subject=None if actor is None else str(actor),
+            assignee=task.assignee,
+            submitted_by=task.submitted_by,
+            subject_can_manage=bool(payload.get("subject_can_manage")),
+        )
+        if violation is not None:
+            raise IllegalTransition("task", task.state, f"{event} ({violation})")
+        self._refuse_if_frozen(task, event, payload, principal=permission is not None)
 
         # `submit` is the one edge whose target depends on project config rather than the table.
         # Read from the TASK, captured at send time from the project — never from the payload. A
@@ -275,6 +343,20 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
             raise IllegalTransition("draft", "absent", "save_draft")
         if task.state is not TaskState.CLAIMED:
             raise IllegalTransition("draft", task.state.value, "save_draft")
+        # …and only by whoever holds the claim, checked HERE for the same reason the state is. The
+        # endpoint's holder check reads a pre-turn snapshot, so a lease that expired and was
+        # re-claimed by someone else in between let the OLD holder's save land on the new holder's
+        # task — `save_draft` replaces the whole shape set, so that is a silent overwrite of work
+        # somebody else is doing. `identity_violation` is the same rule the endpoint applies, read
+        # from the one place it is written.
+        author = str(payload["author"])
+        violation = identity_violation(event="save_draft", subject=author, assignee=task.assignee, submitted_by=task.submitted_by)
+        if violation is not None:
+            raise IllegalTransition("draft", violation, "save_draft")
+        # A draft is a principal action in every sense but the transition table, so rule 5 applies:
+        # the sharpest case in the whole plane is a draft landing while the publish saga is reading
+        # drafts to build its plan.
+        self._refuse_if_frozen(task, "save_draft", payload, principal=True)
 
         has, raw = await self._state_manager.try_get_state(DRAFT_KEY)
         current = Draft.model_validate(json.loads(raw)) if has and raw else None

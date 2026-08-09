@@ -289,7 +289,10 @@ async def run_node(job: NodeJob, *, client: httpx.AsyncClient) -> NodeResult:
         )
     except NodeError as exc:
         return NodeResult(state=NodeRunState(status="failed", ms=_elapsed_ms(started), error=str(exc)))
-    # state.output_text is capped by the model; payload_text is the FULL value the graph carries on.
+    # BOTH fields are capped by the model, at different ceilings: `output_text` at the 4 000-char
+    # DISPLAY cap, `payload_text` at `MAX_PAYLOAD_CHARS` (256 KiB) because it is the document the
+    # graph carries on — and, in the durable lane, the value written to the workflow history once as
+    # this activity's output and again as every dependent's input.
     return NodeResult(
         state=NodeRunState(status="succeeded", ms=_elapsed_ms(started), output_text=out.text),
         payload_text=out.text,

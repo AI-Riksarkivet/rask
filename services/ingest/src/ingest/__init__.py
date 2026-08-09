@@ -8,6 +8,7 @@ entrypoint-over-package contract) rather than being re-assembled here.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
@@ -16,7 +17,7 @@ from ingest.api import router as ingest_router
 from ingest.health import router as health_router
 from ingest.provenance import LineageProvenanceReader
 from ingest.queue_health import router as queue_health_router
-from ingest.runs import SCHEDULE_TIMEOUT_SECONDS, InMemoryRunStore
+from ingest.runs import SCHEDULE_TIMEOUT_SECONDS, InMemoryRunStore, ScheduleUnavailable
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -211,11 +212,63 @@ def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanF
     return lifespan
 
 
+def _is_already_scheduled(exc: BaseException) -> bool:
+    """True when the engine refused because it ALREADY holds this instance — a success, not a failure.
+
+    `instance_id` is `run_id_for(project, key)`, which is deterministic, so the instance the engine is
+    complaining about IS this run. The condition is reachable by design: `asyncio.wait_for` cancels
+    the await, never the thread behind `to_thread`, so a schedule that was merely slow still lands and
+    the retry the 503 advises then meets its own earlier dispatch. Reporting that as an error would
+    make the advice impossible to satisfy; dispatching past it would run the harvest twice.
+
+    Matched on the message because neither dapr-ext-workflow nor durabletask exports a typed
+    already-exists error and the gRPC status behind it has moved between versions. Narrow enough to be
+    safe: a false positive needs a schedule failure whose own text says the instance exists.
+    """
+    return "already exists" in str(exc).lower()
+
+
+#: The transport errors, named rather than imported. `(module, attribute)` pairs resolved at call
+#: time so this module keeps no import-time dependency on grpc or dapr — the same reason
+#: `_DaprWorkflowStarter` imports lazily — and no STATIC dependency on two libraries that ship no
+#: stubs into a plane whose type gate treats a warning as a failure.
+_SIDECAR_ERROR_NAMES = (("grpc", "RpcError"), ("dapr.clients.exceptions", "DaprInternalError"))
+
+
+def _sidecar_error_types() -> tuple[type[BaseException], ...]:
+    """The exception types that mean the SIDECAR answered badly.
+
+    Type-based rather than status-code-based on purpose. Guessing which gRPC codes are transient is
+    how a permanent misconfiguration turns into an infinite client retry loop, and the code dapr
+    returns for one condition has moved across versions. What is stable is the boundary: an error
+    raised by the transport is an operator's problem and a caller may retry it; anything else raised
+    in here — a payload that will not serialize, a name that does not resolve — is this service's own
+    bug and keeps its 500.
+
+    `OSError` covers the socket dying under the channel; there is no file I/O on this path for it to
+    over-match.
+    """
+    types: list[type[BaseException]] = [OSError]
+    for module_name, attribute in _SIDECAR_ERROR_NAMES:
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:  # pragma: no cover — both ship with dapr; absent only in a stripped env
+            continue
+        candidate = getattr(module, attribute, None)
+        if isinstance(candidate, type) and issubclass(candidate, BaseException):
+            types.append(candidate)
+    return tuple(types)
+
+
 class _DaprWorkflowStarter:
     """Schedules `ingest_run` through the Dapr workflow client in the sidecar.
 
     Imported lazily inside `start` so constructing the app — which every test does — never requires a
     reachable sidecar.
+
+    Also the place the door's failure vocabulary is DEFINED. `api.py` knows nothing about gRPC and
+    should not: it maps `TimeoutError` and `ScheduleUnavailable` to a retryable 503 and lets anything
+    else be a 500, so the classification has to happen at the one seam that can see a dapr exception.
     """
 
     async def start(self, run_id: str, payload: dict[str, object]) -> None:
@@ -231,7 +284,20 @@ class _DaprWorkflowStarter:
         # the event loop for every other request, and calling it unbounded would hold the POST open
         # past A1's one-second contract. A scheduling failure surfaces as an error on the run rather
         # than a hung connection — a caller that gets no answer cannot retry intelligently.
-        await asyncio.wait_for(asyncio.to_thread(_schedule), timeout=SCHEDULE_TIMEOUT_SECONDS)
+        try:
+            await asyncio.wait_for(asyncio.to_thread(_schedule), timeout=SCHEDULE_TIMEOUT_SECONDS)
+        except TimeoutError:
+            # Straight through — the bound is this method's own contract and `api.py` already maps it.
+            # Letting it reach the classifier below would put a decided outcome at the mercy of
+            # whatever text the exception happens to carry.
+            raise
+        except Exception as exc:
+            if _is_already_scheduled(exc):
+                logger.info("run %s is already scheduled — the engine holds the instance; converging on it", run_id)
+                return
+            if isinstance(exc, _sidecar_error_types()):
+                raise ScheduleUnavailable(str(exc) or type(exc).__name__) from exc
+            raise
 
 
 class _DaprWorkflowReader:

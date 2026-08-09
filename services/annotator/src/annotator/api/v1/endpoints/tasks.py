@@ -12,6 +12,14 @@ Two rules the machine cannot express, enforced here because they need the task's
   `task.submitted_by`, which only the actor holds.
 - **The lease holder is the only one who may save or submit.** `can_annotate` says you may annotate
   in this project; holding the claim says you may annotate THIS task right now.
+
+Both are evaluated against a PRE-TURN SNAPSHOT of the task, and that is deliberate but not
+sufficient: a snapshot is what lets this layer answer 403 with the reason, without spending an actor
+turn. The rules are re-evaluated INSIDE the turn as well (`annotator.projects.actor`), because
+between the read here and the turn there the lease can move and the reviewer can become the author.
+The facts the actor cannot compute for itself — `can_manage`, the project's own state — are resolved
+here and carried in as VERIFIED INPUTS, exactly like `actor`: computed from the verified subject and
+the checker's own answer, never forwarded from the request body.
 """
 
 from __future__ import annotations
@@ -19,7 +27,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any, Final, cast
 
-from fastapi import APIRouter, Path, Request, status
+from fastapi import APIRouter, Depends, Path, Request, status
 from pydantic import BaseModel, Field
 
 from annotator.api.security import CheckerDep, CurrentSubject
@@ -28,21 +36,49 @@ from annotator.projects.imports import shapes_from_ipc
 from annotator.projects.machines import (
     FROZEN_PROJECT_STATES,
     HOLDER_OR_MANAGER,
-    LEASE_HOLDER_ONLY,
-    SELF_REVIEW_FORBIDDEN,
     TASK_EDGES,
     IllegalTransition,
+    identity_violation,
     task_transition,
 )
 from annotator.projects.models import Link, ProjectState, Shape, TaskState
 from annotator.projects.ontology import LabelOntology
-from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
+from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tasks", tags=["annotation-tasks"])
+
+def require_actor_plane(request: Request) -> None:
+    """Refuse the whole task plane with 503 when its actor types failed to register.
+
+    `annotator.main` keeps actor registration deliberately non-fatal — the read-plane annotation
+    routes need no actors, so a broken task plane must not take the media surface down with it — and
+    it promises this 503 as the visible consequence. It was a promise and nothing else: the flag was
+    written and read by no one, so a failed registration answered every task route with whatever the
+    actor call happened to raise.
+
+    **Read what the flag actually proves, which is narrow.** `ActorRuntime.register_actor` is a
+    LOCAL operation — it builds the type info, constructs an actor client without invoking it, and
+    stores an `ActorManager` in a process dict that daprd later reads by polling `/dapr/config`. So
+    `False` means an actor CLASS this service could not register (a malformed interface, a mount that
+    raised), and it does **not** mean the sidecar is absent, unreachable or refusing placement: those
+    leave the flag `True` and still surface as a per-request error. Widening this gate to cover them
+    would need a live daprd check, which is a readiness decision and not a startup flag — see
+    `annotator.main._actor_plane_ready`.
+
+    Three states, and only the middle one refuses. `main.py` defines the flag before the first
+    request, so in this service it is always `True` or `False`. ABSENT means a composition that
+    declares no actor plane at all — this router mounted standalone — which has nothing to report;
+    gating that would be inventing an outage rather than reporting one, and the actor calls behind it
+    fail on their own terms exactly as they do today.
+    """
+    if getattr(request.app.state, "actors_registered", None) is False:
+        raise ServiceUnavailableError("the task plane is unavailable: its actor types are not registered with the Dapr sidecar")
+
+
+router = APIRouter(prefix="/tasks", tags=["annotation-tasks"], dependencies=[Depends(require_actor_plane)])
 
 #: Edges whose `TASK_EDGES` permission is `None` — caused by the system (an actor reminder), never by
 #: a principal. They are REFUSED on the HTTP surface rather than waved through: "no permission
@@ -120,22 +156,28 @@ async def _authorize(checker: Any, subject: str, permission: str, project_id: st
         raise ForbiddenError(f"{subject} lacks {permission} on {obj}")
 
 
-async def _refuse_if_project_frozen(project_id: str, event: str) -> None:
-    """§5.2 rule 5 — nothing escapes a published project.
+async def _verified_project_state(project_id: str, event: str) -> ProjectState | None:
+    """§5.2 rule 5 — nothing escapes a published project — and the observation the actor is handed.
 
     Once the project is publishing, published or archived, EVERY task transition is rejected:
     provenance is frozen with the artifact, and a task that moved after the publish would describe a
     dataset that no longer matches it. Costs one actor read per task event, which is the honest price
     of a guarantee that would otherwise be documented and unenforced.
+
+    Returns the state it VERIFIED so the caller can carry it into the actor turn rather than reading
+    the project a second time; `None` means the project record is gone (an orphaned task — the
+    transition's own preconditions still apply). The actor re-asserts it there, which is what makes
+    rule 5 a property of the task actor instead of a habit of this module.
     """
     from annotator.api.v1.endpoints.project_events import _project_proxy  # noqa: PLC0415 - import cycle
 
     project = await _project_proxy(project_id).get()
     if project is None:
-        return  # an orphaned task; the transition's own preconditions still apply
+        return None
     state = ProjectState(project["state"])
     if state in FROZEN_PROJECT_STATES:
         raise ConflictError(f"project {project_id} is {state} — {event} is rejected; provenance is frozen with the published artifact")
+    return state
 
 
 async def _refuse_second_replica(task_id: str, current: dict[str, Any], recipient: str) -> None:
@@ -187,7 +229,7 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
     project_id = str(current["project_id"])
     await _authorize(checker, subject, permission, project_id, f"task.{payload.event}")
 
-    await _refuse_if_project_frozen(project_id, payload.event)
+    project_state = await _verified_project_state(project_id, payload.event)
 
     # Consensus v1: one replica per annotator per group — the same person labeling two replicas of
     # one item is one opinion counted twice, which defeats the point of independent replicas.
@@ -195,22 +237,28 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
         recipient = str(payload.assignee or subject) if payload.event == "assign" else subject
         await _refuse_second_replica(task_id, current, recipient)
 
-    # Rules the table cannot express, because they depend on the task's own rows.
-    if payload.event in SELF_REVIEW_FORBIDDEN and current.get("submitted_by") == subject:
-        audit(f"task.{payload.event}", FAILURE, subject=subject, resource=task_id, reason="self_review")
-        raise ForbiddenError("a reviewer may not review their own submission")
-    holder = current.get("assignee")
-    if payload.event in LEASE_HOLDER_ONLY and holder not in (None, subject):
-        # §5.2 rule 2 — "even a manager". A manager who wants the task must `release` and re-`assign`.
-        raise ForbiddenError(f"task {task_id} is held by {holder}")
     # §5.2 — `release` is the documented escape hatch for a task pinned to someone unavailable, so a
-    # manager may take it; anyone else may not break another annotator's claim.
-    if (
-        payload.event in HOLDER_OR_MANAGER
-        and holder not in (None, subject)
-        and not await checker(user=subject, relation="can_manage", obj=f"annotation_project:{project_id}")
-    ):
-        raise ForbiddenError(f"task {task_id} is held by {holder} — releasing it needs can_manage")
+    # manager may take it; anyone else may not break another annotator's claim. Resolved for EVERY
+    # release rather than only when the snapshot shows a foreign holder: the actor re-checks the rule
+    # against the holder of the moment, and a release that arrived while the task looked free would
+    # otherwise be refused in-turn for want of an answer nobody asked for. One extra Check, on an
+    # edge nobody fires in a loop.
+    subject_can_manage = False
+    if payload.event in HOLDER_OR_MANAGER:
+        subject_can_manage = await checker(user=subject, relation="can_manage", obj=f"annotation_project:{project_id}")
+
+    # Rules the table cannot express, because they depend on the task's own rows. Answered here for
+    # the 403 and re-answered inside the actor's turn for the truth — see the module docstring.
+    violation = identity_violation(
+        event=payload.event,
+        subject=subject,
+        assignee=current.get("assignee"),
+        submitted_by=current.get("submitted_by"),
+        subject_can_manage=subject_can_manage,
+    )
+    if violation is not None:
+        audit(f"task.{payload.event}", FAILURE, subject=subject, resource=task_id, reason="identity_bound")
+        raise ForbiddenError(violation)
 
     try:
         updated = await actor.fire(
@@ -224,6 +272,10 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
                 "assignee": payload.assignee,
                 "message": payload.message,
                 "shape_ids": payload.shape_ids,
+                # The two facts the actor cannot compute for itself, stated by the layer that
+                # verified them. Same standing as `actor`: derived here, never read off the request.
+                "project_state": None if project_state is None else str(project_state),
+                "subject_can_manage": subject_can_manage,
             }
         )
     except IllegalTransition as exc:  # lost a race — the state moved between our read and the call
@@ -258,11 +310,15 @@ async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: Checke
     # could be rewritten after review — and during a publish — which would put annotations into the
     # lakehouse that no reviewer ever saw. `TASK_EDGES` already says `save_draft` is legal only from
     # CLAIMED; this is the HTTP surface honouring the machine instead of writing around it.
-    await _refuse_if_project_frozen(str(current["project_id"]), "save_draft")
+    project_state = await _verified_project_state(str(current["project_id"]), "save_draft")
     if TaskState(current["state"]) is not TaskState.CLAIMED:
         raise ConflictError(f"task {task_id} is {current['state']} — a draft is only writable while the task is claimed")
-    if current.get("assignee") not in (None, subject):
-        raise ForbiddenError(f"task {task_id} is held by {current['assignee']}")
+    # §5.2 rule 2, read from the ONE place it is written. `save_draft` is the event the actor applies
+    # this rule under for a draft write, so naming it here makes the 403 and the in-turn 409 the same
+    # rule rather than two that happen to agree today — the drift a hand-rolled copy invites.
+    violation = identity_violation(event="save_draft", subject=subject, assignee=current.get("assignee"), submitted_by=current.get("submitted_by"))
+    if violation is not None:
+        raise ForbiddenError(violation)
 
     try:
         draft = await actor.save_draft(
@@ -274,6 +330,8 @@ async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: Checke
                 "links": [link.model_dump(mode="json") for link in payload.links],
                 "base_revision": payload.base_revision,
                 "origin": payload.origin,
+                # The verified observation the actor re-asserts rule 5 against, exactly as on `fire`.
+                "project_state": None if project_state is None else str(project_state),
             }
         )
     except IllegalTransition as exc:
@@ -308,11 +366,14 @@ async def import_annotations(task_id: TaskId, request: Request, checker: Checker
         raise ConflictError(f"task {task_id} has not been sent into a project")
     await _authorize(checker, subject, "can_annotate", str(current["project_id"]), "task.import")
 
-    await _refuse_if_project_frozen(str(current["project_id"]), "import")
+    project_state = await _verified_project_state(str(current["project_id"]), "import")
     if TaskState(current["state"]) is not TaskState.CLAIMED:
         raise ConflictError(f"task {task_id} is {current['state']} — annotations can only be imported into a claimed task")
-    if current.get("assignee") not in (None, subject):
-        raise ForbiddenError(f"task {task_id} is held by {current['assignee']}")
+    # An import IS a draft write — it lands through `actor.save_draft` — so it is refused by the same
+    # rule under the same event name, not by a second copy that could be updated one edit late.
+    violation = identity_violation(event="save_draft", subject=subject, assignee=current.get("assignee"), submitted_by=current.get("submitted_by"))
+    if violation is not None:
+        raise ForbiddenError(violation)
 
     existing = await actor.get_draft() or {}
     existing_shapes: list[dict[str, Any]] = list(existing.get("shapes") or [])
@@ -347,6 +408,7 @@ async def import_annotations(task_id: TaskId, request: Request, checker: Checker
                 # rather than a silent overwrite — the same guarantee two tabs already get.
                 "base_revision": existing.get("revision"),
                 "origin": "import",
+                "project_state": None if project_state is None else str(project_state),
             }
         )
     except IllegalTransition as exc:

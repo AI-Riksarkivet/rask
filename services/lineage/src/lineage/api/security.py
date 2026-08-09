@@ -13,8 +13,6 @@ rather than silently letting requests through.
 
 from __future__ import annotations
 
-import os
-import secrets as _secrets
 from typing import Annotated, Protocol
 
 from fastapi import Depends, Header, Request
@@ -22,7 +20,15 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 
 from lineage.api.dependencies import SettingsDep
-from service_kit.governed.dapr_auth import is_public_caller
+from service_kit.governed.dapr_auth import (
+    CredentialRejected,
+    SecretStoreUnreadable,
+    ServiceDoorClosed,
+    SubjectNotAllowed,
+    dedicated_token_from_store,
+    is_public_caller,
+    service_principal,
+)
 from service_kit.governed.oidc import IDToken, OIDCVerifier
 
 
@@ -72,69 +78,61 @@ class ServicePrincipal:
         return self._sub
 
 
-def _dedicated_token(identity: str) -> str | None:
-    """The credential that is the ONLY one able to claim `identity`, via the estate's ONE resolver.
-
-    The resolution itself lives in ``service_kit.governed.dapr_auth.dedicated_token_from_store``
-    (open_dapr.md §2.8 — this used to be a private fork here while the catalog's door had no
-    resolver at all; §2.17's caching + retries=1 + absent-vs-unreadable split live there now).
-    This wrapper only maps the neutral unreadable-store error onto lineage's problem type. Returns
-    None only when the bundle was READ and the field is genuinely absent. Deliberately no env
-    fallback: a credential readable from process env is the shape the estate's rule forbids, and
-    it is exactly how the shared token came to sit in seven web pods.
-    """
-    from service_kit.governed.dapr_auth import SecretStoreUnreadable, dedicated_token_from_store
-
-    store = os.environ.get("LINEAGE_SECRET_STORE", "lance-secrets")
-    key = os.environ.get("LINEAGE_SECRET_KEY", "lance")
-    try:
-        return dedicated_token_from_store(store, key)(identity)
-    except SecretStoreUnreadable as exc:
-        raise ServiceUnavailableError(str(exc)) from exc
-
-
 def _service_principal(settings: SettingsDep, token: str | None, identity: str | None) -> ServicePrincipal:
-    """Authenticate an in-cluster service producer: a valid credential + an ALLOWLISTED subject.
+    """Render the estate's ONE service door in lineage's problem vocabulary. It decides nothing.
 
-    TWO questions, and this door used to answer only the first:
+    THE FORK IS GONE (open_dapr.md §2.8). This function used to be a full second copy of
+    `service_kit.governed.dapr_auth.service_principal` — same two questions, same allowlist, same
+    privileged branch, and a DIFFERENT answer when `APP_API_TOKEN` was unset: it refused where the
+    shared door signalled fall-through. Two doors that disagree is worse than either answer, because
+    whichever one an auditor reads, the other is the one that ran. The unified answer is the refusal
+    (`ServiceDoorClosed`'s docstring carries the reasoning); the mechanism now lives in one body.
+
+    The TWO questions it delegates, restated because they are what the door is FOR:
 
       1. may this SUBJECT use the service door at all?  ->  `service_subjects`, the allowlist
-      2. may THIS CALLER be that subject?               ->  the credential, below
+      2. may THIS CALLER be that subject?               ->  the credential
 
     Without (2) the identity is a claim the door BELIEVES. With one shared app token and an allowlist
     of `service-trainer,service-web`, any holder of that token could pick either — and they are not
     peers: `service-web` is a reader on the warehouse, `service-trainer` is `writer` on
     `namespace:models`. That shared token lives in the env of seven sidecar-less web pods, so env
     read in any one of them meant forged, author-stamped writes into the authoritative lineage graph.
-
     A privileged subject therefore needs its OWN credential, and the shared token cannot claim it.
+
+    The store coordinates come from SETTINGS, not from `os.environ`. The fork read
+    `LINEAGE_SECRET_STORE`/`LINEAGE_SECRET_KEY`, names that nothing in the estate sets — the chart, the
+    compose stacks and `apply_dapr_secrets` all speak `LINEAGE_DAPR_SECRET_STORE`/`_KEY` — so an
+    operator who repointed the store correctly still had this door querying `lance-secrets`, getting
+    `{}` back, and refusing every privileged subject on a deployment that looked configured.
     """
-    expected = os.environ.get("APP_API_TOKEN")
-    if not expected:
-        # The service door only exists when the app token does. Without it there is nothing to verify,
-        # so an unauthenticated caller must not be able to open it by merely naming a subject.
-        raise UnauthenticatedError("service ingest is not configured")
-
-    allowed = {s.strip() for s in settings.service_subjects.split(",") if s.strip()}
-    if not identity or identity not in allowed:
+    try:
+        principal = service_principal(
+            token=token,
+            identity=identity,
+            allowed_subjects=settings.service_subjects,
+            privileged_subjects=settings.privileged_subjects,
+            # Deferred into the callback: the store is read only when a privileged subject is actually
+            # being verified, never on the shared-token path — and never for an unlisted subject, which
+            # is checked first so this door is not an enumeration oracle.
+            dedicated_token=dedicated_token_from_store(settings.dapr_secret_store, settings.dapr_secret_key),
+        )
+    except ServiceDoorClosed as exc:
+        # The caller asked for the service door by sending both service headers, and it does not exist
+        # in this deployment. Say so — a fall-through would answer them with "Missing bearer token".
+        raise UnauthenticatedError(str(exc)) from exc
+    except SubjectNotAllowed as exc:
         # Fail closed on an unlisted subject — this is what stops a token holder impersonating a human.
-        raise PermissionDeniedError(f"service identity not allowed: {identity or '<missing>'}")
-
-    privileged = {s.strip() for s in settings.privileged_subjects.split(",") if s.strip()}
-    if identity in privileged:
-        # FAIL CLOSED on a missing secret. A privileged subject whose credential is unprovisioned must
-        # NOT fall back to the shared token — that is the escalation this exists to stop, and a quiet
-        # fallback would restore it while looking configured.
-        dedicated = _dedicated_token(identity)
-        if not dedicated:
-            raise UnauthenticatedError(f"service identity {identity!r} is privileged but has no dedicated credential provisioned")
-        if not _secrets.compare_digest((token or "").encode(), dedicated.encode()):
-            raise UnauthenticatedError(f"the presented credential may not claim {identity!r}")
-        return ServicePrincipal(identity)
-
-    if not _secrets.compare_digest((token or "").encode(), expected.encode()):
-        raise UnauthenticatedError("invalid service token")
-    return ServicePrincipal(identity)
+        raise PermissionDeniedError(str(exc)) from exc
+    except CredentialRejected as exc:
+        # Includes the privileged subject whose credential was never provisioned: it must NOT fall back
+        # to the shared token — that is the escalation this exists to stop, and a quiet fallback would
+        # restore it while looking configured.
+        raise UnauthenticatedError(str(exc)) from exc
+    except SecretStoreUnreadable as exc:
+        # An outage is an outage, never a 401: the absent-vs-unreadable rule (open_dapr.md §2.17).
+        raise ServiceUnavailableError(str(exc)) from exc
+    return ServicePrincipal(principal.sub)
 
 
 def authenticate(
@@ -159,6 +157,10 @@ def authenticate(
     # service-invoked request carrying a valid user bearer would be diverted into the service door and
     # 403 on the missing identity (audit 2026-07-15). A token-only request now falls through to OIDC,
     # which still requires a valid bearer — the door itself stays exactly as strict (app token + allowlist).
+    #
+    # BOTH headers, on the other hand, is the caller ASKING for the service door, so the door is the
+    # only one they get: a refusal inside this branch is final and never re-asks OIDC. The catalog
+    # answers identically (open_dapr.md §2.8) — that agreement is the point.
     if dapr_api_token is not None and x_lance_service_identity is not None:
         # THE LAUNDERING PATH, refused AT THE SERVICE DOOR. The gateway forwards through Dapr service
         # invocation and the callee's daprd stamps a valid `dapr-api-token` on the way in, so an

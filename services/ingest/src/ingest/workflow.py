@@ -8,6 +8,8 @@ THE SHAPE, and why each piece is where it is:
 
     ingest_run                 (parent — one per POST /v1/ingests)
       emit_start               activity: lineage START, so a run is visible before it does anything
+      resolve_limits           activity: the run's POLICY ceilings, pinned into history
+      ensure_dataset           activity: the table's location AND its base version, resolved once
       enumerate_chunks         activity: source -> CHUNK descriptors, never units
       when_all(chunk_run ...)  child workflow per chunk, fanned out
       finalize                 activity: the lander commits ONE Lance version through the catalog
@@ -30,6 +32,15 @@ are the replay-safe clock; `datetime.now()` here would produce a different histo
 and wedge the run. This is the single easiest way to break a workflow, hence the rule stated rather
 than assumed.
 
+**ENV IS I/O, and it is the one that hides.** A module-level `os.getenv` looks like a constant and
+behaves like a clock: a replay lands on whatever pod is free, so a rolling deploy that changes a
+value mid-run makes the SAME history replay into a DIFFERENT action stream — the timer the first
+execution created has no counterpart in the replay, or the other way round, and the run wedges. So
+nothing in workflow scope reads env, INCLUDING through model validation: `RunSpec`/`ChunkSpec` are
+validated at the top of both generator bodies, so a `default_factory` that reads env is a workflow
+env read wearing a Pydantic disguise. Every value a workflow branches on arrives either on the input
+or as an ACTIVITY RESULT, which is history and therefore replays byte-identical.
+
 **No polling** (A13). The drain blocks on JetStream's pull `fetch`, which the server fulfils when
 messages exist — a blocking wait, not a loop asking "is it done yet". Nothing in this plane holds an
 ack across a job's runtime, which is the specific thing A13 outlaws.
@@ -45,10 +56,12 @@ from typing import TYPE_CHECKING, Any
 import dapr.ext.workflow as wf
 from pydantic import BaseModel, Field
 
-from ingest.sizing import ResolvedSizing, resolve
+from ingest.sizing import ResolvedSizing
 
 
 if TYPE_CHECKING:
+    from collections.abc import Generator, Mapping
+
     from dapr.ext.workflow import DaprWorkflowContext, WorkflowActivityContext
 
 # One child workflow per this many keys. Small enough that a chunk's result stays compact in the
@@ -56,37 +69,144 @@ if TYPE_CHECKING:
 # own figure (open_ingest.md: "child workflow per ~1-10k keys").
 CHUNK_SIZE = 1000
 
-#: How long a run may take before it is failed. ZERO (the code default) means UNBOUNDED — the chart
-#: opts in with `RASK_INGEST_MAX_RUN_HOURS`, because this plane's own docstrings advertise
-#: million-unit harvests and a live default would kill the legitimate long run it exists to protect.
-#:
-#: It is the enforcement half of gate A15, which asserts `maintenance.olderThanDays * 24 >=
-#: RASK_INGEST_MAX_RUN_HOURS` so version GC cannot delete the version a live run is committing
-#: against. That assertion was passing while NOTHING read the value — a gate certifying a relation
-#: with only one side implemented.
-MAX_RUN_HOURS = float(os.getenv("RASK_INGEST_MAX_RUN_HOURS", "0") or 0)
-
-#: The most units one run may enumerate before it is refused. ZERO (the code default) means
-#: UNBOUNDED, for the same reason as the hour ceiling: this plane advertises million-unit harvests.
-#:
-#: WHAT THIS DOES AND DOES NOT PROTECT, stated because the honest scope is narrower than it looks.
-#: It refuses the RUN — the queue publish, the fan-out, the state-store churn of a fan-out nobody
-#: intended. It does NOT prevent the source LISTING, because all three adapters materialize their
-#: listing below this seam (`S3Source` does a full recursive LIST when `prefix` is empty, which the
-#: registry explicitly invites). An `islice` here would look like a bound and stop nothing: the walk
-#: has already happened by the time a key reaches us.
-#:
-#: So there is deliberately NO "stops pulling at the limit" test. Such a test passes against a lazy
-#: fake and is false for every production source — a green assertion about a property the code does
-#: not have is worse than no assertion.
-MAX_UNITS = int(os.getenv("RASK_INGEST_MAX_UNITS", "0") or 0)
-
 # Retries are the activity's, not a hand-rolled loop: Dapr owns the backoff and the replay.
 ACTIVITY_RETRY = wf.RetryPolicy(
     first_retry_interval=timedelta(seconds=5),
     max_number_of_attempts=4,
     backoff_coefficient=2.0,
 )
+
+#: The most per-unit error entries any workflow payload may carry. The map is keyed by UNIT — one
+#: entry per corrupt page — so on the million-unit harvest this plane advertises a bad source prefix
+#: makes it a million entries, and the workflow persists it at least four times over (the drain's
+#: activity result, the child's return, the parent's merge, `finalize`'s input). That is the state
+#: store paying, repeatedly, for a payload nobody reads past the first screen.
+#:
+#: So the COUNT is kept exact (`errors_total`) and the PAYLOAD is capped. A number is what an
+#: operator acts on — "412 units failed" — and the units themselves are already durable where they
+#: belong: parked on the queue's DLQ with their reasons.
+MAX_REPORTED_ERRORS = 100
+
+#: The key under which a truncated error map names its own overflow. Reserved, like `__chunk__`.
+ERRORS_TRUNCATED_KEY = "__truncated__"
+
+
+class RunLimits(BaseModel):
+    """The run's POLICY ceilings — resolved ONCE, in activity scope, and carried.
+
+    ZERO MEANS UNBOUNDED for both, and that is the default IN CODE. This plane's own docstrings
+    advertise million-unit harvests, so a live default would kill the legitimate long run the
+    ceilings exist to protect; the deployment opts in with `RASK_INGEST_MAX_RUN_HOURS` /
+    `RASK_INGEST_MAX_UNITS`.
+
+    **These were module-level `os.getenv` reads, and the workflow branched on them.** That is the
+    determinism break this module's header names: `if max_run_hours > 0` decides whether a durable
+    timer is created, so a rolling deploy that set or cleared the variable between a run's first
+    execution and its replay produced an action stream the history does not match — the classic way
+    to wedge a durable workflow permanently. `max_units` had the milder version of it: the same run
+    reporting FAILED-by-ceiling or COMPLETE depending on which pod replayed it.
+
+    The fix is the one `sizing` already uses — resolve once, carry the resolved value — with the
+    resolution in an ACTIVITY (`resolve_limits`) so it is pinned in workflow history. `RunSpec.limits`
+    is the accept-time seam: a door that resolves the ceilings when it validates the request supplies
+    them here and the activity passes them straight through.
+
+    `max_units` refuses the RUN — the queue publish, the fan-out, the state-store churn of a fan-out
+    nobody intended. It does NOT prevent the source LISTING, because all three adapters materialize
+    their listing below this seam (`S3Source` does a full recursive LIST when `prefix` is empty, which
+    the registry explicitly invites). An `islice` at the ceiling would look like a bound and stop
+    nothing: the walk has already happened by the time a key reaches us. So there is deliberately NO
+    "stops pulling at the limit" test — it would pass against a lazy fake and be false for every
+    production source.
+
+    `max_run_hours` is the enforcement half of gate A15, which asserts `maintenance.olderThanDays * 24
+    >= RASK_INGEST_MAX_RUN_HOURS` so version GC cannot delete the version a live run is committing
+    against. That assertion was passing while NOTHING read the value — a gate certifying a relation
+    with only one side implemented.
+    """
+
+    max_run_hours: float = 0.0
+    max_units: int = 0
+
+    @classmethod
+    def from_env(cls) -> RunLimits:
+        """The DEPLOYMENT's ceilings. Called from activity scope only — never during validation.
+
+        An empty value is unbounded rather than a crash: `kubectl set env FOO=` leaves an empty
+        string and `float("")` raises, which would take the ceiling's own activity down for a config
+        typo.
+        """
+        return cls(
+            max_run_hours=float(os.getenv("RASK_INGEST_MAX_RUN_HOURS", "0") or 0),
+            max_units=int(os.getenv("RASK_INGEST_MAX_UNITS", "0") or 0),
+        )
+
+
+class DatasetHandle(BaseModel):
+    """Where this run writes, and the version it writes AGAINST — both resolved once, at `ensure`.
+
+    `read_version` is here rather than re-read at `finalize`, and that is the whole of finding F12a.
+    The catalog's commit door is idempotent per run — it stamps `rask.ingest.run_id=<id>` into the
+    Lance transaction and answers a repeat with the version that run already committed — but it finds
+    that earlier commit by scanning versions AFTER the `read_version` the caller presents
+    (`catalog/services/dataplane.py::_find_run_commit`). `finalize` re-read the version per attempt,
+    so a replay presented the version its OWN first attempt had just produced, the scan window was
+    empty, and the dedupe could never fire: commit lands -> the pod dies before Dapr records the
+    activity result -> `discover_staged` still returns the same fragments -> a second Append of the
+    same rows, which does not even 409 because Append never conflicts with Append.
+
+    Carrying the version pins the scan window to where the run's own commit actually is. A stale base
+    is safe by the format's own rule: an Append auto-rebases against concurrent appends and conflicts
+    only with Overwrite/Restore, so a long run committing against the version it started from lands
+    exactly the rows it wrote.
+    """
+
+    location: str
+    read_version: int = 0
+
+
+def bound_errors(errors: Mapping[str, str], total: int | None = None) -> tuple[dict[str, str], int]:
+    """Cap a per-unit error map at `MAX_REPORTED_ERRORS`, keeping the COUNT exact.
+
+    Returns `(listed, total)`. `total` overrides the input's own length for a map that has ALREADY
+    been truncated once — the parent merges N bounded child results, and counting its keys would
+    under-report every unit a child had to drop.
+
+    DETERMINISTIC, because this runs in workflow scope: the survivors are chosen by sorted key, never
+    by dict order, so a replay selects the same entries.
+
+    The supplied `total` is a FLOOR, not the last word: a caller can only ever under-state it (a
+    result carrying no `errors_total` at all reads as zero), and returning a count smaller than the
+    entries in hand would be a pair no reader can act on — `errors_total: 0` beside two named failed
+    units. What is listed is known to have failed, so it is the floor the count cannot go under.
+    """
+    listed = {key: value for key, value in errors.items() if key != ERRORS_TRUNCATED_KEY}
+    count = len(listed) if total is None else max(total, len(listed))
+    if len(listed) > MAX_REPORTED_ERRORS:
+        listed = {key: listed[key] for key in sorted(listed)[:MAX_REPORTED_ERRORS]}
+    if count > len(listed):
+        listed[ERRORS_TRUNCATED_KEY] = f"{count - len(listed)} further units failed and are not listed here — {count} failed in total; see the queue's DLQ"
+    return listed, count
+
+
+class AntiJoinUnavailable(RuntimeError):
+    """Bronze's `id` column could not be read, so nothing is known about what is already there.
+
+    Raised rather than degraded, which is finding F12c. The anti-join decides which units are ALREADY
+    present and must be skipped; an empty result means "skip nothing", i.e. re-fetch and re-land every
+    object in the source. A `except Exception` around the read turned one transient S3 blip into
+    silent full re-duplication of an entire run — the failure mode the anti-join exists to prevent,
+    reached through the anti-join's own error path.
+
+    Raising puts it under `ACTIVITY_RETRY` (four attempts, exponential backoff), so a blip costs a
+    retry and a permanent failure costs the run — with a reason, routed through the parent's error
+    boundary into a FAIL lineage record. Both are better than a green run that doubled the tier.
+
+    That last clause is only true because the boundary MOVED to make it true: it used to open below
+    `enumerate_chunks`, so this raise would have killed the workflow before its own FAIL record and
+    left the START emitted at accept orphaned forever — the boundary's own defect, one activity
+    earlier. Turning a swallow into a raise is half a fix until the raise has somewhere to land.
+    """
 
 
 class ChunkSpec(BaseModel):
@@ -109,9 +229,15 @@ class ChunkSpec(BaseModel):
 
     #: The run's write partitioning, RESOLVED at accept and carried — same reason as `dataset_uri`.
     #: Re-reading env inside the drain would let a rolling restart change a live run's fragment size
-    #: mid-fan-out, so two chunks of one run could write to different layouts. Defaulted rather than
-    #: required so a chunk enqueued by an older build still validates.
-    sizing: ResolvedSizing = Field(default_factory=resolve)
+    #: mid-fan-out, so two chunks of one run could write to different layouts.
+    #:
+    #: The default is `None` and NOT `resolve()`, which is a determinism fix rather than a style
+    #: choice: `resolve()` reads env, this model is validated at the top of the `chunk_run` generator,
+    #: and a default_factory firing there is an env read in WORKFLOW scope — see the module header.
+    #: `None` means "nothing supplied any", and the drain resolves the deployment default in ACTIVITY
+    #: scope (`Worker.__init__`), which is where an env read belongs. `POST /v1/ingests` always sends
+    #: resolved sizing, so production never takes that path.
+    sizing: ResolvedSizing | None = None
 
     #: The SOURCE identity, carried so `publish_chunk_units` can ask the adapter for each unit's
     #: `partition_key`. Only the adapter knows what a unit key means (a IIIF volume, an S3 folder),
@@ -128,7 +254,8 @@ class ChunkResult(BaseModel):
 
     chunk_id: str
     fragments: list[str] = Field(default_factory=list, description="FragmentMetadata JSON blobs")
-    errors: dict[str, str] = Field(default_factory=dict, description="unit key -> reason")
+    errors: dict[str, str] = Field(default_factory=dict, description="unit key -> reason, capped at MAX_REPORTED_ERRORS")
+    errors_total: int = Field(default=0, description="how many units failed, whether or not each is listed above")
 
 
 class RunSpec(BaseModel):
@@ -140,8 +267,13 @@ class RunSpec(BaseModel):
     dataset: str
     options: dict[str, Any] = Field(default_factory=dict)
     #: Resolved at ACCEPT (`api.create_ingest`) so a refusal is a 400 rather than a drain that hangs,
-    #: and so the whole fan-out shares one set of numbers.
-    sizing: ResolvedSizing = Field(default_factory=resolve)
+    #: and so the whole fan-out shares one set of numbers. `None` rather than a `resolve()` default
+    #: for the reason spelled out on `ChunkSpec.sizing`: this model is validated inside the
+    #: `ingest_run` generator, where an env read breaks replay.
+    sizing: ResolvedSizing | None = None
+    #: The POLICY ceilings, when the accepting door resolved them. `None` means "ask the deployment",
+    #: which `resolve_limits` then does ONCE in activity scope so the answer rides workflow history.
+    limits: RunLimits | None = None
 
     @property
     def namespace(self) -> str:
@@ -168,114 +300,22 @@ class RunOutcome(BaseModel):
     committed_version: int | None = None
     rows: int = 0
     errors: dict[str, str] = Field(default_factory=dict)
+    #: How many entries `errors` WOULD hold unbounded. Equal to `len(errors)` until the cap bites.
+    errors_total: int = 0
     status: str = "COMPLETE"
 
 
-def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, Any]:
-    """Parent workflow: enumerate, fan out, finalize once, emit lineage."""
+def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[Any, Any, dict[str, Any]]:
+    """Parent workflow: enumerate, fan out, finalize once, emit lineage.
+
+    Typed as a Generator because it IS one — every `yield` is a durable await point. Annotating it
+    `-> dict` (the shape it conceptually returns) is a lie `ty` catches, and `error-on-warning` makes
+    it a build failure; `flows/workflow.py:46` had already ruled this the same way.
+    """
     spec = RunSpec.model_validate(payload)
 
     yield ctx.call_activity(emit_start, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
 
-    # BEFORE the fan-out, not before the commit. D6's creation two-step said "created empty before
-    # any fragment is COMMITTED", and that reading put it in `finalize` — which is too late, because
-    # a fragment written against a dataset that does not exist yet takes lance's DEFAULTS for the
-    # creation-time flags. The first in-cluster run fetched, validated and wrote every fixture and
-    # then died at commit with "added files with version 2.1. However, the data storage version is
-    # 2.2." The dataset must exist before the first WRITE, so the writers inherit its format.
-    # The location the CATALOG vends, captured once and threaded into every chunk. Deriving it a
-    # second time inside `enumerate_chunks` is what broke the first catalog-backed run: workers wrote
-    # fragments to the env-composed warehouse path while the catalog's table lived somewhere else, and
-    # the commit was refused with "commit references 4 data file(s) not present under the table
-    # location (did the direct write target the wrong prefix?)" — after every unit had been fetched.
-    # One resolution, carried; never two derivations of one location.
-    dataset_location: str = yield ctx.call_activity(ensure_dataset, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
-
-    chunks: list[dict[str, Any]] = yield ctx.call_activity(
-        enumerate_chunks,
-        input={"spec": spec.model_dump(), "dataset_uri": dataset_location},
-        retry_policy=ACTIVITY_RETRY,
-    )
-    # The enumerated total, published as CUSTOM STATUS so it is readable while the run is still
-    # going. `units_total` was declared on the run record and never assigned by anything, so the API
-    # could say "4 done" and never "4 of 500" — no progress bar was possible for exactly the long
-    # harvest where one matters. Custom status rides the workflow's own durable state, so it survives
-    # a pod death like every other run fact and needs no second writable copy.
-    units_total = sum(len(chunk.get("keys") or ()) for chunk in chunks)
-    ctx.set_custom_status(json.dumps({"units_total": units_total, "chunks": len(chunks)}))
-
-    # THE UNIT CEILING — refused HERE, before a single task is published.
-    #
-    # A mis-pointed source is the case: `s3-prefix` with an empty `prefix` lists a whole bucket, and
-    # the registry invites exactly that ("Leave empty to take the whole bucket"). Without a ceiling
-    # that becomes millions of queue messages, a fan-out of thousands of child workflows, and the
-    # state-store churn of both — for a run nobody meant to start.
-    #
-    # It refuses by POLICY (a returned FAILED outcome), not by raising: raising inside the activity
-    # would burn four retries re-LISTING the source before failing, and the operator would read a
-    # crash rather than a limit. That path only reports honestly because the status merge now carries
-    # a returned FAILED through to the door — see `runs.merge_workflow_state`.
-    #
-    # Placed after `enumerate_chunks` rather than inside it because the ceiling is a property of the
-    # RUN, and this is where the run's decisions live. It cannot prevent the listing itself (see
-    # MAX_UNITS) — what it prevents is acting on it.
-    if MAX_UNITS > 0 and units_total > MAX_UNITS:
-        refused: dict[str, Any] = RunOutcome(
-            status="FAILED",
-            errors={
-                "run": (
-                    f"source enumerated {units_total} units, over the {MAX_UNITS} ceiling "
-                    f"(RASK_INGEST_MAX_UNITS). Narrow the source — an empty s3-prefix lists the whole "
-                    f"bucket — or raise the ceiling for this deployment."
-                )
-            },
-        ).model_dump()
-        yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": refused}, retry_policy=ACTIVITY_RETRY)
-        return refused
-
-    # AN EMPTY SOURCE IS A SUCCESS WITH ZERO ROWS, and it short-circuits HERE.
-    #
-    # Not a failure, deliberately. An empty folder or prefix is a legitimate state of the world — a
-    # scheduled ETL over a quiet source hits it routinely — and reporting it as FAILED would alert
-    # every time nothing happened to arrive, which is how an alert stops being read. "0 rows" is the
-    # honest answer and it is queryable; "failed" is neither.
-    #
-    # Short-circuited rather than left to fall through, because the fall-through is `when_all([])`
-    # and its behaviour on an empty list is not a documented guarantee — the run would be resting on
-    # an implementation detail of the fan-in. Returning here makes the empty case a decision the
-    # workflow states rather than an accident it survives.
-    #
-    # `finalize` is skipped too, which is what keeps the "no empty version" half true: it would find
-    # no fragments and `commit_fragments` already refuses to commit an empty list (a run whose every
-    # unit failed should leave no version behind to explain), but not calling it at all means the
-    # dataset is not even opened for a run that had nothing to write.
-    if units_total == 0:
-        empty: dict[str, Any] = RunOutcome(status="COMPLETE", rows=0).model_dump()
-        empty["units_total"] = 0
-        yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": empty}, retry_policy=ACTIVITY_RETRY)
-        return empty
-
-    # Fan out. when_all is fan-in: the parent suspends until every child has drained, and survives
-    # its own pod dying because the history replays. This is the durable-orchestration property that
-    # a hand-rolled counter had to imitate.
-    fanout = wf.when_all([ctx.call_child_workflow(chunk_run, input=c) for c in chunks])
-
-    # THE RUN DEADLINE — A15's other half, which nothing enforced.
-    #
-    # `RASK_INGEST_MAX_RUN_HOURS` was declared in `chart/values.yaml` and read by NO code, while the
-    # A15 gate asserted `maintenance.olderThanDays * 24 >= max_run_hours` and passed. That gate
-    # certifies "version GC keeps more history than a run can take" — a guarantee that is fiction
-    # while nothing bounds how long a run takes. A green gate over an unenforced relation is worse
-    # than no gate: it is a promise with nothing behind it, and the failure it exists to prevent
-    # (GC deleting the version a live run is committing against) is silent data loss.
-    #
-    # `ctx.create_timer` is a DURABLE Dapr timer — runtime-managed, replay-safe, and explicitly NOT
-    # counted against A13's in-process timer budget (the condition names Dapr workflow timers as the
-    # carve-out). It is not a poll: the workflow suspends and the runtime wakes it once.
-    #
-    # ZERO MEANS UNBOUNDED, and that is the default in code. The plane's own docstrings advertise
-    # million-unit runs, so a live default would break the legitimate long harvest this is meant to
-    # protect — the deployment opts in, exactly like the other ceilings.
     # THE ERROR BOUNDARY — every exit routes through ONE terminal step.
     #
     # Without it, a chunk that exhausted its retries raised straight out of `when_all` and the
@@ -286,6 +326,14 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
     # reason. `tests/test_empty_commit.py` documented the loss verbatim for the finalize leg; the
     # fan-in leg was the same hole one line earlier.
     #
+    # IT OPENS IMMEDIATELY AFTER `emit_start`, not at the fan-in, and that is F12c's other half.
+    # The boundary once began below `enumerate_chunks`, which was survivable while that activity
+    # could only degrade — and stopped being survivable the moment it learned to REFUSE: an
+    # unreadable bronze now raises `AntiJoinUnavailable` rather than silently skipping nothing, and
+    # a raise above the boundary reproduces exactly the loss the boundary exists to prevent, one
+    # activity earlier. Everything between the START and the terminal is inside it, so the START
+    # emitted at accept can no longer be orphaned by ANY step.
+    #
     # REPLAY-SAFE by construction: the runtime re-raises the RECORDED child failure identically on
     # every replay (`_durabletask/task.py` raises the persisted failure detail), so the except
     # branch is as deterministic as the success branch, and the handler does nothing but call an
@@ -294,9 +342,139 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
     # `emit_terminal` itself failing after ITS retries still kills the workflow — deliberately.
     # There is no record to write about failing to write the record, and pretending otherwise
     # would just bury the loss one level deeper.
+    #
+    # WHICH IS WHY `terminal_emitted` EXISTS. Widening the boundary put the already-terminal
+    # short-circuits (unit ceiling, empty source, deadline) INSIDE it, and each emits its own
+    # terminal — so a permanently-failed emit on the "empty source is COMPLETE with zero rows" path
+    # arrived at this handler and was answered with a SECOND emit carrying a FAILED outcome. If that
+    # attempt then succeeded where the first did not — a transient outage outlasting four retries but
+    # not eight is the ordinary shape of one — the graph would permanently record a run that
+    # completed as failed, and the workflow would RETURN that lie. Re-raising instead keeps the rule
+    # above literally true for every path rather than only for the ones that reach `finalize`.
+    #
+    # `units_total` is bound BEFORE the try because the FAIL record reports it and a failure above
+    # `enumerate_chunks` has no count to report. Zero there is the truth: nothing was enumerated.
+    units_total = 0
+    terminal_emitted = False
     try:
-        if MAX_RUN_HOURS > 0:
-            deadline = ctx.create_timer(timedelta(hours=MAX_RUN_HOURS))
+        # THE CEILINGS, PINNED. An activity result is history, so every replay of this run branches on
+        # the numbers its FIRST execution saw — which is what stops a rolling deploy changing whether a
+        # durable timer exists half way through a run. See `RunLimits`.
+        #
+        # After `emit_start` on purpose: a run must be visible in the graph before anything can refuse it,
+        # so a run that dies resolving its own policy is still a visibly incomplete run rather than an
+        # absence someone has to notice.
+        resolved_limits: dict[str, Any] = yield ctx.call_activity(resolve_limits, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+        limits = RunLimits.model_validate(resolved_limits)
+
+        # BEFORE the fan-out, not before the commit. D6's creation two-step said "created empty before
+        # any fragment is COMMITTED", and that reading put it in `finalize` — which is too late, because
+        # a fragment written against a dataset that does not exist yet takes lance's DEFAULTS for the
+        # creation-time flags. The first in-cluster run fetched, validated and wrote every fixture and
+        # then died at commit with "added files with version 2.1. However, the data storage version is
+        # 2.2." The dataset must exist before the first WRITE, so the writers inherit its format.
+        # The location the CATALOG vends, captured once and threaded into every chunk. Deriving it a
+        # second time inside `enumerate_chunks` is what broke the first catalog-backed run: workers wrote
+        # fragments to the env-composed warehouse path while the catalog's table lived somewhere else, and
+        # the commit was refused with "commit references 4 data file(s) not present under the table
+        # location (did the direct write target the wrong prefix?)" — after every unit had been fetched.
+        # One resolution, carried; never two derivations of one location. The BASE VERSION rides the same
+        # handle for the same reason, and finding F12a is what it costs when it does not — see
+        # `DatasetHandle`.
+        handle: dict[str, Any] = yield ctx.call_activity(ensure_dataset, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+        target = DatasetHandle.model_validate(handle)
+
+        chunks: list[dict[str, Any]] = yield ctx.call_activity(
+            enumerate_chunks,
+            input={"spec": spec.model_dump(), "dataset_uri": target.location},
+            retry_policy=ACTIVITY_RETRY,
+        )
+        # The enumerated total, published as CUSTOM STATUS so it is readable while the run is still
+        # going. `units_total` was declared on the run record and never assigned by anything, so the API
+        # could say "4 done" and never "4 of 500" — no progress bar was possible for exactly the long
+        # harvest where one matters. Custom status rides the workflow's own durable state, so it survives
+        # a pod death like every other run fact and needs no second writable copy.
+        units_total = sum(len(chunk.get("keys") or ()) for chunk in chunks)
+        ctx.set_custom_status(json.dumps({"units_total": units_total, "chunks": len(chunks)}))
+
+        # THE UNIT CEILING — refused HERE, before a single task is published.
+        #
+        # A mis-pointed source is the case: `s3-prefix` with an empty `prefix` lists a whole bucket, and
+        # the registry invites exactly that ("Leave empty to take the whole bucket"). Without a ceiling
+        # that becomes millions of queue messages, a fan-out of thousands of child workflows, and the
+        # state-store churn of both — for a run nobody meant to start.
+        #
+        # It refuses by POLICY (a returned FAILED outcome), not by raising: raising inside the activity
+        # would burn four retries re-LISTING the source before failing, and the operator would read a
+        # crash rather than a limit. That path only reports honestly because the status merge now carries
+        # a returned FAILED through to the door — see `runs.merge_workflow_state`.
+        #
+        # Placed after `enumerate_chunks` rather than inside it because the ceiling is a property of the
+        # RUN, and this is where the run's decisions live. It cannot prevent the listing itself (see
+        # `RunLimits`) — what it prevents is acting on it.
+        if limits.max_units > 0 and units_total > limits.max_units:
+            refused: dict[str, Any] = RunOutcome(
+                status="FAILED",
+                errors={
+                    "run": (
+                        f"source enumerated {units_total} units, over the {limits.max_units} ceiling "
+                        f"(RASK_INGEST_MAX_UNITS). Narrow the source — an empty s3-prefix lists the whole "
+                        f"bucket — or raise the ceiling for this deployment."
+                    )
+                },
+                errors_total=1,
+            ).model_dump()
+            terminal_emitted = True
+            yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": refused}, retry_policy=ACTIVITY_RETRY)
+            return refused
+
+        # AN EMPTY SOURCE IS A SUCCESS WITH ZERO ROWS, and it short-circuits HERE.
+        #
+        # Not a failure, deliberately. An empty folder or prefix is a legitimate state of the world — a
+        # scheduled ETL over a quiet source hits it routinely — and reporting it as FAILED would alert
+        # every time nothing happened to arrive, which is how an alert stops being read. "0 rows" is the
+        # honest answer and it is queryable; "failed" is neither.
+        #
+        # Short-circuited rather than left to fall through, because the fall-through is `when_all([])`
+        # and its behaviour on an empty list is not a documented guarantee — the run would be resting on
+        # an implementation detail of the fan-in. Returning here makes the empty case a decision the
+        # workflow states rather than an accident it survives.
+        #
+        # `finalize` is skipped too, which is what keeps the "no empty version" half true: it would find
+        # no fragments and `commit_fragments` already refuses to commit an empty list (a run whose every
+        # unit failed should leave no version behind to explain), but not calling it at all means the
+        # dataset is not even opened for a run that had nothing to write.
+        if units_total == 0:
+            empty: dict[str, Any] = RunOutcome(status="COMPLETE", rows=0).model_dump()
+            empty["units_total"] = 0
+            terminal_emitted = True
+            yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": empty}, retry_policy=ACTIVITY_RETRY)
+            return empty
+
+        # Fan out. when_all is fan-in: the parent suspends until every child has drained, and survives
+        # its own pod dying because the history replays. This is the durable-orchestration property that
+        # a hand-rolled counter had to imitate.
+        fanout = wf.when_all([ctx.call_child_workflow(chunk_run, input=c) for c in chunks])
+
+        # THE RUN DEADLINE — A15's other half, which nothing enforced.
+        #
+        # `RASK_INGEST_MAX_RUN_HOURS` was declared in `chart/values.yaml` and read by NO code, while the
+        # A15 gate asserted `maintenance.olderThanDays * 24 >= max_run_hours` and passed. That gate
+        # certifies "version GC keeps more history than a run can take" — a guarantee that is fiction
+        # while nothing bounds how long a run takes. A green gate over an unenforced relation is worse
+        # than no gate: it is a promise with nothing behind it, and the failure it exists to prevent
+        # (GC deleting the version a live run is committing against) is silent data loss.
+        #
+        # `ctx.create_timer` is a DURABLE Dapr timer — runtime-managed, replay-safe, and explicitly NOT
+        # counted against A13's in-process timer budget (the condition names Dapr workflow timers as the
+        # carve-out). It is not a poll: the workflow suspends and the runtime wakes it once.
+        #
+        # ZERO MEANS UNBOUNDED, and that is the default in code. The plane's own docstrings advertise
+        # million-unit runs, so a live default would break the legitimate long harvest this is meant to
+        # protect — the deployment opts in, exactly like the other ceilings. The value is `limits`, an
+        # ACTIVITY RESULT, and never env read here: whether a timer exists must not change under a replay.
+        if limits.max_run_hours > 0:
+            deadline = ctx.create_timer(timedelta(hours=limits.max_run_hours))
             winner = yield wf.when_any([fanout, deadline])
             if winner is deadline:
                 # Terminal, and it does NOT fall through to `finalize`: committing a partial harvest under
@@ -305,8 +483,10 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
                 # by a re-run, which converges on the same rows because the unit ids are content-derived.
                 timed_out: dict[str, Any] = RunOutcome(
                     status="FAILED",
-                    errors={"run": f"exceeded the {MAX_RUN_HOURS}h ceiling (RASK_INGEST_MAX_RUN_HOURS) with {units_total} units enumerated"},
+                    errors={"run": f"exceeded the {limits.max_run_hours}h ceiling (RASK_INGEST_MAX_RUN_HOURS) with {units_total} units enumerated"},
+                    errors_total=1,
                 ).model_dump()
+                terminal_emitted = True
                 yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": timed_out}, retry_policy=ACTIVITY_RETRY)
                 return timed_out
             results = fanout.get_result()
@@ -315,7 +495,15 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
 
         parsed = [ChunkResult.model_validate(r) for r in results]
         fragments = [f for r in parsed for f in r.fragments]
-        errors = {k: v for r in parsed for k, v in r.errors.items()}
+        # BOUNDED at the merge, not merely at each child. N chunks each carrying up to
+        # MAX_REPORTED_ERRORS entries is still N * MAX_REPORTED_ERRORS in the parent's history, and
+        # the parent's dict is the one that rides into `finalize`'s input and out again as the run's
+        # own outcome. The exact count comes from the children's totals rather than from counting
+        # keys, so a unit a child had to drop is still counted here.
+        merged: dict[str, str] = {}
+        for result in parsed:
+            merged.update(result.errors)
+        errors, errors_total = bound_errors(merged, sum(r.errors_total for r in parsed))
         ctx.set_custom_status(json.dumps({"units_total": units_total, "finalizing": len(fragments)}))
 
         # Exactly one commit for the whole run — D6. Nothing is visible in bronze until this returns, so
@@ -323,16 +511,32 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
         # purpose: a permanently-refused commit is exactly as much a run failure as a dead chunk, and
         # it must leave the same FAIL record. Staged fragments stay staged either way — a re-run
         # converges via content-derived identity, and the orphan scan reports what nothing reclaimed.
+        #
+        # `read_version` rides the input, so an activity RETRY and a workflow REPLAY present the same
+        # base version the first attempt did — which is the only reason the catalog can recognize its
+        # own earlier commit rather than appending the run's rows a second time (F12a, `DatasetHandle`).
         outcome: dict[str, Any] = yield ctx.call_activity(
             finalize,
-            input={"spec": spec.model_dump(), "fragments": fragments, "errors": errors, "units_total": units_total},
+            input={
+                "spec": spec.model_dump(),
+                "fragments": fragments,
+                "errors": errors,
+                "errors_total": errors_total,
+                "units_total": units_total,
+                "read_version": target.read_version,
+            },
             retry_policy=ACTIVITY_RETRY,
         )
     except Exception as exc:
+        if terminal_emitted:
+            # The failure IS a terminal emit — this run already stated how it ended, and answering
+            # that with a second, contradicting record is worse than dying. See `terminal_emitted`.
+            raise
         failed: dict[str, Any] = RunOutcome(
             # The recorded failure detail replays identically, so this string is deterministic.
             status="FAILED",
             errors={"run": f"unrecoverable before finalize completed: {str(exc)[:400]}"},
+            errors_total=1,
         ).model_dump()
         failed["units_total"] = units_total
         yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": failed}, retry_policy=ACTIVITY_RETRY)
@@ -342,8 +546,11 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
     return outcome
 
 
-def chunk_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, Any]:
+def chunk_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[Any, Any, dict[str, Any]]:
     """Child workflow: publish this chunk's units, then drain them.
+
+    A Generator, for the reason spelled out on `ingest_run` — the annotation names the protocol, not
+    the payload the last `return` carries.
 
     THE DRAIN IS AN ACTIVITY, and the first version's was not — it suspended on an external event
     that nothing in the estate ever raised. Read together, `worker.signal_drained` published to a
@@ -366,15 +573,28 @@ def chunk_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, An
 
     drained: dict[str, Any] = yield ctx.call_activity(drain_chunk, input=chunk.model_dump(), retry_policy=ACTIVITY_RETRY)
 
+    errors: dict[str, str] = dict(drained.get("errors") or {})
+    # The drain already capped its own payload, so `len(errors)` is not the count — it reports the
+    # true one separately and this must carry it, or every unit the cap dropped stops being counted.
+    errors_total = int(drained.get("errors_total") or len(errors))
+
     # Confirm against the QUEUE, not against the drain's own report. A drain that returned early —
     # its fetch timed out because another pod held the units — is indistinguishable from a complete
     # one in its own result, and only the stream knows the difference. `num_pending == 0` on a
     # WORK_QUEUE stream means every unit was acked, by whichever worker did it.
-    if drained.get("errors") or drained.get("units_done", 0) < len(chunk.keys):
+    if errors_total or int(drained.get("units_done") or 0) < len(chunk.keys):
         reconciled: dict[str, Any] = yield ctx.call_activity(reconcile_chunk, input=chunk.model_dump(), retry_policy=ACTIVITY_RETRY)
-        drained = {**drained, "errors": {**drained.get("errors", {}), **reconciled.get("errors", {})}}
+        extra = {key: value for key, value in (reconciled.get("errors") or {}).items() if key not in errors}
+        errors.update(extra)
+        errors_total += len(extra)
 
-    return ChunkResult.model_validate({k: v for k, v in drained.items() if k in ChunkResult.model_fields}).model_dump()
+    listed, total = bound_errors(errors, errors_total)
+    return ChunkResult(
+        chunk_id=chunk.chunk_id,
+        fragments=[str(fragment) for fragment in (drained.get("fragments") or ())],
+        errors=listed,
+        errors_total=total,
+    ).model_dump()
 
 
 # ── activities — every non-deterministic thing lives behind one of these ───────────────
@@ -391,15 +611,36 @@ def emit_start(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
     _lineage().start(spec.run_id, spec.project, spec.dataset, spec.kind, spec.options)
 
 
-def ensure_dataset(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str:
+def resolve_limits(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
+    """Read the run's POLICY ceilings — the plane's one sanctioned env read for them.
+
+    AN ACTIVITY, not a module constant, and that is the entire point: an activity's result is written
+    to workflow history, so every replay of this run sees the numbers its first execution saw. A
+    module-level `os.getenv` looked like a constant and behaved like a clock — see `RunLimits`.
+
+    Passes the spec's own `limits` straight through when the accepting door already resolved them, so
+    a run can be pinned to what it was ACCEPTED with rather than to what the pod that first executed
+    it happened to hold.
+    """
+    spec = RunSpec.model_validate(payload)
+    return (spec.limits or RunLimits.from_env()).model_dump()
+
+
+def ensure_dataset(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
     """Create the run's bronze dataset EMPTY, carrying the creation-time flags. D6 step 1.
 
     Idempotent, so a replay is a no-op rather than a second create — which matters because this runs
     before the fan-out and is therefore the activity most likely to be replayed.
+
+    Returns the table's location AND the version this run's fragments will be committed against.
+    Both are resolved HERE, once, and carried: two derivations of one location is what made workers
+    write where the catalog was not looking, and two derivations of one base VERSION is what made the
+    catalog's replay dedupe unreachable (F12a — `DatasetHandle` has the mechanism).
     """
     from ingest.runtime import ensure_dataset_at
 
-    return ensure_dataset_at(RunSpec.model_validate(payload))
+    location, read_version = ensure_dataset_at(RunSpec.model_validate(payload))
+    return DatasetHandle(location=location, read_version=read_version).model_dump()
 
 
 def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -414,16 +655,12 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
     a million activity results would melt the state store, which is the whole reason chunking exists
     and the reason this plane needs no separate ledger.
     """
+    from ingest.identity import unit_id
     from ingest.sources import SourceSpec, build_source, iter_versioned_unit_keys
 
     spec = RunSpec.model_validate(payload["spec"])
-    source_spec = SourceSpec(kind=spec.kind, project=spec.project, dataset=spec.dataset, options=spec.options)
-    # KEYS, not objects. `iter_units` reads every object's bytes to hand back its uri — so
-    # enumerating a IIIF volume through it downloaded the whole volume here and the workers then
-    # downloaded it again. Two full transfers of the source, the first with no backpressure at all.
-    pairs = list(iter_versioned_unit_keys(build_source(source_spec)))
-
     uri = str(payload["dataset_uri"])
+
     # THE ANTI-JOIN — what makes repeated ingest CONVERGE (owner goal 2026-08-07). Before this,
     # `lander.py` committed a blind Append and a re-run duplicated every row: nine runs of one
     # fixture prefix measured nine copies per file. The identity is `unit_id(key, token)` — the
@@ -435,21 +672,34 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
     # sidecar and never rides a projection that does not name it. A quiet tick drops every key,
     # falls into the units_total == 0 short-circuit, and leaves NO Lance version. The skip is
     # LOGGED with counts — silent truncation would read as data loss in reverse.
-    from ingest.identity import unit_id
-
-    existing: set[int] = set()
+    #
+    # A FAILED READ IS A FAILURE (F12c). This sat under a bare `except Exception` that logged and
+    # continued with an EMPTY set — and an empty set does not mean "nothing to skip", it means "skip
+    # NOTHING": one transient object-store error and the run re-fetches and re-lands every object
+    # bronze already holds, silently duplicating a whole tier. That is not a degradation of the
+    # anti-join, it is precisely the failure the anti-join exists to prevent, reached through the
+    # anti-join's own error path. `ensure_dataset` ran immediately before this activity and returned
+    # this very location, so the table exists by construction and nothing here is a legitimate
+    # absence — an unreadable `id` column is a read failure, and the honest answer is to stop.
+    #
+    # BEFORE the source walk, so a doomed attempt costs one listing instead of four: raising puts this
+    # under ACTIVITY_RETRY, and every attempt re-executes the whole activity body.
     try:
         import lance
 
         dataset = lance.dataset(uri)
-        if dataset.count_rows():
-            existing = set(dataset.to_table(columns=["id"]).column("id").to_pylist())
-    except Exception:
-        # A dataset the catalog just created (or a local test path) may not be openable yet —
-        # an empty set means nothing is skipped, which is the safe degradation: worst case is
-        # the pre-anti-join behaviour, never a silently skipped ingest.
-        _log = __import__("logging").getLogger(__name__)
-        _log.warning("anti-join could not read %s — ingesting everything", uri, exc_info=True)
+        existing: set[int] = set(dataset.to_table(columns=["id"]).column("id").to_pylist()) if dataset.count_rows() else set()
+    except Exception as exc:
+        raise AntiJoinUnavailable(
+            f"could not read the `id` column of {uri}, so this run cannot tell which objects bronze already holds. "
+            f"Ingesting anyway would re-land every one of them: {exc}"
+        ) from exc
+
+    source_spec = SourceSpec(kind=spec.kind, project=spec.project, dataset=spec.dataset, options=spec.options)
+    # KEYS, not objects. `iter_units` reads every object's bytes to hand back its uri — so
+    # enumerating a IIIF volume through it downloaded the whole volume here and the workers then
+    # downloaded it again. Two full transfers of the source, the first with no backpressure at all.
+    pairs = list(iter_versioned_unit_keys(build_source(source_spec)))
 
     if existing:
         before = len(pairs)
@@ -530,14 +780,28 @@ def reconcile_chunk(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> di
 
 
 def finalize(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
-    """The lander: fragments -> ONE Lance commit, registered through the catalog."""
+    """The lander: fragments -> ONE Lance commit, registered through the catalog.
+
+    `read_version` comes from the INPUT and is never re-read here. Dapr re-executes an activity whose
+    result it did not durably record, so a `finalize` that committed and then lost its pod runs again
+    with the same input — and the catalog answers a repeat of the same (run_id, read_version) with the
+    version that run already committed instead of appending its rows twice. Re-reading the version per
+    attempt is what made that dedupe unreachable; see `DatasetHandle`.
+    """
     from ingest.runtime import finalize_run
 
     spec = RunSpec.model_validate(payload["spec"])
-    outcome = finalize_run(spec, payload.get("fragments") or [], payload.get("errors") or {})
+    outcome = finalize_run(
+        spec,
+        payload.get("fragments") or [],
+        payload.get("errors") or {},
+        read_version=int(payload.get("read_version") or 0),
+    )
     # Carried into the terminal output so a FINISHED run still reports what it set out to do — the
     # custom status is the live view, this is the permanent one.
     outcome["units_total"] = int(payload.get("units_total") or 0)
+    # The EXACT failure count, which `errors` no longer is once the cap bites (`bound_errors`).
+    outcome["errors_total"] = int(payload.get("errors_total") or len(outcome.get("errors") or {}))
     return outcome
 
 
@@ -600,7 +864,7 @@ def _run_async(coro: Any) -> Any:  # noqa: ANN401
 
 
 WORKFLOWS = (ingest_run, chunk_run)
-ACTIVITIES = (emit_start, ensure_dataset, enumerate_chunks, publish_units, drain_chunk, reconcile_chunk, finalize, emit_terminal)
+ACTIVITIES = (emit_start, resolve_limits, ensure_dataset, enumerate_chunks, publish_units, drain_chunk, reconcile_chunk, finalize, emit_terminal)
 
 
 def register(runtime: wf.WorkflowRuntime) -> None:

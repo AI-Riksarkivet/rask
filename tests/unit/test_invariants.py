@@ -451,6 +451,11 @@ _PINNED_TOPICS: list[tuple[str, str]] = [
     ("services/catalog/src/catalog/core/config.py", 'default="lineage.events.v1", alias="LANCE_DAPR_TOPIC"'),
     ("services/maintenance/src/maintenance/core/config.py", 'default="lineage.events.v1", alias="MAINTENANCE_LINEAGE_TOPIC"'),
     ("services/medallion/src/medallion/core/config.py", 'default="lineage.events.v1", alias="MEDALLION_LINEAGE_TOPIC"'),
+    # The medallion's publication head rides the CATALOG's control topic, so it IMPORTS the producer's
+    # constant rather than re-typing the name — what catalog + maintenance already do. Pinned as the
+    # import AND the use: either alone can be satisfied while the other re-literalizes the string.
+    ("services/medallion/src/medallion/core/config.py", "from service_kit.control_events import CONTROL_TOPIC"),
+    ("services/medallion/src/medallion/core/config.py", 'default=CONTROL_TOPIC, alias="MEDALLION_CONTROL_TOPIC"'),
     # the intra-cascade trigger topics (unversioned by design: both ends deploy atomically from one chart)
     ("services/medallion/src/medallion/core/config.py", 'default="medallion.bronze", alias="MEDALLION_SUB_TOPIC"'),
     ("services/medallion/src/medallion/core/config.py", 'default="medallion.bronze", alias="MEDALLION_BRONZE_TOPIC"'),
@@ -470,6 +475,29 @@ def test_event_topic_constants_are_pinned(relpath: str, needle: str) -> None:
         f"{relpath} no longer contains `{needle}` — the event-fabric topic contract (DATA-CONTRACT §7.2) "
         "names this exact constant. A deliberate rename must update the doc + this pin together; a "
         "BREAKING payload change must instead add a NEW .vN topic with parallel consumers."
+    )
+
+
+def test_medallion_never_re_types_the_catalog_control_topic() -> None:
+    """The pin above says the constant is imported; this says no SECOND spelling of it may reappear.
+
+    A pin is satisfiable by an import that some other module then shadows with its own literal — which
+    is exactly how `core/config.py` came to carry `"catalog.control.v1"` while three other consumers
+    imported `CONTROL_TOPIC`. The name belongs to its producer's model module (DATA-CONTRACT §7.2:
+    "the ONE shared constant both sides import"); a rename there must reach every subscriber, and a
+    duplicate is a subscriber the rename silently leaves listening to a topic nobody publishes to.
+    """
+    import ast  # local: the AST is the point — a prose mention of the topic in a comment is not a duplicate
+
+    offenders = [
+        f"{py.relative_to(REPO)}:{node.lineno}"
+        for py in _svc("medallion").rglob("*.py")
+        for node in ast.walk(ast.parse(py.read_text()))
+        if isinstance(node, ast.Constant) and node.value == "catalog.control.v1"
+    ]
+    assert not offenders, (
+        f"{offenders} spell `catalog.control.v1` out as a string literal instead of importing CONTROL_TOPIC "
+        "from service_kit.control_events — the topic name has exactly one definition site (DATA-CONTRACT §7.2)."
     )
 
 
@@ -1230,10 +1258,7 @@ def test_the_lineage_allowlist_is_DERIVED_from_every_declared_identity() -> None
 
     rendered = _helm_template("auth.enabled=true")
 
-    declared = {
-        m.group(1)
-        for m in re.finditer(r'name:\s*RASK_LINEAGE_SERVICE_IDENTITY,\s*value:\s*"?([\w-]+)"?', rendered)
-    }
+    declared = {m.group(1) for m in re.finditer(r'name:\s*RASK_LINEAGE_SERVICE_IDENTITY,\s*value:\s*"?([\w-]+)"?', rendered)}
     assert declared, "no service declares a lineage identity — the derivation has nothing to read, so this gate is vacuous"
 
     allowlist_match = re.search(r'name:\s*LINEAGE_SERVICE_SUBJECTS,\s*value:\s*"([^"]*)"', rendered)
@@ -1265,3 +1290,88 @@ def test_the_allowlist_admits_NO_EMPTY_subject() -> None:
 
     assert "" not in subjects, f"the allowlist contains an EMPTY subject: {subjects!r} — it would admit an unidentified caller"
     assert len(subjects) == len(set(subjects)), f"the allowlist repeats a subject: {subjects!r}"
+
+
+def test_every_DURABLE_pubsub_component_has_a_sidecar_retry_target() -> None:
+    """A trigger consumer that must not lose messages must also be named in the Resiliency CRD.
+
+    THE REGRESSION THIS GATES. The cascade's control component
+    (`catalog-control-pubsub-<producer>`) carried a `durableName` — the chart's own marker for "a
+    trigger published while this app is down must be DELIVERED on recovery" — and was absent from
+    the Resiliency CRD's `targets.components`, which ranges only over the `lance.subPubsub` family.
+    The `/publication-arrival` subscription declares a `dead_letter_topic`, and Dapr sends there
+    after the FIRST failure when no retry policy targets the component. So the most expensive
+    trigger in the estate got zero retries and parked on one transient blip — while the CRD existed,
+    the app was in `scopes:`, and every neighbour was covered.
+
+    The rule is stated as a PROPERTY rather than a list of names on purpose: a future subscriber
+    added to one template and not the other fails here, which is exactly how this one was missed.
+    """
+    rendered = _helm_template("dapr.enabled=true", "dapr.resiliency.enabled=true")
+    docs = [d for d in yaml.safe_load_all(rendered) if d]
+
+    durable = {
+        d["metadata"]["name"]
+        for d in docs
+        if d.get("kind") == "Component"
+        and (d.get("spec") or {}).get("type") == "pubsub.jetstream"
+        and any(m.get("name") == "durableName" for m in (d.get("spec") or {}).get("metadata") or [])
+        # DLQ components are EXEMPT, and not as a convenience. A dead-letter handler must
+        # unconditionally ACK — a RETRY from a DLQ route requeues the message onto the DLQ forever —
+        # so its subscription never returns RETRY and an inbound retry policy could never engage.
+        # Requiring one would push a meaningless target into the CRD and teach the next reader that
+        # a DLQ is retried, which is the opposite of the rule. (This exemption is not hypothetical:
+        # `lineage-pubsub-lineage-dlq` is durable, by design, and correctly has no target.)
+        and not d["metadata"]["name"].endswith("-dlq")
+    }
+    assert durable, "no durable pub/sub component rendered — this gate would pass vacuously"
+
+    targeted: set[str] = set()
+    for d in docs:
+        if d.get("kind") != "Resiliency":
+            continue
+        targeted |= set(((d.get("spec") or {}).get("targets") or {}).get("components") or {})
+
+    missing = durable - targeted
+    assert not missing, (
+        f"durable pub/sub components with NO inbound retry target: {sorted(missing)} — with a dead_letter_topic declared, Dapr parks these on the FIRST failure"
+    )
+
+
+def test_the_rustfs_tenant_carries_NO_plaintext_credential() -> None:
+    """The Tenant CR's OIDC client secret must be a `secretKeyRef`, never a `value:`.
+
+    THE REGRESSION THIS GATES. `RUSTFS_IDENTITY_OPENID_CLIENT_SECRET` shipped as
+    `value: {{ .Values.dex.clientSecret }}` — readable in `kubectl get tenant -o yaml`,
+    `kubectl describe` and `helm get manifest` — while every sibling credential in the estate was
+    already behind a guard. It sat outside that guard because a Tenant is consumed by the RustFS
+    operator, which has no daprd sidecar and so cannot read the Dapr secret store the fleet services
+    use. That is the case `infra-credentials.yaml` exists for, and this asserts the Tenant actually
+    uses it.
+
+    Latent-by-default is not a defence: `rustfs.oidc.enabled` is off in the shipped values, so this
+    renders only on estates running STS credential vending — which is precisely where a leaked client
+    secret is worth the most.
+    """
+    rendered = _helm_template("rustfs.enabled=true", "rustfs.oidc.enabled=true")
+    docs = [d for d in yaml.safe_load_all(rendered) if d]
+
+    tenants = [d for d in docs if d.get("kind") == "Tenant"]
+    assert tenants, "no Tenant rendered — this gate would pass vacuously"
+
+    for tenant in tenants:
+        for env in (tenant.get("spec") or {}).get("env") or []:
+            if not str(env.get("name", "")).endswith("_CLIENT_SECRET"):
+                continue
+            assert "value" not in env, f"{env['name']} renders a PLAINTEXT value on the Tenant CR: {env!r}"
+            ref = ((env.get("valueFrom") or {}).get("secretKeyRef")) or {}
+            assert ref.get("name") and ref.get("key"), f"{env['name']} has neither a value nor a usable secretKeyRef: {env!r}"
+
+            # The reference must RESOLVE — a secretKeyRef at an absent key is a pod that never starts,
+            # and it would only surface on the enabled path, which is the narrowest possible place to
+            # discover it.
+            secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
+            target = secrets.get(ref["name"])
+            assert target is not None, f"{env['name']} references Secret {ref['name']!r}, which the chart does not render"
+            keys = set(target.get("stringData") or {}) | set(target.get("data") or {})
+            assert ref["key"] in keys, f"{env['name']} references key {ref['key']!r}, absent from Secret {ref['name']!r} (has {sorted(keys)})"

@@ -17,6 +17,25 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 #: to replay. The frontend re-fetches the full payload from its own inference call when it needs it.
 MAX_OUTPUT_CHARS = 4000
 
+#: The ceiling on `NodeResult.payload_text` — the value the GRAPH carries downstream, two orders of
+#: magnitude above the display cap because it is a document, not a preview.
+#:
+#: Uncapped it was an amplifier, not just a large field: in the durable lane the payload is written
+#: to the workflow history as the activity's output AND again as the input of every dependent node,
+#: so one big node output costs O(dependents) writes to the actor state store. The estate already
+#: refuses to move data of that shape through Dapr at all — `service_kit.dapr_publish` caps a
+#: published event at 900 KiB on the claim-check rule (events carry pointers, never data).
+#:
+#: 256 KiB exactly matches `executor._REGEX_MAX_SUBJECT`, the other caller-facing bound on a payload
+#: in this service, so a payload that survives this cap is still one a `regex` node will accept —
+#: two different ceilings would make "too large" mean two different things one edge apart.
+MAX_PAYLOAD_CHARS = 256 * 1024
+
+#: Appended to a payload this service cut, so a downstream node's input SAYS it is incomplete rather
+#: than reading as a short document. Formatted with the original length and the ceiling: those two
+#: numbers are what turn "the answer looks wrong" into "the payload was 3 MiB".
+PAYLOAD_TRUNCATED_MARKER = "\n…[flows truncated this payload: {total} characters exceeded the {cap}-character ceiling]"
+
 #: Terminal-or-running vocabulary, shared by a run and by each of its nodes so a caller reads one
 #: set of words. A node that never got to run because an upstream failed is `failed` with the
 #: error "upstream failed" — not a fourth state, because "blocked" is a *reason*, not an outcome.
@@ -174,19 +193,34 @@ class RunState(BaseModel):
 class NodeResult(BaseModel):
     """What one node's execution produced — and the Dapr activity's OUTPUT contract.
 
-    Two fields because they answer two questions. `state` is what the builder paints, and its
-    `output_text` is capped at ``MAX_OUTPUT_CHARS``. `payload_text` is what the GRAPH carries to the
-    dependent nodes, and it is deliberately NOT capped: a page of ALTO exceeds the display cap
-    routinely, and feeding the truncated copy downstream would hand an `alto` node a document cut
-    mid-element — a silently wrong result, which is worse than a large one.
+    Two fields because they answer two questions, and the two carry DIFFERENT ceilings. `state` is
+    what the builder paints, capped at ``MAX_OUTPUT_CHARS`` (4 000) because it is a preview.
+    `payload_text` is what the GRAPH carries to the dependent nodes, capped at ``MAX_PAYLOAD_CHARS``
+    (256 KiB) because it is a document — a page of ALTO exceeds the display cap routinely, and
+    feeding the truncated PREVIEW downstream would hand an `alto` node a document cut mid-element.
 
-    The consequence, stated rather than discovered: in the durable lane the uncapped payload enters
-    the workflow history. Acceptable while payloads are one page of text; bounding it (a blob handle
-    instead of the bytes) is the follow-up, not a v0 concern.
+    The graph cap is loud, which is the whole reason it can exist at all: a truncated payload ends
+    with ``PAYLOAD_TRUNCATED_MARKER`` naming the original length, so a document cut mid-element
+    announces itself in the dependent node's own input instead of producing a plausible short
+    answer. A silent truncation here would be worse than no cap; a marked one is not.
     """
 
     state: NodeRunState
     payload_text: str | None = None
+
+    @field_validator("payload_text")
+    @classmethod
+    def _cap(cls, value: str | None) -> str | None:
+        # On the MODEL for the same reason `NodeRunState._truncate` is: the executor, the activity
+        # and the workflow all build these, and this is the exact value that lands in the durable
+        # workflow history — once as this activity's output, then again as every dependent's input.
+        if value is None or len(value) <= MAX_PAYLOAD_CHARS:
+            return value
+        marker = PAYLOAD_TRUNCATED_MARKER.format(total=len(value), cap=MAX_PAYLOAD_CHARS)
+        # The marker rides INSIDE the ceiling, not past it: the cap is what a dependent node
+        # receives, and a bound that its own input check (`_REGEX_MAX_SUBJECT`) then rejects by a
+        # few dozen characters would be a bound that fails at exactly the size it was set for.
+        return value[: MAX_PAYLOAD_CHARS - len(marker)] + marker
 
 
 class Payload(BaseModel):

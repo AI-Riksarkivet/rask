@@ -32,14 +32,42 @@ RunStatus = Literal["ACCEPTED", "RUNNING", "COMPLETE", "COMPLETE_WITH_ERRORS", "
 SCHEDULE_TIMEOUT_SECONDS = 3.0
 
 
+class ScheduleUnavailable(Exception):
+    """The engine could not be ASKED to take the run — retryable, and the same answer as a timeout.
+
+    The bounded schedule call raises `TimeoutError` when the sidecar is merely slow, and for a while
+    that was the ONLY failure the door mapped. Every other sidecar failure is the same condition
+    wearing a different exception — daprd not up yet, a refused gRPC channel, "the state store is not
+    configured to use the actor runtime" — and each of those escaped as a raw 500, which tells a
+    client its request can never work when the truth is "ask again".
+
+    Raised only by the transport adapter (`_DaprWorkflowStarter`), never by workflow code: a
+    programming error on this side is not retryable and must keep its 500 rather than becoming a
+    503 the caller loops on forever.
+    """
+
+
 def run_id_for(project: str, idempotency_key: str) -> str:
     """Derive the run id from the CALLER's key — the estate's idempotency pattern.
 
     Deterministic by construction: same project + same key -> same id, on any pod, after any crash.
     A token minted per attempt would leave one orphan run per retry, which is the failure the
     annotation publish saga had to solve with `pending_publish_id` (docs/OPERATORS.md §4).
+
+    INJECTIVE, and a printable separator cannot make it so. `f"{project}-ingest-{key}"` lets the
+    delimiter occur inside either field, so distinct pairs render one string: project `ra` with
+    `Idempotency-Key: batch-ingest-7` and project `ra-ingest-batch` with key `7` both give
+    `ra-ingest-batch-ingest-7`. `PROJECT_PATTERN` permits `-` (`warehouse_registry.py:37`) and
+    `IngestRequest.project` carries no pattern at all, while the key half is a caller-supplied HTTP
+    header — so this is reachable, and it is CROSS-TENANT: the id is the workflow instance id AND the
+    dedupe key, so one caller's POST is answered `deduplicated: true` against another project's run
+    and their `GET /v1/ingests/{id}` resolves to it.
     """
-    return str(uuid.uuid5(RUN_NAMESPACE, f"{project}-ingest-{idempotency_key}"))
+    # `\x00` because it cannot occur in either field — an HTTP header value cannot carry a NUL, and a
+    # project name is validated against a pattern that admits no control characters. That is a
+    # property of the alphabet rather than a convention about what people name things, which is the
+    # only kind of separator argument that survives a hostile input.
+    return str(uuid.uuid5(RUN_NAMESPACE, "\x00".join((project, "ingest", idempotency_key))))
 
 
 class RunRecord(BaseModel):
@@ -56,6 +84,20 @@ class RunRecord(BaseModel):
     errors: dict[str, str] = Field(default_factory=dict)
     committed_version: int | None = None
     lineage_run_present: bool = False
+
+    # The DISPATCH half, and the reason the dedupe branch can be trusted. `scheduled` is set only
+    # once the engine has ACCEPTED the workflow, so a stored record with `scheduled=False` is a run
+    # with nothing driving it — re-drivable, not a duplicate. Without the distinction, storing the
+    # record before the dispatch (so a concurrent GET can see the run) made mere existence read as
+    # "already started": the 503's own advice — retry with the same Idempotency-Key — then resolved
+    # to `deduplicated=true` forever and the run became a permanent zombie, a status with no executor.
+    #
+    # `dispatch_started_at` is the LEASE over the window in which a repeat POST must not re-drive.
+    # The schedule call is capped at SCHEDULE_TIMEOUT_SECONDS, so an attempt older than that cap is
+    # over however its request ended — including a client disconnect, which unwinds the handler
+    # without running any except-branch and would otherwise strand the claim.
+    scheduled: bool = False
+    dispatch_started_at: datetime | None = None
 
     # The PUBLICATION half (§ D2). A commit makes rows readable; only a publication makes them ready,
     # so a run that committed and did not publish is a distinct, visible state rather than a green
@@ -76,6 +118,32 @@ class RunRecord(BaseModel):
         knows its provenance and one that merely believes it.
         """
         return self.status in ("COMPLETE", "COMPLETE_WITH_ERRORS") and not self.lineage_run_present
+
+
+def is_redrivable(record: RunRecord) -> bool:
+    """True when a stored run has no dispatch behind it, so a repeat POST must SCHEDULE it.
+
+    The predicate the dedupe branch turns on, and the whole of the zombie fix. Three states, and only
+    the middle one is a genuine duplicate:
+
+    * `scheduled` — the engine took it. A repeat starts nothing (A2), whatever its status now is.
+    * a fresh `dispatch_started_at` — an attempt is in flight on some request right now. Also starts
+      nothing: the schedule call is bounded, so waiting the bound out is cheaper than racing two
+      dispatches of the same instance id to the engine.
+    * neither — nobody is driving this run. The retry the 503 advises has to be able to dispatch it,
+      or the advice is a guarantee of the bug it claims to recover from.
+
+    The lease is time-based rather than cleared in a `finally` on purpose: a disconnected client
+    unwinds the handler with `CancelledError`, which no except-branch here catches, and an in-flight
+    marker that only a normal return can clear would strand exactly the run this predicate exists to
+    free.
+    """
+    if record.scheduled:
+        return False
+    started = record.dispatch_started_at
+    if started is None:
+        return True
+    return (datetime.now(UTC) - started).total_seconds() >= SCHEDULE_TIMEOUT_SECONDS
 
 
 class RunStore(Protocol):
@@ -156,6 +224,11 @@ def record_from_workflow_state(run_id: str, state: dict[str, object] | None) -> 
     workflow's input, and Dapr stores that in the run's history, so `serialized_input` IS the
     accepted-time record. The store becomes a genuine cache — losing it costs one extra gRPC call,
     which is what its docstring always claimed.
+
+    `scheduled=True` is not an assumption: the state being rebuilt FROM is the engine's own record of
+    the instance, which is the only evidence the door ever has that a dispatch landed. Defaulting it
+    to False would make a re-POST after a pod restart look re-drivable and dispatch the run a second
+    time — the mirror image of the zombie, and the worse direction of the two.
     """
     payload = _as_mapping((state or {}).get("serialized_input"))
     if not payload:
@@ -165,6 +238,7 @@ def record_from_workflow_state(run_id: str, state: dict[str, object] | None) -> 
         project=str(payload.get("project") or ""),
         dataset=str(payload.get("dataset") or ""),
         kind=str(payload.get("kind") or ""),
+        scheduled=True,
     )
 
 
@@ -191,9 +265,10 @@ def merge_workflow_state(record: RunRecord, state: dict[str, object] | None) -> 
     """Overlay the engine's live truth onto the accepted-time record.
 
     THE FIX for a run that completed in-cluster and kept reporting ACCEPTED with `units_total: 0`.
-    `InMemoryRunStore` is written once, by the POST handler, and never again — no activity updates
-    it, and none should: the workflow's own durable history IS the run's state, and a second writable
-    copy of it is a consistency problem with no upside.
+    `InMemoryRunStore` is written by the ACCEPT path alone — the claim, then the outcome of the
+    schedule call — and by nothing that EXECUTES the run: no activity updates it, and none should,
+    because the workflow's own durable history IS the run's state and a second writable copy of it is
+    a consistency problem with no upside.
 
     So the store keeps only what the engine cannot know (the project, dataset and kind the caller
     asked for) and everything that CHANGES is read from the engine. That also makes the answer
@@ -202,7 +277,10 @@ def merge_workflow_state(record: RunRecord, state: dict[str, object] | None) -> 
 
     A `None` state means the engine has no such instance. That is not an error: between the store
     write and the schedule call there is a genuine window where the run exists and the workflow does
-    not, and returning the accepted record unchanged is the honest answer for it.
+    not, and returning the accepted record unchanged is the honest answer for it. The record itself
+    says which side of that window it is on — `scheduled` is what a repeat POST reads to decide
+    whether to dispatch, precisely because this function cannot tell "not yet scheduled" from
+    "scheduled, engine unreachable".
     """
     if state is None:
         return record

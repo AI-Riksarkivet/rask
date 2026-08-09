@@ -13,24 +13,16 @@ succeeds against a base that has moved.
 These tests pin the enforcement, and the ZERO-means-unbounded default, which is not a detail — this
 plane advertises million-unit harvests, so a live default would kill the legitimate long run the
 ceiling exists to protect.
+
+Both ceilings used to be module-level `os.getenv` reads branched on INSIDE the orchestrator, which is
+a replay-determinism break in its own right — that is F12b, and `test_replay_hygiene.py` owns it.
+What survives here is the ENFORCEMENT: that the ceilings exist, that they default to unbounded, and
+that the deadline path refuses to commit a partial harvest.
 """
 
 from __future__ import annotations
 
-import importlib
-
 import pytest
-
-
-def _reload_workflow(monkeypatch: pytest.MonkeyPatch, hours: str | None):
-    """Re-import with the env set, because the ceiling is read at module scope."""
-    from ingest import workflow
-
-    if hours is None:
-        monkeypatch.delenv("RASK_INGEST_MAX_RUN_HOURS", raising=False)
-    else:
-        monkeypatch.setenv("RASK_INGEST_MAX_RUN_HOURS", hours)
-    return importlib.reload(workflow)
 
 
 def test_the_ceiling_DEFAULTS_TO_UNBOUNDED(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,26 +32,23 @@ def test_the_ceiling_DEFAULTS_TO_UNBOUNDED(monkeypatch: pytest.MonkeyPatch) -> N
     day — which this plane explicitly supports — and it would do so by design rather than by
     accident, which is worse.
     """
-    workflow = _reload_workflow(monkeypatch, None)
+    from ingest.workflow import RunLimits
 
-    assert workflow.MAX_RUN_HOURS == 0
+    monkeypatch.delenv("RASK_INGEST_MAX_RUN_HOURS", raising=False)
+
+    assert RunLimits().max_run_hours == 0, "the CODE default must be unbounded, with no env consulted to say so"
+    assert RunLimits.from_env().max_run_hours == 0
 
 
 def test_the_ceiling_is_READ_from_the_env_the_chart_sets(monkeypatch: pytest.MonkeyPatch) -> None:
     """The exact variable name matters: the chart writes `RASK_INGEST_MAX_RUN_HOURS` and gate A15
     reads it out of `values.yaml`. A mismatch here reproduces the original defect — a gate asserting
     against a value the code never sees."""
-    workflow = _reload_workflow(monkeypatch, "24")
+    from ingest.workflow import RunLimits
 
-    assert workflow.MAX_RUN_HOURS == 24.0
+    monkeypatch.setenv("RASK_INGEST_MAX_RUN_HOURS", "24")
 
-
-def test_an_EMPTY_env_value_is_unbounded_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`kubectl set env FOO=` leaves an empty string, and `float("")` raises. A ceiling that crashes
-    the module on an empty value would take the whole service down at import for a config typo."""
-    workflow = _reload_workflow(monkeypatch, "")
-
-    assert workflow.MAX_RUN_HOURS == 0
+    assert RunLimits.from_env().max_run_hours == 24.0
 
 
 def test_the_deadline_uses_a_DURABLE_dapr_timer_not_an_in_process_one() -> None:
@@ -171,17 +160,20 @@ def test_the_unit_ceiling_DEFAULTS_TO_UNBOUNDED(monkeypatch: pytest.MonkeyPatch)
     A live default would refuse the million-unit harvests this plane exists for, which is the
     opposite of protecting them.
     """
-    monkeypatch.delenv("RASK_INGEST_MAX_UNITS", raising=False)
-    workflow = _reload_workflow(monkeypatch, None)
+    from ingest.workflow import RunLimits
 
-    assert workflow.MAX_UNITS == 0
+    monkeypatch.delenv("RASK_INGEST_MAX_UNITS", raising=False)
+
+    assert RunLimits().max_units == 0
+    assert RunLimits.from_env().max_units == 0
 
 
 def test_the_unit_ceiling_is_read_from_its_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RASK_INGEST_MAX_UNITS", "500")
-    workflow = _reload_workflow(monkeypatch, None)
+    from ingest.workflow import RunLimits
 
-    assert workflow.MAX_UNITS == 500
+    monkeypatch.setenv("RASK_INGEST_MAX_UNITS", "500")
+
+    assert RunLimits.from_env().max_units == 500
 
 
 def test_the_ceiling_refuses_BEFORE_any_unit_is_published() -> None:
@@ -202,10 +194,10 @@ def test_the_ceiling_refuses_BEFORE_any_unit_is_published() -> None:
     def _line_of(pred) -> int | None:
         return next((n.lineno for n in ast.walk(fn) if pred(n)), None)
 
-    ceiling = _line_of(lambda n: isinstance(n, ast.Name) and n.id == "MAX_UNITS")
+    ceiling = _line_of(lambda n: isinstance(n, ast.Attribute) and n.attr == "max_units")
     fanout = _line_of(lambda n: isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "call_child_workflow")
 
-    assert ceiling is not None, "MAX_UNITS is never consulted in the parent workflow"
+    assert ceiling is not None, "the unit ceiling is never consulted in the parent workflow"
     assert fanout is not None
     assert ceiling < fanout, "the unit ceiling is checked AFTER the fan-out — by then the units are already published"
 

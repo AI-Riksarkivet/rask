@@ -79,6 +79,30 @@ spec:
     - { name: queueGroupName, value: {{ .Values.medallion.producer.daprAppId | quote }} }
     - { name: deliverPolicy, value: "new" }
     - { name: durableName, value: "{{ .Values.medallion.producer.daprAppId }}-control-durable" }
+    # Redelivery timing, on the SAME schedule the per-subscriber components below carry and for the same
+    # invariant: the broker's first backOff step must exceed the sidecar's total retry span, or the broker
+    # redelivers while the sidecar is still mid-retry and one publication is handled twice, concurrently.
+    # This component shipped with none of these and rode jetstream's defaults — so the subscriber whose
+    # message is the most expensive in the estate to duplicate was the only one without the guard.
+    #
+    # Duplicated rather than shared because the block below renders inside a `range` over $subscribers,
+    # which this component is deliberately not part of (it carries the CONTROL topic, not the lineage
+    # one). .dagger/charts.go asserts the rendered numbers, so drift between the two copies fails the
+    # build rather than going unnoticed.
+    #
+    # Changing these on an EXISTING cluster mutates a live durable's config — the §2.11 hazard, in its
+    # benign form: the durable NAME and its filter subject are unchanged, so the sidecar reconfigures
+    # rather than colliding with a consumer already holding the name, and this is exactly the drift the
+    # nats-stream-job reconcile compares (maxDeliver/backOff) and repairs.
+    {{- if .Values.dapr.resiliency.enabled }}
+    - { name: ackWait, value: "720s" }
+    - { name: maxDeliver, value: "3" }
+    - { name: backOff, value: "720s,720s" }
+    {{- else }}
+    - { name: ackWait, value: "30s" }
+    - { name: maxDeliver, value: "5" }
+    - { name: backOff, value: "30s,60s,120s,300s" }
+    {{- end }}
 scopes:
   - {{ .Values.medallion.producer.daprAppId }}
 {{- end }}

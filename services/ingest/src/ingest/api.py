@@ -10,6 +10,11 @@ recurring disease:
   second workflow. The medallion accepted the header and re-harvested the whole volume anyway.
 
 Both are pinned by A1/A2 in `tests/test_ingest_api.py`.
+
+Dedupe keys off the DISPATCH, not off the record's existence. A run whose schedule call never landed
+has a record and no executor, and the retry this door advises on a 503 has to be able to drive it —
+`RunRecord.scheduled` / `runs.is_redrivable` are that distinction, and without it the advice
+guaranteed the zombie it claimed to recover from.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
@@ -28,8 +34,10 @@ from ingest.runs import (
     SCHEDULE_TIMEOUT_SECONDS,
     RunRecord,
     RunStore,
+    ScheduleUnavailable,
     WorkflowRunReader,
     WorkflowStarter,
+    is_redrivable,
     merge_workflow_state,
     record_from_workflow_state,
     run_id_for,
@@ -106,6 +114,33 @@ def get_reader(request: Request) -> WorkflowRunReader | None:
     return getattr(request.app.state, "workflow_reader", None)
 
 
+async def _mark_scheduled(store: RunStore, record: RunRecord) -> None:
+    """The engine took the run — the one write that makes the dedupe branch dedupe.
+
+    Applied to the record as it stands NOW rather than to the handler's own copy, which went stale
+    the moment it awaited the engine. `scheduled` is monotonic — a dispatch that landed cannot
+    un-land — so the write itself is unconditional; what it must not do is carry a stale snapshot of
+    every OTHER field back over a concurrent attempt's.
+    """
+    current = await store.get(record.run_id) or record
+    await store.put(current.model_copy(update={"scheduled": True}))
+
+
+async def _release_claim(store: RunStore, record: RunRecord, **update: object) -> None:
+    """This attempt ended without scheduling — hand the run back, unless it is no longer ours.
+
+    A compare-and-set on the lease, and it has to be: the handler's copy of the record is stale
+    across the `await` on the engine, so writing it back blindly is a lost update whose lost field is
+    `scheduled`. The result would be worse than the zombie this whole path exists to remove — a run
+    the engine IS executing goes back to re-drivable and stays there, so EVERY later POST on that key
+    dispatches it again. `dispatch_started_at` identifies the attempt, so it is also the compare.
+    """
+    current = await store.get(record.run_id)
+    if current is not None and current.dispatch_started_at != record.dispatch_started_at:
+        return
+    await store.put((current or record).model_copy(update=update))
+
+
 @router.post("/ingests", status_code=status.HTTP_202_ACCEPTED, response_model=IngestAccepted)
 async def create_ingest(
     body: IngestRequest,
@@ -149,30 +184,80 @@ async def create_ingest(
     run_id = run_id_for(body.project, key)
 
     existing = await store.get(run_id)
-    if existing is not None:
+    if existing is not None and not is_redrivable(existing):
         # THE dedupe. Same key + same spec resolves to the same resource and starts NO second
         # workflow — A2 asserts zero new dispatches, not merely a matching id.
+        #
+        # Gated on `is_redrivable`, and that gate is the whole of the zombie fix. The record is
+        # written BEFORE the dispatch so a concurrent GET can see the run, so "a record exists" and
+        # "a workflow is executing" are different facts — and reading the first as the second made
+        # the 503 below self-defeating: the caller did exactly what its detail said, retried with the
+        # same key, and landed here on a run the engine had never been told about.
         response.headers["Location"] = f"/v1/ingests/{run_id}"
         return IngestAccepted(run_id=run_id, status=existing.status, deduplicated=True)
 
-    record = RunRecord(run_id=run_id, project=body.project, dataset=body.dataset, kind=body.kind)
+    # Re-drive, or first drive. The existing record is REUSED rather than replaced so `created_at`
+    # keeps naming when the caller first asked; `dispatch_started_at` claims the attempt, which is
+    # what stops a duplicate arriving mid-dispatch from racing this one to the engine. Status and
+    # errors reset because a previous attempt's dispatch failure is not this attempt's outcome.
+    #
+    # The SPEC, though, comes from THIS request's body and never from the abandoned attempt's. Only
+    # `project` is part of the run id, so a re-drive can legitimately arrive naming a different
+    # dataset or kind — and it is the body that is dispatched below. Carrying the old values would
+    # leave the record naming a table the run does not write to, which is the one thing a status
+    # endpoint must not do.
+    record = (existing or RunRecord(run_id=run_id, project=body.project, dataset=body.dataset, kind=body.kind)).model_copy(
+        update={
+            "project": body.project,
+            "dataset": body.dataset,
+            "kind": body.kind,
+            "status": "ACCEPTED",
+            "errors": {},
+            "dispatch_started_at": datetime.now(UTC),
+        }
+    )
     await store.put(record)
 
     spec = SourceSpec(kind=body.kind, project=body.project, dataset=body.dataset, options=body.options)
     try:
         await starter.start(run_id, {"run_id": run_id, **spec.model_dump(), "sizing": sizing.model_dump()})
-    except TimeoutError as exc:
+    except (TimeoutError, ScheduleUnavailable) as exc:
         # 503, not 500. A1 bounds the schedule call so a slow sidecar cannot hold the POST past its
         # one-second contract — but the bound turned a BUSY sidecar into an unretryable server error,
         # observed on a pod whose daprd had only just started. 503 + Retry-After is the same
         # information in a form a client can act on, and `@rask/api`'s refuse() already reads the
         # problem+json detail. The run id is deterministic, so the retry converges on this same run
         # rather than starting a second one.
+        #
+        # BOTH failures, not just the timeout: a sidecar that answers badly is the same retryable
+        # condition as one that answers slowly, and mapping only the timeout left every other
+        # transport failure as a 500 on top of a stored record — a run with a status and no executor.
+        # The adapter draws the line (`_DaprWorkflowStarter`); a programming error is not in it.
+        #
+        # Releasing the lease is what makes the advice true. The attempt is over, so the record goes
+        # back to re-drivable immediately rather than waiting the bound out — a client that ignores
+        # Retry-After and comes straight back still gets a dispatch instead of a dedupe. Through
+        # `_release_claim` because by now another attempt may own the run (see its docstring).
+        await _release_claim(store, record, dispatch_started_at=None)
+        timed_out = isinstance(exc, TimeoutError)
+        reason = f"did not accept run {run_id} within {SCHEDULE_TIMEOUT_SECONDS}s" if timed_out else f"refused run {run_id}: {str(exc)[:200]}"
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"the workflow engine did not accept run {run_id} within {SCHEDULE_TIMEOUT_SECONDS}s — retry with the same Idempotency-Key",
+            detail=f"the workflow engine {reason} — the run is NOT scheduled; retry with the same Idempotency-Key and it will be dispatched",
             headers={"Retry-After": "5"},
         ) from exc
+    except Exception as exc:
+        # NOT retryable, and not swallowed — re-raised, so the 500 and its trace still happen. What
+        # changes is the record: leaving an ACCEPTED behind for a dispatch that can never succeed is
+        # the same zombie in a different costume, so the run says FAILED and names the reason instead
+        # of reporting a status nothing is driving.
+        await _release_claim(store, record, status="FAILED", errors={"dispatch": f"{type(exc).__name__}: {exc}"[:500]}, dispatch_started_at=None)
+        logger.exception("run %s could not be dispatched and the failure is not retryable", run_id)
+        raise
+
+    # Only NOW is the run real. Everything above this line is a claim; the engine accepting the
+    # instance is the fact, and it is the fact the dedupe branch reads.
+    await _mark_scheduled(store, record)
 
     response.headers["Location"] = f"/v1/ingests/{run_id}"
     return IngestAccepted(run_id=run_id)
