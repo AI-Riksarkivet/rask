@@ -66,6 +66,19 @@ coverage; line references in §1–§3 predate these and are stale where they ov
 - Fixed at the source along the way: floating pills overlapping the temporal strips; unseekable
   route-served media in e2e (206 ranges); the e2e mock treating any seeded body carrying a string
   `status` field as its {status, body} response shape (every seeded jobs route answered 500).
+- TEMPLATING SAID HONESTLY, AND AS YAML: the create editor's one `tools` toggle row conflated
+  three concepts (drawing geometry / span-into-text / whole-item tag) and TRANSCRIPTION had no
+  place in the model at all — the workspace offered a text editor on every row of every task.
+  Now (a) `LabelClass.transcribe` declares "regions of this class carry transcribed text" per
+  class (neither a tool nor an attribute: the primary content column), and the inspector offers
+  the Transcription editor per that declaration once a task declares classes (unconstrained
+  canvas keeps the old everywhere behaviour); (b) the form editor speaks plain language — per
+  label: name, "drawn as" (bbox/polygon/mask/segment), then transcribe / span / tag as separate
+  capabilities with explanations, fields listed readably; (c) a YAML view over the SAME draft is
+  the full-power authoring surface and exchange format (task/labels/draw/span/tag/transcribe/
+  fields/options/relations), STRICT like the server's extra=forbid (a typo'd key is a named
+  error that blocks create, never a silent drop) — the wire stays JSON, `task-yaml.ts` maps
+  both ways, and a 'define in YAML' scaffold starts from scratch.
 - THE POINT SESSION (finding 1's core loop): while armed, clicks ACCUMULATE as signed ±points
   (`AssistRequest.points`, stateless — every request carries the whole session), the producer
   re-runs over the full set, and each answer REPLACES the previous prediction (retract-on-success,

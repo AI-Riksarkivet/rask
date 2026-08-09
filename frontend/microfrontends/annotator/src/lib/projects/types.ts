@@ -61,6 +61,9 @@ const LabelClassSchema = v.object({
 	colour: v.nullish(v.string()),
 	/** Which primitives this class may be drawn with. Empty = any. */
 	tools: v.optional(v.array(v.string()), []),
+	/** This class's regions carry TRANSCRIBED TEXT (the row's `text` facet) — the inspector
+	 *  offers transcription editing per this declaration once any class declares. */
+	transcribe: v.optional(v.boolean(), false),
 	attributes: v.optional(v.array(OutputAttrSchema), []),
 	/** At-least-once. EXPLICIT per class — it used to be a project-level `required_labels` list the
 	 *  create dialog filled from "every class name", which silently made every class mandatory on

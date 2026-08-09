@@ -62,6 +62,7 @@
 			controller.textSpanClasses = [];
 			controller.tagClasses = [];
 			controller.classAttributes = {};
+			controller.classTranscribe = {};
 			return;
 		}
 		let alive = true;
@@ -107,6 +108,13 @@
 										required: a.required ?? false,
 									})),
 								]),
+						)
+					: {};
+				// Which classes CARRY TRANSCRIPTION — the inspector offers the text editor per
+				// this declaration once any class declares; a task with none stays unconstrained.
+				controller.classTranscribe = result.ok
+					? Object.fromEntries(
+							(result.data.ontology?.classes ?? []).map((c) => [c.name, c.transcribe ?? false]),
 						)
 					: {};
 			})

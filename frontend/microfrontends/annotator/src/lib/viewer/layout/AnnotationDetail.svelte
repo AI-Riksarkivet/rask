@@ -78,14 +78,22 @@
 			</div>
 		</div>
 
-		<label class="flex flex-col gap-1.5 text-xs">
-			<span class="text-muted-foreground">Text</span>
-			<TextInput
-				value={row.text}
-				placeholder="—"
-				oninput={(e) => controller.updateField(row.index, 'text', e.currentTarget.value)}
-			/>
-		</label>
+		<!-- TRANSCRIPTION — the row's text facet, offered per the CLASS's declaration: an OCR
+		     paragraph declares `transcribe`, a detection box does not, and an unconstrained
+		     canvas (no task, or a label no class covers) keeps the historical everywhere-
+		     editable behaviour. This is the answer to "is transcription an attribute?": it is
+		     neither a tool nor an attribute — it is the primary content column, declared per
+		     class in the ontology. -->
+		{#if controller.offersTranscription(row.label)}
+			<label class="flex flex-col gap-1.5 text-xs" data-testid="transcription-field">
+				<span class="text-muted-foreground">Transcription</span>
+				<TextInput
+					value={row.text}
+					placeholder="—"
+					oninput={(e) => controller.updateField(row.index, 'text', e.currentTarget.value)}
+				/>
+			</label>
+		{/if}
 
 		<!-- Offered only when the TASK declares a class that can be drawn as text. A labeling
 		     surface on a task with no text class is a control that can produce nothing. -->

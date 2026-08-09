@@ -22,6 +22,15 @@
 	import type { Project } from './types.js';
 	import { projectStateVariant, taskProgress } from './presentation.js';
 	import { PROJECT_TEMPLATES, templateById } from './templates.js';
+	import {
+		DRAW_TOOLS,
+		type DraftClass,
+		type TaskDraft,
+		draftClassFromWire,
+		draftToOntology,
+		draftToYaml,
+		parseTaskYaml,
+	} from './task-yaml.js';
 
 	let tenant = $state('');
 	let projects = $state<Project[]>([]);
@@ -82,63 +91,96 @@
 	// typed attributes, relations — everything the free-form path below cannot author (it applies
 	// one uniform tool list to every typed name). Picking one seeds an EDITABLE working copy:
 	// "customize how the labeling task is supposed to look" means the template is a starting
-	// point, not a contract you can only take or leave. 'custom' keeps the free-form path.
+	// point, not a contract you can only take or leave. 'custom' keeps the free-form path;
+	// 'yaml' starts from a scaffold in the YAML view.
 	let templateId = $state('custom');
-	const pickedTemplate = $derived(templateId === 'custom' ? undefined : templateById(templateId));
+	const pickedTemplate = $derived(templateById(templateId));
 
-	/** The editable per-class working copy, seeded when a template is picked. Rows carry the
-	 *  template's attributes along by OBJECT (rename a class and its attributes follow); relations
-	 *  are filtered at payload time to edges whose endpoints still exist. */
-	type DraftClass = {
-		name: string;
-		tools: string[];
-		attributes: { name: string; type?: string; choices?: string[]; required?: boolean }[];
-		required: boolean;
-	};
-	let draftClasses = $state<DraftClass[]>([]);
+	// ONE working copy — `TaskDraft` — whichever view edits it. The FORM speaks the honest
+	// vocabulary (draw / transcribe / span / tag — the wire's `tools` conflates the last three
+	// and cannot say transcription at all); the YAML view is the full-power surface (typed
+	// fields, relations, allow_empty) and the exchange format. Both views project the same
+	// draft, so they cannot disagree.
+	let draft = $state<TaskDraft>({ kind: '', classes: [], relations: [], allowEmpty: undefined });
+	let editorView = $state<'form' | 'yaml'>('form');
+	let yamlText = $state('');
+	let yamlErrors = $state<string[]>([]);
+	const STARTER_YAML = [
+		'# The labeling task: what annotators mark, and how each label is captured.',
+		'task: my-task',
+		'labels:',
+		'  - name: region',
+		'    draw: [bbox] # bbox | polygon | mask | segment',
+		'    transcribe: true # regions carry transcribed text',
+		'  - name: person',
+		'    span: true # marks ranges in the text (NER)',
+		'  - name: damaged',
+		'    tag: true # a whole-item choice',
+		'',
+	].join('\n');
 	// Re-seed when the PICK changes (guarded — a reset-on-pick, not a reactive loop): editing the
-	// rows must never re-trigger it, or every keystroke would restore the template.
+	// draft must never re-trigger it, or every keystroke would restore the template.
 	let seededFor = $state('custom');
 	$effect(() => {
 		if (templateId === seededFor) return;
 		seededFor = templateId;
+		yamlErrors = [];
+		if (templateId === 'yaml') {
+			draft = parseTaskYaml(STARTER_YAML).draft;
+			yamlText = STARTER_YAML;
+			editorView = 'yaml';
+			return;
+		}
 		const t = templateById(templateId);
-		draftClasses = (t?.ontology.classes ?? []).map((c) => ({
-			name: c.name,
-			tools: [...c.tools],
-			attributes: (c.attributes ?? []).map((a) => ({ ...a, choices: a.choices && [...a.choices] })),
-			required: c.required ?? false,
-		}));
+		draft = {
+			kind: t?.ontology.kind ?? '',
+			classes: (t?.ontology.classes ?? []).map(draftClassFromWire),
+			relations: (t?.ontology.relations ?? []).map((r) => ({
+				name: r.name,
+				from: [...r.from_classes],
+				to: [...r.to_classes],
+				directed: true,
+				required: r.required ?? false,
+			})),
+			allowEmpty: t?.ontology.allow_empty,
+		};
+		editorView = 'form';
 	});
-	const TOOL_CHOICES = ['bbox', 'polygon', 'mask', 'segment', 'tag', 'text'];
-	function toggleTool(row: DraftClass, tool: string): void {
-		row.tools = row.tools.includes(tool)
-			? row.tools.filter((t) => t !== tool)
-			: [...row.tools, tool];
+	function showYaml(): void {
+		yamlText = draftToYaml(draft);
+		yamlErrors = [];
+		editorView = 'yaml';
 	}
+	/** Every valid parse lands in the draft at once; an invalid one shows its errors and leaves
+	 *  the draft on the last valid state — and BLOCKS create, so what is sent is never silently
+	 *  older than what is on screen. */
+	function onYamlInput(text: string): void {
+		yamlText = text;
+		const { draft: parsed, errors } = parseTaskYaml(text);
+		yamlErrors = errors;
+		if (errors.length === 0) draft = parsed;
+	}
+	function toggleDraw(row: DraftClass, tool: string): void {
+		row.draw = row.draw.includes(tool) ? row.draw.filter((t) => t !== tool) : [...row.draw, tool];
+	}
+	/** The surviving relations, live — edges whose endpoints were renamed or removed are dropped
+	 *  at payload time, and the editor says so instead of letting the server refuse the create. */
+	const liveRelations = $derived.by(() => {
+		const names = new Set(draft.classes.map((c) => c.name.trim()));
+		return draft.relations.filter((r) => [...r.from, ...r.to].every((n) => names.has(n)));
+	});
 
 	// Derived, not a function: a pure projection of taskKind + classesText + the two toggles, which
 	// is exactly what $derived is for. One payload — there is nothing left for a second to disagree
 	// with.
 	const ontologyPayload = $derived.by(() => {
-		// The EDITED working copy wins: the template's per-class declarations, as the person left
-		// them. Relations survive only while both endpoints still exist — a renamed or removed
-		// class must not leave an edge naming a ghost (the server would refuse the whole create).
-		if (pickedTemplate) {
-			const classes = draftClasses
-				.filter((c) => c.name.trim() !== '' && c.tools.length > 0)
-				.map((c) => ({ ...c, name: c.name.trim() }));
-			const names = new Set(classes.map((c) => c.name));
-			return {
-				kind: pickedTemplate.ontology.kind,
-				classes,
-				relations: (pickedTemplate.ontology.relations ?? []).filter((r) =>
-					[...r.from_classes, ...r.to_classes].every((n) => names.has(n)),
-				),
-				...(pickedTemplate.ontology.allow_empty !== undefined
-					? { allow_empty: pickedTemplate.ontology.allow_empty }
-					: {}),
-			};
+		// The EDITED working copy wins: the declarations as the person left them, whichever view
+		// authored them. `draftToOntology` maps the vocabulary onto the wire document, dropping
+		// classes that can produce nothing and edges naming a ghost endpoint (the server would
+		// refuse the whole create over either).
+		if (templateId !== 'custom') {
+			const doc = draftToOntology(draft);
+			return doc.classes.length > 0 || doc.kind ? doc : undefined;
 		}
 		if (classNames.length === 0 && taskKind === 'free') return undefined;
 		const preset = TASK_PRESETS[taskKind];
@@ -204,7 +246,9 @@
 	});
 
 	async function create(): Promise<void> {
-		if (!slug.trim() || creating) return;
+		// Unparseable YAML blocks create: the draft holds the LAST VALID state, and sending it
+		// while the screen shows something newer would be a silent divergence.
+		if (!slug.trim() || creating || yamlErrors.length > 0) return;
 		creating = true;
 		createError = '';
 		const result = await createProject({
@@ -356,80 +400,205 @@
 					ariaLabel="Task template"
 					options={[
 	{ value: 'custom', label: 'custom (type your own classes)' },
+	{ value: 'yaml', label: 'custom (define in YAML)' },
 	...PROJECT_TEMPLATES.map((t) => ({ value: t.id, label: t.name })),
 ]}
 				/>
 			</label>
-			{#if pickedTemplate}
-				<!-- THE PER-CLASS EDITOR — the template as a STARTING POINT. Rename a class (its
-				     typed attributes follow the row), flip which tools it may be drawn with, drop
-				     it, add another. Relations auto-drop when an endpoint stops existing, and say
-				     so, instead of letting the server refuse the whole create over a ghost edge. -->
+			{#if templateId !== 'custom'}
+				<!-- THE TASK EDITOR — one working copy, two views. The FORM speaks plain language:
+				     a LABEL is what an annotator marks; HOW it is captured is stated per label
+				     (drawn on the canvas / ranges in the text / a whole-item choice); TRANSCRIBE
+				     declares that its regions carry transcribed text (the primary content, not a
+				     tool and not a field); FIELDS are the typed extras (reading order, script).
+				     The YAML view is the same draft as text — the full-power surface and the
+				     copy-out/paste-in exchange format. -->
 				<div
 					class="border-border bg-muted/40 flex flex-col gap-2 rounded-md border p-2 text-xs"
 					data-testid="template-summary"
 				>
-					<p class="text-muted-foreground">{pickedTemplate.description}</p>
-					{#each draftClasses as row, i (i)}
-						<div class="flex flex-wrap items-center gap-1.5" data-testid="template-class-row">
-							<Input
-								class="h-6 w-32 text-xs"
-								bind:value={row.name}
-								aria-label="Class name"
-								placeholder="class name"
-							/>
-							{#each TOOL_CHOICES as tool (tool)}
-								<Button
-									variant={row.tools.includes(tool) ? 'secondary' : 'ghost'}
-									size="xs"
-									class="h-5 px-1.5 text-[10px]"
-									aria-pressed={row.tools.includes(tool)}
-									data-testid={`class-${i}-tool-${tool}`}
-									onclick={() => toggleTool(row, tool)}
-								>
-									{tool}
-								</Button>
-							{/each}
-							{#if row.attributes.length}
-								<span class="text-muted-foreground text-[10px]">
-									+{row.attributes.length} attr{row.attributes.length === 1 ? '' : 's'}
-								</span>
-							{/if}
+					<div class="flex items-start justify-between gap-2">
+						<p class="text-muted-foreground">
+							{pickedTemplate?.description ?? 'A task defined from scratch, in YAML.'}
+						</p>
+						<div class="flex shrink-0 rounded-md border" role="tablist" aria-label="Editor view">
 							<Button
-								variant="ghost"
-								size="icon-xs"
-								title="Remove this class"
-								data-testid={`remove-class-${i}`}
-								onclick={() => (draftClasses = draftClasses.filter((_, j) => j !== i))}
+								variant={editorView === 'form' ? 'secondary' : 'ghost'}
+								size="xs"
+								class="h-5 rounded-r-none px-1.5 text-[10px]"
+								aria-pressed={editorView === 'form'}
+								data-testid="task-view-form"
+								onclick={() => (editorView = 'form')}
 							>
-								✕
+								Form
+							</Button>
+							<Button
+								variant={editorView === 'yaml' ? 'secondary' : 'ghost'}
+								size="xs"
+								class="h-5 rounded-l-none px-1.5 text-[10px]"
+								aria-pressed={editorView === 'yaml'}
+								data-testid="task-view-yaml"
+								onclick={showYaml}
+							>
+								YAML
 							</Button>
 						</div>
-					{/each}
-					<Button
-						variant="outline"
-						size="xs"
-						class="self-start"
-						data-testid="add-class"
-						onclick={() =>
-	(draftClasses = [
-		...draftClasses,
-		{ name: '', tools: ['bbox'], attributes: [], required: false },
+					</div>
+					{#if editorView === 'yaml'}
+						<textarea
+							class="border-input bg-background min-h-40 w-full rounded-md border p-2 font-mono text-[11px] leading-relaxed"
+							value={yamlText}
+							spellcheck="false"
+							aria-label="Task definition YAML"
+							data-testid="task-yaml"
+							oninput={(e) => onYamlInput(e.currentTarget.value)}
+						></textarea>
+						{#if yamlErrors.length}
+							<ul class="text-destructive flex flex-col gap-0.5" data-testid="task-yaml-errors">
+								{#each yamlErrors as err (err)}<li>{err}</li>{/each}
+							</ul>
+						{:else}
+							<p class="text-muted-foreground text-[10px]">
+								draw = geometry on the canvas · span = ranges in the text · tag = whole-item choice ·
+								transcribe = regions carry transcribed text · fields = typed extras per region
+							</p>
+						{/if}
+					{:else}
+						{#each draft.classes as row, i (i)}
+							<div
+								class="border-border/60 flex flex-col gap-1 rounded border-b pb-1.5 last:border-b-0"
+								data-testid="template-class-row"
+							>
+								<div class="flex flex-wrap items-center gap-1.5">
+									<Input
+										class="h-6 w-36 text-xs"
+										bind:value={row.name}
+										aria-label="Class name"
+										placeholder="label name"
+									/>
+									<label class="text-muted-foreground flex items-center gap-1 text-[10px]">
+										<Checkbox
+											bind:checked={row.required}
+											aria-label="Required on every item"
+											class="size-3"
+										/>
+										required
+									</label>
+									<span class="flex-1"></span>
+									<Button
+										variant="ghost"
+										size="icon-xs"
+										title="Remove this label"
+										data-testid={`remove-class-${i}`}
+										onclick={() => (draft.classes = draft.classes.filter((_, j) => j !== i))}
+									>
+										✕
+									</Button>
+								</div>
+								<div class="flex flex-wrap items-center gap-1">
+									<span class="text-muted-foreground w-14 shrink-0 text-[10px]">drawn as</span>
+									{#each DRAW_TOOLS as tool (tool)}
+										<Button
+											variant={row.draw.includes(tool) ? 'secondary' : 'ghost'}
+											size="xs"
+											class="h-5 px-1.5 text-[10px]"
+											aria-pressed={row.draw.includes(tool)}
+											data-testid={`class-${i}-tool-${tool}`}
+											onclick={() => toggleDraw(row, tool)}
+										>
+											{tool}
+										</Button>
+									{/each}
+									<span class="text-muted-foreground px-0.5">·</span>
+									<Button
+										variant={row.transcribe ? 'secondary' : 'ghost'}
+										size="xs"
+										class="h-5 px-1.5 text-[10px]"
+										aria-pressed={row.transcribe}
+										title="Each region of this label carries transcribed text"
+										data-testid={`class-${i}-cap-transcribe`}
+										onclick={() => (row.transcribe = !row.transcribe)}
+									>
+										transcribe
+									</Button>
+									<Button
+										variant={row.span ? 'secondary' : 'ghost'}
+										size="xs"
+										class="h-5 px-1.5 text-[10px]"
+										aria-pressed={row.span}
+										title="Marks character ranges in the text (NER)"
+										data-testid={`class-${i}-cap-span`}
+										onclick={() => (row.span = !row.span)}
+									>
+										span
+									</Button>
+									<Button
+										variant={row.tag ? 'secondary' : 'ghost'}
+										size="xs"
+										class="h-5 px-1.5 text-[10px]"
+										aria-pressed={row.tag}
+										title="A whole-item choice — the classification chip bar"
+										data-testid={`class-${i}-cap-tag`}
+										onclick={() => (row.tag = !row.tag)}
+									>
+										tag
+									</Button>
+								</div>
+								{#if row.fields.length}
+									<div class="flex flex-wrap items-center gap-1">
+										<span class="text-muted-foreground w-14 shrink-0 text-[10px]">fields</span>
+										{#each row.fields as field (field.name)}
+											<span
+												class="border-border bg-background inline-flex items-center gap-1 rounded border px-1 py-0.5 text-[10px]"
+												title="A typed per-region field — edit in the YAML view"
+											>
+												{field.name}
+												<span class="text-muted-foreground">
+													{field.options.length ? field.options.join(' | ') : field.type}{field.required
+														? ' · required'
+														: ''}
+												</span>
+											</span>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/each}
+						<div class="flex items-center justify-between gap-2">
+							<Button
+								variant="outline"
+								size="xs"
+								data-testid="add-class"
+								onclick={() =>
+	(draft.classes = [
+		...draft.classes,
+		{
+			name: '',
+			draw: ['bbox'],
+			span: false,
+			tag: false,
+			transcribe: false,
+			required: false,
+			fields: [],
+		},
 	])}
-					>
-						+ add class
-					</Button>
-					{#if pickedTemplate.ontology.relations?.length}
-						{@const names = new Set(draftClasses.map((c) => c.name.trim()))}
-						{@const kept = (pickedTemplate.ontology.relations ?? []).filter((r) =>
-							[...r.from_classes, ...r.to_classes].every((n) => names.has(n)),
-						)}
+							>
+								+ add label
+							</Button>
+							<span class="text-muted-foreground text-[10px]"
+								>typed fields &amp; relations: the YAML view</span
+							>
+						</div>
+					{/if}
+					{#if draft.relations.length}
 						<p class="text-muted-foreground" data-testid="template-relations">
-							relations: {kept.length ? kept.map((r) => r.name).join(', ') : 'none'}
-							{#if kept.length < (pickedTemplate.ontology.relations?.length ?? 0)}
+							relations: {liveRelations.length
+								? liveRelations.map((r) => r.name).join(', ')
+								: 'none'}
+							{#if liveRelations.length < draft.relations.length}
 								<span class="text-warning">
-									— {(pickedTemplate.ontology.relations?.length ?? 0) - kept.length} dropped (an endpoint class
-									was renamed or removed)</span
+									— {draft.relations.length - liveRelations.length} dropped (an endpoint class was renamed
+									or removed)</span
 								>
 							{/if}
 						</p>
@@ -444,10 +613,10 @@
 					<Input bind:value={classesText} placeholder="person, ship, signature" />
 				</label>
 			{/if}
-			{#if !pickedTemplate}
-				<!-- The free-form knobs are the CUSTOM path's; a template already answered all three,
-				     and dead controls under a picked template would advertise overrides that do not
-				     apply. -->
+			{#if templateId === 'custom'}
+				<!-- The free-form knobs are the CUSTOM path's; a template (or the YAML editor)
+				     already answered all three, and dead controls under either would advertise
+				     overrides that do not apply. -->
 				<label class="flex flex-col gap-1 text-sm">
 					<span>Shape kind</span>
 					<Select
@@ -497,7 +666,7 @@
 			{/if}
 			<div class="flex justify-end gap-2">
 				<Button type="button" variant="outline" onclick={() => (createOpen = false)}>Cancel</Button>
-				<Button type="submit" disabled={creating || !slug.trim()}>
+				<Button type="submit" disabled={creating || !slug.trim() || yamlErrors.length > 0}>
 					{creating ? 'Creating…' : 'Create labeling task'}
 				</Button>
 			</div>

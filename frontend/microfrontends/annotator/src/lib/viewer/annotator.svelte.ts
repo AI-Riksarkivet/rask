@@ -676,6 +676,25 @@ export class AnnotatorController {
 	readonly activeTags = $derived(
 		new Set(this.rows.filter((r) => r.shape === 'tag' && r.label).map((r) => r.label)),
 	);
+	// ── transcription (the row's `text` facet — the primary content, not a tool or a field) ──
+	/** Per declared class: whether its regions CARRY TRANSCRIBED TEXT. Set from the ontology by
+	 *  the shell, exactly like `tagClasses`. Empty ⇒ no task constraint — the workspace's
+	 *  historical behaviour (the text editor offered everywhere) is the unconstrained fallback. */
+	classTranscribe = $state<Record<string, boolean>>({});
+	/** Whether the inspector should OFFER transcription editing for a row of `label`.
+	 *
+	 *  Unconstrained (no ontology, or no classes declared) ⇒ yes, everywhere — the pre-declaration
+	 *  behaviour. Constrained ⇒ yes only where declared; a row whose label is NOT a declared class
+	 *  (an unlabeled draft, a document row) stays editable, because no declaration covers it and
+	 *  refusing on a rule that does not exist would be a wrong answer. This is what makes
+	 *  "transcription" answerable in the model at last: a detection box does not offer a text
+	 *  field it has no business carrying, an OCR paragraph does. */
+	offersTranscription(label: string): boolean {
+		// A declared class answers with its declaration; everything else (no ontology, or a label
+		// no class covers) is unconstrained and stays editable.
+		return this.classTranscribe[label] ?? true;
+	}
+
 	// ── per-row ATTRIBUTES (the ontology's typed per-class fields: reading order, script, …) ──
 	/** Attribute declarations per CLASS, from the task's ontology — set by the shell exactly like
 	 *  `tagClasses`. Empty ⇒ no attribute editor. Values are edited as STRINGS: the submit

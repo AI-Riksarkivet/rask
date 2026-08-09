@@ -87,6 +87,14 @@ class LabelClass(BaseModel):
     colour: str | None = None
     #: Which primitives this class may be drawn with. Empty = any (an unconstrained class).
     tools: list[ShapeType] = Field(default_factory=list)
+    #: This class's regions CARRY TRANSCRIBED TEXT (the row's `text` facet) — an OCR paragraph
+    #: does, a detection box does not. Previously undeclarable: the workspace offered the text
+    #: editor on every row of every task, so "is transcription an attribute?" had no answer in
+    #: the model at all. It is neither a tool (a span INTO text is; this is text ON a region)
+    #: nor an attribute (typed side-fields; this is the primary content column). Like `colour`,
+    #: it configures the workspace rather than gating submit: the inspector offers transcription
+    #: only where it is declared, once an ontology declares classes at all.
+    transcribe: bool = False
     #: Per-class typed fields. Replaces the project-level attribute list, which could not say WHICH
     #: class an attribute belonged to.
     attributes: list[OutputAttr] = Field(default_factory=list)

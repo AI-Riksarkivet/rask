@@ -1311,9 +1311,11 @@ test('template gallery: picking a template sends its COMPLETE ontology — per-c
 	await dialog.getByPlaceholder('vasa-portraits').fill('court-records');
 
 	// Keyboard selection (see the task-type test: Bits UI's portal breaks later clicks after a
-	// mouse pick). 'custom' is focused when the listbox opens; the composite template is next.
+	// mouse pick). 'custom' is focused when the listbox opens; then the YAML scaffold; the
+	// composite template is after both.
 	await dialog.getByLabel('Task template').press('Enter');
 	await page.getByRole('option', { name: /OCR \/ HTR layout/ }).waitFor();
+	await dialog.getByLabel('Task template').press('ArrowDown');
 	await dialog.getByLabel('Task template').press('ArrowDown');
 	await dialog.getByLabel('Task template').press('Enter');
 	await expect(dialog.getByLabel('Task template')).toContainText('OCR / HTR');
@@ -1360,6 +1362,7 @@ test('a template is a STARTING POINT: rename, retool, remove and add classes bef
 	await dialog.getByLabel('Task template').press('Enter');
 	await page.getByRole('option', { name: /OCR \/ HTR layout/ }).waitFor();
 	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('ArrowDown');
 	await dialog.getByLabel('Task template').press('Enter');
 
 	const rows = dialog.getByTestId('template-class-row');
@@ -1392,4 +1395,120 @@ test('a template is a STARTING POINT: rename, retool, remove and add classes bef
 	);
 	// No ghost edge reaches the server.
 	expect(ontology.relations).toEqual([]);
+});
+
+test('the YAML view IS the task — template edits round-trip through text into the create payload', async ({
+	page,
+}) => {
+	// The YAML is the full-power authoring surface over the SAME draft the form edits: switching
+	// views must not lose anything, and what is typed as YAML must be what the server receives —
+	// with the human vocabulary (draw/span/tag/transcribe/fields) mapped onto the wire's.
+	await seed(page, {
+		'GET /projects': { projects: [], total: 0 },
+		'POST /projects': project('draft'),
+	});
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	const dialog = page.getByRole('dialog');
+	await dialog.getByPlaceholder('vasa-portraits').fill('yaml-authored');
+	await dialog.getByLabel('Task template').press('Enter');
+	await page.getByRole('option', { name: /OCR \/ HTR layout/ }).waitFor();
+	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('Enter');
+
+	// The template, serialized: the YAML view states the task in ITS vocabulary.
+	await dialog.getByTestId('task-view-yaml').click();
+	const yaml = dialog.getByTestId('task-yaml');
+	await expect(yaml).toHaveValue(/task: ocr-layout/);
+	await expect(yaml).toHaveValue(/transcribe: true/);
+	await expect(yaml).toHaveValue(/span: true/);
+	// The wire dialect never leaks into the human surface.
+	await expect(yaml).not.toHaveValue(/tools:/);
+
+	// Replace the whole task from text.
+	await yaml.fill(
+		[
+			'task: my-ocr',
+			'labels:',
+			'  - name: line',
+			'    draw: [bbox]',
+			'    transcribe: true',
+			'    fields:',
+			'      - name: order',
+			'        type: int',
+			'        required: true',
+			'  - name: person',
+			'    span: true',
+			'  - name: damaged',
+			'    tag: true',
+			'relations:',
+			'  - name: annotates',
+			'    from: [person]',
+			'    to: [line]',
+		].join('\n'),
+	);
+
+	// The FORM shows the same task — one draft, two views.
+	await dialog.getByTestId('task-view-form').click();
+	await expect(dialog.getByTestId('template-class-row')).toHaveCount(3);
+	await expect(dialog.getByTestId('class-0-cap-transcribe')).toHaveAttribute(
+		'aria-pressed',
+		'true',
+	);
+	await expect(dialog.getByTestId('class-1-cap-span')).toHaveAttribute('aria-pressed', 'true');
+	await expect(dialog.getByTestId('template-relations')).toContainText('annotates');
+
+	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
+	const create = await createCall(page);
+	const ontology = (create.body as { ontology: Record<string, unknown> }).ontology;
+	expect(ontology).toMatchObject({ kind: 'my-ocr' });
+	const byName = Object.fromEntries(
+		(ontology.classes as Record<string, unknown>[]).map((c) => [c.name as string, c]),
+	);
+	expect(byName['line']).toMatchObject({ tools: ['bbox'], transcribe: true });
+	expect((byName['line']!.attributes as unknown[])[0]).toMatchObject({
+		name: 'order',
+		type: 'int',
+		required: true,
+	});
+	expect(byName['person']).toMatchObject({ tools: ['text'] });
+	expect(byName['damaged']).toMatchObject({ tools: ['tag'] });
+	expect((ontology.relations as Record<string, unknown>[])[0]).toMatchObject({
+		name: 'annotates',
+		from_classes: ['person'],
+		to_classes: ['line'],
+	});
+});
+
+test('unparseable YAML NAMES its errors and blocks create — never a silently stale payload', async ({
+	page,
+}) => {
+	await seed(page, { 'GET /projects': { projects: [], total: 0 } });
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	const dialog = page.getByRole('dialog');
+	await dialog.getByPlaceholder('vasa-portraits').fill('bad-yaml');
+	// 'custom (define in YAML)' sits right after 'custom' — the from-scratch scaffold.
+	await dialog.getByLabel('Task template').press('Enter');
+	await page.getByRole('option', { name: /define in YAML/ }).waitFor();
+	await dialog.getByLabel('Task template').press('ArrowDown');
+	await dialog.getByLabel('Task template').press('Enter');
+
+	// The scaffold opens IN the YAML view, already valid.
+	const yaml = dialog.getByTestId('task-yaml');
+	await expect(yaml).toBeVisible();
+	await expect(dialog.getByRole('button', { name: 'Create labeling task' })).toBeEnabled();
+
+	// A typo'd key is an ERROR, not a silent drop — mirroring the server's extra="forbid".
+	await yaml.fill('labels:\n  - name: a\n    draw: [bbox]\n    atributes: []');
+	await expect(dialog.getByTestId('task-yaml-errors')).toContainText('atributes');
+	await expect(dialog.getByRole('button', { name: 'Create labeling task' })).toBeDisabled();
+
+	// Fixing the text lifts the block.
+	await yaml.fill('labels:\n  - name: a\n    draw: [bbox]');
+	await expect(dialog.getByTestId('task-yaml-errors')).toHaveCount(0);
+	await expect(dialog.getByRole('button', { name: 'Create labeling task' })).toBeEnabled();
 });

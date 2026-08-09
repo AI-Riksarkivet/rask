@@ -70,4 +70,17 @@ describe('the template gallery', () => {
 		).toBe(true);
 		expect(t.ontology.relations?.length).toBe(1);
 	});
+
+	it('transcription is DECLARED per class, exactly where regions carry text', () => {
+		// The layout regions of the OCR task transcribe; its span/tag classes do not (a span IS
+		// text, a tag has none) — and a plain detection task declares no transcription anywhere.
+		const ocr = templateById('ocr-layout')!;
+		const byName = Object.fromEntries(ocr.ontology.classes.map((c) => [c.name, c]));
+		expect(byName['paragraph']?.transcribe).toBe(true);
+		expect(byName['marginalia']?.transcribe).toBe(true);
+		expect(byName['person']?.transcribe).toBeUndefined();
+		expect(byName['damaged']?.transcribe).toBeUndefined();
+		const detection = templateById('object-detection')!;
+		expect(detection.ontology.classes.every((c) => !c.transcribe)).toBe(true);
+	});
 });

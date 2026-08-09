@@ -23,6 +23,10 @@ export interface TemplateAttr {
 export interface TemplateClass {
 	name: string;
 	tools: string[];
+	/** This class's regions carry TRANSCRIBED TEXT (the row's `text` facet) — an OCR paragraph
+	 *  does, a detection box does not. Neither a tool (a span INTO text is) nor an attribute
+	 *  (typed side-fields): it is the primary content column, declared per class. */
+	transcribe?: boolean;
 	attributes?: TemplateAttr[];
 	required?: boolean;
 }
@@ -55,10 +59,11 @@ export const PROJECT_TEMPLATES: readonly ProjectTemplate[] = [
 		ontology: {
 			kind: 'ocr-layout',
 			classes: [
-				{ name: 'header', tools: ['bbox'], attributes: [READING_ORDER] },
+				{ name: 'header', tools: ['bbox'], transcribe: true, attributes: [READING_ORDER] },
 				{
 					name: 'paragraph',
 					tools: ['polygon', 'bbox'],
+					transcribe: true,
 					required: true,
 					attributes: [
 						READING_ORDER,
@@ -66,8 +71,13 @@ export const PROJECT_TEMPLATES: readonly ProjectTemplate[] = [
 						{ name: 'crossed-out', type: 'bool' },
 					],
 				},
-				{ name: 'marginalia', tools: ['polygon', 'bbox'], attributes: [READING_ORDER] },
-				{ name: 'page-number', tools: ['bbox'], attributes: [READING_ORDER] },
+				{
+					name: 'marginalia',
+					tools: ['polygon', 'bbox'],
+					transcribe: true,
+					attributes: [READING_ORDER],
+				},
+				{ name: 'page-number', tools: ['bbox'], transcribe: true, attributes: [READING_ORDER] },
 				{ name: 'person', tools: ['text'] },
 				{ name: 'place', tools: ['text'] },
 				{ name: 'damaged', tools: ['tag'] },
@@ -139,8 +149,8 @@ export const PROJECT_TEMPLATES: readonly ProjectTemplate[] = [
 		ontology: {
 			kind: 'document-question-answering',
 			classes: [
-				{ name: 'question', tools: ['bbox', 'text'] },
-				{ name: 'value', tools: ['bbox', 'text'] },
+				{ name: 'question', tools: ['bbox', 'text'], transcribe: true },
+				{ name: 'value', tools: ['bbox', 'text'], transcribe: true },
 			],
 			relations: [
 				{ name: 'answers', from_classes: ['question'], to_classes: ['value'], required: true },
@@ -169,7 +179,12 @@ export const PROJECT_TEMPLATES: readonly ProjectTemplate[] = [
 		ontology: {
 			kind: 'reading-order',
 			classes: [
-				{ name: 'line', tools: ['bbox'], attributes: [{ ...READING_ORDER, required: true }] },
+				{
+					name: 'line',
+					tools: ['bbox'],
+					transcribe: true,
+					attributes: [{ ...READING_ORDER, required: true }],
+				},
 			],
 		},
 	},

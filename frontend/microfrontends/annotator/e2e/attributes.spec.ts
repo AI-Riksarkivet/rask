@@ -127,3 +127,51 @@ test('the editor renders from the ONTOLOGY per class, and the value rides the sa
 	await expect(page.getByTestId('annotation-detail')).toBeVisible();
 	await expect(page.getByTestId('attributes-panel')).toHaveCount(0);
 });
+
+test('transcription is offered PER the class declaration — not on every row of every task', async ({
+	page,
+}) => {
+	// The answer to "is transcription an attribute?": neither a tool nor an attribute — the
+	// row's text facet, declared per class. A paragraph declaring `transcribe` gets the editor;
+	// a stamp (same task, no declaration) does not; before the declaration existed, both did.
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/seed`, {
+		data: {
+			routes: {
+				'GET /tasks/t1': {
+					...TASK,
+					ontology: {
+						...TASK.ontology,
+						classes: [{ ...TASK.ontology.classes[0], transcribe: true }, TASK.ontology.classes[1]],
+					},
+				},
+			},
+		},
+	});
+	await page.route('**/annotator/api/annotations/**', (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (route.request().method() !== 'GET') return json(route, { detail: 'no' }, 404);
+		if (path.endsWith('/versions')) return json(route, { versions: [] });
+		return route.fulfill({
+			status: 200,
+			contentType: 'application/vnd.apache.arrow.stream',
+			headers: { 'X-Annotations-Version': '1' },
+			body: ipc(),
+		});
+	});
+
+	await page.goto(`/annotator/?keys=${encodeURIComponent(KEY)}&task=t1`);
+
+	await page
+		.getByTestId('annotation-list')
+		.getByRole('button')
+		.filter({ hasText: 'paragraph' })
+		.click();
+	await expect(page.getByTestId('transcription-field')).toBeVisible();
+	await expect(page.getByTestId('transcription-field')).toContainText('Transcription');
+
+	// Advance the queue to the stamp (selecting a row swaps the list for the detail pane, so
+	// navigation happens through the inspector, exactly as a reviewer moves).
+	await page.getByTitle('Next (J / ↓)').click();
+	await expect(page.getByTestId('annotation-detail')).toContainText('#1');
+	await expect(page.getByTestId('transcription-field')).toHaveCount(0);
+});
