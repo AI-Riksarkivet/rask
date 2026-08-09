@@ -99,7 +99,7 @@
 	//
 	// Fetched for the WHOLE task list, not the visible page, and that is load-bearing: filtering is
 	// what these rows are for, and filtering a page by data only fetched for that page is circular —
-	// you could never filter TO a row that is not already on screen. A project is bounded by
+	// you could never filter TO a row that is not already on screen. A labeling task is bounded by
 	// SEND_TASK_CAP (1000), which is also the endpoint's own cap, so the two agree by construction.
 	const rowsQuery = $derived(fetchCorpusRows({ keys: rowKeysFor(tasks), dataset: null }));
 	// Rows are DECORATION on a queue that already works without them: `?? []` everywhere, never a
@@ -661,7 +661,7 @@
 					disabled={busy !== null}
 					title={task.submitted_by && me !== null && task.submitted_by === me
 	? 'you submitted this — the server will refuse a self-review'
-	: 'send the task back with a note'}
+	: 'send the item back with a note'}
 					onclick={() => {
 	changesFor = task;
 	changesMessage = '';

@@ -281,7 +281,7 @@
 			<p class="text-muted-foreground text-sm">
 				Tenant <span class="font-mono">{tenant || '…'}</span> — send items from
 				<a class="underline underline-offset-2" href="{base}/browse">the corpus browser</a> or search, then
-				claim, annotate, review and publish. (Projects are platform-level; labeling work lives here.)
+				claim, annotate, review and publish. (A labeling task is the campaign; the items sent into it are what gets labelled.)
 			</p>
 		</div>
 		<div class="flex items-center gap-2">
@@ -299,7 +299,7 @@
 	{/if}
 
 	{#if status === 'loading'}
-		<p class="text-muted-foreground text-sm">Loading projects…</p>
+		<p class="text-muted-foreground text-sm">Loading labeling tasks…</p>
 	{:else if status === 'forbidden'}
 		<Card class="px-4 py-6 text-sm">
 			<p class="font-medium">You can't list this tenant's labeling tasks.</p>
@@ -327,7 +327,7 @@
 		<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
 			{#each projects as project (project.project_id)}
 				{@const progress = taskProgress(project.counts)}
-				<a href="{base}/projects/{project.project_id}" class="group">
+				<a href="{base}/tasks/{project.project_id}" class="group">
 					<Card class="group-hover:border-ring flex h-full flex-col gap-2 p-4 transition-colors">
 						<div class="flex items-start justify-between gap-2">
 							<span class="text-sm font-semibold">{project.title || project.slug}</span>

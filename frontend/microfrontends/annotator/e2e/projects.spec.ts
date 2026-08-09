@@ -213,7 +213,7 @@ test('A2: claim takes the lease, Annotate routes into the EXISTING canvas, submi
 		listing([task('t1', 'unassigned')]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await expect(page.getByRole('heading', { name: /Vasa portraits/ })).toBeVisible();
 
 	// The post-claim world, seeded before the click: the event answers with the moved task and the
@@ -264,7 +264,7 @@ test('A2: an expired lease is shown EXPIRED, never as held', async ({ page }) =>
 		listing([stale]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 
 	await expect(page.getByText('dave · expired')).toBeVisible();
 	await expect(page.getByText(/dave · \d{2}:\d{2}/)).not.toBeVisible();
@@ -286,7 +286,7 @@ test('A3: accept, fix & accept and request changes are three distinct actions; t
 		'POST /tasks/t2/events': task('t2', 'changes_requested', { submitted_by: 'gina' }),
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 
 	// All three, simultaneously visible, separately actionable — never collapsed.
 	await expect(page.getByRole('button', { name: 'Accept', exact: true })).toBeVisible();
@@ -326,7 +326,7 @@ test('A4: the confirm step states what lands and whose names travel; a running p
 	]);
 	await snapshot(page, { project: project('frozen'), legal_events: LEGAL.frozen }, done);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-publish').click();
 
 	await page.getByRole('button', { name: 'Publish…' }).click();
@@ -406,7 +406,7 @@ test('a server 403 surfaces as the refusal it is — named door, no silent no-op
 		},
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('button', { name: 'Claim' }).click();
 
 	await expect(page.getByText('gina lacks can_claim on annotation_project:p1')).toBeVisible();
@@ -439,7 +439,7 @@ test('bulk accept fires one gated event per selected reviewable task', async ({ 
 		}),
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
 	// The bar's summary is just the count now: the per-action counts moved onto the buttons, because
 	// the vocabulary is DERIVED from the rows' own `legal_events` rather than being the two hardcoded
@@ -473,7 +473,7 @@ test('assign names a recipient and the row comes back pinned', async ({ page }) 
 		listing([assignable]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('button', { name: 'Assign…' }).click();
 	await page.getByPlaceholder(/annotator \(OIDC subject/).fill('dave');
 
@@ -535,7 +535,7 @@ test('consensus: replica items wear a replica k/N chip from their deterministic 
 		]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 
 	await expect(page.getByText('replica 1/2')).toBeVisible();
 	await expect(page.getByText('replica 2/2')).toBeVisible();
@@ -561,7 +561,7 @@ test('consensus: the one-replica-per-annotator 409 surfaces verbatim, and the ro
 		},
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('button', { name: 'Claim' }).click();
 
 	await expect(
@@ -590,7 +590,7 @@ test('adjudication: the manager picks a canonical replica; the pick PUTs and the
 	});
 	await snapshot(page, detail({}), replicas);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-publish').click();
 
 	const panel = page.getByTestId('adjudication-panel');
@@ -648,7 +648,7 @@ test('adjudication: non-accepted replicas offer no Pick at all', async ({ page }
 		]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-publish').click();
 
 	const panel = page.getByTestId('adjudication-panel');
@@ -671,7 +671,7 @@ test('adjudication: a stale-pick 409 from the server surfaces verbatim', async (
 		},
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-publish').click();
 	await page
 		.getByTestId('adjudication-panel')
@@ -715,7 +715,7 @@ test('instructions: the create dialog sends them and the detail page shows them 
 	);
 
 	// And the detail page renders them where the work is picked up.
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await expect(page.getByTestId('instructions')).toContainText(
 		'Label every visible portrait; skip seals.',
 	);
@@ -800,7 +800,7 @@ test('ontology: picking a task type sends ONE document; the detail page wears it
 	expect(classes[0]).toMatchObject({ required: false });
 
 	// The detail page names the task type and the taxonomy, from the same document.
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await expect(page.getByTestId('task-kind-chip')).toContainText('reading-order');
 	await expect(page.getByTestId('label-taxonomy')).toContainText('region');
 	await expect(page.getByTestId('label-taxonomy')).toContainText('bbox');
@@ -859,7 +859,7 @@ test('ontology: a manager edits the taxonomy after create, and the PATCH carries
 	);
 	await seed(page, { 'PATCH /projects/p1/ontology': project('labeling') });
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('edit-ontology-trigger').click();
 
@@ -916,7 +916,7 @@ test('ontology: the editor REFUSES to flatten structure it cannot express', asyn
 		listing([]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('edit-ontology-trigger').click();
 
@@ -933,7 +933,7 @@ test('ontology: the edit button is ABSENT once the project is frozen', async ({ 
 	// this only stops offering the door.
 	await snapshot(page, { project: project('frozen'), legal_events: LEGAL.labeling }, listing([]));
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-settings').click();
 	await expect(page.getByTestId('edit-ontology-trigger')).toHaveCount(0);
 });
@@ -954,7 +954,7 @@ test('an unfinishable item can be REMOVED — otherwise one of them wedges the p
 	});
 	page.on('dialog', (d) => void d.accept());
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('drop-task').first().click();
 
 	await expect
@@ -976,7 +976,7 @@ test('the remove control is ABSENT once the project is frozen', async ({ page })
 		listing([task('t1', 'accepted')]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await expect(page.getByTestId('drop-task')).toHaveCount(0);
 });
 
@@ -996,7 +996,7 @@ test('the queue filters by STATE, and says how many of how many', async ({ page 
 		]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	// The DataTable renders semantic <tr>; `rowgroup` scopes to the BODY so the header row is not
 	// counted as an item — a count that is always one too high hides an off-by-one in the filter.
 	const rows = page.getByRole('rowgroup').last().getByRole('row');
@@ -1025,7 +1025,7 @@ test('the queue filters by ASSIGNEE, and the two filters COMPOSE', async ({ page
 		]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	// The DataTable renders semantic <tr>; `rowgroup` scopes to the BODY so the header row is not
 	// counted as an item — a count that is always one too high hides an off-by-one in the filter.
 	const rows = page.getByRole('rowgroup').last().getByRole('row');
@@ -1048,7 +1048,7 @@ test('an EMPTY filter result says why it is empty, rather than looking broken', 
 		listing([task('t1', 'claimed', { assignee: 'gina' }), task('t2', 'accepted')]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByLabel('Filter by assignee').fill('nobody-by-that-name');
 
 	// "No items yet — send data points in" would be a LIE here: there are items, they just do not
@@ -1072,7 +1072,7 @@ test('changing a filter CLEARS the selection — a hidden row must never stay se
 		]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
 	// "Accept 2", not "Accept 2 reviewed": each bulk action now names its own count.
 	await expect(page.getByTestId('bulk-accept')).toContainText('2');
@@ -1113,7 +1113,7 @@ test('bulk assign fires ONE gated event per selected item, carrying the assignee
 		'POST /tasks/t2/events': task('t2', 'claimed', { assignee: 'gina' }),
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
 
 	// Only the ASSIGNABLE rows are offered — t3 is accepted and its machine has no `assign` edge.
@@ -1147,7 +1147,7 @@ test('a PARTIAL failure names what failed and reports what landed', async ({ pag
 		'POST /tasks/t2/events': { status: 409, body: { detail: 'task t2 is already held by omar' } },
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
 	await page.getByTestId('bulk-assign').click();
 	await page.getByTestId('bulk-assign-dialog').getByRole('textbox').fill('gina');
@@ -1166,7 +1166,7 @@ test('bulk assign is not offered when nothing selected can take it', async ({ pa
 		listing([task('t1', 'accepted'), task('t2', 'skipped')]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
 
 	// WITHHELD, not disabled. The bar renders only actions the selection can actually take, so "not
@@ -1195,7 +1195,7 @@ test('the metrics panel reports throughput and accept-rate, and includes a perso
 		]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	const panel = page.getByTestId('annotator-metrics');
 	await expect(panel).toBeVisible();
 	await expect(panel.getByTestId('metrics-row')).toHaveCount(2);
@@ -1218,7 +1218,7 @@ test('the metrics panel is ABSENT on a project nobody has touched', async ({ pag
 		listing([task('t1', 'unassigned')]),
 	);
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await expect(page.getByTestId('annotator-metrics')).toHaveCount(0);
 });
 
@@ -1242,7 +1242,7 @@ test('membership lists direct grants and grants a new one', async ({ page }) => 
 		},
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('load-members').click();
 	await expect(page.getByTestId('member-row')).toHaveCount(1);
@@ -1275,7 +1275,7 @@ test('revoking the LAST administrator is refused, and the refusal is shown', asy
 		},
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('load-members').click();
 	await page.getByTestId('revoke-member').click();
@@ -1294,7 +1294,7 @@ test('a non-manager is told WHY, not shown an empty list', async ({ page }) => {
 		'GET /projects/p1/members': { status: 403, body: { detail: 'omar lacks can_manage' } },
 	});
 
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await page.getByTestId('tab-settings').click();
 	await page.getByTestId('load-members').click();
 

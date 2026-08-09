@@ -20,7 +20,7 @@ describe('leaving a canvas opened from a labeling task', () => {
 	it('returns to THAT task queue, not the corpus browser', () => {
 		const href = exitHref(params('dataset=transcripts_v2&keys=a/1/1&task=t9&project=bind86'));
 
-		expect(href).toBe('/projects/bind86');
+		expect(href).toBe('/tasks/bind86');
 	});
 
 	it('prefers the queue even though a dataset is also present', () => {
@@ -32,11 +32,11 @@ describe('leaving a canvas opened from a labeling task', () => {
 	});
 
 	it('encodes a project id that needs it', () => {
-		expect(exitHref(params('project=a%20b'))).toBe('/projects/a%20b');
+		expect(exitHref(params('project=a%20b'))).toBe('/tasks/a%20b');
 	});
 
 	it('respects the zone base', () => {
-		expect(exitHref(params('project=bind86'), '/annotator')).toBe('/annotator/projects/bind86');
+		expect(exitHref(params('project=bind86'), '/annotator')).toBe('/annotator/tasks/bind86');
 	});
 });
 

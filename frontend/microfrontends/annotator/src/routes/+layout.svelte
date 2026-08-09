@@ -36,7 +36,7 @@
 		const out: { id: string; label: string; href: string }[] = [];
 		const taskId = reviewSelection.taskId;
 		if (taskId)
-			out.push({ id: `task:${taskId}`, label: taskId, href: `${base}/projects/${taskId}` });
+			out.push({ id: `task:${taskId}`, label: taskId, href: `${base}/tasks/${taskId}` });
 		const unit = reviewSelection.active;
 		if (unit) {
 			const position =
@@ -94,7 +94,7 @@
      is one click away rather than absent.
 
      `canvas` mode (no breadcrumb, full-height children) still applies ONLY while the drawing canvas
-     is showing (`?keys=`): the projects landing and detail pages keep the ordinary chrome, because
+     is showing (`?keys=`): the labeling-task landing and detail pages keep the ordinary chrome, because
      making the whole zone canvas-mode is what once made this read as "a different app". -->
 <AppShell
 	pathname={page.url.pathname}

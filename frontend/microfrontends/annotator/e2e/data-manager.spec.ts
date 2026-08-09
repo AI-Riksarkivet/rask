@@ -81,7 +81,7 @@ async function openQueue(page: Page, details = MANY): Promise<void> {
 		'GET /projects/p1/tasks?include=details': listing(details),
 		'GET /projects/p1/members': { members: [], total: 0 },
 	});
-	await page.goto('/annotator/projects/p1');
+	await page.goto('/annotator/tasks/p1');
 	await expect(page.getByTestId('queue-view-toggle')).toBeVisible();
 }
 

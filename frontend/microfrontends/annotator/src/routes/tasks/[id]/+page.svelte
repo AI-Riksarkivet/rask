@@ -58,7 +58,7 @@
 			await Promise.all([projectQuery.refresh(), tasksQuery.refresh()]);
 		} catch (err) {
 			// The ZONE SERVER is unreachable (the remote call itself failed, not the annotation service
-			// behind it). Still the offline state — never a permanent "Loading project…".
+			// behind it). Still the offline state — never a permanent "Loading labeling task…".
 			if (seq !== inflight) return;
 			detail = null;
 			listing = null;
@@ -73,7 +73,7 @@
 			detail = null;
 			listing = null;
 			status = 'offline';
-			statusDetail = 'the project read returned nothing';
+			statusDetail = 'the labeling-task read returned nothing';
 			return;
 		}
 		if (projectResult.ok) {
@@ -146,7 +146,7 @@
 </script>
 
 {#if status === 'loading'}
-	<p class="text-muted-foreground p-6 text-sm">Loading project…</p>
+	<p class="text-muted-foreground p-6 text-sm">Loading labeling task…</p>
 {:else if status === 'forbidden'}
 	<div class="p-6 text-sm">
 		<p class="font-medium">You can't view this labeling task.</p>
