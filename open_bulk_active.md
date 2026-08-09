@@ -123,6 +123,13 @@ filtered+labeled view); cancellation with guaranteed UI cleanup.
   undoable bulk runs for free.
 - **Module-load global state** (top-level awaited LanceDB/pipeline singletons), the 965-line
   form component, stringly-typed event switches, UA-sniffed browser branches.
+- **Untyped cells** — `Cell.value?: any` (`src/state/columns.ts:85`) means no layer knows what
+  a cell should hold; "types" exist only as a cosmetic string (`create-table-column.ts` maps
+  everything to DuckDB `TEXT` except image→`BLOB`). Ours stay contract-typed at the boundary
+  (ontology attr type → submit validation → guided_json) even while the UX defers asking.
+- **Refusal text stored as data** — the prompt *instructs* the model to answer "No more items"
+  when it runs dry (`materialize-prompt.ts`), and that string lands in cells like any value.
+  guided_json makes this unrepresentable for us: a constrained column cannot receive prose.
 
 ## §5 The open-bulk design (rask mapping)
 
@@ -139,6 +146,43 @@ from `LabelOntology`, and every producer column's `output_contract` is a fragmen
 `generation_schema` that already rides `output_schema` to vLLM. Filling a cell = writing an
 annotation row / metadata patch through the EXISTING save wire (edits/inserts, base_version
 OCC) — the grid is a VIEW over the same table the canvas edits, never a second store.
+
+**The dynamism bar (first-hand audit, 2026-08-09).** What "dynamic like the reference" means
+concretely, each fact read in source, with the design consequence it forces on us:
+
+1. **One sentence → a living column.** Every column header carries a ✨ button opening a bare
+   textarea ("Type your action, e.g. translate to French"); Cmd+Enter creates the column
+   *immediately* — auto-named `column_N` (`execution.tsx:53-62`), the source column
+   auto-referenced, the sentence becoming the prompt (`add-column-placeholder.tsx:128-213`).
+2. **Generation auto-starts.** `mode === 'add'` fires the first run ~500 ms after the column
+   exists (`execution-form.tsx:570-581`). There is no "configure, then run" — the column is
+   filling before the form has been read.
+3. **Type is inferred, never asked.** A new column is `type: 'unknown'` until the first
+   generate, then takes the model's `supportedType` (`execution-form.tsx:546-548`); template
+   choices carry their own type map (detect-objects→text, colorize→image).
+4. **References are implicit.** `{{column}}` mentions in the prompt ARE the dependency edges;
+   the column you launched from is wired in automatically.
+5. **Everything edits live.** Prompt/model re-editable and re-runnable at any time (re-runs
+   skip validated cells — `generate-cells.ts:263-266`); rename is click-header-and-type;
+   cells stream in one by one via an async iterator and a run is abortable mid-flight with
+   partial results kept (`useGenerateColumn.ts:32-67`).
+6. **Editing a cell IS validating it.** Typing in a cell and thumbs-up go through the same
+   `validateCell` wire (`cell-actions.tsx:88-90`, `validate-cell.usecase.ts`); the corrected
+   value immediately joins the example pool.
+7. **A whole dataset from one sentence** (autodataset): an LLM proposes name + columns +
+   prompts, which are materialized and run — the column DAG bootstraps itself
+   (`run-autodataset.ts`).
+
+**Design consequence — act-first, declare-derived.** Our earlier framing ("＋ column = fill a
+name + type declaration") set the ceremony in the wrong place. The declaration stays — it is
+what buys validation and guided decoding — but it is **derived from the action, not demanded
+before it**: "＋ column" is ONE textarea; Enter creates the ontology declaration silently
+(auto-name from the action, `type: free` unless the chosen producer's declared `returns` or a
+template implies better), PATCHes the ontology, and starts preview-5 immediately.
+**Progressive typing**: a column is born loose (`free`) and hardens as the task matures —
+tightening `free → enum(choices)` later retro-validates existing cells and upgrades the
+column's guided_json branch. The YAML view shows the derived declaration after the fact for
+whoever wants to see or tighten it; nobody is forced through it.
 
 **Runs**: preview (≤5 rows) executes through the assist plane synchronously; full runs submit
 one job per column execution with `{recipe, selection, skip: validated}` on the jobs seam,
@@ -162,9 +206,10 @@ the natural exemplar picker at corpus scale.
    Filtered-slice selections (beyond one task) ride phase 6's selection work. (was: medium)
 2. **Cell state overlay + inline accept/edit**: the sparse overlay schema (validated +
    attribution + provenance), thumbs-up accept, inline edit through the save wire. (medium)
-3. **Recipe columns + preview-first**: add-column with producer picker (registry-driven),
-   `{{column}}` templating, auto-run 5 rows through the assist plane, drag-to-fill for scoped
-   ranges. (large)
+3. **Recipe columns + preview-first**: act-first add-column (one textarea; declaration
+   derived — auto-name, inferred/progressive type, silent ontology PATCH), producer picker
+   registry-driven, `{{column}}` templating, auto-run 5 rows through the assist plane,
+   drag-to-fill for scoped ranges. (large)
 4. **Jobs-seam bulk runs**: recipe → job with skip-validated, SSE cell streaming, cancel with
    cleanup, run record + lineage; content-hash memoization. (large)
 5. **The flywheel**: validated cells → few-shot examples in recipes + exemplars for propagate;
