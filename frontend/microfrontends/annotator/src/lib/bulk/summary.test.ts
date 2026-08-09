@@ -20,6 +20,10 @@ describe('summarize', () => {
 			text: 'Anno 1632',
 			textId: 'd',
 			predictionIds: ['d'],
+			tagCells: {
+				damaged: { id: 'b', text: '', status: 'accepted' },
+				'faded-ink': { id: 'c', text: '', status: 'unlabelled' },
+			},
 			reviewer: '',
 			reviewedAt: null,
 		});
@@ -34,6 +38,7 @@ describe('summarize', () => {
 			text: '',
 			textId: null,
 			predictionIds: [],
+			tagCells: {},
 			reviewer: '',
 			reviewedAt: null,
 		});
@@ -51,6 +56,19 @@ describe('summarize', () => {
 		expect(s.predictionIds).toEqual(['r0', 'r2']);
 		expect(s.textId).toBe('r1');
 		expect(s.text).toBe('therest aff');
+	});
+
+	it('a recipe cell is a tag row WITH text — the grid reads it by its column label', () => {
+		const t = tableFromArrays({
+			id: ['a'],
+			shape_type: ['tag'],
+			label: ['century'],
+			status: ['prediction'],
+			text: ['17th'],
+		});
+		expect(summarize(t).tagCells).toEqual({
+			century: { id: 'a', text: '17th', status: 'prediction' },
+		});
 	});
 
 	it('attribution renders the NEWEST server stamp — reviewer of the max updated_at', () => {

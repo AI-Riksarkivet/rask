@@ -90,6 +90,9 @@ export interface AssistShape {
 	height: number;
 	polygon?: number[];
 	label?: string;
+	/** The TEXTUAL answer — a transcription, or an LLM/VLM recipe's cell value (item-level
+	 *  answers land as `tag` shapes whose `text` is the bulk grid's cell). */
+	text?: string;
 	confidence?: number;
 	/** The model's OWN uncertainty estimate — never derived client-side as `1 - confidence`
 	 *  (that carries no information beyond confidence). Absent = the backend made no estimate. */

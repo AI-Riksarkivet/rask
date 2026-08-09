@@ -19,20 +19,42 @@
 	// collision keeps the draft open over the fresh state so nothing typed is lost silently.
 	import { onDestroy } from 'svelte';
 	import { base } from '$app/paths';
-	import { loadAnnotations, postSave, type SavePayload } from '@rask/labeling/annotations-client';
+	import {
+		loadAnnotations,
+		makeInsertRow,
+		postSave,
+		type SavePayload,
+	} from '@rask/labeling/annotations-client';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
+	import * as Popover from '@rask/ui/popover';
 	import { Textarea } from '@rask/ui/textarea';
 	import MediaThumb from '$lib/viewer/layout/MediaThumb.svelte';
 	import { statusVariant } from '$lib/viewer/layout/statusStyle';
 	import { taskCanvasHref } from '$lib/viewer/task-stream';
 	import { fetchCorpusRows } from '$lib/projects/remote/rows.remote';
+	import { updateProjectOntology } from '$lib/projects/remote/projects.remote';
+	import { assistProducers, requestAssist } from '$lib/viewer/remote/assist.remote';
 	import { indexRows, rowFor, rowKeysFor, rowText } from '$lib/projects/corpus-rows';
 	import type { TaskDetail } from '$lib/projects/types';
 	import { type AnnotationSummary, summarize } from './summary.js';
+	import { deriveColumnName, recipeColumns, withRecipeClass, type Ontology } from './recipe.js';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
-	let { projectId, tasks }: { projectId: string; tasks: TaskDetail[] } = $props();
+	let {
+		projectId,
+		tasks,
+		ontology,
+	}: {
+		projectId: string;
+		tasks: TaskDetail[];
+		/** The task's current ontology — recipe columns project from it. Absent = none render. */
+		ontology?: Ontology;
+	} = $props();
+
+	/** How many rows an act-first column fills IMMEDIATELY — judge the prompt cheaply before
+	 *  running thousands (the preview-5 economics; scoped/whole-task runs are the jobs seam). */
+	const PREVIEW_ROWS = 5;
 
 	// Corpus facets are DECORATION on a grid that works without them (the queue's own rule):
 	// `?? []` everywhere, never a loading gate.
@@ -54,6 +76,126 @@
 	// The single open inline edit (one at a time is the spreadsheet convention): the draft the
 	// textarea binds to, kept OUTSIDE the cache so a background refresh cannot eat a keystroke.
 	let editing = $state<{ taskId: string; draft: string } | null>(null);
+
+	// ── act-first "＋ column" (phase 3) ───────────────────────────────────────────────────────
+	// One textarea; Enter DERIVES the declaration (name from the action, tag+transcribe class),
+	// PATCHes the ontology silently, and fills the first rows through the assist wire. The
+	// column list unions the prop's ontology with names added THIS session, so the new column
+	// renders before the project re-fetch lands.
+	let columnAction = $state('');
+	let columnOpen = $state(false);
+	let addingColumn = $state(false);
+	let selectedProducer = $state('');
+	const localColumns = new SvelteSet<string>();
+	/** Cells with a fill in flight, keyed `taskId:column` — rendered as a streaming cell. */
+	const filling = new SvelteSet<string>();
+
+	const producersQuery = $derived(assistProducers(null));
+	// Recipe producers: interactive families whose declared returns include the `tag` an
+	// item-level answer lands as. The picker lists what discovery/config actually offers —
+	// users never type an endpoint (open_assist_discovery.md §"Who configures what").
+	const recipeProducers = $derived.by(() => {
+		const listing = producersQuery.current;
+		if (!listing?.ok) return [];
+		return listing.data.producers.filter(
+			(p) => p.interactive !== false && p.returns.includes('tag'),
+		);
+	});
+	$effect(() => {
+		if (!selectedProducer) selectedProducer = recipeProducers[0]?.name ?? '';
+	});
+	const columns = $derived([...new Set([...recipeColumns(ontology), ...localColumns])]);
+	// Recipe labels render as their own columns — keep them out of the Tags chips.
+	const chipTags = (summary: AnnotationSummary): string[] =>
+		summary.tags.filter((t) => !columns.includes(t));
+
+	async function addColumn(): Promise<void> {
+		const action = columnAction.trim();
+		if (!action || !ontology || !selectedProducer || addingColumn) return;
+		addingColumn = true;
+		try {
+			const name = deriveColumnName(action, [...ontology.classes.map((c) => c.name), ...columns]);
+			// The command single-flights the project re-fetch itself; `localColumns` renders the
+			// column before that read lands.
+			const result = await updateProjectOntology({
+				projectId,
+				ontology: withRecipeClass(ontology, name),
+			});
+			if (!result.ok) return;
+			localColumns.add(name);
+			columnOpen = false;
+			columnAction = '';
+			// Preview-first: fill the FIRST rows immediately so the prompt is judged cheaply;
+			// sequential on purpose (one cell visibly lands after another, and the mock/model
+			// is not hammered with a burst).
+			for (const task of tasks.slice(0, PREVIEW_ROWS)) {
+				await fillCell(task, name, action);
+			}
+		} finally {
+			addingColumn = false;
+		}
+	}
+
+	/** One cell fill: ask the producer, land the answer as a `tag` row with `status='prediction'`
+	 *  through the ordinary save wire. The cell's provenance is the row's `source`; a re-fetch
+	 *  renders whatever the server committed. */
+	async function fillCell(task: TaskDetail, column: string, prompt: string): Promise<void> {
+		const url = annotationsUrl(task);
+		const cellKey = `${task.task_id}:${column}`;
+		if (!url || filling.has(cellKey)) return;
+		filling.add(cellKey);
+		try {
+			// The save needs the row's current version — make sure it is loaded.
+			if (!items.has(task.task_id)) await fetchSummary(task);
+			const state = items.get(task.task_id);
+			if (!state) return;
+			// `taskId: null` DELIBERATELY: each item captured its ontology at send, so a column
+			// appended NOW is absent from that capture by definition — passing the task id would
+			// have the contract filter drop the very answers this fill exists to produce. The
+			// membership rules still apply where they mean something (submit). Capture-refresh
+			// semantics are phase 3b's open question (open_bulk_active.md §6.3).
+			const result = await requestAssist({
+				key: (task.source.keys ?? []).join(','),
+				dataset: task.source.where ?? null,
+				producer: selectedProducer,
+				prompt,
+				taskId: null,
+				region: null,
+				points: null,
+			});
+			if (!result.ok) return;
+			const answer = result.data.shapes.find((s) => (s.text ?? '') !== '');
+			if (!answer) return;
+			const row = makeInsertRow({
+				shape_type: 'tag',
+				label: column,
+				text: answer.text ?? '',
+				status: 'prediction',
+				source: result.data.source,
+				confidence: answer.confidence ?? null,
+				uncertainty: answer.uncertainty ?? null,
+			});
+			await postSave(url, {
+				edits: [],
+				inserts: [row],
+				geometry: [],
+				temporal: [],
+				spans: [],
+				deletes: [],
+				base_version: state.version,
+			});
+			await fetchSummary(task, { force: true });
+		} catch {
+			// A failed cell stays empty — visibly unfilled, retryable by re-running the column.
+		} finally {
+			filling.delete(cellKey);
+		}
+	}
+
+	/** Accept ONE recipe cell — the same status flip as the row-level accept, scoped to a cell. */
+	async function acceptCell(task: TaskDetail, cell: { id: string }): Promise<void> {
+		await saveEdits(task, [{ id: cell.id, status: 'accepted' }]);
+	}
 
 	function annotationsUrl(task: TaskDetail): string | null {
 		const key = (task.source.keys ?? []).join(',');
@@ -184,6 +326,72 @@
 				<th class="px-2 py-1.5 font-medium">Regions</th>
 				<th class="px-2 py-1.5 font-medium">Tags</th>
 				<th class="px-2 py-1.5 font-medium">Text</th>
+				{#each columns as column (column)}
+					<th class="px-2 py-1.5 font-medium" data-testid="bulk-column-{column}">{column}</th>
+				{/each}
+				<th class="px-2 py-1.5 font-normal">
+					<Popover.Root bind:open={columnOpen}>
+						<Popover.Trigger>
+							{#snippet child({ props })}
+								<Button
+									{...props}
+									variant="ghost"
+									size="sm"
+									class="h-6 whitespace-nowrap px-1.5 text-[11px]"
+									data-testid="bulk-add-column"
+									disabled={!ontology}
+								>
+									＋ column
+								</Button>
+							{/snippet}
+						</Popover.Trigger>
+						<Popover.Content class="w-96 p-3" align="end">
+							<div class="flex flex-col gap-2">
+								<p class="text-muted-foreground text-xs">
+									Type your action — the column is named from it, appended to the task's ontology, and the
+									first {PREVIEW_ROWS} rows fill immediately.
+								</p>
+								<Textarea
+									class="min-h-16 text-xs"
+									placeholder="e.g. which century is this document from?"
+									bind:value={columnAction}
+									data-testid="bulk-column-action"
+									onkeydown={(event: KeyboardEvent) => {
+	if (event.key === 'Enter' && !event.shiftKey) {
+		event.preventDefault();
+		void addColumn();
+	}
+}}
+								/>
+								<label class="text-muted-foreground flex items-center gap-2 text-xs">
+									model
+									<select
+										class="border-input bg-background h-6 min-w-0 flex-1 rounded border px-1 text-xs"
+										bind:value={selectedProducer}
+										data-testid="bulk-column-producer"
+									>
+										{#each recipeProducers as producer (producer.name)}
+											<option value={producer.name}>
+												{producer.name}{producer.configured ? '' : ' (mock)'}
+											</option>
+										{/each}
+									</select>
+								</label>
+								<div class="flex justify-end">
+									<Button
+										size="sm"
+										class="h-6 px-2 text-xs"
+										disabled={addingColumn || !columnAction.trim() || !selectedProducer}
+										data-testid="bulk-column-go"
+										onclick={() => addColumn()}
+									>
+										{addingColumn ? 'adding…' : '⏎ go'}
+									</Button>
+								</div>
+							</div>
+						</Popover.Content>
+					</Popover.Root>
+				</th>
 			</tr>
 		</thead>
 		<tbody>
@@ -266,7 +474,7 @@
 					<td class="px-2 py-1" data-testid="bulk-tags">
 						{#if summary}
 							<span class="flex flex-wrap gap-1">
-								{#each summary.tags as tag (tag)}
+								{#each chipTags(summary) as tag (tag)}
 									<Badge variant="secondary" class="text-[10px]">{tag}</Badge>
 								{/each}
 							</span>
@@ -325,6 +533,41 @@
 							</span>
 						{/if}
 					</td>
+					{#each columns as column (column)}
+						{@const cell = summary?.tagCells[column]}
+						<td class="max-w-56 px-2 py-1 text-[11px]" data-testid="bulk-cell-{column}">
+							{#if filling.has(`${task.task_id}:${column}`)}
+								<span class="text-muted-foreground animate-pulse">▍generating…</span>
+							{:else if cell}
+								<span class="flex items-center gap-1">
+									<span
+										class="truncate {cell.status === 'prediction'
+											? 'text-primary'
+											: 'text-foreground'}"
+										title={cell.text}
+									>
+										{cell.text || cell.status}
+									</span>
+									{#if cell.status === 'prediction'}
+										<Button
+											variant="ghost"
+											size="sm"
+											class="h-5 shrink-0 px-1 text-[10px]"
+											disabled={saving.has(task.task_id)}
+											title="Accept this cell"
+											data-testid="bulk-cell-accept"
+											onclick={() => acceptCell(task, cell)}
+										>
+											✓
+										</Button>
+									{/if}
+								</span>
+							{:else}
+								<span class="text-muted-foreground">—</span>
+							{/if}
+						</td>
+					{/each}
+					<td></td>
 				</tr>
 			{/each}
 		</tbody>

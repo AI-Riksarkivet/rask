@@ -222,10 +222,20 @@ the natural exemplar picker at corpus scale.
    (`✓ gina · time`) rather than claiming identity client-side. A 409 re-fetches; an edit
    conflict keeps the draft open over the fresh state. `summarize()` grew the actionable
    fields (predictionIds, textId, reviewer/reviewedAt). (was: medium)
-3. **Recipe columns + preview-first**: act-first add-column (one textarea; declaration
-   derived — auto-name, inferred/progressive type, silent ontology PATCH), producer picker
-   registry-driven, `{{column}}` templating, auto-run 5 rows through the assist plane,
-   drag-to-fill for scoped ranges. (large)
+3. **Recipe columns + preview-first** — **3a LANDED 2026-08-09**: act-first add-column on the
+   grid (ONE textarea + a registry-driven producer picker; Enter derives the declaration —
+   name from the action's words, a tag-tooled `transcribe` class — PATCHes the ontology
+   silently and fills the first 5 rows sequentially through the assist wire). The answer
+   rides a NEW `AssistShape.text` facet (interactive `vlm` family, returns `tag`; the mock
+   echoes deterministically) and lands as a `tag` row `status='prediction'` with provenance
+   via the ordinary save inserts; per-cell ✓ accept is the same status flip scoped to one
+   cell. Remaining for 3b: `{{column}}` reference MATERIALIZATION into the prompt (references
+   are derived but not yet substituted with row values), drag-to-fill for scoped ranges,
+   rerun-column (skip validated), and the capture-refresh question: items capture their
+   ontology at send, so recipe fills currently pass `taskId: null` (a column appended now is
+   absent from every existing capture by definition — passing the id would have the contract
+   filter drop the fill's own answers). Decide: refresh captures on ontology PATCH, or scope
+   the generation contract to the column. (was: large)
 4. **Jobs-seam bulk runs**: recipe → job with skip-validated, SSE cell streaming, cancel with
    cleanup, run record + lineage; content-hash memoization. (large)
 5. **The flywheel**: validated cells → few-shot examples in recipes + exemplars for propagate;

@@ -27,6 +27,9 @@ export interface AnnotationSummary {
 	textId: string | null;
 	/** Ids of rows still in `prediction` — the set a ✓-accept flips in one save. */
 	predictionIds: string[];
+	/** Tag-shaped rows by label — the recipe columns' cells (`text` is the value). Last row of a
+	 *  label wins, which is also the save wire's newest-write semantics. */
+	tagCells: Record<string, { id: string; text: string; status: string }>;
 	/** Who last touched a row on this item (server-stamped `reviewer` of the newest edit). */
 	reviewer: string;
 	/** When that touch happened — epoch ms from the newest `updated_at`; null when unstamped. */
@@ -43,6 +46,7 @@ export function summarize(table: Table): AnnotationSummary {
 	const updatedAt = table.getChild('updated_at');
 	const byStatus: Record<string, number> = {};
 	const tags = new Set<string>();
+	const tagCells: Record<string, { id: string; text: string; status: string }> = {};
 	const predictionIds: string[] = [];
 	let excerpt = '';
 	let excerptId: string | null = null;
@@ -54,7 +58,14 @@ export function summarize(table: Table): AnnotationSummary {
 		if (s === 'prediction') predictionIds.push(String(id?.get(i) ?? i));
 		if (String(shape?.get(i) ?? '') === 'tag') {
 			const tag = String(label?.get(i) ?? '');
-			if (tag) tags.add(tag);
+			if (tag) {
+				tags.add(tag);
+				tagCells[tag] = {
+					id: String(id?.get(i) ?? i),
+					text: String(text?.get(i) ?? ''),
+					status: s,
+				};
+			}
 		}
 		if (!excerpt) {
 			const value = String(text?.get(i) ?? '');
@@ -82,6 +93,7 @@ export function summarize(table: Table): AnnotationSummary {
 		text: excerpt,
 		textId: excerptId,
 		predictionIds,
+		tagCells,
 		reviewer: latestReviewer,
 		reviewedAt: latestAt,
 	};

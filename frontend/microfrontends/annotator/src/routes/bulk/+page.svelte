@@ -29,8 +29,8 @@
 		<Card class="flex flex-col items-start gap-2 px-4 py-6 text-sm">
 			<p class="font-medium">Bulk grid needs a labeling task.</p>
 			<p class="text-muted-foreground">
-				Open one from <a class="underline underline-offset-2" href="{base}/">Labeling tasks</a> and use
-				its “Bulk grid” button.
+				Open one from <a class="underline underline-offset-2" href="{base}/">Labeling tasks</a> and use its
+				“Bulk grid” button.
 			</p>
 		</Card>
 	{:else}
@@ -45,6 +45,6 @@
 			</div>
 			<Button variant="outline" size="sm" href="{base}/tasks/{projectId}">Back to the task</Button>
 		</div>
-		<BulkGrid {projectId} {tasks} />
+		<BulkGrid {projectId} {tasks} ontology={project?.ontology} />
 	{/if}
 </div>

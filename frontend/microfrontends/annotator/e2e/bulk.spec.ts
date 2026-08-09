@@ -222,6 +222,154 @@ test('accept and inline edit ride the save wire — OCC version echoed, attribut
 	await expect(row.getByTestId('bulk-text-editor')).toHaveCount(0);
 });
 
+test('act-first ＋column: one action derives the declaration, PATCHes the ontology, fills rows', async ({
+	page,
+}) => {
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/reset`);
+	const PATCHED_ONTOLOGY = {
+		kind: '',
+		modality: 'image',
+		classes: [
+			{
+				name: 'century-document',
+				tools: ['tag'],
+				transcribe: true,
+				attributes: [],
+				required: false,
+			},
+		],
+		relations: [],
+		allow_empty: false,
+	};
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/seed`, {
+		data: {
+			routes: {
+				'GET /projects/p1': { project: PROJECT, legal_events: [] },
+				'GET /projects/p1/tasks': {
+					tasks: { t1: 'claimed', t2: 'unassigned' },
+					counts: { claimed: 1, unassigned: 1 },
+					total: 2,
+					terminal: 0,
+					may_publish: false,
+					details: [
+						taskItem('t1', 'doc1/0/1', 'claimed', 'gina'),
+						taskItem('t2', 'doc1/0/2', 'unassigned', null),
+					],
+				},
+				// The picker lists DISCOVERED producers only — the vlm family, returning `tag`.
+				'GET /api/assist/producers': {
+					producers: [
+						{
+							name: 'vlm',
+							configured: false,
+							returns: ['tag'],
+							compatible: null,
+							interactive: true,
+						},
+					],
+					default_configured: false,
+				},
+				'PATCH /projects/p1/ontology': { ...PROJECT, ontology: PATCHED_ONTOLOGY },
+				// The producer's answer: a `tag` shape whose text IS the cell value.
+				'POST /api/assist/doc1/0/1': {
+					shapes: [
+						{ shape_type: 'tag', x: 0, y: 0, width: 0, height: 0, text: '17th', confidence: 0.8 },
+					],
+					source: 'model:vlm',
+					dropped: [],
+				},
+				'POST /api/assist/doc1/0/2': {
+					shapes: [
+						{ shape_type: 'tag', x: 0, y: 0, width: 0, height: 0, text: '18th', confidence: 0.8 },
+					],
+					source: 'model:vlm',
+					dropped: [],
+				},
+			},
+		},
+	});
+	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await page.route('**/annotator/api/chunk-frame/**', (route) =>
+		route.fulfill({ status: 200, contentType: 'image/png', body: PNG }),
+	);
+	// Stateful annotations wire: after a save with inserts, the item serves its recipe row back.
+	const saves: Array<{ path: string; inserts: Array<Record<string, unknown>> }> = [];
+	const filled = new Set<string>();
+	await page.route('**/annotator/api/annotations/**', async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		const item = path.includes('doc1/0/1') ? 'doc1/0/1' : 'doc1/0/2';
+		if (route.request().method() === 'POST') {
+			const body = route.request().postDataJSON();
+			if (body.inserts?.length) {
+				saves.push({ path, inserts: body.inserts });
+				filled.add(item);
+			}
+			return json(route, { version: 2, touched: 1 });
+		}
+		const century = item === 'doc1/0/1' ? '17th' : '18th';
+		const rows = filled.has(item)
+			? ipc([{ shape: 'tag', label: 'century-document', status: 'prediction', text: century }])
+			: ipc([]);
+		return route.fulfill({
+			status: 200,
+			contentType: 'application/vnd.apache.arrow.stream',
+			headers: { 'X-Annotations-Version': filled.has(item) ? '2' : '1' },
+			body: rows,
+		});
+	});
+
+	await page.goto('/annotator/bulk?task=p1');
+
+	// ONE textarea, one Enter: no name field, no type field — the declaration is derived.
+	await page.getByTestId('bulk-add-column').click();
+	await page.getByTestId('bulk-column-action').fill('which century is this document from?');
+	await expect(page.getByTestId('bulk-column-producer')).toHaveValue('vlm');
+	await page.getByTestId('bulk-column-go').click();
+
+	// The column exists immediately (named from the action) and the preview rows fill.
+	await expect(page.getByTestId('bulk-column-century-document')).toBeVisible();
+	const rows = page.getByTestId('bulk-row');
+	await expect(rows.first().getByTestId('bulk-cell-century-document')).toContainText('17th');
+	await expect(rows.nth(1).getByTestId('bulk-cell-century-document')).toContainText('18th');
+
+	// The silent PATCH carried the DERIVED declaration: tag-tooled, transcribing.
+	const calls = await (await page.request.get(`${MOCK_ANNOTATOR}/__mock/calls`)).json();
+	const patch = calls.calls.find(
+		(c: { method: string; path: string }) =>
+			c.method === 'PATCH' && c.path === '/projects/p1/ontology',
+	);
+	expect(patch.body.ontology.classes).toEqual([
+		expect.objectContaining({ name: 'century-document', tools: ['tag'], transcribe: true }),
+	]);
+
+	// Each cell landed as a tag row through the ordinary save wire, provenance stamped.
+	expect(saves[0].inserts[0]).toMatchObject({
+		shape_type: 'tag',
+		label: 'century-document',
+		text: '17th',
+		status: 'prediction',
+		source: 'model:vlm',
+	});
+
+	// Per-cell accept: the same status flip, scoped to one cell.
+	const acceptSaves: Array<Record<string, unknown>> = [];
+	await page.route('**/annotator/api/annotations/**', async (route) => {
+		if (route.request().method() === 'POST') {
+			acceptSaves.push(route.request().postDataJSON());
+			return json(route, { version: 3, touched: 1 });
+		}
+		return route.fulfill({
+			status: 200,
+			contentType: 'application/vnd.apache.arrow.stream',
+			headers: { 'X-Annotations-Version': '3' },
+			body: ipc([{ shape: 'tag', label: 'century-document', status: 'accepted', text: '17th' }]),
+		});
+	});
+	await rows.first().getByTestId('bulk-cell-accept').click();
+	await expect(rows.first().getByTestId('bulk-cell-accept')).toHaveCount(0);
+	expect(acceptSaves[0].edits).toEqual([{ id: 'r0', status: 'accepted' }]);
+});
+
 test('without a labeling task, the page says where to come from — no dead chrome', async ({
 	page,
 }) => {

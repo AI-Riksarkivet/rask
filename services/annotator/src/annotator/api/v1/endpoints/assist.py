@@ -105,6 +105,10 @@ _RETURNS: dict[str, tuple[str, ...]] = {
     # jobs seam happily accepts. Listed ⇒ compatibility computes; batch-ness rides `interactive`.
     "htr": ("text",),
     "insid3": ("mask",),
+    # The RECIPE family (open-bulk): an LLM/VLM answering an item-level question. Its answer is a
+    # `tag` shape carrying `text` — the bulk grid's cell — so it is interactive (per-cell fills go
+    # through this POST) and its compatibility computes against tag-tooled classes.
+    "vlm": ("tag",),
     # vlm-judge/embed-propagate emit VERDICTS/FIELD writes, not shapes — an empty tuple is honest
     # ("emits no drawable shape"), and compatibility correctly stays a non-claim.
     "vlm-judge": (),
@@ -179,6 +183,11 @@ class AssistShape(BaseModel):
     height: float
     polygon: list[float] = Field(default_factory=list)
     label: str = ""
+    #: The TEXTUAL answer — a transcription, or an LLM/VLM recipe's cell value (the bulk grid's
+    #: item-level columns land as `tag` shapes whose `text` is the cell). Part of the wire so a
+    #: text-family producer can answer at all: without it the assist plane could only ever carry
+    #: geometry, and every text answer would need a second transport.
+    text: str = ""
     confidence: float = 0.0
     #: None = the backend made no estimate; the row lands with a null and sorts last in the queue.
     uncertainty: float | None = None
@@ -454,6 +463,12 @@ def _mock(body: AssistRequest) -> list[AssistShape]:
                 uncertainty=uncertainty,
             )
         ]
+    if body.producer.startswith("vlm"):
+        # The recipe family: an item-level ANSWER, not geometry — a `tag` shape whose `text` is
+        # the bulk grid's cell value. Deterministic echo of the question so the loop (fill →
+        # correct → validate) is exercisable in-repo, honest about being a mock.
+        answer = f"[{body.producer}] {(body.prompt or '').strip()}"[:80]
+        return [AssistShape(shape_type="tag", x=0.0, y=0.0, width=0.0, height=0.0, text=answer, confidence=0.8, uncertainty=0.2)]
     label = (body.prompt or "region").strip()
     if r is not None:
         return [
