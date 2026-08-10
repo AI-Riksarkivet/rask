@@ -110,6 +110,20 @@ class IngressSettings(BaseSettings):
     #: The local sidecar's HTTP port — daprd's own env var, so a deployment that moves it moves this too.
     dapr_http_port: int = Field(default=3500, alias="DAPR_HTTP_PORT")
 
+    #: The output-binding component names for the two channels, and the ONE place they are spelled on
+    #: this side. A binding this deployment did not render is simply absent from the dispatch table, so
+    #: an opted-in subject is skipped quietly rather than erroring per send.
+    email_binding: str = Field(default="notifications-email", alias="RASK_NOTIFICATIONS_EMAIL_BINDING")
+    slack_binding: str = Field(default="notifications-slack", alias="RASK_NOTIFICATIONS_SLACK_BINDING")
+
+    #: Which channels this DEPLOYMENT can send at all. Empty = the bell only, which is the default and
+    #: the safe posture: a per-user opt-in cannot conjure a channel the estate never enabled.
+    enabled_channels: str = Field(default="", alias="RASK_NOTIFICATIONS_CHANNELS")
+
+    #: Per-send ceiling on a channel egress. Below the sidecar's redelivery window, so a hung provider
+    #: fails this send rather than stacking the next delivery on top of it.
+    channel_timeout_seconds: float = Field(default=10.0, gt=0, alias="RASK_NOTIFICATIONS_CHANNEL_TIMEOUT_SECONDS")
+
     #: The estate's one Dapr switch, read here as well as in `service_kit.config.Settings` because the
     #: subscriptions are wired at app-build time — before any lifespan exists to hand that object over.
     #: The same env var, so the two can disagree only if someone changes it between two reads.

@@ -554,14 +554,38 @@ Per `CLAUDE.md`: a skill claim that contradicts a file is fixed in the same comm
    record, because `sent` discloses that a subject has email or Slack wired, which is a fact about a
    PERSON and not about a run.
 
-   **NOT landed:** the digest reminder (an actor reminder batching a window of rows into one send),
-   and the §7 channel-verify rig (a Mailpit sink in a `.docker` side-stack plus a mock Slack webhook,
-   asserting exactly-one delivery per `(event, subject, channel)` across a FORCED redelivery). The
-   idempotency claim is currently proven by unit tests against a fake ledger, not against a real
-   redelivery — which is the difference between the property being implemented and being observed.
-   Nothing is wired into the fan-out yet either: the plane can send, and nothing calls it.
-6. **S6 — the ops seam.** vmalert rules + synthetic proofs; dashboards row; docs/skills sweep
-   (§8) finalized.
+   **The fan-out hook landed too**, and its ordering is the safety property: a push runs only for a
+   recipient whose row was ACTUALLY WRITTEN — never for a duplicate (that is how a redelivery becomes
+   a second email), never for a hidden row (that would tell someone by email about a run the
+   visibility gate just refused them, taking the one route that leaves the estate), and never for a
+   failed write. A push failure never changes the outcome, because flipping to RETRY would redeliver
+   the whole event to re-attempt an email — re-writing nothing, to retry the one thing a person sees
+   twice. Four tests pin exactly those four cases.
+
+   **NOT landed, and named rather than implied:** the digest reminder (an actor reminder batching a
+   window of rows into one send — a real feature, not a detail, and it needs its own decision about
+   what a digest window means when a FAILED run lands in it), and the §7 channel-verify rig (a Mailpit
+   sink plus a mock Slack webhook, asserting exactly-one delivery per `(event, subject, channel)`
+   across a FORCED redelivery). The idempotency property is proven against a fake ledger and against
+   the actor's own claim-inside-the-turn, but not against a real broker redelivery — the difference
+   between implemented and observed.
+6. ~~**S6 — the ops seam.**~~ **SHIPPED 2026-08-11.** Three vmalert rules, each with a FIRING proof
+   and a QUIET proof, because a rule that only ever fires is one nobody can tell from a broken one:
+   `NotificationsDeadLettering` (a park means the sidecar's whole schedule was exhausted — this
+   notification will never arrive without a replay), `InboxActorTurnQueueBacklog` (single-activation
+   means one subject's calls serialize, so anything slow INSIDE a turn — a channel send above all —
+   backs up that subject's queue; the quiet case proves a draining burst does not page), and
+   `NotificationsReconcilerStalled`, which is the one that catches a plane looking healthy while
+   being useless: a reconciler that is admitted but granted nothing ticks perfectly and reconciles
+   zero, so ABSENCE is the signal. Plus a five-panel Perses dashboard whose lane split is the panel
+   worth reading.
+
+   **The label name was the trap, and synthetic proofs cannot catch it alone.** The instrument
+   attribute is `lance.notifications.lane`, which the OTel→Prometheus translation exports as
+   `lance_notifications_lane` — a selector on `lane` matches nothing. The test harness supplies
+   whatever series the author writes, so a rule and its proof can agree with each other and both be
+   wrong about production. The series in `rules_test.yml` are therefore labelled from the INSTRUMENT.
+   Verified to discriminate: breaking a threshold makes the firing case fail.
 
 ---
 

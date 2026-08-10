@@ -38,7 +38,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt, stop_after_delay, wait_exponential_jitter
 
-from notifications.api.fanout import InboxOpener, WatcherLookup
+from notifications.api.fanout import ChannelPush, InboxOpener, WatcherLookup
 from notifications.api.ingest import DAPR_RETRY, ingest_run_event
 from notifications.api.metrics import Lane
 from notifications.api.visibility import Visibility
@@ -281,6 +281,7 @@ async def reconcile(
     visibility: Visibility,
     open_inbox: InboxOpener,
     watchers: WatcherLookup | None = None,
+    push: ChannelPush | None = None,
     max_pages: int,
     budget_seconds: float,
 ) -> ReconcileResult:

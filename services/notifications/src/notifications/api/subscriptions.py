@@ -34,7 +34,7 @@ from notifications.api.ingest import ingest_run_event
 from notifications.api.metrics import Lane
 from notifications.api.security import VisibilityDep
 from notifications.api.settings import get_ingress_settings
-from notifications.proxies import inbox_for, watchers_of
+from notifications.proxies import channel_push, inbox_for, watchers_of
 from service_kit.governed.dapr_auth import assert_app_token_configured, require_dapr_token
 
 
@@ -68,7 +68,7 @@ def register_subscriptions(app: FastAPI) -> None:
         single message. `body["data"]` is the OpenLineage event — Dapr parses it because the publisher
         sends `datacontenttype=application/json`.
         """
-        return await ingest_run_event(event.get("data"), lane=Lane.BUS, visibility=visibility, open_inbox=inbox_for, watchers=watchers_of)
+        return await ingest_run_event(event.get("data"), lane=Lane.BUS, visibility=visibility, open_inbox=inbox_for, watchers=watchers_of, push=channel_push())
 
     @dapr_app.subscribe(
         pubsub=settings.control_pubsub,

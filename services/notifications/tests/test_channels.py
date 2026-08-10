@@ -1,7 +1,7 @@
 """Channels — the push that leaves the estate, and the ledger that keeps it from leaving twice."""
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI
@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from notifications.api import prefs as prefs_module
 from notifications.api.channels import EMAIL, SLACK, deliver_to_channels, render
+from notifications.api.fanout import InboxOpener
 from notifications.config import get_notifications_settings
 from notifications.models import InboxPointer, NotificationReason
 
@@ -225,3 +226,107 @@ class TestPrefsDoor:
         client.put("/prefs", json={"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}})
 
         assert client.get("/prefs").json()["channels"] == [EMAIL]
+
+
+# --- the fan-out hook: WHEN a channel push happens, which is the whole safety property ------------
+
+
+class _Pushes:
+    def __init__(self, *, fails: bool = False) -> None:
+        self.calls: list[str] = []
+        self.fails = fails
+
+    async def __call__(self, subject: str, payload: dict[str, Any]) -> None:
+        self.calls.append(subject)
+        if self.fails:
+            raise RuntimeError("the binding is down")
+
+
+class _InboxStub:
+    """Returns whichever delivery verdict a case needs, so the hook's ordering can be driven."""
+
+    def __init__(self, delivered: bool = True, *, raises: bool = False) -> None:
+        self.delivered = delivered
+        self.raises = raises
+
+    async def deliver(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        if self.raises:
+            raise RuntimeError("the sidecar is unreachable")
+        return {"delivered": self.delivered}
+
+
+async def _run_fanout(*, delivered: bool = True, raises: bool = False, visible: bool = True, pushes: _Pushes) -> None:
+    from notifications.api.fanout import fan_out
+    from notifications.api.lineage_events import Notifiable
+    from notifications.api.visibility import Visibility
+
+    notice = Notifiable(
+        delivery=_pointer(),
+        author="alice",
+        outputs=frozenset({"silver$pages"}) if visible else frozenset({"forbidden$table"}),
+    )
+
+    class _View(Visibility):
+        # Parameter NAMES match the base, not just the types: they are keyword-callable, so renaming
+        # them is a real override violation rather than a checker technicality.
+        async def sees_all(self, subject: str, names: Any) -> bool:
+            return visible
+
+    await fan_out(
+        notice,
+        audience=["alice"],
+        visibility=_View(client=None, enabled=False),
+        open_inbox=cast(InboxOpener, lambda _s: _InboxStub(delivered, raises=raises)),
+        push=pushes,
+    )
+
+
+class TestFanoutHook:
+    @pytest.mark.asyncio
+    async def test_a_written_row_pushes(self) -> None:
+        pushes = _Pushes()
+        await _run_fanout(pushes=pushes)
+        assert pushes.calls == ["alice"]
+
+    @pytest.mark.asyncio
+    async def test_a_DUPLICATE_row_pushes_nothing(self) -> None:
+        """The row already existed, so a push here is how a redelivery becomes a second email."""
+        pushes = _Pushes()
+        await _run_fanout(delivered=False, pushes=pushes)
+        assert pushes.calls == []
+
+    @pytest.mark.asyncio
+    async def test_a_HIDDEN_row_pushes_nothing(self) -> None:
+        """Pushing for a row the visibility gate just refused would tell someone about a run by
+        email that the inbox deliberately withheld — the leak the gate exists to prevent, taking the
+        one route that leaves the estate."""
+        pushes = _Pushes()
+        await _run_fanout(visible=False, pushes=pushes)
+        assert pushes.calls == []
+
+    @pytest.mark.asyncio
+    async def test_a_FAILED_write_pushes_nothing(self) -> None:
+        pushes = _Pushes()
+        await _run_fanout(raises=True, pushes=pushes)
+        assert pushes.calls == []
+
+    @pytest.mark.asyncio
+    async def test_a_push_failure_does_not_change_the_outcome(self) -> None:
+        """The inbox row is written and the bell is correct whatever the channel plane does. Flipping
+        to RETRY would redeliver the whole event to re-attempt an email — re-writing nothing, to retry
+        the one thing a person would see twice."""
+        from notifications.api.fanout import fan_out
+        from notifications.api.lineage_events import Notifiable
+        from notifications.api.visibility import Visibility
+
+        notice = Notifiable(delivery=_pointer(), author="alice", outputs=frozenset({"silver$pages"}))
+        result = await fan_out(
+            notice,
+            audience=["alice"],
+            visibility=Visibility(client=None, enabled=False),
+            open_inbox=cast(InboxOpener, lambda _s: _InboxStub(True)),
+            push=_Pushes(fails=True),
+        )
+
+        assert result.delivered == 1
+        assert not result.needs_retry

@@ -110,3 +110,75 @@ groups:
             deliveries for 15m without clearing, so this consumer is not draining its subscription and the
             cascade / lineage ingest has silently stopped. A healthy transient error clears in seconds. Check
             the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+  - name: lance-notifications
+    rules:
+      # The notification plane's three ops signals. All three are about the plane going QUIET, which is
+      # the failure mode a notification system cannot detect for itself: nobody reports a notification
+      # they never received, so silence has to be alerted on rather than waited for.
+
+      # 1. The DLQ filling. `dlq.notifications` is this app's OWN parking subject (a per-app DLQ, so a
+      #    park counted here belongs to this plane and not to a neighbour sharing a subTopic). A park
+      #    means the sidecar's whole retry schedule was exhausted, so this is not "one delivery was
+      #    slow" — it is a notification that will now never arrive unless someone replays it.
+      - alert: NotificationsDeadLettering
+        expr: sum(rate(notifications_dlq_parked_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: notifications
+        annotations:
+          summary: "Notifications are dead-lettering — deliveries are being parked, not retried"
+          description: >-
+            The notifications service has parked messages on dlq.notifications for 10m: the sidecar's full
+            retry schedule was exhausted, so these notifications will not arrive without a replay. Check the
+            inbox actor plane (lance-statestore reachable? actors registered?) and OpenFGA.
+            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+      # 2. The INBOX ACTOR TURN QUEUE. Single-activation is the plane's lock, which means every call for
+      #    one subject serializes — so anything slow INSIDE a turn (a channel send, an FGA round-trip)
+      #    backs up that subject's whole queue. `dapr_runtime_actor_pending_actor_calls` is the only
+      #    series that shows it, and it is the reason S5's channel push is a decision worth watching
+      #    rather than assuming: a push inside the turn holds the turn.
+      - alert: InboxActorTurnQueueBacklog
+        expr: max(dapr_runtime_actor_pending_actor_calls{actor_type="InboxActor"}) > 10
+        for: 2m
+        labels:
+          severity: warning
+          service: notifications
+        annotations:
+          summary: "InboxActor turn queue is backing up — one subject's notifications are serializing"
+          description: >-
+            More than 10 calls are queued against a single InboxActor for 2m. Turn-based concurrency means
+            they run one at a time, so something inside a turn is slow — most likely a channel send (SMTP or
+            the Slack webhook) or an unhealthy state store. Notifications for that subject are delayed, not
+            lost. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+      # 3. The RECONCILER GONE QUIET — the one that catches a plane which looks healthy and is not.
+      #    The feed lane covers every producer that emits lineage over HTTP only (ingest, Ray TRAIN,
+      #    external OpenLineage), and its two silent failure modes both leave a Ready pod: the service
+      #    identity is not in lineage's allowlist (every tick 403s, and a 403 is deliberately not
+      #    retried), or it is admitted and granted nothing (every tick runs clean and reconciles zero).
+      #    Either way the cron ticks and the counter never moves. Absence is the signal, so this alerts
+      #    on the RATE being zero rather than on any error.
+      #    THE LABEL NAME IS DERIVED, NOT CHOSEN. The instrument attribute is `lance.notifications.lane`
+      #    (metrics.py), and the OTel→Prometheus translation turns dots into underscores — so the series
+      #    carries `lance_notifications_lane`, not `lane`. A selector on `lane` matches nothing, which
+      #    means the rule would evaluate `sum(rate(<empty>)) == 0` and either never fire or fire always,
+      #    depending on how the backend treats an empty vector. Synthetic proofs cannot catch this class
+      #    on their own: the test supplies whatever series the author writes, so the series in
+      #    rules_test.yml has to be labelled from the instrument rather than from the rule.
+      - alert: NotificationsReconcilerStalled
+        expr: sum(rate(notifications_ingress_events_total{lance_notifications_lane="feed"}[30m])) == 0
+        for: 30m
+        labels:
+          severity: warning
+          service: notifications
+        annotations:
+          summary: "The notifications /events reconciler has processed nothing for 30m"
+          description: >-
+            The feed lane has ingested no events for 30m. On an idle estate that is correct; on a busy one it
+            means the reconciler is running and seeing nothing — check that RASK_LINEAGE_SERVICE_IDENTITY is
+            in lineage's LINEAGE_SERVICE_SUBJECTS allowlist AND that the subject holds grants on the datasets
+            it should see. A reconciler that is admitted but ungranted runs perfectly and reconciles zero.
+            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled

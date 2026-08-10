@@ -27,7 +27,7 @@ changes.
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Final, Protocol
+from typing import Any, Final, Protocol
 
 from notifications.models import InboxPointer
 
@@ -139,3 +139,43 @@ async def deliver_to_channels(
             continue
         sent.append(channel)
     return sent
+
+
+def make_push(table: ChannelTable, *, open_inbox: Callable[[str], Any]) -> Callable[[str, dict[str, Any]], Awaitable[None]]:
+    """The concrete `ChannelPush`: read a subject's prefs, push the pointer, claim as you go.
+
+    Reads prefs PER DELIVERY rather than caching them, and that is the honest trade: a cache would
+    keep mailing someone for its TTL after they turned email off, and "I unsubscribed and it kept
+    sending" is the one channel failure that costs trust rather than time. The read is one actor call
+    against the small partition, on a path that has already written a row.
+
+    A subject who opted into nothing costs exactly one call and sends nothing — which is the common
+    case, so the early return matters.
+    """
+
+    async def push(subject: str, payload: dict[str, Any]) -> None:
+        inbox = open_inbox(subject)
+        prefs = await inbox.get_prefs()
+        channels = list(prefs.get("channels") or [])
+        if not channels:
+            return
+        pointer = InboxPointer.model_validate(payload)
+
+        async def claim(notification_id: str, channel: str) -> bool:
+            result = await inbox.claim_channel({"notification_id": notification_id, "channel": channel})
+            return bool(result.get("claimed"))
+
+        sent = await deliver_to_channels(
+            pointer,
+            channels=channels,
+            destinations=dict(prefs.get("destinations") or {}),
+            table=table,
+            mark_sent=claim,
+        )
+        if sent:
+            # Counted by CHANNEL and OUTCOME only — never by subject. The subject is per-user data and
+            # belongs on a span or a log line, never on a metric label, where it would make the series
+            # cardinality the size of the user base.
+            log.info("channel_pushed", extra={"channels": sent})
+
+    return push

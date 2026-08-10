@@ -15,6 +15,7 @@ Every call into an inbox goes through :func:`inbox_for`, and every inbox id thro
 
 import logging
 from collections.abc import Awaitable, Callable
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, cast
 
 from notifications.errors import InboxUnreadable
@@ -159,3 +160,36 @@ async def watchers_of(project_id: str) -> list[str]:
         logger.exception("watch_index_unreadable", extra={"project_id": project_id})
         return []
     return [str(s) for s in (result.get("subjects") or [])]
+
+
+@lru_cache(maxsize=1)
+def channel_push() -> "Callable[[str, dict[str, Any]], Awaitable[None]] | None":
+    """This deployment's channel pusher, or `None` when no channel is enabled.
+
+    `None` rather than an empty table, because the two say different things to the fan-out: an empty
+    table still costs a prefs read per delivery to discover it can send nothing, while `None` skips
+    the hop entirely. On an estate with channels off — the default — that is the whole cost removed
+    rather than merely made cheap.
+
+    The Dapr client is built lazily and cached for the process: `DaprClient()` opens a channel, so
+    constructing it at import would make merely importing this module require a sidecar.
+    """
+    from notifications.api.channels import EMAIL, SLACK, ChannelTable, make_binding_sender, make_push
+    from notifications.api.settings import get_ingress_settings
+
+    settings = get_ingress_settings()
+    enabled = {name.strip() for name in settings.enabled_channels.split(",") if name.strip()}
+    if not enabled:
+        return None
+
+    from dapr.aio.clients import DaprClient
+
+    client = DaprClient()
+    table: ChannelTable = {}
+    if EMAIL in enabled:
+        table[EMAIL] = make_binding_sender(client, binding=settings.email_binding, operation="create", timeout_seconds=settings.channel_timeout_seconds)
+    if SLACK in enabled:
+        table[SLACK] = make_binding_sender(client, binding=settings.slack_binding, operation="post", timeout_seconds=settings.channel_timeout_seconds)
+    if not table:
+        return None
+    return make_push(table, open_inbox=inbox_for)

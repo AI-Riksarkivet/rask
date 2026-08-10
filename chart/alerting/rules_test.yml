@@ -127,3 +127,92 @@ tests:
       - eval_time: 16m
         alertname: DaprConsumerWedge
         exp_alerts: []
+
+  # ── the notification plane (S6) ────────────────────────────────────────────────────────────────
+  # Each of the three rules gets a FIRING case and a QUIET case. The quiet cases are the ones worth
+  # having: a rule that only ever fires is a rule nobody can distinguish from a broken one.
+
+  # 10. Sustained dead-lettering → ALERT. A park means the sidecar's whole retry schedule was
+  #     exhausted, so this is a notification that will never arrive without a replay.
+  - interval: 1m
+    input_series:
+      - series: 'notifications_dlq_parked_total{app="notifications"}'
+        values: "0+1x20" # one park per minute, continuously
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NotificationsDeadLettering
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: notifications
+            exp_annotations:
+              summary: "Notifications are dead-lettering — deliveries are being parked, not retried"
+              description: "The notifications service has parked messages on dlq.notifications for 10m: the sidecar's full retry schedule was exhausted, so these notifications will not arrive without a replay. Check the inbox actor plane (lance-statestore reachable? actors registered?) and OpenFGA. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+
+  # 11. A plane that has NEVER parked anything → NO alert. The counter sits flat at zero, which is the
+  #     ordinary state and must never page.
+  - interval: 1m
+    input_series:
+      - series: 'notifications_dlq_parked_total{app="notifications"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NotificationsDeadLettering
+        exp_alerts: []
+
+  # 12. A turn queue that keeps growing → ALERT. Something inside the turn is slow, and every call for
+  #     that subject is behind it.
+  - interval: 1m
+    input_series:
+      - series: 'dapr_runtime_actor_pending_actor_calls{actor_type="InboxActor",app_id="notifications"}'
+        values: "0 4 9 12 15 18 20 22 24 26"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: InboxActorTurnQueueBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: notifications
+            exp_annotations:
+              summary: "InboxActor turn queue is backing up — one subject's notifications are serializing"
+              description: "More than 10 calls are queued against a single InboxActor for 2m. Turn-based concurrency means they run one at a time, so something inside a turn is slow — most likely a channel send (SMTP or the Slack webhook) or an unhealthy state store. Notifications for that subject are delayed, not lost. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+
+  # 13. A BURST that drains → NO alert. A busy inbox briefly queues; the `for: 2m` is what separates a
+  #     burst from a backlog, and this is the case that would false-page without it.
+  - interval: 1m
+    input_series:
+      - series: 'dapr_runtime_actor_pending_actor_calls{actor_type="InboxActor",app_id="notifications"}'
+        values: "0 18 22 3 0 0 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: InboxActorTurnQueueBacklog
+        exp_alerts: []
+
+  # 14. The feed lane processing NOTHING for 30m → ALERT. This is the silent one: an ungranted or
+  #     unadmitted reconciler ticks perfectly and reconciles zero, with a Ready pod throughout.
+  - interval: 1m
+    input_series:
+      - series: 'notifications_ingress_events_total{lance_notifications_lane="feed",app="notifications"}'
+        values: "5x45" # flat — the counter never moves, so rate() is exactly zero
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: NotificationsReconcilerStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: notifications
+            exp_annotations:
+              summary: "The notifications /events reconciler has processed nothing for 30m"
+              description: "The feed lane has ingested no events for 30m. On an idle estate that is correct; on a busy one it means the reconciler is running and seeing nothing — check that RASK_LINEAGE_SERVICE_IDENTITY is in lineage's LINEAGE_SERVICE_SUBJECTS allowlist AND that the subject holds grants on the datasets it should see. A reconciler that is admitted but ungranted runs perfectly and reconciles zero. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+
+  # 15. A reconciler that IS reconciling → NO alert, even at a slow trickle. One event every ten
+  #     minutes is enough to prove the lane is alive, and the rule must not page on a quiet estate that
+  #     is nonetheless working.
+  - interval: 1m
+    input_series:
+      - series: 'notifications_ingress_events_total{lance_notifications_lane="feed",app="notifications"}'
+        values: "0+1x45"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: NotificationsReconcilerStalled
+        exp_alerts: []

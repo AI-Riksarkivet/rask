@@ -63,6 +63,11 @@ class FanoutResult(BaseModel):
 #: stays testable without a sidecar — the same seam `InboxOpener` already is.
 type WatcherLookup = Callable[[str], Awaitable[Sequence[str]]]
 
+#: How a caller pushes one delivered pointer to a subject's opted-in channels. A CALLABLE for the same
+#: reason `InboxOpener` is one: the fan-out stays testable with no Dapr client and no bindings, and a
+#: deployment with channels off passes `None` rather than a table of senders that refuse.
+type ChannelPush = Callable[[str, dict[str, object]], Awaitable[None]]
+
 
 async def audience_for(notice: Notifiable, *, watchers: WatcherLookup | None = None) -> tuple[str, ...]:
     """Who is told about this run: its verified author (v1) UNION the project's watchers (v2).
@@ -93,8 +98,15 @@ async def fan_out(
     audience: Sequence[str],
     visibility: Visibility,
     open_inbox: InboxOpener,
+    push: ChannelPush | None = None,
 ) -> FanoutResult:
-    """Write one pointer into each visible recipient's inbox; count everything else."""
+    """Write one pointer into each visible recipient's inbox; count everything else.
+
+    `push` runs only for a recipient whose row was ACTUALLY WRITTEN — never for a duplicate, a hidden
+    row or a failure. That ordering is the design: a channel push announces an inbox row, so pushing
+    for a row that already existed is how a redelivery becomes a second email, and pushing for a
+    hidden one would tell someone about a run the visibility gate just refused them.
+    """
     counts = dict.fromkeys((Outcome.DELIVERED, Outcome.DUPLICATE, Outcome.HIDDEN, Outcome.RETRIED), 0)
 
     # Minted PER RECIPIENT, because the reason is a per-recipient fact: the same run reaches its
@@ -109,9 +121,19 @@ async def fan_out(
         span.set_attribute("lance.notifications.recipients", len(audience))
         span.set_attribute("lance.notifications.notification_id", notice.delivery.notification_id)
         for subject in audience:
-            outcome = await _deliver_one(subject, notice=notice, payload=payload_for(subject), visibility=visibility, open_inbox=open_inbox)
+            payload = payload_for(subject)
+            outcome = await _deliver_one(subject, notice=notice, payload=payload, visibility=visibility, open_inbox=open_inbox)
             counts[outcome] += 1
             record_recipient(outcome)
+            if outcome is Outcome.DELIVERED and push is not None:
+                # Best-effort, and its faults never change the OUTCOME: the inbox row is written and
+                # the bell is correct whatever the channel plane does. A push failure that flipped the
+                # result to RETRY would redeliver the whole event to re-attempt an email — re-writing
+                # nothing (the row is idempotent) to retry the one thing a person would see twice.
+                try:
+                    await push(subject, payload)
+                except Exception:
+                    log.exception("channel_push_failed", extra={"subject": subject})
     return FanoutResult(
         delivered=counts[Outcome.DELIVERED],
         duplicate=counts[Outcome.DUPLICATE],
