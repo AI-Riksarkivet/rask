@@ -134,7 +134,12 @@ def _enumerate(ctx: WorkflowActivityContext, root: Path, uri: str) -> list[dict[
         },
         "dataset_uri": uri,
     }
-    return enumerate_chunks(ctx, payload)
+    chunks = enumerate_chunks(ctx, payload)
+    # `enumerate_chunks` may return a compact REFUSAL dict instead of chunks (the unit ceiling and
+    # the gRPC dispatch budget). Every test through this helper is well under both, so a dict here
+    # means the helper's premise broke — asserted rather than cast, so it says which.
+    assert isinstance(chunks, list), f"enumeration was refused: {chunks}"
+    return chunks
 
 
 def test_a_rerun_over_an_UNCHANGED_source_enumerates_NOTHING(activity_ctx: WorkflowActivityContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

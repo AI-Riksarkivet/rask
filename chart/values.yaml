@@ -173,6 +173,22 @@ services:
       # numbers can be compared before a deploy rather than discovered to disagree at 3am;
       # tests/unit/test_gates_a15_a18.py asserts the relation, not either constant.
       RASK_INGEST_MAX_RUN_HOURS: "24"
+      # The UNIT ceiling, and the reason it is a DEPLOYED value rather than a code default. Zero is
+      # unbounded, deliberately, because this plane advertises million-unit harvests and a live code
+      # default would kill the legitimate long run — but unset in the chart meant the CLUSTER ran
+      # unbounded, and the two ceilings that bound a run were half-deployed.
+      #
+      # It is not only a fan-out bound. `enumerate_chunks` returns every key and token in the run as
+      # ONE activity result, and the Dapr workflow worker's gRPC channel keeps grpc's 4 MiB default
+      # (it merges only DEFAULT_GRPC_KEEPALIVE_OPTIONS) — measured at ~83 bytes per serialized
+      # key+token, that wedges somewhere near 25,000 units. The activity refuses before building a
+      # payload it cannot deliver, and this is the number it refuses against; without it the only
+      # remaining guard is the transport budget, which reports a byte count rather than intent.
+      #
+      # 250,000 is well under the transport wedge and well above any harvest run here so far. Raise
+      # it for a genuinely larger source only alongside range-based chunking — the descriptors, not
+      # the ceiling, are what the 4 MiB limit actually binds.
+      RASK_INGEST_MAX_UNITS: "250000"
   compute:
     module: "compute:app"
     port: 8804

@@ -82,6 +82,7 @@ def test_enumerate_produces_chunks_not_units(activity_ctx: WorkflowActivityConte
 
     chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": _empty_bronze(tmp_path / "bronze.lance")})
 
+    assert isinstance(chunks, list), f"enumeration was refused: {chunks}"
     assert len(chunks) == 1, "5 units must be ONE chunk, not five activity results"
     parsed = ChunkSpec.model_validate(chunks[0])
     assert len(parsed.keys) == 5
@@ -161,6 +162,7 @@ async def test_a4_a7_the_full_chain_lands_rows_and_commits_once(activity_ctx: Wo
     monkeypatch.setenv("RASK_INGEST_ACTIVE_DATASET", uri)
 
     chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": _empty_bronze(tmp_path / "bronze.lance")})
+    assert isinstance(chunks, list), f"enumeration was refused: {chunks}"
     chunk = ChunkSpec.model_validate(chunks[0])
     assert await publish_chunk_units(chunk) == 4
 

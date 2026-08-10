@@ -51,7 +51,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import dapr.ext.workflow as wf
 from pydantic import BaseModel, Field
@@ -390,7 +390,10 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
 
         chunks: list[dict[str, Any]] = yield ctx.call_activity(
             enumerate_chunks,
-            input={"spec": spec.model_dump(), "dataset_uri": target.location},
+            # The ceiling travels WITH the request. It is resolved (`resolve_limits`, above) before
+            # this call precisely so the activity can refuse before building a payload the transport
+            # cannot carry — see `enumerate_chunks` for why the check below cannot do it alone.
+            input={"spec": spec.model_dump(), "dataset_uri": target.location, "max_units": limits.max_units},
             retry_policy=ACTIVITY_RETRY,
         )
         # The enumerated total, published as CUSTOM STATUS so it is readable while the run is still
@@ -400,6 +403,23 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
         # a pod death like every other run fact and needs no second writable copy.
         units_total = sum(len(chunk.get("keys") or ()) for chunk in chunks)
         ctx.set_custom_status(json.dumps({"units_total": units_total, "chunks": len(chunks)}))
+
+        # THE REFUSAL enumerate_chunks may return instead of chunks — the unit ceiling and the
+        # dispatch budget, both decided where the payload is built because neither can be decided
+        # after it has failed to arrive. Rendered through the SAME returned-FAILED path as the ceiling
+        # below, so a refusal reads identically to an operator however it was reached.
+        if isinstance(chunks, dict):
+            reason = str(chunks.get(REFUSAL_KEY) or "enumeration was refused")
+            terminal_emitted = True
+            yield ctx.call_activity(
+                emit_terminal,
+                input={
+                    "spec": spec.model_dump(),
+                    "outcome": RunOutcome(status="FAILED", errors={"run": reason}, errors_total=1).model_dump(),
+                },
+                retry_policy=ACTIVITY_RETRY,
+            )
+            return RunOutcome(status="FAILED", errors={"run": reason}, errors_total=1).model_dump()
 
         # THE UNIT CEILING — refused HERE, before a single task is published.
         #
@@ -647,7 +667,56 @@ def ensure_dataset(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dic
     return DatasetHandle(location=location, read_version=read_version).model_dump()
 
 
-def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
+#: grpc's own default `max_receive_message_length`, in bytes. NOT ours to choose: `WorkflowRuntime`
+#: exposes no `channel_options`, and `dapr.ext.workflow.internal.shared.get_grpc_channel` merges only
+#: `DEFAULT_GRPC_KEEPALIVE_OPTIONS` — four keepalive tuples, no size keys — so this is what an
+#: activity result is measured against on the way back to the sidecar.
+GRPC_MAX_MESSAGE_BYTES: int = 4 * 1024 * 1024
+
+#: What one `enumerate_chunks` result may occupy. Deliberately well under the ceiling rather than at
+#: it: the measured payload is the JSON this activity builds, while what grpc weighs is that plus the
+#: durabletask envelope around it, and a budget set AT the limit would refuse nothing until the
+#: envelope pushed it over — which is the failure this exists to make impossible.
+CHUNK_DISPATCH_BUDGET_BYTES: int = 3 * 1024 * 1024
+
+#: The key a refusal is carried under. A dict, where the success path returns a list, so the body can
+#: tell them apart structurally rather than by inspecting contents.
+REFUSAL_KEY: Final[str] = "__refused__"
+
+
+def _refuse_oversized_dispatch(chunks: list[dict[str, Any]], *, units: int, max_units: int) -> dict[str, Any] | None:
+    """The compact refusal, or ``None`` to proceed. See :func:`enumerate_chunks` for why it is here.
+
+    Two ceilings, one refusal, and the ORDER matters. `max_units` is the operator's declared intent
+    and is reported as such; the dispatch budget is a property of the transport and is reported as
+    such. Checking the declared one first means a deployment that set a sane ceiling gets the message
+    it configured, not a message about gRPC.
+
+    The size is MEASURED rather than estimated from a per-key constant: keys are source-supplied and
+    an estimate calibrated on one source is wrong for the next. `json.dumps` here is the same
+    serialization the SDK performs on the way out (`shared.to_json`), so this weighs the real thing.
+    """
+    if max_units > 0 and units > max_units:
+        return {
+            REFUSAL_KEY: (
+                f"source enumerated {units} units, over the {max_units} ceiling (RASK_INGEST_MAX_UNITS). "
+                f"Narrow the source — an empty s3-prefix lists the whole bucket — or raise the ceiling for this deployment."
+            )
+        }
+    size = len(json.dumps(chunks).encode())
+    if size > CHUNK_DISPATCH_BUDGET_BYTES:
+        return {
+            REFUSAL_KEY: (
+                f"source enumerated {units} units, whose chunk descriptors serialize to {size} bytes — over the "
+                f"{CHUNK_DISPATCH_BUDGET_BYTES}-byte budget this activity's result must fit in (grpc's "
+                f"{GRPC_MAX_MESSAGE_BYTES}-byte default, which the Dapr workflow worker does not raise). "
+                f"Set RASK_INGEST_MAX_UNITS to bound the run, or narrow the source."
+            )
+        }
+    return None
+
+
+def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
     """Walk the source adapter and slice it into chunk descriptors.
 
     An activity, not workflow code, because it does network I/O — and because enumeration itself must
@@ -658,6 +727,24 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
     Returns CHUNKS, never units. One child workflow per CHUNK_SIZE keys returns one compact result;
     a million activity results would melt the state store, which is the whole reason chunking exists
     and the reason this plane needs no separate ledger.
+
+    **THE DISPATCH CEILING, and why the run ceiling could not enforce it.** This one activity result
+    carries EVERY key and token in the run, and an activity result crosses the sidecar as one gRPC
+    message. `dapr-ext-workflow` builds its worker channel with `DEFAULT_GRPC_KEEPALIVE_OPTIONS` and
+    nothing else (`internal/shared.py`), so grpc's 4 MiB default `max_receive_message_length` stands —
+    measured at ~83 bytes per serialized key+token, that is a hard wedge somewhere near 25,000 units,
+    against a plane whose own docstrings advertise million-unit harvests.
+
+    `max_units` was supposed to stop that and CANNOT: it is checked in the workflow body, which only
+    runs once this result has been DELIVERED. The oversized message fails on the way back, so the
+    guard sits behind the failure it guards against — and the failure it becomes is a
+    `RESOURCE_EXHAUSTED` from inside the SDK, on a workflow that then retries the listing four times
+    and wedges, with nothing naming a knob.
+
+    So the ceiling is enforced HERE, before the payload exists, and the policy decision still belongs
+    to the workflow: this returns a compact REFUSAL marker instead of the chunks, and the body renders
+    it through the same returned-FAILED path `max_units` already uses. A refusal is one small dict, so
+    it always fits.
     """
     from ingest.identity import unit_id
     from ingest.sources import SourceSpec, build_source, iter_versioned_unit_keys
@@ -737,7 +824,8 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
                 options=spec.options,
             ).model_dump()
         )
-    return chunks
+    refusal = _refuse_oversized_dispatch(chunks, units=len(pairs), max_units=int(payload.get("max_units") or 0))
+    return refusal if refusal is not None else chunks
 
 
 def drain_chunk(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
