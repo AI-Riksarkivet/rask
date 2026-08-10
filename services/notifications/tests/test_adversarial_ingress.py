@@ -28,7 +28,7 @@ from notifications.api import metrics as metrics_module
 from notifications.api import subscriptions as subscriptions_module
 from notifications.api.ingest import DAPR_DROP, DAPR_RETRY, DAPR_SUCCESS, ingest_run_event
 from notifications.api.metrics import Lane
-from notifications.api.reconciler import LineageCursor, LineageCursorStore, LineageFeedClient, reconcile
+from notifications.api.reconciler import LineageCursor, LineageCursorStore, LineageFeedBudgetExceeded, LineageFeedClient, reconcile
 from notifications.api.settings import get_ingress_settings
 from notifications.api.visibility import Visibility
 from notifications.config import get_notifications_settings
@@ -488,7 +488,7 @@ async def test_a_lineage_that_answers_slowly_fails_this_tick_instead_of_stacking
     respx.get(f"{LINEAGE}/events").mock(side_effect=_slow)
     memory = _MemoryCursor(1)
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(LineageFeedBudgetExceeded):
         await reconcile(
             client=_feed_client(),
             store=cast(LineageCursorStore, memory),

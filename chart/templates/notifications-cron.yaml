@@ -1,0 +1,29 @@
+{{- /* The notification plane's SECOND ingress (open_notifications.md §2/S2). The bus subscription
+     alone is provably incomplete: the ingest service emits lineage over HTTP only and refuses the
+     topic, as do Ray TRAIN and every external OpenLineage producer — those lanes reach lineage's
+     durable feed and never `lineage.events.v1`. This cron ticks the notifications service's
+     sidecar-only reconcile route (POST /<bindingName>, guarded by require_dapr_token), which walks
+     `GET /events` down from a persisted cursor and closes the HTTP-only lanes at <= one tick.
+
+     It doubles as the catch-up path after a notifications outage, which is why the schedule is
+     component config here rather than a scheduler thread in the service: changing the cadence is a
+     values edit, not a redeploy of application code.
+
+     Mirrors the maintenance and compute crons exactly: schedule in the Component, scoped to the one
+     consuming app-id, gated on dapr.enabled (no control plane, no Component CRD, and the release
+     would fail to apply). The service still renders without it — its reconcile route simply never
+     fires, and the bus lane keeps working. */}}
+{{- if and .Values.dapr.enabled .Values.services.notifications }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.services.notifications.reconcileBindingName | default "notifications-reconcile-cron" }}
+  labels: {{- include "rask.componentLabels" (list . "notifications") | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.services.notifications.reconcileSchedule | default "@every 30s" | quote }} }
+scopes:
+  - notifications
+{{- end }}

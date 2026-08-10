@@ -61,6 +61,16 @@ data:
   # and `notifications-durable` is free on the DLQ stream because NATS scopes consumer names per stream.
   RASK_NOTIFICATIONS_DLQ_TOPIC: "dlq.notifications"
   {{- end }}
+  # The reconciler's origin — lineage's OWN Service, never the gateway. The feed poll authenticates at
+  # lineage's SERVICE door, and the gateway is a public front door whose invocations that door refuses
+  # by construction (`dapr_auth.is_public_caller`), so pointing this at the gateway would produce a 403
+  # that reads like a missing grant. Omit it and the app falls back to 127.0.0.1:8000 — its own pod —
+  # where the walk finds nothing and the reconciler runs cleanly forever while reconciling nothing.
+  RASK_NOTIFICATIONS_LINEAGE_URL: {{ printf "http://%s-lineage:%v" (include "lance.fullname" .) .Values.services.lineage.port | quote }}
+  # The route the cron Component is delivered to. Rendered from the SAME values key that names the
+  # Component (`notifications-cron.yaml`), because a binding whose component name and route path
+  # disagree is a cron that fires into a 404 on every tick while both halves look right in isolation.
+  RASK_NOTIFICATIONS_BINDING_NAME: {{ .Values.services.notifications.reconcileBindingName | default "notifications-reconcile-cron" | quote }}
   {{- end }}
   # lance-plane gateway upstreams (lance-ns-merge.md P1 gateway fold + P4): the fleet gateway carries
   # /api/catalog, /api/lineage, /api/produce, /api/train and the /api/explorer/* namespace. Service names

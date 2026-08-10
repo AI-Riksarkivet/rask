@@ -229,6 +229,29 @@ services:
     # movers, maintenance) templated elsewhere, each rendering APP_API_TOKEN explicitly. In fleet.yaml
     # the token had only ever been reachable through `lanceWriter`, which this service is not.
     daprIngest: true
+    # The SECOND ingress (open_notifications.md §2). The bus carries run lifecycle; the ingest service,
+    # Ray TRAIN and every external OpenLineage producer emit over HTTP only and never reach the topic,
+    # so a subscribe-and-stop plane silently never notifies a whole class of run. This cron ticks the
+    # sidecar-only reconcile route, which walks lineage's durable `GET /events` down from a persisted
+    # cursor. It is also the catch-up path after a notifications outage.
+    #
+    # One key, two renders: `notifications-cron.yaml` names the Component from it and `configmap.yaml`
+    # renders RASK_NOTIFICATIONS_BINDING_NAME from it. Dapr delivers an input binding to the route
+    # matching the COMPONENT NAME, so a second literal on the app side is a cron that ticks into a 404.
+    reconcileBindingName: notifications-reconcile-cron
+    # Must stay ABOVE RASK_NOTIFICATIONS_RECONCILE_BUDGET_SECONDS (app default 25 s), or a slow lineage
+    # lets ticks stack on each other instead of the next one finding the same work still to do.
+    reconcileSchedule: "@every 30s"
+    env:
+      # This service DECLARES its identity here, and that single declaration is what admits it to
+      # lineage's service door: `services.yaml` builds LINEAGE_SERVICE_SUBJECTS by scanning every
+      # service's own `env.RASK_LINEAGE_SERVICE_IDENTITY`, and `IngressSettings.service_identity`
+      # reads the same var for the claim it sends. Remove it and the reconciler 401s at every tick.
+      #
+      # Admission is only half of it: the feed is GOVERNED, so this subject sees exactly the rows its
+      # grants allow. A deployment that admits it and grants it nothing gets a reconciler that runs
+      # cleanly and reconciles nothing — the quiet failure this whole lane exists to prevent.
+      RASK_LINEAGE_SERVICE_IDENTITY: notifications
     waitFor: []
   gateway:
     module: "gateway:app"

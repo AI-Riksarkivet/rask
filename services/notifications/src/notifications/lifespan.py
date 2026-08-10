@@ -15,9 +15,12 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 
+import httpx
 from dapr.ext.fastapi import DaprActor
 from fastapi import FastAPI, Request
 
+from notifications.api.reconciler import LineageCursorStore, LineageFeedClient
+from notifications.api.settings import get_ingress_settings
 from notifications.config import get_notifications_settings
 from notifications.inbox_actor import InboxActor
 from service_kit.config import Settings
@@ -104,6 +107,27 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
             except Exception:
                 log.exception("notifications: FGA client failed to build — the inbox will 503")
 
+        # The reconciler's egress, built ONCE. One `AsyncClient` serves both halves — lineage's feed
+        # over the network and the sidecar's state API on localhost — because a pool is a property of
+        # the process, and the cron route's alternative would be minting one per tick. Neither client
+        # performs I/O at construction, so there is nothing here that can fail; what can fail is the
+        # first tick, which answers 503 with the reason rather than starting a cursor-less walk.
+        ingress = get_ingress_settings()
+        app.state.http = httpx.AsyncClient()
+        app.state.lineage_feed = LineageFeedClient(
+            client=app.state.http,
+            base_url=ingress.lineage_url,
+            identity=ingress.service_identity,
+            token=ingress.app_api_token,
+            timeout_seconds=ingress.feed_timeout_seconds,
+            page_limit=ingress.feed_page_limit,
+        )
+        app.state.lineage_cursor = LineageCursorStore(
+            client=app.state.http,
+            store_name=ingress.state_store,
+            dapr_http_port=ingress.dapr_http_port,
+        )
+
         actor_ext: DaprActor | None = getattr(app.state, "actor_ext", None)
         if actor_ext is not None:
             try:
@@ -120,6 +144,13 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
             yield
         finally:
             app.state.shutting_down = True
+            # Reverse construction order: the httpx pool was built AFTER the FGA client, so it closes
+            # first. Suppressed for the same reason as the FGA close below — a shutdown path that
+            # raises hides whatever came after it.
+            http_client = getattr(app.state, "http", None)
+            if http_client is not None:
+                with suppress(Exception):
+                    await http_client.aclose()
             # The client the lifespan built is the lifespan's to release — the same shape `lineage` and
             # `catalog` already carry. Without it the SDK's aiohttp session is collected unclosed, so a
             # rolling restart leaves one half-open connection per replica on OpenFGA until its own idle

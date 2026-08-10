@@ -65,13 +65,42 @@ class LineageCursorUnreadable(ServiceUnavailableError):
     """
 
 
+class LineageFeedBudgetExceeded(ServiceUnavailableError):
+    """One pass outran its own wall-clock budget.
+
+    Distinct from a bare `TimeoutError` on purpose, and the distinction was earned: driving the live
+    service found that `dapr.clients.http.client` calls a BLOCKING `DaprHealth.wait_for_sidecar()`
+    when the first actor proxy is built, which raises `TimeoutError` after 60 s of its own. Catching
+    the bare type reported a missing sidecar as "the pass exceeded its 25 s budget" — the wrong
+    diagnosis, pointing at lineage for a fault in the delivery plane.
+    """
+
+
 class LineageCursor(BaseModel):
-    """The reconciler's high-water mark: every feed row at or below `seq` has been handled."""
+    """The reconciler's high-water mark: every feed row at or below `seq` has been handled.
+
+    `resume_from` and `pending_high` exist because the walk runs DOWNWARD and the mark is a LOW-water
+    one, which makes partial progress otherwise unrepresentable. A pass that handles the newest 3 000
+    rows and is then cut off cannot raise `seq` — the rows between `seq` and where it stopped are
+    still unhandled — so without somewhere to record "I got this far coming down", the next tick
+    starts at the newest row again, dies at the same depth, and the backlog is never drained. That is
+    a permanent stall rather than a slow catch-up, and it is exactly the state an outage produces.
+
+    So an interrupted walk parks two facts: `resume_from`, the feed cursor the next tick continues
+    from instead of starting at the top, and `pending_high`, the newest row that walk had reached —
+    which becomes the new `seq` only when the walk finally meets the old one. Both are `None` in the
+    settled state, which is every cursor S1 ever wrote (hence the defaults, and hence a stored record
+    from before this field existed still validates).
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     seq: int = Field(ge=0)
     updated_at: datetime
+    #: Where an interrupted downward walk stopped. `None` = the last pass completed.
+    resume_from: int | None = Field(default=None, ge=0)
+    #: The newest row the interrupted walk had reached; becomes `seq` when it completes.
+    pending_high: int | None = Field(default=None, ge=0)
 
 
 class FeedRecord(BaseModel):
@@ -106,6 +135,9 @@ class ReconcileResult(BaseModel):
     primed: bool = False
     #: The walk ran out of pages before reaching the cursor — rows were skipped. See `feed_max_pages`.
     truncated: bool = False
+    #: A pass was already in flight, so this tick did nothing. Reported rather than silent: a lane
+    #: that is permanently skipping is a lane whose budget no longer fits its schedule.
+    skipped: bool = False
 
 
 def _is_transient(exc: BaseException) -> bool:
@@ -222,9 +254,15 @@ class LineageCursorStore:
             log.exception("lineage_cursor_unreadable")
             raise LineageCursorUnreadable("the stored lineage feed cursor no longer fits its schema") from exc
 
-    async def set(self, seq: int) -> None:
-        """Move the high-water mark. Last write wins — one writer, no contender to race."""
-        cursor = LineageCursor(seq=seq, updated_at=datetime.now(UTC))
+    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None) -> None:
+        """Move the mark. Last write wins — one writer, no contender to race.
+
+        Called with `resume_from`/`pending_high` to PARK an interrupted walk (the mark itself does not
+        move, because the rows below where it stopped are still unhandled), and without them to settle
+        a completed one — which also clears any parked state, so a walk that finishes leaves nothing
+        behind for the next tick to resume from.
+        """
+        cursor = LineageCursor(seq=seq, updated_at=datetime.now(UTC), resume_from=resume_from, pending_high=pending_high)
         try:
             response = await self._client.post(
                 self._base,
@@ -265,40 +303,72 @@ async def reconcile(
     """
     scanned = 0
     retried = 0
-    after: int | None = None
     truncated = True
-    async with asyncio.timeout(budget_seconds):
-        stored = await store.get()
-        if stored is None:
-            return await _prime(client, store)
-        high = stored.seq
-        for _ in range(max_pages):
-            page = await client.page(after=after)
-            fresh = [record for record in page.events if record.seq > stored.seq]
-            for record in fresh:
-                scanned += 1
-                high = max(high, record.seq)
-                status = await ingest_run_event(
-                    record.event,
-                    lane=Lane.FEED,
-                    visibility=visibility,
-                    open_inbox=open_inbox,
-                    event_seq=record.seq,
-                )
-                if status == DAPR_RETRY:
-                    retried += 1
-            if len(fresh) < len(page.events) or page.next_cursor is None:
-                # The cursor came into view, or the feed floor did — either way the walk is complete.
-                truncated = False
-                break
-            after = page.next_cursor
+    stored = None
+    after: int | None = None
+    high = 0
+    budget = asyncio.timeout(budget_seconds)
+    try:
+        async with budget:
+            stored = await store.get()
+            if stored is None:
+                return await _prime(client, store)
+            # Continue an interrupted walk from where it stopped rather than from the newest row.
+            # `pending_high` carries that walk's ceiling, so the mark it eventually settles on is the
+            # top of the WHOLE multi-tick walk, not the top of whichever tick happened to finish it.
+            after = stored.resume_from
+            high = stored.pending_high if stored.pending_high is not None else stored.seq
+            for _ in range(max_pages):
+                page = await client.page(after=after)
+                fresh = [record for record in page.events if record.seq > stored.seq]
+                for record in fresh:
+                    scanned += 1
+                    high = max(high, record.seq)
+                    status = await ingest_run_event(
+                        record.event,
+                        lane=Lane.FEED,
+                        visibility=visibility,
+                        open_inbox=open_inbox,
+                        event_seq=record.seq,
+                    )
+                    if status == DAPR_RETRY:
+                        retried += 1
+                if len(fresh) < len(page.events) or page.next_cursor is None:
+                    # The cursor came into view, or the feed floor did — either way the walk is complete.
+                    truncated = False
+                    break
+                after = page.next_cursor
+    except TimeoutError as exc:
+        if not budget.expired():
+            # Somebody else's TimeoutError — the Dapr SDK's blocking sidecar health check is the one
+            # that actually occurs. It is not a statement about the feed, so it must not be parked as
+            # one and must not be renamed into a budget overrun; it propagates with its own traceback.
+            raise
+        # Park the descent so the next tick resumes instead of restarting. Without this the walk is
+        # all-or-nothing: a backlog deeper than one budget re-walks the same prefix forever, times out
+        # at the same depth, and the rows below it are never delivered — a permanent stall wearing the
+        # costume of a transient one.
+        #
+        # Only when nothing asked for a RETRY: parking past a row that failed would skip it, and the
+        # whole reason the mark is held back on retry is that this lane must not step over a failure.
+        # `after is not None` means at least one full page was handled, so there is progress to keep;
+        # a budget too small for a SINGLE page parks nothing and stalls honestly, which is a
+        # `feed_page_limit`/`reconcile_budget_seconds` misconfiguration and reads as one.
+        if stored is not None and not retried and after is not None:
+            await store.set(stored.seq, resume_from=after, pending_high=high)
+            log.warning("lineage_feed_walk_parked", extra={"resume_from": after, "pending_high": high, "scanned": scanned})
+        raise LineageFeedBudgetExceeded(f"the lineage feed reconcile pass exceeded its {budget_seconds}s budget") from exc
 
+    # `stored` is not None from here: the no-cursor branch returned inside the walk, and the checker
+    # narrows it accordingly — a guard here is provably dead code rather than defence.
     if truncated:
         # Loud, and an ERROR rather than a warning: the walk covers the feed's whole retention by
         # default, so running out of pages means the rows between here and the cursor are already
         # pruned. They are unrecoverable, so stalling would buy nothing and only hide it.
         log.error("lineage_feed_gap_skipped", extra={"cursor": stored.seq, "resumed_at": high, "pages": max_pages})
     if not retried:
+        # No `resume_from`/`pending_high`: a completed walk settles the mark AND clears whatever an
+        # earlier interrupted pass parked, so the next tick starts from the top again.
         await store.set(high)
     # The cursor REPORTED is the one now in effect, not the highest row seen: a tick that hit a
     # transient failure leaves the mark where it was, and a result claiming otherwise would make the

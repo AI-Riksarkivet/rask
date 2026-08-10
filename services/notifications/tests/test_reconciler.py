@@ -5,6 +5,8 @@ TRANSPORT, so what is asserted is the request that would actually reach lineage 
 our own function was called with the arguments we then assert it was called with.
 """
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -13,11 +15,13 @@ import pytest
 import respx
 from pydantic import SecretStr
 
+from notifications.api.ingest import DAPR_RETRY, DAPR_SUCCESS
 from notifications.api.metrics import Lane
 from notifications.api.reconciler import (
     LineageCursor,
     LineageCursorStore,
     LineageCursorUnreadable,
+    LineageFeedBudgetExceeded,
     LineageFeedClient,
     reconcile,
 )
@@ -82,20 +86,29 @@ class _Plane:
 class _MemoryCursor:
     """The cursor store's contract in memory — the walk's tests are about the walk."""
 
-    def __init__(self, seq: int | None = None) -> None:
+    def __init__(self, seq: int | None = None, *, resume_from: int | None = None, pending_high: int | None = None) -> None:
         self.seq = seq
+        self.resume_from = resume_from
+        self.pending_high = pending_high
         self.writes: list[int] = []
+        #: Every write in full, so a test can assert on the PARKED state an interrupted walk leaves.
+        self.records: list[tuple[int, int | None, int | None]] = []
 
     async def get(self) -> LineageCursor | None:
-        return None if self.seq is None else LineageCursor(seq=self.seq, updated_at=datetime.now(UTC))
+        if self.seq is None:
+            return None
+        return LineageCursor(seq=self.seq, updated_at=datetime.now(UTC), resume_from=self.resume_from, pending_high=self.pending_high)
 
-    async def set(self, seq: int) -> None:
+    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None) -> None:
         self.seq = seq
+        self.resume_from = resume_from
+        self.pending_high = pending_high
         self.writes.append(seq)
+        self.records.append((seq, resume_from, pending_high))
 
 
-def _store(seq: int | None = None) -> tuple[LineageCursorStore, _MemoryCursor]:
-    memory = _MemoryCursor(seq)
+def _store(seq: int | None = None, *, resume_from: int | None = None, pending_high: int | None = None) -> tuple[LineageCursorStore, _MemoryCursor]:
+    memory = _MemoryCursor(seq, resume_from=resume_from, pending_high=pending_high)
     return cast(LineageCursorStore, memory), memory
 
 
@@ -389,3 +402,102 @@ def test_the_feed_lane_is_labelled_apart_from_the_bus() -> None:
     """Two lanes on one counter, because the question an operator asks is which door stopped
     delivering — and a single `ingress.events` series cannot answer it."""
     assert {Lane.BUS.value, Lane.FEED.value} == {"bus", "feed"}
+
+
+# --- the budget must BOUND the walk, not discard it ---------------------------------------------
+#
+# Found reviewing the S2 tick. The mark is a LOW-water one and the walk runs DOWNWARD, so a pass that
+# handled the newest N rows and was then cut off cannot raise it — the rows between the mark and where
+# it stopped are still unhandled. With nowhere to park the descent, every tick restarted at the newest
+# row, spent the same budget re-walking the same prefix, died at the same depth and wrote nothing. A
+# backlog deeper than one budget was therefore never drained: a PERMANENT stall wearing the costume of
+# a transient one, and precisely the state an outage produces — which is the case §2 says this lane
+# exists to cover.
+
+
+def _slow_ingest(seconds: float, status: dict[str, str] | None = None) -> Callable[..., Awaitable[dict[str, str]]]:
+    """An ingest that costs wall-clock, so a walk can be made to outrun its budget deterministically.
+
+    The status is the real `DAPR_*` dict, never a bare string: `reconcile()` compares against the
+    constant, so a string fake would silently never match and the RETRY test would pass while proving
+    nothing. It did exactly that on the first draft of these tests.
+    """
+
+    async def _ingest(*args: object, **kwargs: object) -> dict[str, str]:
+        await asyncio.sleep(seconds)
+        return status if status is not None else DAPR_SUCCESS
+
+    return _ingest
+
+
+def _descending_pages(top: int, per_page: int, pages: int) -> list[httpx.Response]:
+    """`pages` responses walking down from `top`, each carrying `per_page` rows."""
+    responses = []
+    seq = top
+    for _ in range(pages):
+        events = [_event(seq - offset) for offset in range(per_page)]
+        seq -= per_page
+        responses.append(httpx.Response(200, json={"events": events, "next_cursor": seq}))
+    return responses
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_walk_cut_off_by_the_budget_parks_where_it_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The regression: an over-budget pass used to record NOTHING and restart from the top forever."""
+    monkeypatch.setattr("notifications.api.reconciler.ingest_run_event", _slow_ingest(0.03))
+    respx.get(f"{LINEAGE}/events").mock(side_effect=_descending_pages(top=1000, per_page=2, pages=20))
+    plane = _Plane()
+    store, memory = _store(1)
+
+    with pytest.raises(LineageFeedBudgetExceeded):
+        await reconcile(client=_feed_client(page_limit=2), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=20, budget_seconds=0.1)
+
+    assert memory.records, "an over-budget walk recorded nothing — the backlog could never be drained"
+    seq, resume_from, pending_high = memory.records[-1]
+    assert seq == 1, "the low-water mark must NOT advance: the rows below where it stopped are unhandled"
+    assert resume_from is not None and resume_from < 1000, "nothing was parked, so the next tick restarts at the top"
+    assert pending_high == 1000, "the ceiling belongs to the whole multi-tick walk, not to this tick"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_next_tick_resumes_the_descent_instead_of_restarting() -> None:
+    """A parked cursor makes the following tick continue DOWNWARD from where the last one stopped."""
+    route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(400), _event(399)], "next_cursor": None}))
+    plane = _Plane()
+    store, _ = _store(1, resume_from=500, pending_high=1000)
+
+    await reconcile(client=_feed_client(page_limit=2), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
+
+    assert route.calls[0].request.url.params.get("after") == "500", "the walk restarted at the top — the park was ignored"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_completed_walk_settles_the_parked_ceiling_and_clears_it() -> None:
+    """Finishing a resumed walk adopts the WHOLE walk's ceiling and leaves nothing parked behind."""
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(4), _event(3)], "next_cursor": None}))
+    plane = _Plane()
+    store, memory = _store(1, resume_from=5, pending_high=9_999)
+
+    await reconcile(client=_feed_client(page_limit=2), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
+
+    seq, resume_from, pending_high = memory.records[-1]
+    assert seq == 9_999, "the settled mark must be the multi-tick ceiling, not this tick's newest row"
+    assert resume_from is None and pending_high is None, "a completed walk left parked state behind"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_retried_row_parks_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Parking past a row that asked for RETRY would step over the failure the mark is held for."""
+    monkeypatch.setattr("notifications.api.reconciler.ingest_run_event", _slow_ingest(0.03, status=DAPR_RETRY))
+    respx.get(f"{LINEAGE}/events").mock(side_effect=_descending_pages(top=1000, per_page=2, pages=20))
+    plane = _Plane()
+    store, memory = _store(1)
+
+    with pytest.raises(LineageFeedBudgetExceeded):
+        await reconcile(client=_feed_client(page_limit=2), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=20, budget_seconds=0.1)
+
+    assert memory.records == [], "a RETRY row was parked past — the next tick would skip the failure"

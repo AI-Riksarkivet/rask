@@ -1684,3 +1684,78 @@ def test_the_kubelet_probes_the_inbox_on_a_path_the_service_actually_serves() ->
         importlib.reload(importlib.import_module("notifications"))
 
     assert probed <= served, f"the kubelet probes {sorted(probed - served)}, which the service does not serve under {config['RASK_API_PREFIX']}"
+
+
+def _notifications_cron_component(docs: list[dict]) -> dict:
+    """The `bindings.cron` Component scoped to the notifications app-id."""
+    for doc in docs:
+        if doc.get("kind") == "Component" and (doc.get("spec") or {}).get("type") == "bindings.cron" and "notifications" in (doc.get("scopes") or []):
+            return doc
+    raise AssertionError("no bindings.cron Component is scoped to `notifications` — the /events reconciler would never tick")
+
+
+def test_the_notifications_cron_binding_name_is_the_route_it_is_delivered_to() -> None:
+    """The reconciler's Component name, its env, and the route the app serves are ONE string.
+
+    Dapr delivers an input binding to `POST /<component name>` at the pod root. So a Component named
+    one thing and a route mounted at another is a cron that fires into a 404 on every tick — with a
+    healthy pod, a rendered Component, a running schedule, and nothing anywhere saying the deliveries
+    are being dropped. The feed lane would simply never reconcile, which is indistinguishable from a
+    feed that had nothing to reconcile.
+
+    Guards all three corners at once, because any two of them can agree while the third drifts.
+
+    The third corner runs in a SUBPROCESS, and that is load-bearing rather than tidy. The route path
+    is bound at module import (`_binding = get_ingress_settings().binding_name`), so setting the env
+    var in this process and calling `importlib.reload` proves nothing: reload re-executes the package
+    `__init__` while `notifications.api.reconcile_cron` is already in `sys.modules`, so the pre-built
+    router is re-included unchanged and the assertion silently degrades to "the chart default equals
+    the code default". Worse, it then FAILS on a correct deployment the moment anyone edits
+    `reconcileBindingName` — blaming the app for a chart change that a real pod, being a fresh
+    process, honours. A subprocess IS that fresh process.
+    """
+    import os
+    import subprocess
+    import sys
+
+    docs = _rendered_docs()
+    component = _notifications_cron_component(docs)
+    binding = component["metadata"]["name"]
+    config = _fleet_config(docs)
+
+    assert config.get("RASK_NOTIFICATIONS_BINDING_NAME") == binding, (
+        f"the cron Component is named {binding!r} but the app is told {config.get('RASK_NOTIFICATIONS_BINDING_NAME')!r} — "
+        "every tick would be delivered to a route the service does not serve"
+    )
+
+    probe = subprocess.run(
+        [sys.executable, "-c", "import json,notifications; print(json.dumps(sorted(notifications.app.openapi()['paths'])))"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "RASK_NOTIFICATIONS_BINDING_NAME": binding, "RASK_API_PREFIX": config["RASK_API_PREFIX"]},
+        cwd=REPO,
+    )
+    served = json.loads(probe.stdout)
+
+    assert f"/{binding}" in served, f"the service serves no route at /{binding} — the cron Component ticks into a 404"
+
+
+def test_the_notifications_reconciler_is_admitted_to_the_lineage_service_door() -> None:
+    """The feed poll authenticates at lineage's SERVICE door, which is an explicit allowlist.
+
+    `services.yaml` builds `LINEAGE_SERVICE_SUBJECTS` by scanning every service's own
+    `env.RASK_LINEAGE_SERVICE_IDENTITY`, and the notifications service claims the same value. Omit the
+    declaration and the reconciler 401s on every tick — a failure that reads as a credential problem
+    while it is really the service never having been admitted at all.
+    """
+    docs = _rendered_docs()
+    lineage = next(doc for doc in docs if doc.get("kind") == "Deployment" and (doc.get("metadata") or {}).get("name", "").endswith("-lineage"))
+    env = {item["name"]: item.get("value") for item in lineage["spec"]["template"]["spec"]["containers"][0]["env"]}
+    subjects = (env.get("LINEAGE_SERVICE_SUBJECTS") or "").split(",")
+
+    container = _notifications_container(docs)
+    claimed = {item["name"]: item.get("value") for item in container["env"]}.get("RASK_LINEAGE_SERVICE_IDENTITY")
+
+    assert claimed, "the notifications service declares no RASK_LINEAGE_SERVICE_IDENTITY — its reconciler cannot reach the feed"
+    assert claimed in subjects, f"lineage admits {subjects} but notifications claims {claimed!r} — every reconcile tick would 401"

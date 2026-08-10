@@ -383,6 +383,20 @@ spec:
                 {{- $subjects = append $subjects . }}
               {{- end }}
             {{- end }}
+            {{- /* notifications carries its identity's CODE DEFAULT here as well, which is the one
+                   exception to declaration-only and is about upgrades rather than about this service.
+                   `env` is a values KEY, so `helm upgrade --reuse-values` — which the repo itself
+                   performs (scripts/verify_produce_door.sh) — renders the OLD chart's values and drops
+                   a key that did not exist then. Every S1-era release is in exactly that state. The
+                   cron Component still renders (it defaults), so the tick would fire while the door
+                   refused it: `IngressSettings.service_identity` defaults to `notifications`, so the
+                   caller claims a subject the allowlist never learned, and `_is_transient` refuses to
+                   retry a 403 — a lane 403ing every 30 s forever, with a Ready pod and a working bus
+                   lane beside it. Defaulting the ALLOWLIST to the same literal the APP defaults to is
+                   what makes the two halves agree with no values at all. */}}
+            {{- if .Values.services.notifications }}
+              {{- $subjects = append $subjects ((get (.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") }}
+            {{- end }}
             - { name: LINEAGE_SERVICE_SUBJECTS, value: {{ compact $subjects | uniq | sortAlpha | join "," | quote }} }
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}

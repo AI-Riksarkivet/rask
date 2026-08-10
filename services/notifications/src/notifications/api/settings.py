@@ -14,8 +14,9 @@ nothing is ever delivered to.
 """
 
 from functools import lru_cache
+from typing import Self
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,7 +58,19 @@ class IngressSettings(BaseSettings):
     #: The subject this service claims at lineage's service door. It must appear in that deployment's
     #: `LINEAGE_SERVICE_SUBJECTS` allowlist, and — because the feed is governed — it must also hold the
     #: grants whose rows the reconciler is expected to see.
-    service_identity: str = Field(default="notifications", alias="RASK_NOTIFICATIONS_SERVICE_IDENTITY")
+    #:
+    #: `RASK_LINEAGE_SERVICE_IDENTITY` is read FIRST, and that is the whole point rather than a
+    #: courtesy alias. The chart builds lineage's allowlist by scanning every service's own
+    #: `env.RASK_LINEAGE_SERVICE_IDENTITY` (`chart/templates/services.yaml`), so reading a
+    #: differently-named var here would make the door's allowlist and the caller's claim two values
+    #: that a deployment can set to disagree — and the failure of that disagreement is a 401 that
+    #: reads like a credential fault instead of the naming drift it is. One declaration, both halves.
+    #: The `RASK_NOTIFICATIONS_`-prefixed name stays as a fallback so a deployment can still override
+    #: this service alone without moving what it claims to lineage.
+    service_identity: str = Field(
+        default="notifications",
+        validation_alias=AliasChoices("RASK_LINEAGE_SERVICE_IDENTITY", "RASK_NOTIFICATIONS_SERVICE_IDENTITY"),
+    )
 
     #: The credential daprd injects when the pod carries `dapr.io/app-token-secret`. Read as a setting
     #: rather than through `os.environ` at the call site so there is one declared name for it, and
@@ -92,6 +105,36 @@ class IngressSettings(BaseSettings):
     #: subscriptions are wired at app-build time — before any lifespan exists to hand that object over.
     #: The same env var, so the two can disagree only if someone changes it between two reads.
     dapr_enabled: bool = Field(default=False, alias="RASK_DAPR_ENABLED")
+
+    #: The cron binding that TICKS the reconciler, and therefore also the route path it is delivered
+    #: to: Dapr POSTs an input binding to `/<component name>` at the ROOT, so the two are one string
+    #: and a mismatch is a component that fires into a 404 forever while the chart looks correct.
+    #: Must equal `services.notifications.reconcileBindingName` in the chart.
+    binding_name: str = Field(default="notifications-reconcile-cron", alias="RASK_NOTIFICATIONS_BINDING_NAME")
+
+    #: Wall-clock ceiling on ONE reconcile pass, handed to `reconcile()`'s `asyncio.timeout`.
+    #:
+    #: It exists as a SETTING because it must stay under the cron period, and the period lives in the
+    #: chart component: a pass that outlives its own tick lets the next delivery stack on top of it,
+    #: which turns a slow lineage into an unbounded pile of concurrent walks rather than one late one.
+    #: The default sits below the default `@every 30s` schedule with room for the cursor write, which
+    #: `reconcile()` deliberately performs OUTSIDE the budget.
+    reconcile_budget_seconds: float = Field(default=25.0, gt=0, alias="RASK_NOTIFICATIONS_RECONCILE_BUDGET_SECONDS")
+
+    @model_validator(mode="after")
+    def _timeout_fits_the_budget(self) -> Self:
+        """A per-request timeout above the whole pass's budget is unsatisfiable, so refuse it at boot.
+
+        This is the half of settings.py's stated ordering rule that this service CAN check. The other
+        half — that the budget stays under the cron period — remains unenforceable here by
+        construction: the schedule is component config in the chart and never reaches this process.
+        """
+        if self.feed_timeout_seconds > self.reconcile_budget_seconds:
+            raise ValueError(
+                f"feed_timeout_seconds ({self.feed_timeout_seconds}) exceeds reconcile_budget_seconds "
+                f"({self.reconcile_budget_seconds}): one page request may not outlast the whole pass"
+            )
+        return self
 
 
 @lru_cache(maxsize=1)

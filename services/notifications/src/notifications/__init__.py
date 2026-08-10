@@ -21,6 +21,7 @@ from notifications import health
 # contract: `routers`, mounted under the api prefix, and `register_subscriptions(app)`, called after
 # `app` exists — a `DaprApp` subscription cannot be declared before there is an app to hang it on.
 from notifications.api import register_subscriptions, routers
+from notifications.api.reconcile_cron import router as reconcile_router
 from notifications.lifespan import actor_plane_ready, build_actor_host, make_lifespan
 from service_kit import make_service_app
 from service_kit.probes import make_probes_router
@@ -31,6 +32,9 @@ from service_kit.probes import make_probes_router
 # binding, which is delivered to POST /<name> at the root for the same reason).
 _root = APIRouter()
 _root.include_router(make_probes_router(actor_plane_ready))
+# The reconciler's cron binding joins them: Dapr delivers an input binding to POST /<component name>
+# at the root, never under the api prefix, so it belongs in this slot rather than in `routers`.
+_root.include_router(reconcile_router)
 
 # Keep the probes out of the trace stream: a kubelet polling twice a second is otherwise the loudest
 # span in the service and carries no information. `setup_otel` (called by `make_service_app` below)

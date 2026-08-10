@@ -441,9 +441,46 @@ Per `CLAUDE.md`: a skill claim that contradicts a file is fixed in the same comm
    `origin/main` as `3e4463a0` (75 files, +11,592) with the actor-guard follow-up in `819c266c`.
    **502 passed, 1 xfailed** (`services/notifications/tests`, 2m50s). See the S1 HANDOFF block at the
    end of this file for what landed, what was measured, and the two gaps left open.
-2. **S2 — completeness.** The `/events` reconciler + cursor; dedupe proven across both ingress
-   paths (the same event via bus and feed lands one pointer); `dlq.notifications` + resiliency
-   registration.
+2. ~~**S2 — completeness.**~~ **SHIPPED 2026-08-10.** `dlq.notifications`, the resiliency registration
+   and the cross-lane dedupe landed with S1; what was missing was that **nothing ever called
+   `reconcile()`** — the walk, the cursor store and their tests all existed while no route, no
+   lifespan task and no cron component reached them, so the feed lane was library code and nothing
+   else. Now: a `bindings.cron` Component (`notifications-reconcile-cron`, `@every 30s`) scoped to the
+   app-id; a root-mounted, sidecar-only `POST /<binding>` with the `OPTIONS` ack; the feed client and
+   cursor store built once in the lifespan and released in reverse order; and the two chart wirings
+   without which the tick was **cleanly useless** — `RASK_NOTIFICATIONS_LINEAGE_URL` (absent, the app
+   fell back to `127.0.0.1:8000`, its own pod) and `env.RASK_LINEAGE_SERVICE_IDENTITY` (absent,
+   `notifications` was not in lineage's `LINEAGE_SERVICE_SUBJECTS`, so every tick would 401). Two
+   settings the design owed §11 q3 also landed — `binding_name` and `reconcile_budget_seconds` — with
+   a boot-time validator refusing a page timeout above the pass budget, which is the half of that
+   ordering rule this process can check. **4043 passed** estate-wide; three new gates
+   (`test_reconcile_cron.py` plus two in `tests/unit/test_invariants.py`), each verified to FAIL with
+   its half reverted.
+
+   **Two defects came from DRIVING the service, not from the suite** (real uvicorn, stub lineage +
+   stub Dapr state API). (a) The Dapr SDK builds its actor-proxy factory lazily and that constructor
+   calls a **blocking** `DaprHealth.wait_for_sidecar()`, so on a sidecar-less deployment — which is
+   what `make dev-micro` runs — the first delivery pins the event loop for 60 s and the pass budget
+   **cannot fire, because the loop it would fire on is the blocked one**. The tick is now gated on
+   `ActorPlaneDep` like the inbox routes: no actor plane, nowhere to deliver, so nothing worth walking
+   the governed feed for. (b) Catching bare `TimeoutError` then reported that missing sidecar as "the
+   pass exceeded its 25 s budget" — the wrong diagnosis, pointing at lineage for a delivery-plane
+   fault. The budget now raises `LineageFeedBudgetExceeded` only when `asyncio.timeout` actually
+   expired; every other `TimeoutError` keeps its own type and traceback.
+
+   The same drive confirmed the lane end to end: priming adopts the newest row and notifies nobody;
+   a cursor seeded below the feed head pages **down twice** (`after=None` → 100–96, then `after=96`)
+   and scans exactly the rows above the mark; and a failing delivery **holds the cursor** rather than
+   advancing past it. What the drive did NOT cover: a successful delivery through a real sidecar (the
+   stub's actor endpoint 404s, which is what exercised the hold-on-failure path), and the park/resume
+   behaviour, which is covered by four unit tests instead.
+
+   Left open in this lane, deliberately: the budget-vs-schedule ordering stays unenforceable in code
+   (the schedule is component config and never reaches the process); the SDK's blocking sidecar wait
+   is **worked around rather than fixed** — it is a `packages/service-kit`-level concern affecting the
+   bus lane too, and belongs with whoever next touches `proxies.py`; and nothing yet **alerts** on a
+   reconciler that is admitted to the service door but granted nothing — it runs cleanly and
+   reconciles nothing, which is the quiet failure this lane exists to end. That alert belongs with S6.
 3. **S3 — the honest bell, estate-wide.** Inbox/Activity tab split in `@rask/ui`; badge counts
    inbox only; all zones wired; zone-contract gate extended; the two-user live drive extended
    and passing.
@@ -857,6 +894,15 @@ way and was equally open** — same guard applied there, one implementation rath
 
 ### Slices remaining
 
-S2 (the `/events` reconciler + cursor — the poll client and cursor persistence landed with S1, the
-cron component did not), S3 (the honest bell), S4 (project watch + v3 targeting), S5 (channels),
-S6 (the ops seam). Nothing in S1 blocks any of them.
+~~S2~~ **shipped 2026-08-10** — see §9 item 2. S3 (the honest bell), S4 (project watch + v3
+targeting), S5 (channels), S6 (the ops seam). Nothing in S1 or S2 blocks any of them.
+
+**S2 also corrected a defect in S1's own walk, found by review rather than by a test.** `reconcile()`
+persisted progress only OUTSIDE its `asyncio.timeout` block, and the mark it persists is a LOW-water
+one while the walk runs DOWNWARD — so a pass cut off by the budget recorded nothing at all and the
+next tick restarted at the newest row. A backlog deeper than one budget could therefore never be
+drained: every tick re-walked the same prefix, died at the same depth, and the rows below it were
+never delivered, while the 503 read "lineage is slow". Since the catch-up-after-an-outage case in §2
+is exactly the deep-backlog case, the lane's stated purpose was the one it could not serve. The walk
+now parks `resume_from`/`pending_high` on the cursor and resumes the descent; four tests pin it, each
+verified to fail against the old walk. Latent in S1 only because nothing called `reconcile()`.
