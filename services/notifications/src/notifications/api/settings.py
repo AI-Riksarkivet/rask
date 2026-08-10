@@ -1,0 +1,100 @@
+"""What the ingress is WIRED TO — component, topic and feed coordinates the chart renders.
+
+Separate from `notifications.config` by OWNER rather than by taste. `NotificationsSettings` holds what
+an inbox IS (retention, cap, page size) and the actor reads it with no sidecar in sight; this holds
+what the SURFACE talks to — a pubsub component the chart mints, a topic whose name is the
+compatibility unit, a lineage base URL and the service-door credential. Nothing in the actor plane
+reads a field here, and nothing here means anything without a deployment behind it.
+
+Every one is a setting rather than a literal for the reason the estate keeps paying for: the
+per-subscriber component name is `<pubsub.name>-<app-id>`, rendered by `lance.subPubsub`
+(`chart/templates/_helpers.tpl:516-519`), and the app's own `*_PUBSUB` env must agree with it — a
+literal on this side and a rendered name on that side are two places that drift into a subscription
+nothing is ever delivered to.
+"""
+
+from functools import lru_cache
+
+from pydantic import Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class IngressSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+        populate_by_name=True,
+    )
+
+    #: The per-subscriber pubsub component. One component per subscriber app-id is not a style choice:
+    #: `queueGroupName` lives on the component, and lineage and this service both consume
+    #: `lineage.events.v1` — one shared queue group would SPLIT those messages across the two apps
+    #: instead of delivering to each.
+    pubsub: str = Field(default="lineage-pubsub-notifications", alias="RASK_NOTIFICATIONS_PUBSUB")
+
+    #: The run-lifecycle topic. The `.v1` in the NAME is the compatibility unit — a subscriber is
+    #: entitled to that payload shape forever — so this default is pinned in `tests/unit/test_invariants.py`
+    #: alongside its four siblings and a bump is a deliberate act, never a drive-by edit.
+    lineage_topic: str = Field(default="lineage.events.v1", alias="RASK_NOTIFICATIONS_LINEAGE_TOPIC")
+
+    #: This app's OWN dead-letter subject (`dlq.notifications`), empty = no dead-lettering.
+    #:
+    #: EMPTY BY DEFAULT, AND THAT IS A SAFETY DEFAULT RATHER THAN A DEFERRAL. Declaring a
+    #: `deadLetterTopic` on a subscription whose app has no entry in `chart/templates/dapr-resiliency.yaml`
+    #: means the sidecar has no retry policy to exhaust, so the FIRST transient RETRY parks the message
+    #: — measured on the medallion publication head and fixed there this session. Turning this on is
+    #: therefore one act with registering the app in the resiliency CRD, and the ordering is enforced by
+    #: the operator rather than by code, so the default has to be the safe one.
+    dlq_topic: str = Field(default="", alias="RASK_NOTIFICATIONS_DLQ_TOPIC")
+
+    #: The lineage service's own base URL — the reconciler's `GET /events` origin. NOT the gateway:
+    #: the feed poll authenticates at lineage's SERVICE door, and the gateway is a public front door
+    #: whose invocations that door refuses by construction (`dapr_auth.is_public_caller`).
+    lineage_url: str = Field(default="http://127.0.0.1:8000", alias="RASK_NOTIFICATIONS_LINEAGE_URL")
+
+    #: The subject this service claims at lineage's service door. It must appear in that deployment's
+    #: `LINEAGE_SERVICE_SUBJECTS` allowlist, and — because the feed is governed — it must also hold the
+    #: grants whose rows the reconciler is expected to see.
+    service_identity: str = Field(default="notifications", alias="RASK_NOTIFICATIONS_SERVICE_IDENTITY")
+
+    #: The credential daprd injects when the pod carries `dapr.io/app-token-secret`. Read as a setting
+    #: rather than through `os.environ` at the call site so there is one declared name for it, and
+    #: `SecretStr` so it cannot land in a log line or a repr by accident.
+    app_api_token: SecretStr | None = Field(default=None, alias="APP_API_TOKEN")
+
+    #: Rows per `GET /events` page. 500 is the server's own hard cap (`runs.py` `_EVENTS_RETURN`), so a
+    #: larger value here would be silently truncated and the walk would think it had reached the floor.
+    feed_page_limit: int = Field(default=500, ge=1, le=500, alias="RASK_NOTIFICATIONS_FEED_PAGE_LIMIT")
+
+    #: How far back one tick will walk. The feed pages OLDER (`seq < after`), so catching up after an
+    #: outage is a walk DOWN from the newest row toward the cursor — and the product of this and
+    #: `feed_page_limit` is how far that walk can reach. The default covers the feed's whole 20 000-row
+    #: retention, so a walk that runs out of pages has reached rows the feed has already pruned: the
+    #: gap is unrecoverable rather than merely unread, which is why exhausting it is an ERROR and not a
+    #: reason to stall. Pages are processed one at a time, so this bounds the WALK, never memory.
+    feed_max_pages: int = Field(default=40, ge=1, alias="RASK_NOTIFICATIONS_FEED_MAX_PAGES")
+
+    #: Per-request timeout on the feed poll. Must stay BELOW the cron tick period, or a stalled lineage
+    #: makes ticks pile up on each other instead of the next one finding the same work still to do.
+    feed_timeout_seconds: float = Field(default=10.0, gt=0, alias="RASK_NOTIFICATIONS_FEED_TIMEOUT_SECONDS")
+
+    #: Where the reconciler's cursor is persisted — the same store the inbox actors use, addressed
+    #: through the sidecar's plain state API rather than the actor API (the cursor belongs to the
+    #: service, not to any subject).
+    state_store: str = Field(default="lance-statestore", alias="RASK_NOTIFICATIONS_STATE_STORE")
+
+    #: The local sidecar's HTTP port — daprd's own env var, so a deployment that moves it moves this too.
+    dapr_http_port: int = Field(default=3500, alias="DAPR_HTTP_PORT")
+
+    #: The estate's one Dapr switch, read here as well as in `service_kit.config.Settings` because the
+    #: subscriptions are wired at app-build time — before any lifespan exists to hand that object over.
+    #: The same env var, so the two can disagree only if someone changes it between two reads.
+    dapr_enabled: bool = Field(default=False, alias="RASK_DAPR_ENABLED")
+
+
+@lru_cache(maxsize=1)
+def get_ingress_settings() -> IngressSettings:
+    """Read once, at first use — `register_subscriptions` runs at import, before any lifespan."""
+    return IngressSettings.model_validate({})

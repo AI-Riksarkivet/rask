@@ -130,6 +130,9 @@ def _routes() -> list[Route]:
     # The studio flow-builder's server half (open_studio_flows.md "Backend"): the node catalog, graph
     # validation, and run execution. Bare app-id, like `ingest` and for the same reason.
     flows = ("flows", os.environ.get("RASK_FLOWS_URL", "http://127.0.0.1:8840"))
+    # The notification plane (open_notifications.md D2): the per-subject inbox behind the bell. Bare
+    # app-id, like `ingest` and `flows`, and 8850 continues the 8830/8840 fleet run.
+    notifications = ("notifications", os.environ.get("RASK_NOTIFICATIONS_URL", "http://127.0.0.1:8850"))
     # longest / most-specific prefixes first; the prefix itself is the catch-all.
     # The two deeper explorer rows MUST outrank /api/explorer. There is NO bare /api
     # catch-all since the R6/R20 wave (core-api/search-api/volumes-api retired):
@@ -162,6 +165,11 @@ def _routes() -> list[Route]:
         # tests/test_routing.py pins the rewrite against the flows app's own openapi, not against a
         # reading of it.
         (f"{prefix}/flows", f"{prefix}/flows", *flows),
+        # PREFIX-INTERPOLATED for the flows row's reason, not by imitation: `notifications` is composed
+        # by `make_service_app` too, so its routers mount under `settings.api_prefix` — the same env var
+        # read at the top of this function. A hardcoded "/api/notifications" pair would be correct only
+        # while RASK_API_PREFIX happens to be "/api".
+        (f"{prefix}/notifications", f"{prefix}/notifications", *notifications),
         ("/api/serve", "/api/serve", *compute),
     ]
 

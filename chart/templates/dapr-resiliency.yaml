@@ -50,6 +50,13 @@ spec:
 {{- $subscribers = append $subscribers (dict "appId" .daprAppId) }}
 {{- end }}
 {{- end }}
+{{- /* The inbox subscription, registered in the SAME act that mints its component. Both halves of the
+     omission are silent and they point opposite ways: unregistered, an app-returned RETRY falls back to
+     the broker's crash-recovery schedule with no dead-lettering at all; dead-lettering turned on WITHOUT
+     this line, the FIRST transient failure parks the message — the publication head's defect, measured
+     and fixed this session. `IngressSettings.dlq_topic` therefore ships empty, and enabling it is an act
+     that presupposes this line. */}}
+{{- $subscribers = append $subscribers (dict "appId" "notifications") }}
 {{- range $subscribers }}
       {{ include "lance.subPubsub" (list $ .appId) }}:
         inbound:

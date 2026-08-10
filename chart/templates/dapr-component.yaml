@@ -130,6 +130,19 @@ scopes:
 {{- $subscribers = append $subscribers (dict "appId" .daprAppId "deliverPolicy" "new") }}
 {{- end }}
 {{- end }}
+{{- /* The INBOX (open_notifications.md §2). `new` is the strongest case in this list: lineage's `all`
+     + ephemeral pair replays the retained stream on every pod restart, which for a graph rebuild IS
+     the durability story and for an inbox would re-notify a week of history on every rollout — a badge
+     that lies loudest right after a deploy. The durable half is the other side of the same coin: a run
+     that terminated while this app was down must still reach its author, and `new` alone skips it on
+     reconnect. Unconditional, like the Deployment (services.notifications is frontDoor).
+
+     This mints a durable name no stream has seen, so §2.11's migration hazard does not apply here —
+     that failure is an EXISTING durable name re-requested with a different filter subject ("consumer
+     name already in use", a silently dead subscription the drift reconcile cannot see because
+     maxDeliver/backOff still match). `notifications-durable` on LINEAGE is new; the reconcile loop
+     (nats-stream-job.yaml) adopts it by its `-durable` suffix from the first tick. */}}
+{{- $subscribers = append $subscribers (dict "appId" "notifications" "deliverPolicy" "new") }}
 {{- range $subscribers }}
 ---
 apiVersion: dapr.io/v1alpha1

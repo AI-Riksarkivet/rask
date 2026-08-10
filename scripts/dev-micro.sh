@@ -35,6 +35,7 @@ GATEWAY_PORT="${GATEWAY_PORT:-$((8888 + OFFSET))}"
 COMPUTE_PORT="${COMPUTE_PORT:-$((8804 + OFFSET))}"
 CONTROLPLANE_PORT="${CONTROLPLANE_PORT:-$((8820 + OFFSET))}"
 FLOWS_PORT="${FLOWS_PORT:-$((8840 + OFFSET))}"
+NOTIFICATIONS_PORT="${NOTIFICATIONS_PORT:-$((8850 + OFFSET))}"
 VIEWER_PORT="${VIEWER_PORT:-$((8101 + OFFSET))}"
 SEARCH_PORT="${SEARCH_PORT:-$((8102 + OFFSET))}"
 ANNOTATOR_PORT="${ANNOTATOR_PORT:-$((8103 + OFFSET))}"
@@ -44,6 +45,7 @@ ANNOTATOR_PORT="${ANNOTATOR_PORT:-$((8103 + OFFSET))}"
 export RASK_COMPUTE_URL="${RASK_COMPUTE_URL:-http://127.0.0.1:${COMPUTE_PORT}}"
 export RASK_CONTROLPLANE_URL="${RASK_CONTROLPLANE_URL:-http://127.0.0.1:${CONTROLPLANE_PORT}}"
 export RASK_FLOWS_URL="${RASK_FLOWS_URL:-http://127.0.0.1:${FLOWS_PORT}}"
+export RASK_NOTIFICATIONS_URL="${RASK_NOTIFICATIONS_URL:-http://127.0.0.1:${NOTIFICATIONS_PORT}}"
 export RASK_EXPLORER_VIEWER_URL="${RASK_EXPLORER_VIEWER_URL:-http://127.0.0.1:${VIEWER_PORT}}"
 export RASK_EXPLORER_SEARCH_URL="${RASK_EXPLORER_SEARCH_URL:-http://127.0.0.1:${SEARCH_PORT}}"
 export RASK_EXPLORER_ANNOTATOR_URL="${RASK_EXPLORER_ANNOTATOR_URL:-http://127.0.0.1:${ANNOTATOR_PORT}}"
@@ -69,6 +71,18 @@ run controlplane "$CONTROLPLANE_PORT" controlplane:app
 # durable Dapr Workflow lane stays OFF here on purpose (it starts only when DAPR_GRPC_PORT is set,
 # which nothing in this fleet sets), so a local run executes inline.
 run flows        "$FLOWS_PORT"        flows:app
+# The notification plane: /api/notifications/inbox{,/unread,/seen,/dismiss}. It BOOTS with no sidecar
+# — `DaprActor` only mounts the callback routes and `ActorRuntime.register_actor` is process-LOCAL
+# (it builds type info and stores an ActorManager in a dict; daprd learns the entity list afterwards
+# by polling /dapr/config). So the door comes up and `/api/health`, `/livez`, `/readyz` all answer.
+# What it does NOT do here is serve an inbox: `require_actor_plane` sees `actors_registered = True`
+# (registration succeeded — it never needed the sidecar), the route calls the ActorProxy, and the
+# proxy dials 127.0.0.1:3500 where nothing is listening. Nothing translates that transport failure,
+# so an inbox route answers 500, not a 503 naming the cause. Read a 500 from :8850 here as "no
+# sidecar", not as a broken service. The bus subscription is DECLARED too (GET /dapr/subscribe serves
+# it), but nothing delivers to it without a sidecar, and the reconciler that would close that gap is
+# S2 — so in this fleet the badge is empty either way.
+run notifications "$NOTIFICATIONS_PORT" notifications:app
 # The media-plane viewer: /api/explorer/* (incl. the lakehouse storage browser's
 # /api/explorer/object* routes). Its DatasetRegistry is lazy, so it boots without a
 # staged corpus — dataset routes then 404 honestly while the objects browser works.
