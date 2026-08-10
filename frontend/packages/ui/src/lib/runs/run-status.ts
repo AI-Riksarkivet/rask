@@ -32,6 +32,15 @@ export type RunStatusLike = {
 	events?: number;
 	/** The catalog operation (`create_table`, `ingest_events`, …), when the run carried one. */
 	operation?: string | null;
+	/** The PRODUCER's own run id — what lineage's detail doors answer to. `run_id` above is the
+	 *  graph's derived uuid5 and links to nothing, so this is the one a reader can act on, and it is
+	 *  the id an inbox pointer carries for exactly that reason.
+	 *
+	 *  Served since the spec was regenerated in `57d255c7` and undeclared here until now, which is
+	 *  precisely the drift this type's own contract test exists to catch — the comment above it says a
+	 *  rename "would compile fine here and render blanks in every zone", and a missing field is the
+	 *  same defect arriving from the other side. */
+	source_run_id?: string | null;
 };
 
 /** What a viewer needs to know at a glance. `unknown` keeps an unrecognised state honest — it is

@@ -385,6 +385,8 @@
 				     the estate that says a run started, finished, or failed. -->
 				<NotificationCenter
 					runs={notifications.runs}
+					inbox={notifications.inbox}
+					inboxUnread={notifications.inboxUnread}
 					seen={notifications.seen}
 					dismissed={notifications.dismissed}
 					onseen={notifications.onseen}

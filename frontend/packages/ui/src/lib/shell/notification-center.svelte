@@ -3,6 +3,8 @@
 	import { Button } from '../components/button/index.js';
 	import * as Popover from '../components/popover/index.js';
 	import NotificationList from './notification-list.svelte';
+	import InboxList from './inbox-list.svelte';
+	import * as Tabs from '../components/tabs/index.js';
 	import { cn } from '../utils/cn.js';
 	import {
 		runNotificationId,
@@ -11,6 +13,7 @@
 		type RunStatusLike,
 		seenOnClose,
 	} from '../runs/run-status.js';
+	import { inboxSeenOnClose, inboxUnreadCount, type InboxNotificationLike } from './inbox.js';
 
 	// The estate's notification surface, in @rask/ui so every zone gets the SAME one — the header was
 	// forked once already (the annotator hand-rolled its own) and drifted, so the run feed ships as a
@@ -25,8 +28,19 @@
 	// bound it is the zone's to persist per subject. Both sets are keyed by NOTIFICATION id
 	// (`run_id@STATE`), not by run — so dismissing "ingest_events started" still lets "ingest_events
 	// failed" reach the viewer.
+	//
+	// S3 SPLIT THE SURFACE IN TWO, and the badge moved with it. The panel used to render `GET /runs`
+	// alone — dataset-governed, so the count was *everyone's* work, and the read state a zone
+	// persisted spoke for rows the inbox had never heard of. Now: an **Inbox** tab (targeted rows,
+	// durable per subject) and an **Activity** tab (the projection, unchanged), with the badge
+	// counting the inbox ALONE. `inbox === undefined` is the honest un-wired case — an auth-off dev
+	// stack or a zone whose transport is absent — and there the badge falls back to the run feed and
+	// the panel renders a single list, exactly as before, so nothing regresses on a stack that has no
+	// notification service to talk to.
 	let {
 		runs,
+		inbox,
+		inboxUnread,
 		seen = $bindable([]),
 		dismissed = $bindable([]),
 		onseen,
@@ -38,6 +52,12 @@
 	}: {
 		/** The run rows, as `GET /runs` returns them. */
 		runs: RunStatusLike[];
+		/** Inbox rows — targeted, durable. `undefined` = this zone has no inbox transport, which is a
+		 *  different statement from an EMPTY inbox and renders differently (no tabs, run-feed badge). */
+		inbox?: InboxNotificationLike[];
+		/** The server's unread count for the WHOLE inbox. Authoritative where present: the rows above
+		 *  are one page, so deriving the badge from them would shrink it as a reader pages. */
+		inboxUnread?: number;
 		/** Notification ids already read. Bindable so a zone can persist them. */
 		seen?: string[];
 		/** Notification ids dismissed. Bindable so a zone can persist them. */
@@ -59,8 +79,19 @@
 
 	const visible = $derived(visibleRuns(runs, dismissed));
 	const unread = $derived(unreadRuns(runs, seen, dismissed));
+
+	/** Whether this zone has an inbox at all. Drives the tabs AND the badge, so the two can never
+	 *  disagree about which plane is being counted. */
+	const hasInbox = $derived(inbox !== undefined);
+	const inboxRows = $derived(inbox ?? []);
+	// Server count wins; the local derivation is the fallback for a page-only caller. `seen` carries
+	// this tab's optimistic marks so the badge drops the moment the panel closes rather than waiting
+	// on the write.
+	const unreadCount = $derived(
+		hasInbox ? (inboxUnread ?? inboxUnreadCount(inboxRows, seen)) : unread.length,
+	);
 	// A count, not an inventory: past two digits the exact number stops being information.
-	const badge = $derived(unread.length > 99 ? '99+' : String(unread.length));
+	const badge = $derived(unreadCount > 99 ? '99+' : String(unreadCount));
 
 	// Read on CLOSE, not on open: while the panel is open the new rows keep their unread mark, so the
 	// viewer can see WHICH ones are new; the count clears once they have had the chance to look.
@@ -70,7 +101,11 @@
 		// closing the bell marked all 13 read — including a FAILED run pushed past the cap that the user
 		// never saw — and `seen` is what a zone persists per subject, so the failure was gone for good.
 		// That is the exact outcome this component exists to prevent.
-		const ids = seenOnClose(visible, limit);
+		//
+		// With an inbox wired, the ids that matter are the INBOX's: those are the rows the service can
+		// actually store a read mark against. Marking run ids there wrote into a mailbox that held no
+		// pointer for them — the S1 gap this slice closes.
+		const ids = hasInbox ? inboxSeenOnClose(inboxRows, limit) : seenOnClose(visible, limit);
 		const next = [...new Set([...seen, ...ids])];
 		if (next.length === seen.length) return;
 		seen = next;
@@ -85,7 +120,12 @@
 	}
 
 	function dismissAll() {
-		const ids = visible.map(runNotificationId);
+		// Whatever plane is on screen. With an inbox wired the visible rows ARE the inbox rows, and
+		// dismissing run ids instead would name pointers the service does not hold — the same
+		// wrong-plane mistake `markSeen` used to make.
+		const ids = hasInbox
+			? inboxRows.map((row) => row.notification_id)
+			: visible.map(runNotificationId);
 		if (ids.length === 0) return;
 		const next = [...new Set([...dismissed, ...ids])];
 		dismissed = next;
@@ -106,10 +146,10 @@
 				variant="ghost"
 				size="icon"
 				class={cn('relative rounded-full', className)}
-				aria-label={unread.length > 0 ? `Notifications, ${unread.length} unread` : 'Notifications'}
+				aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
 			>
 				<Bell class="size-4" aria-hidden="true" />
-				{#if unread.length > 0}
+				{#if unreadCount > 0}
 					<!-- The count lives on the trigger so it is legible with the panel CLOSED — that is the
 					     whole point of the surface: nobody should have to hunt for a failed run. -->
 					<span
@@ -135,22 +175,45 @@
 	>
 		<div class="border-border/60 flex items-center gap-2 border-b px-3 py-2">
 			<p class="text-sm font-medium">Notifications</p>
-			{#if unread.length > 0}
-				<span class="text-muted-foreground text-xs">{unread.length} unread</span>
+			{#if unreadCount > 0}
+				<span class="text-muted-foreground text-xs">{unreadCount} unread</span>
 			{/if}
 			<Button
 				variant="ghost"
 				size="xs"
 				class="ml-auto"
-				disabled={visible.length === 0}
+				disabled={hasInbox ? inboxRows.length === 0 : visible.length === 0}
 				onclick={dismissAll}
 			>
 				Dismiss all
 			</Button>
 		</div>
-		<div class="max-h-[60svh] overflow-y-auto">
-			<NotificationList {runs} {seen} {dismissed} {limit} {now} ondismiss={dismiss} />
-		</div>
+		{#if hasInbox}
+			<!-- Two planes, named. Inbox = addressed to you, durable per subject. Activity = everything
+			     you may see, per tab. Conflating them is what made the badge count other people's work
+			     and made a read mark evaporate on reload. -->
+			<Tabs.Root value="inbox">
+				<Tabs.List class="w-full rounded-none border-b px-3">
+					<Tabs.Trigger value="inbox" data-slot="inbox-tab">
+						Inbox
+						{#if unreadCount > 0}
+							<span class="text-muted-foreground ml-1.5 text-xs tabular-nums">{unreadCount}</span>
+						{/if}
+					</Tabs.Trigger>
+					<Tabs.Trigger value="activity" data-slot="activity-tab">Activity</Tabs.Trigger>
+				</Tabs.List>
+				<Tabs.Content value="inbox" class="mt-0 max-h-[60svh] overflow-y-auto">
+					<InboxList rows={inboxRows} locallySeen={seen} {limit} {now} ondismiss={dismiss} />
+				</Tabs.Content>
+				<Tabs.Content value="activity" class="mt-0 max-h-[60svh] overflow-y-auto">
+					<NotificationList {runs} {seen} {dismissed} {limit} {now} ondismiss={dismiss} />
+				</Tabs.Content>
+			</Tabs.Root>
+		{:else}
+			<div class="max-h-[60svh] overflow-y-auto">
+				<NotificationList {runs} {seen} {dismissed} {limit} {now} ondismiss={dismiss} />
+			</div>
+		{/if}
 		{#if allHref}
 			<div class="border-border/60 border-t px-3 py-2 text-center">
 				<a

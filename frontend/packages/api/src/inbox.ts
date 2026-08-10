@@ -84,6 +84,23 @@ export interface DismissResult {
 	unread: number;
 }
 
+/** What the shared bell's Inbox tab renders: one page of rows plus the badge for the WHOLE inbox.
+ *
+ *  Two fields rather than the raw `InboxFeed` because the cursor is deliberately not part of the
+ *  bell's contract — the panel shows a window and says how many more there are, it does not page.
+ *  `null` at the call site (see each zone's `inbox.remote.ts`) is the un-wired case: no session, no
+ *  service, and the bell falls back to its own per-tab memory rather than to a blank panel. */
+export interface InboxPanel {
+	rows: InboxNotification[];
+	unread: number;
+}
+
+/** Project a feed onto the panel's shape. Trivial, and shared anyway: seven zones derive this, and
+ *  the one that derived it differently would be the one whose badge disagreed with the others. */
+export function inboxPanel(feed: InboxFeed): InboxPanel {
+	return { rows: feed.notifications, unread: feed.unread };
+}
+
 /** `unread` is what the badge counts, `all` is what the panel shows. Neither includes dismissed rows. */
 export type InboxFilter = 'unread' | 'all';
 

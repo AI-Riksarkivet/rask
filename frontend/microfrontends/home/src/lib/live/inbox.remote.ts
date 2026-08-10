@@ -3,10 +3,12 @@ import { env } from '$env/dynamic/private';
 import {
 	dismissNotification,
 	INBOX_PAGE_LIMIT_MAX,
+	inboxPanel,
 	inboxReadState,
 	markInboxSeen,
 	readInbox,
 	type DismissResult,
+	type InboxPanel,
 	type InboxReadState,
 	type MarkResult,
 } from '@rask/api/inbox';
@@ -110,3 +112,22 @@ export const dismiss = command(
 	(notificationId): Promise<ApiResult<DismissResult>> =>
 		dismissNotification(inboxRequest(), notificationId),
 );
+
+/**
+ * The Inbox tab's ROWS — S3's half of this file, and the one that closes S1's stated gap.
+ *
+ * `readInboxState` above projects the inbox onto the RUN feed's read state, which could only ever
+ * speak for runs you authored: the panel rendered `GET /runs` (dataset-governed, everyone's work)
+ * while the inbox holds pointers addressed to you, so marking a row you did not author wrote into a
+ * mailbox with no pointer for it and the mark evaporated on reload. Rendering these rows directly is
+ * what makes the two sets one set — a dismissed row is simply absent, and there is no read state to
+ * reconstruct.
+ *
+ * `null` is the un-wired answer, not an error: no session (auth-off dev), or no notifications
+ * service. The bell then renders NO tabs and falls back to the run feed exactly as it did before S3,
+ * which is what keeps `make dev-zone ZONE=home` working with no cluster behind it.
+ */
+export const readInboxFeed = query(async (): Promise<InboxPanel | null> => {
+	const result = await readInbox(inboxRequest(), { state: 'all', limit: INBOX_PAGE_LIMIT_MAX });
+	return result.ok ? inboxPanel(result.data) : null;
+});

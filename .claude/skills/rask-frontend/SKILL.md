@@ -190,7 +190,38 @@ Both halves are idiomatic SvelteKit — `+server.ts` is the framework's own tool
 
 **The media-plane BFF reads are AUTHORIZED now, not just proxied (2026-08-04).** `makeViewerProxy` — the `api/[...path]` catch-all that explorer and annotator both mount — carries `requireSession: true` (`packages/api/src/bff.ts:307-322`), so a bearer-less page-image or atlas read 401s at the BFF on an auth-enabled stack. The bearer path is sealed cookie → the zone's session handle → `makeBackendProxy` (`authorization: Bearer …`) → gateway → viewer, where `/api/page` checks `can_read_data` and `/api/pages` `can_get_metadata` on `table:<catalog id>`, and the S3 object routes behind `/api/explorer/**` check `can_browse_storage`. The lakehouse's `/api/explorer/[...rest]` forwards the caller's bearer but does **not** `requireSession`, so an empty `/lakehouse/catalog/storage` on a governed stack is an authz answer, not an outage.
 
-**(d) The bell's read state is PERSISTED for the runs you AUTHORED — in `home`, and in `home` alone (S1, 2026-08-10).** `@rask/ui`'s `NotificationCenter` has always exposed `seen`/`dismissed` as `$bindable` with `onseen`/`ondismiss` documented as "the persistence seam" (`notification-center.svelte:44-48`); unbound it remembers per TAB, so a FAILED run you had already dealt with came back on the next reload. `home` now binds that seam to `$lib/live/inbox.remote.ts` → `@rask/api/inbox` → the gateway's `/api/notifications` row → `services/notifications`' per-subject inbox actor. Four facts a reader needs, and the first is the one no gate can see. **The two planes carry different row sets**: the panel renders `GET /runs`, governed by DATASET visibility (every run whose outputs you may read, whoever ran it), while the inbox is filled by AUTHORSHIP on terminal states alone (D4 v1 — `audience_for` is `(notice.author,)`). A mover's FAILED run you can see but did not start has no pointer in your inbox, so marking it read stores nothing and it is unread again after a reload — S1 does not regress that and does not fix it; **S3 does, by rendering inbox rows instead of run rows**. The base is **`RASK_GATEWAY_URL`, absolute, never a relative `/api/…`**: this zone's dev proxy and its SSR rewrite both point at `LANCE_GATEWAY_URL` (:8001, LINEAGE), so a relative call 404s in dev and works in prod only because the chart happens to aim both names at the gateway. The **per-tab fallback stays** — the remote read answers `null` on an auth-off or service-less stack and the component keeps its own memory, so `make dev-zone ZONE=home` renders unchanged. And the badge is still the RUNS feed: inbox-only badge, the Inbox/Activity tab split and the other six zones are **S3** (`open_notifications.md` §9). Gated by `@rask/zone-contract`'s `notification-surface.test.ts` third describe block, which names `home` in a constant on purpose and asserts the callbacks REACH the transport (`markSeen`/`dismiss`/`readInboxState` called from the layout), not merely that the prop names appear — a seam bound to `onseen: () => {}` gates identically to a wired one.
+**(d) The bell renders a SUBJECT'S INBOX, and it does so in all seven zones (S3, 2026-08-10).** The
+surface is split in two and the badge moved with it: an **Inbox** tab (rows addressed to you, durable
+per subject) and an **Activity** tab (the `GET /runs` projection, unchanged), with the badge counting
+the **inbox alone**. Until S3 the panel rendered `/runs` only — dataset-governed, so the count was
+*everyone's* work, and the read state a zone persisted spoke for rows the inbox had never heard of:
+mark one read and it came back unread on the next reload, because there was no pointer to write to.
+Rendering inbox rows makes the two sets one set, and a dismissed row is simply absent rather than a
+set to reconstruct.
+
+Each zone owns a thin `$lib/live/inbox.remote.ts` (four remote functions: `readInboxState`,
+`readInboxFeed`, `markSeen`, `dismiss`) over the shared `@rask/api/inbox`; `@rask/ui` takes the rows
+structurally (`InboxNotificationLike`) and never imports `@rask/api`. Four facts a reader needs:
+
+* **The base is `RASK_GATEWAY_URL`, absolute, never a relative `/api/…`** — `home`/`lakehouse` proxy
+  `/api` to `LANCE_GATEWAY_URL` (:8001, LINEAGE) and `explorer`/`annotator` have no `/api` proxy at
+  all, so a relative call 404s in dev and survives in prod only because the chart happens to aim both
+  names at one Service.
+* **Hold the query, don't re-call it.** A remote `query()` re-called returns the CACHED value, so
+  `readInboxFeed()` after a write re-read exactly what was already there and the badge never moved.
+  The zones hold the query object and call `.refresh()` — the estate's one polling idiom
+  (`compute/src/routes/+page.svelte`), also flicker-free because the previous value stays readable.
+* **`inbox === undefined` is the un-wired case and is NOT the same as an empty inbox.** No session or
+  no service ⇒ the bell renders NO tabs and falls back to the run feed with per-tab memory, exactly as
+  before S3, which is what keeps `make dev-zone` working with no cluster behind it.
+* **The badge's server `unread` wins over any local derivation** — the rows are one page, so deriving
+  it would shrink the badge as a reader pages.
+
+Gated by `@rask/zone-contract`'s `notification-surface.test.ts`, now a **loop over `zoneDirs()`**
+rather than S1's named constant: per zone it asserts the transport exists over the shared client, that
+it addresses `RASK_GATEWAY_URL`, that the seam is bound, that the callbacks REACH the transport, and —
+the half no prop-name check can reach — that the layout passes `inbox`/`inboxUnread` at all, since a
+zone can bind every callback and still hand the bell nothing but `runs`.
 
 Estate-wide: `command()` 73 across 22 remote modules (mutations single-flight their reads: `void query().refresh()` in the handler), `form()` 0, `query.batch()` 0, `{#await}` 0. `query.live` is the LIVENESS spine, not just the bell: every zone's `feeds.remote.ts` (the bell) and lakehouse's `controlEvents`/`controlCursor`/`jetstreamCursor`. (The explorer's service-health is NOT one — it is a single deduped poll in `lib/service-health.svelte.ts`, whose own comment rejects a cursor because liveness has no event.) Consume cursors through `$lib/live/tick.svelte.ts` (`liveRead` + `lineageTick`/`controlTick`) — it replaced thirteen hand-rolled `$effect`+`setInterval` pollers, and its rules (open on mount, cursor arrival is not a change) each exist because breaking them broke a test. Data mutations move the LINEAGE cursor; governance mutations (grants, warehouses, tenants — including raw `/v1/access/tuples` writes, which emit `grant_added`) move the CONTROL cursor.
 

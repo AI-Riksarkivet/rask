@@ -9,6 +9,7 @@ import {
 	Search,
 	Settings,
 } from '@lucide/svelte';
+import type { InboxNotificationLike } from './inbox.js';
 import type { RunStatusLike } from '../runs/run-status.js';
 
 /** All lucide icons share one component signature, so any icon's type fits. */
@@ -22,8 +23,15 @@ export type IconComponent = typeof Database;
  *  state comes back through the callbacks so the zone — which owns a per-subject store — can persist
  *  it. Ids in `seen`/`dismissed` are NOTIFICATION ids (`run_id@STATE`), from `runNotificationId`. */
 export type NotificationFeed = {
-	/** The run rows, as the lineage service's `GET /runs` returns them. */
+	/** The run rows, as the lineage service's `GET /runs` returns them — the ACTIVITY plane: every
+	 *  run whose outputs you may read, whoever started it. Per-tab read state. */
 	runs: RunStatusLike[];
+	/** The INBOX plane: rows addressed to this subject, durable per subject. `undefined` means this
+	 *  zone has no inbox transport — a different statement from an empty inbox, and the bell renders
+	 *  it differently (no tabs, and the badge falls back to the run feed). */
+	inbox?: InboxNotificationLike[];
+	/** The server's unread count for the WHOLE inbox, not the page above. */
+	inboxUnread?: number;
 	seen?: string[];
 	dismissed?: string[];
 	onseen?: (seen: string[]) => void;

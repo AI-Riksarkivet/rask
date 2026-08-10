@@ -481,9 +481,36 @@ Per `CLAUDE.md`: a skill claim that contradicts a file is fixed in the same comm
    bus lane too, and belongs with whoever next touches `proxies.py`; and nothing yet **alerts** on a
    reconciler that is admitted to the service door but granted nothing — it runs cleanly and
    reconciles nothing, which is the quiet failure this lane exists to end. That alert belongs with S6.
-3. **S3 — the honest bell, estate-wide.** Inbox/Activity tab split in `@rask/ui`; badge counts
-   inbox only; all zones wired; zone-contract gate extended; the two-user live drive extended
-   and passing.
+3. ~~**S3 — the honest bell, estate-wide.**~~ **SHIPPED 2026-08-10.** The Inbox/Activity tab split in
+   `@rask/ui` (rows taken structurally as `InboxNotificationLike` — the design system still does not
+   import `@rask/api`); the badge counts the **inbox alone**; a thin `inbox.remote.ts` in **all seven**
+   zones over the shared `@rask/api/inbox`; and the zone-contract gate turned from S1's named constant
+   into the `zoneDirs()` loop it promised, with a fifth assertion no prop-name check can reach — that
+   the layout passes `inbox`/`inboxUnread` at all, since a zone can bind every callback and still hand
+   the bell nothing but `runs`. §12's left-open item 1 is closed by construction: the panel renders the
+   rows the service can store a mark against, so a dismissed row is absent rather than a set to rebuild.
+
+   **Three defects the browser found that no gate did**, which is the whole argument for driving it:
+   (a) the badge was **invisible** — `badge`'s VALUE moved to the inbox count while its `{#if}` and
+   `aria-label` stayed on the run count, so a stack with 2 unread inbox rows and no runs showed
+   nothing; (b) `dismissAll` and its disabled state were still keyed to run ids, naming pointers the
+   service does not hold; (c) re-calling `readInboxFeed()` after a write returns the **cached** query,
+   so the row greyed out and the number beside it did not — the zones now hold the query and call
+   `.refresh()`. All three were invisible to svelte-check, oxlint and 1196 zone-contract assertions.
+
+   Driven end to end against a real dev server + a stub `/api/notifications`: badge 2 sourced from the
+   inbox while Activity was EMPTY (the two planes visibly separate — before S3 the badge would have
+   read 0 and the rows been unreachable), the failed row red with the server-seen row correctly
+   dot-less, close → `SEEN → updated=2, unread=0` → refresh → badge gone, **survived a full reload**
+   (the B2 acceptance), and dismiss removed the row.
+
+   Fixed in passing: `RunStatusLike` was missing `source_run_id`, served since `57d255c7` regenerated
+   the spec — its own contract test was red on main, which is exactly the drift that test exists for.
+
+   **NOT done, and deliberately named rather than implied:** the `mock-notifications.ts` Playwright
+   upstream and the **two-user live drive** from §7 (alice's failed run increments alice's badge and
+   not bob's). The drive above used one stubbed subject; the two-user claim needs real Dex logins and
+   a cluster, so it remains the top gate and it remains unrun.
 4. **S4 — project watch.** `WatchIndexActor`, watch endpoints behind `project#member`, the
    settings surface in `home`, FGA `check:` cases, control-events ingress (v3 targeting).
 5. **S5 — channels.** SMTP + Slack bindings, prefs, digest reminder, the channel verify rig,

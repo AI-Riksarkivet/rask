@@ -7,7 +7,7 @@
 	import { AppShell } from '@rask/ui/shell';
 	import { onMount } from 'svelte';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
-	import { dismiss, markSeen, readInboxState } from '$lib/live/inbox.remote';
+	import { dismiss, markSeen, readInboxFeed, readInboxState } from '$lib/live/inbox.remote';
 	import type { Snippet } from 'svelte';
 	import { HOME_ZONE_NAV } from '$lib/nav';
 	import type { LayoutData } from './$types';
@@ -36,8 +36,20 @@
 	let seen = $state<string[]>([]);
 	let dismissed = $state<string[]>([]);
 
+	// S3: the panel's Inbox tab renders THESE, not the run rows. `null` = un-wired (no session, no
+	// service) and the bell falls back to a single run list with no tabs — the auth-off dev shape.
+	// The query OBJECT, held once — not a $state snapshot refilled by re-calling the query.
+	// Re-calling a remote `query()` hands back the CACHED value, so a `readInboxFeed()` after a write
+	// re-read exactly what was already there and the badge never moved. `.refresh()` is the only thing
+	// that re-fetches, and `.current` is how its value is read back — the estate's one polling idiom
+	// (`compute/src/routes/+page.svelte`), which is also flicker-free because the previous value stays
+	// readable while the next is in flight.
+	let inboxQuery = $state<ReturnType<typeof readInboxFeed> | null>(null);
+	const inbox = $derived(inboxQuery?.current ?? null);
+
 	onMount(() => {
 		feed = lineageFeed();
+		inboxQuery = readInboxFeed();
 		// Seeded on mount, never during render, and for the same reason the feed is: the landing page
 		// must not wait on the notification plane to paint. UNION, not replace — anything this tab has
 		// already marked while the read was in flight stays marked.
@@ -68,15 +80,27 @@
 	// the seeded set is missing it and the following close sends it again.
 	const notifications = $derived({
 		runs: feed?.current?.runs ?? [],
+		// `undefined`, never `[]`, when the inbox did not answer: an EMPTY inbox is a fact worth
+		// rendering ("nothing addressed to you"), while an ABSENT one means this stack has no inbox to
+		// speak of and the bell must not claim otherwise by showing an empty Inbox tab.
+		inbox: inbox?.rows,
+		inboxUnread: inbox?.unread,
 		seen,
 		dismissed,
 		onseen: (next: string[]) => {
 			seen = next;
-			void markSeen(next).catch(() => {});
+			void markSeen(next)
+				// The badge is the server's count, so a write that changed something has to move it.
+				// Without this refresh the row greys out and the number beside it does not, which reads
+				// as a broken badge rather than a stale one.
+				.then(() => inboxQuery?.refresh())
+				.catch(() => {});
 		},
 		ondismiss: (notificationId: string, next: string[]) => {
 			dismissed = next;
-			void dismiss(notificationId).catch(() => {});
+			void dismiss(notificationId)
+				.then(() => inboxQuery?.refresh())
+				.catch(() => {});
 		},
 		allHref: '/lakehouse/lineage/runs',
 	});
