@@ -22,6 +22,7 @@ from annotator.projects.project_actor import AnnotationProjectActor
 from annotator.projects.tenant_actor import TenantProjectsActor
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
+from service_kit.governed.dapr_auth import guard_actor_routes
 from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.media.middleware import register_middleware
@@ -144,6 +145,13 @@ try:
 except Exception:  # pragma: no cover - a broken ext must not take the read plane down
     actor_ext = None
     logger.exception("annotator: could not mount the actor routes — the task plane is unavailable")
+else:
+    # The actor callback surface is SIDECAR-ONLY, and it was open. `DaprActor` mounts
+    # `PUT /actors/{type}/{id}/method/{method}` at the ROOT, so it inherits none of the doors the task
+    # and project routers declare — and these actors hold the task plane's own state: claims, drafts,
+    # reviews, the lease holder. The actor id is a project id, which is not a secret and never was.
+    # Same guard, same reason, one implementation (`service_kit.governed.dapr_auth`) as notifications.
+    guard_actor_routes(app)
 
 #: The task plane's own health, defined HERE and not only in the lifespan so it is never merely
 #: absent: a mount that failed above never reaches the registration block, and a flag that only

@@ -4,12 +4,17 @@ THE HOLE. `DaprActor(app)` root-mounts `PUT /actors/{actor_type}/{actor_id}/meth
 this service the actor IS the private store — one inbox per subject, keyed by an id that is merely
 `base64url(sub)`. The inbox's own doors (OIDC, `require_actor_plane`, the FGA re-check) hang on the
 ROUTER under `settings.api_prefix`; these routes are mounted at the ROOT and inherit none of them. So
-before the guard, anything able to reach `:8850` read any subject's inbox by name:
+before the guard, anything able to reach the pod read any actor's state by name. The notifications inbox is the
+sharpest case — one inbox per subject, actor id `base64url(sub)`:
 
     curl -XPUT :8850/actors/InboxActor/YWxpY2U/method/Page -d '{"state":"all","limit":100}'
 
 `YWxpY2U` is `base64url("alice")` and subjects are readable off lineage's author facets — the actor id
 was never a secret, so it cannot be the access control.
+
+It lives in `service_kit` because TWO services mount `DaprActor` this way — notifications (the
+per-subject inbox) and the annotator (claims, drafts, reviews, the lease holder) — and two copies of
+an auth guard is how they drift apart.
 
 These drive the middleware through a real app rather than calling it directly, because what is being
 asserted is that the guard is actually MOUNTED and matches the right paths — a correct function that
@@ -19,9 +24,8 @@ nothing installs would pass a direct call and leave the hole open.
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from starlette.middleware.base import BaseHTTPMiddleware
 
-from notifications.lifespan import _guard_actor_routes
+from service_kit.governed.dapr_auth import guard_actor_routes
 
 
 ALICE = "YWxpY2U"  # base64url("alice"), exactly as the exploit would compose it
@@ -31,7 +35,7 @@ ALICE = "YWxpY2U"  # base64url("alice"), exactly as the exploit would compose it
 def client() -> TestClient:
     """An app carrying the guard plus one route at each side of the boundary."""
     app = FastAPI()
-    app.add_middleware(BaseHTTPMiddleware, dispatch=_guard_actor_routes)
+    guard_actor_routes(app)
 
     @app.put("/actors/{actor_type}/{actor_id}/method/{method}")
     async def _actor(actor_type: str, actor_id: str, method: str) -> dict[str, str]:

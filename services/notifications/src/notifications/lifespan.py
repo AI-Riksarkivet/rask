@@ -12,20 +12,16 @@ defect this service is deliberately not repeating.
 """
 
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
-from typing import Final
 
 from dapr.ext.fastapi import DaprActor
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from fastapi import FastAPI, Request
 
 from notifications.config import get_notifications_settings
 from notifications.inbox_actor import InboxActor
 from service_kit.config import Settings
-from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.governed.dapr_auth import guard_actor_routes
 from service_kit.schemas.health import Readiness, ReadinessStatus
 
 
@@ -44,52 +40,10 @@ def build_actor_host(app: FastAPI) -> DaprActor | None:
     except Exception:
         log.exception("notifications: could not mount the actor routes — the inbox will 503")
         return None
-    app.add_middleware(BaseHTTPMiddleware, dispatch=_guard_actor_routes)
+    # One implementation, in service_kit: the annotator mounts DaprActor the same way and had the
+    # same exposure, and two copies of an auth guard is how they drift.
+    guard_actor_routes(app)
     return actor
-
-
-#: What `DaprActor` mounts at the ROOT of this app — outside `RASK_API_PREFIX`, and therefore outside
-#: every dependency the inbox router declares.
-_ACTOR_PATH_PREFIXES: Final = ("/actors", "/dapr/config")
-
-
-async def _guard_actor_routes(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-    """Require the sidecar's own token on the actor callback surface.
-
-    **The hole this closes.** `DaprActor(app)` root-mounts
-    `PUT /actors/{actor_type}/{actor_id}/method/{method}`, and the actor IS this service's private
-    store — one inbox per subject, keyed by an id that is merely `base64url(sub)`. Unguarded, anything
-    able to reach `:8850` reads any subject's inbox BY NAME, with no bearer and neither FGA check:
-
-        curl -XPUT :8850/actors/InboxActor/YWxpY2U/method/Page -d '{"state":"all","limit":100}'
-
-    `YWxpY2U` is `base64url("alice")`, and subjects are readable off lineage's author facets — the
-    actor id is not a secret and was never meant to be one. The inbox's own doors hang on the ROUTER,
-    under `settings.api_prefix`; these routes are mounted at the root and inherit none of them.
-
-    A middleware rather than a router dependency because the SDK adds these routes to the app itself:
-    there is no `include_router` call to hang `dependencies=` on, and rewriting a mounted route's
-    dependant after the fact is far more fragile than matching a path prefix.
-
-    `require_dapr_token` is the right door, not a stand-in. These paths are BY CONSTRUCTION
-    sidecar-delivered — daprd calls them back, presenting `dapr-api-token` when `APP_API_TOKEN` is
-    set — and the same dependency refuses a public front door outright, which is the half that still
-    holds in dev where the token is unset. It proves "arrived via Dapr", never "trusted caller", and
-    that is exactly the claim being made here.
-
-    The annotator mounts `DaprActor(app)` the same way and is unguarded today. That is FILED rather
-    than fixed from here — this service is not the place to change the annotator's posture — but a new
-    service whose entire purpose is per-subject privacy should not inherit the gap.
-    """
-    if request.url.path.startswith(_ACTOR_PATH_PREFIXES):
-        try:
-            require_dapr_token(
-                dapr_api_token=request.headers.get("dapr-api-token"),
-                dapr_caller_app_id=request.headers.get("dapr-caller-app-id"),
-            )
-        except HTTPException as refusal:
-            return JSONResponse({"detail": refusal.detail}, status_code=refusal.status_code)
-    return await call_next(request)
 
 
 async def actor_plane_ready(request: Request) -> Readiness:

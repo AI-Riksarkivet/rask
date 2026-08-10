@@ -18,10 +18,11 @@ from __future__ import annotations
 import functools
 import os
 import secrets
-from collections.abc import Callable
-from typing import Annotated
+from collections.abc import Awaitable, Callable
+from typing import Annotated, Final
 
-from fastapi import Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
+from starlette.responses import Response
 
 
 #: Dapr app-ids whose invocations may NEVER take a service-token path — the PUBLIC front doors.
@@ -290,3 +291,51 @@ def service_principal(
     if not secrets.compare_digest((token or "").encode(), expected.encode()):
         raise CredentialRejected("invalid service token")
     return ServiceIdentity(identity)
+
+
+#: What `dapr.ext.fastapi.DaprActor` mounts at the ROOT of an app — outside `settings.api_prefix`, and
+#: therefore outside every dependency the domain routers declare.
+ACTOR_PATH_PREFIXES: Final = ("/actors", "/dapr/config")
+
+
+def guard_actor_routes(app: FastAPI) -> None:
+    """Require the sidecar's own token on `DaprActor`'s callback surface.
+
+    **The hole this closes.** `DaprActor(app)` root-mounts
+    `PUT /actors/{actor_type}/{actor_id}/method/{method}`, and an actor is typically the service's
+    PRIVATE store — keyed by an id that is rarely a secret. The domain routers' doors (OIDC, FGA,
+    plane-readiness) hang on the ROUTER under `settings.api_prefix`; these routes are mounted at the
+    root and inherit none of them. So anything able to reach the pod reads any actor's state BY NAME:
+
+        curl -XPUT :8850/actors/InboxActor/YWxpY2U/method/Page -d '{"state":"all","limit":100}'
+
+    `YWxpY2U` is `base64url("alice")`. Where the id derives from a subject, it is readable off lineage
+    author facets or a project listing — it was never meant to carry access control.
+
+    `require_dapr_token` is the right door rather than a stand-in: these paths are BY CONSTRUCTION
+    sidecar-delivered — daprd calls them back, presenting `dapr-api-token` when `APP_API_TOKEN` is set
+    — and the same dependency refuses a public front door outright, which is the half that still holds
+    in dev where the token is unset. It proves "arrived via Dapr", never "trusted caller".
+
+    A middleware rather than a router dependency because the SDK adds these routes to the app itself:
+    there is no `include_router` call to hang `dependencies=` on, and rewriting a mounted route's
+    dependant after the fact is far more fragile than matching a path prefix.
+
+    Call it immediately after constructing `DaprActor(app)`. It is a no-op for every other path, so a
+    service that mounts no actors can call it harmlessly — but there is no reason to.
+    """
+    from fastapi.responses import JSONResponse  # noqa: PLC0415 - keeps this module import-light
+    from starlette.middleware.base import BaseHTTPMiddleware  # noqa: PLC0415
+
+    async def _guard(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        if request.url.path.startswith(ACTOR_PATH_PREFIXES):
+            try:
+                require_dapr_token(
+                    dapr_api_token=request.headers.get("dapr-api-token"),
+                    dapr_caller_app_id=request.headers.get("dapr-caller-app-id"),
+                )
+            except HTTPException as refusal:
+                return JSONResponse({"detail": refusal.detail}, status_code=refusal.status_code)
+        return await call_next(request)
+
+    app.add_middleware(BaseHTTPMiddleware, dispatch=_guard)
