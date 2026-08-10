@@ -69,18 +69,23 @@
 			<a
 				href={taskCanvasHref(task, projectId, base)}
 				class={cn(
-					'group relative block overflow-hidden rounded-md border transition-colors',
-					active
-						? 'border-primary ring-primary/40 ring-2'
-						: 'border-border hover:border-muted-foreground',
-				)}
+	'group relative block overflow-hidden rounded-md border transition-colors',
+	active
+		? 'border-primary ring-primary/40 ring-2'
+		: 'border-border hover:border-muted-foreground',
+)}
 				aria-current={active ? 'true' : undefined}
 				title={`item ${i + 1} of ${items.length}`}
 				data-testid="filmstrip-item"
 				data-active={active ? 'true' : 'false'}
 				{@attach active ? keepInView : () => {}}
 			>
-				<MediaThumb src={frameUrl(task)} kind={task.media?.kind ?? 'image'} ratio="aspect-square" alt="" />
+				<MediaThumb
+					src={frameUrl(task)}
+					kind={task.media?.kind ?? 'image'}
+					ratio="aspect-square"
+					alt=""
+				/>
 				<!-- The ORDINAL, not the task id. Walking a queue is positional — "item 3" is what the
 				     arrows and the stream control both say, and a truncated uuid would agree with
 				     neither. -->

@@ -145,7 +145,8 @@ export function boxAt(track: Track, t: number): Box | null {
 		}
 	}
 
-	if (before.t === after.t) return { x: before.x, y: before.y, width: before.width, height: before.height };
+	if (before.t === after.t)
+		return { x: before.x, y: before.y, width: before.width, height: before.height };
 
 	const span = after.t - before.t;
 	const f = (t - before.t) / span;

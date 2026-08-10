@@ -8,7 +8,15 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { compareDocs, docCellText, docColumns, DOC_ID, DOC_TITLE, matchesDoc, type DocView } from './doc-columns';
+import {
+	compareDocs,
+	docCellText,
+	docColumns,
+	DOC_ID,
+	DOC_TITLE,
+	matchesDoc,
+	type DocView,
+} from './doc-columns';
 
 const view: DocView = {
 	docId: (r) => String(r.doc_id ?? ''),
@@ -23,7 +31,13 @@ const view: DocView = {
 };
 
 const rows: Record<string, unknown>[] = [
-	{ doc_id: 'bind86', label: 'Landshandlingar 1663', year: 1663, archive: 'RA', subjects: ['tax', 'land'] },
+	{
+		doc_id: 'bind86',
+		label: 'Landshandlingar 1663',
+		year: 1663,
+		archive: 'RA',
+		subjects: ['tax', 'land'],
+	},
 	{ doc_id: 'bind9', label: 'Vasa letters', year: 9, archive: 'ÅA' },
 	{ doc_id: 'bind12', label: null, year: null, archive: 'RA' },
 ];

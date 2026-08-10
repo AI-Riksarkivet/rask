@@ -35,8 +35,7 @@
 		if (!page.url.searchParams.has('keys')) return [];
 		const out: { id: string; label: string; href: string }[] = [];
 		const taskId = reviewSelection.taskId;
-		if (taskId)
-			out.push({ id: `task:${taskId}`, label: taskId, href: `${base}/tasks/${taskId}` });
+		if (taskId) out.push({ id: `task:${taskId}`, label: taskId, href: `${base}/tasks/${taskId}` });
 		const unit = reviewSelection.active;
 		if (unit) {
 			const position =

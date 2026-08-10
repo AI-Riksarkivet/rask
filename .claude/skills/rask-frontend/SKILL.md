@@ -217,9 +217,13 @@ frontend loop that runs in a cloud sandbox (claude.ai/code, CI), and it is how C
 `make dev-frontends` filters out. `dev-zone` runs the zone's own `vite dev` instead: one port, no
 proxy, no watcher, safe beside a running composition.
 
-The five zones with mocks are `home`, `lakehouse`, `explorer`, `annotator`, `models`.
+The four zones with mocks are `home`, `lakehouse`, `explorer`, `annotator`.
 **`compute` and `studio` have no `e2e/` and no `test:e2e`** — `dev-zone` still starts them and says so,
 but their `/api` is unmocked, and it is the same gap that leaves them outside every local gate.
+**`models` is the WORST of the three**, and this line claimed the opposite until 2026-08-09: it has no
+`e2e/` directory either, but its `package.json` *does* declare `"test:e2e": "playwright test"` — a
+script that fails the moment anything invokes it. Half of `cb6921b6 fix(models): commit the e2e
+harness's missing package.json half` landed; the harness it was the half of did not.
 
 Four things it deliberately does not give you — none is a bug:
 

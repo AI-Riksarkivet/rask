@@ -69,7 +69,9 @@
 	const inputFor = (p: ProducerInfo | null): string => {
 		if (p?.inputs?.length) return p.inputs.join(' + ');
 		const name = p?.name ?? '';
-		return INPUTS[Object.keys(INPUTS).find((k) => name.startsWith(k)) ?? ''] ?? 'a region on the canvas';
+		return (
+			INPUTS[Object.keys(INPUTS).find((k) => name.startsWith(k)) ?? ''] ?? 'a region on the canvas'
+		);
 	};
 	const takesPrompt = $derived(active?.name.startsWith('grounding-dino') ?? false);
 
@@ -254,8 +256,8 @@
 				segmenting…
 			{:else if controller.assistPoints.length > 0}
 				<span data-testid="assist-point-count">
-					{controller.assistPoints.length} point{controller.assistPoints.length === 1 ? '' : 's'} — click
-					to refine
+					{controller.assistPoints.length} point{controller.assistPoints.length === 1 ? '' : 's'} — click to
+					refine
 				</span>
 			{:else}
 				Click or drag a box — {controller.assistProducer}

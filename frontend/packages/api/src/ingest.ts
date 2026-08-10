@@ -141,7 +141,9 @@ export async function getIngestRun(
 ): Promise<IngestRun> {
 	// Same bearer seam as `startIngest` — the READ door is governed too, so a server-side call with
 	// no `Authorization` is refused as the gateway rather than served as the user.
-	const res = await fetchFn(`/api/ingest/ingests/${encodeURIComponent(runId)}`, { headers: extraHeaders });
+	const res = await fetchFn(`/api/ingest/ingests/${encodeURIComponent(runId)}`, {
+		headers: extraHeaders,
+	});
 	if (!res.ok) return refuse(res, 'getIngestRun');
 	return parse(IngestRunSchema, await res.json());
 }

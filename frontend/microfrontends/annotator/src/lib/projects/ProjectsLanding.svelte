@@ -282,7 +282,8 @@
 			<p class="text-muted-foreground text-sm">
 				Tenant <span class="font-mono">{tenant || '…'}</span> — send items from
 				<a class="underline underline-offset-2" href="{base}/browse">the corpus browser</a> or search, then
-				claim, annotate, review and publish. (A labeling task is the campaign; the items sent into it are what gets labelled.)
+				claim, annotate, review and publish. (A labeling task is the campaign; the items sent into it are
+				what gets labelled.)
 			</p>
 		</div>
 		<div class="flex items-center gap-2">

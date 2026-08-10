@@ -42,7 +42,13 @@
 	let failed = $state(false);
 
 	const Glyph = $derived(
-		kind === 'audio' ? FileAudio : kind === 'video' ? FileVideo : kind === 'text' ? FileText : ImageIcon,
+		kind === 'audio'
+			? FileAudio
+			: kind === 'video'
+				? FileVideo
+				: kind === 'text'
+					? FileText
+					: ImageIcon,
 	);
 </script>
 

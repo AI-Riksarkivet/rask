@@ -1613,6 +1613,17 @@
             "title": "Run Id",
             "type": "string"
           },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          },
           "started_at": {
             "anyOf": [
               {

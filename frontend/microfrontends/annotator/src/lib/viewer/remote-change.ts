@@ -50,7 +50,8 @@ export function onRemoteChange(state: CanvasState): RemoteChange {
 			action: 'warn',
 			// Names the fact and the consequence, because "changed" alone leaves someone unable to
 			// decide. They need to know their save will be REFUSED, not merely that something moved.
-			reason: 'Someone else saved this item. Your unsaved edits are still here, but saving will be refused until you reload.',
+			reason:
+				'Someone else saved this item. Your unsaved edits are still here, but saving will be refused until you reload.',
 		};
 	}
 
