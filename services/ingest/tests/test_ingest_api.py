@@ -372,26 +372,28 @@ async def test_a_duplicate_arriving_MID_DISPATCH_still_starts_nothing() -> None:
 def test_a_REDRIVE_records_the_spec_it_actually_DISPATCHES(
     client: tuple[TestClient, _RecordingStarter, InMemoryRunStore],
 ) -> None:
-    """The re-drive keeps `created_at`; it must NOT keep the abandoned attempt's spec.
+    """The re-drive keeps `created_at` and must name the spec it DISPATCHED — a status endpoint that
+    points an operator at the wrong dataset is worse than one that 404s, because it looks like an
+    answer.
 
-    Only `project` feeds the run id, so a retry on the same Idempotency-Key can legitimately carry a
-    different dataset or kind — and the workflow is dispatched with the BODY. A record that reused the
-    first attempt's fields then named a table this run never writes to, while the harvest landed
-    somewhere else entirely: a status endpoint that points an operator at the wrong dataset is worse
-    than one that 404s, because it looks like an answer.
+    **The scenario this used to use is now unreachable, and that is the fix rather than a regression.**
+    It drove a re-drive that carried a DIFFERENT dataset on the same Idempotency-Key, on the reasoning
+    that only `project` feeds the run id so the change was "legitimate". It is not: that is one key
+    naming two different requests, and it is now a 409 (see the conflict tests below). So the
+    invariant is exercised where it still applies — a re-drive of the SAME request after a failed
+    dispatch — and the divergence it guarded against can no longer be constructed at all.
     """
     c, starter, store = client
     _failing_then_recording(starter, TimeoutError())
     volume_a = {**BODY, "dataset": "volume-A"}
-    volume_b = {**BODY, "dataset": "volume-B"}
 
     assert c.post("/v1/ingests", json=volume_a, headers={"Idempotency-Key": "moved"}).status_code == 503
-    assert c.post("/v1/ingests", json=volume_b, headers={"Idempotency-Key": "moved"}).status_code == 202
+    assert c.post("/v1/ingests", json=volume_a, headers={"Idempotency-Key": "moved"}).status_code == 202
 
     record = asyncio.run(store.get(run_id_for("p1", "moved")))
     assert record is not None
-    assert starter.dispatched[0][1]["dataset"] == "volume-B"
-    assert record.dataset == "volume-B", "the record names the dataset the ABANDONED attempt asked for"
+    assert starter.dispatched[0][1]["dataset"] == "volume-A"
+    assert record.dataset == "volume-A", "the record does not name the dataset that was dispatched"
 
 
 @pytest.mark.asyncio
@@ -498,3 +500,149 @@ def test_only_a_TRANSPORT_failure_is_classified_retryable() -> None:
     assert isinstance(ConnectionRefusedError("no sidecar"), retryable)
     assert not isinstance(ValueError("payload is not serializable"), retryable)
     assert not isinstance(TypeError("bad signature"), retryable)
+
+
+# --------------------------------------------------------------------------- #
+# GET /v1/ingests — only a REFUSAL filters a row
+# --------------------------------------------------------------------------- #
+
+
+def _governed_client(store: InMemoryRunStore) -> TestClient:
+    """The router behind the SAME problem handlers the real app installs.
+
+    The shared `client` fixture builds a bare `FastAPI()`, which is right for the handler-logic tests
+    above — but these assert the WIRE STATUS a propagating domain error produces, and that mapping is
+    `install_problem_handlers`' job (`ingest.__init__` calls it). Without it the exception escapes as
+    a raw traceback and the test would be asserting the absence of a feature it never enabled.
+    """
+    from service_kit.lakehouse.ns_errors import install_problem_handlers
+
+    app = FastAPI()
+    app.include_router(router, prefix="/v1")
+    install_problem_handlers(app, __import__("logging").getLogger("test"))
+    app.state.run_store = store
+    app.state.workflow_starter = _RecordingStarter()
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _seeded(store: InMemoryRunStore) -> None:
+    """Two runs in two projects, so a filter that drops everything is distinguishable from one that
+    drops the right thing."""
+    for run_id, project in (("r-mine", "p1"), ("r-theirs", "p2")):
+        asyncio.run(store.put(RunRecord(run_id=run_id, project=project, dataset="pages", kind="test-src", status="RUNNING", created_at=datetime.now(UTC))))
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected_status"),
+    [
+        # The one that legitimately filters a ROW: this caller may not see that project.
+        ("permission", 200),
+        # NOT a property of a row. The authorization layer is down, so EVERY record "filters" and the
+        # list renders an outage as "you own nothing" — an answer, not an error. Must be a 503.
+        ("unavailable", 503),
+        # Also not a property of a row: the caller's own bearer is bad. Answering 200 with an empty
+        # list tells them their token works.
+        ("unauthenticated", 401),
+    ],
+)
+def test_only_a_refusal_filters_a_row(
+    raised: str,
+    expected_status: int,
+    client: tuple[TestClient, _RecordingStarter, InMemoryRunStore],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ingest import api as api_mod
+    from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
+
+    _c, _starter, store = client
+    _seeded(store)
+    c = _governed_client(store)
+    errors = {
+        "permission": PermissionDeniedError("nope"),
+        "unavailable": ServiceUnavailableError("authorization service is not available"),
+        "unauthenticated": UnauthenticatedError("invalid token"),
+    }
+
+    async def _authorize(_request: object, _settings: object, project: str | None = None, *_a: object, **_k: object) -> None:
+        if project == "p2":
+            raise errors[raised]
+
+    monkeypatch.setattr(api_mod, "authorize_ingest", _authorize)
+
+    res = c.get("/v1/ingests")
+
+    assert res.status_code == expected_status, res.text
+    if expected_status == 200:
+        assert [r["run_id"] for r in res.json()["runs"]] == ["r-mine"], "the refusal must drop exactly the unreadable row"
+
+
+def test_an_authz_outage_is_never_rendered_as_an_empty_list(
+    client: tuple[TestClient, _RecordingStarter, InMemoryRunStore], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sharpest shape of the bug: EVERY project unreadable because the store is down. Before, that
+    was a 200 with `{"runs": []}` — indistinguishable from a caller who has never ingested anything,
+    and the one rendering an operator cannot act on."""
+    from ingest import api as api_mod
+    from lance_namespace import ServiceUnavailableError
+
+    _c, _starter, store = client
+    _seeded(store)
+    c = _governed_client(store)
+
+    async def _down(*_a: object, **_k: object) -> None:
+        raise ServiceUnavailableError("openfga unreachable")
+
+    monkeypatch.setattr(api_mod, "authorize_ingest", _down)
+
+    res = c.get("/v1/ingests")
+
+    assert res.status_code == 503, res.text
+    assert res.json() != {"runs": []}
+
+
+# --------------------------------------------------------------------------- #
+# Same key, different spec — a CONFLICT, on both branches
+# --------------------------------------------------------------------------- #
+
+
+def test_the_same_key_with_a_different_spec_is_a_conflict(client: tuple[TestClient, _RecordingStarter, InMemoryRunStore]) -> None:
+    """An Idempotency-Key means "this exact request". Only `project` and the key go into the run id,
+    so reusing one key for a different dataset used to land on the FIRST run and answer
+    `deduplicated=true` — telling the caller a request was accepted that was never dispatched."""
+    c, starter, _store = client
+
+    first = c.post("/v1/ingests", json=BODY, headers={"Idempotency-Key": "shared"})
+    assert first.status_code in {200, 202}, first.text
+    dispatched_before = len(starter.dispatched)
+
+    second = c.post("/v1/ingests", json={**BODY, "dataset": "something-else"}, headers={"Idempotency-Key": "shared"})
+
+    assert second.status_code == 409, second.text
+    assert "something-else" in second.json()["detail"]
+    assert len(starter.dispatched) == dispatched_before, "a conflicting spec must dispatch nothing"
+
+
+def test_the_conflict_is_refused_on_the_REDRIVE_branch_too(client: tuple[TestClient, _RecordingStarter, InMemoryRunStore]) -> None:
+    """The branch that was worse. A re-drivable record (nothing scheduled) would have been REPURPOSED
+    onto the new spec — the run id keeps naming the first caller's request while the workflow ingests
+    the second's. Checked before the branch, so both are covered by one guard."""
+    c, starter, store = client
+
+    asyncio.run(store.put(RunRecord(run_id=run_id_for("p1", "shared"), project="p1", dataset="pages", kind="test-src", scheduled=False)))
+
+    res = c.post("/v1/ingests", json={**BODY, "kind": "test-src", "dataset": "other"}, headers={"Idempotency-Key": "shared"})
+
+    assert res.status_code == 409, res.text
+    assert starter.dispatched == [], "the re-drive branch dispatched a repurposed run"
+
+
+def test_the_same_key_with_the_SAME_spec_still_dedupes(client: tuple[TestClient, _RecordingStarter, InMemoryRunStore]) -> None:
+    """The guard must not break A2. Identical request, identical key → one dispatch, deduplicated."""
+    c, starter, _store = client
+
+    c.post("/v1/ingests", json=BODY, headers={"Idempotency-Key": "same-spec"})
+    again = c.post("/v1/ingests", json=BODY, headers={"Idempotency-Key": "same-spec"})
+
+    assert again.status_code in {200, 202}, again.text
+    assert again.json()["deduplicated"] is True
+    assert len(starter.dispatched) == 1, "the dedupe stopped working"

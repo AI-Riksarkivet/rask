@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, Field
 
 from ingest.auth import AuthSettingsDep, authorize_ingest
@@ -184,6 +185,21 @@ async def create_ingest(
     run_id = run_id_for(body.project, key)
 
     existing = await store.get(run_id)
+    # SAME KEY, DIFFERENT SPEC IS A CONFLICT — on BOTH branches below, which is why it is checked
+    # before either. Only `project` and the key go into the run id, so a caller reusing one key for
+    # a different `dataset` or `kind` lands on someone else's run. Neither branch noticed: the dedupe
+    # branch answered 200 `deduplicated=true` for a run that ingested something ELSE (the caller is
+    # told their request was accepted and it never was), and the re-drive branch silently REPURPOSED
+    # the record onto the new spec. An Idempotency-Key means "this exact request"; a key reused with
+    # a different payload is the one case where the honest answer is neither dedupe nor re-drive.
+    if existing is not None and (existing.dataset, existing.kind) != (body.dataset, body.kind):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Idempotency-Key {key!r} already names run {run_id} ingesting "
+                f"{existing.kind}:{existing.dataset}, not {body.kind}:{body.dataset} — use a new key for a different request"
+            ),
+        )
     if existing is not None and not is_redrivable(existing):
         # THE dedupe. Same key + same spec resolves to the same resource and starts NO second
         # workflow — A2 asserts zero new dispatches, not merely a matching id.
@@ -201,11 +217,13 @@ async def create_ingest(
     # what stops a duplicate arriving mid-dispatch from racing this one to the engine. Status and
     # errors reset because a previous attempt's dispatch failure is not this attempt's outcome.
     #
-    # The SPEC, though, comes from THIS request's body and never from the abandoned attempt's. Only
-    # `project` is part of the run id, so a re-drive can legitimately arrive naming a different
-    # dataset or kind — and it is the body that is dispatched below. Carrying the old values would
-    # leave the record naming a table the run does not write to, which is the one thing a status
-    # endpoint must not do.
+    # The SPEC comes from THIS request's body, and after the 409 above it is guaranteed to EQUAL the
+    # stored one — so the update below is a no-op for `dataset`/`kind` and stays only because the
+    # record may be brand new. It used to be load-bearing: the comment here said a re-drive "can
+    # legitimately arrive naming a different dataset or kind", which is what let one key silently
+    # repurpose another request's run. Dispatching the body while the record named the old table is
+    # the one thing a status endpoint must not do; refusing the request outright is better than
+    # either half of that.
     record = (existing or RunRecord(run_id=run_id, project=body.project, dataset=body.dataset, kind=body.kind)).model_copy(
         update={
             "project": body.project,
@@ -324,6 +342,19 @@ async def list_ingests(
     There is no single project to authorize against before reading — the list spans tenants — so each
     record is checked against its OWN project and the ones the caller may not see are dropped rather
     than refused. A 403 for the whole call would leak that runs exist; an empty list leaks nothing.
+
+    **ONLY a refusal filters.** This used to swallow every exception, and the other two things
+    `authorize_ingest` raises are not refusals of a ROW — they are failures of the CALL, and both
+    rendered as an empty 200:
+
+      * `ServiceUnavailableError` — OpenFGA or the OIDC verifier is down. Every record then "filters",
+        so a fail-closed authorization outage is indistinguishable from a caller who owns nothing.
+        That is the worst possible rendering of an outage: it looks like an answer.
+      * `UnauthenticatedError` — the caller's own bearer is malformed or invalid. It cannot be true of
+        one row and false of the next; answering 200 with `{"runs": []}` tells a caller their token
+        works and they have no runs.
+
+    Both propagate now (503 / 401). `PermissionDeniedError` is the one that means "not this row".
     """
     records = await store.recent(min(max(limit, 0), 200))
 
@@ -331,7 +362,7 @@ async def list_ingests(
     for record in records:
         try:
             await authorize_ingest(request, settings, record.project, dapr_api_token, authorization, dapr_caller_app_id)
-        except Exception:
+        except PermissionDeniedError:
             # DEBUG, not warning: a caller seeing only their own runs is the endpoint WORKING.
             # Logging it louder would make a correctly-filtered list look like a stream of
             # authorization failures, which is how a real signal gets tuned out.
