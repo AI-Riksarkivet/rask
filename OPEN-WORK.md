@@ -69,7 +69,23 @@ registered; no workflow is registered.
 through the sidecar. Keep `tests/unit/test_invariants.py`'s scope check — an app missing from `scopes` gets
 "component not found" and every user's saved work 503s, logged by the sidecar and noticed by nothing else.
 
-### B2 · The notification inbox has no actor *(was #128)*
+### ~~B2 · The notification inbox has no actor~~ *(was #128)* — **CLOSED 2026-08-11**
+
+**Closed by the notification plane**, built end to end across six slices and verified with two live
+drives. Read/dismissed state is per SUBJECT now: one Dapr `InboxActor` per subject on
+`lance-statestore`, holding claim-check pointers with durable read state, and the bell renders those
+rows in all seven zones rather than the dataset-governed `/runs` projection it used to.
+
+**The acceptance this item names was RUN**, not argued: two real Dex identities, alice marks her row
+read, and a FRESH session shows it still read while bob's own unread count is untouched. Alongside it,
+the targeting claim — alice's failed run increments alice's badge and NOT bob's — was driven against a
+real Dapr actor plane. `open_notifications.md` was deleted with this closure; the shipped surface is
+`services/notifications` and the two skills that describe it (`rask-services-fleet`, `rask-frontend`).
+
+*(B1's "no actor type is registered" was already stale — the annotator registers three; the missing
+piece was an inbox host, not actor infrastructure. That host now exists.)*
+
+<details><summary>The original item, for the record</summary>
 
 **What.** Read/dismissed state for notifications is per-tab. The bell itself is done and estate-wide (all
 four zones, shared `@repo/api/runs-feed`), because `GET /runs` already carries the lifecycle — but *read*
@@ -83,6 +99,8 @@ piece is an inbox host, not actor infrastructure.)*
 than a sweeper cron. **Designed in full as `open_notifications.md`** (2026-08-08): a `services/notifications`
 deployable hosting the inbox actor, bus + reconciler ingress, project watches, channel fan-out — its slice
 S1 is what closes this item.
+
+</details>
 
 ### B2b · ratch's runner imports become the Ray-native name seam *(new, 2026-07-27)*
 

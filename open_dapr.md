@@ -81,6 +81,15 @@ and `:65`, `medallion/api/train.py:101`, `medallion/api/dlq.py:30`, `catalog/api
 its scopes from `stateStore.scopes`, given that `lineage`, `medallion` and `maintenance` all
 fetch secrets and are absent from that list. The verification read the template:
 `dapr-component.yaml:219` is `{{- $secretScopes = concat $secretScopes .Values.stateStore.scopes }}`
+
+> **The rollout window gained a passenger, 2026-08-11.** `stateStore.scopes` now carries
+> `notifications` (the notification plane's inbox actors, shipped across six slices). Because
+> `lance-statestore` sets `actorStateStore: "true"` and daprd refuses to hot-reload an actor state
+> store, that scope only takes effect on a coordinated restart of every scoped app — the same window
+> this question is about. The value is committed and the restart is deliberately NOT assumed: on a
+> fresh install both land together and it works; the hazard is an UPGRADE onto a cluster whose daprd
+> already booted with the old list. Scheduling it is an owner call, not a code decision.
+
 under a comment "Derived from stateStore.scopes rather than restated" — a **concat onto
 hardcoded branches**, not a replacement. Both readings of the first draft were half-right; there
 is no anomaly here.
