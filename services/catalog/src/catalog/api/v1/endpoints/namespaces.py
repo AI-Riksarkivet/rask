@@ -33,6 +33,7 @@ from lance_namespace import (
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
 from catalog.api.security import CurrentToken
+from catalog.api.v1.endpoints.tables import _paginate
 from catalog.core.config import Settings
 from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
@@ -470,20 +471,50 @@ def namespace_exists(id: str, ns: NamespaceDep, settings: SettingsDep) -> None:
 
 
 @router.get("/{id}/table/list", response_model_exclude_none=True)
-def list_tables(
+async def list_tables(
     id: str,
     ns: NamespaceDep,
     settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
     page_token: str | None = None,
     limit: int | None = None,
     include_declared: bool = True,
 ) -> ListTablesResponse:
-    """List the tables under namespace ``id`` via ``list_tables`` (page_token/limit paged);
-    ``include_declared=false`` drops declared-only tables (reserved, no storage yet)."""
-    req = ListTablesRequest(
-        id=parse_identifier(id, settings.delimiter),
-        page_token=page_token,
-        limit=limit,
-        include_declared=include_declared,
-    )
-    return native.call(ns, "list_tables", req)
+    """List the tables under namespace ``id``; when FGA is on, filtered to what the caller can
+    ``can_read_data``. ``include_declared=false`` drops declared-only tables (reserved, no storage yet).
+
+    **WHY THIS FILTERS AT ALL — the route's gate stopped implying its contents.** The router mounts
+    every endpoint here under ``authorize``, which resolves this route's ``list`` action to
+    ``can_get_metadata``; C1 (upward visibility) then redefined that on a namespace as
+    ``reader or can_get_metadata from child``. The widening is correct for what it was for — without
+    it a grantee could not resolve the breadcrumb to their own table and every list above it 403'd —
+    but it means holding ``reader`` on ONE table opens this route, and the route used to answer with
+    every SIBLING table's name. Measured against both compiled models: before ``14a84022`` the check
+    was ``false`` (403); after it, ``true`` (200, full listing). A table list is not a harmless header;
+    ``viewer.api.security`` states the estate's position outright — "A corpus LIST is itself sensitive:
+    it names data someone may not know exists."
+
+    So the split ``open_notifications.md`` §3.1 already settled applies verbatim: the ROUTE may open on
+    ``can_get_metadata``, each ITEM is checked on the object itself. ``list_all_tables`` (``tables.py``)
+    has always done this; that this route did not was the inconsistency, not the policy.
+
+    **Pagination moved off the native call, for the reason it moved there too (#141).** A backend
+    ``limit`` truncates BEFORE the filter, so ``limit=10`` could answer 2 and hand out a cursor that
+    skips everything the filter removed — pages that silently drop tables the caller CAN read. The
+    native call is therefore unpaginated and the keyset cursor is applied to the filtered list. The
+    list is sorted and deduped first because the cursor is the last NAME of the previous page and is
+    stable only over an ordered one.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    req = ListTablesRequest(id=segments, include_declared=include_declared)
+    response: ListTablesResponse = await run_in_threadpool(native.call, ns, "list_tables", req)
+    names = sorted(set(response.tables or []))
+    # When FGA is on and the caller is known, keep only the tables they may actually read. The object
+    # id is the table's PATH under this namespace, built with `canonical_object_id` — the same joiner
+    # the grant path uses, so a check here cannot address an id a grant never wrote.
+    if settings.fga_enabled and token is not None and client is not None:
+        allowed = set(await fga.list_objects(client, user=token.sub, relation="can_read_data", object_type="table"))
+        names = [name for name in names if f"table:{fga.canonical_object_id([*segments, name], delimiter=settings.delimiter)}" in allowed]
+    response.tables, response.page_token = _paginate(names, page_token, limit)
+    return response
