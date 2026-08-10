@@ -155,3 +155,61 @@ def test_revoke_skips_the_inverse_edge_for_a_parent_type_that_declares_no_child(
     removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "annotation_project:labels", actor="test", origin="create"))
     assert removed == 1
     assert _keys(fake.deleted) == {("project:acme", "tenant", "annotation_project:labels")}
+
+
+# --------------------------------------------------------------------------- #
+# hierarchy_edge_tuples — the pairing, exposed so no writer can re-separate it
+# --------------------------------------------------------------------------- #
+
+
+def test_hierarchy_edge_tuples_returns_both_directions() -> None:
+    """The pairing extracted from `grant_on_create`, because it was NOT the only writer of these
+    edges — `medallion.services.train` and `scripts/seed_medallion_fga.sh` wrote the forward half
+    alone, leaving every object they created invisible from below. A one-directional link is a valid
+    tuple that no rule ever reads, so nothing failed; the lists above it simply came back empty."""
+    edges = fga.hierarchy_edge_tuples(child_object="table:ns1$t", parent_object="namespace:ns1")
+
+    assert [(t.user, t.relation, t.object) for t in edges] == [
+        ("namespace:ns1", "parent", "table:ns1$t"),
+        ("table:ns1$t", "child", "namespace:ns1"),
+    ]
+
+
+def test_hierarchy_edge_tuples_omits_the_inverse_where_the_model_has_no_child() -> None:
+    """`project` declares no `child`. A `child` tuple there is accepted by OpenFGA and read by no
+    rule — a silent no-op, which is worse than an error because it looks like the link was made."""
+    edges = fga.hierarchy_edge_tuples(child_object="warehouse:wh", parent_object="project:acme")
+
+    assert [(t.user, t.relation, t.object) for t in edges] == [("project:acme", "parent", "warehouse:wh")]
+
+
+def test_hierarchy_edge_tuples_honours_a_non_default_parent_relation() -> None:
+    """`annotation_project` spells the edge `tenant`. Writing `parent` there produces a tuple no rule
+    reads, so `admin from tenant` never resolves and the object looks unowned by everyone."""
+    edges = fga.hierarchy_edge_tuples(child_object="annotation_project:p1", parent_object="project:acme", parent_relation="tenant")
+
+    assert [(t.user, t.relation, t.object) for t in edges] == [("project:acme", "tenant", "annotation_project:p1")]
+
+
+def test_grant_on_create_is_built_on_the_shared_pairing() -> None:
+    """Not a duplicate of the batch test above: that one pins the RESULT, this one pins that there is
+    only ONE implementation of it. A second hand-written copy is exactly how the two writers drifted."""
+    import inspect
+
+    source = inspect.getsource(fga.grant_on_create)
+
+    assert "hierarchy_edge_tuples" in source, "grant_on_create re-implements the pairing instead of sharing it"
+    assert '"child"' not in source, "grant_on_create hand-writes the inverse edge again"
+
+
+def test_every_parent_type_with_a_child_relation_is_declared_here() -> None:
+    """`_CHILD_EDGE_PARENT_TYPES` is a hand-kept whitelist, and the inverse is skipped silently for a
+    type missing from it. So a `child` added to the model and not here would produce exactly the
+    invisible-object bug this helper exists to prevent, with every test still green."""
+    compiled = {td["type"]: set((td.get("relations") or {}).keys()) for td in fga.load_model()["type_definitions"]}
+    declares_child = {name for name, relations in compiled.items() if "child" in relations}
+
+    assert declares_child == set(fga._CHILD_EDGE_PARENT_TYPES), (
+        f"model.fga declares `child` on {sorted(declares_child)}; _CHILD_EDGE_PARENT_TYPES says "
+        f"{sorted(fga._CHILD_EDGE_PARENT_TYPES)} — the inverse edge is silently skipped for the difference"
+    )

@@ -34,14 +34,38 @@ w() {
   esac
 }
 
+# BOTH directions of one parent -> child link. `w <parent> parent <child>` alone is what this script
+# used to do, and a forward-only edge is a tuple OpenFGA accepts and no rule ever reads back: C1's
+# `can_get_metadata: reader or can_get_metadata from child` needs the INVERSE stored, because OpenFGA
+# cannot walk a tuple backwards. Without it a grantee on one table can read it and cannot see the
+# namespace or warehouse containing it — their own breadcrumb 403s and every list above comes back
+# empty, which is the exact symptom C1 was written to cure.
+#
+# The inverse goes only on parents whose type declares `child` (warehouse, namespace) — the shell
+# twin of `_CHILD_EDGE_PARENT_TYPES` in service_kit.governed.fga, whose `hierarchy_edge_tuples` owns
+# the same pairing for every Python writer. Adding `child` to a type in model.fga means adding it in
+# both places.
+#
+# Idempotent: `w` already swallows "already exists", so re-running this over an estate that has some
+# of these is the normal case — which is also how a pre-C1 estate is BACKFILLED. There is no other
+# backfill path; `revoke_object_tuples` reconstructs and deletes the inverse on drop, so nothing is
+# orphaned by adding them.
+link() {
+  local parent="$1" child="$2"
+  w "$parent" parent "$child"
+  case "${parent%%:*}" in
+    warehouse|namespace) w "$child" child "$parent" ;;
+  esac
+}
+
 # medallion stage namespaces under the warehouse (so the rung cascade reaches them) — the MEDIA lane's
 # namespaces included: without them the media mover's can_create_table check on namespace:silver-media
 # finds no parent chain and the governed cascade silently DROPs every media trigger (audit blocker).
-w "$WAREHOUSE" parent namespace:bronze
-w "$WAREHOUSE" parent namespace:silver
-w "$WAREHOUSE" parent namespace:gold
-w "$WAREHOUSE" parent namespace:bronze-media
-w "$WAREHOUSE" parent namespace:silver-media
+link "$WAREHOUSE" namespace:bronze
+link "$WAREHOUSE" namespace:silver
+link "$WAREHOUSE" namespace:gold
+link "$WAREHOUSE" namespace:bronze-media
+link "$WAREHOUSE" namespace:silver-media
 # The cascade DATASETS' table→namespace parent links. The catalog seeds these for tables it creates, but
 # the movers write Lance DIRECTLY — without a parent tuple on table:<dataset> nothing cascades to it, so
 # under LINEAGE_FGA_ENABLED no human (not even a warehouse owner) can can_get_metadata a mover-produced
@@ -51,12 +75,12 @@ w "$WAREHOUSE" parent namespace:silver-media
 # rung cascade, not just reads — a warehouse *writer* also gains can_write_data on every linked medallion
 # table (that concentric inheritance is the model working as designed, not a leak). Grant warehouse rungs
 # accordingly: humans who should only browse the estate get `reader`, never `writer`.
-w namespace:bronze parent 'table:bronze$events'
-w namespace:bronze parent 'table:bronze$pages'
-w namespace:silver parent 'table:silver$features'
-w namespace:gold parent 'table:gold$catalog'
-w namespace:bronze-media parent 'table:bronze-media$objects'
-w namespace:silver-media parent 'table:silver-media$features'
+link namespace:bronze 'table:bronze$events'
+link namespace:bronze 'table:bronze$pages'
+link namespace:silver 'table:silver$features'
+link namespace:gold 'table:gold$catalog'
+link namespace:bronze-media 'table:bronze-media$objects'
+link namespace:silver-media 'table:silver-media$features'
 # writers → can_create_table on their stage; the promoter mover → can_promote on gold. The bronze
 # ingest head writes as the PRODUCER's identity (lance-ray) — the retired raw→bronze mover's writer
 # rung moved here with the collapse (R23).
@@ -82,7 +106,7 @@ w user:service-silver-to-gold validator namespace:gold
 # POST /v1/model/<model>/promote endpoint, gated on can_promote = validator. A writer (incl. the trainer)
 # is NOT a validator, so it is denied — exactly the silver→gold separation, reused for models. A `validator
 # namespace:models` grant cascades to table:models$<model> via the per-model parent link the trainer seeds.
-w "$WAREHOUSE" parent namespace:models
+link "$WAREHOUSE" namespace:models
 w user:service-trainer reader namespace:silver
 w user:service-trainer reader namespace:gold
 w user:service-trainer writer namespace:models
@@ -109,17 +133,17 @@ PROJECT="${1:-}"
 if [ -n "$PROJECT" ]; then
   ZONE_WH="${2:?usage: seed_medallion_fga.sh <project> <zone-warehouse-id> (the tenant medallion bucket warehouse)}"
   for ns in bronze silver gold; do
-    w "warehouse:$ZONE_WH" parent "namespace:$PROJECT-$ns"
+    link "warehouse:$ZONE_WH" "namespace:$PROJECT-$ns"
   done
   w user:service-lance-ray writer "namespace:$PROJECT-bronze"
   w user:service-ingest writer "namespace:$PROJECT-bronze"
   w user:service-bronze-to-silver writer "namespace:$PROJECT-silver"
   w user:service-silver-to-gold validator "namespace:$PROJECT-gold"
-  w "namespace:$PROJECT-bronze" parent "table:$PROJECT-bronze\$events"
+  link "namespace:$PROJECT-bronze" "table:$PROJECT-bronze\$events"
   # The ingest lane's table. `INGEST_TABLE` because the ETL form lets a user name it, unlike the
   # producer's fixed `events` lane — pass it when seeding a tenant whose first ingest is not `pages`.
-  w "namespace:$PROJECT-bronze" parent "table:$PROJECT-bronze\$${INGEST_TABLE:-pages}"
-  w "namespace:$PROJECT-silver" parent "table:$PROJECT-silver\$features"
-  w "namespace:$PROJECT-gold" parent "table:$PROJECT-gold\$catalog"
+  link "namespace:$PROJECT-bronze" "table:$PROJECT-bronze\$${INGEST_TABLE:-pages}"
+  link "namespace:$PROJECT-silver" "table:$PROJECT-silver\$features"
+  link "namespace:$PROJECT-gold" "table:$PROJECT-gold\$catalog"
   echo "✓ enabled tenant '$PROJECT' medallion (zone warehouse:$ZONE_WH — stage parents, mover rungs, table links)"
 fi

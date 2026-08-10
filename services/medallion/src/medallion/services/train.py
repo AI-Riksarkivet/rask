@@ -236,20 +236,21 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, fga_c
         # LINEAGE_FGA_ENABLED. Idempotent (duplicate writes are swallowed); a dangling link for a
         # job that later fails is harmless (same posture as the pre-seeded mover links). Placed
         # before the ack so an outage RETRYs rather than acking with the link half-missing.
-        from service_kit.governed.fga import ClientTuple  # openfga_sdk re-export — only needed on this path
-
         try:
             await fga.write_tuples(
                 fga_client,
                 actor="system:medallion",
                 origin="train",
-                tuples=[
-                    ClientTuple(
-                        user=f"namespace:{settings.models_namespace}",
-                        relation="parent",
-                        object=f"table:{settings.models_namespace}${model}",
-                    )
-                ],
+                # BOTH directions. The forward `parent` edge alone leaves the model table with no
+                # upward visibility — `can_get_metadata: reader or can_get_metadata from child` needs
+                # the inverse STORED, because OpenFGA cannot walk a tuple backwards — so a grantee on
+                # one model could read it and could not see the `models` namespace containing it.
+                # This wrote the forward half only; `hierarchy_edge_tuples` is what stops the pair
+                # being re-separated by the next writer.
+                tuples=fga.hierarchy_edge_tuples(
+                    child_object=f"table:{settings.models_namespace}${model}",
+                    parent_object=f"namespace:{settings.models_namespace}",
+                ),
             )
         except ServiceUnavailableError as exc:
             log.warning("train_parent_link_unavailable", extra={"token": token, "error": str(exc)})

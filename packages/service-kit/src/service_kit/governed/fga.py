@@ -122,6 +122,34 @@ _MAX_REVOKE_PAGES = 100
 _CHILD_EDGE_PARENT_TYPES = frozenset({"warehouse", "namespace"})
 
 
+def hierarchy_edge_tuples(*, child_object: str, parent_object: str, parent_relation: str = "parent") -> list[ClientTuple]:
+    """BOTH directions of one parent→child link, so a caller cannot write half of it.
+
+    OpenFGA cannot walk a tuple backwards, so `can_get_metadata: reader or can_get_metadata from
+    child` needs the inverse edge STORED. `grant_on_create` has always written both; every other
+    writer has written only `parent`, and each one of those is an object whose upward visibility is
+    silently dead — the grantee can read the table and cannot see the namespace or warehouse that
+    contains it, so their own breadcrumb 403s and every list above it comes back empty.
+
+    That is why this exists as a function rather than as a rule people are expected to remember: the
+    C1 rollout shipped with `medallion.services.train` and `scripts/seed_medallion_fga.sh` still
+    writing the forward edge alone, and nothing catches it — a one-directional link is a perfectly
+    valid tuple that simply never resolves.
+
+    The inverse is written only when the PARENT's type declares `child` (:data:`_CHILD_EDGE_PARENT_TYPES`):
+    a `child` tuple on a type that does not is accepted by the API and read by no rule, which is the
+    same silent no-op as writing `parent` where the model says `tenant`.
+
+    Idempotent by construction — `write_tuples` swallows a duplicate — so it is safe over an estate
+    that already has some of these, and `revoke_object_tuples` already reconstructs and removes the
+    inverse on drop, so nothing is orphaned by adding them.
+    """
+    tuples = [ClientTuple(user=parent_object, relation=parent_relation, object=child_object)]
+    if parent_object.split(":", 1)[0] in _CHILD_EDGE_PARENT_TYPES:
+        tuples.append(ClientTuple(user=child_object, relation="child", object=parent_object))
+    return tuples
+
+
 def load_model() -> dict[str, Any]:
     """Load the authorization model JSON shipped with the app."""
     return json.loads(_MODEL_PATH.read_text())
@@ -1143,16 +1171,10 @@ async def grant_on_create(
         # spells it `parent`, but `annotation_project` spells it `tenant` — writing `parent` there
         # produces a tuple OpenFGA accepts and no rule ever reads, so `admin from tenant` and
         # `member from tenant` never resolve and the object looks unowned by everyone.
-        tuples.append(ClientTuple(user=parent_object, relation=parent_relation, object=obj))
-        # …and the INVERSE edge, in the SAME batch, so the two directions cannot drift. It backs
-        # `can_get_metadata: reader or can_get_metadata from child`: without it a single-table grant
-        # is unreachable, because the grantee can read the table and cannot see the namespace or
-        # warehouse that contains it. OpenFGA cannot walk a tuple backwards, so the reverse edge has
-        # to be stored. Written only when the PARENT's type declares `child` — a tuple on a type that
-        # does not is accepted by the API and read by no rule, the same silent no-op the comment
-        # above describes for `tenant`.
-        if parent_object.split(":", 1)[0] in _CHILD_EDGE_PARENT_TYPES:
-            tuples.append(ClientTuple(user=obj, relation="child", object=parent_object))
+        # …and the INVERSE edge with it, in the SAME batch, so the two directions cannot drift.
+        # `hierarchy_edge_tuples` owns that pairing for every writer — see its docstring for what
+        # happens to an object that gets only the forward half.
+        tuples.extend(hierarchy_edge_tuples(child_object=obj, parent_object=parent_object, parent_relation=parent_relation))
     await write_tuples(
         client,
         tuples,
