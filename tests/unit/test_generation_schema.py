@@ -133,10 +133,11 @@ def test_an_unconstrained_class_may_generate_as_any_tool() -> None:
 def test_the_schema_rides_the_remote_wire() -> None:
     """A vLLM backend receives the contract IN the request — `output_schema` beside the prompt,
     ready for `guided_json`; a non-LLM backend is free to ignore the key."""
-    from types import SimpleNamespace
     from typing import Any
 
     from annotator.api.v1.endpoints.assist import AssistRequest, _remote
+
+    from service_kit.media.state import AppState
 
     captured: dict[str, Any] = {}
 
@@ -151,6 +152,6 @@ def test_the_schema_rides_the_remote_wire() -> None:
             return _Resp()
 
     schema = generation_schema(OCR)
-    _remote(SimpleNamespace(http=_Http()), "http://model", ("d1", 0, 0), AssistRequest(producer="vlm"), schema)  # type: ignore[arg-type]
+    _remote(AppState(http=_Http()), "http://model", ("d1", 0, 0), AssistRequest(producer="vlm"), schema)
 
     assert captured["output_schema"] == schema

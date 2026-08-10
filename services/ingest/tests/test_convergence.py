@@ -14,7 +14,7 @@ Three behaviours, each pinned separately because each fails differently:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 # Populates the source registry by import-time side effect — the same trap that made an in-cluster
 # probe pass while the real emit failed: a bare interpreter has NO kinds registered, and a test
@@ -26,6 +26,10 @@ from ingest.identity import unit_id
 from ingest.lander import CREATION_FLAGS
 from ingest.worker import units_to_table
 from ingest.workflow import enumerate_chunks
+
+
+if TYPE_CHECKING:
+    from dapr.ext.workflow import WorkflowActivityContext
 
 
 # ── the identity itself ────────────────────────────────────────────────────────────────
@@ -119,7 +123,7 @@ def _seed_bronze(uri: str, keys: list[str]) -> None:
     lance.write_dataset(table, uri, **CREATION_FLAGS)
 
 
-def _enumerate(tmp_path: Path, root: Path, uri: str) -> list[dict[str, Any]]:
+def _enumerate(ctx: WorkflowActivityContext, root: Path, uri: str) -> list[dict[str, Any]]:
     payload = {
         "spec": {
             "run_id": "conv-test",
@@ -130,10 +134,10 @@ def _enumerate(tmp_path: Path, root: Path, uri: str) -> list[dict[str, Any]]:
         },
         "dataset_uri": uri,
     }
-    return enumerate_chunks(None, payload)  # type: ignore[arg-type] — the activity never touches ctx
+    return enumerate_chunks(ctx, payload)
 
 
-def test_a_rerun_over_an_UNCHANGED_source_enumerates_NOTHING(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_rerun_over_an_UNCHANGED_source_enumerates_NOTHING(activity_ctx: WorkflowActivityContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Condition 1's engine: every key already in bronze -> zero chunks -> the run takes the
     units_total == 0 short-circuit -> COMPLETE, no fetch, no commit, no new version."""
     monkeypatch.setenv("RASK_INGEST_LOCAL_ROOT", str(tmp_path))
@@ -149,10 +153,10 @@ def test_a_rerun_over_an_UNCHANGED_source_enumerates_NOTHING(tmp_path: Path, mon
     uri = str(tmp_path / "bronze.lance")
     _seed_bronze(uri, keys)
 
-    assert _enumerate(tmp_path, root, uri) == [], "every object is already in bronze — enumerating any of them re-fetches and re-lands it"
+    assert _enumerate(activity_ctx, root, uri) == [], "every object is already in bronze — enumerating any of them re-fetches and re-lands it"
 
 
-def test_a_NEW_object_enumerates_EXACTLY_ONE_unit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_NEW_object_enumerates_EXACTLY_ONE_unit(activity_ctx: WorkflowActivityContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Condition 3's engine: the skip happens at enumerate — proven by the chunk carrying ONE key,
     which is also what makes `units_total` the honest fetch count."""
     monkeypatch.setenv("RASK_INGEST_LOCAL_ROOT", str(tmp_path))
@@ -169,7 +173,7 @@ def test_a_NEW_object_enumerates_EXACTLY_ONE_unit(tmp_path: Path, monkeypatch: p
     _seed_bronze(uri, keys)
 
     (root / "c.tif").write_bytes(b"II*\x00c")
-    chunks = _enumerate(tmp_path, root, uri)
+    chunks = _enumerate(activity_ctx, root, uri)
 
     assert len(chunks) == 1
     assert len(chunks[0]["keys"]) == 1
@@ -202,7 +206,9 @@ def test_the_etag_COLUMN_records_what_the_identity_used(tmp_path: Path) -> None:
 # ── the anti-join must FAIL rather than skip nothing (F12c) ────────────────────────────
 
 
-def test_an_UNREADABLE_bronze_FAILS_the_enumeration_instead_of_ingesting_everything(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_UNREADABLE_bronze_FAILS_the_enumeration_instead_of_ingesting_everything(
+    activity_ctx: WorkflowActivityContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The defect: a bare `except Exception` around the `id` read logged and continued with an EMPTY
     set — and an empty set does not mean "nothing to skip", it means "skip NOTHING".
 
@@ -231,10 +237,10 @@ def test_an_UNREADABLE_bronze_FAILS_the_enumeration_instead_of_ingesting_everyth
     monkeypatch.setattr(lance, "dataset", _unreadable)
 
     with pytest.raises(AntiJoinUnavailable, match="already holds"):
-        _enumerate(tmp_path, root, uri)
+        _enumerate(activity_ctx, root, uri)
 
 
-def test_an_EMPTY_bronze_is_not_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_EMPTY_bronze_is_not_a_failure(activity_ctx: WorkflowActivityContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The legitimate empty case stays legitimate: `ensure_dataset` creates the table with zero rows,
     so a run against a brand-new dataset must enumerate everything rather than refuse."""
     from ingest.catalog import LocalCatalog
@@ -248,7 +254,7 @@ def test_an_EMPTY_bronze_is_not_a_failure(tmp_path: Path, monkeypatch: pytest.Mo
     uri = str(tmp_path / "bronze.lance")
     LocalCatalog(BRONZE_SCHEMA).ensure_at(uri)
 
-    chunks = _enumerate(tmp_path, root, uri)
+    chunks = _enumerate(activity_ctx, root, uri)
 
     assert len(chunks) == 1
     assert len(chunks[0]["keys"]) == 1

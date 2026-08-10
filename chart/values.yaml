@@ -1608,8 +1608,20 @@ openfga:
   # NOT set here, deliberately: `pipeline_list_objects` is already the DEFAULT since v1.11.6, and
   # `datastore_throttling` changes behaviour under load on a Postgres THREE consumers share — decide
   # that one against measurements, not by switching it on blind.
-  experimentals:
-    - weighted_graph_check
+  #
+  # WHY AN ENV VAR AND NOT `experimentals:` — 0.3.9's values.schema.json ENUMERATES the four flags it
+  # knew about and `weighted_graph_check` post-dates it, so `experimentals: [weighted_graph_check]`
+  # fails schema validation before a single template renders. That is not a helm-4 quirk: `helm lint
+  # chart` and `helm template chart` both die on it under the CI-pinned 3.16.4 as well. `extraEnvVars`
+  # carries no enum, the subchart appends it verbatim to the server container's env, and
+  # OPENFGA_EXPERIMENTALS is the EXACT variable `experimentals:` renders (deployment.yaml, `join ","`)
+  # — so the binary is configured identically. It also reaches the subchart's bundled migrate
+  # container, which is inert here: datastore.applyMigrations is false and templates/openfga-migrate.yaml
+  # owns migration instead. Move this back to `experimentals:` when the subchart reaches a version whose
+  # enum lists the flag; that bump is blocked on Chart.lock (see chart/Chart.yaml under openfga).
+  extraEnvVars:
+    - name: OPENFGA_EXPERIMENTALS
+      value: weighted_graph_check
   datastore:
     engine: postgres
     # DSN comes from the infra-credentials Secret (key openfga-datastore-uri) — the SAME secret the AGE

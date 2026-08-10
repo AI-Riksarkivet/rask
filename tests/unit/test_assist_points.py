@@ -11,10 +11,11 @@ would be indistinguishable from a no-op.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 from annotator.api.v1.endpoints.assist import _SAM_CLICK_PATCH, AssistRequest, Point, Region, _mock, _remote
+
+from service_kit.media.state import AppState
 
 
 def test_points_parse_on_the_request_and_default_empty() -> None:
@@ -87,7 +88,7 @@ def test_remote_backends_receive_the_full_point_set() -> None:
             return _Resp()
 
     body = AssistRequest(producer="sam-click", points=[Point(x=1, y=2), Point(x=3, y=4, positive=False)])
-    _remote(SimpleNamespace(http=_Http()), "http://model", ("d1", 0, 0), body)  # type: ignore[arg-type]
+    _remote(AppState(http=_Http()), "http://model", ("d1", 0, 0), body)
 
     assert captured["points"] == [
         {"x": 1.0, "y": 2.0, "positive": True},

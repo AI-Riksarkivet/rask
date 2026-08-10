@@ -67,7 +67,11 @@ if TYPE_CHECKING:
 # One child workflow per this many keys. Small enough that a chunk's result stays compact in the
 # state store, large enough that a million-unit run does not spawn a million children. The plan's
 # own figure (open_ingest.md: "child workflow per ~1-10k keys").
-CHUNK_SIZE = 1000
+#
+# Annotated `int` because it is a KNOB, not an identity: unannotated, its declared type is the
+# literal 1000, and rebinding it — which the chunk-boundary test does, to slice at 3 without writing
+# a 1000-file fixture — is then a type error rather than the intended tuning.
+CHUNK_SIZE: int = 1000
 
 # Retries are the activity's, not a hand-rolled loop: Dapr owns the backoff and the replay.
 ACTIVITY_RETRY = wf.RetryPolicy(

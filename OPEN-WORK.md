@@ -3506,7 +3506,13 @@ beside the existing `fga model test` so compatibility is machine-checked, not re
 
 ### J-followups — what the v1.18.3 upgrade opened (2026-08-08)
 
-The image is v1.18.3 and `weighted_graph_check` is ON (chart/values.yaml `openfga.experimentals`).
+The image is v1.18.3 and `weighted_graph_check` is ON — set as `chart/values.yaml`
+`openfga.extraEnvVars` → `OPENFGA_EXPERIMENTALS`, **not** the `experimentals:` key this line named
+until 2026-08-10. The 0.3.9 subchart's `values.schema.json` enumerates the four flags it knew about,
+and `weighted_graph_check` post-dates it, so the `experimentals:` form failed schema validation and
+took the WHOLE chart render down — under helm 3.16.4, the CI pin, as well as helm 4. Corrected here
+because anyone auditing whether the flag is on greps for `experimentals:`, finds only comment prose,
+and would conclude the feature had been silently dropped.
 Three things it made available that are NOT wired, each deliberately left as its own change:
 
 1. **Subchart 0.3.9 → 0.3.12** (its appVersion IS v1.18.3). Needs `helm dependency update ./chart`

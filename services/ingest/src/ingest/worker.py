@@ -376,23 +376,29 @@ class Worker:
                     task = UnitTask.model_validate_json(msg.data)  # type: ignore[attr-defined]
                     async with sem:
                         try:
-                            key, result = await self._one(task)
+                            # Kept as ONE value rather than unpacked: `_one` returns
+                            # `tuple[str, bytes] | tuple[None, str]`, and the two halves are
+                            # correlated. Unpacking first breaks that — the refusal branch's `str`
+                            # then rides along into the payload list, which is a `bytes` list.
+                            fetched = await self._one(task)
                         except Exception as exc:
                             await self._refuse(msg, task, exc, outcome)
                             return
-                        if key is None:
+                        if fetched[0] is None:
                             # Validation refused it: park and ACK. Redelivering corrupt bytes cannot help.
-                            outcome.errors[task.key] = str(result)
-                            await self._q.park_poison(task, str(result))
+                            reason = fetched[1]
+                            outcome.errors[task.key] = reason
+                            await self._q.park_poison(task, reason)
                             await msg.ack()
                             return
                         # Held, NOT acked — the ack is owed until this unit's fragment is on the store.
-                        pending.append((key, result))
+                        key, payload = fetched
+                        pending.append((key, payload))
                         pending_parts.append(task.partition_key)
                         pending_tokens.append(task.token)
                         pending_msgs.append(msg)
                         held[id(msg)] = msg
-                        pending_bytes += len(result)
+                        pending_bytes += len(payload)
 
                 # A REDELIVERED unit never shares a fragment with a fresh one, and that isolation is what
                 # keeps recovery decidable. `discover_staged` resolves an overlap by dropping the

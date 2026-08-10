@@ -12,13 +12,13 @@ own test; a diff that touches more has re-welded something.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence
+    from collections.abc import Iterator, Sequence
 
     from service_kit.lakehouse.sources import SourceAdapter, SourceObject
 
@@ -74,14 +74,21 @@ class SourceDescriptor(BaseModel):
     options: list[SourceOption] = Field(default_factory=list)
 
 
+#: The three registry callables are `@runtime_checkable` because `_Registration` STORES them: a
+#: pydantic field typed by a bare Protocol validates with `isinstance`, which a plain Protocol
+#: refuses at runtime. Storing them as `object` instead is what forced a cast at all three read
+#: sites — and a cast there erases the one signature the registry exists to hold.
+@runtime_checkable
 class SourceFactory(Protocol):
     def __call__(self, spec: SourceSpec) -> SourceAdapter: ...
 
 
+@runtime_checkable
 class LineageTwin(Protocol):
     def __call__(self, spec: SourceSpec) -> LineageInput: ...
 
 
+@runtime_checkable
 class PartitionOf(Protocol):
     """How this kind groups its units — the value of the bronze `partition_key` column.
 
@@ -101,10 +108,10 @@ class _Registration(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     kind: str
-    build: object
-    lineage_input: object
+    build: SourceFactory
+    lineage_input: LineageTwin
     descriptor: SourceDescriptor
-    partition_of: object = None
+    partition_of: PartitionOf | None = None
 
 
 _REGISTRY: dict[str, _Registration] = {}
@@ -148,8 +155,7 @@ def build_source(spec: SourceSpec) -> SourceAdapter:
     if reg is None:
         known = ", ".join(sorted(_REGISTRY)) or "<none registered>"
         raise ValueError(f"unknown source kind {spec.kind!r} — registered kinds: {known}")
-    build_fn: Callable[[SourceSpec], SourceAdapter] = reg.build  # type: ignore[assignment]
-    return build_fn(spec)
+    return reg.build(spec)
 
 
 def lineage_input_for(spec: SourceSpec) -> LineageInput:
@@ -157,8 +163,7 @@ def lineage_input_for(spec: SourceSpec) -> LineageInput:
     reg = _REGISTRY.get(spec.kind)
     if reg is None:
         raise ValueError(f"unknown source kind {spec.kind!r}")
-    twin: Callable[[SourceSpec], LineageInput] = reg.lineage_input  # type: ignore[assignment]
-    return twin(spec)
+    return reg.lineage_input(spec)
 
 
 def partition_key_for(spec: SourceSpec, key: str) -> str | None:
@@ -171,8 +176,7 @@ def partition_key_for(spec: SourceSpec, key: str) -> str | None:
     reg = _REGISTRY.get(spec.kind)
     if reg is None or reg.partition_of is None:
         return None
-    fn: Callable[[SourceSpec, str], str | None] = reg.partition_of  # type: ignore[assignment]
-    return fn(spec, key)
+    return reg.partition_of(spec, key)
 
 
 def registered_kinds() -> list[str]:
@@ -215,6 +219,7 @@ def iter_unit_keys(adapter: SourceAdapter) -> Iterator[str]:
     if callable(keyed):
         return iter(keyed())
     return (obj.uri for obj in adapter.iter_objects())
+
 
 def iter_versioned_unit_keys(adapter: SourceAdapter) -> Iterator[tuple[str, str | None]]:
     """Enumerate ``(key, version_token)`` pairs — the identity material the anti-join needs.

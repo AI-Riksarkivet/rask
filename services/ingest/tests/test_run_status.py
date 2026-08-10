@@ -17,10 +17,15 @@ this arithmetic.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 import pytest
 from fastapi.testclient import TestClient
 from ingest.runs import InMemoryRunStore, RunRecord, merge_workflow_state
+
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 def _record(**overrides: object) -> RunRecord:
@@ -128,10 +133,10 @@ def test_unparseable_output_still_yields_the_runtime_status() -> None:
 
 
 class _Reader:
-    def __init__(self, state: dict[str, object] | None) -> None:
+    def __init__(self, state: Mapping[str, object] | None) -> None:
         self._state = state
 
-    def state(self, run_id: str) -> dict[str, object] | None:
+    def state(self, run_id: str) -> Mapping[str, object] | None:
         return self._state
 
 

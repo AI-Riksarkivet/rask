@@ -26,6 +26,10 @@ class _Spec:
     offering only `project`, and `_publish` swallowed the AttributeError into its
     catalog-cannot-publish branch. The run would have reported `published: False` with a plausible
     reason, in production, with nothing raising.
+
+    That drift is now caught rather than described: `_publish` takes `runtime.PublishSpec`, so this
+    class is structurally checked against the fields the function actually reads and dropping one
+    fails the type gate instead of a production run.
     """
 
     project = "demo"

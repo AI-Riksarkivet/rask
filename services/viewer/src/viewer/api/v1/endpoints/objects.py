@@ -29,6 +29,7 @@ from functools import lru_cache
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 from pydantic import BaseModel
 

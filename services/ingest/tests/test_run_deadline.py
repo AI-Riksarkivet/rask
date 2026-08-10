@@ -192,7 +192,10 @@ def test_the_ceiling_refuses_BEFORE_any_unit_is_published() -> None:
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "ingest_run")
 
     def _line_of(pred) -> int | None:
-        return next((n.lineno for n in ast.walk(fn) if pred(n)), None)
+        # `ast.walk` yields bare `AST`, which carries no position — only the positioned subclasses
+        # do. Narrowing to those is what makes `.lineno` readable, and it excludes nothing either
+        # predicate below can match: both are looking for expressions.
+        return next((n.lineno for n in ast.walk(fn) if isinstance(n, ast.stmt | ast.expr) and pred(n)), None)
 
     ceiling = _line_of(lambda n: isinstance(n, ast.Attribute) and n.attr == "max_units")
     fanout = _line_of(lambda n: isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "call_child_workflow")

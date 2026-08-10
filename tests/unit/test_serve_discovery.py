@@ -111,11 +111,14 @@ def test_env_config_is_operator_INTENT_and_wins_over_observation() -> None:
 def test_an_unreachable_dashboard_degrades_to_config_plus_mock() -> None:
     reset_cache()
 
-    class _Http:
-        def get(self, url: str, timeout: float) -> httpx.Response:
-            raise httpx.ConnectError("cluster down")
+    def _refuse(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("cluster down")
 
-    assert discovered_backends(_Http(), "http://ray:8265", None) == {}  # type: ignore[arg-type]
+    # A REAL client over a refusing transport: the refusal travels httpx's own send path out of
+    # `.get`, so what the production `except (httpx.HTTPError, ValueError)` sees is what a real
+    # unreachable dashboard would deliver — not a stand-in `.get` whose own body was the assertion.
+    with httpx.Client(transport=httpx.MockTransport(_refuse)) as http:
+        assert discovered_backends(http, "http://ray:8265", None) == {}
 
 
 def test_discovery_is_TTL_cached_per_dashboard() -> None:

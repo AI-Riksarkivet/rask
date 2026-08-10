@@ -18,7 +18,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import pyarrow as pa
 from lance import blob_field
@@ -485,7 +485,27 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *,
     }
 
 
-def _publish(catalog: Any, spec: RunSpec, version: int) -> dict[str, Any]:  # noqa: ANN401 — the catalog seam
+class PublishSpec(Protocol):
+    """The three fields `_publish` READS off a run spec, named so a stand-in is CHECKED against them.
+
+    `RunSpec` satisfies it, and so must any test double. Annotating the concrete model and letting a
+    double through on trust is how this call came to swallow an AttributeError into its
+    catalog-cannot-publish branch: the plane started addressing the catalog by namespace, the double
+    still offered only `project`, and the run reported `published: false` with a plausible reason
+    while nothing raised.
+    """
+
+    @property
+    def namespace(self) -> str: ...
+
+    @property
+    def dataset(self) -> str: ...
+
+    @property
+    def run_id(self) -> str: ...
+
+
+def _publish(catalog: Any, spec: PublishSpec, version: int) -> dict[str, Any]:  # noqa: ANN401 — the catalog seam
     """Publish the committed version, and report the RANGE it covers (§ D2 D-R3).
 
     `from_version`/`to_version` are what a consumer needs to resolve an exact row delta

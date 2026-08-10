@@ -39,6 +39,9 @@ class _FakeStateManager:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
         self.saves = 0
+        #: Raised by `save_state`. A store outage is a behaviour of the double rather than a method
+        #: a test rebinds, so the substitute stays one the type checker can still see.
+        self.fail_save_with: Exception | None = None
 
     async def try_get_state(self, key: str) -> tuple[bool, str | None]:
         return (key in self.store, self.store.get(key))
@@ -47,6 +50,8 @@ class _FakeStateManager:
         self.store[key] = value
 
     async def save_state(self) -> None:
+        if self.fail_save_with is not None:
+            raise self.fail_save_with
         self.saves += 1
 
 
@@ -235,10 +240,7 @@ async def test_a_failed_store_leaves_the_lease_reminder_armed(event: str) -> Non
     self-expiry, exactly what the lease reminder exists to prevent. (open_dapr.md §2.6.)"""
     actor = await _claimed()
 
-    async def _boom() -> None:
-        raise RuntimeError("state store down")
-
-    actor.sm.save_state = _boom  # type: ignore[method-assign]
+    actor.sm.fail_save_with = RuntimeError("state store down")
     with pytest.raises(RuntimeError):
         await actor.fire(_verified({"event": event, "actor": "gina"}))
 

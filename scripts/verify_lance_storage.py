@@ -328,17 +328,35 @@ LANCE_CHECKS: list[Callable[[Path], CheckResult]] = [
 S3_CHECKS: list[Callable[[Path], CheckResult]] = [check_conditional_put, check_server_side_copy]
 
 
+def _check_name(check: Callable[[Path], CheckResult]) -> str:
+    """A check's display name: the first line of its docstring, or its function name.
+
+    `__doc__` is `str | None`, and both call sites below are ERROR paths — so a check written without
+    a docstring would raise `AttributeError` inside the handler that exists to report its failure,
+    replacing the real diagnosis with a stack trace about the reporter. Running under `python -OO`
+    strips every docstring and does the same thing to ALL of them at once. The fallback is the
+    function name, which is what a reader would grep for anyway.
+
+    Both reads go through `getattr`, and the second one is not defensiveness — it is the type being
+    honest. `Callable[[Path], CheckResult]` is a CALL SIGNATURE and promises nothing else: every real
+    function carries `__name__`, but a `functools.partial`, a bound method wrapper or any callable
+    object need not, and `ty` says so. Widening the parameter to a Protocol declaring `__name__` would
+    buy one attribute that is only ever read after something has already failed.
+    """
+    return (check.__doc__ or getattr(check, "__name__", "<unnamed check>")).split("\n")[0]
+
+
 def run(checks: list[Callable[[Path], CheckResult]], root: Path) -> list[CheckResult]:
     results: list[CheckResult] = []
     for check in checks:
         try:
             results.append(check(root))
         except Blocked as exc:
-            results.append(CheckResult(name=check.__doc__.split("\n")[0], status="ENVIRONMENT-BLOCKED", evidence=str(exc)))
+            results.append(CheckResult(name=_check_name(check), status="ENVIRONMENT-BLOCKED", evidence=str(exc)))
         except Exception as exc:
             results.append(
                 CheckResult(
-                    name=check.__doc__.split("\n")[0],
+                    name=_check_name(check),
                     status="FAILED",
                     evidence=f"{type(exc).__name__}: {exc}",
                 )

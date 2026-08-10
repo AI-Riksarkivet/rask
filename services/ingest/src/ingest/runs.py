@@ -10,9 +10,18 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import BaseModel, Field
+
+
+if TYPE_CHECKING:
+    # `Mapping`, not `dict`, on every parameter below that only READS the engine's state. `dict` is
+    # INVARIANT in its value type, so `dict[str, str]` — what a state payload written out as a
+    # literal infers as — is not assignable to `dict[str, object]`, and the callers that hand one
+    # over are correct. Nothing here mutates the state, so the read-only supertype is both the
+    # honest signature and the one those callers already satisfy.
+    from collections.abc import Mapping
 
 
 # The namespace that makes run ids deterministic across processes and restarts. Fixed constant, not
@@ -209,10 +218,10 @@ class WorkflowRunReader(Protocol):
     """Reads a run's live state from the workflow engine. A Protocol so the API needs no sidecar in
     tests."""
 
-    def state(self, run_id: str) -> dict[str, object] | None: ...
+    def state(self, run_id: str) -> Mapping[str, object] | None: ...
 
 
-def record_from_workflow_state(run_id: str, state: dict[str, object] | None) -> RunRecord | None:
+def record_from_workflow_state(run_id: str, state: Mapping[str, object] | None) -> RunRecord | None:
     """Rebuild the accepted-time record from the workflow's own INPUT.
 
     THE FIX for a 404 after a pod restart. `InMemoryRunStore` is process-local, so killing the pod
@@ -242,7 +251,7 @@ def record_from_workflow_state(run_id: str, state: dict[str, object] | None) -> 
     )
 
 
-def _failure_detail(state: dict[str, object]) -> str:
+def _failure_detail(state: Mapping[str, object]) -> str:
     """The engine's own reason for a RAISED workflow failure, or "" when it records none.
 
     Never raises and never assumes a shape: the field has moved across dapr-ext-workflow versions and
@@ -261,7 +270,7 @@ def _failure_detail(state: dict[str, object]) -> str:
     return ""
 
 
-def merge_workflow_state(record: RunRecord, state: dict[str, object] | None) -> RunRecord:
+def merge_workflow_state(record: RunRecord, state: Mapping[str, object] | None) -> RunRecord:
     """Overlay the engine's live truth onto the accepted-time record.
 
     THE FIX for a run that completed in-cluster and kept reporting ACCEPTED with `units_total: 0`.
