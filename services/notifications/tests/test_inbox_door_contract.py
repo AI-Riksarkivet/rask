@@ -463,3 +463,19 @@ def test_an_empty_inbox_is_not_turned_into_an_outage_by_the_same_setting(client:
 
     assert response.status_code == 200
     assert response.json()["notifications"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_delivery_ledger_never_reaches_the_wire() -> None:
+    """`sent` is bookkeeping, and disclosing it discloses something about a PERSON, not a run.
+
+    A reader who can see which channels a notification was pushed to learns that that subject has
+    email or Slack wired — on a shared screen, about someone else. The wire row is a declared field
+    list rather than an exclusion for exactly this reason: an exclusion silently admits whatever the
+    storage model grows next, and `sent` is the proof that it grows.
+    """
+    from notifications.api.schemas import InboxRow
+    from notifications.models import InboxPointer
+
+    assert "sent" in InboxPointer.model_fields, "the ledger left the store; this test is now vacuous"
+    assert "sent" not in InboxRow.model_fields

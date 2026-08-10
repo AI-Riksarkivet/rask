@@ -47,6 +47,7 @@ from notifications.config import get_notifications_settings
 from notifications.errors import InboxUnreadable
 from notifications.feed import compact, paginate, unread_count
 from notifications.models import (
+    ChannelPrefs,
     InboxDismiss,
     InboxMark,
     InboxMeta,
@@ -75,6 +76,9 @@ ROWS_KEY = "inbox-rows"
 #: The THIRD partition: this subject's watch list. Read only by the settings surface and by a fan-out
 #: resolving one subject — never by the badge, which is why it is not folded into the meta record.
 WATCHES_KEY = "inbox-watches"
+#: The FOURTH partition: where this subject wants to be pushed. Read only by the prefs door and by a
+#: channel fan-out resolving one subject — never by the badge, for the same reason as the watches.
+PREFS_KEY = "inbox-prefs"
 
 #: The compaction reminder's name. One per actor; repeating until the inbox is empty.
 COMPACTION_REMINDER = "compaction"
@@ -137,6 +141,18 @@ class InboxActorInterface(ActorInterface):
 
     @actormethod(name="SetWatch")
     async def set_watch(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @actormethod(name="GetPrefs")
+    async def get_prefs(self) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @actormethod(name="SetPrefs")
+    async def set_prefs(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @actormethod(name="ClaimChannel")
+    async def claim_channel(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
 
@@ -401,3 +417,59 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
             await self._state_manager.set_state(WATCHES_KEY, record.model_dump_json())
             await self._state_manager.save_state()
         return {"projects": projects, "total": len(projects), "changed": changed}
+
+    async def get_prefs(self) -> dict[str, Any]:
+        """Where this subject wants to be pushed. Absent reads as OFF, never as an error.
+
+        Off is the correct default and the correct absence: every channel is an interruption someone
+        has to ask for, so "no record" and "wants nothing" are the same answer.
+        """
+        has, raw = await self._state_manager.try_get_state(PREFS_KEY)
+        if not has or not raw:
+            return {"channels": [], "destinations": {}}
+        prefs = _parse(PREFS_KEY, raw, ChannelPrefs)
+        _require_owner(PREFS_KEY, prefs.subject, self._subject())
+        return {"channels": list(prefs.channels), "destinations": dict(prefs.destinations)}
+
+    async def set_prefs(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Replace this subject's channel preferences wholesale.
+
+        Whole-document rather than per-field: the door hands back what the form holds, and a partial
+        merge would make "I removed my Slack address" indistinguishable from "I did not mention it".
+        """
+        record = ChannelPrefs(
+            subject=self._subject(),
+            channels=[str(c) for c in (payload.get("channels") or [])],
+            destinations={str(k): str(v) for k, v in (payload.get("destinations") or {}).items()},
+            updated_at=datetime.now(UTC),
+        )
+        await self._state_manager.set_state(PREFS_KEY, record.model_dump_json())
+        await self._state_manager.save_state()
+        return {"channels": list(record.channels), "destinations": dict(record.destinations)}
+
+    async def claim_channel(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Claim `(notification_id, channel)` for sending. `claimed: False` = already sent.
+
+        CHECK-AND-WRITE INSIDE THE TURN, which is what makes this an idempotency key rather than a
+        hopeful read: single-activation means no second caller can be between the read and the write,
+        so two concurrent redeliveries cannot both come away believing they are the first.
+
+        An unknown notification id claims nothing — the row it would record against is gone (compacted
+        or dismissed), and inventing one to hold a ledger entry would resurrect a notification.
+        """
+        notification_id = str(payload["notification_id"])
+        channel = str(payload["channel"])
+        meta = await self._read_meta()
+        rows = await self._read_rows()
+        if rows is None:
+            return {"claimed": False}
+        pointers = list(rows.pointers)
+        for index, pointer in enumerate(pointers):
+            if pointer.notification_id != notification_id:
+                continue
+            if channel in pointer.sent:
+                return {"claimed": False}
+            pointers[index] = pointer.model_copy(update={"sent": [*pointer.sent, channel]})
+            await self._persist(pointers, meta)
+            return {"claimed": True}
+        return {"claimed": False}

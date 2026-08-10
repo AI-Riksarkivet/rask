@@ -703,7 +703,12 @@ async def test_a_stored_record_carries_no_field_a_reader_could_not_already_ask_f
 
     assert set(meta) == {"subject", "unread", "rows", "compaction_due_at", "updated_at"}
     assert set(rows) == {"subject", "pointers", "updated_at"}
-    assert set(rows["pointers"][0]) == {"notification_id", "reason", "object_id", "source_run_id", "event_seq", "occurred_at", "seen", "dismissed"}
+    # `sent` is the delivery ledger (which channels this row was already pushed to) — bookkeeping the
+    # actor needs, which is what this test's own claim allows, and NOT a field read off an event body.
+    # It rides the pointer so it ages out with the row it is about rather than becoming a second,
+    # uncompacted store. It is filtered OUT of the wire by `InboxRow`, which is asserted separately:
+    # a reader learning that someone has Slack wired is a disclosure about that person, not about a run.
+    assert set(rows["pointers"][0]) == {"notification_id", "reason", "object_id", "source_run_id", "event_seq", "occurred_at", "seen", "dismissed", "sent"}
 
 
 # ── a store that refuses itself, and the one door that answers anyway ───────────────────────────────

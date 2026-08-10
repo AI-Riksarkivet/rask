@@ -25,7 +25,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 
 from notifications.api.cursor import decode_cursor, encode_cursor
-from notifications.api.schemas import DismissResult, InboxFeed, MarkResult, UnreadBadge
+from notifications.api.schemas import DismissResult, InboxFeed, InboxRow, MarkResult, UnreadBadge
 from notifications.api.security import CurrentSubject, VisibilityDep
 from notifications.dependencies import ActorPlaneDep, NotificationsSettingsDep
 from notifications.models import INBOX_PAGE_LIMIT_MAX, InboxDismiss, InboxFilter, InboxMark, InboxPage, InboxQuery
@@ -72,7 +72,9 @@ async def get_inbox(
     page = InboxPage.model_validate(await inbox_for(subject).page(query.model_dump(mode="json")))
     allowed = await visibility.visible(subject, {pointer.object_id for pointer in page.pointers})
     return InboxFeed(
-        notifications=[pointer for pointer in page.pointers if pointer.object_id in allowed],
+        # Projected onto the WIRE row, which drops the delivery ledger: what a reader may see is a
+        # declared field list, never whatever the storage record happens to carry today.
+        notifications=[InboxRow.of(pointer) for pointer in page.pointers if pointer.object_id in allowed],
         next_cursor=encode_cursor(page.pointers[-1]) if page.has_more and page.pointers else None,
         unread=page.unread,
     )

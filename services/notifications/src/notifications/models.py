@@ -110,6 +110,14 @@ class InboxPointer(NotificationDelivery):
 
     seen: bool = False
     dismissed: bool = False
+    #: Channels this notification has already been pushed to for this subject — the delivery
+    #: idempotency ledger, `(event_id, subject, channel)` with the first two implied by WHERE it is
+    #: stored. JetStream redelivery is at-least-once, so without it a retried event emails you twice.
+    #:
+    #: It rides the POINTER rather than a ledger of its own, which is what keeps it bounded: the rows
+    #: are already TTL'd and compacted, so the record of "we emailed this" ages out with the thing it
+    #: is about. A separate ledger would be new state with no compaction and no reason to ever shrink.
+    sent: list[str] = Field(default_factory=list)
 
     @property
     def unread(self) -> bool:
@@ -203,6 +211,29 @@ class InboxMeta(BaseModel):
     #: When the compaction reminder is next expected to fire. Persisted because it is the only way a
     #: later turn can tell "armed and pending" from "armed once, and the Scheduler lost it".
     compaction_due_at: UtcDatetime | None = None
+    updated_at: UtcDatetime
+
+
+class ChannelPrefs(BaseModel):
+    """Where a subject wants to be pushed, beyond the bell.
+
+    OFF BY DEFAULT, every channel. The bell is in-app and costs the reader nothing; email and Slack
+    are interruptions someone has to ask for. An estate that mailed everyone by default would be the
+    "badge that counts other people's work" failure again, arriving in an inbox that is not ours.
+
+    An unknown channel name is not an error here — prefs are stored as a set of channel ids and the
+    dispatch table is what decides which of them can actually be sent, so removing a channel from the
+    build cannot make a stored preference unreadable.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    subject: str = Field(min_length=1)
+    #: Channel ids the subject opted into (`email`, `slack`). Empty = the bell only.
+    channels: list[str] = Field(default_factory=list)
+    #: Where to reach them per channel — an address the subject supplied, never one this plane
+    #: inferred from a token. Claim-check applies: a value here is a destination, never content.
+    destinations: dict[str, str] = Field(default_factory=dict)
     updated_at: UtcDatetime
 
 

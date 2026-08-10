@@ -1,0 +1,62 @@
+{{- /* The notification plane's CHANNELS (open_notifications.md S5) — Dapr OUTPUT bindings, so the
+     SMTP host, the Slack webhook and their credentials live here and never in the service's env or
+     its code. Swapping SMTP for a provider API is a Component change, not a code change.
+
+     OFF BY DEFAULT (`services.notifications.channels.*.enabled`), and that is the safe direction
+     rather than a deferral: a channel Component that exists with no credentials produces a sidecar
+     that logs a failure per send, while a channel nobody enabled produces silence. The service
+     tolerates both — an opted-into channel whose binding is absent is skipped quietly — so the
+     estate's posture is chosen in values, not implied by a template.
+
+     SECRETS COME FROM THE SECRET STORE ONLY. `secretKeyRef` in a Component's metadata is resolved by
+     daprd against `lance-secrets`, which `notifications` is already scoped to (it inherits the scope
+     through `stateStore.scopes`). There is deliberately no plaintext alternative to fall back to. */}}
+{{- $ch := (.Values.services.notifications).channels | default dict }}
+{{- if and .Values.dapr.enabled .Values.services.notifications }}
+{{- if (($ch.email).enabled) }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: notifications-email
+  labels: {{- include "rask.componentLabels" (list . "notifications") | nindent 4 }}
+spec:
+  type: bindings.smtp
+  version: v1
+  metadata:
+    - { name: host, value: {{ $ch.email.host | quote }} }
+    {{- /* hasKey+ternary, never `| default` — an explicit `port: 0` is falsy, so a default would
+           silently resurrect 587 on a value someone deliberately set. Pinned estate-wide by
+           tests/unit/test_invariants.py::test_no_numeric_helm_default_can_swallow_an_explicit_zero. */}}
+    - { name: port, value: {{ hasKey $ch.email "port" | ternary $ch.email.port 587 | quote }} }
+    - { name: emailFrom, value: {{ $ch.email.from | quote }} }
+    - name: user
+      secretKeyRef: { name: {{ $ch.email.secretName | default "notifications-smtp" | quote }}, key: user }
+    - name: password
+      secretKeyRef: { name: {{ $ch.email.secretName | default "notifications-smtp" | quote }}, key: password }
+auth:
+  secretStore: {{ .Values.stateStore.secretStore | default "lance-secrets" }}
+scopes:
+  - notifications
+---
+{{- end }}
+{{- if (($ch.slack).enabled) }}
+{{- /* An HTTP binding rather than Dapr's `bindings.twitter`-style provider component: a Slack
+     incoming webhook IS an HTTP POST, and the URL is the credential — which is exactly why it comes
+     from the secret store and never from a value. */}}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: notifications-slack
+  labels: {{- include "rask.componentLabels" (list . "notifications") | nindent 4 }}
+spec:
+  type: bindings.http
+  version: v1
+  metadata:
+    - name: url
+      secretKeyRef: { name: {{ $ch.slack.secretName | default "notifications-slack" | quote }}, key: webhookUrl }
+auth:
+  secretStore: {{ .Values.stateStore.secretStore | default "lance-secrets" }}
+scopes:
+  - notifications
+{{- end }}
+{{- end }}

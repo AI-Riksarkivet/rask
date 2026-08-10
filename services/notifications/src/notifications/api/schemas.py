@@ -6,13 +6,52 @@ can only ever carry the fields it declares. `InboxMeta.rows` — how many record
 partition holds — is a storage fact the actor needs and a reader has no business knowing, and the
 only reason it never reaches a browser is that no model here declares it.
 
-`InboxPointer` itself IS returned, unchanged: it is already the claim-check record — an id, a reason,
-one object name, a run link and two booleans. There is no payload copy in it to filter.
+`InboxPointer` was returned unchanged while it held nothing but the claim-check record. S5 gave it a
+`sent` ledger — which channels this notification has already been pushed to — and that is DELIVERY
+BOOKKEEPING, not something a reader has any business seeing: it discloses that a subject has email or
+Slack wired, and to a reader of a shared screen it discloses it about someone else. So the wire row is
+now a declared projection rather than the storage record, which is what this module said all along
+about `InboxMeta.rows` and now has a second reason to say.
 """
+
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from notifications.models import InboxPointer
+
+
+class InboxRow(BaseModel):
+    """One inbox row AS THE WIRE SEES IT — the storage record minus its delivery bookkeeping.
+
+    Every field here is one a reader can already ask for. `sent` is deliberately absent; see the
+    module docstring. Built with an explicit field list rather than an exclusion, because an exclusion
+    silently admits whatever the storage model grows next.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    notification_id: str
+    reason: str
+    object_id: str
+    source_run_id: str | None = None
+    event_seq: int | None = None
+    occurred_at: datetime
+    seen: bool = False
+    dismissed: bool = False
+
+    @classmethod
+    def of(cls, pointer: InboxPointer) -> "InboxRow":
+        return cls(
+            notification_id=pointer.notification_id,
+            reason=str(pointer.reason),
+            object_id=pointer.object_id,
+            source_run_id=pointer.source_run_id,
+            event_seq=pointer.event_seq,
+            occurred_at=pointer.occurred_at,
+            seen=pointer.seen,
+            dismissed=pointer.dismissed,
+        )
 
 
 class InboxFeed(BaseModel):
@@ -25,7 +64,7 @@ class InboxFeed(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    notifications: list[InboxPointer]
+    notifications: list[InboxRow]
     next_cursor: str | None = None
     unread: int = Field(ge=0)
 

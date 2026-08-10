@@ -538,8 +538,28 @@ Per `CLAUDE.md`: a skill claim that contradicts a file is fixed in the same comm
    normalized to an EMPTY subject, which `inbox_actor_id` raises on — a malformed producer field
    turning into a RETRY loop on an event that can never succeed. Browser-driven end to end: watch,
    unwatch, and the state surviving a reload because it is the server's and not the tab's.
-5. **S5 — channels.** SMTP + Slack bindings, prefs, digest reminder, the channel verify rig,
-   secret-store scoping.
+5. **S5 — channels.** PARTLY SHIPPED 2026-08-11, and the remainder is named below rather than
+   implied. **Landed:** the `bindings.smtp` + Slack HTTP output-binding Components (OFF by default,
+   credentials via `secretKeyRef` against `lance-secrets` and no plaintext alternative to fall back
+   to); the per-user prefs door (`GET|PUT /prefs`, off by default, refusing an opt-in with no
+   destination because a channel that is on and unreachable is silently identical to one that is
+   off); the dispatch table as a dict of callables with a `Sender` Protocol; and delivery idempotency
+   by `(event_id, subject, channel)` — CLAIM-BEFORE-SEND on the subject's own actor, inside the turn,
+   so two concurrent redeliveries cannot both believe they are the first.
+
+   **The ledger rides the POINTER**, which is what keeps it bounded: the rows are already TTL'd and
+   compacted, so the record of "we emailed this" ages out with the thing it is about. A ledger of its
+   own would be new state with no compaction and no reason to ever shrink. That in turn forced the
+   wire boundary to become explicit — `InboxRow` is now a declared field list rather than the storage
+   record, because `sent` discloses that a subject has email or Slack wired, which is a fact about a
+   PERSON and not about a run.
+
+   **NOT landed:** the digest reminder (an actor reminder batching a window of rows into one send),
+   and the §7 channel-verify rig (a Mailpit sink in a `.docker` side-stack plus a mock Slack webhook,
+   asserting exactly-one delivery per `(event, subject, channel)` across a FORCED redelivery). The
+   idempotency claim is currently proven by unit tests against a fake ledger, not against a real
+   redelivery — which is the difference between the property being implemented and being observed.
+   Nothing is wired into the fan-out yet either: the plane can send, and nothing calls it.
 6. **S6 — the ops seam.** vmalert rules + synthetic proofs; dashboards row; docs/skills sweep
    (§8) finalized.
 
