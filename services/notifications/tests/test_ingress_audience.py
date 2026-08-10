@@ -24,7 +24,7 @@ from notifications.api.fanout import audience_for, fan_out
 from notifications.api.ingest import DAPR_DROP, DAPR_RETRY, DAPR_SUCCESS, ingest_run_event
 from notifications.api.lineage_events import LineageRunEvent, Notifiable, notifiable
 from notifications.api.metrics import Lane
-from notifications.api.visibility import FGA_OBJECT_TYPE, METADATA_RELATION, Visibility
+from notifications.api.visibility import FGA_OBJECT_TYPE, METADATA_RELATION, NOTIFY_RELATION, Visibility
 from notifications.proxies import TypedActorProxy, inbox_actor_id
 from service_kit.exceptions import ServiceUnavailableError
 
@@ -163,21 +163,40 @@ async def test_each_candidate_is_asked_separately_because_the_answer_is_per_subj
 
 @pytest.mark.asyncio
 async def test_the_objects_are_addressed_as_tables_and_never_as_a_container(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The S1 FGA position, pinned where it is USED rather than only where it is written.
+    """The FGA position, pinned where it is USED rather than only where it is written.
 
-    `table#can_get_metadata` is bare `reader`; the concurrent upward-visibility change
-    (`reader or can_get_metadata from child`) lands on `warehouse` and `namespace` only. A delivery
-    check that addressed a container would therefore reach every subject holding `reader` on any one
-    table beneath it — an audience nobody chose, arriving as a push.
+    Two claims, and the second is S4's. (1) The objects are addressed as `table:` — a delivery check
+    that named a CONTAINER would reach every subject holding `reader` on any one table beneath it,
+    because `can_get_metadata` on `warehouse`/`namespace` is `reader or can_get_metadata from child`
+    since C1. (2) The relation is `can_be_notified`, not the render's `can_get_metadata`: a
+    notification asserts a stake in the object itself. On `table` the two are the same set, so this
+    changed no audience — which is exactly why the split had to be pinned rather than trusted to be
+    noticed later.
     """
     view, recorder = _governed(monkeypatch, {"alice": set()})
     plane = _Plane()
 
     await fan_out(_notice(outputs=["silver$pages", "gold$lines"]), audience=["alice"], visibility=view, open_inbox=plane.open)
 
-    assert recorder.calls[0]["relation"] == METADATA_RELATION
+    assert recorder.calls[0]["relation"] == NOTIFY_RELATION
+    assert recorder.calls[0]["relation"] != METADATA_RELATION, "delivery must not ask the render's question"
     for obj in recorder.calls[0]["objects"]:
         assert obj.startswith("table:")
+
+
+@pytest.mark.asyncio
+async def test_the_render_path_keeps_the_permissive_relation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The other half of the split — and the half that must NOT tighten.
+
+    A pointer already in an inbox resolves through `visible()`. Asking the delivery question there
+    would blank rows the delivery gate had already approved, on a container-scoped pointer that the
+    subject can legitimately see. Delivery decides who is TOLD; render decides what still resolves.
+    """
+    view, recorder = _governed(monkeypatch, {"alice": set()})
+
+    await view.visible("alice", ["silver$pages"])
+
+    assert recorder.calls[0]["relation"] == METADATA_RELATION
 
 
 # --- the subset rule -----------------------------------------------------------------------------

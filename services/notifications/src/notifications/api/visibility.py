@@ -5,22 +5,28 @@ off a delivery would be an authorization decision made by whoever published the 
 therefore re-derived TWICE against the same rule the lineage read path already enforces: at DELIVERY,
 before a pointer is written, and again at RENDER, when the panel resolves stored pointers.
 
-The rule is `can_get_metadata` on `table:<dataset>`, batch-checked — one round-trip over the whole
-candidate set, never one `check` per object. Three things about it are settled rather than assumed:
+**THE TWO CHECKS ASK DIFFERENT QUESTIONS, and since S4 they ask different RELATIONS.**
 
-* `table#can_get_metadata` is bare `reader`, and the concurrent change that gives `warehouse` and
-  `namespace` upward visibility (`reader or can_get_metadata from child`) touches the two CONTAINER
-  types only. So the widening does not reach this plane at all.
+* **Delivery** asks `can_be_notified` — bare `reader` on the notifiable types. A notification asserts
+  a stake in the OBJECT ITSELF.
+* **Render** asks `can_get_metadata` — `reader or can_get_metadata from child` on containers since
+  C1. It answers "is there anything beneath this you may see?", which is right for resolving a
+  breadcrumb (and for resolving a pointer already in someone's inbox) and wrong for interrupting
+  someone.
+
+Both are batch-checked on `table:<dataset>` — one round-trip over the whole candidate set, never one
+`check` per object. Two things about the pair are settled rather than assumed:
+
+* On `table` and `materialized_view` the two relations are the SAME SET (both bare `reader`), so
+  splitting them changed no audience on the day it landed. That is what made it safe to do before any
+  container-scoped event exists to need it.
 * The lineage governed path checks `table:` objects — `fga_object_type` defaults to `"table"` and is
   set by nothing in the chart — and this plane notifies on terminal states whose outputs are
-  datasets. Same type, same relation, same answer.
-* The tighter relation a PUSH really wants (`can_be_notified: reader` on the notifiable types) is a
-  coordinated model change, and on `table` it would be the same set as today — so it costs nothing
-  now and becomes load-bearing only when a container-scoped event can be notified on.
+  datasets. Same type, same answer.
 
-`can_get_metadata` answers "is there anything beneath this you may see?" — the right question for
-rendering a breadcrumb and the wrong one for interrupting someone. On `table` the two coincide, which
-is why S1 is free to ask this one.
+The split becomes load-bearing the moment a governance event names a `namespace` or `warehouse`: under
+one-rule-everywhere that event would be delivered to every subject holding `reader` on any single
+table anywhere beneath it — an audience nobody chose, arriving as a push.
 """
 
 import logging
@@ -43,8 +49,15 @@ log = logging.getLogger(__name__)
 #: same value as a default that nothing in `chart/` overrides.
 FGA_OBJECT_TYPE: Final = "table"
 
-#: The relation a render asks for. Delivery asks for it too, today — see the module docstring.
+#: What a RENDER asks: "is there anything beneath this you may see?". Permissive on containers by
+#: design (C1's `child` edge), which is right — a breadcrumb to your own data must resolve.
 METADATA_RELATION: Final = "can_get_metadata"
+
+#: What a DELIVERY asks: "do you have a stake in this object itself?". Bare `reader` on every
+#: notifiable type, so on a leaf it is the same set as `METADATA_RELATION` and on a container it is
+#: strictly tighter. S4 landed the relation; until then this path asked the render's question and got
+#: away with it because the plane only ever notified on `table:` outputs.
+NOTIFY_RELATION: Final = "can_be_notified"
 
 
 class Visibility:
@@ -60,8 +73,8 @@ class Visibility:
         self._client = client
         self._enabled = enabled
 
-    async def visible(self, subject: str, names: Collection[str]) -> set[str]:
-        """The subset of `names` that `subject` may read, in one round-trip.
+    async def _filter(self, subject: str, names: Collection[str], relation: str) -> set[str]:
+        """The subset of `names` that `subject` holds `relation` on, in one round-trip.
 
         The empty set short-circuits BEFORE the unwired-client refusal, matching the estate's existing
         filter. That is not a hole: an empty candidate set yields an empty answer either way, so there
@@ -78,16 +91,30 @@ class Visibility:
         allowed = await fga.batch_check(
             self._client,
             user=subject,
-            relation=METADATA_RELATION,
+            relation=relation,
             objects=[f"{FGA_OBJECT_TYPE}:{name}" for name in names],
         )
         return {name for name in names if allowed.get(f"{FGA_OBJECT_TYPE}:{name}")}
 
-    async def sees_all(self, subject: str, names: Collection[str]) -> bool:
-        """Whether `subject` may see EVERY name — the subset test, and the half people get wrong.
+    async def visible(self, subject: str, names: Collection[str]) -> set[str]:
+        """RENDER: the subset of `names` the subject may SEE. Stays on `can_get_metadata`.
 
-        `names <= visible` rather than "any of them": one invisible output drops the row. A run that
-        wrote a dataset you may read and one you may not is a run you are not told about, because
-        being told names the run, its author and its outcome.
+        Permissive by design, and it must stay that way: a pointer already in someone's inbox resolves
+        through this, and tightening it here would blank rows the delivery gate had already approved.
         """
-        return set(names) <= await self.visible(subject, names)
+        return await self._filter(subject, names, METADATA_RELATION)
+
+    async def sees_all(self, subject: str, names: Collection[str]) -> bool:
+        """DELIVERY: whether `subject` may be notified about EVERY name — the subset test, and the
+        half people get wrong.
+
+        `names <= allowed` rather than "any of them": one un-notifiable output drops the row. A run
+        that wrote a dataset you have a stake in and one you do not is a run you are not told about,
+        because being told names the run, its author and its outcome.
+
+        Asks `can_be_notified`, NOT the render's question. On today's `table:` outputs the two are the
+        same set, so this changed no audience the day it landed — the split is what keeps a
+        container-scoped event (S4's governance targeting) from reaching everyone holding a grant on
+        anything beneath it.
+        """
+        return set(names) <= await self._filter(subject, names, NOTIFY_RELATION)

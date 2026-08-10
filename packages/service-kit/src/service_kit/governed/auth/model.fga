@@ -132,6 +132,22 @@ type warehouse
     # the breadcrumb to their own data 403s. Metadata only: seeing that a container exists on the path
     # to something you were deliberately given is not a leak, and it is the whole browse story.
     define can_get_metadata: reader or can_get_metadata from child
+    # NOTIFICATION delivery, and it is deliberately NOT `can_get_metadata`.
+    #
+    # `can_get_metadata` answers "is there anything beneath this you may see?" — that is the right
+    # question for rendering a breadcrumb and the WRONG one for interrupting someone. Since C1 it
+    # reads `reader or can_get_metadata from child`, so a subject holding `reader` on ONE table three
+    # namespaces down passes it here. Correct for browsing; as a delivery gate it would push a
+    # container-scoped governance event to everyone holding a grant on anything underneath — an
+    # audience nobody chose, arriving as a notification. That is the exact failure the notification
+    # plane exists to end (open_notifications.md §3.1), reintroduced through a relation whose own
+    # purpose is unrelated.
+    #
+    # A notification asserts a stake in the OBJECT ITSELF, so this is bare `reader`. It lives in the
+    # model rather than as a bare-rung check in the notifications service because the model, not the
+    # app, owns the op->privilege mapping — and as a `can_*` it takes no direct assignment, it names
+    # a role (§10.4).
+    define can_be_notified: reader
     define can_create_namespace: writer
     define can_create_table: writer
     # The warehouse root is ALSO the create-on-parent target for a TOP-LEVEL child (no enclosing
@@ -227,6 +243,12 @@ type namespace
     # Upward visibility — same rule and same reason as `warehouse#can_get_metadata`. Recursive through
     # `child: [namespace, ...]`, so a grant nested three namespaces deep lights the whole path to it.
     define can_get_metadata: reader or can_get_metadata from child
+    # NOTIFICATION delivery, and it is deliberately NOT `can_get_metadata` — see `warehouse` above for
+    # the full reasoning. In one line: `can_get_metadata` answers "is there anything beneath this you
+    # may see?", which is right for a breadcrumb and wrong for interrupting someone, and since C1 it
+    # reaches up from a grant nested arbitrarily deep. A notification asserts a stake in the OBJECT
+    # ITSELF, so this is bare `reader`.
+    define can_be_notified: reader
     define can_create_namespace: writer
     define can_create_table: writer
     # Creating a materialized view is a create-on-parent op gated on the enclosing namespace (writer rung),
@@ -274,6 +296,11 @@ type table
     define pass_grants: [user, role#assignee]
     # ---- actions ----
     define can_get_metadata: reader
+    # NOTIFICATION delivery. Identical to `can_get_metadata` on this type — both are bare `reader` —
+    # and that identity is the point rather than a redundancy: it is what makes the container split
+    # above cost nothing today, so S1's delivery path was already correct and stays correct. Named
+    # separately so the day a leaf's metadata rung moves, delivery does not silently move with it.
+    define can_be_notified: reader
     define can_read_data: reader
     define can_write_data: writer
     define can_promote: validator
@@ -322,6 +349,11 @@ type materialized_view
     define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or refresher or reader from parent
     # ---- actions ----
     define can_get_metadata: reader
+    # NOTIFICATION delivery. Identical to `can_get_metadata` on this type — both bare `reader` — and
+    # that identity is the point rather than a redundancy: it is what makes the container split cost
+    # nothing on a leaf. Named separately so the day a leaf's metadata rung moves, delivery does not
+    # silently move with it.
+    define can_be_notified: reader
     define can_read: reader
     define can_refresh: refresher
 

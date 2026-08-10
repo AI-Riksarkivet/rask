@@ -213,6 +213,66 @@ tests:
         object: namespace:acme_gold
         assertions: { can_get_metadata: false }
 
+  - name: notification delivery is NOT metadata visibility — the S4 split, on the very grantee C1 opened it for
+    # `can_get_metadata` reads `reader or can_get_metadata from child`, so ivan's ONE table grant lights
+    # the whole path above it. Right for a breadcrumb; as a delivery gate it would push a namespace- or
+    # warehouse-scoped governance event to everyone holding a grant on anything underneath — an audience
+    # nobody chose, arriving as a notification. `can_be_notified` is bare `reader`, so the two answers
+    # diverge on containers and coincide on leaves. This test is the proof of both halves.
+    check:
+      - user: user:ivan # the leaf he was actually granted: notified, and visible, and the same set
+        object: table:acme_gold_catalog
+        assertions: { can_be_notified: true, can_get_metadata: true }
+      - user: user:ivan # THE SPLIT: he can SEE the path to his table…
+        object: namespace:acme_gold
+        assertions: { can_get_metadata: true, can_be_notified: false }
+      - user: user:ivan # …and is not a party to what happens to the container itself
+        object: warehouse:acme_bucket
+        assertions: { can_get_metadata: true, can_be_notified: false }
+      # The positive side, so the relation cannot pass by denying everyone. carol holds `reader` on the
+      # warehouse itself, which cascades down the rungs — a real stake in the container.
+      - user: user:carol
+        object: warehouse:acme_bucket
+        assertions: { can_be_notified: true }
+      - user: user:carol
+        object: namespace:acme_gold
+        assertions: { can_be_notified: true }
+      # A namespace WRITER is a reader by concentric derivation, so the stage's own writer is notifiable.
+      - user: user:kevin
+        object: namespace:acme_silver
+        assertions: { can_be_notified: true }
+      # A leaf's two rungs coincide by construction — that identity is what made S1's delivery path
+      # correct before this relation existed, and it must keep holding.
+      - user: user:carol
+        object: "materialized_view:acme_silver$daily_agg"
+        assertions: { can_be_notified: true, can_get_metadata: true }
+      # Boundary: an outsider gains nothing anywhere, and an unrelated stage stays silent.
+      - user: user:eve
+        object: namespace:acme_gold
+        assertions: { can_be_notified: false, can_get_metadata: false }
+      - user: user:ivan
+        object: namespace:acme_bronze
+        assertions: { can_be_notified: false }
+      - user: user:eve
+        object: table:acme_gold_catalog
+        assertions: { can_be_notified: false }
+
+  - name: who may be NOTIFIED about the gold stage? (list_users) — container readers only, never a table-only grantee
+    # The audience question stated as an ENUMERATION, because that is the shape a fan-out actually asks
+    # — and `list_users` is the only form that can prove an absence. IVAN'S ABSENCE IS THE FINDING: the
+    # same query against `can_get_metadata` returns him, because C1's `child` edge lights every
+    # container above his one table. Everyone listed holds a real stake in the container:
+    #   alice/bob — team:eng admins of project:acme, so warehouse owners
+    #   carol     — reader granted on warehouse:acme_bucket directly
+    #   dave      — writer on the warehouse (writer implies reader, concentrically)
+    #   gina      — member of project:acme, which `warehouse#reader` includes via `member from project`
+    list_users:
+      - object: namespace:acme_gold
+        user_filter: [{ type: user }]
+        assertions:
+          can_be_notified:
+            users: [user:alice, user:bob, user:carol, user:dave, user:gina]
+
   - name: create-on-parent — create perms are gated on the PARENT object (design-create-on-parent)
     check:
       # warehouse creation is gated on the project: a project admin (alice, via team:eng) may; an outsider may not.
