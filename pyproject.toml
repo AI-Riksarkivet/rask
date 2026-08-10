@@ -59,6 +59,20 @@ dev = [
     "pytest-postgresql>=6.1",
     "tracker[postgres]",
     "validate",
+    # pytest-timeout — the only tool that can DIAGNOSE a hung suite in Dagger, which is where this
+    # suite hangs and a developer box does not. Two dead ends were paid for before it was added, and
+    # both are properties of the environment rather than of the bug:
+    #   · Dagger buffers a `WithExec`'s stdout until the exec COMPLETES, so a run that never finishes
+    #     yields no output at all — not a partial progress line, not the name of the test it stopped
+    #     on. SIGINT gives nothing either.
+    #   · Arming `faulthandler.dump_traceback_later()` from a root conftest does not survive: pytest's
+    #     own faulthandler plugin calls `cancel_dump_traceback_later()` between tests, so it would
+    #     need `-p no:faulthandler` alongside it.
+    # `--timeout-method=thread` dumps every thread's stack and fails the run, so the next hang names
+    # itself instead of being bisected by hand again. Wired into `.dagger/test.go`'s two lanes rather
+    # than into `addopts`: a global ceiling would also bound the model-loading `slow` suites, whose
+    # honest runtime nobody here can measure.
+    "pytest-timeout>=2.3",
 ]
 
 [tool.uv.sources]

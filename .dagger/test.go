@@ -77,7 +77,9 @@ func (m *Rask) TestPackage(
 		// `path` is split on whitespace so several files can go in one call — pytest takes many
 		// targets, and passing the whole string as ONE argument makes it a path that does not exist,
 		// which pytest reports as "no tests ran" rather than as an error. That reads like a green run.
-		WithExec(append([]string{"uv", "run", "--no-sync", "--with", "pytest", "--with", "pytest-cov", "pytest", "-q", "--no-cov", "-m", "not e2e and not slow"}, strings.Fields(path)...)).
+		// pytest-timeout is injected for the same reason pytest is: a `--package` sync omits the root
+		// dev group. See Test below for why every lane in here carries a timeout.
+		WithExec(append([]string{"uv", "run", "--no-sync", "--with", "pytest", "--with", "pytest-cov", "--with", "pytest-timeout", "pytest", "-q", "--no-cov", "--timeout=300", "--timeout-method=thread", "-m", "not e2e and not slow"}, strings.Fields(path)...)).
 		Stdout(ctx)
 }
 
@@ -121,6 +123,19 @@ func (m *Rask) Test(
 		WithMountedCache("/root/.cache/helm", dag.CacheVolume("rask-helm-cache")).
 		WithMountedCache("/root/.local/share/helm", dag.CacheVolume("rask-helm-data")).
 		WithExec([]string{"make", "k3s-deps"}).
-		WithExec([]string{"uv", "run", "--no-sync", "pytest", "-q", "-m", "not e2e and not slow"}).
+		// ── a per-test ceiling, because a hang in HERE is undiagnosable without one ─────────────────
+		// This suite has hung in Dagger while passing on a developer box, and the container is what
+		// makes it undebuggable: Dagger buffers a WithExec's stdout until the exec COMPLETES, so a run
+		// that never finishes prints nothing at all — no progress line, no test name, and SIGINT adds
+		// nothing. The whole-suite bisect that followed cost more than the bug.
+		//
+		// `--timeout-method=thread` (not `signal`) because the observed profile was threads parked in
+		// futex_wait with the main thread in nanosleep: the thread method dumps EVERY thread's stack
+		// and fails the run, so the next occurrence names itself. 300s is far above the suite's whole
+		// measured runtime (~2 min on a developer box) — it is a hang detector, not a speed budget.
+		//
+		// Not in `addopts`: that would put the same ceiling on `make test-slow`, whose tests load real
+		// models over the network and whose honest runtime is not established here.
+		WithExec([]string{"uv", "run", "--no-sync", "pytest", "-q", "--timeout=300", "--timeout-method=thread", "-m", "not e2e and not slow"}).
 		Stdout(ctx)
 }

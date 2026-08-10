@@ -21,6 +21,15 @@ same instinct as the config-isolation fixtures the per-directory conftests alrea
 calls `load_dotenv`, so the suite pins env to stay hermetic") — one scope up, against a variable no
 test sets and no test should inherit.
 
+**"BEFORE ANYTHING IMPORTS" IS THE LOAD-BEARING WORD, AND THE FIRST VERSION DID NOT ACHIEVE IT.** The
+strip lived only in the session-scoped autouse fixture below, and a session fixture runs on the FIRST
+TEST — long after collection has imported every test module, and therefore long after any module-scope
+`setup_otel` has already built its exporter. The variable was removed from an environment nothing was
+going to read again. That is why the strip now also happens at this module's own import (see
+`_strip_harness_otlp()` below the constant), which pytest performs before collection begins, and why
+`tests/unit/test_conftest_otlp_strip.py` drives a real subprocess to prove the ordering rather than
+asserting it from a comment.
+
 WHAT THIS DELIBERATELY DOES NOT DO: it does not stop a test setting the variable itself.
 `monkeypatch.setenv` still works and is still honoured — `test_setup_otel_wires_when_enabled` and
 `test_NO_settings_still_opts_in_through_the_endpoint` both depend on that. Removing the ambient value
@@ -48,17 +57,38 @@ _HARNESS_OTLP_VARS = (
 )
 
 
+def _strip_harness_otlp() -> None:
+    """Drop every ambient OTLP variable. Idempotent, and safe to call more than once."""
+    for name in _HARNESS_OTLP_VARS:
+        os.environ.pop(name, None)
+
+
+# ── AT IMPORT, and this is the whole point ────────────────────────────────────────────────────────
+# The first version of this file did the strip in the session fixture below and nowhere else, which
+# does not work for the case it was written for. pytest's order is: load the rootdir conftest →
+# COLLECT (which IMPORTS every test module) → run the first test (which is when a session-scoped
+# autouse fixture finally executes). The damage this guards against is done at IMPORT: `services/gateway`
+# calls `setup_otel(app, service_name=...)` at MODULE scope with no `Settings`, so the exporter is
+# already wired by the time any fixture runs, and stripping the variable afterwards cannot un-wire it.
+#
+# Measured, not reasoned: with the strip in the fixture alone, a module importing the gateway under an
+# injected `OTEL_EXPORTER_OTLP_ENDPOINT` still saw the variable set at module scope. Moved here, it
+# sees `None`. A conftest at the rootdir is imported before collection begins, which is early enough.
+_strip_harness_otlp()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _no_harness_telemetry() -> None:
-    """Remove the harness's OTLP configuration for the whole session.
+    """Re-strip once for the session, AFTER every conftest and plugin has had its turn.
 
-    Session-scoped and autouse: the leak is a property of the process, not of any test, and the
-    damage is done at import time — a function-scoped fixture would run too late for a module that
-    calls `setup_otel` at module scope, which is precisely the case that motivated this.
+    Kept alongside the import-time call rather than replaced by it, because they close different
+    holes. The import-time call is the one that matters and is the one that was missing. This one
+    catches a re-introduction: the per-directory conftests build real apps, `create_app` calls
+    `load_dotenv()`, and a `.env` on a developer box naming an OTLP endpoint would put the variable
+    back after this module was imported.
 
     Not restored afterwards, on purpose. The values belong to the harness, nothing in the suite reads
     them once removed, and putting them back at teardown would only re-arm the exporter while pytest
     is still writing its report.
     """
-    for name in _HARNESS_OTLP_VARS:
-        os.environ.pop(name, None)
+    _strip_harness_otlp()
