@@ -313,16 +313,43 @@ def test_the_test_yaml_references_the_model_rather_than_copying_it() -> None:
 
 
 def test_access_disclosure_routes_are_owner_tier() -> None:
-    """CONTRACT (security, #51/#68/#72): the access-DISCLOSURE routes — ``access/list`` (enumerate who holds
-    access) and ``access/check`` (simulate an arbitrary (user, relation)) — AND the MUTATE routes
-    ``access/grant`` / ``access/revoke`` must clear the OWNER bar, never the writer fall-through. The reads
-    reveal the authz graph; the writes HAND OUT ownership — a mere writer must not reach any of them.
+    """CONTRACT (security, #51/#68): the access-DISCLOSURE routes — ``access/list`` (enumerate who holds
+    access), ``access/check`` (simulate an arbitrary (user, relation)) and ``access/graph`` — must clear
+    the OWNER bar, never the writer fall-through. They reveal the authz graph; a mere writer must not
+    reach them.
 
     The pair-existence contract above canNOT catch a downgrade here: dropping a suffix from the owner map
     falls it through to ``can_write_data`` — a real relation, so that test stays green while the gate quietly
     weakens. This asserts the resolved tier directly, so such a refactor fails loudly."""
     from catalog.api.fga_deps import _action_relation
 
-    for suffix in ("access/list", "access/check", "access/grant", "access/revoke", "access/graph"):
+    for suffix in ("access/list", "access/check", "access/graph"):
         assert _action_relation("table", suffix) == "can_drop", suffix
         assert _action_relation("namespace", suffix) == "can_delete", suffix
+
+
+def test_grant_routes_are_intercepted_before_the_suffix_fallthrough() -> None:
+    """CONTRACT (security, #72 + the grant axis): ``access/grant`` / ``access/revoke`` are authorized
+    PER RUNG from the request body by ``_authorize_grant``, not by the suffix map.
+
+    This test replaced an assertion that they resolve to the owner tier. That assertion was right while
+    granting was welded to ownership and is wrong now — but deleting it would have removed the guard it
+    existed to be, because these suffixes are exactly the ones whose fall-through is ``can_write_data``:
+    if the interception is ever removed, a plain data WRITER silently gains the ability to hand out
+    ownership. So the guard is re-pointed, not dropped. It now pins the interception itself, which is
+    the thing that must not regress.
+
+    The reason the fall-through is tolerable at all is that it is unreachable: ``authorize`` returns
+    inside the ``_GRANT_SUFFIXES`` branch before ``_action_relation`` is ever consulted. Both halves are
+    asserted here — that the suffixes are declared intercepted, AND that every rung the grant API
+    accepts has a ``can_grant_*`` gate to be checked against. A rung without one would be refused by
+    ``_authorize_grant``, so this cannot silently open; it would simply make the rung ungrantable."""
+    from catalog.api.fga_deps import _GRANT_SUFFIXES, _grant_actions
+    from catalog.api.v1.endpoints.access import _GRANTABLE_BASE
+
+    assert frozenset({"access/grant", "access/revoke"}) == _GRANT_SUFFIXES
+    for fga_type in ("warehouse", "namespace", "table"):
+        actions = _grant_actions(fga_type)
+        assert actions, f"no can_grant_* enumerated for {fga_type}"
+        for rung in _GRANTABLE_BASE:
+            assert f"can_grant_{rung}" in actions, f"{fga_type}: {rung} is grantable with no can_grant_{rung} gate"

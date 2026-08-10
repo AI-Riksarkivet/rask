@@ -28,8 +28,9 @@ import asyncio
 from functools import lru_cache
 
 from fastapi import APIRouter, Request
-from lance_namespace import ServiceUnavailableError, UnsupportedOperationError
+from lance_namespace import ServiceUnavailableError, UnauthenticatedError, UnsupportedOperationError
 
+from catalog.api import fga_deps
 from catalog.api.dependencies import SettingsDep, get_control_emitter
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
@@ -44,6 +45,9 @@ from catalog.schemas import (
     AccessListResponse,
     GraphEdge,
     GraphNode,
+    ManagedAccessRequest,
+    ManagedAccessResponse,
+    MyPermissionsResponse,
     RelationGrants,
 )
 from service_kit.governed import fga
@@ -52,13 +56,22 @@ from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
 table_router = APIRouter(prefix="/v1/table", tags=["access"])
 namespace_router = APIRouter(prefix="/v1/namespace", tags=["access"])
+# Warehouse is NOT in fga_deps._RESOURCES, so `authorize` returns early for these paths — every route
+# mounted here must gate itself explicitly (see `set_warehouse_managed_access`).
+warehouse_router = APIRouter(prefix="/v1/warehouse", tags=["access"])
 
 
 # The base rungs an admin may directly assign. The model defines each as ``[user, role#assignee] or …``
 # (service_kit/governed/auth/model.fga) — a real user/userset grant, unlike the derived ``can_*`` actions or the
-# structural ``parent`` edge, neither of which may be hand-granted. Intersected with the model below so a
+# structural ``parent``/``child`` edges, none of which may be hand-granted. Intersected with the model below so a
 # renamed rung drops out (and test_fga_model_contract would catch the drift).
-_GRANTABLE_BASE: tuple[str, ...] = ("owner", "writer", "reader", "validator")
+#
+# ``manage_grants`` and ``pass_grants`` are here because grant power is now its own axis rather than a
+# side-effect of ``owner``: leaving them out would define the delegation the model describes and provide
+# no way to confer it. They are not more dangerous than ``owner`` — both are reachable only through
+# ``can_grant_manage_grants`` / ``can_grant_pass_grants``, which are ``manage_grants``-only, so a
+# grant-option delegate can neither mint further delegates nor promote themselves.
+_GRANTABLE_BASE: tuple[str, ...] = ("owner", "writer", "reader", "validator", "manage_grants", "pass_grants")
 
 
 @lru_cache
@@ -176,6 +189,68 @@ async def check_namespace_access(id: str, request: Request, settings: SettingsDe
     return await _access_check(request, settings, token, "namespace", id, body)
 
 
+async def _my_permissions(request: Request, settings: Settings, token: CurrentToken, fga_type: str, id: str) -> MyPermissionsResponse:
+    """Answer every ``can_*`` on this object for the CALLER — the self-view.
+
+    Reader-gated (``can_get_metadata``), NOT owner-gated like its two siblings, and the distinction is
+    the whole point: ``access/list`` enumerates who holds what and ``access/check`` probes an arbitrary
+    subject, so both disclose principals and clear the owner bar. "What may I do here" discloses
+    nothing about anyone else — gating it at the owner bar would mean only the people who already know
+    the answer could ask the question, which is why no surface over these primitives existed.
+
+    Takes no ``user``: a self-view that accepts a subject is the enumeration question renamed. The
+    subject comes from the bearer and nowhere else.
+
+    Not audited. ``access_review`` and ``access_simulate`` are audited because each is an authz-graph
+    DISCLOSURE about third parties; a caller learning their own effective permissions reveals nothing
+    they could not obtain by attempting the operations, and one audit row per page render would bury
+    the rows that matter.
+    """
+    if not settings.fga_enabled:
+        raise UnsupportedOperationError("permission self-view requires OpenFGA (this stack runs auth-off)")
+    client = getattr(request.app.state, "fga", None)
+    if client is None:  # the router gate already 503s this; kept so the endpoint is safe standalone
+        raise ServiceUnavailableError("authorization service is not available")
+    # `fga_enabled` implies `oidc_enabled` (the pair is refused at boot) and OIDC 401s a bearer-less
+    # request before any handler runs, so a token is guaranteed once the gate above has passed. Stated
+    # rather than assumed: `CurrentToken` is `IDToken | None`, and the alternative is `token.sub`
+    # raising AttributeError on a branch that only configuration makes unreachable. The siblings can
+    # fall back to "anonymous" because they use the subject for an AUDIT row; here it IS the subject
+    # of every Check, and "anonymous" would silently answer the wrong question.
+    if token is None:
+        raise UnauthenticatedError("the permission self-view needs an authenticated caller")
+    segments = parse_identifier(id, settings.delimiter)
+    obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+    # An OIDC ``sub`` is opaque and MAY already carry a type prefix. Prefixing unconditionally yields
+    # `user:user:<sub>`, a subject that matches no tuple, so every relation answers a correct-looking
+    # `false` and the page renders "you may do nothing" for an owner. Same rule the settings gate uses.
+    subject = token.sub if ":" in token.sub else f"user:{token.sub}"
+    relations = _can_relations(fga_type)
+    # TaskGroup, not gather — same reason as the review path: one failure cancels its siblings rather
+    # than leaving orphaned retry loops hammering a degraded OpenFGA after the request has 503'd.
+    try:
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(fga.check(client, user=subject, relation=r, obj=obj, qualify=False)) for r in relations]
+    except* ServiceUnavailableError as outage:
+        # A TaskGroup raises an ExceptionGroup, which no handler in the problem-body map recognises —
+        # it would surface as a 500 and the caller would read "the catalog is broken" instead of
+        # "authorization is unavailable, fail closed". Unwrapped exactly as `_access_list` does.
+        raise outage.exceptions[0] from None
+    return MyPermissionsResponse(object=obj, subject=subject, permissions={r: t.result() for r, t in zip(relations, tasks, strict=True)})
+
+
+@table_router.post("/{id}/access/my-permissions")
+async def my_table_permissions(id: str, request: Request, settings: SettingsDep, token: CurrentToken) -> MyPermissionsResponse:
+    """What the caller may do on this table — reader-gated by the router (``can_get_metadata``)."""
+    return await _my_permissions(request, settings, token, "table", id)
+
+
+@namespace_router.post("/{id}/access/my-permissions")
+async def my_namespace_permissions(id: str, request: Request, settings: SettingsDep, token: CurrentToken) -> MyPermissionsResponse:
+    """What the caller may do on this namespace — reader-gated by the router (``can_get_metadata``)."""
+    return await _my_permissions(request, settings, token, "namespace", id)
+
+
 async def _access_mutate(
     request: Request,
     settings: Settings,
@@ -236,25 +311,29 @@ async def _access_mutate(
 
 @table_router.post("/{id}/access/grant")
 async def grant_table_access(id: str, request: Request, settings: SettingsDep, token: CurrentToken, body: AccessGrantRequest) -> AccessGrantResponse:
-    """Grant a base rung on the table to a subject — owner-gated by the router (``can_drop``)."""
+    """Grant a base rung on the table to a subject — gated PER RUNG by the router
+    (``can_grant_<relation>``, read from the body). Granting is its own axis now: a `manage_grants`
+    holder may hand out access without holding the data, and a `pass_grants` delegate may hand on only
+    what they already hold."""
     return await _access_mutate(request, settings, token, "table", id, body, grant=True)
 
 
 @table_router.post("/{id}/access/revoke")
 async def revoke_table_access(id: str, request: Request, settings: SettingsDep, token: CurrentToken, body: AccessGrantRequest) -> AccessGrantResponse:
-    """Revoke a base rung on the table from a subject — owner-gated by the router (``can_drop``)."""
+    """Revoke a base rung on the table from a subject — gated per rung, identically to grant: taking a
+    rung away is the same authority as handing it out."""
     return await _access_mutate(request, settings, token, "table", id, body, grant=False)
 
 
 @namespace_router.post("/{id}/access/grant")
 async def grant_namespace_access(id: str, request: Request, settings: SettingsDep, token: CurrentToken, body: AccessGrantRequest) -> AccessGrantResponse:
-    """Grant a base rung on the namespace to a subject — owner-gated by the router (``can_delete``)."""
+    """Grant a base rung on the namespace to a subject — gated per rung (``can_grant_<relation>``)."""
     return await _access_mutate(request, settings, token, "namespace", id, body, grant=True)
 
 
 @namespace_router.post("/{id}/access/revoke")
 async def revoke_namespace_access(id: str, request: Request, settings: SettingsDep, token: CurrentToken, body: AccessGrantRequest) -> AccessGrantResponse:
-    """Revoke a base rung on the namespace from a subject — owner-gated by the router (``can_delete``)."""
+    """Revoke a base rung on the namespace from a subject — gated per rung, identically to grant."""
     return await _access_mutate(request, settings, token, "namespace", id, body, grant=False)
 
 
@@ -313,7 +392,124 @@ async def graph_namespace_access(id: str, request: Request, settings: SettingsDe
     return await _access_graph(request, settings, token, "namespace", id)
 
 
+# --------------------------------------------------------------------------- #
+# Managed access — centralize granting for a whole container
+# --------------------------------------------------------------------------- #
+
+#: The wildcard subject the flag is stored as. ``[user:*]`` is a TYPE RESTRICTION used as a switch,
+#: not a public grant: no rule reads it as "everyone", only ``managed_access_inheritance`` reads it at
+#: all. Written as one canonical tuple so the flag has exactly one representation to set, clear and
+#: audit — a second spelling (``role:*``) would be a second thing to check when asking "is this on?".
+_MANAGED_ACCESS_SUBJECT = "user:*"
+
+
+async def _read_managed_access(request: Request, settings: Settings, fga_type: str, id: str) -> ManagedAccessResponse:
+    """Is this container managed? The READ half, without which the flag is unusable in a UI.
+
+    Reader-tier (``can_get_metadata``, via the suffix map), not the grant bar that SETS it. That is
+    deliberate: the flag is the reason someone's grant controls are absent, so the person who needs
+    the answer most is precisely the one who may not change it. Hiding the state from them turns a
+    stated policy into an unexplained missing button.
+
+    Answers ``false`` on an auth-off stack rather than refusing: no tuples means no flag, and a page
+    asking "is this managed?" wants an answer it can render.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+    client = getattr(request.app.state, "fga", None)
+    if not settings.fga_enabled or client is None:
+        return ManagedAccessResponse(object=obj, managed_access=False)
+    tuples = await fga.read_object_tuples(client, obj)
+    return ManagedAccessResponse(object=obj, managed_access=any(t.object == obj and t.relation == "managed_access" for t in tuples))
+
+
+@namespace_router.post("/{id}/managed-access/describe")
+async def get_namespace_managed_access(id: str, request: Request, settings: SettingsDep, token: CurrentToken) -> ManagedAccessResponse:
+    """Whether granting on this namespace is centralized — reader-gated (``can_get_metadata``)."""
+    return await _read_managed_access(request, settings, "namespace", id)
+
+
+@warehouse_router.post("/{id}/managed-access/describe")
+async def get_warehouse_managed_access(id: str, request: Request, settings: SettingsDep, token: CurrentToken) -> ManagedAccessResponse:
+    """The same for a warehouse. Gated EXPLICITLY — `warehouse` is not in ``_RESOURCES``, so
+    ``authorize`` returns early and a route added here without this call is ungated."""
+    segments = parse_identifier(id, settings.delimiter)
+    obj = f"warehouse:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+    await fga_deps.require_relation(getattr(request.app.state, "fga", None), settings, token, relation="can_get_metadata", obj=obj)
+    return await _read_managed_access(request, settings, "warehouse", id)
+
+
+async def _set_managed_access(request: Request, settings: Settings, token: CurrentToken, fga_type: str, id: str, enabled: bool) -> ManagedAccessResponse:
+    """Set or clear the flag, idempotently.
+
+    Reads before writing for the same reason the membership API does: an OpenFGA Write is
+    transactional and REJECTS a tuple that already exists, so "turn it on when it is already on"
+    would 400 rather than being the no-op a caller reasonably expects.
+    """
+    if not settings.fga_enabled:
+        raise UnsupportedOperationError("managed access requires OpenFGA (this stack runs auth-off)")
+    client = getattr(request.app.state, "fga", None)
+    if client is None:  # the router gate already 503s this; kept so the endpoint is safe standalone
+        raise ServiceUnavailableError("authorization service is not available")
+    segments = parse_identifier(id, settings.delimiter)
+    obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+    actor = token.sub if token else "system:catalog"
+    tup = fga.ClientTuple(user=_MANAGED_ACCESS_SUBJECT, relation="managed_access", object=obj)
+
+    already = any(t.object == obj and t.relation == "managed_access" for t in await fga.read_object_tuples(client, obj))
+    if enabled and not already:
+        await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")
+    elif not enabled and already:
+        await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")
+    # Audited distinctly from a grant: this does not move anyone's access, it changes WHO MAY move it —
+    # a governance act whose blast radius is every object beneath, and one an auditor will look for by
+    # name rather than by inferring it from the absence of later grants.
+    audit("managed_access_set", SUCCESS, subject=actor, resource=obj, enabled=enabled)
+    await emit_control(
+        get_control_emitter(request),
+        action="grant_added" if enabled else "grant_revoked",
+        object_type="grant",
+        object_id=obj,
+        actor=f"user:{token.sub}" if token else None,
+        extra={"relation": "managed_access", "subject": _MANAGED_ACCESS_SUBJECT},
+    )
+    return ManagedAccessResponse(object=obj, managed_access=enabled)
+
+
+@namespace_router.post("/{id}/managed-access/set")
+async def set_namespace_managed_access(
+    id: str, request: Request, settings: SettingsDep, token: CurrentToken, body: ManagedAccessRequest
+) -> ManagedAccessResponse:
+    """Centralize granting for this namespace and everything beneath it — gated on
+    ``can_set_managed_access`` (which derives from ``manage_grants``).
+
+    With it on, owners BELOW keep every data power and lose only the ability to hand access out; a
+    grant-manager at or above this namespace keeps it. Note the consequence for clearing it: inside an
+    already-managed scope the owner's ``manage_grants`` is withdrawn, so they cannot switch it off —
+    which is what makes it a policy rather than a suggestion.
+    """
+    return await _set_managed_access(request, settings, token, "namespace", id, body.enabled)
+
+
+@warehouse_router.post("/{id}/managed-access/set")
+async def set_warehouse_managed_access(
+    id: str, request: Request, settings: SettingsDep, token: CurrentToken, body: ManagedAccessRequest
+) -> ManagedAccessResponse:
+    """The same, for a whole warehouse — the scope root, so this governs every stage and table in it.
+
+    Gated EXPLICITLY rather than through the router's suffix map: ``warehouse`` is not in
+    ``_RESOURCES``, so ``authorize`` returns early for these paths (the same reason ``warehouses.py``
+    and ``projects.py`` call ``require_relation`` by hand). A route added here without that call would
+    be authenticated and ungated.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    obj = f"warehouse:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+    await fga_deps.require_relation(getattr(request.app.state, "fga", None), settings, token, relation="can_set_managed_access", obj=obj)
+    return await _set_managed_access(request, settings, token, "warehouse", id, body.enabled)
+
+
 # The v1 aggregator includes one ``router`` per module — the table + namespace routers are stitched here.
 router = APIRouter()
 router.include_router(table_router)
 router.include_router(namespace_router)
+router.include_router(warehouse_router)

@@ -36,6 +36,40 @@ class AccessListResponse(BaseModel):
     grants: list[RelationGrants]
 
 
+class ManagedAccessRequest(BaseModel):
+    """Turn managed access on or off for one container."""
+
+    enabled: bool
+
+
+class ManagedAccessResponse(BaseModel):
+    """The container and the state of its flag after the write.
+
+    Echoes the resolved state rather than the request, so a caller learns the outcome even when the
+    write was a no-op (the flag was already in the asked-for state).
+    """
+
+    object: str
+    managed_access: bool
+
+
+class MyPermissionsResponse(BaseModel):
+    """What the CALLING subject may do on one object — every ``can_*`` the model defines, answered
+    for them alone.
+
+    Deliberately not a projection of :class:`AccessListResponse`. That one enumerates *who holds
+    what*, which discloses principals and therefore clears the owner bar; this one answers "what may
+    **I** do here", which discloses nothing about anyone else and must stay reachable by the reader
+    it is describing. Same relation set, a `check` per relation instead of a `list_users`, and no
+    ``user`` parameter — a self-view that accepts a subject IS the enumeration question wearing a
+    different name.
+    """
+
+    object: str
+    subject: str
+    permissions: dict[str, bool]
+
+
 class AccessCheckRequest(BaseModel):
     """A simulated authorization question — does ``user`` hold ``relation`` on this object? The
     ``user`` may be a bare subject (``alice``, taken as ``user:alice``) or a fully-qualified userset

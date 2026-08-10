@@ -6,11 +6,15 @@ import {
 	AccessGrantSchema,
 	AccessGraphSchema,
 	AccessListSchema,
+	ManagedAccessSchema,
+	MyPermissionsSchema,
 	type AccessCheck,
 	type AccessGrant,
 	type AccessGraph,
 	type AccessKind,
 	type AccessList,
+	type ManagedAccess,
+	type MyPermissions,
 } from '../namespace';
 
 import { catalogJSON, parsed } from '$lib/server/doors';
@@ -48,6 +52,37 @@ const SubjectSchema = v.object({
 	user: v.string(),
 	relation: v.string(),
 });
+
+/** Is granting on this container centralized? Reader-tier, so the page can EXPLAIN a missing control
+ *  to the person it is missing for. Named `describe` to match the catalog's suffix-per-operation shape
+ *  (`policy/describe` / `policy/set`) — the authz suffix map is keyed on the path alone, so a read and
+ *  a write sharing one suffix could only ever carry one tier, and it would be the write's. */
+export const fetchManagedAccess = query(
+	TargetSchema,
+	async ({ kind, id }): Promise<ApiResult<ManagedAccess>> =>
+		parsed(
+			await catalogJSON(`/v1/${kind}/${enc(id)}/managed-access/describe`, { method: 'POST' }),
+			ManagedAccessSchema,
+		),
+);
+
+/** The SELF-view: what the SIGNED-IN caller may do on this object. Reader-gated by the catalog
+ *  (`can_get_metadata`), not owner-gated like `fetchAccess` below — describing the caller to
+ *  themselves discloses no principals.
+ *
+ *  This is what a page renders FROM. Before it existed the only honest options were to show every
+ *  action and let the click 403, or to hide actions behind a rung the page had to guess; the first is
+ *  what the lakehouse did, and it only stayed invisible because a user without access never reached
+ *  the page at all. Upward visibility changed that — a single-table grantee can now navigate to the
+ *  namespace above their table — so the page has to be able to ask. */
+export const fetchMyPermissions = query(
+	TargetSchema,
+	async ({ kind, id }): Promise<ApiResult<MyPermissions>> =>
+		parsed(
+			await catalogJSON(`/v1/${kind}/${enc(id)}/access/my-permissions`, { method: 'POST' }),
+			MyPermissionsSchema,
+		),
+);
 
 /** #51 access review, kind-generalized: who holds which can_* action on the object. Owner-gated by
  *  the catalog (can_drop / can_delete). POST because the catalog's lance-namespace-style surface is

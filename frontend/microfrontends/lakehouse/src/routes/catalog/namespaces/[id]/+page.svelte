@@ -20,6 +20,8 @@
 		checkAccess,
 		fetchAccess,
 		fetchAccessGraph,
+		fetchManagedAccess,
+		fetchMyPermissions,
 		grantAccess,
 		revokeAccess,
 	} from '$lib/data/remote/access-objects.remote';
@@ -78,6 +80,27 @@
 	let graph = $state<AccessGraph | null>(null);
 	let graphStatus = $state<'loading' | 'ok' | 'denied' | 'offline'>('loading');
 
+	// What the SIGNED-IN caller may do here, from the catalog's self-view. This page used to render
+	// every action unconditionally and report the denial only after the click, which was survivable
+	// while a reader could not reach the page at all — the namespace 403'd first. Upward visibility
+	// ended that: a single-table grantee now navigates here legitimately, so an ungated `Set policy`
+	// would be a button that exists solely to fail. `null` means "not answered yet", which is NOT the
+	// same as "denied": treating it as denied would hide an owner's own controls on every first paint.
+	let perms = $state<Record<string, boolean> | null>(null);
+	// Whether granting here is CENTRALIZED. Distinct from `perms`: that says what the caller may do,
+	// this says WHY — an owner whose grant controls vanished is otherwise looking at a bug. `null`
+	// means unanswered, which is not the same as "not managed": claiming a policy before the read
+	// lands would be as wrong as hiding one.
+	let managed = $state<boolean | null>(null);
+	// Namespace policy set/delete is gated by the catalog on `can_delete` (fga_deps' suffix map), so
+	// that is the rung the button must agree with — not a rung this page invents.
+	const mayEditPolicy = $derived(perms?.can_delete === true);
+	const permsSettled = $derived(perms !== null);
+	// The one case worth naming separately: the caller owns this namespace, and granting is still
+	// denied. That is managed access doing its job, and it is the only reading under which an owner
+	// should NOT read a missing grant control as broken.
+	const grantsCentralized = $derived(managed === true && perms?.can_delete === true);
+
 	const unauthorized = $derived(tables === null && lastStatus === 401);
 	const offline = $derived(tables === null && settled && lastStatus !== 401);
 
@@ -98,6 +121,22 @@
 		} else {
 			lastStatus = res.status;
 		}
+	}
+
+	async function loadPerms(): Promise<void> {
+		const current = ns;
+		const res = await fetchMyPermissions({ kind: 'namespace', id: current });
+		if (ns !== current) return; // latest-wins across a namespace navigation
+		// A failure leaves `perms` null — "unanswered", so actions stay hidden rather than being shown
+		// on a guess. The catalog is the authority either way; this only decides what to RENDER.
+		if (res.ok) perms = res.data.permissions;
+	}
+
+	async function loadManaged(): Promise<void> {
+		const current = ns;
+		const res = await fetchManagedAccess({ kind: 'namespace', id: current });
+		if (ns !== current) return; // latest-wins across a namespace navigation
+		if (res.ok) managed = res.data.managed_access;
 	}
 
 	async function loadGraph(): Promise<void> {
@@ -180,8 +219,14 @@
 		showGraph = false;
 		graph = null;
 		graphStatus = 'loading';
+		// Reset to "unanswered" too — carrying A's verdicts into B would render B's controls from
+		// A's grants, which is the same class of bug as the edit form surviving a namespace change.
+		perms = null;
+		managed = null;
 		loadTables();
 		loadPolicy();
+		loadPerms();
+		loadManaged();
 	});
 
 	function startPolicyEdit(): void {
@@ -363,22 +408,44 @@
 						{#if policy.target_rows_per_fragment}<span class="chip mono">target {policy.target_rows_per_fragment}
 						rows/frag</span>{/if}
 						{#if !policy.compact_enabled}<span class="chip off mono">maintenance off</span>{/if}
-						<button class="btn ghost" onclick={startPolicyEdit}>Edit</button>
-						<button class="btn ghost danger" disabled={busy} onclick={removePolicy}>
-							<Trash2 size={12} /> Remove
-						</button>
+						{#if mayEditPolicy}
+							<button class="btn ghost" onclick={startPolicyEdit}>Edit</button>
+							<button class="btn ghost danger" disabled={busy} onclick={removePolicy}>
+								<Trash2 size={12} /> Remove
+							</button>
+						{/if}
 					</div>
 				{:else}
 					<p class="mut">
 						No policy — the sweep applies the global defaults.
-						<button class="btn ghost" onclick={startPolicyEdit}>Set policy</button>
+						{#if mayEditPolicy}
+							<button class="btn ghost" onclick={startPolicyEdit}>Set policy</button>
+						{/if}
 					</p>
+				{/if}
+				<!-- Say WHY the controls are absent, once the self-view has actually answered. Silence
+				     would read as a broken page to someone who expected to be able to edit, and the
+				     rung is the useful part of the answer — it names what to ask for. -->
+				{#if permsSettled && !mayEditPolicy}
+					<p class="mut">Changing this policy needs the owner rung (<code>can_delete</code>) on {ns}.</p>
 				{/if}
 				{#if policyError}<p class="error">{policyError}</p>{/if}
 			</section>
 		{:else}
 			<section>
 				<h2>Access</h2>
+				<!-- Managed access is a POLICY, and an unexplained absence is indistinguishable from a
+				     bug. Shown only once the read has landed and only when it actually explains
+				     something the caller can see: they own this namespace and granting is still denied.
+				     Anyone without the owner rung already gets the rung message and does not need a
+				     second reason. -->
+				{#if grantsCentralized}
+					<p class="mut managed">
+						Granting here is <strong>centralized</strong>. Owners of this namespace keep every other
+						power and cannot hand out access; a grant-manager on the warehouse above does that. Clearing
+						it is theirs too — a policy you can switch off from inside is not a policy.
+					</p>
+				{/if}
 				<GrantsPanel dataset={ns} kind="namespace" client={grantsClient} />
 				<!-- #81 one hop of the authorization graph, lazy-loaded as a compact list card. -->
 				<button class="btn ghost graphtoggle" onclick={toggleGraph}>
@@ -477,6 +544,16 @@
 		color: var(--faint);
 		font-size: 12px;
 		margin: 4px 0;
+	}
+
+	/* Real tokens, not the legacy `--ink/--line/--faint` bridge this file otherwise uses: those names
+	   were undefined for a long time and fell back to `currentColor`, which is the estate's
+	   long-standing "why does this look weird". Migrating the whole page is its own change; new rules
+	   should not add to the debt. */
+	.managed {
+		border-left: 2px solid var(--border);
+		padding-left: 8px;
+		color: var(--muted-foreground);
 	}
 	.error {
 		color: var(--fail);

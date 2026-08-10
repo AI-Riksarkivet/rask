@@ -64,19 +64,74 @@ type project
     # the TENANT. `member`, not `admin` — labeling is ordinary tenant work, and the creator becomes
     # the new project's owner via seed_ownership.
     define can_create_annotation_project: member
+    # ---- membership grants (P6) ----
+    # Until these existed the tenant had no door of its own: `admin`/`member` were writable only by
+    # the create-time seed and the estate-gated raw tuple editor, so the person who created a project
+    # — and holds `admin` on it — could not invite anyone into it. The model already said
+    # `can_administer: admin` was the right authority; there was simply no endpoint behind it.
+    #
+    # ADMIN IS GRANTABLE BY AN ADMIN, deliberately. The alternative (members only, admin-minting kept
+    # at the estate) reads safer and is not: a project admin is already `warehouse#owner` via
+    # `admin from project`, so they can hand out `owner` on any namespace or table beneath — full data
+    # power, permanently, and re-delegable. Withholding `admin` would withhold the audit-legible path
+    # and leave the powerful one open. It also matches Lakekeeper, whose `can_grant_project_admin` is
+    # `project_admin`, and whose comment names the reason this is safe: the API refuses to remove the
+    # LAST admin, so a tenant can self-govern without being able to strand itself.
+    define can_grant_admin: admin
+    define can_grant_member: admin
+    # Seeing who holds what follows from being able to change it — the same derivation as the data
+    # rungs' `can_read_assignments`, so a rung added here cannot leave the read behind.
+    define can_read_assignments: admin
 
 # A warehouse = exactly one S3 bucket, owned by one project. The catalog root object is a `warehouse:`.
 # Concentric rungs inherit from the project (admins own; members read).
 type warehouse
   relations
     define project: [project]
+    # The INVERSE of `namespace#parent`, written by the same `grant_on_create` batch. It exists for one
+    # reason: upward visibility (see `can_get_metadata`). Keeping it a separate edge rather than deriving
+    # it is not a choice — OpenFGA cannot traverse a tuple backwards, so "is anything under me visible?"
+    # is unanswerable without it.
+    define child: [namespace]
     define owner: [user, role#assignee] or admin from project
     define writer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
     define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or writer or member from project
     # A warehouse-level validator validates EVERY stage below it.
     define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
+    # ---- the GRANT axis (separate from the USE rungs above) ----
+    # Who may hand out access here, as its own privilege rather than a side-effect of `owner`. Until
+    # this existed the two were welded together — the grant routes gate on the owner bar — so
+    # "may administer access but not read the data" was unexpressible, and the only way to let someone
+    # run access reviews was to give them the data too. `or owner` keeps every existing owner able to
+    # grant, so this adds a capability and revokes none.
+    # MANAGED ACCESS — a boolean flag on the object, in the wildcard idiom (`[user:*]` is a type
+    # restriction used as a switch, not a public grant: nothing reads it as "everyone", only
+    # `managed_access_inheritance` below does). Turn it on and owners BELOW lose self-service
+    # granting; only a grant-manager at or above this object may hand access out.
+    #
+    # This is the lever an archive actually wants and the rungs alone cannot express: "nobody hands
+    # out access to this collection except the records manager". Without it, every owner of every
+    # table is independently able to widen access, and the only way to stop them is to stop making
+    # them owners — which also stops them working.
+    define managed_access: [user:*, role:*]
+    define managed_access_inheritance: managed_access
+    # `but not managed_access_inheritance from parent` is the whole mechanism: ownership normally
+    # carries the right to grant, and this withdraws exactly that when the enclosing scope is managed,
+    # leaving the owner every other power they had. `manage_grants from parent` is what keeps the
+    # centralized case working — the manager above stays able to grant here.
+    define manage_grants: [user, role#assignee] or owner
+    # The GRANT OPTION: hand on a rung you hold yourself, and nothing more. Deliberately NOT
+    # self-passing — `can_grant_pass_grants` is `manage_grants` alone below, so a delegate cannot mint
+    # further delegates and the chain stays one hop deep. Not time-boxable for the same reason `owner`
+    # is not: an expiring right to delegate leaves permanent grants behind it.
+    define pass_grants: [user, role#assignee]
     # ---- actions ----
-    define can_get_metadata: reader
+    # UPWARD VISIBILITY: readable if you hold `reader` here, OR if anything beneath you is visible.
+    # Without the second clause a grant on one table is unreachable — the grantee can read the table
+    # and cannot see the warehouse or namespace that contains it, so every list above it is empty and
+    # the breadcrumb to their own data 403s. Metadata only: seeing that a container exists on the path
+    # to something you were deliberately given is not a leak, and it is the whole browse story.
+    define can_get_metadata: reader or can_get_metadata from child
     define can_create_namespace: writer
     define can_create_table: writer
     # The warehouse root is ALSO the create-on-parent target for a TOP-LEVEL child (no enclosing
@@ -104,19 +159,60 @@ type warehouse
     # deny every caller including the estate owner. A gate that denies everyone is an outage, not a
     # gate. Per-store granularity lands the day store registration owns its own tuples.
     define can_browse_storage: owner
+    # ---- grant actions, one per assignable rung ----
+    # `manage_grants` grants anything here; a `pass_grants` holder may hand on ONLY what they already
+    # hold. This is SQL's WITH GRANT OPTION, and the second clause is what makes the split useful
+    # rather than decorative: without it, delegating any granting at all means delegating all of it.
+    define can_grant_owner: manage_grants
+    define can_grant_writer: manage_grants or (writer and pass_grants)
+    define can_grant_reader: manage_grants or (reader and pass_grants)
+    define can_grant_validator: manage_grants or (validator and pass_grants)
+    # Both meta-rungs are `manage_grants`-only. `can_grant_owner` is too: ownership is the authority to
+    # hand out authority, so passing it through the grant option would let a delegate exceed the rung
+    # they were delegated.
+    define can_grant_manage_grants: manage_grants
+    define can_grant_pass_grants: manage_grants
+    # Seeing who holds what follows from being able to CHANGE who holds what — the same bar, derived
+    # rather than restated, so a rung added above cannot leave this behind.
+    define can_read_assignments: manage_grants
+    # Turning managed access on or off is itself a grant-management act. Note what this means one
+    # level down: on a namespace ALREADY inside a managed scope, the owner's `manage_grants` is
+    # withdrawn, so they cannot clear the flag either — a policy you can switch off is not a policy.
+    define can_set_managed_access: manage_grants
 
 # Namespace = a medallion stage (bronze/silver/gold) or a domain namespace; self-nesting under a warehouse.
 type namespace
   relations
     define parent: [warehouse, namespace]
+    # The inverse edge — see `warehouse#child`. `materialized_view` is here and `transaction` is not:
+    # a view is a browsable object someone can be granted, a transaction is a receipt that no one
+    # navigates to.
+    define child: [namespace, table, materialized_view]
     define owner: [user, role#assignee] or owner from parent
     define writer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or writer from parent
     define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or writer or reader from parent
     # The validator rung is SEPARATE from writer — a writer is NOT a validator. Inherits from the parent
     # so a warehouse/parent validator validates this stage. This is what gates promotion INTO the stage.
     define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or validator from parent
+    # ---- the GRANT axis ---- (see `warehouse` for why it is separate from the rungs above)
+    # Managed access, inherited: setting the flag on the warehouse governs every stage beneath it, and
+    # a stage may also set it for itself. The recursion is what makes "manage this collection centrally"
+    # one act rather than one act per object.
+    define managed_access: [user:*, role:*]
+    define managed_access_inheritance: managed_access or managed_access_inheritance from parent
+    # Cascades like every other rung: a warehouse grant-manager manages grants on every stage beneath
+    # it, so access administration is delegated once at the top rather than re-granted per namespace.
+    # `(ownership but not managed_access_inheritance from parent)` — an owner grants here UNLESS the
+    # enclosing scope is managed, in which case only a manager from above can.
+    define manage_grants: [user, role#assignee] or (owner but not managed_access_inheritance from parent) or manage_grants from parent
+    # The grant option does NOT cascade — it is deliberately per-object. Inheriting it would mean one
+    # `pass_grants` at the warehouse silently made someone a delegate on every table underneath, which
+    # is the blanket authority `manage_grants` already expresses honestly.
+    define pass_grants: [user, role#assignee]
     # ---- actions ----
-    define can_get_metadata: reader
+    # Upward visibility — same rule and same reason as `warehouse#can_get_metadata`. Recursive through
+    # `child: [namespace, ...]`, so a grant nested three namespaces deep lights the whole path to it.
+    define can_get_metadata: reader or can_get_metadata from child
     define can_create_namespace: writer
     define can_create_table: writer
     # Creating a materialized view is a create-on-parent op gated on the enclosing namespace (writer rung),
@@ -125,6 +221,15 @@ type namespace
     define can_update_properties: writer
     define can_promote: validator
     define can_delete: owner
+    # ---- grant actions ---- (same shape as `warehouse`; see there for the reasoning)
+    define can_grant_owner: manage_grants
+    define can_grant_writer: manage_grants or (writer and pass_grants)
+    define can_grant_reader: manage_grants or (reader and pass_grants)
+    define can_grant_validator: manage_grants or (validator and pass_grants)
+    define can_grant_manage_grants: manage_grants
+    define can_grant_pass_grants: manage_grants
+    define can_read_assignments: manage_grants
+    define can_set_managed_access: manage_grants
 
 type table
   relations
@@ -133,6 +238,12 @@ type table
     define writer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or writer from parent
     define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or writer or reader from parent
     define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or validator from parent
+    # ---- the GRANT axis ---- (see `warehouse`)
+    # A table takes no `managed_access` of its own — the flag is a CONTAINER policy, and a per-table
+    # switch would let an owner exempt their own table from the collection's rule, which is the rule's
+    # only purpose. It still OBEYS one set above it, through `managed_access_inheritance from parent`.
+    define manage_grants: [user, role#assignee] or (owner but not managed_access_inheritance from parent) or manage_grants from parent
+    define pass_grants: [user, role#assignee]
     # ---- actions ----
     define can_get_metadata: reader
     define can_read_data: reader
@@ -148,6 +259,14 @@ type table
     define can_create_tag: owner
     define can_update_tag: owner
     define can_restore: owner
+    # ---- grant actions ---- (same shape as `warehouse`; see there for the reasoning)
+    define can_grant_owner: manage_grants
+    define can_grant_writer: manage_grants or (writer and pass_grants)
+    define can_grant_reader: manage_grants or (reader and pass_grants)
+    define can_grant_validator: manage_grants or (validator and pass_grants)
+    define can_grant_manage_grants: manage_grants
+    define can_grant_pass_grants: manage_grants
+    define can_read_assignments: manage_grants
 
 # A materialized view = a derived, refreshable dataset under a namespace (id = namespace path + view
 # name). Concentric rungs mirror `table`: owner ⊇ refresher ⊇ reader, all cascading from the parent

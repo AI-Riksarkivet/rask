@@ -49,10 +49,29 @@
 		client,
 	}: { dataset: string; kind?: GrantsKind; client: GrantsClient } = $props();
 
-	// #72 the base rungs an owner may hand out (owner/writer/reader/validator) — the model's directly
-	// assignable relations, least→most privilege. NOT the can_* actions the review row shows (those are
-	// derived); a grant/revoke writes/deletes a direct base-rung tuple, then the review is re-fetched.
-	const GRANTABLE = ['reader', 'writer', 'validator', 'owner'];
+	// #72 the base rungs a grant-manager may hand out — the model's directly assignable relations,
+	// least→most privilege. NOT the can_* actions the review row shows (those are derived); a
+	// grant/revoke writes/deletes a direct base-rung tuple, then the review is re-fetched.
+	//
+	// The last two are the GRANT AXIS, and they are not more of the same: the four above say what a
+	// subject may do with the DATA, these say what they may do with ACCESS. `manage_grants` hands out
+	// any rung here without conferring a single byte of read — the security-admin persona that was
+	// unexpressible while granting was welded to `owner`. `pass_grants` is the grant OPTION: it lets a
+	// holder hand on what they already hold, and nothing more, so it is worthless on its own.
+	//
+	// Kept in privilege order rather than grouped, because that is the order the picker reads in and
+	// `manage_grants` genuinely outranks `owner` on the axis it belongs to. The catalog gates each one
+	// separately (`can_grant_<rung>`), so a rung offered here that the caller may not grant is refused
+	// server-side — the picker is a convenience, never the boundary.
+	const GRANTABLE = ['reader', 'writer', 'validator', 'owner', 'pass_grants', 'manage_grants'];
+
+	// `reader` and `owner` say what they mean; `pass_grants` and `manage_grants` do not, and picking
+	// the wrong one of those hands out the authority to hand out authority. The wire value stays the
+	// relation name — this is the label only, so nothing downstream has to know about it.
+	const RUNG_LABEL: Record<string, string> = {
+		pass_grants: 'pass_grants — may re-grant what they hold',
+		manage_grants: 'manage_grants — may grant anything, reads nothing',
+	};
 
 	// Every piece of state is keyed by the dataset it belongs to (no cross-dataset bleed, audit
 	// 2026-07-16: a single un-keyed `loading` let one dataset's in-flight review block another's):
@@ -276,7 +295,7 @@
 						bind:value={mgRelation}
 						ariaLabel="Grant rung"
 						placeholder="rung…"
-						options={GRANTABLE.map((r) => ({ value: r, label: r }))}
+						options={GRANTABLE.map((r) => ({ value: r, label: RUNG_LABEL[r] ?? r }))}
 					/>
 					<button
 						class="btn"

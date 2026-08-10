@@ -113,6 +113,14 @@ _MISSING_DELETE_MARKERS = ("cannot delete", "does not exist", "write_failed_due_
 # this ceiling is never reached in practice.
 _MAX_REVOKE_PAGES = 100
 
+# Parent types that declare a `child` relation in the model, and therefore take the inverse edge
+# `grant_on_create` writes for upward visibility. Deliberately a whitelist keyed on the PARENT's
+# type: `project` is absent because `annotation_project` hangs off it by `tenant` and the model
+# gives `project` no `child`, and a `child` tuple on a type that does not define it is accepted by
+# OpenFGA and read by no rule — a silent no-op, the same failure mode as writing `parent` where the
+# model says `tenant`. Adding a `child` relation to a type in `model.fga` means adding it here too.
+_CHILD_EDGE_PARENT_TYPES = frozenset({"warehouse", "namespace"})
+
 
 def load_model() -> dict[str, Any]:
     """Load the authorization model JSON shipped with the app."""
@@ -1136,6 +1144,15 @@ async def grant_on_create(
         # produces a tuple OpenFGA accepts and no rule ever reads, so `admin from tenant` and
         # `member from tenant` never resolve and the object looks unowned by everyone.
         tuples.append(ClientTuple(user=parent_object, relation=parent_relation, object=obj))
+        # …and the INVERSE edge, in the SAME batch, so the two directions cannot drift. It backs
+        # `can_get_metadata: reader or can_get_metadata from child`: without it a single-table grant
+        # is unreachable, because the grantee can read the table and cannot see the namespace or
+        # warehouse that contains it. OpenFGA cannot walk a tuple backwards, so the reverse edge has
+        # to be stored. Written only when the PARENT's type declares `child` — a tuple on a type that
+        # does not is accepted by the API and read by no rule, the same silent no-op the comment
+        # above describes for `tenant`.
+        if parent_object.split(":", 1)[0] in _CHILD_EDGE_PARENT_TYPES:
+            tuples.append(ClientTuple(user=obj, relation="child", object=parent_object))
     await write_tuples(
         client,
         tuples,
@@ -1225,13 +1242,24 @@ async def revoke_object_tuples(
     )
     if not tuples:
         return 0
+    # The inverse `child` edge is the ONE tuple about this object that a read by object cannot see:
+    # `grant_on_create` stores it as `<obj> child <parent>`, so its OBJECT is the parent and it
+    # survives a revoke that only reads `object == obj`. Left behind it is a phantom child — the
+    # access graph renders an edge to an object that no longer exists, and the drop looks incomplete.
+    # The parent is recoverable from what was just read: the `parent` edge is `<parent> parent <obj>`,
+    # so its USER is the parent object. Deleting an absent tuple is swallowed by `delete_tuples`, so
+    # this is safe for objects created before the edge existed and for types that never take one.
+    doomed = list(tuples)
+    parent = next((t.user for t in tuples if t.relation == "parent" and t.user), None)
+    if parent and parent.split(":", 1)[0] in _CHILD_EDGE_PARENT_TYPES:
+        doomed.append(ClientTuple(user=obj, relation="child", object=parent))
     await delete_tuples(
         client,
-        tuples,
+        doomed,
         actor=actor,
         origin=origin,
         retry_attempts=retry_attempts,
         retry_backoff_seconds=retry_backoff_seconds,
         retry_max_backoff_seconds=retry_max_backoff_seconds,
     )
-    return len(tuples)
+    return len(doomed)

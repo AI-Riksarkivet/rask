@@ -472,7 +472,7 @@ export interface paths {
         put?: never;
         /**
          * Grant Namespace Access
-         * @description Grant a base rung on the namespace to a subject — owner-gated by the router (``can_delete``).
+         * @description Grant a base rung on the namespace to a subject — gated per rung (``can_grant_<relation>``).
          */
         post: operations["grant_namespace_access_v1_namespace__id__access_grant_post"];
         delete?: never;
@@ -522,6 +522,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/namespace/{id}/access/my-permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * My Namespace Permissions
+         * @description What the caller may do on this namespace — reader-gated by the router (``can_get_metadata``).
+         */
+        post: operations["my_namespace_permissions_v1_namespace__id__access_my_permissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/namespace/{id}/access/revoke": {
         parameters: {
             query?: never;
@@ -533,7 +553,7 @@ export interface paths {
         put?: never;
         /**
          * Revoke Namespace Access
-         * @description Revoke a base rung on the namespace from a subject — owner-gated by the router (``can_delete``).
+         * @description Revoke a base rung on the namespace from a subject — gated per rung, identically to grant.
          */
         post: operations["revoke_namespace_access_v1_namespace__id__access_revoke_post"];
         delete?: never;
@@ -648,6 +668,52 @@ export interface paths {
         get: operations["list_namespaces_v1_namespace__id__list_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespace/{id}/managed-access/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get Namespace Managed Access
+         * @description Whether granting on this namespace is centralized — reader-gated (``can_get_metadata``).
+         */
+        post: operations["get_namespace_managed_access_v1_namespace__id__managed_access_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespace/{id}/managed-access/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Namespace Managed Access
+         * @description Centralize granting for this namespace and everything beneath it — gated on
+         *     ``can_set_managed_access`` (which derives from ``manage_grants``).
+         *
+         *     With it on, owners BELOW keep every data power and lose only the ability to hand access out; a
+         *     grant-manager at or above this namespace keeps it. Note the consequence for clearing it: inside an
+         *     already-managed scope the owner's ``manage_grants`` is withdrawn, so they cannot switch it off —
+         *     which is what makes it a policy rather than a suggestion.
+         */
+        post: operations["set_namespace_managed_access_v1_namespace__id__managed_access_set_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1002,6 +1068,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{project_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Members
+         * @description Who holds which rung directly on this tenant — gated on ``can_read_assignments``.
+         *
+         *     DIRECT grants only. An admin who holds it through ``member from team`` is not listed, because they
+         *     are not revocable here and a remove button that cannot work is worse than no row. The team edge is
+         *     where that access lives and where it is removed.
+         */
+        get: operations["list_members_v1_projects__project_id__members_get"];
+        /**
+         * Grant Member
+         * @description Grant one tenant rung to one subject — gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).
+         *
+         *     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
+         *     OpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400
+         *     on the second call.
+         */
+        put: operations["grant_member_v1_projects__project_id__members_put"];
+        post?: never;
+        /**
+         * Revoke Member
+         * @description Revoke one tenant rung — gated identically to granting it.
+         *
+         *     REFUSES the last ``admin``. Removing it leaves a tenant nobody inside can administer, grant on, or
+         *     delete — recoverable only by estate intervention, which is exactly the state the API exists to
+         *     avoid. Named rather than discovered later.
+         *
+         *     Revoking a rung that is not there is a no-op, not a 404: the caller asked for a state and that
+         *     state already holds.
+         */
+        delete: operations["revoke_member_v1_projects__project_id__members_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/stores": {
         parameters: {
             query?: never;
@@ -1074,6 +1183,13 @@ export interface paths {
          * @description List every table in the namespace via ``list_all_tables``; when FGA is on,
          *     filter the result down to the tables the caller can ``can_read_data``.
          *     ``include_declared=false`` drops declared-only tables (reserved, no storage yet).
+         *
+         *     Pagination is applied to the FINAL merged result, never to the native root call: the response is
+         *     root tables + bound seeds + the namespace walk, so a native-level ``limit`` would truncate only
+         *     the first ingredient and silently DROP tables from every page (#141 — the endpoint advertised
+         *     pagination and ignored it). The merged list is sorted and deduped, so the cursor is keyset-style:
+         *     ``page_token`` = the last name of the page, stateless and stable across pages. The walk itself
+         *     still costs the full estate server-side per call — acceptable at admin frequency, and honest now.
          */
         get: operations["list_all_tables_v1_table_get"];
         put?: never;
@@ -1169,7 +1285,10 @@ export interface paths {
         put?: never;
         /**
          * Grant Table Access
-         * @description Grant a base rung on the table to a subject — owner-gated by the router (``can_drop``).
+         * @description Grant a base rung on the table to a subject — gated PER RUNG by the router
+         *     (``can_grant_<relation>``, read from the body). Granting is its own axis now: a `manage_grants`
+         *     holder may hand out access without holding the data, and a `pass_grants` delegate may hand on only
+         *     what they already hold.
          */
         post: operations["grant_table_access_v1_table__id__access_grant_post"];
         delete?: never;
@@ -1218,6 +1337,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/table/{id}/access/my-permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * My Table Permissions
+         * @description What the caller may do on this table — reader-gated by the router (``can_get_metadata``).
+         */
+        post: operations["my_table_permissions_v1_table__id__access_my_permissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/table/{id}/access/revoke": {
         parameters: {
             query?: never;
@@ -1229,7 +1368,8 @@ export interface paths {
         put?: never;
         /**
          * Revoke Table Access
-         * @description Revoke a base rung on the table from a subject — owner-gated by the router (``can_drop``).
+         * @description Revoke a base rung on the table from a subject — gated per rung, identically to grant: taking a
+         *     rung away is the same authority as handing it out.
          */
         post: operations["revoke_table_access_v1_table__id__access_revoke_post"];
         delete?: never;
@@ -2660,6 +2800,52 @@ export interface paths {
          * @description Discard the caller's saved canvas.
          */
         delete: operations["delete_workflow_graph_v1_user_state_workflow_graph_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/warehouse/{id}/managed-access/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get Warehouse Managed Access
+         * @description The same for a warehouse. Gated EXPLICITLY — `warehouse` is not in ``_RESOURCES``, so
+         *     ``authorize`` returns early and a route added here without this call is ungated.
+         */
+        post: operations["get_warehouse_managed_access_v1_warehouse__id__managed_access_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/warehouse/{id}/managed-access/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Warehouse Managed Access
+         * @description The same, for a whole warehouse — the scope root, so this governs every stage and table in it.
+         *
+         *     Gated EXPLICITLY rather than through the router's suffix map: ``warehouse`` is not in
+         *     ``_RESOURCES``, so ``authorize`` returns early for these paths (the same reason ``warehouses.py``
+         *     and ``projects.py`` call ``require_relation`` by hand). A route added here without that call would
+         *     be authenticated and ungated.
+         */
+        post: operations["set_warehouse_managed_access_v1_warehouse__id__managed_access_set_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4102,6 +4288,8 @@ export interface components {
             }[];
             /** Read Version */
             read_version: number;
+            /** Run Id */
+            run_id?: string | null;
         };
         /** CommitFragmentsResponse */
         CommitFragmentsResponse: {
@@ -4693,6 +4881,11 @@ export interface components {
         };
         /** CreateWarehouseNamespaceRequest */
         CreateWarehouseNamespaceRequest: {
+            /**
+             * Adopt Existing
+             * @default false
+             */
+            adopt_existing: boolean;
             /** Namespace */
             namespace: string;
         };
@@ -5592,6 +5785,16 @@ export interface components {
              */
             version: number;
         };
+        /** GrantRequest */
+        GrantRequest: {
+            /**
+             * Relation
+             * @enum {string}
+             */
+            relation: "admin" | "member";
+            /** User */
+            user: string;
+        };
         /**
          * GraphEdge
          * @description A relation edge: ``source`` holds ``relation`` on ``target`` (a grant), or an object's ``parent``
@@ -5930,6 +6133,27 @@ export interface components {
          */
         LivenessStatus: "ok";
         /**
+         * ManagedAccessRequest
+         * @description Turn managed access on or off for one container.
+         */
+        ManagedAccessRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
+         * ManagedAccessResponse
+         * @description The container and the state of its flag after the write.
+         *
+         *     Echoes the resolved state rather than the request, so a caller learns the outcome even when the
+         *     write was a no-op (the flag was already in the asked-for state).
+         */
+        ManagedAccessResponse: {
+            /** Managed Access */
+            managed_access: boolean;
+            /** Object */
+            object: string;
+        };
+        /**
          * MatchQuery
          * @description MatchQuery
          */
@@ -6068,6 +6292,23 @@ export interface components {
             sub: string;
         };
         /**
+         * Member
+         * @description One direct grant on this tenant.
+         */
+        Member: {
+            /** Relation */
+            relation: string;
+            /** User */
+            user: string;
+        };
+        /** MemberList */
+        MemberList: {
+            /** Grantable */
+            grantable?: string[];
+            /** Members */
+            members: components["schemas"]["Member"][];
+        };
+        /**
          * MergeInsertIntoTableResponse
          * @description Response from merge insert operation
          */
@@ -6164,6 +6405,28 @@ export interface components {
         MultiMatchQuery: {
             /** Match Queries */
             match_queries: components["schemas"]["MatchQuery"][];
+        };
+        /**
+         * MyPermissionsResponse
+         * @description What the CALLING subject may do on one object — every ``can_*`` the model defines, answered
+         *     for them alone.
+         *
+         *     Deliberately not a projection of :class:`AccessListResponse`. That one enumerates *who holds
+         *     what*, which discloses principals and therefore clears the owner bar; this one answers "what may
+         *     **I** do here", which discloses nothing about anyone else and must stay reachable by the reader
+         *     it is describing. Same relation set, a `check` per relation instead of a `list_users`, and no
+         *     ``user`` parameter — a self-view that accepts a subject IS the enumeration question wearing a
+         *     different name.
+         */
+        MyPermissionsResponse: {
+            /** Object */
+            object: string;
+            /** Permissions */
+            permissions: {
+                [key: string]: boolean;
+            };
+            /** Subject */
+            subject: string;
         };
         /**
          * PhraseQuery
@@ -7649,7 +7912,11 @@ export interface operations {
     check_access_v1_access_check_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7682,7 +7949,11 @@ export interface operations {
     expand_access_v1_access_expand_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7715,7 +7986,11 @@ export interface operations {
     list_access_objects_v1_access_list_objects_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7748,7 +8023,11 @@ export interface operations {
     list_access_users_v1_access_list_users_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7781,7 +8060,11 @@ export interface operations {
     get_access_model_v1_access_model_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7796,12 +8079,25 @@ export interface operations {
                     "application/json": components["schemas"]["AccessModelResponse"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     simulate_access_v1_access_simulate_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7844,7 +8140,11 @@ export interface operations {
                 /** @description the previous page's continuation token */
                 continuation?: string | null;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7873,7 +8173,11 @@ export interface operations {
     write_access_tuple_v1_access_tuples_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7906,7 +8210,11 @@ export interface operations {
     delete_access_tuple_v1_access_tuples_delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7942,7 +8250,11 @@ export interface operations {
                 /** @description the last cursor the client saw (0 = baseline) */
                 since?: number;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7971,7 +8283,11 @@ export interface operations {
     create_materialized_view_v1_materialized_view__id__create_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8006,7 +8322,11 @@ export interface operations {
     refresh_materialized_view_v1_materialized_view__id__refresh_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8041,7 +8361,11 @@ export interface operations {
     get_me_v1_me_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -8056,6 +8380,15 @@ export interface operations {
                     "application/json": components["schemas"]["MeResponse"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     list_models_v1_model_get: {
@@ -8063,7 +8396,11 @@ export interface operations {
             query?: {
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -8092,7 +8429,11 @@ export interface operations {
     describe_model_v1_model__model__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 model: string;
             };
@@ -8125,6 +8466,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 model: string;
@@ -8160,7 +8504,11 @@ export interface operations {
     check_namespace_access_v1_namespace__id__access_check_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8195,7 +8543,11 @@ export interface operations {
     grant_namespace_access_v1_namespace__id__access_grant_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8230,7 +8582,11 @@ export interface operations {
     graph_namespace_access_v1_namespace__id__access_graph_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8261,7 +8617,11 @@ export interface operations {
     list_namespace_access_v1_namespace__id__access_list_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8289,10 +8649,49 @@ export interface operations {
             };
         };
     };
+    my_namespace_permissions_v1_namespace__id__access_my_permissions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPermissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     revoke_namespace_access_v1_namespace__id__access_revoke_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8327,7 +8726,11 @@ export interface operations {
     create_namespace_v1_namespace__id__create_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8362,7 +8765,11 @@ export interface operations {
     describe_namespace_v1_namespace__id__describe_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8396,7 +8803,11 @@ export interface operations {
                 force?: boolean;
                 purge?: boolean;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8431,7 +8842,11 @@ export interface operations {
     namespace_exists_v1_namespace__id__exists_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8465,7 +8880,11 @@ export interface operations {
                 page_token?: string | null;
                 limit?: number | null;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8493,10 +8912,88 @@ export interface operations {
             };
         };
     };
+    get_namespace_managed_access_v1_namespace__id__managed_access_describe_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedAccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_namespace_managed_access_v1_namespace__id__managed_access_set_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedAccessRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedAccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_namespace_policy_v1_namespace__id__policy_delete_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8527,7 +9024,11 @@ export interface operations {
     describe_namespace_policy_v1_namespace__id__policy_describe_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8558,7 +9059,11 @@ export interface operations {
     set_namespace_policy_v1_namespace__id__policy_set_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8593,7 +9098,11 @@ export interface operations {
     get_namespace_protection_v1_namespace__id__protection_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8624,7 +9133,11 @@ export interface operations {
     set_namespace_protection_v1_namespace__id__protection_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8663,7 +9176,11 @@ export interface operations {
                 limit?: number | null;
                 include_declared?: boolean;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8694,7 +9211,11 @@ export interface operations {
     namespace_tasks_v1_namespace__id__tasks_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8725,7 +9246,11 @@ export interface operations {
     undrop_namespace_v1_namespace__id__undrop_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8756,7 +9281,11 @@ export interface operations {
     delete_project_policy_v1_project__id__policy_delete_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8787,7 +9316,11 @@ export interface operations {
     describe_project_policy_v1_project__id__policy_describe_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8818,7 +9351,11 @@ export interface operations {
     set_project_policy_v1_project__id__policy_set_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8853,7 +9390,11 @@ export interface operations {
     list_projects_v1_projects_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -8868,12 +9409,25 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectResponse"][];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     create_project_v1_projects_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -8906,7 +9460,11 @@ export interface operations {
     list_project_policies_v1_projects__id__policies_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -8937,7 +9495,11 @@ export interface operations {
     get_project_v1_projects__project_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 project_id: string;
             };
@@ -8970,7 +9532,11 @@ export interface operations {
             query?: {
                 force?: boolean;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 project_id: string;
             };
@@ -8998,10 +9564,127 @@ export interface operations {
             };
         };
     };
+    list_members_v1_projects__project_id__members_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grant_member_v1_projects__project_id__members_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_member_v1_projects__project_id__members_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_stores_v1_stores_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9016,12 +9699,25 @@ export interface operations {
                     "application/json": components["schemas"]["StoreRegistry"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     attach_store_v1_stores_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9054,7 +9750,11 @@ export interface operations {
     stores_by_tier_v1_stores_tiers_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9071,6 +9771,15 @@ export interface operations {
                     };
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     list_all_tables_v1_table_get: {
@@ -9080,7 +9789,11 @@ export interface operations {
                 limit?: number | null;
                 include_declared?: boolean;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9109,7 +9822,11 @@ export interface operations {
     batch_commit_tables_v1_table_batch_commit_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9142,7 +9859,11 @@ export interface operations {
     batch_create_table_versions_v1_table_version_batch_create_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9175,7 +9896,11 @@ export interface operations {
     check_table_access_v1_table__id__access_check_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -9210,7 +9935,11 @@ export interface operations {
     grant_table_access_v1_table__id__access_grant_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -9245,7 +9974,11 @@ export interface operations {
     graph_table_access_v1_table__id__access_graph_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -9276,7 +10009,11 @@ export interface operations {
     list_table_access_v1_table__id__access_list_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -9304,10 +10041,49 @@ export interface operations {
             };
         };
     };
+    my_table_permissions_v1_table__id__access_my_permissions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPermissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     revoke_table_access_v1_table__id__access_revoke_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -9344,6 +10120,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -9381,6 +10160,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -9416,7 +10198,11 @@ export interface operations {
     analyze_table_query_plan_v1_table__id__analyze_plan_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -9451,7 +10237,11 @@ export interface operations {
     backfill_column_v1_table__id__backfill_column_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -9493,6 +10283,9 @@ export interface operations {
             header?: {
                 Range?: string | null;
                 "If-Range"?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -9524,7 +10317,11 @@ export interface operations {
     create_table_branch_v1_table__id__branches_create_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -9559,7 +10356,11 @@ export interface operations {
     delete_table_branch_v1_table__id__branches_delete_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -9597,7 +10398,11 @@ export interface operations {
                 page_token?: string | null;
                 limit?: number | null;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -9630,6 +10435,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -9665,7 +10473,11 @@ export interface operations {
     count_table_rows_v1_table__id__count_rows_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -9709,6 +10521,9 @@ export interface operations {
             header?: {
                 "X-Lance-Run-Facets"?: string | null;
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -9746,6 +10561,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -9783,6 +10601,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -9820,7 +10641,11 @@ export interface operations {
             query?: {
                 tier?: "read" | "write";
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -9853,6 +10678,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -9890,6 +10718,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -9929,6 +10760,9 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -9967,7 +10801,11 @@ export interface operations {
                 tag?: string | null;
                 vend_credentials?: boolean | null;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10003,6 +10841,9 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -10036,6 +10877,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -10071,7 +10915,11 @@ export interface operations {
     table_exists_v1_table__id__exists_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10102,7 +10950,11 @@ export interface operations {
     explain_table_query_plan_v1_table__id__explain_plan_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10139,7 +10991,11 @@ export interface operations {
             query?: {
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10175,7 +11031,11 @@ export interface operations {
                 page_token?: string | null;
                 limit?: number | null;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10208,6 +11068,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -10240,7 +11103,11 @@ export interface operations {
     describe_table_index_stats_v1_table__id__index__index_name__stats_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
                 index_name: string;
@@ -10277,6 +11144,9 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -10312,7 +11182,11 @@ export interface operations {
     compact_maintenance_v1_table__id__maintenance_compact_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10347,7 +11221,11 @@ export interface operations {
     preview_maintenance_v1_table__id__maintenance_preview_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10382,7 +11260,11 @@ export interface operations {
     run_maintenance_v1_table__id__maintenance_run_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10432,6 +11314,9 @@ export interface operations {
             header?: {
                 "X-Lance-Run-Facets"?: string | null;
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -10467,7 +11352,11 @@ export interface operations {
     delete_table_policy_v1_table__id__policy_delete_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10498,7 +11387,11 @@ export interface operations {
     describe_table_policy_v1_table__id__policy_describe_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10529,7 +11422,11 @@ export interface operations {
     set_table_policy_v1_table__id__policy_set_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10564,7 +11461,11 @@ export interface operations {
     get_table_protection_v1_table__id__protection_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10595,7 +11496,11 @@ export interface operations {
     set_table_protection_v1_table__id__protection_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10630,7 +11535,11 @@ export interface operations {
     publish_table_v1_table__id__publish_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10665,7 +11574,11 @@ export interface operations {
     query_table_v1_table__id__query_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10702,6 +11615,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -10741,6 +11657,9 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -10778,6 +11697,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -10815,6 +11737,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -10852,7 +11777,11 @@ export interface operations {
     get_table_stats_v1_table__id__stats_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10883,7 +11812,11 @@ export interface operations {
     create_table_tag_v1_table__id__tags_create_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10918,7 +11851,11 @@ export interface operations {
     delete_table_tag_v1_table__id__tags_delete_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10953,7 +11890,11 @@ export interface operations {
     list_table_tags_v1_table__id__tags_list_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -10984,7 +11925,11 @@ export interface operations {
     update_table_tag_v1_table__id__tags_update_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -11019,7 +11964,11 @@ export interface operations {
     get_table_tag_version_v1_table__id__tags_version_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -11054,7 +12003,11 @@ export interface operations {
     table_tasks_v1_table__id__tasks_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -11085,7 +12038,11 @@ export interface operations {
     undrop_table_v1_table__id__undrop_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -11118,6 +12075,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -11155,6 +12115,9 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -11190,7 +12153,11 @@ export interface operations {
     create_table_version_v1_table__id__version_create_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -11225,7 +12192,11 @@ export interface operations {
     batch_delete_table_versions_v1_table__id__version_delete_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -11262,7 +12233,11 @@ export interface operations {
             query?: {
                 version?: number | null;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -11302,7 +12277,11 @@ export interface operations {
                 descending?: boolean | null;
                 branch?: string | null;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -11333,7 +12312,11 @@ export interface operations {
     alter_transaction_v1_transaction__id__alter_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -11368,7 +12351,11 @@ export interface operations {
     describe_transaction_v1_transaction__id__describe_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -11399,7 +12386,11 @@ export interface operations {
     get_dock_layout_v1_user_state_dock_layout_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11414,12 +12405,25 @@ export interface operations {
                     "application/json": components["schemas"]["UserStateEnvelope_DockLayouts_"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     put_dock_layout_v1_user_state_dock_layout_put: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11452,7 +12456,11 @@ export interface operations {
     delete_dock_layout_v1_user_state_dock_layout_delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11465,12 +12473,25 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     get_dock_layout_library_v1_user_state_dock_layout_library_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11485,12 +12506,25 @@ export interface operations {
                     "application/json": components["schemas"]["UserStateEnvelope_DockLayoutLibrary_"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     put_dock_layout_library_v1_user_state_dock_layout_library_put: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11523,7 +12557,11 @@ export interface operations {
     delete_dock_layout_library_v1_user_state_dock_layout_library_delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11536,12 +12574,25 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     get_saved_views_v1_user_state_saved_views_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11556,12 +12607,25 @@ export interface operations {
                     "application/json": components["schemas"]["UserStateEnvelope_list_SavedView__"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     put_saved_views_v1_user_state_saved_views_put: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11594,7 +12658,11 @@ export interface operations {
     delete_saved_views_v1_user_state_saved_views_delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11607,12 +12675,25 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     get_workflow_graph_v1_user_state_workflow_graph_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11627,12 +12708,25 @@ export interface operations {
                     "application/json": components["schemas"]["UserStateEnvelope_WorkflowGraph_"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     put_workflow_graph_v1_user_state_workflow_graph_put: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11665,7 +12759,11 @@ export interface operations {
     delete_workflow_graph_v1_user_state_workflow_graph_delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11678,12 +12776,99 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_warehouse_managed_access_v1_warehouse__id__managed_access_describe_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedAccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_warehouse_managed_access_v1_warehouse__id__managed_access_set_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedAccessRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedAccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     list_warehouses_v1_warehouses_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11698,12 +12883,25 @@ export interface operations {
                     "application/json": components["schemas"]["WarehouseResponse"][];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     create_warehouse_v1_warehouses_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11736,7 +12934,11 @@ export interface operations {
     list_estate_bindings_v1_warehouses___bindings_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11751,12 +12953,25 @@ export interface operations {
                     "application/json": components["schemas"]["EstateBindingsResponse"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     get_warehouse_v1_warehouses__warehouse_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 warehouse_id: string;
             };
@@ -11791,7 +13006,11 @@ export interface operations {
                 purge_bucket?: boolean;
                 force?: boolean;
             };
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 warehouse_id: string;
             };
@@ -11822,7 +13041,11 @@ export interface operations {
     activate_warehouse_v1_warehouses__warehouse_id__activate_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 warehouse_id: string;
             };
@@ -11853,7 +13076,11 @@ export interface operations {
     deactivate_warehouse_v1_warehouses__warehouse_id__deactivate_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 warehouse_id: string;
             };
@@ -11884,7 +13111,11 @@ export interface operations {
     list_warehouse_namespaces_v1_warehouses__warehouse_id__namespaces_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 warehouse_id: string;
             };
@@ -11915,7 +13146,11 @@ export interface operations {
     create_warehouse_namespace_v1_warehouses__warehouse_id__namespaces_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
             path: {
                 warehouse_id: string;
             };

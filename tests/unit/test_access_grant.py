@@ -53,8 +53,20 @@ def _run(
 
 
 def test_grantable_relations_are_the_base_rungs_only() -> None:
+    """The DIRECTLY ASSIGNABLE rungs — never a derived ``can_*`` action or a structural edge.
+
+    The set grew when granting became its own axis: ``manage_grants`` and ``pass_grants`` are real
+    assignable relations, and omitting them would define a delegation the API could not confer. They
+    are not a widening of who may grant — each is reachable only through ``can_grant_manage_grants``
+    / ``can_grant_pass_grants``, both ``manage_grants``-only, so a grant-option delegate can neither
+    mint further delegates nor promote themselves.
+
+    Asserted as an exact tuple on purpose: this list is what the grant API will accept, so a rung
+    appearing here without a ``can_grant_*`` gate would be grantable and ungated. That pairing is
+    proven in ``test_fga_model_contract`` — this half pins the membership.
+    """
     for t in ("table", "namespace"):
-        assert access._grantable_relations(t) == ("owner", "writer", "reader", "validator")
+        assert access._grantable_relations(t) == ("owner", "writer", "reader", "validator", "manage_grants", "pass_grants")
 
 
 def test_grant_writes_the_tuple_and_reports_granted(monkeypatch: pytest.MonkeyPatch) -> None:
