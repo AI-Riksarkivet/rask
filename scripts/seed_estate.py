@@ -161,7 +161,14 @@ class Project:
 
 @dataclass(frozen=True, slots=True)
 class Grant:
-    """One raw tuple written through ``POST /v1/access/tuples`` after the objects exist."""
+    """One raw tuple written through ``POST /v1/access/tuples`` after the objects exist.
+
+    ``object`` may carry the literal ``{delimiter}`` placeholder, and a grant on a TABLE must: a table's
+    id is its PATH (``<namespace>$<name>``), the separator is configurable per run (``--delimiter`` /
+    ``SEED_NS_DELIMITER``), and a grant that hardcoded ``$`` would name a table this run did not create
+    the moment the two disagreed — writing the tuple anyway, against an object that does not exist,
+    which is the ghost this whole script is built to stop making. Substituted in :func:`plan`.
+    """
 
     user: str
     relation: str
@@ -196,7 +203,18 @@ DEMO_ESTATE = Estate(
         # team:eng owns TWO projects — the fixture's proof that a team is not a tenant. Their warehouses
         # carry no namespaces, exactly as the fixtures leave them.
         Project(id="research", warehouses=(Warehouse(id="research-bucket"),)),
-        Project(id="beta", warehouses=(Warehouse(id="beta-bucket"),)),
+        Project(
+            id="beta",
+            warehouses=(
+                Warehouse(
+                    id="beta-bucket",
+                    # The MANAGED-ACCESS scope (C4). The fixtures put it on its OWN warehouse on purpose:
+                    # the flag changes who may grant, so setting it on acme-bucket would silently rewrite
+                    # every grant-axis expectation over there.
+                    namespaces=(Namespace(name="beta-locked", tables=("records",)),),
+                ),
+            ),
+        ),
     ),
     grants=(
         # Teams and their members. `team:` and `role:` objects have no catalog existence to seed — they
@@ -216,6 +234,36 @@ DEMO_ESTATE = Estate(
         Grant("user:carol", "reader", "warehouse:acme-bucket"),
         # gina: a plain tenant member (not via team:eng) — a viewer who is not an admin.
         Grant("user:gina", "member", "project:acme"),
+        # ---- UPWARD VISIBILITY (C1) --------------------------------------------------------------
+        # ivan holds ONE grant, on ONE table. The containers above it become VISIBLE — the breadcrumb
+        # to his own data resolves instead of 403ing — while a SIBLING stage stays invisible. This is
+        # the only persona whose object is a table, and therefore the only one that needs the
+        # delimiter placeholder.
+        Grant("user:ivan", "reader", "table:acme-gold{delimiter}catalog"),
+        # ---- THE GRANT AXIS (C2) — administering access is not the same as holding it -------------
+        # judy: grant authority on the bucket and NO data rung — the access-review persona that was
+        # unexpressible while granting was welded to `owner`.
+        Grant("user:judy", "manage_grants", "warehouse:acme-bucket"),
+        # kevin: a DELEGATE on the silver stage — a writer who may hand on exactly what he holds, and
+        # no more.
+        Grant("user:kevin", "writer", "namespace:acme-silver"),
+        Grant("user:kevin", "pass_grants", "namespace:acme-silver"),
+        # leo: holds the grant OPTION and no rung — the option is worthless alone, by construction.
+        Grant("user:leo", "pass_grants", "namespace:acme-silver"),
+        # ---- MANAGED ACCESS (C4) -----------------------------------------------------------------
+        # The flag, written as the ONE canonical tuple the catalog stores it as (`_MANAGED_ACCESS_SUBJECT`
+        # in the catalog's access endpoints). `user:*` is a TYPE RESTRICTION used as a switch, not a
+        # public grant: no rule reads it as "everyone", only `managed_access_inheritance` reads it at
+        # all. It has a real door of its own (`POST /v1/warehouses/{id}/managed-access/set`), but that
+        # door is gated on `can_set_managed_access` HELD ON THE BUCKET, which is a tenant's relation and
+        # not a seed's; the raw tuple editor is where every other grant here goes and it accepts the
+        # flag as the directly-assignable relation it is.
+        Grant("user:*", "managed_access", "warehouse:beta-bucket"),
+        # mona OWNS the stage inside the managed scope — which would normally carry the right to grant,
+        # and under the flag does not. She keeps every data power.
+        Grant("user:mona", "owner", "namespace:beta-locked"),
+        # nora is the records manager: grant authority at the warehouse, which the flag centralizes on her.
+        Grant("user:nora", "manage_grants", "warehouse:beta-bucket"),
     ),
 )
 
@@ -351,20 +399,26 @@ def plan(estate: Estate, subs: Mapping[str, str], *, delimiter: str = DELIMITER)
         for namespace, table in _table_pairs(estate)
     )
     planned = {step.key for step in steps}
-    steps.extend(
-        Step(
-            layer="grant",
-            label=f"{grant.object} #{grant.relation} @ {remap_subject(grant.user, subs)}",
-            method="POST",
-            path="/v1/access/tuples",
-            body={"user": remap_subject(grant.user, subs), "relation": grant.relation, "object": grant.object},
-            # No key: a tuple brings nothing into existence, so nothing hangs off it. The parent is the
-            # object it decorates WHEN this run is what creates that object — see Step.parent.
-            parent=grant.object if grant.object in planned else None,
-            tolerate=FGA_OFF,
+    for grant in estate.grants:
+        # A table grant names its object by PATH, so it carries the delimiter this run is using rather
+        # than a hardcoded one — see Grant. Resolved here, once, so `body`, `label` and the `parent`
+        # lookup all speak of the SAME object; resolving it in only one of the three is how a grant
+        # ends up correctly addressed and wrongly ordered, or the reverse.
+        obj = grant.object.replace("{delimiter}", delimiter)
+        user = remap_subject(grant.user, subs)
+        steps.append(
+            Step(
+                layer="grant",
+                label=f"{obj} #{grant.relation} @ {user}",
+                method="POST",
+                path="/v1/access/tuples",
+                body={"user": user, "relation": grant.relation, "object": obj},
+                # No key: a tuple brings nothing into existence, so nothing hangs off it. The parent is
+                # the object it decorates WHEN this run is what creates that object — see Step.parent.
+                parent=obj if obj in planned else None,
+                tolerate=FGA_OFF,
+            )
         )
-        for grant in estate.grants
-    )
     return steps
 
 

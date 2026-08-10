@@ -86,7 +86,9 @@ _REGISTRY = [
 ]
 #: Per-namespace, not one answer for all of them: `acme-gold` holds `catalog`, not `features`, and a mock
 #: that ignored the namespace let a read-back "verify" a table the plan never declared there.
-_TABLES = {"acme-bronze": [], "acme-silver": ["features"], "acme-gold": ["catalog"]}
+#: `beta-locked` is the managed-access scope's stage — its table is what makes the C4 fixture a real
+#: object rather than a tuple about nothing.
+_TABLES = {"acme-bronze": [], "acme-silver": ["features"], "acme-gold": ["catalog"], "beta-locked": ["records"]}
 
 
 def _fake_catalog(recorded: list[httpx.Request], refuse: Refusal | None = None) -> httpx.MockTransport:
@@ -167,8 +169,11 @@ def test_a_top_level_namespace_is_created_through_its_warehouse_and_never_the_ge
     # bucket to route to — the catalog refuses it outright, and a seeder must not even ask.
     assert not [request for request in recorded if request.url.path.startswith("/v1/namespace/") and request.url.path.endswith("/create")]
     namespaces = [request for request in recorded if _layer(request) == "namespace"]
-    assert {request.url.path for request in namespaces} == {"/v1/warehouses/acme-bucket/namespaces"}
-    assert [_body(request)["namespace"] for request in namespaces] == ["acme-bronze", "acme-silver", "acme-gold"]
+    # Both buckets that hold a stage, not just acme's: the route choice is a property of EVERY
+    # top-level namespace, and pinning only the first warehouse let a second one take the generic
+    # door unnoticed.
+    assert {request.url.path for request in namespaces} == {"/v1/warehouses/acme-bucket/namespaces", "/v1/warehouses/beta-bucket/namespaces"}
+    assert [_body(request)["namespace"] for request in namespaces] == ["acme-bronze", "acme-silver", "acme-gold", "beta-locked"]
 
 
 def test_a_table_is_declared_under_its_namespace_path_not_as_a_flat_id() -> None:
@@ -176,8 +181,39 @@ def test_a_table_is_declared_under_its_namespace_path_not_as_a_flat_id() -> None
     assert _run(recorded) == 0
 
     declares = [request for request in recorded if _layer(request) == "table"]
-    assert [request.url.path for request in declares] == ["/v1/table/acme-silver$features/declare", "/v1/table/acme-gold$catalog/declare"]
+    assert [request.url.path for request in declares] == [
+        "/v1/table/acme-silver$features/declare",
+        "/v1/table/acme-gold$catalog/declare",
+        "/v1/table/beta-locked$records/declare",
+    ]
     assert _body(declares[0])["id"] == ["acme-silver", "features"]
+
+
+def test_a_grant_on_a_table_names_the_table_this_run_actually_created() -> None:
+    """The one grant whose object is a TABLE, and therefore the one that depends on the delimiter.
+
+    A table's id is its PATH and the separator is per-run (``--delimiter`` / ``SEED_NS_DELIMITER``), so a
+    grant that hardcoded ``$`` would address a table nobody created the moment the two disagreed — and a
+    tuple write SUCCEEDS against an object that does not exist. That is the ghost the whole script is
+    built to stop making, re-entering through the grant layer.
+
+    Driven with a NON-default delimiter on purpose: under the default the hardcoded form and the correct
+    form are the same string, so the bug is invisible exactly where it would be tested.
+    """
+    recorded: list[httpx.Request] = []
+    assert _run(recorded, argv=["--catalog", "http://catalog", "--delimiter", "."]) == 0
+
+    declared = [request.url.path for request in recorded if _layer(request) == "table"]
+    granted = [str(_body(request)["object"]) for request in recorded if _layer(request) == "grant"]
+
+    assert "/v1/table/acme-gold.catalog/declare" in declared
+    assert "table:acme-gold.catalog" in granted, f"the table grant did not follow the run's delimiter: {granted}"
+    assert not [obj for obj in granted if "{delimiter}" in obj], f"the placeholder reached the wire: {granted}"
+    # And it is still ORDERED behind the declare — resolving the object without resolving the parent
+    # lookup would write the tuple first, against a table that does not exist yet.
+    assert _index(recorded, lambda r: r.url.path == "/v1/table/acme-gold.catalog/declare") < _index(
+        recorded, lambda r: _layer(r) == "grant" and _body(r)["object"] == "table:acme-gold.catalog"
+    )
 
 
 def test_the_bearer_token_rides_every_call_and_is_absent_when_there_is_none() -> None:
