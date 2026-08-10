@@ -23,7 +23,7 @@ from typing import Final
 
 from pydantic import ValidationError
 
-from notifications.api.fanout import FanoutResult, InboxOpener, audience_for, fan_out
+from notifications.api.fanout import FanoutResult, InboxOpener, WatcherLookup, audience_for, fan_out
 from notifications.api.lineage_events import LineageRunEvent, notifiable
 from notifications.api.metrics import Lane, Outcome, record_ingress
 from notifications.api.visibility import Visibility
@@ -81,6 +81,7 @@ async def ingest_run_event(
     *,
     lane: Lane,
     visibility: Visibility,
+    watchers: WatcherLookup | None = None,
     open_inbox: InboxOpener,
     event_seq: int | None = None,
 ) -> dict[str, str]:
@@ -111,7 +112,8 @@ async def ingest_run_event(
     if event_seq is not None:
         notice = notice.model_copy(update={"delivery": notice.delivery.model_copy(update={"event_seq": event_seq})})
 
-    result = await fan_out(notice, audience=audience_for(notice), visibility=visibility, open_inbox=open_inbox)
+    audience = await audience_for(notice, watchers=watchers)
+    result = await fan_out(notice, audience=audience, visibility=visibility, open_inbox=open_inbox)
     record_ingress(lane, _event_outcome(result))
     if result.needs_retry:
         return DAPR_RETRY

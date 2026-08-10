@@ -54,6 +54,7 @@ from notifications.models import (
     InboxPointer,
     InboxQuery,
     InboxRows,
+    InboxWatches,
     NotificationDelivery,
 )
 from service_kit.governed.user_state import decode_subject
@@ -71,6 +72,9 @@ INBOX_ACTOR_TYPE = "InboxActor"
 #: frequent read in this plane and it never touches the rows.
 META_KEY = "inbox-meta"
 ROWS_KEY = "inbox-rows"
+#: The THIRD partition: this subject's watch list. Read only by the settings surface and by a fan-out
+#: resolving one subject — never by the badge, which is why it is not folded into the meta record.
+WATCHES_KEY = "inbox-watches"
 
 #: The compaction reminder's name. One per actor; repeating until the inbox is empty.
 COMPACTION_REMINDER = "compaction"
@@ -125,6 +129,14 @@ class InboxActorInterface(ActorInterface):
 
     @actormethod(name="Dismiss")
     async def dismiss(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @actormethod(name="GetWatches")
+    async def get_watches(self) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @actormethod(name="SetWatch")
+    async def set_watch(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
 
@@ -347,3 +359,45 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
             max_rows=settings.inbox_max_rows,
         )
         await self._persist(pointers, meta)
+
+    async def _read_watches(self) -> InboxWatches | None:
+        has, raw = await self._state_manager.try_get_state(WATCHES_KEY)
+        if not has or not raw:
+            return None
+        watches = _parse(WATCHES_KEY, raw, InboxWatches)
+        _require_owner(WATCHES_KEY, watches.subject, self._subject())
+        return watches
+
+    async def get_watches(self) -> dict[str, Any]:
+        """The projects this subject watches. Absent state reads as an EMPTY list, never as an error.
+
+        Absent is the ordinary case — most subjects watch nothing — and it is genuinely different from
+        the unreadable case, which `_require_owner` still raises on.
+        """
+        watches = await self._read_watches()
+        return {"projects": list(watches.projects) if watches else [], "total": len(watches.projects) if watches else 0}
+
+    async def set_watch(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Add or remove ONE project. Idempotent in both directions.
+
+        No `ttlInSeconds` here, unlike the pointer rows: a watch is a STANDING preference, not a
+        notification that ages out. Expiring it would silently stop delivering to someone who never
+        asked to stop being told — the failure this plane exists to avoid, arriving as a silence.
+        """
+        project_id = str(payload["project_id"])
+        watching = bool(payload["watching"])
+        current = await self._read_watches()
+        projects = list(current.projects) if current else []
+        if watching and project_id not in projects:
+            projects.append(project_id)
+            changed = True
+        elif not watching and project_id in projects:
+            projects = [p for p in projects if p != project_id]
+            changed = True
+        else:
+            changed = False
+        if changed:
+            record = InboxWatches(subject=self._subject(), projects=projects, updated_at=datetime.now(UTC))
+            await self._state_manager.set_state(WATCHES_KEY, record.model_dump_json())
+            await self._state_manager.save_state()
+        return {"projects": projects, "total": len(projects), "changed": changed}

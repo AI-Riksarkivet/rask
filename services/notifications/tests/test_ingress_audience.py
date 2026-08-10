@@ -37,17 +37,21 @@ WIRED = cast("OpenFgaClient", object())
 OPEN = Visibility(client=None, enabled=False)
 
 
-def _event(*, author: str = "alice", outputs: list[str] | None = None) -> dict[str, Any]:
+def _event(*, author: str = "alice", outputs: list[str] | None = None, project: str | None = None) -> dict[str, Any]:
+    facets: dict[str, Any] = {"author": {"name": author, "sub": author}}
+    if project is not None:
+        # The same `lance` facet `run_id` rides — the producer stamps the tenant there.
+        facets["lance"] = {"project": project}
     return {
         "eventType": "FAIL",
         "eventTime": "2026-08-09T12:00:00+00:00",
-        "run": {"runId": "run-1", "facets": {"author": {"name": author, "sub": author}}},
+        "run": {"runId": "run-1", "facets": facets},
         "outputs": [{"namespace": "silver", "name": name} for name in (outputs if outputs is not None else ["silver$pages"])],
     }
 
 
-def _notice(*, author: str = "alice", outputs: list[str] | None = None) -> Notifiable:
-    notice = notifiable(LineageRunEvent.model_validate(_event(author=author, outputs=outputs)))
+def _notice(*, author: str = "alice", outputs: list[str] | None = None, project: str | None = None) -> Notifiable:
+    notice = notifiable(LineageRunEvent.model_validate(_event(author=author, outputs=outputs, project=project)))
     assert notice is not None
     return notice
 
@@ -119,14 +123,56 @@ def _governed(monkeypatch: pytest.MonkeyPatch, allowed: dict[str, set[str]]) -> 
 # --- v1's audience -------------------------------------------------------------------------------
 
 
-def test_the_audience_is_the_verified_author_and_nobody_else() -> None:
+@pytest.mark.asyncio
+async def test_the_audience_is_the_verified_author_and_nobody_else() -> None:
     """Membership gates watching and never implies it. The failure this plane exists to end is a badge
-    that counts other people's work, and it returns the moment an audience widens by default."""
-    assert audience_for(_notice(author="alice")) == ("alice",)
+    that counts other people's work, and it returns the moment an audience widens by default.
+
+    With NO watcher lookup this is exactly v1 — which is also what a watcher-index outage degrades to.
+    """
+    assert await audience_for(_notice(author="alice")) == ("alice",)
 
 
-def test_the_audience_follows_the_run_rather_than_any_configuration() -> None:
-    assert audience_for(_notice(author="bob")) == ("bob",)
+@pytest.mark.asyncio
+async def test_the_audience_follows_the_run_rather_than_any_configuration() -> None:
+    assert await audience_for(_notice(author="bob")) == ("bob",)
+
+
+@pytest.mark.asyncio
+async def test_a_project_watch_widens_the_audience_but_never_replaces_the_author() -> None:
+    """v2 targeting: author UNION watchers, author FIRST — the one recipient guaranteed to exist."""
+
+    async def watchers(project: str) -> list[str]:
+        assert project == "acme"
+        return ["bob", "carol"]
+
+    audience = await audience_for(_notice(author="alice", project="acme"), watchers=watchers)
+
+    assert audience == ("alice", "bob", "carol")
+
+
+@pytest.mark.asyncio
+async def test_an_author_who_also_watches_is_told_once() -> None:
+    """Deduped, so a project owner who watches their own project does not get two pointers."""
+
+    async def watchers(_project: str) -> list[str]:
+        return ["alice", "bob"]
+
+    assert await audience_for(_notice(author="alice", project="acme"), watchers=watchers) == ("alice", "bob")
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_no_project_reaches_its_author_and_no_watchers() -> None:
+    """A producer that stamps no `lance.project` facet is not an error — it is v1's case, still.
+
+    Silence for the watchers is the safe direction: the alternative is guessing a tenant and
+    notifying the wrong one.
+    """
+
+    async def watchers(_project: str) -> list[str]:
+        raise AssertionError("a project-less run must not resolve watchers at all")
+
+    assert await audience_for(_notice(author="alice"), watchers=watchers) == ("alice",)
 
 
 # --- the round-trip shape ------------------------------------------------------------------------

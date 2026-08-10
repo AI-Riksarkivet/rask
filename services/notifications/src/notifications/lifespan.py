@@ -23,6 +23,7 @@ from notifications.api.reconciler import LineageCursorStore, LineageFeedClient
 from notifications.api.settings import get_ingress_settings
 from notifications.config import get_notifications_settings
 from notifications.inbox_actor import InboxActor
+from notifications.watch_actor import WatchIndexActor
 from service_kit.config import Settings
 from service_kit.governed.dapr_auth import guard_actor_routes
 from service_kit.schemas.health import Readiness, ReadinessStatus
@@ -132,8 +133,14 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         if actor_ext is not None:
             try:
                 await actor_ext.register_actor(InboxActor)
+                # The project-watch index — registered in the SAME try as the inbox, so a partial
+                # actor plane is reported as unregistered rather than as half-working. A watch
+                # endpoint that could write the subject's half and not the project's half would
+                # produce exactly the split this plane refuses: a watch the settings page shows and
+                # the fan-out never reads.
+                await actor_ext.register_actor(WatchIndexActor)
                 app.state.actors_registered = True
-                log.info("notifications: InboxActor registered")
+                log.info("notifications: InboxActor + WatchIndexActor registered")
             except Exception:
                 app.state.actors_registered = False
                 log.exception("notifications: actor registration failed — the inbox will 503")

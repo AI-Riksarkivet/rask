@@ -88,8 +88,11 @@ class Notifiable(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     delivery: NotificationDelivery
-    #: The verified author — v1's whole audience.
+    #: The verified author — v1's whole audience, and still the audience nobody has to opt into.
     author: str
+    #: The tenant this run belongs to, when the producer stamped one. v2's watch lookup key; `None`
+    #: means the run reaches its author and no watchers, which is the safe direction.
+    project: str | None = None
     outputs: frozenset[str]
 
 
@@ -137,6 +140,17 @@ def source_run_id(run: LineageRun) -> str | None:
     return _facet_field(run.facets, LANCE_FACET, "run_id")
 
 
+def project_id(run: LineageRun) -> str | None:
+    """The TENANT this run belongs to — v2 targeting's key, from the same `lance` facet as `run_id`.
+
+    `None` for a producer that stamps no project, which is not an error: v1 authorship targeting needs
+    no tenant, so a project-less run still reaches its author and simply reaches no watchers. Silence
+    for the watchers is the safe direction — the alternative would be guessing a tenant and notifying
+    the wrong one.
+    """
+    return _facet_field(run.facets, LANCE_FACET, "project")
+
+
 def notifiable(event: LineageRunEvent) -> Notifiable | None:
     """One terminal run projected into a delivery plus the audience and objects it is checked against.
 
@@ -171,6 +185,7 @@ def notifiable(event: LineageRunEvent) -> Notifiable | None:
         return None
     state = event.event_type.upper()
     return Notifiable(
+        project=project_id(event.run),
         delivery=NotificationDelivery(
             # `run_id@STATE`, which for a terminal event IS lineage's own dedupe key for the feed —
             # `(run_id, event_type)`, the partial unique index that dedups a RETRY-after-partial-success

@@ -23,13 +23,18 @@ from fastapi import Depends, Request
 
 from notifications.api.visibility import Visibility
 from notifications.dependencies import NotificationsSettingsDep
-from service_kit.governed.deps import make_auth_deps
+from service_kit.governed.deps import FgaChecker, make_auth_deps
 
 
 _deps = make_auth_deps(NotificationsSettingsDep)
 
 #: The verified subject — the actor id this request's inbox is derived from.
 CurrentSubject = Annotated[str, Depends(_deps.current_subject)]
+
+#: A single-object `check`, for the one door that asks one: the watch gate (`project#member` on
+#: `project:<id>`). Distinct from `VisibilityDep` below, which is a `batch_check` over a page — asking
+#: "which of these may I see" one object at a time is the N-round-trip mistake `governed()` avoids.
+CheckerDep = Annotated[FgaChecker, Depends(_deps.get_checker)]
 
 
 def get_visibility(request: Request, settings: NotificationsSettingsDep) -> Visibility:

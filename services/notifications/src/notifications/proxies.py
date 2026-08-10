@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from notifications.errors import InboxUnreadable
 from notifications.inbox_actor import INBOX_ACTOR_TYPE, InboxActorInterface
+from notifications.watch_actor import WATCH_ACTOR_TYPE, WatchIndexActorInterface
 from service_kit.governed.user_state import DAPR_APP_ID_SEPARATOR, encode_subject
 
 
@@ -121,3 +122,40 @@ def inbox_for(subject: str) -> TypedActorProxy:
     actor id: a caller that could hand an id could hand somebody else's.
     """
     return typed_proxy(INBOX_ACTOR_TYPE, inbox_actor_id(subject), InboxActorInterface)
+
+
+def watch_index_for(project_id: str) -> TypedActorProxy:
+    """A proxy to ONE project's watcher index.
+
+    The actor id is the project id VERBATIM, not an encoded subject — a project id is estate-chosen
+    and already a path-safe identifier, and encoding it would make the actor unreadable to an operator
+    for no gain. The subject encoding exists because a `sub` is identity-provider-chosen and may carry
+    Dapr's reserved `||`; a project id may not.
+
+    Raises:
+        ValueError: If `project_id` is empty, or could carry Dapr's reserved app-id separator — the
+            same guard `inbox_actor_id` applies, for the same reason, on the one input that reaches
+            the sidecar's URL path.
+    """
+    if not project_id.strip():
+        raise ValueError("a watch index requires a non-empty project id")
+    if DAPR_APP_ID_SEPARATOR in project_id:
+        raise ValueError(f"project id {project_id!r} contains Dapr's reserved app-id separator {DAPR_APP_ID_SEPARATOR!r}")
+    return typed_proxy(WATCH_ACTOR_TYPE, project_id, WatchIndexActorInterface)
+
+
+async def watchers_of(project_id: str) -> list[str]:
+    """The subjects watching `project_id`, or an EMPTY list if the index cannot be read.
+
+    Absorbing its own faults is the whole point of this wrapper. `audience_for` is called from a bus
+    handler, so a raising resolver is a handler that answers RETRY — and the sidecar would then
+    redeliver a run whose AUTHOR was already notified, forever, because a watcher-index outage does
+    not heal on redelivery. Degrading to v1's audience is the honest failure: the author is still
+    told, the watchers are not, and the fact is on an ERROR line rather than in a redelivery loop.
+    """
+    try:
+        result = await watch_index_for(project_id).list_watchers()
+    except Exception:
+        logger.exception("watch_index_unreadable", extra={"project_id": project_id})
+        return []
+    return [str(s) for s in (result.get("subjects") or [])]

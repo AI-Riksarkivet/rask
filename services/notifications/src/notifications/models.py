@@ -198,6 +198,32 @@ class InboxMeta(BaseModel):
     updated_at: UtcDatetime
 
 
+class InboxWatches(BaseModel):
+    """The subject's own watch list — the THIRD partition, read rarely and written by hand.
+
+    Separate from meta and rows for the reason the other two are separate: it is touched only by the
+    settings surface and by a fan-out that is resolving one subject, never by the badge. Putting it in
+    `InboxMeta` would make every unread-count read carry it.
+
+    IT IS THE SUBJECT'S VIEW, and the project's `WatchIndexActor` is the fan-out's view — the same
+    fact recorded twice, deliberately. Neither can answer the other's question: an inbox actor cannot
+    enumerate a project's watchers, and a project index cannot list one subject's projects without
+    scanning every project. The watch endpoint writes both, synchronously, and fails the request if
+    either write fails — a half-written watch that the settings page shows and the fan-out never reads
+    is the one outcome worse than a refusal.
+
+    `subject` is the second lock, exactly as in the two partitions above.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    subject: str = Field(min_length=1)
+    #: Project ids, insertion-ordered. A list rather than a set because JSON has no set and the order
+    #: is a free, stable tiebreaker for the settings surface that renders it.
+    projects: list[str] = Field(default_factory=list)
+    updated_at: UtcDatetime
+
+
 class InboxRows(BaseModel):
     """The LARGE partition: the pointer records, read only when a page or a mutation needs them."""
 

@@ -15,11 +15,11 @@ from collections.abc import Sequence
 
 from fastapi import APIRouter
 
-from notifications.api import inbox
+from notifications.api import inbox, watches
 from notifications.api.subscriptions import register_subscriptions
 
 
-#: Mounted under the api prefix. One router today; a tuple because the entrypoint splats it.
-routers: Sequence[APIRouter] = (inbox.router,)
+#: Mounted under the api prefix: the inbox door and the watch door (v2 targeting).
+routers: Sequence[APIRouter] = (inbox.router, watches.router)
 
 __all__ = ["register_subscriptions", "routers"]

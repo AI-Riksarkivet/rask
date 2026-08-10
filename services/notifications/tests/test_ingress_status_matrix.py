@@ -19,7 +19,7 @@ will produce, by widening the audience at the one seam that decides it.
 """
 
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -336,10 +336,14 @@ async def test_no_authorization_configuration_puts_a_subject_in_a_metric_label(
 # reads, and a rank that only becomes wrong once watches exist is a rank nobody will re-derive then.
 
 
-def _audience(*subjects: str) -> Callable[[Notifiable], tuple[str, ...]]:
-    """A stand-in for `audience_for` — v2's shape (the author plus the project's watchers) at v1's seam."""
+def _audience(*subjects: str) -> Callable[..., Awaitable[tuple[str, ...]]]:
+    """A stand-in for `audience_for` — the author plus the project's watchers, resolved.
 
-    def resolve(notice: Notifiable) -> tuple[str, ...]:
+    Async and `**_` tolerant since S4: the real one awaits a watcher lookup, and a stand-in that took
+    only the notice would pass here while the production call site (`watchers=`) raised.
+    """
+
+    async def resolve(notice: Notifiable, **_: object) -> tuple[str, ...]:
         return subjects
 
     return resolve

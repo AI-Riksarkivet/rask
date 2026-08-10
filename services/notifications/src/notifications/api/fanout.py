@@ -18,7 +18,7 @@ is the same (RETRY), and routing it through the same counter keeps one path inst
 """
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 
 from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict
@@ -58,15 +58,32 @@ class FanoutResult(BaseModel):
         return self.failed > 0
 
 
-def audience_for(notice: Notifiable) -> tuple[str, ...]:
-    """Who is told about this run. v1: its verified author, and nobody else.
+#: How a caller resolves a project's watchers. A CALLABLE rather than a proxy import so the fan-out
+#: stays testable without a sidecar — the same seam `InboxOpener` already is.
+type WatcherLookup = Callable[[str], Awaitable[Sequence[str]]]
 
-    The one targeting source that needs no registry and no new FGA type — you may always be told about
-    your own run. Project watches (gated on `project#member`) and governance events naming a subject
-    join here, as additional sources over the same delivery path; the estate's standing rule is that
-    membership gates watching and never implies it, so no audience widens by default.
+
+async def audience_for(notice: Notifiable, *, watchers: WatcherLookup | None = None) -> tuple[str, ...]:
+    """Who is told about this run: its verified author (v1) UNION the project's watchers (v2).
+
+    The author needs no registry and no permission — you may always be told about your own run.
+    Watchers are an explicit, `project#member`-gated opt-in, and the estate's standing rule holds:
+    membership GATES watching and never implies it, so no audience widens by default. Nothing here
+    authorizes anything — every recipient's visibility is re-derived at delivery, which is what makes
+    a stale watch harmless rather than a leak.
+
+    ORDER IS AUTHOR-FIRST AND DEDUPED, so an author who also watches their own project is told once,
+    and the one recipient guaranteed to exist is the one attempted first. `watchers=None` (and a
+    project-less run) is v1's exact behaviour, which is what a lookup failure degrades to: a
+    resolver that raises is a bus handler that RETRIES, so callers that cannot tolerate that pass a
+    resolver which absorbs its own faults.
     """
-    return (notice.author,)
+    audience = [notice.author]
+    if watchers is not None and notice.project:
+        for subject in await watchers(notice.project):
+            if subject not in audience:
+                audience.append(subject)
+    return tuple(audience)
 
 
 async def fan_out(

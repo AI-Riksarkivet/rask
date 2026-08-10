@@ -32,7 +32,7 @@ from notifications.api.reconciler import LineageCursorStore, LineageFeedClient, 
 from notifications.api.security import VisibilityDep
 from notifications.api.settings import get_ingress_settings
 from notifications.dependencies import ActorPlaneDep
-from notifications.proxies import inbox_for
+from notifications.proxies import inbox_for, watchers_of
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.dapr_auth import require_dapr_token
 
@@ -109,6 +109,7 @@ async def on_reconcile_cron(feed: FeedClientDep, cursor: CursorStoreDep, visibil
             store=cursor,
             visibility=visibility,
             open_inbox=inbox_for,
+            watchers=watchers_of,
             max_pages=settings.feed_max_pages,
             budget_seconds=settings.reconcile_budget_seconds,
         )
