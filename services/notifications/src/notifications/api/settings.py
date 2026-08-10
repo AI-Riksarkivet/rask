@@ -35,6 +35,15 @@ class IngressSettings(BaseSettings):
     #: instead of delivering to each.
     pubsub: str = Field(default="lineage-pubsub-notifications", alias="RASK_NOTIFICATIONS_PUBSUB")
 
+    #: The catalog's control-plane pubsub component — v3 targeting's ingress. Its OWN per-subscriber
+    #: component, cloned from the `lance-ray` precedent (own queue group + durable), never a new scope
+    #: on the BROADCAST component: that one's whole point is every-replica delivery, and a competing
+    #: consumer added to it would split the broadcast instead of joining it.
+    control_pubsub: str = Field(default="catalog-control-pubsub-notifications", alias="RASK_NOTIFICATIONS_CONTROL_PUBSUB")
+
+    #: The governance topic. The `.v1` is the compatibility unit, like its lineage sibling.
+    control_topic: str = Field(default="catalog.control.v1", alias="RASK_NOTIFICATIONS_CONTROL_TOPIC")
+
     #: The run-lifecycle topic. The `.v1` in the NAME is the compatibility unit — a subscriber is
     #: entitled to that payload shape forever — so this default is pinned in `tests/unit/test_invariants.py`
     #: alongside its four siblings and a bump is a deliberate act, never a drive-by edit.

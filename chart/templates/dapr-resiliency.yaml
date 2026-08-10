@@ -83,6 +83,21 @@ spec:
         inbound:
           retry: pubsubDeliveryRetry
 {{- end }}
+{{- /* The NOTIFICATION plane's control-topic subscriber (v3 targeting), which `$subscribers` misses
+     for exactly the same reason the producer's does: `lance.subPubsub` renders the LINEAGE-topic
+     component name, and this subscription rides the control one. `notifications` is already in
+     `$subscribers`, so `scopes:` below covers the app — it is only the second COMPONENT target that
+     has to be named, which is the shape that makes this class of omission invisible.
+
+     Rendered under the same condition as the Component itself (dapr-component.yaml), from the same
+     expression, so a rename of `pubsub.controlName` cannot leave the policy pointing at a component
+     that is gone. Gated by tests/unit/test_invariants.py's durable-component sweep, which is what
+     caught this one before it shipped. */}}
+{{- if .Values.services.notifications }}
+      {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}-notifications:
+        inbound:
+          retry: pubsubDeliveryRetry
+{{- end }}
 scopes:
 {{- range $subscribers }}
   - {{ .appId }}

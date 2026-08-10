@@ -98,8 +98,10 @@ def test_no_dead_letter_topic_is_declared_by_default(without_dead_lettering: Fas
     is strictly worse than having neither: the message is gone from the subscription AND the operator
     has to replay it by hand. Off until the resiliency registration lands with it."""
     declared = _declared(without_dead_lettering)
-    assert [entry["topic"] for entry in declared] == ["lineage.events.v1"]
-    assert "deadLetterTopic" not in declared[0]
+    assert [entry["topic"] for entry in declared] == ["lineage.events.v1", "catalog.control.v1"]
+    # BOTH lanes, because the rule is about the subscription's schedule and not about its payload:
+    # a governance delivery that parks on the first transient failure is exactly as lost as a run one.
+    assert all("deadLetterTopic" not in entry for entry in declared)
 
 
 def test_no_parking_route_exists_when_nothing_can_be_parked(without_dead_lettering: FastAPI) -> None:

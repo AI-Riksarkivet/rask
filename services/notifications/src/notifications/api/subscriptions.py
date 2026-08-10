@@ -28,6 +28,7 @@ from typing import Annotated, Any
 from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI
 
+from notifications.api.control_events import ingest_control_event
 from notifications.api.dlq import register_dlq_route
 from notifications.api.ingest import ingest_run_event
 from notifications.api.metrics import Lane
@@ -68,3 +69,21 @@ def register_subscriptions(app: FastAPI) -> None:
         sends `datacontenttype=application/json`.
         """
         return await ingest_run_event(event.get("data"), lane=Lane.BUS, visibility=visibility, open_inbox=inbox_for, watchers=watchers_of)
+
+    @dapr_app.subscribe(
+        pubsub=settings.control_pubsub,
+        topic=settings.control_topic,
+        route="/control-events",
+        dead_letter_topic=settings.dlq_topic or None,
+    )
+    async def on_control_event(
+        event: dict[str, Any],
+        _: Annotated[None, Depends(require_dapr_token)],
+    ) -> dict[str, str]:
+        """v3 targeting: a governance act that NAMED someone.
+
+        No `VisibilityDep`, and that absence is the design rather than an omission — see
+        `control_events`. Being named IS the targeting, and after a `grant_revoked` the subject can no
+        longer see the object, so a visibility check would drop the one event they most need.
+        """
+        return await ingest_control_event(event.get("data"), open_inbox=inbox_for)

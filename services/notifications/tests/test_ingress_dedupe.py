@@ -105,6 +105,10 @@ def test_the_subscription_is_advertised_to_the_sidecar(bus: TestClient) -> None:
     declared = bus.get("/dapr/subscribe").json()
     assert [(entry["pubsubname"], entry["topic"], entry["route"]) for entry in declared] == [
         ("lineage-pubsub-notifications", "lineage.events.v1", "/lineage-events"),
+        # v3 targeting, on its OWN component: `queueGroupName` lives on the component, and adding a
+        # scope to the catalog's BROADCAST component would split an every-replica broadcast into a
+        # competing-consumer group instead of joining it.
+        ("catalog-control-pubsub-notifications", "catalog.control.v1", "/control-events"),
     ]
 
 

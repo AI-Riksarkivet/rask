@@ -106,6 +106,45 @@ spec:
 scopes:
   - {{ .Values.medallion.producer.daprAppId }}
 {{- end }}
+{{- if and .Values.dapr.enabled .Values.services.notifications }}
+---
+# The NOTIFICATION plane's control-topic subscriber (v3 targeting: a governance act that NAMED
+# someone). Its OWN component, cloned from the producer's above rather than added as a scope to the
+# broadcast component — `queueGroupName` lives on the COMPONENT, so a scope added to a broadcast
+# splits it into a competing-consumer group instead of joining it, and the catalog's broadcast exists
+# precisely to reach every replica.
+#
+# `deliverPolicy: new` for the same reason the lineage subscriber carries it: an inbox that replayed
+# the retained backlog on every pod restart would re-notify a week of grants on every rollout.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}-notifications
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
+    - { name: name, value: "lance-dapr-catalog-control" }
+    - { name: queueGroupName, value: "notifications" }
+    - { name: deliverPolicy, value: "new" }
+    - { name: durableName, value: "notifications-control-durable" }
+    # Same redelivery schedule as its two siblings, and the same invariant: the broker's first backOff
+    # step must exceed the sidecar's total retry span, or the broker redelivers while the sidecar is
+    # still mid-retry and one event is handled twice, concurrently.
+    {{- if .Values.dapr.resiliency.enabled }}
+    - { name: ackWait, value: "720s" }
+    - { name: maxDeliver, value: "3" }
+    - { name: backOff, value: "720s,720s" }
+    {{- else }}
+    - { name: ackWait, value: "30s" }
+    - { name: maxDeliver, value: "5" }
+    - { name: backOff, value: "30s,60s,120s,300s" }
+    {{- end }}
+scopes:
+  - notifications
+{{- end }}
 {{- end }}
 {{- /* One component PER SUBSCRIBER app-id (see the lance.subPubsub helper): queueGroupName makes that
      app's replicas a competing-consumer group (single delivery per app — without it every replica gets

@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict
 from notifications.api.lineage_events import Notifiable
 from notifications.api.metrics import Outcome, record_recipient
 from notifications.api.visibility import Visibility
+from notifications.models import NotificationReason
 from notifications.proxies import TypedActorProxy
 
 
@@ -95,12 +96,20 @@ async def fan_out(
 ) -> FanoutResult:
     """Write one pointer into each visible recipient's inbox; count everything else."""
     counts = dict.fromkeys((Outcome.DELIVERED, Outcome.DUPLICATE, Outcome.HIDDEN, Outcome.RETRIED), 0)
-    payload = notice.delivery.model_dump(mode="json")
+
+    # Minted PER RECIPIENT, because the reason is a per-recipient fact: the same run reaches its
+    # author because they ran it and a watcher because they asked to be told, and a row that recorded
+    # only one of those could not be re-checked against the right rule later (the `NotificationReason`
+    # docstring's own argument). Everything else in the delivery is identical, so this is one field.
+    def payload_for(subject: str) -> dict[str, object]:
+        reason = NotificationReason.AUTHOR if subject == notice.author else NotificationReason.WATCH
+        return notice.delivery.model_copy(update={"reason": reason}).model_dump(mode="json")
+
     with _tracer.start_as_current_span("inbox.fanout") as span:
         span.set_attribute("lance.notifications.recipients", len(audience))
         span.set_attribute("lance.notifications.notification_id", notice.delivery.notification_id)
         for subject in audience:
-            outcome = await _deliver_one(subject, notice=notice, payload=payload, visibility=visibility, open_inbox=open_inbox)
+            outcome = await _deliver_one(subject, notice=notice, payload=payload_for(subject), visibility=visibility, open_inbox=open_inbox)
             counts[outcome] += 1
             record_recipient(outcome)
     return FanoutResult(

@@ -41,14 +41,22 @@ UtcDatetime = Annotated[datetime, AfterValidator(_as_utc)]
 
 
 class NotificationReason(StrEnum):
-    """Why this subject was told. One member: authorship is the only targeting v1 resolves.
+    """Why this subject was told — one member per targeting source.
 
-    It is stored rather than inferred because it is what a delivery re-check keys on — "you are the
-    author" and "you watch the project" are different claims about the same run, and a row that does
-    not say which one it rode in on cannot be re-checked against the right rule later.
+    Stored rather than inferred because it is what a delivery re-check keys on: "you are the author"
+    and "you watch the project" are different claims about the same run, and a row that does not say
+    which one it rode in on cannot be re-checked against the right rule later. The v3 members are the
+    sharper case — a governance row is checked against NO object rule at all, because being named IS
+    the targeting, and a reader that could not tell it apart from a run row would have to guess.
     """
 
+    #: v1 — the run's verified author. Needs no registry and no permission.
     AUTHOR = "author"
+    #: v2 — a `project#member`-gated watch on the run's project.
+    WATCH = "watch"
+    #: v3 — this subject was NAMED by a governance act (`extra.subject`).
+    GRANT_ADDED = "grant_added"
+    GRANT_REVOKED = "grant_revoked"
 
 
 class InboxFilter(StrEnum):

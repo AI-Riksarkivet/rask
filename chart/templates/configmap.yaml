@@ -48,6 +48,13 @@ data:
   # (services.yaml LINEAGE_DAPR_TOPIC, medallion.yaml MEDALLION_LINEAGE_TOPIC, maintenance.yaml) —
   # a subscriber that names the topic itself is a subscriber that can be retargeted halfway.
   RASK_NOTIFICATIONS_LINEAGE_TOPIC: {{ .Values.pubsub.topic | quote }}
+  # v3 targeting's ingress. Rendered from the SAME expression that names the Component
+  # (dapr-component.yaml) for the reason the row above carries: the app's default happens to equal
+  # this render today, which is exactly what makes the drift silent — override `pubsub.controlName`
+  # and the app would subscribe on a component that does not exist, which daprd reports as a startup
+  # error while the pod stays Ready. A Ready pod with a dead subscription.
+  RASK_NOTIFICATIONS_CONTROL_PUBSUB: {{ printf "%s-notifications" (.Values.pubsub.controlName | default "catalog-control-pubsub") | quote }}
+  RASK_NOTIFICATIONS_CONTROL_TOPIC: {{ .Values.pubsub.controlTopic | default "catalog.control.v1" | quote }}
   {{- if .Values.dapr.resiliency.enabled }}
   # Dapr-native DLQ, rendered under the SAME condition as the Resiliency CRD and never on its own:
   # a `deadLetterTopic` with no retry policy behind it parks on the FIRST transient failure, which is
