@@ -44,9 +44,7 @@ def test_ensure_returns_the_location_the_catalog_VENDS() -> None:
     """
     # ensure() on an EXISTING table now also evolves the schema (the etag column, 2026-08-07);
     # the door answering "already exists" is the ordinary idempotent case.
-    respx.post(f"{BASE}/v1/table/bronze$pages/add_columns").mock(
-        return_value=httpx.Response(400, json={"detail": "column etag already exists"})
-    )
+    respx.post(f"{BASE}/v1/table/bronze$pages/add_columns").mock(return_value=httpx.Response(400, json={"detail": "column etag already exists"}))
     respx.post(f"{BASE}/v1/table/bronze$pages/describe").mock(
         return_value=httpx.Response(200, json={"location": "s3://governed/bronze/pages.lance", "version": 3})
     )
@@ -301,9 +299,7 @@ def test_the_CREATE_response_vends_the_location_without_a_second_describe() -> N
     asynchronously, turning a successful create into a failed run."""
     respx.post(f"{BASE}/v1/table/bind86-bronze$fresh/describe").mock(return_value=httpx.Response(403, json={}))
     respx.post(f"{BASE}/v1/namespace/bind86-bronze/exists").mock(return_value=httpx.Response(200))
-    respx.post(f"{BASE}/v1/table/bind86-bronze$fresh/create").mock(
-        return_value=httpx.Response(200, json={"location": "s3://wh/fresh", "version": 1})
-    )
+    respx.post(f"{BASE}/v1/table/bind86-bronze$fresh/create").mock(return_value=httpx.Response(200, json={"location": "s3://wh/fresh", "version": 1}))
 
     assert _client().ensure("bind86-bronze", "fresh") == "s3://wh/fresh"
 
@@ -329,12 +325,8 @@ def test_a_409_then_a_403_is_reported_as_an_AUTHORIZATION_gap_on_an_existing_tab
 def test_an_EXISTING_visible_table_is_never_re_created() -> None:
     """The fall-through must not turn every run into a create attempt. A describable table short-circuits
     before the namespace probe, which is also what keeps a run cheap on the common path."""
-    respx.post(f"{BASE}/v1/table/bind86-bronze$there/add_columns").mock(
-        return_value=httpx.Response(400, json={"detail": "column etag already exists"})
-    )
-    respx.post(f"{BASE}/v1/table/bind86-bronze$there/describe").mock(
-        return_value=httpx.Response(200, json={"location": "s3://wh/there", "version": 7})
-    )
+    respx.post(f"{BASE}/v1/table/bind86-bronze$there/add_columns").mock(return_value=httpx.Response(400, json={"detail": "column etag already exists"}))
+    respx.post(f"{BASE}/v1/table/bind86-bronze$there/describe").mock(return_value=httpx.Response(200, json={"location": "s3://wh/there", "version": 7}))
     create = respx.post(f"{BASE}/v1/table/bind86-bronze$there/create").mock(return_value=httpx.Response(200, json={}))
 
     assert _client().ensure("bind86-bronze", "there") == "s3://wh/there"

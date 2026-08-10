@@ -25,8 +25,6 @@ from ingest.sources import LineageInput, SourceOption, SourceSpec, register
 
 
 if TYPE_CHECKING:
-
-
     from service_kit.lakehouse.sources import SourceAdapter
 
 
@@ -42,7 +40,6 @@ if TYPE_CHECKING:
 #: would be the same hole with an extra step, and a source that cannot be pointed anywhere is a
 #: source nobody can abuse.
 LOCAL_ROOT_ENV = "RASK_INGEST_LOCAL_ROOT"
-
 
 
 def local_root() -> Path | None:
@@ -205,5 +202,6 @@ def register_builtin_sources() -> None:
                 ),
             ],
         )
+
 
 register_builtin_sources()

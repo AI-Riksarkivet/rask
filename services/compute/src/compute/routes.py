@@ -32,9 +32,7 @@ async def ray_jobs(client: RayClientDep, settings: SettingsDep) -> RayJobsPayloa
 
 
 @router.get("/jobs/{submission_id}/logs")
-async def ray_job_logs(
-    http: HttpDep, client: RayClientDep, settings: SettingsDep, submission_id: str, tail: int = 2000
-) -> RayJobLogsPayload:
+async def ray_job_logs(http: HttpDep, client: RayClientDep, settings: SettingsDep, submission_id: str, tail: int = 2000) -> RayJobLogsPayload:
     return await dashboard.job_logs(http, client, settings.ray_dashboard_url, submission_id, tail)
 
 
