@@ -15,6 +15,11 @@
 		 *  syncing back with an `$effect` — a mirror goes stale the moment the parent replaces the prop,
 		 *  and then overwrites it. Reaches `Switch.Root` through `...rest`; declared here so it type-checks. */
 		onCheckedChange?: (checked: boolean) => void;
+		/** Reaches `Switch.Root` through `...rest` and always has — declared here because a prop that
+		 *  works at runtime and fails svelte-check is a prop nobody can use. A caller with an in-flight
+		 *  write needs it: a switch that can be toggled again mid-request sends the opposite value at
+		 *  the server's own pace. */
+		disabled?: boolean;
 	} = $props();
 </script>
 

@@ -42,12 +42,6 @@
 	// a store that does not exist" is a decision someone made, whereas a dead control is a bug.
 	const UNWIRED: Unwired[] = [
 		{
-			title: 'Notifications',
-			blurb: 'Which run and cascade events raise the bell, and who they reach.',
-			icon: Bell,
-			needs: 'a per-subject preference document beside the existing dock-layout state',
-		},
-		{
 			title: 'New-project defaults',
 			blurb: 'What a project is created WITH — storage tier, retention, initial admin.',
 			icon: SlidersHorizontal,

@@ -131,3 +131,62 @@ export const readInboxFeed = query(async (): Promise<InboxPanel | null> => {
 	const result = await readInbox(inboxRequest(), { state: 'all', limit: INBOX_PAGE_LIMIT_MAX });
 	return result.ok ? inboxPanel(result.data) : null;
 });
+
+/** One watched project, as the notifications service records it. */
+const WatchListSchema = v.object({
+	projects: v.array(v.string()),
+	total: v.number(),
+});
+
+/**
+ * The projects this subject watches — v2 targeting's own surface (S4).
+ *
+ * `null` is the un-wired answer, not an error: no session (auth-off dev) or no notifications
+ * service. The page renders that as "watching is unavailable on this stack" rather than as an empty
+ * list, because an empty list is a real and different state — it means you watch nothing.
+ */
+export const readWatches = query(async (): Promise<string[] | null> => {
+	const { fetch, base, bearer } = inboxRequest();
+	const result = await requestWatches(fetch, `${base}/watches`, bearer);
+	return result;
+});
+
+/** Start watching a project. Requires `project#member`, checked by the service against the PROJECT. */
+export const watchProject = command(NotificationIdSchema, async (projectId): Promise<boolean> => {
+	const { fetch, base, bearer } = inboxRequest();
+	const response = await fetch(`${base}/watches/${encodeURIComponent(projectId)}`, {
+		method: 'PUT',
+		headers: bearer ? { authorization: `Bearer ${bearer}` } : {},
+	});
+	void readWatches().refresh();
+	return response.ok;
+});
+
+/** Stop watching. Deliberately NOT membership-gated by the service — someone removed from a project
+ *  must still be able to clear a watch they can no longer create. */
+export const unwatchProject = command(NotificationIdSchema, async (projectId): Promise<boolean> => {
+	const { fetch, base, bearer } = inboxRequest();
+	const response = await fetch(`${base}/watches/${encodeURIComponent(projectId)}`, {
+		method: 'DELETE',
+		headers: bearer ? { authorization: `Bearer ${bearer}` } : {},
+	});
+	void readWatches().refresh();
+	return response.ok;
+});
+
+/** The one read, factored out so both the query and its refresh share a single parse. */
+async function requestWatches(
+	fetch: typeof globalThis.fetch,
+	url: string,
+	bearer: string | undefined,
+): Promise<string[] | null> {
+	try {
+		const response = await fetch(url, {
+			headers: bearer ? { authorization: `Bearer ${bearer}` } : {},
+		});
+		if (!response.ok) return null;
+		return v.parse(WatchListSchema, await response.json()).projects;
+	} catch {
+		return null;
+	}
+}

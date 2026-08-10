@@ -441,9 +441,9 @@
 				     second reason. -->
 				{#if grantsCentralized}
 					<p class="mut managed">
-						Granting here is <strong>centralized</strong>. Owners of this namespace keep every other
-						power and cannot hand out access; a grant-manager on the warehouse above does that. Clearing
-						it is theirs too — a policy you can switch off from inside is not a policy.
+						Granting here is <strong>centralized</strong>. Owners of this namespace keep every other power
+						and cannot hand out access; a grant-manager on the warehouse above does that. Clearing it is
+						theirs too — a policy you can switch off from inside is not a policy.
 					</p>
 				{/if}
 				<GrantsPanel dataset={ns} kind="namespace" client={grantsClient} />

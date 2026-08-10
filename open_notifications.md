@@ -511,8 +511,33 @@ Per `CLAUDE.md`: a skill claim that contradicts a file is fixed in the same comm
    upstream and the **two-user live drive** from §7 (alice's failed run increments alice's badge and
    not bob's). The drive above used one stubbed subject; the two-user claim needs real Dex logins and
    a cluster, so it remains the top gate and it remains unrun.
-4. **S4 — project watch.** `WatchIndexActor`, watch endpoints behind `project#member`, the
-   settings surface in `home`, FGA `check:` cases, control-events ingress (v3 targeting).
+4. ~~**S4 — project watch.**~~ **SHIPPED 2026-08-10**, in three commits. **S4a**: `can_be_notified`
+   on the four notifiable types, so DELIVERY and RENDER stop asking the same question — C1's upward
+   visibility made `can_get_metadata` reach up from one table grant, which is right for a breadcrumb
+   and wrong for a push. On a leaf the two relations are the same set, so the audience did not move
+   by one subject; the split is free now and expensive to retrofit later. Proven by a `check:` case on
+   ivan (the very grantee C1 opened it for) and a `list_users` on the gold stage, because an
+   enumeration is the only form that can prove his ABSENCE. **S4b**: `WatchIndexActor` + the
+   subject-side `inbox-watches` partition (two registries, because neither can answer the other's
+   question), the three-route door — PUT gated on `project#member`, DELETE deliberately NOT gated so
+   someone removed from a project can still clear a watch they can no longer create — and
+   `audience_for` widened to author ∪ watchers, author-first and deduped. **S4c**: v3 targeting, the
+   `catalog.control.v1` lane, which runs NO visibility check because being named IS the targeting —
+   after a `grant_revoked` the subject fails every check on the object, so a visibility gate would
+   drop the one event they most need. Plus the per-user watch page in `home`.
+
+   **The page is at `/notifications`, NOT under `/settings`**, and that is a correction to this
+   plan rather than a deviation from it: `/settings/**` is estate-admin only and its layout gate 404s
+   everyone else, because it configures the PLATFORM. A watch is the opposite kind of thing — a
+   per-user preference about what interrupts you — so behind the admin door the only people who could
+   manage their notifications would be the people least likely to need to.
+
+   Two defects caught by gates before they shipped: the new durable pubsub component had no inbound
+   retry target (`test_every_DURABLE_pubsub_component_has_a_sidecar_retry_target` — the exact
+   parks-on-first-failure hazard that cost the publication head once), and `extra.subject: "user:"`
+   normalized to an EMPTY subject, which `inbox_actor_id` raises on — a malformed producer field
+   turning into a RETRY loop on an event that can never succeed. Browser-driven end to end: watch,
+   unwatch, and the state surviving a reload because it is the server's and not the tab's.
 5. **S5 — channels.** SMTP + Slack bindings, prefs, digest reminder, the channel verify rig,
    secret-store scoping.
 6. **S6 — the ops seam.** vmalert rules + synthetic proofs; dashboards row; docs/skills sweep
