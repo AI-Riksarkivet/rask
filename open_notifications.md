@@ -437,11 +437,10 @@ Per `CLAUDE.md`: a skill claim that contradicts a file is fixed in the same comm
 
 ## 9. Slices — each independently shippable, reviewed, red-first
 
-1. **S1 — the service + the inbox, author-targeting, bus ingress.** Skeleton (workspace member,
-   dockerfile, chart, gateway row + tests, dev-micro), `lineage.events.v1` subscription
-   (terminal states only), `InboxActor` + seen/dismiss endpoints, the frontend seam wired in one
-   zone behind the existing component API. **Closes B2.** Includes the coordinated
-   state-store-scope rollout.
+1. ~~**S1 — the service + the inbox, author-targeting, bus ingress.**~~ **SHIPPED 2026-08-10**, on
+   `origin/main` as `3e4463a0` (75 files, +11,592) with the actor-guard follow-up in `819c266c`.
+   **502 passed, 1 xfailed** (`services/notifications/tests`, 2m50s). See the S1 HANDOFF block at the
+   end of this file for what landed, what was measured, and the two gaps left open.
 2. **S2 — completeness.** The `/events` reconciler + cursor; dedupe proven across both ingress
    paths (the same event via bus and feed lands one pointer); `dlq.notifications` + resiliency
    registration.
@@ -800,3 +799,64 @@ context** (dapr/dapr#6950) — is an expectation-setter for ingest/flows traces,
    Filed alongside: Scheduler etcd loss/rollback is now a **named failure domain** for every
    reminder-carrying actor in the estate — the annotator's lease and publish watchdogs as well as
    the InboxActor — and nothing currently alerts on it.
+
+---
+
+## 12. S1 HANDOFF (2026-08-10) — what shipped, what was measured, what is left
+
+**On `origin/main`:** `3e4463a0` (`feat(notifications)`, 75 files) + `819c266c` (the actor guard,
+lifted into `service_kit` and applied to the annotator too). **502 passed, 1 xfailed** in 2m50s.
+
+### What landed against the design
+
+Everything in §1-§5 for the S1 slice: the deployable on `:8850` with app-id `notifications`; the
+`InboxActor` on `lance-statestore` holding **pointers only**; `lineage.events.v1` on its own component
+with `deliverPolicy: new` + `notifications-durable` (verified in the rendered manifest, alongside the
+`ackWait`/`maxDeliver`/`backOff` schedule); terminal states only per q1; the gateway row in its
+prefix-interpolated form with three test shapes; `dlq.notifications` on the shared stream binding, no
+new NATS stream; `stateStore.scopes` gaining `notifications` with the coordinated rollout **named
+rather than assumed**; the dockerfile; `services/notifications/tests` enrolled in root `testpaths`.
+
+`§3.1` (the upward-visibility decision) is implemented as written: `batch_check` on `table:<output>`,
+the subset rule `names <= visible`, dataset-less rows dropped when FGA is on, and the three-outcome
+checker (enabled-but-unwired → 503, never permissive).
+
+### The two design constraints that came from measurement, not preference
+
+- **q6 — `ActorStateTTL` is NOT enabled** (one Dapr `Configuration`, `lance-tracing`, whose entire
+  spec is `tracing.samplingRate`, itself gated on `lance.otelEnabled`). So the compaction reminder is
+  **authoritative** and `ttlInSeconds` is belt-only.
+- **q11 — reminders live in the Scheduler's etcd**, not the actor state store (a 3-replica StatefulSet
+  with a 16 Gi PVC, read from the rendered chart). Composed with q6 that leaves reminder-bounded state
+  with **no floor**, which is why the InboxActor **re-arms its compaction reminder from the read
+  path**, conditionally so a frequently-read inbox is still eventually compacted.
+
+### A real hole found in review and closed
+
+`DaprActor(app)` root-mounts `PUT /actors/{type}/{id}/method/{method}` OUTSIDE `RASK_API_PREFIX`, so
+it inherits none of the inbox router's doors — and the actor id is merely `base64url(sub)`, readable
+off lineage author facets. `curl -XPUT :8850/actors/InboxActor/YWxpY2U/method/Page` returned any
+subject's whole inbox. Now guarded by `service_kit.governed.dapr_auth.guard_actor_routes`
+(`require_dapr_token` on `/actors` + `/dapr/config`), with 5 tests. **The annotator mounted the same
+way and was equally open** — same guard applied there, one implementation rather than two.
+
+### Left open, deliberately
+
+1. **The bell's seam persists read state only for AUTHORED runs.** `GET /runs` is governed by DATASET
+   visibility, so the bell renders every run you can SEE, while S1's inbox is authorship-only — and the
+   estate's dominant traffic is service-authored (`author: data_eng` / `ray` / `analyst` / `htr`). So
+   `onseen` writes into a mailbox no browser reads and the row is unread after a reload. **The code is
+   honest about this** (`+layout.svelte:29-35` states it verbatim) and the per-tab fallback still
+   stands, so nothing regressed — but B2 is only half-closed. **S3 is the fix** (render inbox rows, not
+   run rows); narrowing the seam to ids the inbox owns is the smaller interim step. Recommend S3 also
+   extend the zone-contract gate so a future zone cannot wire an activity feed to the inbox transport
+   by imitation.
+2. **`can_be_notified` is still an S4 change.** §3.1's split costs nothing today because `table`
+   defines `can_get_metadata: reader`, so render and delivery are the same set. It becomes load-bearing
+   the moment S4 delivers container-scoped governance events.
+
+### Slices remaining
+
+S2 (the `/events` reconciler + cursor — the poll client and cursor persistence landed with S1, the
+cron component did not), S3 (the honest bell), S4 (project watch + v3 targeting), S5 (channels),
+S6 (the ops seam). Nothing in S1 blocks any of them.

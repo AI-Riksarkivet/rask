@@ -412,6 +412,81 @@ not mistake "landed" for "closed everywhere":
 etag-mismatch status) and the owner-gated calls (§2.12 head retirement, the `lance-ray` rename,
 state-store scope changes).
 
+---
+
+## HANDOFF (2026-08-10) — what is on `main`, and what the next session should pick up
+
+Everything below is **pushed to `origin/main`** (`b087cec2 → 819c266c`, six commits). Verified against
+a pristine `b087cec2` worktree wherever a baseline mattered, so nothing here is inference.
+
+| Commit | What |
+| --- | --- |
+| `94264442` | `fix(otel)` — an explicit off must beat an ambient endpoint |
+| `bd191c08` | `fix(dapr-plane)` — the 17 findings, the 4 capped warnings, one door |
+| `2b777980` | `docs(dapr,notifications)` — this status block and three corrections |
+| `3e4463a0` | `feat(notifications)` — S1, the per-subject inbox (502 passed, 1 xfailed) |
+| `8d564bff` | `fix(ci)` — typecheck 77 → 1, chart schema validation |
+| `819c266c` | `fix(service-kit)` — one guard for the Dapr actor callback surface |
+
+### The one thing to read first
+
+**Three of this repo's four CI gates were RED on `main` before any of this work**, which is why so
+much shipped green-by-absence. Two are now fixed and the third is diagnosed:
+
+- `typecheck` — **77 → 1**. The remaining 1 is TRUE (see "dead script" below) and was left rather
+  than suppressed.
+- `charts` — `openfga.experimentals` failed the vendored subchart's schema **under helm 3.16.4 (the
+  CI pin) as well as helm 4**, so the whole render died before any template ran. Moved to
+  `extraEnvVars` → `OPENFGA_EXPERIMENTALS`, proven equivalent by rendering both forms against a
+  patched subchart and comparing the resulting Deployments as parsed objects.
+- `test` — **`tests/unit` hangs, and it hangs identically on pristine `b087cec2`.** Still open.
+
+### Open, with the next step already worked out
+
+1. **`tests/unit` hangs → `dagger call test` cannot pass.** Bisected to the first quarter of
+   `tests/unit` (43 of 172 files); profile is ~0.2% CPU, 44 threads in `futex_wait_queue`, main in
+   `hrtimer_nanosleep`. **Two dead ends recorded so they are not repeated:** dagger buffers stdout
+   until the exec completes, so a hung run yields NO output (SIGINT gave nothing either); and arming
+   `faulthandler` from a root conftest does not survive, because pytest's own faulthandler plugin
+   calls `cancel_dump_traceback_later()` between tests — it needs `-p no:faulthandler` alongside
+   `dump_traceback_later(N, exit=True)`. **Recommended: add `pytest-timeout` (absent from dev deps);
+   one run then fails with a stack naming the test.** Note `94264442` already removed a DIFFERENT
+   sleeper from this suite (~8× speedup on `service-kit`); this is a second, independent cause.
+2. **A third non-injective id seed, in the lineage graph.** `medallion/schemas/events.py:243` composes
+   `f"{project}-{operation}-{token}"` and claims it is "distinct across tenants". It is not —
+   `acme`/`silver`/`b-gold-c` and `acme-silver-b`/`gold`/`c` both render `acme-silver-b-gold-c`, and
+   both `PROJECT_PATTERN` and `SAFE_NAME_PATTERN` permit `-`. Two tenants' runs MERGE onto one lineage
+   run id. The fix is the `"\x00".join(...)` form already used by `ingest.runs.run_id_for` and
+   `flows.routes.run_id_for` (each with a test that pins the OLD form as actually colliding). Lower-risk
+   siblings: `lineage/services/repository.py:1072`, `maintenance/core/lineage_emit.py:216`.
+3. **`scripts/seed_bronze_pages.py` has been dead since A12** — it imports
+   `medallion.services.iiif_produce`, deleted by `09823f56`, so it raises `ImportError` before doing
+   anything. This is the last `ty` diagnostic. NOT suppressed, deliberately: an ignore would assert the
+   import is fine when the module is gone. Delete it, or repoint at the ingest plane (`/api/ingest`).
+4. **Ingest residuals** left by the reviewer of the zombie-run fix: same-key-different-spec has no
+   defined semantics (wants a **409**, on both the dedupe and re-drive branches); F8's classifier is
+   untested against a live `grpc.RpcError`; Dapr's duplicate-instance refusal is scoped to ACTIVE
+   instances, so a re-drive after COMPLETED re-harvests (`reuse_id_policy` would close it);
+   `list_ingests` renders a fail-closed 503 as an empty list.
+5. **F12a's LocalCatalog residual** (`lander.py:122`) — dev/test-only, the deployed path takes
+   `catalog.commit` and is fixed.
+6. **2 pre-existing failures** in `tests/integration/test_authz.py`, identical on pristine HEAD.
+7. **No scoped test lane.** `.dagger/test.go`'s `Test` takes only `--src`, so the only way to run
+   pytest is the whole suite — and on a host where `uv sync` cannot work it is the only way to run
+   pytest at all. Scoping this session required temporarily rewriting `testpaths` in committed config.
+   An optional `--paths` / `-k` passthrough that no-ops when absent would fix it without changing what
+   `dagger call test` means in CI.
+
+### Corrections this work made to THIS file
+
+- **§2.5's body is stale.** It says "the run id never reaches the wire"; `bde07314` put it there on
+  2026-08-07, along with §2.3's error boundary. §2.3 and §2.5 are therefore **already fixed** despite
+  being listed as still open.
+- **Three landed fixes had regression suites collected by nothing** — `services/lineage/tests` and
+  `services/catalog/tests` were absent from `testpaths`. Both enrolled; 46 passed.
+- The estate's own lesson is sharper than "fixes that only work on fresh installs": it is **fixes
+  whose proof never runs.**
+
 ### 2.3 No error boundary in `ingest_run` — one failing chunk kills the run before `finalize`
 
 **CONFIRMED · severity high. The highest-blast-radius item in this file.**
