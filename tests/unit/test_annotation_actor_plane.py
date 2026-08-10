@@ -24,7 +24,7 @@ from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import tasks as tasks_ep
 from annotator.projects.models import ProjectState, TaskState
 from fastapi import FastAPI, Request
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
 
 from service_kit.exceptions import ServiceUnavailableError, register_handlers
@@ -128,20 +128,32 @@ def test_a_healthy_or_undeclared_actor_plane_is_not_gated(actors_registered: boo
 def test_only_the_task_plane_carries_the_gate() -> None:
     """The read plane must stay up while the task plane is down — that is the whole reason
     registration is non-fatal. Asserted on the composed router rather than by driving a media route,
-    so a future router that picks the dependency up by accident is caught here."""
+    so a future router that picks the dependency up by accident is caught here.
+
+    **Walked with `iter_route_contexts`, not over `app.routes`.** FastAPI 0.140 made `include_router`
+    LAZY: the app stores one opaque `_IncludedRouter` per include and never flattens it — not on
+    startup, not on `openapi()` — so a walk over `app.routes` finds zero `APIRoute`s and this test
+    failed as "the gate is mounted on nothing" while the gate was mounted correctly. The context form
+    is also STRICTER than the private-attribute walk (`route.original_router.routes`) that the same
+    upgrade provoked elsewhere: it reports the EFFECTIVE path and the EFFECTIVE dependency list, so a
+    gate attached at an `include_router(..., dependencies=[…])` site — a leak the child router's own
+    routes cannot show — is caught here too.
+    """
     from annotator.api.v1.router import router as api_router
 
     app = FastAPI()
     app.include_router(api_router)
     gated: set[str] = set()
-    for route in app.routes:
-        if not any(getattr(dep, "dependency", None) is tasks_ep.require_actor_plane for dep in getattr(route, "dependencies", [])):
+    for ctx in iter_route_contexts(app.routes):
+        if not any(getattr(dep, "dependency", None) is tasks_ep.require_actor_plane for dep in getattr(ctx, "dependencies", ())):
             continue
-        # `app.routes` is typed `BaseRoute` and only some route kinds carry a `path`. Asserted rather
-        # than filtered on: a gated route without one has to FAIL here, not drop silently out of the
-        # set the assertions below read.
-        assert isinstance(route, APIRoute), f"a gated route carries no path: {route!r}"
-        gated.add(route.path)
+        # Only some route kinds carry a `path`, and `RouteContext.path` is `str | None` for exactly
+        # that reason. Asserted rather than filtered on: a gated route without one has to FAIL here,
+        # not drop silently out of the set the assertions below read.
+        path = ctx.path
+        assert isinstance(ctx.original_route, APIRoute), f"a gated route is not an APIRoute: {ctx.original_route!r}"
+        assert path is not None, f"a gated route carries no path: {ctx.original_route!r}"
+        gated.add(path)
 
     assert gated, "the gate is mounted on nothing"
     assert all(path.startswith("/tasks") for path in gated), f"the actor-plane gate leaked onto non-task routes: {sorted(gated)}"

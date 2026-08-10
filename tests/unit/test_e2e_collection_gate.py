@@ -67,10 +67,27 @@ INVOCATION_GLOBS = (
     "tests/e2e-py/*.py",
     "tests/unit/*.py",
 )
-# Any repo-relative path under tests/ that names a Python file. Deliberately not anchored to
-# the word "pytest": a path may be built into a shell variable or a Go slice several lines
-# away from the command that consumes it, and a dead path is misleading wherever it sits.
-TEST_PY_PATH = re.compile(r"tests/[A-Za-z0-9_./-]*\.py")
+# Any repo-relative path with a `tests/` segment that names a Python file. Deliberately not anchored
+# to the word "pytest": a path may be built into a shell variable or a Go slice several lines away
+# from the command that consumes it, and a dead path is misleading wherever it sits.
+#
+# Two things this pattern has to get right, and the first draft got neither:
+#
+#   · **The leading segments are part of the match.** Every service now carries its OWN suite
+#     directory (`services/<name>/tests/…`, thirteen of them in `testpaths`). A pattern beginning at
+#     `tests/` matched only the TAIL of such a path, checked that tail against the repo root, found
+#     nothing, and reported a dead path that was not dead. A gate that cries wolf gets suppressed,
+#     which costs more than the check is worth.
+#   · **A match may not begin mid-path.** With leading segments allowed, a URL ending in a suite
+#     file — several docstrings cite the upstream repo on github — otherwise matched from its host
+#     onward and was then resolved as if it were repo-relative. The lookbehind requires the match to
+#     start at a real boundary, so anything preceded by `/` or `:` is inside a longer path or a URL
+#     and is left alone. The cost is that an absolute or `$(pwd)`-prefixed path is not checked; it
+#     would not resolve against `REPO_ROOT` anyway, so nothing is lost.
+#
+# `tests/unit/*.py` is itself an invocation glob, so THIS file is scanned too: a comment here may not
+# spell out an example dead path, or the gate fails on its own documentation.
+TEST_PY_PATH = re.compile(r"(?<![A-Za-z0-9_.:/-])(?:[A-Za-z0-9_.-]+/)*tests/[A-Za-z0-9_./-]*\.py")
 
 
 def test_e2e_py_is_wired_into_testpaths():
