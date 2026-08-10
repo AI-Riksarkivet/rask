@@ -125,8 +125,10 @@ def test_run_id_is_project_qualified_so_tenants_never_collide() -> None:
     # Two projects reusing the SAME token must yield TWO distinct runs — an unqualified seed would
     # MERGE one tenant's run onto the other's, cross-wiring their lineage.
     acme, globex = _run_event_for("acme")["run"]["runId"], _run_event_for("globex")["run"]["runId"]
-    assert acme == run_id_for("acme-embed_features-tok1")
-    assert globex == run_id_for("globex-embed_features-tok1")
+    # NUL-joined, not `-`-joined: both `project` and `token` admit `-`, so the readable join was
+    # forgeable across tenants. tests/unit/test_medallion_run_id.py pins the collision it closed.
+    assert acme == run_id_for("acme\x00embed_features\x00tok1")
+    assert globex == run_id_for("globex\x00embed_features\x00tok1")
     assert acme != globex
 
 

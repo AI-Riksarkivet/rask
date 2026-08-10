@@ -110,7 +110,13 @@ def _legacy_build_run_event(**kwargs: Any) -> dict[str, Any]:
             "programmingLanguage": "PYTHON",
         }
     if token:
-        run_id = run_id_for(f"{project}-{operation}-{token}" if project else f"{operation}-{token}")
+        # The ONE line of this frozen copy that is deliberately re-derived rather than frozen. The
+        # freeze pins the WIRE, and the project-qualified runId's seed changed on purpose (`-` → NUL,
+        # because a `-` join between two `-`-bearing fields is forgeable — see
+        # `medallion.schemas.events.build_run_event`). Left at the old form this copy would assert the
+        # collision back into existence, which is the opposite of what a parity gate is for. The
+        # project-LESS branch below it stays byte-frozen, and that is the half the graph depends on.
+        run_id = run_id_for("\x00".join((project, operation, token)) if project else f"{operation}-{token}")
     else:
         run_id = str(uuid.uuid4())
     failed = event_type.upper() in {"FAIL", "ABORT"}

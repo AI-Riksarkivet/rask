@@ -12,6 +12,14 @@ old builder, plus every existing suite unmodified. The deterministic ``runId`` n
 it equals ``service_kit.openlineage.run_id_for`` for every seed — redelivery keeps MERGEing onto the
 runs already in the graph.
 
+**One field is exempt from that freeze, and exactly one:** the ``runId`` of a PROJECT-QUALIFIED emit.
+Its seed changed from ``-``-joined to NUL-joined because the ``-`` form was forgeable across tenants
+(the reasoning is at the derivation site in :func:`build_run_event`). That is a MIGRATION, and it is
+cheap only because of what it does not touch: project-less emits — everything single-tenant, which is
+what the graph mostly holds — derive exactly as before. What it does cost: already-emitted
+project-qualified runs keep their old ids and are not back-fillable, and a tenant cascade in flight
+across the deploy emits its remaining events under the new id, so it reads as two runs rather than one.
+
 The lineage service ingests these into Apache AGE, growing the
 ``(:Dataset)-[:DERIVED_FROM]->(:Dataset)`` edge that *is* the medallion DAG.
 """
@@ -180,9 +188,11 @@ def build_run_event(
     standard ``outputStatistics`` facet, when the compute knows the URI (``source_uri``) the standard
     ``dataSource`` facet, and when the quality gate validated the write (``assertions`` set) the standard
     ``dataQualityAssertions`` facet. The ``runId`` is a DETERMINISTIC UUID derived from
-    ``<operation>-<token>`` — project-qualified to ``<project>-<operation>-<token>`` when ``project`` is
-    set, so two tenants reusing the same token never collide onto one run (spec-valid + stable across
-    redelivery either way); the raw ``token`` rides the ``lance`` run facet for cascade correlation.
+    ``<operation>-<token>`` — project-qualified to ``<project>\\x00<operation>\\x00<token>`` when
+    ``project`` is set, so two tenants reusing the same token never collide onto one run (spec-valid +
+    stable across redelivery either way). The separator is NUL rather than ``-`` because both
+    caller-supplied fields admit ``-``, which made the joined seed forgeable; see the derivation site.
+    The raw ``token`` rides the ``lance`` run facet for cascade correlation.
     ``project`` (#84 per-tenant routing) also rides the ``lance`` facet, so the cascade head
     (``/bronze-arrival``) can copy it onto the stage trigger — omitted when unset, keeping the
     single-tenant emit (run id included) byte-identical. ``event_type='FAIL'`` + ``error_message``
@@ -239,8 +249,27 @@ def build_run_event(
     # yet distinct across tenants. lineage_kit.run_id_for == service_kit.openlineage.run_id_for (the
     # aligned namespace, note #1), so every id already in the graph keeps MERGEing. A token-less call
     # (defensive fallback — the cascade always threads one) gets a fresh random UUID.
+    #
+    # `\x00` and not `-`, because the separator has to be a character NO field can contain. Both
+    # caller-supplied fields admit `-`: PROJECT_PATTERN (`service_kit.lakehouse.warehouse_registry`)
+    # is `[A-Za-z0-9][A-Za-z0-9_-]{0,63}` and SAFE_TOKEN_PATTERN (`medallion.services.trigger_guards`)
+    # is `[A-Za-z0-9._-]{1,64}`, so a `-` join is FORGEABLE out of the fields it separates — and this
+    # id is the MERGE key for the (:Run) node in AGE, so a forged one lands another tenant's run on
+    # yours. It is reachable with a single `operation` (which is per-mover env config, not caller
+    # input): ("acme", "embed_features", "evil-embed_features-tok1") and
+    # ("acme-embed_features-evil", "embed_features", "tok1") both rendered
+    # `acme-embed_features-evil-embed_features-tok1`. Same fix, same reason as `ingest.runs.run_id_for`
+    # and `flows.routes.run_id_for`, each of which pins the old form as actually colliding.
+    #
+    # The project-LESS branch is left EXACTLY as it was, deliberately: it is the pre-#84 seed every
+    # single-tenant run already in the graph derives from, and with `operation` fixed per deployment it
+    # carries no caller-controlled second field to forge with. STATED SCOPE-CUT — that branch stays
+    # non-injective in (operation, token), reachable only by an operator setting MEDALLION_OPERATION to
+    # a prefix of another mover's operation+token. Closing it too would re-derive every single-tenant
+    # id in the graph, which is a migration and not a bug fix. The two families cannot collide with
+    # each other: a NUL-bearing seed is unreachable from the `-`-joined one.
     if token:
-        run_id = run_id_for(f"{project}-{operation}-{token}" if project else f"{operation}-{token}")
+        run_id = run_id_for("\x00".join((project, operation, token)) if project else f"{operation}-{token}")
     else:
         run_id = str(uuid.uuid4())
     # A FAIL run produced no data: it keeps a BARE output (name only) and NO version/stats/assertions.
