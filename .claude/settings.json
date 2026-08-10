@@ -24,7 +24,8 @@
     "playwright-cli@ra-skills": true,
     "gsap@ra-skills": true,
     "architecture-diagram@ra-skills": true,
-    "svelte-flow@ra-skills": true
+    "svelte-flow@ra-skills": true,
+    "dapr-skills@diagrid-labs": true
   },
   "extraKnownMarketplaces": {
     "ra-skills": {
@@ -61,6 +62,12 @@
       "source": {
         "source": "github",
         "repo": "anthropics/claude-plugins-official"
+      }
+    },
+    "diagrid-labs": {
+      "source": {
+        "source": "github",
+        "repo": "diagrid-labs/dapr-skills"
       }
     }
   }
