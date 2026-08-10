@@ -479,3 +479,41 @@ async def test_the_delivery_ledger_never_reaches_the_wire() -> None:
 
     assert "sent" in InboxPointer.model_fields, "the ledger left the store; this test is now vacuous"
     assert "sent" not in InboxRow.model_fields
+
+
+def test_every_public_route_sits_under_the_gateway_s_forwarded_PREFIX() -> None:
+    """The gateway forwards `{RASK_API_PREFIX}/notifications` UNREWRITTEN.
+
+    So a router mounted one segment short — `/watches` rather than `/notifications/watches` — is
+    served by the app and UNREACHABLE through the front door: a 404 that reads as a missing feature
+    while the route exists and answers locally. Both S4's watch door and S5's prefs door shipped that
+    way and were caught by driving the real service, not by any gate. This is the gate.
+
+    Root-mounted paths are exempt BY NAME rather than by pattern: they are the sidecar's and the
+    kubelet's, and a new one has to be added here deliberately.
+    """
+    import importlib
+
+    from service_kit.config import Settings
+
+    # READ the prefix, never assume it. The code default is `/api/v1` and every deployment sets
+    # `/api`, so a test that hardcoded either would be asserting about the wrong app half the time.
+    module = importlib.reload(importlib.import_module("notifications"))
+    prefix = Settings().api_prefix.rstrip("/")
+    root_mounted = {
+        "/livez",
+        "/readyz",
+        "/healthz",
+        "/dapr/config",
+        "/dapr/subscribe",
+        "/lineage-events",
+        "/control-events",
+        "/dlq-event",
+        "/notifications-reconcile-cron",
+    }
+    stray = [
+        path
+        for path in module.app.openapi()["paths"]
+        if not path.startswith(f"{prefix}/notifications") and path not in root_mounted and not path.startswith("/actors") and path != f"{prefix}/health"
+    ]
+    assert stray == [], f"these routes are unreachable through the gateway: {stray}"

@@ -445,10 +445,18 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         """
         has, raw = await self._state_manager.try_get_state(PREFS_KEY)
         if not has or not raw:
-            return {"channels": [], "destinations": {}}
+            return {"channels": [], "destinations": {}, "digest_seconds": None}
         prefs = _parse(PREFS_KEY, raw, ChannelPrefs)
         _require_owner(PREFS_KEY, prefs.subject, self._subject())
-        return {"channels": list(prefs.channels), "destinations": dict(prefs.destinations)}
+        return {
+            "channels": list(prefs.channels),
+            "destinations": dict(prefs.destinations),
+            # Returned because the PUSH PATH reads it. Omitting it made every digest preference a
+            # silent no-op: the field stored, the door echoing it back, and every notification still
+            # sent immediately — found by driving a real send, not by any unit test, because the tests
+            # asked `digest_defers` directly and never made the value travel.
+            "digest_seconds": prefs.digest_seconds,
+        }
 
     async def set_prefs(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Replace this subject's channel preferences wholesale.
@@ -460,11 +468,16 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
             subject=self._subject(),
             channels=[str(c) for c in (payload.get("channels") or [])],
             destinations={str(k): str(v) for k, v in (payload.get("destinations") or {}).items()},
+            digest_seconds=payload.get("digest_seconds"),
             updated_at=datetime.now(UTC),
         )
         await self._state_manager.set_state(PREFS_KEY, record.model_dump_json())
         await self._state_manager.save_state()
-        return {"channels": list(record.channels), "destinations": dict(record.destinations)}
+        return {
+            "channels": list(record.channels),
+            "destinations": dict(record.destinations),
+            "digest_seconds": record.digest_seconds,
+        }
 
     async def claim_channel(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Claim `(notification_id, channel)` for sending. `claimed: False` = already sent.

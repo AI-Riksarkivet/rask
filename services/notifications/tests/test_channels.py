@@ -170,11 +170,16 @@ class _FakeInbox:
         self._store = store
 
     async def get_prefs(self) -> dict[str, Any]:
-        return {"channels": list(self._store.get("channels", [])), "destinations": dict(self._store.get("destinations", {}))}
+        return {
+            "channels": list(self._store.get("channels", [])),
+            "destinations": dict(self._store.get("destinations", {})),
+            "digest_seconds": self._store.get("digest_seconds"),
+        }
 
     async def set_prefs(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._store["channels"] = list(payload.get("channels") or [])
         self._store["destinations"] = dict(payload.get("destinations") or {})
+        self._store["digest_seconds"] = payload.get("digest_seconds")
         return await self.get_prefs()
 
 
@@ -192,21 +197,21 @@ def prefs_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, dict[str,
 class TestPrefsDoor:
     def test_absent_prefs_read_as_off(self, prefs_client: tuple[TestClient, dict[str, Any]]) -> None:
         client, _ = prefs_client
-        assert client.get("/prefs").json() == {"channels": [], "destinations": {}}
+        assert client.get("/notifications/prefs").json() == {"channels": [], "destinations": {}, "digest_seconds": None}
 
     def test_an_opt_in_round_trips(self, prefs_client: tuple[TestClient, dict[str, Any]]) -> None:
         client, _ = prefs_client
 
-        client.put("/prefs", json={"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}})
+        client.put("/notifications/prefs", json={"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}})
 
-        assert client.get("/prefs").json() == {"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}}
+        assert client.get("/notifications/prefs").json() == {"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}, "digest_seconds": None}
 
     def test_a_channel_with_no_destination_is_refused_rather_than_stored(self, prefs_client: tuple[TestClient, dict[str, Any]]) -> None:
         """A channel that is on and unreachable is silently identical to one that is off — and the
         subject would have every reason to believe they had turned it on."""
         client, store = prefs_client
 
-        response = client.put("/prefs", json={"channels": [EMAIL], "destinations": {}})
+        response = client.put("/notifications/prefs", json={"channels": [EMAIL], "destinations": {}})
 
         # 400, the estate's `ValidationError` — a well-formed body making an unsatisfiable request.
         assert response.status_code == 400
@@ -216,7 +221,7 @@ class TestPrefsDoor:
     def test_an_unknown_channel_is_refused(self, prefs_client: tuple[TestClient, dict[str, Any]]) -> None:
         client, _ = prefs_client
 
-        response = client.put("/prefs", json={"channels": ["carrier-pigeon"], "destinations": {"carrier-pigeon": "coop"}})
+        response = client.put("/notifications/prefs", json={"channels": ["carrier-pigeon"], "destinations": {"carrier-pigeon": "coop"}})
 
         assert response.status_code == 400
 
@@ -224,11 +229,11 @@ class TestPrefsDoor:
         """A partial merge makes "I removed my Slack address" indistinguishable from "I did not
         mention it"."""
         client, _ = prefs_client
-        client.put("/prefs", json={"channels": [EMAIL, SLACK], "destinations": {EMAIL: "a@b.c", SLACK: "https://hook"}})
+        client.put("/notifications/prefs", json={"channels": [EMAIL, SLACK], "destinations": {EMAIL: "a@b.c", SLACK: "https://hook"}})
 
-        client.put("/prefs", json={"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}})
+        client.put("/notifications/prefs", json={"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}})
 
-        assert client.get("/prefs").json()["channels"] == [EMAIL]
+        assert client.get("/notifications/prefs").json()["channels"] == [EMAIL]
 
 
 # --- the fan-out hook: WHEN a channel push happens, which is the whole safety property ------------
@@ -494,3 +499,36 @@ class TestDigest:
 
         assert [p["notification_id"] for p in drained["pointers"]] == ["run-1@COMPLETE"]
         assert (await actor.arm_digest({"seconds": 3600}))["armed"] is True, "the window did not close"
+
+
+class TestDigestRoundTrip:
+    """The bug the unit tests missed and a live send caught.
+
+    `TestDigest` above asks `ChannelPrefs.digest_defers` directly, so it proves the RULE. It never
+    made the value travel — actor -> wire -> push path — and the actor's `get_prefs` was dropping the
+    field entirely. Result: the preference stored, the door echoed it back, and every notification
+    still went out immediately. A predicate test cannot see that; a round-trip test can.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_actor_returns_what_it_was_given(self) -> None:
+        actor = _real_actor()
+
+        await actor.set_prefs({"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}, "digest_seconds": 3600})
+
+        assert (await actor.get_prefs())["digest_seconds"] == 3600
+
+    @pytest.mark.asyncio
+    async def test_absent_prefs_report_no_digest_rather_than_omitting_the_key(self) -> None:
+        """The push path reads `prefs.get("digest_seconds")`; a MISSING key and an explicit `None`
+        read the same there, but only one of them is a contract."""
+        actor = _real_actor()
+
+        assert (await actor.get_prefs())["digest_seconds"] is None
+
+    def test_the_door_round_trips_it(self, prefs_client: tuple[TestClient, dict[str, Any]]) -> None:
+        client, _ = prefs_client
+
+        client.put("/notifications/prefs", json={"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}, "digest_seconds": 3600})
+
+        assert client.get("/notifications/prefs").json()["digest_seconds"] == 3600

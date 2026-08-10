@@ -24,7 +24,8 @@ from service_kit.exceptions import ValidationError
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/prefs", tags=["prefs"])
+# `/notifications/prefs` — see `watches.py` for why the segment is not optional.
+router = APIRouter(prefix="/notifications/prefs", tags=["prefs"])
 
 #: What this build can actually send. A stored preference naming something else is kept (a channel
 #: removed from the build must not make a stored document unreadable) but cannot be SET — the door is
@@ -41,6 +42,10 @@ class ChannelPreferences(BaseModel):
     #: Channel id → destination. A destination is something the subject SUPPLIED; nothing here is
     #: inferred from a token, because an address a plane guessed is an address it can guess wrong.
     destinations: dict[str, str] = Field(default_factory=dict)
+    #: Batch pushes into one message every N seconds. `None` = immediate, which stays the default:
+    #: a digest trades timeliness for volume, and the notification worth having is the urgent one.
+    #: A terminal FAILURE is never digested whatever this says.
+    digest_seconds: int | None = Field(default=None, ge=60)
 
 
 @router.get("")
@@ -50,6 +55,7 @@ async def get_prefs(subject: CurrentSubject, _actor_plane: ActorPlaneDep) -> Cha
     return ChannelPreferences(
         channels=list(result.get("channels") or []),
         destinations=dict(result.get("destinations") or {}),
+        digest_seconds=result.get("digest_seconds"),
     )
 
 
@@ -68,8 +74,9 @@ async def set_prefs(payload: ChannelPreferences, subject: CurrentSubject, _actor
     if missing:
         raise ValidationError(f"no destination for channel(s): {', '.join(missing)} — a channel with nowhere to send is silently off")
     result = await inbox_for(subject).set_prefs(payload.model_dump(mode="json"))
-    log.info("channel_prefs_updated", extra={"channels": sorted(payload.channels)})
+    log.info("channel_prefs_updated", extra={"channels": sorted(payload.channels), "digest": payload.digest_seconds is not None})
     return ChannelPreferences(
         channels=list(result.get("channels") or []),
         destinations=dict(result.get("destinations") or {}),
+        digest_seconds=result.get("digest_seconds"),
     )

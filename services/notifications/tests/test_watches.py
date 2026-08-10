@@ -165,7 +165,7 @@ class TestWatchDoor:
         """Neither registry can answer the other's question, so a watch that wrote one is half a watch."""
         client = TestClient(_app(plane, allow=True))
 
-        body = client.put("/watches/acme").json()
+        body = client.put("/notifications/watches/acme").json()
 
         assert body == {"project_id": "acme", "watching": True, "changed": True, "total": 1}
         assert plane.project_watchers["acme"] == ["anon"], "the fan-out's view was not written"
@@ -175,7 +175,7 @@ class TestWatchDoor:
         """403 with a reason, never an empty 200 — and no residue in either registry."""
         client = TestClient(_app(plane, allow=False), raise_server_exceptions=False)
 
-        response = client.put("/watches/acme")
+        response = client.put("/notifications/watches/acme")
 
         assert response.status_code == 403
         assert plane.project_watchers == {}
@@ -183,25 +183,25 @@ class TestWatchDoor:
 
     def test_watching_twice_reports_unchanged_rather_than_failing(self, plane: _Plane) -> None:
         client = TestClient(_app(plane, allow=True))
-        client.put("/watches/acme")
+        client.put("/notifications/watches/acme")
 
-        assert client.put("/watches/acme").json()["changed"] is False
+        assert client.put("/notifications/watches/acme").json()["changed"] is False
 
     def test_the_list_reflects_what_was_watched(self, plane: _Plane) -> None:
         client = TestClient(_app(plane, allow=True))
-        client.put("/watches/acme")
-        client.put("/watches/beta")
+        client.put("/notifications/watches/acme")
+        client.put("/notifications/watches/beta")
 
-        assert client.get("/watches").json() == {"projects": ["acme", "beta"], "total": 2}
+        assert client.get("/notifications/watches").json() == {"projects": ["acme", "beta"], "total": 2}
 
     def test_unwatching_needs_no_membership(self, plane: _Plane) -> None:
         """The asymmetry is deliberate: someone removed from a project must still be able to clear a
         watch they can no longer create, or the preference becomes unreachable."""
         client = TestClient(_app(plane, allow=True))
-        client.put("/watches/acme")
+        client.put("/notifications/watches/acme")
 
         denied = TestClient(_app(plane, allow=False))
-        body = denied.delete("/watches/acme").json()
+        body = denied.delete("/notifications/watches/acme").json()
 
         assert body["watching"] is False
         assert plane.project_watchers["acme"] == []
@@ -210,4 +210,4 @@ class TestWatchDoor:
     def test_unwatching_something_unwatched_is_not_an_error(self, plane: _Plane) -> None:
         client = TestClient(_app(plane, allow=True))
 
-        assert client.delete("/watches/ghost").json()["changed"] is False
+        assert client.delete("/notifications/watches/ghost").json()["changed"] is False

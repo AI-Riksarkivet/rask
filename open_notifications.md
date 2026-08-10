@@ -577,9 +577,24 @@ Per `CLAUDE.md`: a skill claim that contradicts a file is fixed in the same comm
    claim independently, an unknown row claims nothing, and the claim survives a full round trip
    through state.
 
-   **STILL NOT OBSERVED, and this is the honest edge:** a real broker redelivering to a real sidecar
-   against a real SMTP conversation. The rig exists and has not been driven — "exactly one message
-   left the estate" is a claim about the thing a person sees, and no in-process test can make it.
+   **THE RIG WAS DRIVEN, 2026-08-11, and it found two defects nothing else had.** Full local Dapr
+   (placement + scheduler + a real `bindings.smtp` against Mailpit), the real `InboxActor` claiming
+   inside its turn: **three deliveries of one event produced exactly ONE email**, to the right address,
+   with a body carrying pointers only. Then digest-on: the COMPLETE was held and the FAIL went
+   immediately, as designed.
+
+   What it caught, and neither is small:
+   - **The watch and prefs doors were UNREACHABLE through the gateway.** The inbox router mounts
+     `/notifications/inbox`; S4's and S5's routers mounted `/watches` and `/prefs` — one segment
+     short. The gateway forwards `{prefix}/notifications` unrewritten, so both doors answered locally
+     and 404'd through the front door: a missing-feature 404 for a feature that exists. Every unit
+     test passed because they call the app directly. Now fixed AND gated —
+     `test_every_public_route_sits_under_the_gateway_s_forwarded_PREFIX` reads the prefix from
+     settings rather than assuming it, and was verified to fail on the old mount.
+   - **`digest_seconds` never round-tripped.** The actor's `get_prefs` dropped the field, so the
+     preference was stored, echoed back by the door, and ignored by the push path — every digest a
+     silent no-op. The unit tests asked `digest_defers` directly and so never made the value travel.
+     A round-trip test now does.
 6. ~~**S6 — the ops seam.**~~ **SHIPPED 2026-08-11.** Three vmalert rules, each with a FIRING proof
    and a QUIET proof, because a rule that only ever fires is one nobody can tell from a broken one:
    `NotificationsDeadLettering` (a park means the sidecar's whole schedule was exhausted — this
