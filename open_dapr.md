@@ -300,7 +300,7 @@ All were repaired in the same pass.
   `dataplane.commit_appended_fragments` accepts it, keyed on a `__lance_commit_message` marker. That
   commit also landed §2.3's error boundary. Finding 12a is still CONFIRMED, but one layer in:
   `read_version` was re-read per attempt, and is now carried through workflow history on a
-  `DatasetHandle`. A residual remains on the LocalCatalog branch (`lander.py:122`), dev/test-only.
+  `DatasetHandle`. A residual remains on the LocalCatalog branch (`lander.py:126-127`), dev/test-only. (Corrected 2026-08-10: the citation said `:122`, which is the EMPTY-fragment no-op and is on the DEPLOYED path via `runtime.py:387`→`:408` — harmless there because it neither commits nor has its version reported. The `read_version`-re-read residual is `:126-127`, reached only through the `else` at `runtime.py:459-460`, i.e. only when the catalog has no `commit` — which is `LocalCatalog` alone.)
 - **Three landed fixes had regression tests that had never executed.** `services/lineage/tests` and
   `services/catalog/tests` existed but were absent from the root `testpaths`, which is verbatim what
   `dagger call test` runs — so the suites for the §2.8 resolver fix, the external-source authz fix
@@ -443,39 +443,73 @@ much shipped green-by-absence. Two are now fixed and the third is diagnosed:
 
 ### Open, with the next step already worked out
 
-1. **`tests/unit` hangs → `dagger call test` cannot pass.** Bisected to the first quarter of
-   `tests/unit` (43 of 172 files); profile is ~0.2% CPU, 44 threads in `futex_wait_queue`, main in
-   `hrtimer_nanosleep`. **Two dead ends recorded so they are not repeated:** dagger buffers stdout
-   until the exec completes, so a hung run yields NO output (SIGINT gave nothing either); and arming
-   `faulthandler` from a root conftest does not survive, because pytest's own faulthandler plugin
-   calls `cancel_dump_traceback_later()` between tests — it needs `-p no:faulthandler` alongside
-   `dump_traceback_later(N, exit=True)`. **Recommended: add `pytest-timeout` (absent from dev deps);
-   one run then fails with a stack naming the test.** Note `94264442` already removed a DIFFERENT
-   sleeper from this suite (~8× speedup on `service-kit`); this is a second, independent cause.
-2. **A third non-injective id seed, in the lineage graph.** `medallion/schemas/events.py:243` composes
-   `f"{project}-{operation}-{token}"` and claims it is "distinct across tenants". It is not —
-   `acme`/`silver`/`b-gold-c` and `acme-silver-b`/`gold`/`c` both render `acme-silver-b-gold-c`, and
-   both `PROJECT_PATTERN` and `SAFE_NAME_PATTERN` permit `-`. Two tenants' runs MERGE onto one lineage
-   run id. The fix is the `"\x00".join(...)` form already used by `ingest.runs.run_id_for` and
-   `flows.routes.run_id_for` (each with a test that pins the OLD form as actually colliding). Lower-risk
-   siblings: `lineage/services/repository.py:1072`, `maintenance/core/lineage_emit.py:216`.
-3. **`scripts/seed_bronze_pages.py` has been dead since A12** — it imports
-   `medallion.services.iiif_produce`, deleted by `09823f56`, so it raises `ImportError` before doing
-   anything. This is the last `ty` diagnostic. NOT suppressed, deliberately: an ignore would assert the
-   import is fine when the module is gone. Delete it, or repoint at the ingest plane (`/api/ingest`).
-4. **Ingest residuals** left by the reviewer of the zombie-run fix: same-key-different-spec has no
-   defined semantics (wants a **409**, on both the dedupe and re-drive branches); F8's classifier is
-   untested against a live `grpc.RpcError`; Dapr's duplicate-instance refusal is scoped to ACTIVE
-   instances, so a re-drive after COMPLETED re-harvests (`reuse_id_policy` would close it);
-   `list_ingests` renders a fail-closed 503 as an empty list.
-5. **F12a's LocalCatalog residual** (`lander.py:122`) — dev/test-only, the deployed path takes
-   `catalog.commit` and is fixed.
-6. **2 pre-existing failures** in `tests/integration/test_authz.py`, identical on pristine HEAD.
-7. **No scoped test lane.** `.dagger/test.go`'s `Test` takes only `--src`, so the only way to run
-   pytest is the whole suite — and on a host where `uv sync` cannot work it is the only way to run
-   pytest at all. Scoping this session required temporarily rewriting `testpaths` in committed config.
-   An optional `--paths` / `-k` passthrough that no-ops when absent would fix it without changing what
-   `dagger call test` means in CI.
+**STATUS 2026-08-10 (second pass).** Items 1, 2, 3, 6 and 7 are CLOSED; 4 and 5 remain, both
+narrowed. Everything below was re-verified against the merge of `origin/main`, and three of this
+block's own claims did not survive that check — they are corrected in place rather than deleted, so
+the correction is readable. Full offline suite after the pass: **4024 passed, 0 failed**; `ruff
+check`, `ruff format --check` and `uvx ty check` all clean.
+
+1. ~~**`tests/unit` hangs → `dagger call test` cannot pass.**~~ **CLOSED — and the diagnosis in this
+   item was right while the fix was one step too late.** `tests/unit` does NOT hang on a developer
+   box (2478 passed in 113 s), which is why the bisect never converged: the hang is a property of the
+   CONTAINER. `94264442` correctly identified Dagger's injected `OTEL_EXPORTER_OTLP_ENDPOINT` and the
+   gateway's module-scope `setup_otel`, then put the strip in a **session-scoped autouse fixture**.
+   pytest's order is `load rootdir conftest → COLLECT (imports every test module) → run first test`,
+   so a session fixture runs AFTER the exporter has already been built. Measured both ways; the strip
+   now also runs at conftest import. `tests/unit/test_conftest_otlp_strip.py` drives a real
+   subprocess per variable and carries its own non-vacuity check. `pytest-timeout` is added and wired
+   into both `.dagger/test.go` lanes, so a future hang names itself instead of printing nothing.
+2. ~~**A third non-injective id seed.**~~ **CLOSED for the real site, and this item's supporting
+   detail was partly wrong.** `medallion/schemas/events.py` now NUL-joins the project-qualified seed.
+   The collision is stronger than stated here: it needs only ONE `operation` (which is per-mover env
+   config and not caller-varied) — `("acme","embed_features","evil-embed_features-tok1")` and
+   `("acme-embed_features-evil","embed_features","tok1")` both derive
+   `abea4552-1102-575d-8cf4-50b612c27e7b`. **Two corrections:** `SAFE_NAME_PATTERN` does not exist —
+   the real validator is `SAFE_TOKEN_PATTERN` (`medallion/services/trigger_guards.py:42`); and the
+   two "lower-risk siblings" named here (`lineage/services/repository.py:1072`,
+   `maintenance/core/lineage_emit.py:216`) are **injective as written** and are not siblings of this
+   defect. The genuine unfiled sibling is
+   `packages/service-kit/src/service_kit/lancekit/openlineage.py:123` (`f"{operation}-{output_name}"`).
+   The project-LESS branch is deliberately unchanged (continuity for every single-tenant run already
+   in the graph); that scope-cut is stated in the code.
+3. ~~**`scripts/seed_bronze_pages.py` has been dead since A12.**~~ **CLOSED, and BOTH options this
+   item offered were wrong.** It is not an orphan — `scripts/seed_dev_estate.sh:149` runs it, so
+   deleting it breaks step 3 of `make seed-dev` and leaves no bronze-page seed. And `/api/ingest` has
+   no IIIF door to repoint at: `ingest.adapters` registers local-dir and s3-prefix only. The
+   acquisition now lives in the script, on the surviving `storage` IIIF helpers, with a test — which
+   is what it lacked (its only reader was `ty`, so deleting something else broke it silently).
+   `uvx ty check` is now clean.
+4. **Ingest residuals** — STILL OPEN, unchanged: same-key-different-spec has no defined semantics
+   (wants a **409**, on both the dedupe and re-drive branches); F8's classifier is untested against a
+   live `grpc.RpcError`; Dapr's duplicate-instance refusal is scoped to ACTIVE instances, so a
+   re-drive after COMPLETED re-harvests (`reuse_id_policy` would close it); `list_ingests` renders a
+   fail-closed 503 as an empty list.
+5. **F12a's LocalCatalog residual** — STILL OPEN, and the citation was wrong: it is
+   `lander.py:126-127`, not `:122`. See the §2.5 correction above for why the distinction matters.
+   Dev/test-only stands for `:126-127`.
+6. ~~**2 pre-existing failures** in `tests/integration/test_authz.py`.~~ **CLOSED — stale assertions,
+   not an authz regression.** `GET /v1/table` returns `sorted(set(...))` and `_paginate`'s keyset
+   cursor depends on that ordering; the tests pinned the source order. 54 passed.
+7. ~~**No scoped test lane.**~~ **CLOSED by `285d5fdd`** (`dagger call test-package`), which landed
+   after this block was written.
+
+**Found in the same pass, and NOT in this list because nothing here predicted them** — see the
+commits on `fix/dapr-handoff-gates`:
+
+- **`dagger call lint` was red on main**, on four committed files, under both the pinned and the
+  unpinned ruff. `57d255c7`'s title claims two gates were greened; this was not one of them.
+- **`14a84022` opened a table-enumeration leak.** C1's widening of `can_get_metadata` made the
+  UNFILTERED `GET /v1/namespace/{id}/table/list` reachable by a single-table grantee, so one grant
+  bought every sibling's name. Verified with the fga CLI against both compiled models (pre: false;
+  post: true). Fixed by filtering per object, the split §3.1 of `open_notifications.md` already
+  settled. Two further FGA findings survived adversarial review and are NOT fixed:
+  a `manage_grants`-only principal can grant themselves `owner`, and the `child` inverse edge is
+  never backfilled, so upward visibility is inert on the pre-existing estate.
+- **`14a84022` also left `scripts/seed_estate.py` behind**, so the seeder could no longer build the
+  estate its own fixtures describe.
+- **FastAPI 0.140 made `include_router` lazy**, which broke one route-introspection test and had
+  already provoked a private-attribute workaround in another. `iter_route_contexts` is the public
+  replacement, and is stricter than both.
 
 ### Corrections this work made to THIS file
 
