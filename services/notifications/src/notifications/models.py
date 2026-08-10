@@ -234,7 +234,26 @@ class ChannelPrefs(BaseModel):
     #: Where to reach them per channel — an address the subject supplied, never one this plane
     #: inferred from a token. Claim-check applies: a value here is a destination, never content.
     destinations: dict[str, str] = Field(default_factory=dict)
+    #: Batch pushes into one message every N seconds instead of sending each immediately. `None` =
+    #: immediate, which stays the default because the failure this plane exists to end is a MISSED
+    #: failure, and a digest delays every notification to reduce the volume of the ones nobody minded.
+    #:
+    #: A FAILED run is deliberately NOT digestible — see `digest_defers`. Batching the one notification
+    #: someone needs now, in order to batch the ones they did not, is the trade nobody wants made for
+    #: them, and it is the trade a naive digest makes silently.
+    digest_seconds: int | None = Field(default=None, ge=60)
     updated_at: UtcDatetime
+
+    def digest_defers(self, notification_id: str) -> bool:
+        """Whether THIS notification waits for the digest, or goes out now.
+
+        Terminal FAILURE always goes now, whatever the digest says. The id carries the state
+        (`run_id@FAIL`) because a pointer is a claim-check with no status field of its own.
+        """
+        if self.digest_seconds is None:
+            return False
+        state = notification_id.rsplit("@", 1)[-1].upper() if "@" in notification_id else ""
+        return state not in {"FAIL", "FAILED", "ABORT"}
 
 
 class InboxWatches(BaseModel):

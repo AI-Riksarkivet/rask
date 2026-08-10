@@ -1,9 +1,10 @@
 """Channels — the push that leaves the estate, and the ledger that keeps it from leaving twice."""
 
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
+from dapr.actor import ActorId
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -11,7 +12,9 @@ from notifications.api import prefs as prefs_module
 from notifications.api.channels import EMAIL, SLACK, deliver_to_channels, render
 from notifications.api.fanout import InboxOpener
 from notifications.config import get_notifications_settings
+from notifications.inbox_actor import InboxActor
 from notifications.models import InboxPointer, NotificationReason
+from notifications.proxies import inbox_actor_id
 
 
 def _pointer(*, notification_id: str = "run-1@FAIL", sent: list[str] | None = None) -> InboxPointer:
@@ -330,3 +333,164 @@ class TestFanoutHook:
 
         assert result.delivered == 1
         assert not result.needs_retry
+
+
+# --- idempotency against the REAL actor claim, not a fake ledger ----------------------------------
+#
+# Every test above stubs `mark_sent`. That proves the dispatch loop honours a claim; it cannot prove
+# the CLAIM ITSELF, which is the part that has to hold under redelivery. These drive the real
+# `InboxActor.claim_channel` — check-and-write inside the turn — so what is under test is the actual
+# state transition rather than a test double agreeing with itself.
+#
+# What is still NOT proven here, and is named rather than implied: a real broker redelivering to a
+# real sidecar against a real SMTP conversation. That is `make notifications-rig-up` (Mailpit + a
+# COUNTING Slack sink), because "exactly one message left the estate" is a claim about the thing a
+# person sees, and no in-process test can make it.
+
+
+class _ActorSm:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def try_get_state(self, key: str) -> tuple[bool, str | None]:
+        return (key in self.store, self.store.get(key))
+
+    async def set_state(self, key: str, value: str) -> None:
+        self.store[key] = value
+
+    async def set_state_ttl(self, key: str, value: str, _ttl: Any) -> None:
+        self.store[key] = value
+
+    async def save_state(self) -> None:
+        return None
+
+
+def _delivery(notification_id: str = "run-1@FAIL") -> dict[str, Any]:
+    """A DELIVERY payload — no `seen`/`dismissed`/`sent`. Those are the subject's, minted by the actor,
+    and `NotificationDelivery` forbids them precisely so a forged delivery cannot arrive pre-read."""
+    return {
+        "notification_id": notification_id,
+        "reason": "author",
+        "object_id": "silver$pages",
+        "source_run_id": notification_id.split("@")[0],
+        "occurred_at": "2026-08-10T12:00:00+00:00",
+    }
+
+
+class _RealActor(InboxActor):
+    """The real actor with its Dapr plumbing replaced — the `test_inbox_actor` shape.
+
+    A SUBCLASS rather than a monkey-patched instance: `register_reminder` is a bound method with a
+    declared signature, and assigning over it makes the double disagree with the base in a way the
+    type checker is right to reject. Overriding keeps the contract.
+    """
+
+    def __init__(self, subject: str = "alice") -> None:
+        self._state_manager = cast(Any, _ActorSm())
+        self.id = ActorId(inbox_actor_id(subject))
+        self.registered: list[str] = []
+
+    @override
+    async def register_reminder(self, name: str, state: bytes, due_time: Any, period: Any = None, ttl: Any = None, failure_policy: Any = None) -> None:
+        self.registered.append(name)
+
+    @override
+    async def unregister_reminder(self, name: str) -> None:
+        return None
+
+
+def _real_actor(subject: str = "alice") -> _RealActor:
+    return _RealActor(subject)
+
+
+class TestRealClaimUnderRedelivery:
+    @pytest.mark.asyncio
+    async def test_the_same_event_delivered_twice_claims_once(self) -> None:
+        """THE property, against the real state transition: at-least-once delivery, exactly-once send."""
+        actor = _real_actor()
+        await actor.deliver(_delivery())
+
+        first = await actor.claim_channel({"notification_id": "run-1@FAIL", "channel": EMAIL})
+        second = await actor.claim_channel({"notification_id": "run-1@FAIL", "channel": EMAIL})
+
+        assert first["claimed"] is True
+        assert second["claimed"] is False
+
+    @pytest.mark.asyncio
+    async def test_two_channels_claim_independently(self) -> None:
+        """The key is `(event, subject, CHANNEL)` — an email must not suppress the Slack message."""
+        actor = _real_actor()
+        await actor.deliver(_delivery())
+
+        assert (await actor.claim_channel({"notification_id": "run-1@FAIL", "channel": EMAIL}))["claimed"] is True
+        assert (await actor.claim_channel({"notification_id": "run-1@FAIL", "channel": SLACK}))["claimed"] is True
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_notification_claims_nothing(self) -> None:
+        """Inventing a row to hold a ledger entry would resurrect a notification that was compacted
+        or dismissed — so a claim against a row that is gone fails rather than creating one."""
+        actor = _real_actor()
+
+        assert (await actor.claim_channel({"notification_id": "ghost@FAIL", "channel": EMAIL}))["claimed"] is False
+
+    @pytest.mark.asyncio
+    async def test_the_claim_SURVIVES_a_full_round_trip_through_state(self) -> None:
+        """The ledger rides the pointer, so it has to survive being serialized and read back — which
+        is the whole reason it is a stored field rather than an in-memory set."""
+        actor = _real_actor()
+        await actor.deliver(_delivery())
+        await actor.claim_channel({"notification_id": "run-1@FAIL", "channel": EMAIL})
+
+        page = await actor.page({"limit": 10})
+
+        assert page["pointers"][0]["sent"] == [EMAIL]
+
+
+class TestDigest:
+    @pytest.mark.asyncio
+    async def test_a_failure_is_never_digested(self) -> None:
+        """Batching the one notification someone needs NOW, to reduce the volume of the ones they did
+        not mind, is the trade nobody wants made for them — and the one a naive digest makes."""
+        from notifications.models import ChannelPrefs
+
+        prefs = ChannelPrefs(subject="alice", digest_seconds=3600, updated_at=datetime.now(UTC))
+
+        assert prefs.digest_defers("run-1@FAIL") is False
+        assert prefs.digest_defers("run-1@ABORT") is False
+        assert prefs.digest_defers("run-1@COMPLETE") is True
+
+    @pytest.mark.asyncio
+    async def test_with_no_digest_nothing_defers(self) -> None:
+        from notifications.models import ChannelPrefs
+
+        prefs = ChannelPrefs(subject="alice", updated_at=datetime.now(UTC))
+
+        assert prefs.digest_defers("run-1@COMPLETE") is False
+
+    @pytest.mark.asyncio
+    async def test_arming_twice_does_not_push_the_window_forward(self) -> None:
+        """A steady trickle of deferred notifications must not keep resetting the window — a subject
+        receiving one every few seconds would otherwise never see a digest at all."""
+        actor = _real_actor()
+
+        first = await actor.arm_digest({"seconds": 3600})
+        second = await actor.arm_digest({"seconds": 3600})
+
+        assert first["armed"] is True
+        assert second["armed"] is False
+        assert actor.registered.count("digest") == 1
+
+    @pytest.mark.asyncio
+    async def test_draining_returns_the_unread_unsent_rows_and_closes_the_window(self) -> None:
+        """Rows already pushed are excluded: a failure went out immediately, and repeating it in the
+        digest an hour later is the duplicate a person notices most."""
+        actor = _real_actor()
+        await actor.deliver(_delivery("run-1@COMPLETE"))
+        await actor.deliver(_delivery("run-2@FAIL"))
+        await actor.claim_channel({"notification_id": "run-2@FAIL", "channel": EMAIL})
+        await actor.arm_digest({"seconds": 3600})
+
+        drained = await actor.drain_digest()
+
+        assert [p["notification_id"] for p in drained["pointers"]] == ["run-1@COMPLETE"]
+        assert (await actor.arm_digest({"seconds": 3600}))["armed"] is True, "the window did not close"

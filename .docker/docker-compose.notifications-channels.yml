@@ -1,0 +1,66 @@
+# The CHANNEL VERIFY RIG (open_notifications.md §7, "Channel verify").
+#
+# A side stack, not a deploy path — the same status as its seven siblings here. It exists to answer
+# the one question unit tests cannot: does exactly ONE message leave the estate per
+# `(event, subject, channel)` when the broker redelivers?
+#
+# Unit tests prove the ledger's logic and the actor's claim-inside-the-turn. Neither can prove what a
+# real SMTP conversation does, and "we send exactly once" is a claim about the thing a person sees.
+#
+#   make notifications-rig-up     bring it up
+#   open http://localhost:8025    Mailpit's inbox — every message the plane sent
+#   curl :9099/deliveries         the mock Slack webhook's ledger
+#   make notifications-rig-down   tear it down
+#
+# Mailpit over a real SMTP relay on purpose: it accepts everything, stores it, and shows it — so a
+# duplicate is VISIBLE rather than inferred from a provider's rate limit.
+services:
+  mailpit:
+    image: axllent/mailpit:v1.21
+    container_name: rask-mailpit
+    ports:
+      - "1025:1025" # SMTP — point the Dapr bindings.smtp component's `host` here
+      - "8025:8025" # the web UI + its REST API (/api/v1/messages)
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+
+  # A Slack incoming-webhook stand-in that COUNTS rather than just accepting: the duplicate is the
+  # thing under test, so the rig has to be able to say "this arrived twice" without a human reading a
+  # log. GET /deliveries returns the ledger; DELETE /deliveries resets between runs.
+  slack-sink:
+    image: python:3.13-alpine
+    container_name: rask-slack-sink
+    ports:
+      - "9099:9099"
+    command:
+      - python
+      - -c
+      - |
+        import json
+        from collections import Counter
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        SEEN = Counter()
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def _send(self, code, body):
+                raw = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers.get("content-length") or 0)).decode()
+                SEEN[body.splitlines()[0] if body else "<empty>"] += 1
+                self._send(200, {"ok": True})
+            def do_GET(self):
+                dupes = {k: v for k, v in SEEN.items() if v > 1}
+                self._send(200, {"deliveries": dict(SEEN), "duplicates": dupes, "total": sum(SEEN.values())})
+            def do_DELETE(self):
+                SEEN.clear()
+                self._send(200, {"cleared": True})
+
+        HTTPServer(("0.0.0.0", 9099), H).serve_forever()

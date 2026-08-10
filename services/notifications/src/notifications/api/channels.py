@@ -141,6 +141,17 @@ async def deliver_to_channels(
     return sent
 
 
+def _defers(notification_id: str) -> bool:
+    """Whether a digest may hold this notification back. Terminal failure never waits.
+
+    Duplicated from `ChannelPrefs.digest_defers` rather than imported through it, because this path
+    holds the prefs as a plain dict off the actor wire and constructing a model to ask one question
+    would be the more indirect of the two. The rule is one line and it is stated in both places.
+    """
+    state = notification_id.rsplit("@", 1)[-1].upper() if "@" in notification_id else ""
+    return state not in {"FAIL", "FAILED", "ABORT"}
+
+
 def make_push(table: ChannelTable, *, open_inbox: Callable[[str], Any]) -> Callable[[str, dict[str, Any]], Awaitable[None]]:
     """The concrete `ChannelPush`: read a subject's prefs, push the pointer, claim as you go.
 
@@ -160,6 +171,15 @@ def make_push(table: ChannelTable, *, open_inbox: Callable[[str], Any]) -> Calla
         if not channels:
             return
         pointer = InboxPointer.model_validate(payload)
+
+        # DIGEST: batch this one into the next window instead of sending it now — unless it is a
+        # FAILURE, which always goes immediately. Digesting a failure to reduce the volume of
+        # successes is the trade nobody wants made for them, and it is the one a naive digest makes
+        # silently. The row is already written either way, so the bell is correct regardless.
+        digest_seconds = prefs.get("digest_seconds")
+        if digest_seconds and _defers(pointer.notification_id):
+            await inbox.arm_digest({"seconds": int(digest_seconds)})
+            return
 
         async def claim(notification_id: str, channel: str) -> bool:
             result = await inbox.claim_channel({"notification_id": notification_id, "channel": channel})

@@ -562,13 +562,24 @@ Per `CLAUDE.md`: a skill claim that contradicts a file is fixed in the same comm
    the whole event to re-attempt an email — re-writing nothing, to retry the one thing a person sees
    twice. Four tests pin exactly those four cases.
 
-   **NOT landed, and named rather than implied:** the digest reminder (an actor reminder batching a
-   window of rows into one send — a real feature, not a detail, and it needs its own decision about
-   what a digest window means when a FAILED run lands in it), and the §7 channel-verify rig (a Mailpit
-   sink plus a mock Slack webhook, asserting exactly-one delivery per `(event, subject, channel)`
-   across a FORCED redelivery). The idempotency property is proven against a fake ledger and against
-   the actor's own claim-inside-the-turn, but not against a real broker redelivery — the difference
-   between implemented and observed.
+   **The digest landed too**, and it answers the question this file left open at q8. A digest batches
+   pushes on the SUBJECT's schedule; a FAILED run is never digestible, because batching the one
+   notification someone needs now in order to batch the ones they did not is the trade nobody wants
+   made for them — and it is the trade a naive digest makes silently. Arming is idempotent WITHOUT
+   re-arming: a steady trickle of deferred notifications must not keep pushing the window forward, or
+   a busy subject never sees a digest at all. The tick drains and sends INSIDE THE TURN — see q8
+   below, now answered rather than deferred.
+
+   **The verify rig landed** as `make notifications-rig-up`: Mailpit plus a Slack sink that COUNTS
+   rather than merely accepting, because the duplicate is the thing under test and a rig that cannot
+   say "this arrived twice" does not test it. Alongside it, eight tests now drive the REAL
+   `InboxActor.claim_channel` rather than a fake ledger — same event twice claims once, two channels
+   claim independently, an unknown row claims nothing, and the claim survives a full round trip
+   through state.
+
+   **STILL NOT OBSERVED, and this is the honest edge:** a real broker redelivering to a real sidecar
+   against a real SMTP conversation. The rig exists and has not been driven — "exactly one message
+   left the estate" is a claim about the thing a person sees, and no in-process test can make it.
 6. ~~**S6 — the ops seam.**~~ **SHIPPED 2026-08-11.** Three vmalert rules, each with a FIRING proof
    and a QUIET proof, because a rule that only ever fires is one nobody can tell from a broken one:
    `NotificationsDeadLettering` (a park means the sidecar's whole schedule was exhausted — this
@@ -900,8 +911,19 @@ context** (dapr/dapr#6950) — is an expectation-setter for ingest/flows traces,
    same rule families late.** Still an owner call, since installing skills changes
    `.claude/settings.json` — but it is no longer a question of whether the rules pay for
    themselves.
-8. **InboxActor saturation signal + delivery-in-turn question** *(added 2026-08-08, external-scan
-   yield)*: `dapr_runtime_actor_pending_actor_calls{actor_type="InboxActor"}` is the turn-queue
+8. ~~**InboxActor saturation signal + delivery-in-turn question**~~ **ANSWERED 2026-08-11 by S5/S6:
+   sends happen INSIDE the turn, and the metric that would falsify that choice ships with it.** The
+   digest tick drains and pushes within the actor's own turn, so every other call for that subject
+   queues behind it. Chosen for three reasons that hold together: the serialization is BOUNDED BY THE
+   WINDOW (a digest fires at most once per `digest_seconds` >= 60 per subject); the alternative buys
+   parallelism this workload does not need while costing a second delivery path with its own
+   at-least-once semantics, which is a second place for a duplicate email to come from; and it is
+   OBSERVED rather than assumed — `InboxActorTurnQueueBacklog` alerts on
+   `dapr_runtime_actor_pending_actor_calls{actor_type="InboxActor"} > 10 for 2m`, with a synthetic
+   proof that a draining burst does NOT page. The decision is falsifiable in production rather than
+   defended in a comment. Original text below.
+
+   *(added 2026-08-08, external-scan yield)*: `dapr_runtime_actor_pending_actor_calls{actor_type="InboxActor"}` is the turn-queue
    depth — the one metric that shows a slow SMTP/Slack call serializing every subsequent call for
    that user, because any output-binding call made INSIDE the actor turn holds the turn.
    S5 must decide: channel sends inside the turn (simple, serialized per user — probably fine) or

@@ -36,6 +36,7 @@ bearing rather than stylistic:
    actual answer; nothing in this design depends on the TTL either way.
 """
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any, override
@@ -76,12 +77,19 @@ ROWS_KEY = "inbox-rows"
 #: The THIRD partition: this subject's watch list. Read only by the settings surface and by a fan-out
 #: resolving one subject — never by the badge, which is why it is not folded into the meta record.
 WATCHES_KEY = "inbox-watches"
+#: Whether a digest tick is pending, so arming is idempotent WITHOUT re-arming: a steady trickle of
+#: deferred notifications must not push the window forward on every one of them.
+DIGEST_KEY = "inbox-digest"
 #: The FOURTH partition: where this subject wants to be pushed. Read only by the prefs door and by a
 #: channel fan-out resolving one subject — never by the badge, for the same reason as the watches.
 PREFS_KEY = "inbox-prefs"
 
 #: The compaction reminder's name. One per actor; repeating until the inbox is empty.
 COMPACTION_REMINDER = "compaction"
+#: The digest tick. A SECOND reminder rather than a flag on the first, because the two have unrelated
+#: periods and unrelated jobs: compaction bounds storage on the estate's schedule, a digest batches
+#: pushes on the SUBJECT's. Folding them would tie a user preference to a retention policy.
+DIGEST_REMINDER = "digest"
 
 
 def _parse[T: BaseModel](partition: str, raw: str, model: type[T]) -> T:
@@ -153,6 +161,14 @@ class InboxActorInterface(ActorInterface):
 
     @actormethod(name="ClaimChannel")
     async def claim_channel(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @actormethod(name="ArmDigest")
+    async def arm_digest(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @actormethod(name="DrainDigest")
+    async def drain_digest(self) -> dict[str, Any]:
         raise NotImplementedError
 
 
@@ -359,6 +375,9 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         logged, because an inbox that is both unreadable and unbounded is the thing an operator needs
         to know about.
         """
+        if name == DIGEST_REMINDER:
+            await self._send_digest()
+            return
         if name != COMPACTION_REMINDER:
             return
         settings = get_notifications_settings()
@@ -473,3 +492,82 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
             await self._persist(pointers, meta)
             return {"claimed": True}
         return {"claimed": False}
+
+    async def arm_digest(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Register the digest tick if it is not already pending.
+
+        Idempotent by construction — `register_reminder` overwrites one of the same name — but
+        CONDITIONAL is the wrong shape here and unconditional is the wrong shape there: re-arming on
+        every deferred notification would push the window forward each time, so a subject receiving a
+        steady trickle would never see a digest at all. That is the same defect the compaction repair
+        avoids, arriving from the other direction, so the guard is the same: arm only when nothing is
+        pending.
+        """
+        seconds = int(payload["seconds"])
+        if await self._digest_pending():
+            return {"armed": False, "seconds": seconds}
+        period = timedelta(seconds=seconds)
+        await self.register_reminder(DIGEST_REMINDER, b"", period, period)
+        await self._state_manager.set_state(DIGEST_KEY, json.dumps({"pending": True, "seconds": seconds}))
+        await self._state_manager.save_state()
+        return {"armed": True, "seconds": seconds}
+
+    async def _digest_pending(self) -> bool:
+        has, raw = await self._state_manager.try_get_state(DIGEST_KEY)
+        return bool(has and raw and json.loads(raw).get("pending"))
+
+    async def drain_digest(self) -> dict[str, Any]:
+        """What the digest window accumulated: the UNREAD, UNSENT rows, and the window closed.
+
+        Returns rows rather than sending them, because an actor that reached out to SMTP would hold
+        its own turn for the length of an SMTP conversation — and this actor's turn is the lock every
+        other call for this subject queues behind. The caller sends; the actor only says what is due.
+
+        Rows already pushed (any channel in `sent`) are excluded: a failure went out immediately, and
+        repeating it in the digest an hour later is the duplicate a person notices most.
+        """
+        rows = await self._read_rows()
+        await self._state_manager.set_state(DIGEST_KEY, json.dumps({"pending": False}))
+        await self._state_manager.save_state()
+        try:
+            await self.unregister_reminder(DIGEST_REMINDER)
+        except Exception:
+            logger.exception("inbox_digest_disarm_failed")
+        if rows is None:
+            return {"pointers": [], "total": 0}
+        due = [p.model_dump(mode="json") for p in rows.pointers if not p.seen and not p.dismissed and not p.sent]
+        return {"pointers": due, "total": len(due)}
+
+    async def _send_digest(self) -> None:
+        """The digest tick: drain the window and push it, INSIDE THIS TURN.
+
+        THE DECISION open_notifications.md q8 left to S5, made here and made deliberately. A channel
+        send inside an actor turn HOLDS that turn, so every other call for this subject queues behind
+        it — which is exactly what `dapr_runtime_actor_pending_actor_calls{actor_type="InboxActor"}`
+        measures and what the `InboxActorTurnQueueBacklog` alert watches. It is chosen anyway, for
+        three reasons that hold together:
+
+        * The serialization is BOUNDED BY THE WINDOW. A digest fires at most once per
+          `digest_seconds` (>= 60) per subject, so the turn is held for one batch per minute at
+          worst, against a queue that is one person's notifications.
+        * The alternative — handing the batch to a queue and sending outside the turn — buys
+          parallelism this workload does not need and costs a second delivery path with its own
+          at-least-once semantics, which is a second place for a duplicate email to come from.
+        * It is OBSERVED rather than assumed: the alert exists before the code that could trip it, so
+          the decision is falsifiable in production rather than defended in a comment.
+
+        Failures are swallowed and logged. A repeating reminder that raises retries a permanent fault
+        at the runtime's own pace forever, and the rows are still in the inbox: the bell is correct
+        whatever the channel plane does.
+        """
+        from notifications.proxies import channel_push
+
+        push = channel_push()
+        if push is None:
+            return
+        try:
+            drained = await self.drain_digest()
+            for payload in drained["pointers"]:
+                await push(self._subject(), payload)
+        except Exception:
+            logger.exception("inbox_digest_send_failed")
