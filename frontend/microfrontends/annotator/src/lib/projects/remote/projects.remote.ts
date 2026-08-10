@@ -75,6 +75,8 @@ const OntologyWireSchema = v.object({
 				name: v.string(),
 				colour: v.optional(v.nullable(v.string())),
 				tools: v.optional(v.array(v.string())),
+				/** Regions of this class carry transcribed text (the row's `text` facet). */
+				transcribe: v.optional(v.boolean()),
 				attributes: v.optional(
 					v.array(
 						v.object({

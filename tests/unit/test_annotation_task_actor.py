@@ -19,7 +19,18 @@ from typing import Any, cast
 import pytest
 from annotator.projects.actor import DRAFT_KEY, LEASE_REMINDER, TASK_KEY, AnnotationTaskActor
 from annotator.projects.machines import IllegalTransition
-from annotator.projects.models import Task, TaskState
+from annotator.projects.models import ProjectState, Task, TaskState
+
+
+def _verified(payload: dict[str, Any]) -> dict[str, Any]:
+    """A payload with the caller's VERIFIED INPUTS filled in — what a real caller always sends.
+
+    Every principal-caused call states the project state it checked (§5.2 rule 5, re-asserted inside
+    the turn), so a bare dict here would be a payload no caller in the estate produces. Wrapping is
+    what keeps that requirement REQUIRED: a test proving the actor refuses an unstated project state
+    passes a bare dict on purpose, and it is the only one in this file that does.
+    """
+    return {"project_state": ProjectState.LABELING, **payload}
 
 
 class _FakeStateManager:
@@ -28,6 +39,9 @@ class _FakeStateManager:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
         self.saves = 0
+        #: Raised by `save_state`. A store outage is a behaviour of the double rather than a method
+        #: a test rebinds, so the substitute stays one the type checker can still see.
+        self.fail_save_with: Exception | None = None
 
     async def try_get_state(self, key: str) -> tuple[bool, str | None]:
         return (key in self.store, self.store.get(key))
@@ -36,6 +50,8 @@ class _FakeStateManager:
         self.store[key] = value
 
     async def save_state(self) -> None:
+        if self.fail_save_with is not None:
+            raise self.fail_save_with
         self.saves += 1
 
 
@@ -96,7 +112,7 @@ async def _claimed() -> _Actor:
     """A draft is writable only from CLAIMED — the actor enforces that itself, so a fixture that
     saves a draft has to be in the state the machine allows it from."""
     actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
     return actor
 
 
@@ -109,7 +125,7 @@ async def _claimed() -> _Actor:
 async def test_seed_is_idempotent_so_a_redelivered_send_cannot_reset_a_claim() -> None:
     """Send arrives twice (JetStream redelivers). The second must not wipe an in-progress claim."""
     actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
 
     again = await actor.seed(_task())
 
@@ -120,7 +136,7 @@ async def test_seed_is_idempotent_so_a_redelivered_send_cannot_reset_a_claim() -
 @pytest.mark.asyncio
 async def test_state_round_trips_through_the_state_manager() -> None:
     actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
 
     stored = json.loads(actor.sm.store[TASK_KEY])
     assert stored["state"] == TaskState.CLAIMED
@@ -134,7 +150,7 @@ async def test_an_illegal_edge_raises_rather_than_being_reimplemented_here() -> 
     must fail the same way `task_transition` fails."""
     actor = await _seeded()
     with pytest.raises(IllegalTransition):
-        await actor.fire({"event": "accept", "actor": "carol"})
+        await actor.fire(_verified({"event": "accept", "actor": "carol"}))
 
 
 @pytest.mark.asyncio
@@ -143,13 +159,13 @@ async def test_submit_honours_the_review_required_captured_on_the_TASK() -> None
     `review_required` would let the submitting annotator waive their own review and self-accept."""
     waived = _Actor()
     await waived.seed(_task(review_required=False))
-    await waived.fire({"event": "claim", "actor": "gina"})
-    out = await waived.fire({"event": "submit", "actor": "gina"})
+    await waived.fire(_verified({"event": "claim", "actor": "gina"}))
+    out = await waived.fire(_verified({"event": "submit", "actor": "gina"}))
     assert out["state"] == TaskState.ACCEPTED  # review waived on the task → straight to accepted
 
     required = await _seeded()  # the default is review_required=True
-    await required.fire({"event": "claim", "actor": "gina"})
-    out2 = await required.fire({"event": "submit", "actor": "gina"})
+    await required.fire(_verified({"event": "claim", "actor": "gina"}))
+    out2 = await required.fire(_verified({"event": "submit", "actor": "gina"}))
     assert out2["state"] == TaskState.IN_REVIEW
     assert out2["submitted_by"] == "gina"
 
@@ -159,9 +175,9 @@ async def test_a_payload_cannot_override_the_tasks_review_requirement() -> None:
     """The self-accept hole, closed. The task says review IS required; a fire payload claiming
     otherwise must be ignored entirely."""
     actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
 
-    out = await actor.fire({"event": "submit", "actor": "gina", "review_required": False})
+    out = await actor.fire(_verified({"event": "submit", "actor": "gina", "review_required": False}))
 
     assert out["state"] == TaskState.IN_REVIEW, "a request payload waived the task's review requirement"
 
@@ -169,8 +185,8 @@ async def test_a_payload_cannot_override_the_tasks_review_requirement() -> None:
 @pytest.mark.asyncio
 async def test_every_transition_is_appended_to_the_audit_trail() -> None:
     actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina"})
-    await actor.fire({"event": "submit", "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.fire(_verified({"event": "submit", "actor": "gina"}))
     trail = (await _state(actor))["transitions"]
     assert [t["event"] for t in trail] == ["claim", "submit"]
     assert trail[0]["from"] == TaskState.UNASSIGNED and trail[0]["to"] == TaskState.CLAIMED
@@ -184,7 +200,7 @@ async def test_every_transition_is_appended_to_the_audit_trail() -> None:
 @pytest.mark.asyncio
 async def test_claim_arms_the_lease_reminder_with_the_project_lease() -> None:
     actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina", "lease_seconds": 900})
+    await actor.fire(_verified({"event": "claim", "actor": "gina", "lease_seconds": 900}))
     assert actor.reminders == [(LEASE_REMINDER, 900.0)]
 
 
@@ -192,7 +208,7 @@ async def test_claim_arms_the_lease_reminder_with_the_project_lease() -> None:
 async def test_assign_pins_the_task_and_arms_nothing() -> None:
     """§4.2: `lease_expires_at is None` while CLAIMED means manager-pinned — it never expires."""
     actor = await _seeded()
-    out = await actor.fire({"event": "assign", "actor": "henry"})
+    out = await actor.fire(_verified({"event": "assign", "actor": "henry"}))
     assert out["state"] == TaskState.CLAIMED
     assert out["lease_expires_at"] is None
     assert actor.reminders == [], "a pinned task must not arm an expiry"
@@ -201,8 +217,8 @@ async def test_assign_pins_the_task_and_arms_nothing() -> None:
 @pytest.mark.asyncio
 async def test_saving_a_draft_renews_the_lease() -> None:
     actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina", "lease_seconds": 60})
-    await actor.fire({"event": "save_draft", "actor": "gina", "lease_seconds": 60})
+    await actor.fire(_verified({"event": "claim", "actor": "gina", "lease_seconds": 60}))
+    await actor.fire(_verified({"event": "save_draft", "actor": "gina", "lease_seconds": 60}))
     assert len(actor.reminders) == 2, "save_draft must re-arm, not let the lease run down"
 
 
@@ -211,17 +227,34 @@ async def test_saving_a_draft_renews_the_lease() -> None:
 async def test_leaving_claimed_disarms_the_reminder(event: str) -> None:
     """A reminder left armed would expire a task that already moved on — outliving what it guarded."""
     actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina"})
-    await actor.fire({"event": event, "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.fire(_verified({"event": event, "actor": "gina"}))
     assert LEASE_REMINDER in actor.unregistered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", ["submit", "release", "skip"])
+async def test_a_failed_store_leaves_the_lease_reminder_armed(event: str) -> None:
+    """Disarm AFTER persist, never before. If the store raises, the persisted state is still CLAIMED
+    and the reminder must still be armed — the reverse order strands a claimed task with no
+    self-expiry, exactly what the lease reminder exists to prevent. (open_dapr.md §2.6.)"""
+    actor = await _claimed()
+
+    actor.sm.fail_save_with = RuntimeError("state store down")
+    with pytest.raises(RuntimeError):
+        await actor.fire(_verified({"event": event, "actor": "gina"}))
+
+    assert LEASE_REMINDER not in actor.unregistered, "a failed store disarmed the safety net"
 
 
 @pytest.mark.asyncio
 async def test_an_expired_lease_returns_the_task_and_KEEPS_the_draft() -> None:
     """The whole point of a lease: the work is not lost, only the hold on it."""
     actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina"})
-    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox", "x": 1, "y": 2, "width": 3, "height": 4}]})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.save_draft(
+        _verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox", "x": 1, "y": 2, "width": 3, "height": 4}]})
+    )
 
     await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
 
@@ -236,8 +269,8 @@ async def test_an_expired_lease_returns_the_task_and_KEEPS_the_draft() -> None:
 async def test_a_stale_reminder_for_a_moved_on_task_is_a_no_op() -> None:
     """A reminder can outrace its unregister. Firing it must not drag a submitted task backwards."""
     actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina"})
-    await actor.fire({"event": "submit", "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.fire(_verified({"event": "submit", "actor": "gina"}))
 
     await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
 
@@ -252,7 +285,9 @@ async def test_a_stale_reminder_for_a_moved_on_task_is_a_no_op() -> None:
 @pytest.mark.asyncio
 async def test_a_draft_is_one_write_for_the_whole_shape_set() -> None:
     actor = await _claimed()
-    out = await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}, {"shape_type": "polygon"}]})
+    out = await actor.save_draft(
+        _verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}, {"shape_type": "polygon"}]})
+    )
     assert out["revision"] == 1
     assert len(json.loads(actor.sm.store[DRAFT_KEY])["shapes"]) == 2
 
@@ -261,10 +296,10 @@ async def test_a_draft_is_one_write_for_the_whole_shape_set() -> None:
 async def test_a_stale_base_revision_is_refused_so_two_tabs_cannot_clobber() -> None:
     """`revision` is the etag. Saving against a revision that has moved on is the 409."""
     actor = await _claimed()
-    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []})
-    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [], "base_revision": 1})
+    await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []}))
+    await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [], "base_revision": 1}))
     with pytest.raises(IllegalTransition):
-        await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [], "base_revision": 1})
+        await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [], "base_revision": 1}))
 
 
 # --------------------------------------------------------------------------------------------------
@@ -289,8 +324,8 @@ async def test_a_transition_reports_its_new_state_to_the_project(monkeypatch: py
     monkeypatch.setattr(dapr.actor.ActorProxy, "create", classmethod(lambda cls, *a, **k: _ProjectProxy()))
     actor = await _seeded()
 
-    await actor.fire({"event": "claim", "actor": "gina"})
-    await actor.fire({"event": "submit", "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.fire(_verified({"event": "submit", "actor": "gina"}))
 
     assert [r["state"] for r in reported] == [TaskState.CLAIMED, TaskState.IN_REVIEW]
 
@@ -309,7 +344,7 @@ async def test_an_unreachable_project_does_not_fail_the_annotator_s_transition(m
     monkeypatch.setattr(dapr.actor.ActorProxy, "create", classmethod(lambda cls, *a, **k: _Broken()))
     actor = await _seeded()
 
-    out = await actor.fire({"event": "claim", "actor": "gina"})
+    out = await actor.fire(_verified({"event": "claim", "actor": "gina"}))
 
     assert out["state"] == TaskState.CLAIMED, "an unreachable project rolled back the annotator's claim"
     assert (await _state(actor))["state"] == TaskState.CLAIMED, "the task's own state was not persisted"
@@ -326,7 +361,7 @@ async def test_shape_ids_are_minted_at_save_and_PERSISTED_so_a_republish_is_stab
     `save_draft` that dropped shape ids would break a crash-recovery property two modules away.
     """
     actor = await _claimed()
-    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}, {"shape_type": "polygon"}]})
+    await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}, {"shape_type": "polygon"}]}))
 
     first = await actor.get_draft()
     second = await actor.get_draft()
@@ -346,7 +381,7 @@ async def test_assign_names_the_recipient_not_the_manager_who_fired_it() -> None
     behaviour."""
     actor = await _seeded()
 
-    out = await actor.fire({"event": "assign", "actor": "henry", "assignee": "gina"})
+    out = await actor.fire(_verified({"event": "assign", "actor": "henry", "assignee": "gina"}))
 
     assert out["assignee"] == "gina", "the manager assigned the task to themselves"
     assert out["transitions"][-1]["by"] == "henry", "the manager is still the recorded actor"
@@ -358,7 +393,7 @@ async def test_assign_without_a_named_recipient_falls_back_to_the_actor() -> Non
     """A manager assigning with no name is taking it themselves — legal, and better than an empty
     assignee, which would be a CLAIMED task nobody holds."""
     actor = await _seeded()
-    out = await actor.fire({"event": "assign", "actor": "henry"})
+    out = await actor.fire(_verified({"event": "assign", "actor": "henry"}))
     assert out["assignee"] == "henry"
 
 
@@ -367,10 +402,10 @@ async def test_request_changes_appends_the_reviewers_reason() -> None:
     """§5.2: `request_changes` appends a `ReviewNote`. Without it the annotator gets the task back
     with no statement of what to change, which makes the whole changes_requested loop useless."""
     actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina"})
-    await actor.fire({"event": "submit", "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.fire(_verified({"event": "submit", "actor": "gina"}))
 
-    out = await actor.fire({"event": "request_changes", "actor": "carol", "message": "the second box is off by a line", "shape_ids": ["s1"]})
+    out = await actor.fire(_verified({"event": "request_changes", "actor": "carol", "message": "the second box is off by a line", "shape_ids": ["s1"]}))
 
     assert out["state"] == TaskState.CHANGES_REQUESTED
     assert len(out["review_notes"]) == 1
@@ -384,9 +419,9 @@ async def test_review_notes_are_append_only_across_rounds() -> None:
     """Two rounds of review must leave two notes — the history of what was asked for is the record."""
     actor = await _seeded()
     for message in ("first pass", "second pass"):
-        await actor.fire({"event": "claim", "actor": "gina"})
-        await actor.fire({"event": "submit", "actor": "gina"})
-        await actor.fire({"event": "request_changes", "actor": "carol", "message": message})
+        await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+        await actor.fire(_verified({"event": "submit", "actor": "gina"}))
+        await actor.fire(_verified({"event": "request_changes", "actor": "carol", "message": message}))
 
     notes = (await _state(actor))["review_notes"]
     assert [n["message"] for n in notes] == ["first pass", "second pass"]
@@ -397,9 +432,9 @@ async def test_accepting_writes_no_review_note() -> None:
     """Only `request_changes` carries a reason. An accept with an empty note would be noise in an
     append-only structure."""
     actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina"})
-    await actor.fire({"event": "submit", "actor": "gina"})
-    out = await actor.fire({"event": "accept", "actor": "carol"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.fire(_verified({"event": "submit", "actor": "gina"}))
+    out = await actor.fire(_verified({"event": "accept", "actor": "carol"}))
     assert out["review_notes"] == []
 
 
@@ -413,11 +448,11 @@ async def test_two_tabs_cannot_clobber_by_OMITTING_base_revision() -> None:
     `base_revision` — that must be a conflict, not a silent 200 that discards A's work.
     """
     actor = await _claimed()
-    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}]})
-    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "base_revision": 1, "shapes": [{"shape_type": "bbox"}] * 30})
+    await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}]}))
+    await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "base_revision": 1, "shapes": [{"shape_type": "bbox"}] * 30}))
 
     with pytest.raises(IllegalTransition, match="without base_revision"):
-        await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "tag"}]})
+        await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "tag"}]}))
 
     surviving = await actor.get_draft()
     assert surviving is not None and len(surviving["shapes"]) == 30, "the omitted-etag save clobbered 30 shapes"
@@ -428,7 +463,7 @@ async def test_the_first_save_needs_no_base_revision() -> None:
     """There is nothing to be stale against before a draft exists, so requiring it would make the
     first save impossible rather than safe."""
     actor = await _claimed()
-    out = await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []})
+    out = await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []}))
     assert out["revision"] == 1
 
 
@@ -447,7 +482,7 @@ async def test_claim_defaults_to_the_lease_captured_from_the_project() -> None:
     actor = _Actor()
     await actor.seed(_task(lease_seconds=600))
 
-    out = await actor.fire({"event": "claim", "actor": "gina"})
+    out = await actor.fire(_verified({"event": "claim", "actor": "gina"}))
 
     expires = datetime.fromisoformat(out["lease_expires_at"])
     seconds = (expires - datetime.now(UTC)).total_seconds()
@@ -462,7 +497,7 @@ async def test_an_explicit_lease_seconds_still_wins_over_the_capture() -> None:
     actor = _Actor()
     await actor.seed(_task(lease_seconds=600))
 
-    out = await actor.fire({"event": "claim", "actor": "gina", "lease_seconds": 120})
+    out = await actor.fire(_verified({"event": "claim", "actor": "gina", "lease_seconds": 120}))
 
     expires = datetime.fromisoformat(out["lease_expires_at"])
     seconds = (expires - datetime.now(UTC)).total_seconds()
@@ -477,9 +512,9 @@ async def test_an_explicit_lease_seconds_still_wins_over_the_capture() -> None:
 async def _claimed_with_ontology(ontology: dict[str, Any], shapes: list[dict[str, Any]]) -> _Actor:
     actor = _Actor()
     await actor.seed(_task(ontology=ontology))
-    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
     if shapes:
-        await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": shapes})
+        await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": shapes}))
     return actor
 
 
@@ -490,7 +525,7 @@ async def test_a_submit_violating_the_ontology_is_refused_with_the_violation_nam
     actor = await _claimed_with_ontology(ontology, [{"shape_type": "bbox", "label": "portrait"}])
 
     with pytest.raises(IllegalTransition, match="portrait"):
-        await actor.fire({"event": "submit", "actor": "gina"})
+        await actor.fire(_verified({"event": "submit", "actor": "gina"}))
     assert (await _state(actor))["state"] == "claimed", "a refused submit must not move the task"
 
 
@@ -499,7 +534,7 @@ async def test_a_conforming_submit_passes() -> None:
     ontology = {"classes": [{"name": "portrait", "tools": ["bbox"], "required": True}]}
     actor = await _claimed_with_ontology(ontology, [{"shape_type": "bbox", "label": "portrait"}])
 
-    result = await actor.fire({"event": "submit", "actor": "gina"})
+    result = await actor.fire(_verified({"event": "submit", "actor": "gina"}))
     assert result["state"] in {"in_review", "accepted"}
 
 
@@ -515,7 +550,7 @@ async def test_a_draftless_submit_is_refused() -> None:
     actor = await _claimed_with_ontology(ontology, [])
 
     with pytest.raises(IllegalTransition, match="at least one annotation"):
-        await actor.fire({"event": "submit", "actor": "gina"})
+        await actor.fire(_verified({"event": "submit", "actor": "gina"}))
 
 
 @pytest.mark.asyncio
@@ -527,7 +562,7 @@ async def test_an_ontology_that_CONSTRAINS_NOTHING_never_blocks_a_submit() -> No
     classes, tools and required attributes and have every one ignored. Here there is nothing to
     ignore — an empty ontology declares nothing, and everything declared is applied."""
     actor = await _claimed_with_ontology({}, [{"shape_type": "text", "label": ""}])
-    assert (await actor.fire({"event": "submit", "actor": "gina"}))["state"] in {"in_review", "accepted"}
+    assert (await actor.fire(_verified({"event": "submit", "actor": "gina"})))["state"] in {"in_review", "accepted"}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -543,17 +578,19 @@ async def test_a_draft_cannot_be_written_after_the_task_left_CLAIMED() -> None:
     that publish then carries into silver. Inside the actor's own turn the state cannot move."""
     ontology = {"classes": [{"name": "cat", "tools": ["tag"], "required": True}]}
     actor = await _claimed_with_ontology(ontology, [{"shape_type": "tag", "label": "cat"}])
-    assert (await actor.fire({"event": "submit", "actor": "gina"}))["state"] in {"in_review", "accepted"}
+    assert (await actor.fire(_verified({"event": "submit", "actor": "gina"})))["state"] in {"in_review", "accepted"}
 
     with pytest.raises(IllegalTransition, match="save_draft"):
         await actor.save_draft(
-            {
-                "task_id": "t1",
-                "project_id": "p1",
-                "author": "gina",
-                "shapes": [{"shape_type": "bbox"}, {"shape_type": "bbox"}, {"shape_type": "bbox"}],
-                "base_revision": 1,
-            }
+            _verified(
+                {
+                    "task_id": "t1",
+                    "project_id": "p1",
+                    "author": "gina",
+                    "shapes": [{"shape_type": "bbox"}, {"shape_type": "bbox"}, {"shape_type": "bbox"}],
+                    "base_revision": 1,
+                }
+            )
         )
     assert [s["shape_type"] for s in json.loads(actor.sm.store[DRAFT_KEY])["shapes"]] == ["tag"]
 
@@ -565,7 +602,7 @@ async def test_a_CONSTRAINED_ontology_refuses_a_draftless_submit_even_with_nothi
     ontology = {"kind": "reading-order", "classes": [{"name": "line", "tools": ["bbox"]}]}
     actor = await _claimed_with_ontology(ontology, [])
     with pytest.raises(IllegalTransition, match="at least one annotation"):
-        await actor.fire({"event": "submit", "actor": "gina"})
+        await actor.fire(_verified({"event": "submit", "actor": "gina"}))
 
 
 # --------------------------------------------------------------------------------------------------
@@ -595,15 +632,17 @@ async def test_a_link_SURVIVES_the_draft_write() -> None:
     """
     actor = _Actor()
     await actor.seed(_task(ontology=KIE))
-    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
     await actor.save_draft(
-        {
-            "task_id": "t1",
-            "project_id": "p1",
-            "author": "gina",
-            "shapes": KIE_SHAPES,
-            "links": [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}],
-        }
+        _verified(
+            {
+                "task_id": "t1",
+                "project_id": "p1",
+                "author": "gina",
+                "shapes": KIE_SHAPES,
+                "links": [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}],
+            }
+        )
     )
 
     stored = await actor.get_draft()
@@ -615,18 +654,20 @@ async def test_a_link_SURVIVES_the_draft_write() -> None:
 async def test_a_KIE_submit_with_its_link_is_ACCEPTED() -> None:
     actor = _Actor()
     await actor.seed(_task(ontology=KIE))
-    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
     await actor.save_draft(
-        {
-            "task_id": "t1",
-            "project_id": "p1",
-            "author": "gina",
-            "shapes": KIE_SHAPES,
-            "links": [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}],
-        }
+        _verified(
+            {
+                "task_id": "t1",
+                "project_id": "p1",
+                "author": "gina",
+                "shapes": KIE_SHAPES,
+                "links": [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}],
+            }
+        )
     )
 
-    result = await actor.fire({"event": "submit", "actor": "gina"})
+    result = await actor.fire(_verified({"event": "submit", "actor": "gina"}))
     assert result["state"] in {"in_review", "accepted"}
 
 
@@ -635,11 +676,11 @@ async def test_a_KIE_submit_WITHOUT_the_required_link_is_refused_by_name() -> No
     """Still enforced — the fix is that it is now SATISFIABLE, not that it stopped being a rule."""
     actor = _Actor()
     await actor.seed(_task(ontology=KIE))
-    await actor.fire({"event": "claim", "actor": "gina"})
-    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": KIE_SHAPES})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": KIE_SHAPES}))
 
     with pytest.raises(IllegalTransition, match="answers"):
-        await actor.fire({"event": "submit", "actor": "gina"})
+        await actor.fire(_verified({"event": "submit", "actor": "gina"}))
 
 
 @pytest.mark.asyncio
@@ -648,16 +689,193 @@ async def test_a_link_pointing_the_WRONG_WAY_is_refused() -> None:
     checkable the same way a label is."""
     actor = _Actor()
     await actor.seed(_task(ontology=KIE))
-    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
     await actor.save_draft(
-        {
-            "task_id": "t1",
-            "project_id": "p1",
-            "author": "gina",
-            "shapes": KIE_SHAPES,
-            "links": [{"name": "answers", "from_shape": "s2", "to_shape": "s1"}],
-        }
+        _verified(
+            {
+                "task_id": "t1",
+                "project_id": "p1",
+                "author": "gina",
+                "shapes": KIE_SHAPES,
+                "links": [{"name": "answers", "from_shape": "s2", "to_shape": "s1"}],
+            }
+        )
     )
 
     with pytest.raises(IllegalTransition, match="source"):
-        await actor.fire({"event": "submit", "actor": "gina"})
+        await actor.fire(_verified({"event": "submit", "actor": "gina"}))
+
+
+# --------------------------------------------------------------------------------------------------
+# The identity-bound rules of §5.2, re-evaluated INSIDE the turn (open_dapr.md, `tasks.py:203`)
+#
+# The HTTP layer checks all three against a PRE-TURN snapshot of the task, which is what lets it
+# answer 403 with a reason without spending a turn — but a snapshot is not a precondition. Between
+# that read and the turn the lease can move and the reviewer can become the author, and the
+# transition would then apply with its precondition already false. Every test below drives the actor
+# DIRECTLY, so it proves the rule holds even when no endpoint checked anything.
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_lease_that_MOVED_refuses_the_previous_holders_submit() -> None:
+    """The race, exactly: the endpoint reads "gina holds it", the lease is released and re-claimed by
+    dave, and gina's submit arrives at an actor whose task is now dave's work."""
+    actor = await _seeded()
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.fire(_verified({"event": "release", "actor": "gina"}))
+    await actor.fire(_verified({"event": "claim", "actor": "dave"}))
+
+    with pytest.raises(IllegalTransition, match="held by dave"):
+        await actor.fire(_verified({"event": "submit", "actor": "gina"}))
+
+    task = await _state(actor)
+    assert task["state"] == TaskState.CLAIMED and task["assignee"] == "dave", "a stale submit moved the new holder's task"
+
+
+@pytest.mark.asyncio
+async def test_a_lease_that_EXPIRED_refuses_the_previous_holders_skip() -> None:
+    """`skip` is the sharpest one: it discards the work outright, and the lease it was checked
+    against had already lapsed and been taken by someone else."""
+    actor = await _seeded()
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
+    await actor.fire(_verified({"event": "claim", "actor": "dave"}))
+
+    with pytest.raises(IllegalTransition, match="held by dave"):
+        await actor.fire(_verified({"event": "skip", "actor": "gina"}))
+
+    assert (await _state(actor))["state"] == TaskState.CLAIMED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", ["accept", "fix_and_accept", "request_changes"])
+async def test_the_reviewer_BECOMING_the_author_is_caught_in_the_turn(event: str) -> None:
+    """§5.2's self-review ban survives the window it used to have: the snapshot showed `submitted_by`
+    as somebody else (or nobody), the submit landed, and the review then applied to the reviewer's
+    own work. `submitted_by` here is the row of THIS turn."""
+    actor = await _seeded()
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.fire(_verified({"event": "submit", "actor": "gina"}))
+
+    with pytest.raises(IllegalTransition, match="own submission"):
+        await actor.fire(_verified({"event": event, "actor": "gina"}))
+
+    assert (await _state(actor))["state"] == TaskState.IN_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_release_by_a_non_holder_needs_the_managers_answer_CARRIED_IN() -> None:
+    """`release` is "lease holder OR can_manage" and `can_manage` is an OpenFGA fact, so the actor
+    cannot compute it — the caller states it. Unstated is unauthorized, which is the fail-closed
+    direction: a release fired without an answer is one nobody asked the question for."""
+    actor = await _seeded()
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+
+    with pytest.raises(IllegalTransition, match="needs can_manage"):
+        await actor.fire(_verified({"event": "release", "actor": "henry"}))
+
+    out = await actor.fire(_verified({"event": "release", "actor": "henry", "subject_can_manage": True}))
+    assert out["state"] == TaskState.UNASSIGNED and out["assignee"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_manager_answer_does_not_unlock_the_lease_holder_rules() -> None:
+    """§5.2 rule 2 is "only the lease holder writes … even a manager". `release` is the one documented
+    escape hatch; `submit` and `skip` are not, so `can_manage` buys nothing there."""
+    actor = await _seeded()
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+
+    with pytest.raises(IllegalTransition, match="held by gina"):
+        await actor.fire(_verified({"event": "submit", "actor": "dave", "subject_can_manage": True}))
+
+
+@pytest.mark.asyncio
+async def test_a_draft_from_the_PREVIOUS_holder_cannot_land_on_the_new_holders_task() -> None:
+    """`save_draft` replaces the whole shape set, so a write authorized against a lapsed lease is a
+    silent overwrite of work somebody else is doing right now. The endpoint's holder check reads the
+    same pre-turn snapshot as everything else; this one reads the turn's own row."""
+    actor = await _seeded()
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}]}))
+    await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
+    await actor.fire(_verified({"event": "claim", "actor": "dave"}))
+    await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "dave", "base_revision": 1, "shapes": [{"shape_type": "polygon"}] * 3}))
+
+    with pytest.raises(IllegalTransition, match="held by dave"):
+        await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "base_revision": 2, "shapes": []}))
+
+    surviving = await actor.get_draft()
+    assert surviving is not None and len(surviving["shapes"]) == 3, "the previous holder's save clobbered the new holder's work"
+
+
+# --------------------------------------------------------------------------------------------------
+# §5.2 rule 5 — nothing escapes a published project, asserted against the caller's VERIFIED input
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frozen", [ProjectState.PUBLISHING, ProjectState.PUBLISHED, ProjectState.ARCHIVED])
+async def test_a_frozen_project_refuses_the_transition_inside_the_turn(frozen: ProjectState) -> None:
+    actor = await _seeded()
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+
+    with pytest.raises(IllegalTransition, match="frozen with the published artifact"):
+        await actor.fire({"event": "submit", "actor": "gina", "project_state": frozen})
+
+    assert (await _state(actor))["state"] == TaskState.CLAIMED
+
+
+@pytest.mark.asyncio
+async def test_a_frozen_project_refuses_a_DRAFT_write_inside_the_turn() -> None:
+    """The sharpest case in the plane: the publish saga is reading drafts right now to build its plan."""
+    actor = await _claimed()
+
+    with pytest.raises(IllegalTransition, match="frozen with the published artifact"):
+        await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [], "project_state": ProjectState.PUBLISHING})
+
+    assert await actor.get_draft() is None
+
+
+@pytest.mark.asyncio
+async def test_a_principal_edge_MUST_state_the_project_state_it_verified() -> None:
+    """An optional precondition is not a precondition — the lesson `base_revision` already taught in
+    this file. A caller that never heard of rule 5 must fail, not sail past it."""
+    actor = await _seeded()
+    with pytest.raises(IllegalTransition, match="no verified project state"):
+        await actor.fire({"event": "claim", "actor": "gina"})
+
+    # A separate actor, because the refusal above left the first one UNASSIGNED — and `save_draft`
+    # would then refuse on the STATE, proving nothing about the stated project.
+    claimed = await _claimed()
+    with pytest.raises(IllegalTransition, match="no verified project state"):
+        await claimed.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []})
+
+
+@pytest.mark.asyncio
+async def test_an_unrecognised_project_state_fails_CLOSED() -> None:
+    """A value this service cannot read is a caller that cannot have verified anything."""
+    actor = await _claimed()
+    with pytest.raises(IllegalTransition, match="unrecognised project state"):
+        await actor.fire({"event": "submit", "actor": "gina", "project_state": "mid-publish"})
+
+
+@pytest.mark.asyncio
+async def test_an_ORPHANED_task_states_an_absent_project_and_still_transitions() -> None:
+    """ "I looked, and the project record is gone" is a legitimate observation, and the case the HTTP
+    layer already let through on the transition's own preconditions. Absent VALUE, present KEY."""
+    actor = await _seeded()
+    out = await actor.fire({"event": "claim", "actor": "gina", "project_state": None})
+    assert out["state"] == TaskState.CLAIMED
+
+
+@pytest.mark.asyncio
+async def test_a_SYSTEM_edge_states_nothing_because_no_principal_causes_it() -> None:
+    """`lease_expired` is fired by this actor's own reminder, which has no project to have verified
+    and no subject to be. It is the only edge in `TASK_EDGES` with no permission, and requiring a
+    stated project state there would wedge every lapsed lease."""
+    actor = await _claimed()
+
+    out = await actor.fire({"event": "lease_expired", "actor": None})
+
+    assert out["state"] == TaskState.UNASSIGNED and out["assignee"] is None

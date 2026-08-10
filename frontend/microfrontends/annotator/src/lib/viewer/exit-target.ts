@@ -15,7 +15,7 @@ export function exitHref(params: URLSearchParams, base = ''): string {
 	// Came from a labeling task → go back to ITS queue, which is the list the person is working
 	// through. `project` is what identifies the page; `task` alone cannot address it.
 	const project = params.get('project');
-	if (project) return `${base}/projects/${encodeURIComponent(project)}`;
+	if (project) return `${base}/tasks/${encodeURIComponent(project)}`;
 
 	// Otherwise this was the corpus browser's canvas hand-off, and the dataset is the context worth
 	// keeping — landing on the default corpus after annotating a different one is a silent switch.

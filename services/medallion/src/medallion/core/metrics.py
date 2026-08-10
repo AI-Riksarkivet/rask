@@ -43,6 +43,12 @@ _stage_other_lane = _meter.create_counter(
     description="Stage triggers DROPped as another ingest lane's (the arrived dataset is not this mover's input).",
 )
 
+_stage_refused = _meter.create_counter(
+    "medallion.stage.refused",
+    unit="{trigger}",
+    description="Stage triggers DROPped by the shape guard — malformed payload, or a from_uri outside this stage's storage root.",
+)
+
 
 def record_transition(transition: str) -> None:
     """Increment the stage-transition counter for ``transition`` (``"<from>-><to>"``)."""
@@ -72,6 +78,25 @@ def record_other_lane(transition: str) -> None:
     the wrong behaviour must not also delete the signal that revealed it.
     """
     _stage_other_lane.add(1, {"lance.medallion.transition": transition})
+
+
+def record_refused(transition: str, reason: str) -> None:
+    """Count one trigger DROPped by the shape guard, by transition and REASON.
+
+    The same argument `record_other_lane` makes, for the guard's two refusals: a DROP is an ack, so
+    Dapr neither redelivers nor dead-letters and nothing downstream records the event. Without this
+    the two most security-relevant refusals in the handler — a malformed payload, and a `from_uri`
+    naming a location outside this stage's storage root — are the only DROPs that leave no trace,
+    which is exactly backwards: a rejected `from_uri` is the signal that someone is publishing
+    triggers this mover should not honour, and it is worth an alert.
+
+    `reason` is a CLOSED vocabulary set by this module's callers (`malformed`, `unconfined_uri`) and
+    never a value off the payload — the estate's bounded-cardinality rule. The offending token, URI
+    and dataset name stay on the log line, where per-event data belongs; a counter labelled by a
+    caller-supplied string is an unbounded series and, here, would also publish attacker-chosen
+    strings into the metrics store.
+    """
+    _stage_refused.add(1, {"lance.medallion.transition": transition, "lance.medallion.reason": reason})
 
 
 def record_dead_letter(app_label: str) -> None:

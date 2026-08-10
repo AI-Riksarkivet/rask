@@ -24,6 +24,7 @@ named table. Fail-closed twice over: an unwired client raises 503 here, and
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
@@ -115,11 +116,18 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # (user, relation) is the same authz-graph disclosure as enumerating it, so it clears the
         # same owner bar. An unmapped suffix would fall through to writer-tier — never leave it unset.
         "access/check": "can_drop",
-        # #72 grant/revoke: MUTATING the ACL is the highest-privilege act on the object — strictly above
-        # a writer, gated at the owner bar (same as reviewing it). Without this mapping these would fall
-        # through to the writer tier, letting a plain data writer hand out ownership.
-        "access/grant": "can_drop",
-        "access/revoke": "can_drop",
+        # The SELF-view is the one access route that must NOT clear the owner bar. `access/list` and
+        # `access/check` disclose principals; "what may I do here" discloses only the caller to
+        # themselves. Owner-gating it would mean only the people who already know the answer could
+        # ask — which is precisely why no surface over these primitives ever shipped. Reader tier:
+        # you may ask about anything you can see. Mapped EXPLICITLY, because the fall-through for an
+        # unmapped table suffix is the writer rung, which would be both wrong and silently wrong.
+        "access/my-permissions": "can_get_metadata",
+        # NOTE: `access/grant` and `access/revoke` are NOT here. They gated on the owner bar until the
+        # grant axis landed, which meant handing out access required owning the data. They are now
+        # authorized per-rung from the BODY (`can_grant_<relation>`) by `_authorize_grant`, which
+        # intercepts before `_action_relation` is consulted — a mapping here would be dead code that
+        # reads like the live rule.
         # #81 authorization graph: one hop of the relationship graph discloses principals + the cascade,
         # the same disclosure as access/list — owner bar.
         "access/graph": "can_drop",
@@ -152,11 +160,33 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "policy/delete": "can_delete",
         "access/list": "can_delete",
         "access/check": "can_delete",
-        "access/grant": "can_delete",
-        "access/revoke": "can_delete",
+        # Same as the table block: grant/revoke are body-authorized by `_authorize_grant`.
+        # #C4 managed access. SUFFIX PER OPERATION (`policy/describe` vs `policy/set`, the convention
+        # already here) — and not stylistic: this map is keyed on the PATH ALONE, so one `managed-access`
+        # suffix serving both a read and a write can only carry ONE tier, and the write's tier is the
+        # wrong one for the read.
+        #
+        # The write is a grant-management act, not a property edit — `can_set_managed_access` derives
+        # from `manage_grants`. Mapped explicitly because the fall-through is `can_update_properties`
+        # (writer), which would let any writer switch off the control that stops owners widening access.
+        "managed-access/set": "can_set_managed_access",
+        # The read sits at the READER bar deliberately: this flag is the REASON someone's grant controls
+        # are missing, so the person who most needs the answer is exactly the one who may not change it.
+        # Gating the read at the write's bar turns a stated policy back into an unexplained absence.
+        "managed-access/describe": "can_get_metadata",
+        # The self-view sits at the READER bar here too — see the table block for why. Spelled out
+        # per type rather than defaulted: an unmapped namespace suffix falls to `can_update_properties`
+        # (writer), so omitting this line would let the page ask "what may I do?" only of people who
+        # can already write, which is the inverse of the question.
+        "access/my-permissions": "can_get_metadata",
         "access/graph": "can_delete",
     },
 }
+
+# Grant/revoke are authorized from the BODY, per rung, by `_authorize_grant` — they appear in neither
+# block above on purpose. `authorize` intercepts these suffixes before `_action_relation` runs, so a
+# mapping here would never be consulted while reading exactly like the live rule.
+_GRANT_SUFFIXES = frozenset({"access/grant", "access/revoke"})
 
 # Body-keyed batch routes (no ``{id}`` path param); the tables are named in the body.
 _BATCH_PATHS = frozenset({"/v1/table/version/batch-create", "/v1/table/batch-commit"})
@@ -318,6 +348,56 @@ async def _authorize_transaction(client: OpenFgaClient, settings: Settings, segm
     await _require(client, user=user, relation=relation, obj=obj)
 
 
+@lru_cache
+def _grant_actions(fga_type: str) -> frozenset[str]:
+    """Every ``can_grant_*`` the compiled model defines on ``fga_type``.
+
+    Read from ``model.json`` (what the app loads), never a hand-kept list: a relation named here but
+    absent there is an OpenFGA 400 that fails CLOSED to a 503 for every caller, which is an outage
+    wearing a permission error's clothes."""
+    for td in fga.load_model()["type_definitions"]:
+        if td["type"] == fga_type:
+            return frozenset(r for r in (td.get("relations") or {}) if r.startswith("can_grant_"))
+    return frozenset()
+
+
+async def _authorize_grant(
+    request: Request,
+    client: OpenFgaClient,
+    settings: Settings,
+    *,
+    user: str,
+    fga_type: str,
+    segments: list[str],
+) -> None:
+    """Authorize grant/revoke on the RUNG in the body — ``can_grant_<relation>``, not a blanket bar.
+
+    This route used to gate on the owner tier (``can_drop`` / ``can_delete``), which welded handing
+    out access to owning the data: the only way to let someone administer access was to give them
+    everything. The model now separates the two (``manage_grants`` / ``pass_grants``), and the gate
+    has to read the body to use it — the path says *that* a grant is happening, only the body says
+    *which rung*. Same shape as ``_authorize_batch`` above, and ``request.json()`` is cached by
+    Starlette so the endpoint re-parses the same bytes.
+
+    Fails CLOSED on anything unexpected. The body is client-controlled and this runs BEFORE Pydantic,
+    so a non-dict, a non-string relation, or a rung the model has no ``can_grant_*`` for is a 403 —
+    never a 500, and never a check on a phantom relation.
+
+    Revoke is gated identically to grant, deliberately: taking a rung away is the same authority as
+    handing it out, and a weaker revoke bar would let a delegate strip the owner who delegated to them.
+    """
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise PermissionDeniedError("malformed access request body")
+    relation = body.get("relation")
+    if not isinstance(relation, str) or not relation:
+        raise PermissionDeniedError("malformed access request body: 'relation' must be a string")
+    action = f"can_grant_{relation}"
+    if action not in _grant_actions(fga_type):
+        raise PermissionDeniedError(f"{relation!r} is not a grantable rung on {fga_type}")
+    await _require(client, user=user, relation=action, obj=_object(fga_type, segments, settings.delimiter))
+
+
 async def _authorize_batch(request: Request, client: OpenFgaClient, settings: Settings, *, user: str) -> None:
     """Authorize body-keyed batch routes (no ``{id}`` path param); tables named in the body.
 
@@ -436,6 +516,11 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
         return
 
     fga_type = _FGA_TYPE[resource]
+    # Grant/revoke authorize on the RUNG BEING HANDED OUT, which lives in the body — so, like the
+    # batch routes above, this one cannot be answered from the path alone.
+    if suffix in _GRANT_SUFFIXES:
+        await _authorize_grant(request, client, settings, user=token.sub, fga_type=fga_type, segments=segments)
+        return
     relation = _action_relation(fga_type, suffix)
     obj = _object(fga_type, segments, settings.delimiter)
     await _require(client, user=token.sub, relation=relation, obj=obj)

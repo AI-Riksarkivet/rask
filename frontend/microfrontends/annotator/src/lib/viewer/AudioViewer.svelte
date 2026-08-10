@@ -11,7 +11,13 @@
 	import { WaveSurface, type TemporalSegment } from '@rask/engine';
 	import { Button } from '@rask/ui/button';
 	import TransportBar from './layout/TransportBar.svelte';
-	import { clampTime, keyAction, nextRate, skip as skipBy, transportShouldHandle } from './transport';
+	import {
+		clampTime,
+		keyAction,
+		nextRate,
+		skip as skipBy,
+		transportShouldHandle,
+	} from './transport';
 	import type { ViewerProps } from './types';
 
 	let { unit, onload, onerror, controller }: ViewerProps = $props();

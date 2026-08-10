@@ -79,6 +79,30 @@ spec:
     - { name: queueGroupName, value: {{ .Values.medallion.producer.daprAppId | quote }} }
     - { name: deliverPolicy, value: "new" }
     - { name: durableName, value: "{{ .Values.medallion.producer.daprAppId }}-control-durable" }
+    # Redelivery timing, on the SAME schedule the per-subscriber components below carry and for the same
+    # invariant: the broker's first backOff step must exceed the sidecar's total retry span, or the broker
+    # redelivers while the sidecar is still mid-retry and one publication is handled twice, concurrently.
+    # This component shipped with none of these and rode jetstream's defaults — so the subscriber whose
+    # message is the most expensive in the estate to duplicate was the only one without the guard.
+    #
+    # Duplicated rather than shared because the block below renders inside a `range` over $subscribers,
+    # which this component is deliberately not part of (it carries the CONTROL topic, not the lineage
+    # one). .dagger/charts.go asserts the rendered numbers, so drift between the two copies fails the
+    # build rather than going unnoticed.
+    #
+    # Changing these on an EXISTING cluster mutates a live durable's config — the §2.11 hazard, in its
+    # benign form: the durable NAME and its filter subject are unchanged, so the sidecar reconfigures
+    # rather than colliding with a consumer already holding the name, and this is exactly the drift the
+    # nats-stream-job reconcile compares (maxDeliver/backOff) and repairs.
+    {{- if .Values.dapr.resiliency.enabled }}
+    - { name: ackWait, value: "720s" }
+    - { name: maxDeliver, value: "3" }
+    - { name: backOff, value: "720s,720s" }
+    {{- else }}
+    - { name: ackWait, value: "30s" }
+    - { name: maxDeliver, value: "5" }
+    - { name: backOff, value: "30s,60s,120s,300s" }
+    {{- end }}
 scopes:
   - {{ .Values.medallion.producer.daprAppId }}
 {{- end }}
@@ -106,6 +130,19 @@ scopes:
 {{- $subscribers = append $subscribers (dict "appId" .daprAppId "deliverPolicy" "new") }}
 {{- end }}
 {{- end }}
+{{- /* The INBOX (open_notifications.md §2). `new` is the strongest case in this list: lineage's `all`
+     + ephemeral pair replays the retained stream on every pod restart, which for a graph rebuild IS
+     the durability story and for an inbox would re-notify a week of history on every rollout — a badge
+     that lies loudest right after a deploy. The durable half is the other side of the same coin: a run
+     that terminated while this app was down must still reach its author, and `new` alone skips it on
+     reconnect. Unconditional, like the Deployment (services.notifications is frontDoor).
+
+     This mints a durable name no stream has seen, so §2.11's migration hazard does not apply here —
+     that failure is an EXISTING durable name re-requested with a different filter subject ("consumer
+     name already in use", a silently dead subscription the drift reconcile cannot see because
+     maxDeliver/backOff still match). `notifications-durable` on LINEAGE is new; the reconcile loop
+     (nats-stream-job.yaml) adopts it by its `-durable` suffix from the first tick. */}}
+{{- $subscribers = append $subscribers (dict "appId" "notifications" "deliverPolicy" "new") }}
 {{- range $subscribers }}
 ---
 apiVersion: dapr.io/v1alpha1
@@ -149,6 +186,38 @@ spec:
     {{- end }}
 scopes:
   - {{ .appId }}
+{{- end }}
+{{- if .Values.dapr.resiliency.enabled }}
+---
+{{- /* The lineage DLQ PARKING consumer — its own component, never the app's main one. The main
+     lineage component is deliverPolicy=all + EPHEMERAL on purpose (replay rebuilds the graph), but
+     the /lineage-dlq parking subscription rode it too — so every pod restart re-attached at the
+     beginning of the retained stream and re-parked up to 168h of already-parked dead letters:
+     ERROR logs + DEAD_LETTERED counts spiking on every rollout with no new loss, training operators
+     to ignore the one metric that means provenance is missing (open_dapr.md §2.10). deliverPolicy=new
+     plus a durable cursor parks each dead letter exactly once. Consumer config matches the
+     resiliency-mode values the nats-stream-job's durable-drift reconcile expects (EXP_MAXD/EXP_BOFF) —
+     this component only renders when resiliency is on, which is also the only time LINEAGE_DLQ_TOPIC
+     exists. */}}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "lance.subPubsub" (list . .Values.services.lineage.daprAppId) }}-dlq
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
+    - { name: name, value: "lance-dapr-{{ .Values.services.lineage.daprAppId }}-dlq" }
+    - { name: queueGroupName, value: "{{ .Values.services.lineage.daprAppId }}-dlq" }
+    - { name: deliverPolicy, value: "new" }
+    - { name: durableName, value: "{{ .Values.services.lineage.daprAppId }}-dlq-durable" }
+    - { name: ackWait, value: "720s" }
+    - { name: maxDeliver, value: "3" }
+    - { name: backOff, value: "720s,720s" }
+scopes:
+  - {{ .Values.services.lineage.daprAppId }}
 {{- end }}
 {{- if include "lance.secretsViaDapr" . }}
 ---

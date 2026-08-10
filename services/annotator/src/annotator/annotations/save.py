@@ -92,6 +92,9 @@ def save_annotations(
         edits_by_id.setdefault(g.id, {}).update({"x": g.x, "y": g.y, "width": g.width, "height": g.height, "polygon": g.polygon})
     for tseg in body.temporal:
         edits_by_id.setdefault(tseg.id, {}).update({"t_start": tseg.t_start, "t_end": tseg.t_end})
+    # Re-anchored text spans (the transcription-edit remap) patch offsets the same way.
+    for span in body.spans:
+        edits_by_id.setdefault(span.id, {}).update({"char_start": span.char_start, "char_end": span.char_end})
     # Governance: the SERVER stamps who wrote each touched row (not the client's claim) —
     # the per-user seam. lance-ns's OpenFGA keys on this author at merge. Row lifecycle
     # is stamped the same way: updated_at on every touched row, created_at at row birth

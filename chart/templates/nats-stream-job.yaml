@@ -141,6 +141,24 @@ spec:
               # (ordinary restarts re-attach as before). Backoff values are nanoseconds in the JSON.
               EXP_MAXD="{{ if .Values.dapr.resiliency.enabled }}3{{ else }}5{{ end }}"
               EXP_BOFF="{{ if .Values.dapr.resiliency.enabled }}720000000000,720000000000{{ else }}30000000000,60000000000,120000000000,300000000000{{ end }}"
+              # ONE-TIME MIGRATION (2026-08-08, the per-app DLQ rename): DLQ-stream durables created
+              # before MEDALLION_DLQ_TOPIC became dlq.<appId> hold filter subjects dlq.<subTopic>
+              # (dlq.medallion.*). The sidecar now requests the SAME durable name with the new filter,
+              # which is exactly the bind failure documented below — "consumer name already in use"
+              # forever, a SILENT dead subscription — and the config-drift loop cannot catch it: the
+              # stale durables' max_deliver/backoff still match EXP. Before the fix a park was
+              # double-counted but visible; after an upgrade WITHOUT this migration it is invisible.
+              # Filter-based, not name-based, so it is idempotent and touches nothing current: no
+              # post-rename consumer filters on dlq.medallion.* (new mover DLQs are dlq.<appId>;
+              # lineage's is dlq.lineage.events). deliverPolicy=new skips dead letters published
+              # inside the delete->recreate window — the same accepted trade as the drift loop.
+              for c in $(nats --server "$S" consumer ls DLQ --names 2>/dev/null | grep -- '-durable$'); do
+                filt=$(nats --server "$S" consumer info DLQ "$c" --json 2>/dev/null | tr -d ' \n' | sed -n 's/.*"filter_subject":"\([^"]*\)".*/\1/p')
+                case "$filt" in dlq.medallion.*)
+                  echo "MIGRATE DLQ/$c: filter=$filt is pre-rename (dlq.<subTopic>) — deleting (sidecar re-creates with dlq.<appId>)"
+                  nats --server "$S" consumer rm DLQ "$c" -f
+                esac
+              done
               for st in LINEAGE MEDALLION TRAINING DLQ; do
                 for c in $(nats --server "$S" consumer ls "$st" --names 2>/dev/null | grep -- '-durable$'); do
                   info=$(nats --server "$S" consumer info "$st" "$c" --json 2>/dev/null | tr -d ' \n')

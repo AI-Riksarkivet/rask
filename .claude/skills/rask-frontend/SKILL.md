@@ -190,7 +190,9 @@ Both halves are idiomatic SvelteKit — `+server.ts` is the framework's own tool
 
 **The media-plane BFF reads are AUTHORIZED now, not just proxied (2026-08-04).** `makeViewerProxy` — the `api/[...path]` catch-all that explorer and annotator both mount — carries `requireSession: true` (`packages/api/src/bff.ts:307-322`), so a bearer-less page-image or atlas read 401s at the BFF on an auth-enabled stack. The bearer path is sealed cookie → the zone's session handle → `makeBackendProxy` (`authorization: Bearer …`) → gateway → viewer, where `/api/page` checks `can_read_data` and `/api/pages` `can_get_metadata` on `table:<catalog id>`, and the S3 object routes behind `/api/explorer/**` check `can_browse_storage`. The lakehouse's `/api/explorer/[...rest]` forwards the caller's bearer but does **not** `requireSession`, so an empty `/lakehouse/catalog/storage` on a governed stack is an authz answer, not an outage.
 
-Estate-wide: `command()` 71 across 21 remote modules (mutations single-flight their reads: `void query().refresh()` in the handler), `form()` 0, `query.batch()` 0, `{#await}` 0. `query.live` is the LIVENESS spine, not just the bell: every zone's `feeds.remote.ts` (the bell) and lakehouse's `controlEvents`/`controlCursor`/`jetstreamCursor`. (The explorer's service-health is NOT one — it is a single deduped poll in `lib/service-health.svelte.ts`, whose own comment rejects a cursor because liveness has no event.) Consume cursors through `$lib/live/tick.svelte.ts` (`liveRead` + `lineageTick`/`controlTick`) — it replaced thirteen hand-rolled `$effect`+`setInterval` pollers, and its rules (open on mount, cursor arrival is not a change) each exist because breaking them broke a test. Data mutations move the LINEAGE cursor; governance mutations (grants, warehouses, tenants — including raw `/v1/access/tuples` writes, which emit `grant_added`) move the CONTROL cursor.
+**(d) The bell's read state is PERSISTED for the runs you AUTHORED — in `home`, and in `home` alone (S1, 2026-08-10).** `@rask/ui`'s `NotificationCenter` has always exposed `seen`/`dismissed` as `$bindable` with `onseen`/`ondismiss` documented as "the persistence seam" (`notification-center.svelte:44-48`); unbound it remembers per TAB, so a FAILED run you had already dealt with came back on the next reload. `home` now binds that seam to `$lib/live/inbox.remote.ts` → `@rask/api/inbox` → the gateway's `/api/notifications` row → `services/notifications`' per-subject inbox actor. Four facts a reader needs, and the first is the one no gate can see. **The two planes carry different row sets**: the panel renders `GET /runs`, governed by DATASET visibility (every run whose outputs you may read, whoever ran it), while the inbox is filled by AUTHORSHIP on terminal states alone (D4 v1 — `audience_for` is `(notice.author,)`). A mover's FAILED run you can see but did not start has no pointer in your inbox, so marking it read stores nothing and it is unread again after a reload — S1 does not regress that and does not fix it; **S3 does, by rendering inbox rows instead of run rows**. The base is **`RASK_GATEWAY_URL`, absolute, never a relative `/api/…`**: this zone's dev proxy and its SSR rewrite both point at `LANCE_GATEWAY_URL` (:8001, LINEAGE), so a relative call 404s in dev and works in prod only because the chart happens to aim both names at the gateway. The **per-tab fallback stays** — the remote read answers `null` on an auth-off or service-less stack and the component keeps its own memory, so `make dev-zone ZONE=home` renders unchanged. And the badge is still the RUNS feed: inbox-only badge, the Inbox/Activity tab split and the other six zones are **S3** (`open_notifications.md` §9). Gated by `@rask/zone-contract`'s `notification-surface.test.ts` third describe block, which names `home` in a constant on purpose and asserts the callbacks REACH the transport (`markSeen`/`dismiss`/`readInboxState` called from the layout), not merely that the prop names appear — a seam bound to `onseen: () => {}` gates identically to a wired one.
+
+Estate-wide: `command()` 73 across 22 remote modules (mutations single-flight their reads: `void query().refresh()` in the handler), `form()` 0, `query.batch()` 0, `{#await}` 0. `query.live` is the LIVENESS spine, not just the bell: every zone's `feeds.remote.ts` (the bell) and lakehouse's `controlEvents`/`controlCursor`/`jetstreamCursor`. (The explorer's service-health is NOT one — it is a single deduped poll in `lib/service-health.svelte.ts`, whose own comment rejects a cursor because liveness has no event.) Consume cursors through `$lib/live/tick.svelte.ts` (`liveRead` + `lineageTick`/`controlTick`) — it replaced thirteen hand-rolled `$effect`+`setInterval` pollers, and its rules (open on mount, cursor arrival is not a change) each exist because breaking them broke a test. Data mutations move the LINEAGE cursor; governance mutations (grants, warehouses, tenants — including raw `/v1/access/tuples` writes, which emit `grant_added`) move the CONTROL cursor.
 
 ### The SSR hairpin
 
@@ -215,9 +217,13 @@ frontend loop that runs in a cloud sandbox (claude.ai/code, CI), and it is how C
 `make dev-frontends` filters out. `dev-zone` runs the zone's own `vite dev` instead: one port, no
 proxy, no watcher, safe beside a running composition.
 
-The five zones with mocks are `home`, `lakehouse`, `explorer`, `annotator`, `models`.
+The four zones with mocks are `home`, `lakehouse`, `explorer`, `annotator`.
 **`compute` and `studio` have no `e2e/` and no `test:e2e`** — `dev-zone` still starts them and says so,
 but their `/api` is unmocked, and it is the same gap that leaves them outside every local gate.
+**`models` is the WORST of the three**, and this line claimed the opposite until 2026-08-09: it has no
+`e2e/` directory either, but its `package.json` *does* declare `"test:e2e": "playwright test"` — a
+script that fails the moment anything invokes it. Half of `cb6921b6 fix(models): commit the e2e
+harness's missing package.json half` landed; the harness it was the half of did not.
 
 Four things it deliberately does not give you — none is a bug:
 
@@ -331,8 +337,14 @@ ESLint and Prettier are **deleted**. `toolchain.test.ts` enforces three things a
 | `bun --cwd=frontend run check test` | svelte-check + the vitest suites (zone-contract alone is 866, across 16 files) |
 | CI (`.dagger/frontend.go:53`) | `bunx turbo run check check:tsgo test lint fmt:check` |
 
-The zone-contract suite is **GREEN — 20 files** (re-measured 2026-08-07; this line used to claim
-"866 of 866 across 16 files", the #109 reading). **Do not pin the assertion count here**: `link-targets`
+The zone-contract suite is **21 files and RED at one of them** (re-measured 2026-08-10: 1159 passed,
+1 failed; this line claimed "GREEN — 20 files" on 2026-08-07 and "866 of 866 across 16 files" at #109).
+The single failure is `dev-zone.test.ts` — *"annotator: dev-zone.ts points at every upstream its e2e
+config mocks"*: the annotator's Playwright config mocks `VIEWER_API` and `src/dev-zone.ts` does not
+point the zone at it, so `make dev-zone ZONE=annotator` reads a connection refused where the suite
+reads a mock. It is a real finding about the dev loop, not a flake, and it is unrelated to whatever
+you are changing — check it is still the *only* red before assuming your diff is clean.
+**Do not pin the assertion count here**: `link-targets`
 and `cross-zone-reload` emit one test per anchor they find, so the total tracks how many links the
 estate has and moves between runs — two consecutive green runs measured 954 and 1115. Two of its
 guards are counters, so read them before

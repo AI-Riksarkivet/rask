@@ -94,3 +94,34 @@ def test_lineage_subscription_declares_dlq_when_configured(monkeypatch: pytest.M
     subs = {s["topic"]: s for s in _subs(TestClient(app))}
     assert subs["lineage.events.v1"]["deadLetterTopic"] == "dlq.lineage.events"
     assert subs["dlq.lineage.events"]["route"].endswith("/lineage-dlq")
+
+
+def test_lineage_parking_rides_its_OWN_durable_component_never_the_replay_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """open_dapr.md §2.10: the main lineage component is deliverPolicy=all + ephemeral BY DESIGN
+    (replay rebuilds the graph). The parking subscription riding it re-parked up to 168h of
+    already-parked dead letters on every pod restart. The chart provisions a dedicated durable
+    `-dlq` component and names it in LINEAGE_DLQ_PUBSUB — this pins that the subscription actually
+    uses it, and that the no-chart dev fallback stays the main component."""
+    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+    monkeypatch.setenv("LINEAGE_DAPR_ENABLED", "true")
+    monkeypatch.setenv("LINEAGE_DLQ_TOPIC", "dlq.lineage.events")
+    monkeypatch.setenv("LINEAGE_DLQ_PUBSUB", "lineage-pubsub-lineage-dlq")
+
+    from lineage.api.dapr import register_dapr
+    from lineage.core.config import get_settings
+
+    get_settings.cache_clear()
+    app = FastAPI()
+    register_dapr(app)
+    get_settings.cache_clear()
+    subs = {s["topic"]: s for s in _subs(TestClient(app))}
+    assert subs["dlq.lineage.events"]["pubsubname"] == "lineage-pubsub-lineage-dlq"
+    assert subs["lineage.events.v1"]["pubsubname"] != "lineage-pubsub-lineage-dlq", "the MAIN subscription must stay on the replay component"
+
+    monkeypatch.delenv("LINEAGE_DLQ_PUBSUB")
+    get_settings.cache_clear()
+    app2 = FastAPI()
+    register_dapr(app2)
+    get_settings.cache_clear()
+    subs2 = {s["topic"]: s for s in _subs(TestClient(app2))}
+    assert subs2["dlq.lineage.events"]["pubsubname"] == subs2["lineage.events.v1"]["pubsubname"], "unset -> dev fallback to the main component"

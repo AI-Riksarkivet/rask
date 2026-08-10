@@ -4,6 +4,22 @@
 #   devMode=true  → `server -dev`: in-memory, auto-unsealed, fixed root token (DEMO ONLY).
 #   devMode=false → `server -config`: sealed, file-backed on a PVC; an operator must init + unseal it and
 #                   set up real auth (no fixed root token, no auto-seed). This is the prod path.
+#
+# THE FIELDS `secret/lance` MUST HOLD (prod / externalAddr — nothing auto-seeds them, and the chart
+# omits every plaintext env row behind the secretsViaDapr guard, so an unseeded field is a fail-closed
+# outage at first use, not a fallback): rustfs-secret-key, postgres-password, publisher-oidc-password,
+# publisher-oidc-client-secret (the Dex client secret — added 2026-08-08 when the last plaintext env
+# credential moved behind the guard; "the last" was wrong, see below), dapr-state-connection-string,
+# plus one service-token-<identity> per subject listed in any *_PRIVILEGED_SUBJECTS. The devMode seed
+# below is the authoritative list — keep this comment and that `bao kv put` in sync.
+#
+# TWO CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` now serves the publish saga AND
+# the RustFS Tenant's STS AssumeRoleWithWebIdentity config — there is one Dex client (`dex.clientId`),
+# so there is one secret. The Tenant reaches it by a different ROUTE, not a different key: it is a
+# third-party operator-managed CR with no daprd sidecar, so it cannot read the Dapr secret store, and
+# it consumes the value as a `secretKeyRef` into the infra-credentials Secret (external-secrets syncs
+# that key FROM this one). Do NOT seed a second `dex-client-secret` field to tidy the naming: a
+# rotation that updates one copy and not the other breaks STS-assume on a path nothing tests.
 {{- if not .Values.openbao.devMode }}
 apiVersion: v1
 kind: ConfigMap
@@ -151,6 +167,7 @@ spec:
               until bao status >/dev/null 2>&1; do echo wait-openbao; sleep 3; done
               bao kv put secret/lance rustfs-secret-key={{ .Values.rustfs.secretKey }} postgres-password={{ .Values.age.password }} \
                 publisher-oidc-password={{ .Values.dex.publisher.password }} \
+                publisher-oidc-client-secret={{ .Values.dex.clientSecret }} \
                 dapr-state-connection-string="postgres://{{ .Values.age.user }}:{{ .Values.age.password }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.stateDb }}?sslmode=disable"
               echo "seeded secret/lance into OpenBao"
 {{- end }}{{/* devMode seed */}}

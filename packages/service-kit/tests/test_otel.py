@@ -26,3 +26,48 @@ def test_setup_otel_wires_when_enabled(monkeypatch: object) -> None:
     assert wired is True
     # FastAPI instrumentation marks the app
     assert getattr(app, "_is_instrumented_by_opentelemetry", False) is True
+
+
+def test_an_explicit_OFF_beats_an_ambient_endpoint(monkeypatch: object) -> None:
+    """The regression, and the reason a whole test suite crawled.
+
+    `OTEL_EXPORTER_OTLP_ENDPOINT` is set by the HARNESS, not by the service: `dagger call test` injects
+    it into every container for Dagger's own telemetry. Under the old `or`, that ambient variable
+    overrode an explicit `RASK_OTEL_ENABLED=false`, so every app a test built wired a live exporter at
+    a collector that rejects application metrics — and the SDK retried with exponential backoff. The
+    suite did not fail, it slept: ~2.7s per unit test, and a full run sat in `hrtimer_nanosleep` at
+    ~1.7% CPU.
+
+    Pinning it here rather than only in `test_setup_otel_noop_when_disabled` because the two assert
+    different things: that one says "off means off with a clean environment", this one says "off means
+    off even when something else in the environment wants it on" — which is the case that actually
+    occurred, and the one a future `or` would quietly re-break.
+    """
+    import pytest
+
+    assert isinstance(monkeypatch, pytest.MonkeyPatch)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.invalid:4317")
+
+    assert setup_otel(FastAPI(), "svc-test", _settings(RASK_OTEL_ENABLED=False)) is False
+
+
+def test_NO_settings_still_opts_in_through_the_endpoint(monkeypatch: object) -> None:
+    """The fallback the `or` existed for must survive: `services/gateway` calls `setup_otel` with no
+    `Settings` at all and opts in through the endpoint alone. Tightening the rule for callers that DO
+    pass settings must not take that away."""
+    import pytest
+
+    assert isinstance(monkeypatch, pytest.MonkeyPatch)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+
+    assert setup_otel(FastAPI(), "svc-test") is True
+
+
+def test_NO_settings_and_NO_endpoint_stays_off(monkeypatch: object) -> None:
+    """The other half of the fallback: absent both signals, nothing is wired."""
+    import pytest
+
+    assert isinstance(monkeypatch, pytest.MonkeyPatch)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+
+    assert setup_otel(FastAPI(), "svc-test") is False

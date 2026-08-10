@@ -36,6 +36,40 @@ class AccessListResponse(BaseModel):
     grants: list[RelationGrants]
 
 
+class ManagedAccessRequest(BaseModel):
+    """Turn managed access on or off for one container."""
+
+    enabled: bool
+
+
+class ManagedAccessResponse(BaseModel):
+    """The container and the state of its flag after the write.
+
+    Echoes the resolved state rather than the request, so a caller learns the outcome even when the
+    write was a no-op (the flag was already in the asked-for state).
+    """
+
+    object: str
+    managed_access: bool
+
+
+class MyPermissionsResponse(BaseModel):
+    """What the CALLING subject may do on one object — every ``can_*`` the model defines, answered
+    for them alone.
+
+    Deliberately not a projection of :class:`AccessListResponse`. That one enumerates *who holds
+    what*, which discloses principals and therefore clears the owner bar; this one answers "what may
+    **I** do here", which discloses nothing about anyone else and must stay reachable by the reader
+    it is describing. Same relation set, a `check` per relation instead of a `list_users`, and no
+    ``user`` parameter — a self-view that accepts a subject IS the enumeration question wearing a
+    different name.
+    """
+
+    object: str
+    subject: str
+    permissions: dict[str, bool]
+
+
 class AccessCheckRequest(BaseModel):
     """A simulated authorization question — does ``user`` hold ``relation`` on this object? The
     ``user`` may be a bare subject (``alice``, taken as ``user:alice``) or a fully-qualified userset
@@ -396,8 +430,9 @@ class PolicyRequest(BaseModel):
     target_rows_per_fragment: int | None = Field(default=None, ge=1024, le=10_000_000)
     # Per-OPERATION opt-outs. `compact_enabled` historically gated the whole pass; these split the
     # ordered per-dataset pass into its three real steps, because they have different costs and
-    # different risks. The ORDER is fixed and not configurable — compaction obsoletes files, so
-    # cleanup must follow it, and index optimization must follow that.
+    # different risks. The ORDER is fixed and not configurable — compact, then optimize indices
+    # (compaction leaves its new fragments unindexed), then cleanup LAST, because it reclaims the
+    # superseded versions both earlier steps produced, in one pass.
     cleanup_enabled: bool = True
     optimize_indices_enabled: bool = True
     # The sweep's READ batch, passed to `compact_files`. Lance's default is 8192 ROWS, and rows are

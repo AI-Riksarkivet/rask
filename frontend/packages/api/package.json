@@ -37,6 +37,10 @@
 			"types": "./src/generated/lineage.ts",
 			"default": "./src/generated/lineage.ts"
 		},
+		"./inbox": {
+			"types": "./src/inbox.ts",
+			"default": "./src/inbox.ts"
+		},
 		"./lineage": {
 			"types": "./src/lineage/index.ts",
 			"default": "./src/lineage/index.ts"

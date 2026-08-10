@@ -66,7 +66,10 @@ ReviewAction = Literal["accepted", "fix_and_accept", "request_changes"]
 #: a human's labels "model" would put a false provenance claim onto every row they eventually
 #: publish. The distinction is the whole reason this field exists.
 DraftOrigin = Literal["human", "model", "propagated", "import"]
-MediaKind = Literal["image", "audio", "video"]
+#: `text` is a first-class modality: the document IS the canvas (token classification, NER over
+#: transcriptions). It was absent here while the zone already shipped a text viewer — so an honest
+#: text task 422'd at send and `kind=text` stayed a hand-edited URL no queue link could produce.
+MediaKind = Literal["image", "audio", "video", "text"]
 
 
 class MediaRef(BaseModel):

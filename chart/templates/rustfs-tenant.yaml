@@ -50,8 +50,22 @@ spec:
       value: "{{ .Values.dex.issuer }}/.well-known/openid-configuration"
     - name: RUSTFS_IDENTITY_OPENID_CLIENT_ID
       value: {{ .Values.dex.clientId | quote }}
+    # secretKeyRef, never `value:` — the one credential on this CR, and it sat in plaintext until
+    # 2026-08-09 while every sibling in the estate was already guarded. A `value:` here is readable in
+    # `kubectl get tenant -o yaml`, `kubectl describe`, and `helm get manifest`, which is precisely the
+    # 'same secret still recoverable from another surface' finding infra-credentials.yaml was created for.
+    #
+    # It goes to the INFRA tier rather than through the Dapr secret store like the fleet's credentials,
+    # and that is not a shortcut: the consumer is the RustFS server, a third-party operator-managed
+    # Tenant with no daprd sidecar, which is the exact case infra-credentials.yaml's header enumerates.
+    # Verified against the vendored CRD before relying on it — third_party/rustfs-operator/crds/
+    # tenant-crd.yaml types `spec.env` as a full Kubernetes EnvVar (`valueFrom.secretKeyRef` included),
+    # so the operator passes this through rather than silently dropping it and disabling OIDC.
     - name: RUSTFS_IDENTITY_OPENID_CLIENT_SECRET
-      value: {{ .Values.dex.clientSecret | quote }}
+      valueFrom:
+        secretKeyRef:
+          name: {{ include "lance.fullname" . }}-infra-credentials
+          key: dex-client-secret
     - name: RUSTFS_IDENTITY_OPENID_SCOPES
       value: "openid,email"
     # The base policy every Dex-authenticated token assumes; the per-request session policy can only

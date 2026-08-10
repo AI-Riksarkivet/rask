@@ -14,9 +14,29 @@ queue must not be handed a failure instead of a diagnosis.
 from __future__ import annotations
 
 import pathlib
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+if TYPE_CHECKING:
+    from ingest.queue import WorkQueue
+    from nats.aio.client import Client as NatsClient
+    from nats.js import JetStreamContext
+
+
+def _queue_over(js: object) -> WorkQueue:
+    """A `WorkQueue` whose only live part is the JetStream seam under test.
+
+    Structural fake + `cast`, the same shape and for the same reason as `conftest.activity_ctx`:
+    `_warn_if_retention_disagrees` reads `self._js.stream_info` and touches `self._nc` not at all,
+    while a real `JetStreamContext` needs a live NATS connection. Widening `WorkQueue.__init__` to
+    accept `None` would weaken a production signature to suit a test.
+    """
+    from ingest.queue import WorkQueue
+
+    return WorkQueue(cast("NatsClient", None), cast("JetStreamContext", js))
 
 
 @pytest.fixture
@@ -254,7 +274,7 @@ def test_a_DISAGREEING_stream_warns_and_does_not_raise(caplog: pytest.LogCapture
     import asyncio
     import logging
 
-    from ingest.queue import STREAM, WorkQueue
+    from ingest.queue import STREAM
 
     class _Info:
         config = type("C", (), {"retention": "limits"})()
@@ -263,7 +283,7 @@ def test_a_DISAGREEING_stream_warns_and_does_not_raise(caplog: pytest.LogCapture
         async def stream_info(self, _name: str) -> _Info:
             return _Info()
 
-    queue = WorkQueue(None, _JS())  # type: ignore[arg-type]
+    queue = _queue_over(_JS())
 
     with caplog.at_level(logging.WARNING):
         asyncio.run(queue._warn_if_retention_disagrees())
@@ -278,8 +298,6 @@ def test_a_MATCHING_stream_says_nothing(caplog: pytest.LogCaptureFixture) -> Non
     import asyncio
     import logging
 
-    from ingest.queue import WorkQueue
-
     class _Info:
         config = type("C", (), {"retention": "workqueue"})()
 
@@ -288,6 +306,6 @@ def test_a_MATCHING_stream_says_nothing(caplog: pytest.LogCaptureFixture) -> Non
             return _Info()
 
     with caplog.at_level(logging.WARNING):
-        asyncio.run(WorkQueue(None, _JS())._warn_if_retention_disagrees())  # type: ignore[arg-type]
+        asyncio.run(_queue_over(_JS())._warn_if_retention_disagrees())
 
     assert not caplog.records, "a correctly configured stream produced a warning"

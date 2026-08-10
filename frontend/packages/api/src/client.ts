@@ -71,10 +71,7 @@ export function createBffClient(base: string): BffClient {
 
 	/** Lift `detail` out of an error body, tolerating a non-JSON error page. */
 	const detailFrom = (body: unknown, status: number): string =>
-		body !== null &&
-		typeof body === 'object' &&
-		'detail' in body &&
-		typeof body.detail === 'string'
+		body !== null && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string'
 			? body.detail
 			: `HTTP ${status}`;
 

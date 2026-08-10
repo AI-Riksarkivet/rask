@@ -113,11 +113,7 @@
 			</Table.Header>
 			<Table.Body>
 				{#each rows as doc (view.docId(doc))}
-					<Table.Row
-						class="cursor-pointer"
-						onclick={() => onopen(doc)}
-						data-testid="doc-row"
-					>
+					<Table.Row class="cursor-pointer" onclick={() => onopen(doc)} data-testid="doc-row">
 						{#each columns as col (col.field)}
 							<Table.Cell class={cn(col.field === DOC_ID && 'font-mono text-xs')}>
 								{docCellText(docView, doc, col.field)}

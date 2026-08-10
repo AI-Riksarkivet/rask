@@ -396,7 +396,12 @@ smoke-rustfs: ## Storage smoke vs rustfs (S3 round-trip + LanceDB) — needs rus
 # DOCKER while k3s reads CONTAINERD and answers ErrImagePull. Measured: a Dagger build succeeded
 # (exit 0), `kubectl set image` -> ErrImagePull, rolled back. Four correct fixes sat unprovable
 # behind it.
-COMPOSE_IMAGES = gateway compute controlplane ingest
+# `notifications` joins for exactly that reason, in the same commit as its dockerfile and its chart
+# Deployment — the three are one act, and any two of them without the third is the ErrImagePull above.
+# (`flows` is STILL absent and has been since it landed: `.docker/flows.dockerfile` and a `rask-flows`
+# Deployment both exist, so an in-cluster flows is unverifiable today for the identical reason. Named
+# rather than fixed here — it is another plane's diff.)
+COMPOSE_IMAGES = gateway compute controlplane ingest notifications
 # SvelteKit SSR microfrontend zone images — one web-<zone> image per $(ZONES) entry,
 # all built from the one parametrized .docker/frontend.dockerfile via --build-arg
 # APP=<name>. (R22: the web- prefix keeps the zone image namespace disjoint from the

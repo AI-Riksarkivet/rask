@@ -18,10 +18,14 @@ tests of the boundary, where the plane's other workflow gates are source-shape a
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from ingest.workflow import ingest_run
+
+
+if TYPE_CHECKING:
+    from dapr.ext.workflow import DaprWorkflowContext
 
 
 class _Task:
@@ -29,7 +33,14 @@ class _Task:
 
 
 class _Ctx:
-    """Records the activity calls the workflow makes, in order, with their inputs."""
+    """Records the activity calls the workflow makes, in order, with their inputs.
+
+    Structural, and `cast` to the declared `DaprWorkflowContext` at each call site — this plane's own
+    idiom (`conftest.py`'s `activity_ctx`, and `test_pipelines_registry.py`'s `cast(JobSubmissionClient,
+    ...)` before it). There is no real context to construct: `DaprWorkflowContext` wraps a
+    `durabletask` orchestration context that exists only inside a running worker, and the generator
+    protocol above is the whole of what `ingest_run` uses `ctx` for.
+    """
 
     def __init__(self) -> None:
         self.activities: list[tuple[str, dict[str, Any]]] = []
@@ -51,6 +62,14 @@ class _Ctx:
 
 SPEC = {"run_id": "boundary-test", "kind": "s3-prefix", "project": "bind86", "dataset": "pages", "options": {}}
 
+#: What `resolve_limits` hands back for a deployment that opted into neither ceiling. Sent as an
+#: activity RESULT rather than set as env, which is the point of the fix these tests now run against:
+#: the workflow branches on history, so a test drives the branch by driving the history.
+NO_LIMITS = {"max_run_hours": 0.0, "max_units": 0}
+
+#: What `ensure_dataset` hands back — the location AND the base version the run commits against.
+HANDLE = {"location": "s3://wh/loc", "read_version": 7}
+
 
 @pytest.fixture(autouse=True)
 def _plain_fanout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -63,20 +82,58 @@ def _plain_fanout(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _drive_to_fanout(ctx: _Ctx) -> Any:
-    """Run the generator up to the fan-in yield: emit_start -> ensure_dataset -> enumerate -> fanout."""
-    gen = ingest_run(ctx, SPEC)  # type: ignore[arg-type]
+    """Drive to the fan-in yield: emit_start -> resolve_limits -> ensure_dataset -> enumerate -> fanout."""
+    gen = ingest_run(cast("DaprWorkflowContext", ctx), SPEC)
     gen.send(None)  # start -> yields emit_start
-    gen.send(None)  # emit_start done -> yields ensure_dataset
-    gen.send("s3://wh/loc")  # location -> yields enumerate_chunks
+    gen.send(None)  # emit_start done -> yields resolve_limits
+    gen.send(NO_LIMITS)  # ceilings, from history -> yields ensure_dataset
+    gen.send(HANDLE)  # location + base version -> yields enumerate_chunks
     # One chunk of two units -> the workflow computes units_total=2 and yields the fan-in.
     gen.send([{"keys": ["a", "b"]}])
     return gen
 
 
-def test_a_failed_chunk_reaches_emit_terminal_with_a_FAIL_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("recorded", "step"),
+    [
+        ([], "resolve_limits"),
+        ([NO_LIMITS], "ensure_dataset"),
+        ([NO_LIMITS, HANDLE], "enumerate_chunks"),
+    ],
+)
+def test_EVERY_step_between_the_START_and_the_terminal_is_inside_the_boundary(recorded: list[Any], step: str) -> None:
+    """The boundary begins immediately after `emit_start`, and F12c is why it had to.
+
+    It used to open below `enumerate_chunks`, which was survivable only while that activity could
+    merely DEGRADE — its anti-join swallowed an unreadable bronze and continued with an empty set.
+    Making that a refusal (`AntiJoinUnavailable`, so a transient object-store error cannot silently
+    re-land an entire tier) put a raise ABOVE the boundary, which reproduces the boundary's own
+    defect one activity earlier: the run dies with the START emitted at accept orphaned in the graph
+    forever and no reason anywhere an operator looks.
+
+    So the property is structural rather than per-activity — nothing between the START and the
+    terminal may exit unrecorded — and it is pinned for all three pre-fan-out steps.
+    """
+    ctx = _Ctx()
+    gen = ingest_run(cast("DaprWorkflowContext", ctx), SPEC)
+    gen.send(None)  # -> emit_start
+    gen.send(None)  # emit_start done -> the first step under test
+    for result in recorded:
+        gen.send(result)
+    assert ctx.activities[-1][0] == step
+
+    gen.throw(RuntimeError(f"{step} exhausted its four attempts"))
+
+    assert ctx.activities[-1][0] == "emit_terminal", f"a permanently-failed {step} died without a FAIL record — calls were {[n for n, _ in ctx.activities]}"
+    outcome = ctx.activities[-1][1]["outcome"]
+    assert outcome["status"] == "FAILED"
+    assert step in outcome["errors"]["run"], "the FAIL record must carry the reason, not a bare failure"
+    assert outcome["units_total"] == 0, "nothing was enumerated, and zero is the honest count to report"
+
+
+def test_a_failed_chunk_reaches_emit_terminal_with_a_FAIL_outcome() -> None:
     """The regression. `.throw()` at the fan-in is exactly what the runtime does when a child
     workflow's failure is replayed; the boundary must convert it into the ONE terminal step."""
-    monkeypatch.setenv("RASK_INGEST_MAX_RUN_HOURS", "")
     ctx = _Ctx()
     gen = _drive_to_fanout(ctx)
 
@@ -99,10 +156,9 @@ def test_a_failed_chunk_reaches_emit_terminal_with_a_FAIL_outcome(monkeypatch: p
     assert stop.value.value["status"] == "FAILED"
 
 
-def test_a_PERMANENTLY_REFUSED_finalize_also_leaves_a_FAIL_record(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_PERMANENTLY_REFUSED_finalize_also_leaves_a_FAIL_record() -> None:
     """`tests/test_empty_commit.py` documented this leg verbatim: a finalize that burns its retries
     killed the workflow before its own FAIL record. The boundary must cover it identically."""
-    monkeypatch.setenv("RASK_INGEST_MAX_RUN_HOURS", "")
     ctx = _Ctx()
     gen = _drive_to_fanout(ctx)
 
@@ -119,10 +175,9 @@ def test_a_PERMANENTLY_REFUSED_finalize_also_leaves_a_FAIL_record(monkeypatch: p
     assert "commit conflict" in outcome["errors"]["run"]
 
 
-def test_the_SUCCESS_path_is_untouched_by_the_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_SUCCESS_path_is_untouched_by_the_boundary() -> None:
     """The boundary must not change what a healthy run does: fan-in -> finalize -> terminal, with
     finalize's outcome — not a synthesized one — as the terminal payload and the return value."""
-    monkeypatch.setenv("RASK_INGEST_MAX_RUN_HOURS", "")
     ctx = _Ctx()
     gen = _drive_to_fanout(ctx)
 
@@ -138,11 +193,53 @@ def test_the_SUCCESS_path_is_untouched_by_the_boundary(monkeypatch: pytest.Monke
     assert stop.value.value == ok
 
 
-def test_emit_terminal_failing_INSIDE_the_boundary_still_fails_the_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("limits", "chunks", "expected_status"),
+    [
+        ({"max_run_hours": 0.0, "max_units": 0}, [], "COMPLETE"),
+        ({"max_run_hours": 0.0, "max_units": 1}, [{"keys": ["a", "b"]}], "FAILED"),
+    ],
+    ids=["empty-source", "unit-ceiling"],
+)
+def test_an_ALREADY_TERMINAL_short_circuit_is_NOT_contradicted_by_a_second_record(
+    limits: dict[str, Any], chunks: list[dict[str, Any]], expected_status: str
+) -> None:
+    """The hole widening the boundary opened, and the reason `terminal_emitted` exists.
+
+    The short-circuits — unit ceiling, empty source, deadline — each state how the run ended and then
+    return, and moving the boundary up put them INSIDE it. So a permanently-failed `emit_terminal` on
+    the "empty source is COMPLETE with zero rows" path reached the handler, which answered it with a
+    SECOND emit carrying a FAILED outcome for a run that did not fail. A transient outage that
+    outlasts four retries but not eight is the ordinary shape of one, so that second attempt can
+    SUCCEED — and then the graph carries the lie permanently and the workflow returns it.
+
+    The rule the boundary already stated ("there is no record to write about failing to write the
+    record") has to hold for these paths too: the emit's own failure kills the run, visibly.
+    """
+    ctx = _Ctx()
+    gen = ingest_run(cast("DaprWorkflowContext", ctx), SPEC)
+    gen.send(None)
+    gen.send(None)
+    gen.send(limits)
+    gen.send(HANDLE)
+    gen.send(chunks)
+
+    assert ctx.activities[-1][0] == "emit_terminal"
+    assert ctx.activities[-1][1]["outcome"]["status"] == expected_status
+    emits = len([n for n, _ in ctx.activities if n == "emit_terminal"])
+
+    with pytest.raises(RuntimeError, match="lineage door down"):
+        gen.throw(RuntimeError("lineage door down"))
+
+    assert len([n for n, _ in ctx.activities if n == "emit_terminal"]) == emits, (
+        f"the handler answered a failed terminal with a second one — calls were {[n for n, _ in ctx.activities]}"
+    )
+
+
+def test_emit_terminal_failing_INSIDE_the_boundary_still_fails_the_workflow() -> None:
     """Deliberate non-goal, pinned so it is a decision and not an accident: there is no record to
     write about failing to write the record. If the terminal emit itself dies, the workflow dies —
     visibly — rather than swallowing the loss one level deeper."""
-    monkeypatch.setenv("RASK_INGEST_MAX_RUN_HOURS", "")
     ctx = _Ctx()
     gen = _drive_to_fanout(ctx)
 

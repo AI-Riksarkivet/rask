@@ -215,6 +215,31 @@ def test_duplicate_attribute_names_within_a_class_are_refused() -> None:
         LabelClass(name="c", attributes=[OutputAttr(name="x"), OutputAttr(name="x")])
 
 
+def test_transcribe_is_a_per_class_declaration_that_round_trips() -> None:
+    """Transcription had NO place in the model: it is not a tool (a `text` tool is a span INTO
+    text; transcription is text ON a region) and not an attribute (typed side-fields; this is the
+    primary content column). Undeclarable, the workspace offered the text editor on every row of
+    every task. Now an OCR paragraph can say so and a detection box can not — and the flag must
+    survive a validate/dump cycle, because the captured task document is what the workspace reads."""
+    ontology = LabelOntology(
+        classes=[
+            LabelClass(name="paragraph", tools=["polygon"], transcribe=True),
+            LabelClass(name="stamp", tools=["bbox"]),
+        ]
+    )
+    dumped = ontology.model_dump()
+    back = LabelOntology.model_validate(dumped)
+    assert [c.transcribe for c in back.classes] == [True, False]
+
+
+def test_transcribe_does_not_gate_submit() -> None:
+    """Like `colour`, `transcribe` CONFIGURES the workspace; it is not a submit rule. A declared
+    transcription class with no text on its shape must still pass — refusing it would make every
+    partially transcribed page unsubmittable, which is not what the declaration means."""
+    ontology = LabelOntology(classes=[LabelClass(name="paragraph", tools=["bbox"], transcribe=True)])
+    assert validate_against_ontology(ontology, [_shape(label="paragraph")]) is None
+
+
 def test_kind_is_a_free_vocabulary_not_a_closed_enum() -> None:
     """A new task type must not require editing Python and a redeploy. HF's own taxonomy is a
     vocabulary for routing and filtering, not a contract — only 31 of its 57 ids carry any schema."""
@@ -332,3 +357,23 @@ def test_a_NON_text_shape_is_never_span_checked() -> None:
     """Every other shape type carries no parent and no range, and must not be refused for it."""
     ontology = LabelOntology(classes=[LabelClass(name="region", tools=["bbox"])])
     assert validate_against_ontology(ontology, [_shape(label="region")]) is None
+
+
+def test_an_UNDECLARED_attribute_name_is_refused_when_the_class_declares_any() -> None:
+    """A typo'd attribute name (`ordr` for `order`) used to pass silently — accepted, published,
+    with the required-`order` refusal as the only symptom, and nothing saying the two were the same
+    mistake. A class that declares attributes closes the set; one that declares none stays
+    unconstrained, mirroring how empty `tools` means any tool."""
+    ontology = LabelOntology(
+        classes=[
+            LabelClass(name="paragraph", attributes=[OutputAttr(name="order", type="int")]),
+            LabelClass(name="stamp"),
+        ]
+    )
+
+    violation = validate_against_ontology(ontology, [_shape(label="paragraph", ordr="2")])
+    assert violation is not None and "ordr" in violation and "order" in violation
+
+    # Declared names still pass; a class with NO declared attributes accepts anything.
+    assert validate_against_ontology(ontology, [_shape(label="paragraph", order="2")]) is None
+    assert validate_against_ontology(ontology, [_shape(label="stamp", anything="goes")]) is None

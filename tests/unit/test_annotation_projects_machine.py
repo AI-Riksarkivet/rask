@@ -10,6 +10,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from datetime import UTC, datetime
+from typing import NotRequired, TypedDict, cast
 
 import pytest
 from annotator.projects import (
@@ -153,8 +154,115 @@ def test_lease_expiry_is_system_caused_and_has_no_permission() -> None:
 
 
 def test_review_actions_are_named_so_the_self_review_ban_is_discoverable() -> None:
-    """A reviewer may not accept their own submission; the API checks `submitted_by` against these."""
+    """A reviewer may not accept their own submission; the rule reads `submitted_by` against these."""
     assert {"accept", "fix_and_accept", "request_changes"} == SELF_REVIEW_FORBIDDEN
+
+
+# --------------------------------------------------------------------------------------------------
+# The identity-bound rules (§5.2), as the ONE function both sides of the sidecar apply
+# --------------------------------------------------------------------------------------------------
+
+
+class _IdentityCall(TypedDict):
+    """The keyword shape of `identity_violation`, so the per-case dict is checked against it.
+
+    Each case below states only the rows it is about; the call merges them over an all-`None` base.
+    Naming the merged shape keeps the call honest — a parameter added to, or retyped on,
+    `identity_violation` fails the typecheck here instead of being unpacked as `object`.
+    """
+
+    event: str
+    subject: str | None
+    assignee: str | None
+    submitted_by: str | None
+    subject_can_manage: NotRequired[bool]
+
+
+@pytest.mark.parametrize(
+    ("case", "kwargs", "expected"),
+    [
+        # Lease holder only — the whole point of re-checking in-turn is the first two rows: the
+        # HTTP layer saw `gina`, the lease moved, and the event arrives against `dave`'s claim.
+        ("a stale submit after the lease moved", {"event": "submit", "subject": "gina", "assignee": "dave"}, "held by dave"),
+        ("a stale skip after the lease moved", {"event": "skip", "subject": "gina", "assignee": "dave"}, "held by dave"),
+        ("the holder submitting", {"event": "submit", "subject": "gina", "assignee": "gina"}, None),
+        # A task released in between is not held by anyone, so nothing here objects — the transition
+        # table still decides whether `submit` is legal from the state it landed in.
+        ("a task free by the time the turn runs", {"event": "submit", "subject": "gina", "assignee": None}, None),
+        ("can_manage does not unlock rule 2", {"event": "submit", "subject": "dave", "assignee": "gina", "subject_can_manage": True}, "held by gina"),
+        # Self-review.
+        ("reviewing one's own submission", {"event": "accept", "subject": "gina", "submitted_by": "gina"}, "own submission"),
+        ("requesting changes on one's own", {"event": "request_changes", "subject": "gina", "submitted_by": "gina"}, "own submission"),
+        ("reviewing someone else's", {"event": "accept", "subject": "dave", "submitted_by": "gina"}, None),
+        # Nobody has submitted yet: `submitted_by` is None and so is a system caller's subject.
+        # Comparing them as equal would ban the review of an unsubmitted task, which is nonsense.
+        ("an unsubmitted task, system caller", {"event": "accept", "subject": None, "submitted_by": None}, None),
+        # Release — holder OR can_manage, with can_manage stated by the caller, never checked here.
+        ("release by a non-holder", {"event": "release", "subject": "henry", "assignee": "gina"}, "needs can_manage"),
+        ("release by a manager", {"event": "release", "subject": "henry", "assignee": "gina", "subject_can_manage": True}, None),
+        ("release by the holder", {"event": "release", "subject": "gina", "assignee": "gina"}, None),
+        ("release of a task nobody holds", {"event": "release", "subject": "henry", "assignee": None}, None),
+        # Edges no identity rule names — including the one system edge, whose subject is None and
+        # whose reminder must never be refused for not being the lease holder.
+        ("the lease reminder", {"event": "lease_expired", "subject": None, "assignee": "gina"}, None),
+        ("a manager assigning", {"event": "assign", "subject": "mgr", "assignee": "gina"}, None),
+        ("a claim", {"event": "claim", "subject": "gina", "assignee": None}, None),
+        ("a manager reopening accepted work", {"event": "reopen", "subject": "mgr", "submitted_by": "gina"}, None),
+    ],
+)
+def test_the_identity_bound_rules_are_a_pure_function_of_the_tasks_own_rows(case: str, kwargs: dict[str, object], expected: str | None) -> None:
+    """The truth table both call sites read from — the HTTP layer against its pre-turn snapshot, the
+    actor against the rows of its own turn. Pinned HERE, with no store and no OpenFGA, because that
+    is the property that lets the actor apply it at all."""
+    from annotator.projects.machines import identity_violation
+
+    violation = identity_violation(**cast("_IdentityCall", {"subject": None, "assignee": None, "submitted_by": None, **kwargs}))
+
+    if expected is None:
+        assert violation is None, f"{case}: refused with {violation!r}"
+    else:
+        assert violation is not None and expected in violation, case
+
+
+def test_the_identity_rules_have_exactly_one_implementation() -> None:
+    """`identity_violation` exists because the rule is now applied on BOTH sides of the sidecar, and
+    two copies would drift — the one that drifted being the one that decided. The gate is on who
+    APPLIES the rule: outside `machines.py` nothing may name the identity sets, re-write the holder
+    comparison, or phrase either refusal.
+
+    Set membership alone is NOT enough to catch a copy, which is how two survived the first version
+    of this gate: a copy written for ONE fixed event never names a set. `tasks.py` refused a
+    non-holder's draft save and import with a hand-rolled `assignee not in (None, subject)` on both
+    draft-write routes while `identity_violation`'s docstring claimed one implementation. So the
+    tells are the COMPARISONS as well — code shapes, not refusal wording, which prose collides with.
+
+    `HOLDER_OR_MANAGER` is deliberately exempt from the membership tell: `tasks.py` reads it to
+    decide whether to spend an OpenFGA `can_manage` Check, which is resolving an INPUT to the rule,
+    not re-deciding it.
+    """
+    from pathlib import Path
+
+    from annotator.projects import machines as machines_module
+
+    tells = (
+        " in SELF_REVIEW_FORBIDDEN",
+        " in LEASE_HOLDER_ONLY",
+        "not in (None, subject)",
+        "submitted_by == subject",
+        'submitted_by") == subject',
+        "submitted_by'] == subject",
+    )
+    machines = Path(str(machines_module.__file__)).resolve()
+    root = machines.parents[1]
+    offenders = [
+        f"{path.relative_to(root)}:{n}"
+        for path in sorted(root.rglob("*.py"))
+        if path != machines
+        for n, line in enumerate(path.read_text().splitlines(), 1)
+        if any(tell in line for tell in tells)
+    ]
+
+    assert offenders == [], f"a second copy of the identity rules: {offenders}"
 
 
 def test_submit_skips_review_only_when_the_project_waives_it() -> None:

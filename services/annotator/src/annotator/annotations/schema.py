@@ -22,8 +22,10 @@ ANNOTATIONS_TABLE = "annotations"
 
 #: The fields a reviewer may edit — the local-first review overlay flushed on save.
 #: Only these are patched; geometry + provenance columns are carried forward from the
-#: current row, so a partial edit never wipes a shape.
-EDITABLE_FIELDS = ("label", "status", "text", "group", "reviewer")
+#: current row, so a partial edit never wipes a shape. ``metadata`` is the per-row
+#: ATTRIBUTES carrier: a JSON object of ``{attribute name: value-as-string}``, the same
+#: flat map the ontology's typed attributes are validated from at submit.
+EDITABLE_FIELDS = ("label", "status", "text", "group", "reviewer", "metadata")
 
 
 class AnnotationEdit(BaseModel):
@@ -35,6 +37,7 @@ class AnnotationEdit(BaseModel):
     text: str | None = None
     group: str | None = None
     reviewer: str | None = None
+    metadata: str | None = None
 
 
 class NewAnnotation(BaseModel):
@@ -60,6 +63,25 @@ class NewAnnotation(BaseModel):
     source: str = "human"
     group: str = ""
     mask: str = ""
+    #: The TEXTUAL facet — a span INTO another row's ``text`` (token classification, the value half
+    #: of KIE). Sentinels match the client's ``makeInsertRow``: empty/-1 on every non-span row, so a
+    #: default never fakes a zero-length span at offset 0. These MUST be declared here even though
+    #: the table schema already carries the columns: pydantic ignores unknown payload fields, so an
+    #: undeclared field is not a 422 — it is a column that silently lands null. Text spans shipped
+    #: exactly that way: rendered from the client overlay, saved, and read back pointing at nothing.
+    parent_id: str = ""
+    char_start: int = -1
+    char_end: int = -1
+    #: Per-row ATTRIBUTES — the ontology's typed per-class fields (`reading order`, `script`,
+    #: `damaged`…), as a JSON object of string values (the submit validator parses int/bool/enum
+    #: from strings). ``{}`` rather than ``""``: the column is `pa.json_()` and an empty string is
+    #: not valid JSON.
+    metadata: str = "{}"
+    #: The active-learning scores a PREDICTION row carries (the review queue ranks by them). None —
+    #: the human-drawn default — lands as null: a person's shape has no model score, and inventing
+    #: one (1.0 "confidence") would let human rows shuffle into the model-ranked half of the queue.
+    confidence: float | None = None
+    uncertainty: float | None = None
 
 
 class GeometryEdit(BaseModel):
@@ -81,6 +103,19 @@ class TemporalEdit(BaseModel):
     t_end: float
 
 
+class SpanEdit(BaseModel):
+    """A re-anchored TEXT SPAN — its offsets only, keyed by id.
+
+    Exists for the transcription-edit remap: correcting a parent's text shifts the text under
+    every span anchored to it, and the client recomputes each span's `[start, end)` to follow.
+    Offsets are deliberately NOT in `EDITABLE_FIELDS` — a free-form field edit of a char offset
+    is a corruption vector; this channel is the one legal writer, mirroring `TemporalEdit`."""
+
+    id: str
+    char_start: int
+    char_end: int
+
+
 class SaveAnnotations(BaseModel):
     """The delta a Save flushes for one media unit: field edits + newly drawn shapes
     + moved geometry + deleted ids. Edits/inserts/geometry commit together (one
@@ -94,6 +129,7 @@ class SaveAnnotations(BaseModel):
     inserts: list[NewAnnotation] = Field(default_factory=list)
     geometry: list[GeometryEdit] = Field(default_factory=list)
     temporal: list[TemporalEdit] = Field(default_factory=list)
+    spans: list[SpanEdit] = Field(default_factory=list)
     deletes: list[str] = Field(default_factory=list)
     base_version: int | None = None
 

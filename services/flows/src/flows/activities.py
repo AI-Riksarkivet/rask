@@ -35,6 +35,11 @@ def run_node(ctx: WorkflowActivityContext, activity_input: dict[str, object]) ->
     to hijack — unlike the request path, where an `asyncio.run` would try to nest inside uvicorn's.
     The client is per-activity for the same reason: the worker thread has no app-scoped one, and an
     activity may run in a process that never served a request.
+
+    The returned dict is bounded, and it has to be: this value is written to the workflow history and
+    then again as the input of every dependent node, so an unbounded payload costs O(dependents)
+    writes to the state store. Both ceilings live on the model (`models.NodeResult`), not here — a
+    cap applied at one of its three construction sites is a cap that holds at one of three.
     """
     job = NodeJob.model_validate(activity_input)
     result = asyncio.run(_run(job))

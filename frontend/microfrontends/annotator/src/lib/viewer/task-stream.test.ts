@@ -156,6 +156,33 @@ describe('the URL a stream hop navigates to', () => {
 		expect(href).not.toContain('dataset=');
 	});
 
+	it('carries the task’s MODALITY, so a text/audio/video task opens its OWN canvas', () => {
+		// `kind=` was hand-URL-only before this: the route understood it, the viewers existed, and
+		// no queue link ever produced it — a text task opened the image canvas from every surface.
+		const href = taskCanvasHref(
+			{ task_id: 'q', state: 'claimed', source: { keys: ['k'] }, media: { kind: 'text' } },
+			'p1',
+		);
+
+		expect(href).toContain('kind=text');
+	});
+
+	it('omits `kind` for image — the default — and for anything unknown', () => {
+		// An unrecognized modality must fall back to the image canvas, not ride the URL into a
+		// viewer-registry miss.
+		const image = taskCanvasHref(
+			{ task_id: 'q', state: 'claimed', source: { keys: ['k'] }, media: { kind: 'image' } },
+			'p1',
+		);
+		const odd = taskCanvasHref(
+			{ task_id: 'q', state: 'claimed', source: { keys: ['k'] }, media: { kind: 'hologram' } },
+			'p1',
+		);
+
+		expect(image).not.toContain('kind=');
+		expect(odd).not.toContain('kind=');
+	});
+
 	it('percent-encodes ids that need it', () => {
 		const href = taskCanvasHref(task('a b'), 'proj/1');
 

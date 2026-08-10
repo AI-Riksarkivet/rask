@@ -70,11 +70,7 @@ export function docColumns(view: DocView): DocColumn[] {
 }
 
 /** One cell's text. Synthetic columns resolve through the view; everything else is a row lookup. */
-export function docCellText(
-	view: DocView,
-	row: Record<string, unknown>,
-	field: string,
-): string {
+export function docCellText(view: DocView, row: Record<string, unknown>, field: string): string {
 	if (field === DOC_ID) return view.docId(row);
 	if (field === DOC_TITLE) return view.titleFields.length > 0 ? view.title(row) : '';
 	const value = row[field];

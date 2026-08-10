@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import deque
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -50,15 +51,26 @@ class LineageEvent(BaseModel):
     errors: dict[str, str] = Field(default_factory=dict)
 
 
-# Module-level, not a class attribute: `lineage_emitter()` builds a fresh recorder per activity, so
-# a per-instance list would drop every event and a mutable class attribute is the same shared state
-# wearing a disguise. This is the in-process MIRROR of what was emitted — a test convenience, and
-# never the source of truth for run status, which asks the graph itself.
-_EVENTS: list[LineageEvent] = []
+#: How many events the in-process mirror keeps. BOUNDED, and that bound is the point.
+#:
+#: This is module-level state in HANDLER scope (DWF-ACT-007): `lineage_emitter()` builds a fresh
+#: recorder per activity, so a per-instance list would drop every event and a mutable class attribute
+#: would be the same shared state wearing a disguise — but a plain list appended to by every activity
+#: of every run and cleared by nothing outside the test suite is a leak for the lifetime of the pod.
+#: An ingest pod serves runs indefinitely and emits two events per run plus one per terminal, so the
+#: list grew without any ceiling at all.
+#:
+#: A ring buffer is the right shape because of what this is FOR: the in-process MIRROR of what was
+#: emitted, a test convenience and a debugging window on the most recent activity — never the source
+#: of truth for run status, which asks the graph itself (`runs.py` joins against the lineage service).
+#: Nothing reads more than the tail, so dropping the head costs nothing and bounds the memory exactly.
+_EVENT_HISTORY = 256
+
+_EVENTS: deque[LineageEvent] = deque(maxlen=_EVENT_HISTORY)
 
 
 def recorded_events() -> list[LineageEvent]:
-    """The events emitted so far, in THIS process."""
+    """The most recent `_EVENT_HISTORY` events emitted in THIS process, oldest first."""
     return list(_EVENTS)
 
 

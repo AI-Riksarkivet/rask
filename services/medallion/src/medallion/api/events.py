@@ -31,7 +31,16 @@ def register_stage_route(app: FastAPI) -> DaprApp:
     settings = get_settings()
     dapr_app = DaprApp(app)
     if settings.dlq_topic:
-        register_dlq_route(dapr_app, pubsub=settings.pubsub, dlq_topic=settings.dlq_topic, app_label="mover")
+        # The label is THIS mover's app-id, derived from its per-app DLQ topic (`dlq.<daprAppId>`,
+        # chart medallion.yaml). A shared literal ("mover") made two movers' parks indistinguishable
+        # in `medallion.dlq.parked` — and when the topic was per-subTopic, two movers subscribed to
+        # EACH OTHER's dead letters and double-counted every park (open_dapr.md §2.11).
+        register_dlq_route(
+            dapr_app,
+            pubsub=settings.pubsub,
+            dlq_topic=settings.dlq_topic,
+            app_label=settings.dlq_topic.removeprefix("dlq."),
+        )
 
     @dapr_app.subscribe(
         pubsub=settings.pubsub,

@@ -40,6 +40,39 @@ tuples:
   # they inherit the stage's owner/writer/reader rungs (no per-object grants needed).
   - { user: namespace:acme_silver, relation: parent, object: materialized_view:acme_silver$daily_agg }
   - { user: namespace:acme_silver, relation: parent, object: transaction:acme_silver$commit1 }
+  # The INVERSE edges. `grant_on_create` writes each of these in the SAME batch as the `parent` tuple
+  # above, so the two directions cannot drift; they are spelled out here because a test fixture has no
+  # create path. They exist only to answer "is anything under me visible?" — OpenFGA cannot walk a
+  # tuple backwards. No `transaction` child: a receipt is not a browsable object.
+  - { user: namespace:acme_bronze, relation: child, object: warehouse:acme_bucket }
+  - { user: namespace:acme_silver, relation: child, object: warehouse:acme_bucket }
+  - { user: namespace:acme_gold, relation: child, object: warehouse:acme_bucket }
+  - { user: table:acme_silver_features, relation: child, object: namespace:acme_silver }
+  - { user: table:acme_gold_catalog, relation: child, object: namespace:acme_gold }
+  - { user: "materialized_view:acme_silver$daily_agg", relation: child, object: namespace:acme_silver }
+  # ivan: the UPWARD-VISIBILITY subject — granted reader on ONE table and nothing else. The real case
+  # is "you may read this dataset"; before the child edge he could read it and not see the path to it.
+  - { user: user:ivan, relation: reader, object: table:acme_gold_catalog }
+  # ---- the GRANT axis ------------------------------------------------------------------------
+  # judy: a SECURITY ADMIN — manages access across the bucket and holds no data rung at all. The
+  # persona that was unexpressible while granting was welded to `owner`.
+  - { user: user:judy, relation: manage_grants, object: warehouse:acme_bucket }
+  # kevin: a DELEGATE on the silver stage — a writer who may hand on what he holds, and no more.
+  - { user: user:kevin, relation: writer, object: namespace:acme_silver }
+  - { user: user:kevin, relation: pass_grants, object: namespace:acme_silver }
+  # leo: holds the grant OPTION and no rung — the option is worthless alone, by construction.
+  - { user: user:leo, relation: pass_grants, object: namespace:acme_silver }
+  # ---- MANAGED ACCESS (C4) ---------------------------------------------------------------------
+  # A separate warehouse on purpose: the flag changes who may grant, so setting it on acme_bucket
+  # would silently rewrite every grant-axis expectation above. beta is team:partners' tenant.
+  - { user: "user:*", relation: managed_access, object: warehouse:beta_bucket }
+  - { user: warehouse:beta_bucket, relation: parent, object: namespace:beta_locked }
+  - { user: namespace:beta_locked, relation: parent, object: table:beta_locked_records }
+  # mona OWNS the stage inside the managed scope — normally that would carry the right to grant.
+  - { user: user:mona, relation: owner, object: namespace:beta_locked }
+  # nora is the records manager: grant authority at the warehouse, which the flag centralizes on her.
+  - { user: user:nora, relation: manage_grants, object: warehouse:beta_bucket }
+
   # grace: an editor-only grant on a standalone (parentless) transaction — may edit properties, NOT commit
   - { user: user:grace, relation: editor, object: transaction:standalone_txn }
   # root_admin: owner of the ROOT warehouse (fga_root_object). ONLY this estate/platform tier reads the
@@ -151,6 +184,34 @@ tests:
       - user: user:eve
         object: table:acme_gold_catalog
         assertions: { can_read_data: false, can_promote: false }
+
+  # UPWARD VISIBILITY. A single-table grantee must be able to SEE the containers on the path to their
+  # own table, or the grant is unreachable: every list above it comes back empty and the breadcrumb
+  # 403s. `can_get_metadata` reads through `child`; nothing else does, which is the boundary — ivan
+  # can see that acme_gold exists, and can read nothing else in it.
+  - name: upward visibility — a table-only grantee can SEE the path to their table, and nothing more
+    check:
+      - user: user:ivan # the grant itself
+        object: table:acme_gold_catalog
+        assertions: { can_read_data: true, can_get_metadata: true }
+      - user: user:ivan # the containers ABOVE it are now visible…
+        object: namespace:acme_gold
+        assertions: { can_get_metadata: true }
+      - user: user:ivan
+        object: warehouse:acme_bucket
+        assertions: { can_get_metadata: true }
+      - user: user:ivan # …but visibility is NOT read: no data, no writes, no siblings
+        object: namespace:acme_gold
+        assertions: { can_create_table: false, can_delete: false, can_update_properties: false }
+      - user: user:ivan
+        object: table:acme_silver_features # a SIBLING stage's table stays invisible
+        assertions: { can_read_data: false, can_get_metadata: false }
+      - user: user:ivan
+        object: namespace:acme_bronze # an unrelated stage stays invisible
+        assertions: { can_get_metadata: false }
+      - user: user:eve # and an outsider gains nothing from the new edge
+        object: namespace:acme_gold
+        assertions: { can_get_metadata: false }
 
   - name: create-on-parent — create perms are gated on the PARENT object (design-create-on-parent)
     check:
@@ -397,3 +458,166 @@ tests:
       - user: user:permanent
         object: namespace:bronze
         assertions: { owner: true, can_delete: true }
+
+  # THE GRANT AXIS. Granting used to be a side-effect of `owner`, so the only way to let someone
+  # administer access was to give them the data. These pin the separation in both directions: a
+  # grant-manager who cannot read, and a data holder who cannot grant.
+  - name: a SECURITY ADMIN manages access without holding any data rung
+    check:
+      - user: user:judy
+        object: warehouse:acme_bucket
+        assertions:
+          # She may hand out every rung, and review who holds them…
+          can_grant_owner: true
+          can_grant_writer: true
+          can_grant_reader: true
+          can_grant_validator: true
+          can_read_assignments: true
+          # …and may not read, write or promote a single byte. This is the whole point.
+          can_get_metadata: false
+          can_create_table: false
+      - user: user:judy # and it cascades, so access admin is delegated once at the top
+        object: namespace:acme_silver
+        assertions: { can_grant_reader: true, can_get_metadata: false }
+      - user: user:judy # …including to the tables beneath it
+        object: table:acme_silver_features
+        assertions: { can_grant_reader: true, can_read_data: false }
+
+  - name: the GRANT OPTION passes on only what the delegate already holds — never more
+    check:
+      - user: user:kevin
+        object: namespace:acme_silver
+        assertions:
+          # He is a writer, so he may pass writer — and reader, which writer already implies.
+          can_grant_writer: true
+          can_grant_reader: true
+          # He is NOT an owner or a validator, so he cannot mint either. No escalation via delegation.
+          can_grant_owner: false
+          can_grant_validator: false
+          # Nor can he create further delegates, or promote himself to grant-manager.
+          can_grant_pass_grants: false
+          can_grant_manage_grants: false
+      - user: user:kevin # the option is per-object and does NOT cascade to the tables below
+        object: table:acme_silver_features
+        assertions: { can_grant_writer: false }
+
+  - name: the grant option alone grants nothing — it qualifies a rung, it is not a rung
+    check:
+      - user: user:leo
+        object: namespace:acme_silver
+        assertions:
+          can_grant_reader: false
+          can_grant_writer: false
+          # `can_read_data` is TABLE-only — a namespace has no data plane. Asserting it here is the
+          # phantom-relation mistake the model-contract test exists to catch, and the CLI caught it.
+          can_get_metadata: false
+
+  - name: an OWNER still grants everything — the split adds a capability and revokes none
+    check:
+      - user: user:alice # project admin ⇒ warehouse owner ⇒ manage_grants
+        object: namespace:acme_silver
+        assertions:
+          can_grant_owner: true
+          can_grant_reader: true
+          can_read_assignments: true
+      - user: user:eve # …and an outsider gains nothing from the new axis
+        object: namespace:acme_silver
+        assertions:
+          can_grant_reader: false
+          can_read_assignments: false
+
+  # P6 — TENANT MEMBERSHIP. The gap that blocked real users: `admin`/`member` on a project were
+  # writable only by the create-time seed and the estate-gated tuple editor, so a project admin could
+  # not invite anyone into their own tenant.
+  - name: a project ADMIN may grant both tenant rungs — the tenant self-governs
+    check:
+      - user: user:alice # admin via team:eng
+        object: project:acme
+        assertions:
+          can_grant_admin: true
+          can_grant_member: true
+          can_read_assignments: true
+          can_administer: true
+  - name: a plain tenant MEMBER may not — membership is an admin act, not a member one
+    check:
+      - user: user:gina # a plain member of project:acme
+        object: project:acme
+        assertions:
+          can_grant_admin: false
+          can_grant_member: false
+          can_read_assignments: false
+      # …and someone else's tenant stays entirely closed. Membership grants must never cross projects.
+      - user: user:frank # team:partners, project:beta
+        object: project:acme
+        assertions:
+          can_grant_admin: false
+          can_grant_member: false
+  - name: a warehouse OWNER is not automatically a tenant admin — the cascade runs DOWN, not up
+    check:
+      # dave is a writer on the bucket; granting tenant membership is a level above the data plane.
+      - user: user:dave
+        object: project:acme
+        assertions:
+          can_grant_admin: false
+          can_grant_member: false
+
+  # MANAGED ACCESS (C4). The archive lever: "nobody hands out access to this collection except the
+  # records manager". Without it the only way to stop an owner widening access is to stop making them
+  # an owner — which also stops them working.
+  - name: managed access WITHDRAWS an owner's right to grant, and nothing else
+    check:
+      - user: user:mona # owns the stage inside the managed scope
+        object: namespace:beta_locked
+        assertions:
+          # She is still the owner in every way that matters to her work…
+          can_get_metadata: true
+          can_create_table: true
+          can_delete: true
+          # …and may no longer hand access out. That is the entire effect.
+          can_grant_reader: false
+          can_grant_owner: false
+          can_read_assignments: false
+      - user: user:mona # the withdrawal reaches the tables under her stage too
+        object: table:beta_locked_records
+        assertions:
+          can_read_data: true
+          can_grant_reader: false
+
+  - name: the records manager keeps granting throughout the managed scope
+    check:
+      - user: user:nora # manage_grants at the warehouse
+        object: namespace:beta_locked
+        assertions:
+          can_grant_reader: true
+          can_grant_owner: true
+          can_read_assignments: true
+      - user: user:nora
+        object: table:beta_locked_records
+        assertions: { can_grant_reader: true }
+      # …and centralizing grants does NOT hand her the data. The two axes stay separate.
+      - user: user:nora
+        object: table:beta_locked_records
+        assertions: { can_read_data: false }
+
+  - name: an UNMANAGED scope is unaffected — the flag is opt-in, not a global mode change
+    check:
+      - user: user:alice # owner of acme's stages, no managed_access anywhere on that bucket
+        object: namespace:acme_silver
+        assertions:
+          can_grant_reader: true
+          can_grant_owner: true
+
+  - name: a policy you can switch off is not a policy — the flag is cleared from ABOVE, never from inside
+    check:
+      - user: user:mona # owner inside the managed scope
+        object: namespace:beta_locked
+        assertions:
+          # She cannot clear the flag that constrains her: `can_set_managed_access` derives from
+          # `manage_grants`, which the flag itself withdrew. Otherwise the control would be advisory.
+          can_set_managed_access: false
+      - user: user:nora # the records manager, at the warehouse
+        object: namespace:beta_locked
+        assertions: { can_set_managed_access: true }
+      - user: user:alice # …and in an UNMANAGED scope an owner still controls their own
+        object: namespace:acme_silver
+        assertions: { can_set_managed_access: true }

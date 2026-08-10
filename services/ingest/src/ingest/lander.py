@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict
 
 import lance
 import pyarrow as pa
@@ -54,7 +54,11 @@ class CreationFlags(TypedDict):
     same. A TypedDict keeps the constant DRY and restores per-key types at the splat.
     """
 
-    data_storage_version: str
+    #: `Literal`, not `str`: lance types `write_dataset(data_storage_version=…)` as a literal union
+    #: of the versions it knows, so a plain `str` is refused at the splat. Pinning the one version
+    #: this constant carries is also the honest type — a bump edits the value and the annotation
+    #: together, which is what makes the bump visible.
+    data_storage_version: Literal["2.2"]
     enable_stable_row_ids: bool
 
 
@@ -214,6 +218,7 @@ def ensure_indexes_at(dataset_uri: str) -> None:
         _ensure_partition_index(lance.dataset(dataset_uri))
     except Exception:
         logger.warning("could not open %s to ensure indexes — queries will scan", dataset_uri, exc_info=True)
+
 
 def write_unit_fragments(dataset_uri: str, batch: pa.Table) -> list[str]:
     """A worker's half of the write: fragments on disk, invisible until the lander commits them.

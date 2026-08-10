@@ -41,7 +41,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 #: The drawable primitives. A class declares which of these it may be drawn with, so "allowed tools"
 #: is derived from the taxonomy rather than declared beside it where the two can disagree.
 ShapeType = Literal["bbox", "polygon", "mask", "keypoint", "polyline", "segment", "tag", "text"]
-MediaKind = Literal["image", "audio", "video"]
+MediaKind = Literal["image", "audio", "video", "text"]
 AttrType = Literal["free", "int", "enum", "bool"]
 
 
@@ -87,6 +87,14 @@ class LabelClass(BaseModel):
     colour: str | None = None
     #: Which primitives this class may be drawn with. Empty = any (an unconstrained class).
     tools: list[ShapeType] = Field(default_factory=list)
+    #: This class's regions CARRY TRANSCRIBED TEXT (the row's `text` facet) — an OCR paragraph
+    #: does, a detection box does not. Previously undeclarable: the workspace offered the text
+    #: editor on every row of every task, so "is transcription an attribute?" had no answer in
+    #: the model at all. It is neither a tool (a span INTO text is; this is text ON a region)
+    #: nor an attribute (typed side-fields; this is the primary content column). Like `colour`,
+    #: it configures the workspace rather than gating submit: the inspector offers transcription
+    #: only where it is declared, once an ontology declares classes at all.
+    transcribe: bool = False
     #: Per-class typed fields. Replaces the project-level attribute list, which could not say WHICH
     #: class an attribute belonged to.
     attributes: list[OutputAttr] = Field(default_factory=list)
@@ -298,6 +306,17 @@ def membership_violation(ontology: LabelOntology, shapes: list[ShapeLike]) -> st
 
         if klass.tools and shape.shape_type not in klass.tools:
             return f"class {klass.name!r} allows tools {sorted(klass.tools)} — shape {shape.shape_id} is {shape.shape_type}"
+
+        # A class that DECLARES attributes closes the set — an undeclared name is a vocabulary
+        # violation, same stance as `extra="forbid"` on the models: a typo'd `ordr` accepted
+        # silently would publish beside a "requires attribute 'order'" refusal, and nothing
+        # anywhere would say the two are the same mistake. A class declaring NO attributes stays
+        # unconstrained, mirroring how empty `tools` means any tool.
+        if klass.attributes:
+            declared_attrs = {a.name for a in klass.attributes}
+            for name in shape.attributes:
+                if name not in declared_attrs:
+                    return f"attribute {name!r} is not declared on class {klass.name!r} (declares {sorted(declared_attrs)}) — shape {shape.shape_id}"
 
         for attr in klass.attributes:
             value = shape.attributes.get(attr.name)

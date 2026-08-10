@@ -4,8 +4,8 @@
 	import { Check, X, RotateCcw, ChevronUp, ChevronDown, Link2, Link2Off } from '@lucide/svelte';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
-	import { Select } from '@rask/ui/select';
 	import TextInput from '$lib/ui/TextInput.svelte';
+	import TextSpanSurface from './TextSpanSurface.svelte';
 	import { statusVariant } from './statusStyle';
 	import type { AnnotatorController } from '../annotator.svelte';
 
@@ -19,30 +19,34 @@
 		l.from_shape === id ? `→ ${l.to_shape}` : `← ${l.from_shape}`;
 
 	// TEXT SPANS. A span is a range INTO this annotation's text — token-classification, and the value
-	// half of KIE on transcribed text. Selecting in the field the text is already in is the whole
-	// interaction: no second surface, no separate mode, and the offsets come from the browser's own
-	// selection rather than being counted by hand.
-	let spanStart = $state(-1);
-	let spanEnd = $state(-1);
-	const hasSelection = $derived(spanStart >= 0 && spanEnd > spanStart);
+	// half of KIE on transcribed text. The TEXT ITSELF is the annotation surface (the doccano
+	// interaction): spans render as class-coloured highlights in the flowing text, and selecting in
+	// the surface labels a new one in place. The editable input above it stays for CORRECTING the
+	// transcription — reading and labeling happen on the rendered surface, not inside a form field.
 	/** The classes a span may be labelled with — the same taxonomy everything else is judged against. */
 	const spanClasses = $derived(controller.textSpanClasses);
-	let spanLabel = $state('');
+	/** This row's spans, projected for the surface — child rows addressing `row.id` by id. */
+	const spanMarks = $derived(
+		row
+			? controller.rows
+					.filter((r) => r.parentId === row.id && r.charStart != null && r.charStart >= 0)
+					.map((r) => ({
+						index: r.index,
+						id: r.id,
+						start: r.charStart ?? 0,
+						end: r.charEnd ?? 0,
+						label: r.label,
+					}))
+			: [],
+	);
 
-	/** Read the browser's selection off the text input. Called on select/keyup/mouseup rather than
-	 *  watched from an effect: a selection is an EVENT, and polling for it would fight the caret. */
-	function captureSelection(e: Event): void {
-		const el = e.currentTarget as HTMLInputElement | HTMLTextAreaElement;
-		spanStart = el.selectionStart ?? -1;
-		spanEnd = el.selectionEnd ?? -1;
-	}
-
-	function commitSpan(): void {
-		if (!row || !hasSelection) return;
-		controller.addTextSpan(row.index, spanStart, spanEnd, spanLabel || spanClasses[0] || 'span');
-		spanStart = -1;
-		spanEnd = -1;
-	}
+	// ATTRIBUTES. The ontology's typed per-class fields (reading order, script, damaged, …), edited
+	// HERE because an attribute belongs to one annotation the way its label does. Values are strings
+	// on the wire — the submit validator parses int/bool/enum — so every control writes a string and
+	// clearing writes '' (which drops the key). Rendered only when the row's CLASS declares any: an
+	// attribute form on a class with none is a control that can produce nothing.
+	const attrSpecs = $derived(row ? controller.attributesFor(row.label) : []);
+	const attrValues = $derived(row ? controller.rowAttributes(row.index) : {});
 </script>
 
 {#if row}
@@ -74,39 +78,35 @@
 			</div>
 		</div>
 
-		<label class="flex flex-col gap-1.5 text-xs">
-			<span class="text-muted-foreground">Text</span>
-			<TextInput
-				value={row.text}
-				placeholder="—"
-				oninput={(e) => controller.updateField(row.index, 'text', e.currentTarget.value)}
-				onselect={captureSelection}
-				onkeyup={captureSelection}
-				onmouseup={captureSelection}
-			/>
-		</label>
+		<!-- TRANSCRIPTION — the row's text facet, offered per the CLASS's declaration: an OCR
+		     paragraph declares `transcribe`, a detection box does not, and an unconstrained
+		     canvas (no task, or a label no class covers) keeps the historical everywhere-
+		     editable behaviour. This is the answer to "is transcription an attribute?": it is
+		     neither a tool nor an attribute — it is the primary content column, declared per
+		     class in the ontology. -->
+		{#if controller.offersTranscription(row.label)}
+			<label class="flex flex-col gap-1.5 text-xs" data-testid="transcription-field">
+				<span class="text-muted-foreground">Transcription</span>
+				<TextInput
+					value={row.text}
+					placeholder="—"
+					oninput={(e) => controller.updateField(row.index, 'text', e.currentTarget.value)}
+				/>
+			</label>
+		{/if}
 
-		<!-- Offered only when the TASK declares a class that can be drawn as text. A "label selection"
-		     button on a task with no text class is a control that can produce nothing. -->
+		<!-- Offered only when the TASK declares a class that can be drawn as text. A labeling
+		     surface on a task with no text class is a control that can produce nothing. -->
 		{#if controller.allowsTextSpans && row.text}
-			<div class="flex flex-wrap items-center gap-2" data-testid="span-editor">
-				{#if hasSelection}
-					<span class="text-muted-foreground font-mono text-xs" data-testid="span-preview">
-						“{row.text.slice(spanStart, spanEnd)}” [{spanStart}, {spanEnd})
-					</span>
-					{#if spanClasses.length > 1}
-						<Select
-							bind:value={spanLabel}
-							ariaLabel="Span class"
-							options={spanClasses.map((c) => ({ value: c, label: c }))}
-						/>
-					{/if}
-					<Button size="xs" data-testid="label-selection" onclick={commitSpan}>Label selection</Button>
-				{:else}
-					<!-- Says what to do rather than showing a dead button. -->
-					<span class="text-muted-foreground text-xs">Select text above to label a span.</span>
-				{/if}
-			</div>
+			<TextSpanSurface
+				text={row.text}
+				marks={spanMarks}
+				classes={spanClasses}
+				selectedIndex={controller.selectedIndex}
+				onlabel={(start, end, label) => controller.addTextSpan(row.index, start, end, label)}
+				onpick={(i) => controller.select(i)}
+				onremove={(i) => controller.deleteRow(i)}
+			/>
 		{/if}
 
 		<label class="flex flex-col gap-1.5 text-xs">
@@ -143,6 +143,57 @@
 				oninput={(e) => controller.updateField(row.index, 'group', e.currentTarget.value)}
 			/>
 		</label>
+
+		{#if attrSpecs.length > 0}
+			<div class="flex flex-col gap-2 border-t pt-3" data-testid="attributes-panel">
+				<span class="text-muted-foreground text-xs font-medium">Attributes</span>
+				{#each attrSpecs as spec (spec.name)}
+					<label class="flex items-center justify-between gap-2 text-xs">
+						<span class="text-muted-foreground">
+							{spec.name}{#if spec.required}<span
+									class="text-destructive"
+									title="required — submit refuses a {row.label} without it">*</span
+								>{/if}
+						</span>
+						{#if spec.type === 'enum'}
+							<select
+								class="border-input bg-background h-7 rounded-md border px-2 text-xs"
+								value={attrValues[spec.name] ?? ''}
+								data-testid={`attr-${spec.name}`}
+								onchange={(e) =>
+	controller.setAttribute(row.index, spec.name, e.currentTarget.value)}
+							>
+								<option value="">—</option>
+								{#each spec.choices as c (c)}<option value={c}>{c}</option>{/each}
+							</select>
+						{:else if spec.type === 'bool'}
+							<input
+								type="checkbox"
+								class="accent-primary size-4"
+								checked={attrValues[spec.name] === 'true'}
+								data-testid={`attr-${spec.name}`}
+								onchange={(e) =>
+	controller.setAttribute(
+		row.index,
+		spec.name,
+		e.currentTarget.checked ? 'true' : 'false',
+	)}
+							/>
+						{:else}
+							<input
+								type={spec.type === 'int' ? 'number' : 'text'}
+								class="border-input bg-background h-7 w-24 rounded-md border px-2 text-right text-xs"
+								value={attrValues[spec.name] ?? ''}
+								placeholder="—"
+								data-testid={`attr-${spec.name}`}
+								oninput={(e) =>
+	controller.setAttribute(row.index, spec.name, e.currentTarget.value)}
+							/>
+						{/if}
+					</label>
+				{/each}
+			</div>
+		{/if}
 
 		<dl class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
 			<dt class="text-muted-foreground">Source</dt>

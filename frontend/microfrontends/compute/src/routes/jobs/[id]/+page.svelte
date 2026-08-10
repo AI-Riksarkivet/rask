@@ -3,7 +3,12 @@
 	import { page } from '$app/state';
 	import { base } from '$app/paths';
 	import { type TaskInfo } from '@rask/api';
-	import { getRayJobs, getJobTasks, getRayCluster, getRayJobLogs } from '$lib/remote/compute.remote';
+	import {
+		getRayJobs,
+		getJobTasks,
+		getRayCluster,
+		getRayJobLogs,
+	} from '$lib/remote/compute.remote';
 	import { Card } from '@rask/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
 	import { SortHeader } from '@rask/ui/sort-header';

@@ -19,9 +19,12 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from annotator.api.v1.endpoints.serve_discovery import discovered_backends
+from annotator.projects.generation_schema import generation_schema
 from annotator.projects.ontology import LabelOntology
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.lancekit.keys import validate_doc_key
+from service_kit.media.config import AssistBackend
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import AppState, dataset_handle
 
@@ -40,12 +43,30 @@ class Region(BaseModel):
     height: float
 
 
+class Point(BaseModel):
+    """One interactive prompt point (image coords). ``positive=False`` marks background —
+    the SAM click convention: foreground clicks say "include this", background clicks say
+    "not this". Points ACCUMULATE across a refinement session; each request carries the
+    full set so the backend is stateless."""
+
+    x: float
+    y: float
+    positive: bool = True
+
+
 class AssistRequest(BaseModel):
-    """What to run: the producer + its prompt (free text and/or a drawn region)."""
+    """What to run: the producer + its prompt (free text, a drawn region, and/or clicked
+    points). A SAM-family backend takes any combination — box, points, box+points; a
+    text-prompt backend reads ``prompt``. Everything is optional so one wire shape serves
+    every producer family."""
 
     producer: str = "grounding-dino"
     prompt: str | None = None
     region: Region | None = None
+    #: The interactive point-prompt session: every point clicked so far, in order. The
+    #: request is the whole session state — re-running with one more point REFINES the
+    #: same object rather than predicting a new one.
+    points: list[Point] = Field(default_factory=list)
     #: The labeling task this assist is for, when there is one. The SERVER reads that task's
     #: captured ontology — the client does not send the rules it is judged by, same posture as
     #: `review_required` and the submit-time contract check.
@@ -78,7 +99,26 @@ _CANONICAL_SHAPE: dict[str, str] = {
 _RETURNS: dict[str, tuple[str, ...]] = {
     "grounding-dino": ("bbox",),
     "sam": ("polygon",),
+    # The BATCH families. Absent from this map, the service's registry and the frontend's diverged
+    # into two truths: `/assist/producers` never listed htr/insid3/vlm-judge/embed-propagate, so
+    # their compatibility rendered "unknown" forever and the settings surface denied producers the
+    # jobs seam happily accepts. Listed ⇒ compatibility computes; batch-ness rides `interactive`.
+    "htr": ("text",),
+    "insid3": ("mask",),
+    # The RECIPE family (open-bulk): an LLM/VLM answering an item-level question. Its answer is a
+    # `tag` shape carrying `text` — the bulk grid's cell — so it is interactive (per-cell fills go
+    # through this POST) and its compatibility computes against tag-tooled classes.
+    "vlm": ("tag",),
+    # vlm-judge/embed-propagate emit VERDICTS/FIELD writes, not shapes — an empty tuple is honest
+    # ("emits no drawable shape"), and compatibility correctly stays a non-claim.
+    "vlm-judge": (),
+    "embed-propagate": (),
 }
+
+#: Families that only run through the JOBS seam (`/api/jobs/apply`) — the interactive assist POST
+#: has no transport for them. The registry says so instead of letting the bar offer a mode that
+#: could only ever answer from the mock.
+_BATCH_ONLY: frozenset[str] = frozenset({"htr", "vlm-judge", "embed-propagate"})
 
 
 def returns_for(producer: str) -> tuple[str, ...]:
@@ -99,12 +139,19 @@ class ProducerInfo(BaseModel):
     name: str
     #: False ⇒ this name answers from the in-repo mock (no endpoint resolves for it).
     configured: bool
-    #: The shape types it emits; EMPTY means unknown, not "none".
+    #: The shape types it emits; EMPTY means unknown, not "none". A registered backend's own
+    #: declaration wins over the built-in family map — the entry, not code, is the contract.
     returns: list[str] = Field(default_factory=list)
+    #: What the backend DECLARES it takes (e.g. ["prompt"], ["points", "region"]). Empty means
+    #: undeclared — the panel falls back to its family knowledge and says so no stronger.
+    inputs: list[str] = Field(default_factory=list)
     #: Whether those shapes satisfy the task named in `?task_id=`. None when there is no task, when
     #: its ontology constrains nothing, or when `returns` is unknown — three genuinely different
     #: reasons not to make a claim, all of which the UI renders as "unknown" rather than as a pass.
     compatible: bool | None = None
+    #: False ⇒ this family runs only through the jobs seam; the interactive assist POST cannot
+    #: reach it, and the bar must not offer it as a mode.
+    interactive: bool = True
 
 
 class ProducerListing(BaseModel):
@@ -119,7 +166,15 @@ class ProducerListing(BaseModel):
 
 
 class AssistShape(BaseModel):
-    """One predicted shape in image coordinates (box or polygon) with confidence."""
+    """One predicted shape in image coordinates (box or polygon) with its scores.
+
+    ``confidence``/``uncertainty`` are the active-learning columns the review queue ranks by
+    (predictions first, highest uncertainty first). They are part of the WIRE contract so a real
+    backend must state them — the columns exist end-to-end (schema, sidebar, queue order) and a
+    producer that omits them leaves its predictions unrankable, which reads as "the queue is
+    alphabetical" with nowhere to see why. ``uncertainty`` is the model's OWN estimate, never
+    derived here as ``1 - confidence`` — that derivation carries no information beyond confidence
+    and is exactly the trap this field exists to avoid."""
 
     shape_type: str = "bbox"
     x: float
@@ -128,7 +183,14 @@ class AssistShape(BaseModel):
     height: float
     polygon: list[float] = Field(default_factory=list)
     label: str = ""
+    #: The TEXTUAL answer — a transcription, or an LLM/VLM recipe's cell value (the bulk grid's
+    #: item-level columns land as `tag` shapes whose `text` is the cell). Part of the wire so a
+    #: text-family producer can answer at all: without it the assist plane could only ever carry
+    #: geometry, and every text answer would need a second transport.
+    text: str = ""
     confidence: float = 0.0
+    #: None = the backend made no estimate; the row lands with a null and sorts last in the queue.
+    uncertainty: float | None = None
 
 
 class AssistResult(BaseModel):
@@ -158,7 +220,7 @@ async def producers(state: StateDep, task_id: str | None = None) -> ProducerList
     other half of "schemas must align from the ml backend": a producer emitting polygons for a
     bbox-only task is answerable BEFORE anyone runs it, and this is where you can see it.
     """
-    return producer_listing(state.settings, await enforced_shape_types(task_id))
+    return producer_listing(state.settings, await enforced_shape_types(task_id), await _discovered(state))
 
 
 async def enforced_shape_types(task_id: str | None) -> set[str] | None:
@@ -179,10 +241,14 @@ async def enforced_shape_types(task_id: str | None) -> set[str] | None:
     return {_CANONICAL_SHAPE.get(t, t) for t in ontology.tools} or None
 
 
-def producer_listing(settings: Any, allowed: set[str] | None = None) -> ProducerListing:
+def producer_listing(
+    settings: Any,
+    allowed: set[str] | None = None,
+    discovered: dict[str, AssistBackend] | None = None,
+) -> ProducerListing:
     """Build the registry report. Takes `settings` structurally, like `backend_for` — the routing
     rules are the interesting part and they should be testable without standing up an `AppState`."""
-    registry: dict[str, str] = getattr(settings, "assist_backends", None) or {}
+    registry = merged_registry(settings, discovered)
     default_url = getattr(settings, "assist_url", None)
 
     rows: list[ProducerInfo] = []
@@ -190,18 +256,40 @@ def producer_listing(settings: Any, allowed: set[str] | None = None) -> Producer
     # service reports an EMPTY settings surface, which reads as "assist is unavailable" when in fact
     # both interactive loops work against the mock.
     for name in sorted(set(registry) | set(_RETURNS)):
-        emits = returns_for(name)
+        declared = registry.get(name)
+        # The backend's OWN declaration wins; the built-in family map is the fallback for the
+        # families the mock answers for. Canonicalised like a response would be, so a backend
+        # declaring "rectangle" and a task allowing "bbox" still meet.
+        emits = tuple(_CANONICAL_SHAPE.get(r, r) for r in declared.returns) if declared and declared.returns else returns_for(name)
         rows.append(
             ProducerInfo(
                 name=name,
-                configured=backend_for(settings, name) is not None,
+                configured=backend_for(settings, name, discovered) is not None,
                 returns=list(emits),
+                inputs=list(declared.inputs) if declared else [],
                 # No task, no enforcement, or nothing known about what it emits ⇒ NO CLAIM. Only the
                 # case where both sides are actually known produces a true/false.
                 compatible=bool(set(emits) & allowed) if (allowed and emits) else None,
+                interactive=name not in _BATCH_ONLY,
             )
         )
     return ProducerListing(producers=rows, default_configured=bool(default_url))
+
+
+class GenerationContract(BaseModel):
+    """The task's ontology as a JSON Schema for structured decoding — what a vLLM-style
+    backend passes to ``guided_json`` (Outlines/xgrammar) so an off-contract annotation
+    cannot be generated. ``null`` when the task constrains nothing: a schema fabricated from
+    no contract would constrain to nothing while reading as if it enforced something."""
+
+    output_schema: dict[str, Any] | None
+
+
+@router.get("/assist/generation-schema")
+async def generation_contract(task_id: str) -> GenerationContract:
+    """The decode-time contract for `task_id` — also useful standalone: a batch deriver or an
+    external labeling script can fetch it and constrain its own generation the same way."""
+    return GenerationContract(output_schema=generation_schema(await _task_ontology(task_id)))
 
 
 @router.post("/assist/{doc_id}/{speech_id}/{chunk_id}")
@@ -214,16 +302,22 @@ async def assist(
     dataset: DatasetParam = None,
 ) -> AssistResult:
     """Run an interactive producer over one media unit and return predicted shapes."""
-    handle = dataset_handle(state, dataset)
+    # Off the loop: dataset resolution is blocking Lance/S3 under a threading.Lock — inline it
+    # froze the whole loop for the duration of a cold S3 open (open_python-audit ANN-01); the
+    # sibling `def` routes get the threadpool for free.
+    handle = await run_in_threadpool(dataset_handle, state, dataset)
     doc_id = validate_doc_key(handle.descriptor.declared, doc_id)
     source = f"model:{body.producer}"
-    url = backend_for(state.settings, body.producer)
+    url = backend_for(state.settings, body.producer, await _discovered(state))
+    # ONE task read serves both halves of the contract: the schema a constrained decoder
+    # enforces at GENERATION time, and the filter that checks whatever came back.
+    ontology = await _task_ontology(body.task_id) if body.task_id else None
     # The producer call uses a SYNC httpx client, so it rides the threadpool rather than blocking
     # the event loop — the endpoint is async only because reading the task's template is.
-    shapes = await run_in_threadpool(_remote, state, url, (doc_id, speech_id, chunk_id), body) if url else _mock(body)
+    shapes = await run_in_threadpool(_remote, state, url, (doc_id, speech_id, chunk_id), body, generation_schema(ontology)) if url else _mock(body)
     for shape in shapes:
         shape.shape_type = _CANONICAL_SHAPE.get(shape.shape_type, shape.shape_type)
-    shapes, dropped = await _within_contract(shapes, body.task_id)
+    shapes, dropped = _within_contract(shapes, ontology)
     # Prompt CONTENT is user free-text — never logged (PII/leak surface); length only.
     logger.info(
         "assist %s (prompt %d chars) → %d shape(s), %d dropped",
@@ -235,20 +329,19 @@ async def assist(
     return AssistResult(shapes=shapes, source=source, dropped=dropped)
 
 
-async def _within_contract(shapes: list[AssistShape], task_id: str | None) -> tuple[list[AssistShape], list[str]]:
+def _within_contract(shapes: list[AssistShape], ontology: LabelOntology | None) -> tuple[list[AssistShape], list[str]]:
     """Keep the predictions the task's template permits; report the rest.
 
     A producer is not obliged to know the task's rules — the whole point of the registry is that a
     backend is a config entry. So the mismatch is resolved HERE, once, rather than by every model
-    server or (as before) by a human at submit time.
+    server or (as before) by a human at submit time. PURE: the route reads the ontology once and
+    both contract halves (the generation schema and this filter) derive from that one read.
 
-    A task-less assist (the ad-hoc canvas) has no contract, so nothing is dropped. A read that fails
-    is treated the same way: the assist still returns its shapes, because refusing a prediction
-    because we could not read a rule would be a worse failure than the mismatch it guards against.
+    A task-less assist (the ad-hoc canvas) has no contract, so nothing is dropped. A read that
+    failed arrives as ``None`` and is treated the same way: the assist still returns its shapes,
+    because refusing a prediction because we could not read a rule would be a worse failure than
+    the mismatch it guards against.
     """
-    if not task_id:
-        return shapes, []
-    ontology = await _task_ontology(task_id)
     if ontology is None:
         return shapes, []
     allowed = {_CANONICAL_SHAPE.get(t, t) for t in ontology.tools}
@@ -289,15 +382,44 @@ async def _task_ontology(task_id: str) -> LabelOntology | None:
     return ontology if ontology.constrains else None
 
 
-def backend_for(settings: Any, producer: str) -> str | None:
-    """Resolve the producer's backend: LONGEST matching prefix in the registry wins (so `"sam"`
-    covers `sam-click` while `"sam-hq"` can still override it), else the default `assist_url`,
-    else None (→ the honest in-repo mock). The registry is what makes a new model a CONFIG entry
-    rather than a code change — the CVAT-functions shape without the function orchestrator."""
-    backends = getattr(settings, "assist_backends", None) or {}
+async def _discovered(state: AppState) -> dict[str, AssistBackend]:
+    """What Ray Serve is serving right now, TTL-cached — fetched off the event loop (sync
+    httpx), and empty when discovery is unconfigured or the control plane is unreachable."""
+    settings = state.settings
+    if not getattr(settings, "serve_discovery_url", None):
+        return {}
+    return await run_in_threadpool(
+        discovered_backends,
+        state.http,
+        settings.serve_discovery_url,
+        getattr(settings, "serve_proxy_url", None),
+    )
+
+
+def merged_registry(settings: Any, discovered: dict[str, AssistBackend] | None) -> dict[str, AssistBackend]:
+    """Discovery under config: what Ray Serve is OBSERVED to serve, overlaid by what the
+    operator DECLARED — an env entry with the same producer name wins, because config is
+    intent and discovery is observation."""
+    return {**(discovered or {}), **registry_of(settings)}
+
+
+def registry_of(settings: Any) -> dict[str, AssistBackend]:
+    """The registry, NORMALIZED: config may carry structured `AssistBackend` entries or bare URL
+    strings (back-compat), and structural test doubles pass plain dicts — every consumer reads
+    through this one coercion instead of re-deciding what an entry is."""
+    raw = getattr(settings, "assist_backends", None) or {}
+    return {name: AssistBackend.model_validate(entry) for name, entry in raw.items()}
+
+
+def backend_for(settings: Any, producer: str, discovered: dict[str, AssistBackend] | None = None) -> str | None:
+    """Resolve the producer's backend: LONGEST matching prefix in the merged registry wins (so
+    `"sam"` covers `sam-click` while `"sam-hq"` can still override it), else the default
+    `assist_url`, else None (→ the honest in-repo mock). With Serve discovery on, DEPLOYING a
+    model is what registers it — the env registry stays the operator override."""
+    backends = merged_registry(settings, discovered)
     best = max((p for p in backends if producer.startswith(p)), key=len, default=None)
     if best is not None:
-        return backends[best]
+        return backends[best].url
     return settings.assist_url
 
 
@@ -308,10 +430,26 @@ def _mock(body: AssistRequest) -> list[AssistShape]:
     """Deterministic stand-in for a model server, so both interactive loops round-trip
     in-repo. GroundingDINO → a box at the drawn region (or a default), labeled with the
     prompt. SAM → a polygon 'mask' around the region/click (a click is a zero box, so a
-    default patch is grown around the point). Both render + review like real predictions."""
+    default patch is grown around the point). Both render + review like real predictions.
+
+    Scores are stated (not derived from each other) for the same reason the mock exists at all:
+    the wire contract must round-trip in-repo, and the review queue's uncertainty ordering is only
+    exercisable when the two producers rank DIFFERENTLY — the segmenter reports lower uncertainty
+    than the detector, so a mixed queue has a visible, deterministic order."""
     r = body.region
     if body.producer.startswith("sam"):
-        x, y, w, h = _region_box(r)
+        if body.points:
+            # A refinement session: the mask follows the POSITIVE points (their bounding
+            # box, padded), and each added point visibly improves the scores — so the
+            # client's replace-on-refine loop is exercisable end-to-end: same session,
+            # different geometry, monotonically better confidence.
+            x, y, w, h = _points_box(body.points)
+            n = len(body.points)
+            confidence = min(0.95, 0.7 + 0.05 * n)
+            uncertainty = max(0.05, 0.3 - 0.04 * n)
+        else:
+            x, y, w, h = _region_box(r)
+            confidence, uncertainty = 0.85, 0.3
         return [
             AssistShape(
                 shape_type="polygon",
@@ -321,9 +459,16 @@ def _mock(body: AssistRequest) -> list[AssistShape]:
                 height=h,
                 polygon=_diamond(x, y, w, h),
                 label=(body.prompt or "object").strip(),
-                confidence=0.85,
+                confidence=confidence,
+                uncertainty=uncertainty,
             )
         ]
+    if body.producer.startswith("vlm"):
+        # The recipe family: an item-level ANSWER, not geometry — a `tag` shape whose `text` is
+        # the bulk grid's cell value. Deterministic echo of the question so the loop (fill →
+        # correct → validate) is exercisable in-repo, honest about being a mock.
+        answer = f"[{body.producer}] {(body.prompt or '').strip()}"[:80]
+        return [AssistShape(shape_type="tag", x=0.0, y=0.0, width=0.0, height=0.0, text=answer, confidence=0.8, uncertainty=0.2)]
     label = (body.prompt or "region").strip()
     if r is not None:
         return [
@@ -335,9 +480,22 @@ def _mock(body: AssistRequest) -> list[AssistShape]:
                 height=r.height,
                 label=label,
                 confidence=0.7,
+                uncertainty=0.45,
             )
         ]
-    return [AssistShape(shape_type="rectangle", x=100.0, y=100.0, width=200.0, height=80.0, label=label, confidence=0.7)]
+    return [AssistShape(shape_type="rectangle", x=100.0, y=100.0, width=200.0, height=80.0, label=label, confidence=0.7, uncertainty=0.45)]
+
+
+def _points_box(points: list[Point]) -> tuple[float, float, float, float]:
+    """The patch a point session selects: the positive points' bounding box, padded by
+    half the click patch on every side. Background (negative) points steer a real model
+    but select nothing themselves — they only anchor the box when NO positive point
+    exists (a session of pure background clicks still needs an answer somewhere)."""
+    anchors = [p for p in points if p.positive] or points
+    xs = [p.x for p in anchors]
+    ys = [p.y for p in anchors]
+    pad = _SAM_CLICK_PATCH / 2
+    return (min(xs) - pad, min(ys) - pad, max(xs) - min(xs) + 2 * pad, max(ys) - min(ys) + 2 * pad)
 
 
 def _region_box(r: Region | None) -> tuple[float, float, float, float]:
@@ -359,12 +517,23 @@ def _diamond(x: float, y: float, w: float, h: float) -> list[float]:
     return [cx, y, x + w, cy, cx, y + h, x, cy]
 
 
-def _remote(state: AppState, url: str, key: tuple[str, int, int], body: AssistRequest) -> list[AssistShape]:
+def _remote(
+    state: AppState,
+    url: str,
+    key: tuple[str, int, int],
+    body: AssistRequest,
+    output_schema: dict[str, Any] | None = None,
+) -> list[AssistShape]:
     """Proxy to the model endpoint — a Ray Serve deployment (GroundingDINO/SAM) per the
     merge runtime stack. WIRED, not exercised in-repo: posts the chunk-frame image URL +
     prompt + region and expects ``{shapes: [...]}``. A failing or misbehaving model
     server (HTTP error, bad JSON, invalid shape) raises
-    :class:`ServiceUnavailableError` — a stable 503, never a raw 500."""
+    :class:`ServiceUnavailableError` — a stable 503, never a raw 500.
+
+    ``output_schema`` is the task's ontology as a JSON Schema — a vLLM-style backend hands it
+    to its structured decoder (``guided_json``) so an off-contract annotation cannot be
+    GENERATED, rather than merely being filtered after. Null when the task constrains nothing;
+    a non-LLM backend is free to ignore it."""
     doc_id, speech_id, chunk_id = key
     http = state.http
     if http is None:
@@ -373,6 +542,8 @@ def _remote(state: AppState, url: str, key: tuple[str, int, int], body: AssistRe
         "image_url": f"/api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}",
         "prompt": body.prompt,
         "region": body.region.model_dump() if body.region else None,
+        "points": [p.model_dump() for p in body.points],
+        "output_schema": output_schema,
     }
     try:
         resp = http.post(url, json=payload, timeout=30.0)

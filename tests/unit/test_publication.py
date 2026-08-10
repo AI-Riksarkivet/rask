@@ -35,6 +35,8 @@ from lance_namespace import (
     connect,
 )
 
+from service_kit.lakehouse.quality import Assertion
+
 
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())])
 
@@ -137,7 +139,7 @@ def test_a_FAILING_gate_leaves_CONSUMERS_ON_LAST_GOOD(ns) -> None:  # noqa: ANN0
     assert pinned.to_table(columns=["id"]).column("id").to_pylist() == [1, 2, 3]
 
 
-def test_the_candidate_is_PINNED_while_the_gate_runs(ns) -> None:  # noqa: ANN001
+def test_the_candidate_is_PINNED_while_the_gate_runs(ns, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
     """The GC hazard, closed.
 
     `cleanup_old_versions` exempts only TAGGED versions, and the candidate is untagged for exactly as
@@ -154,17 +156,22 @@ def test_the_candidate_is_PINNED_while_the_gate_runs(ns) -> None:  # noqa: ANN00
 
     real = publication.assert_quality
 
-    def observing(*args: object, **kwargs: object):  # noqa: ANN202
+    # The gate's own signature, spelled out: a `*args` wrapper cannot forward into typed parameters,
+    # and it would keep passing the day the gate grows one.
+    def observing(
+        uri: str,
+        storage_options: dict[str, str],
+        *,
+        key_column: str,
+        required_columns: tuple[str, ...] | list[str] = (),
+    ) -> list[Assertion]:
         tags = publication.dataplane.list_tags(ns, {}, ListTableTagsRequest(id=TABLE_ID)).tags or {}
         entry = tags.get(PUBLISHING_TAG)
         seen.append(getattr(entry, "version", None) if entry is not None else None)
-        return real(*args, **kwargs)  # ty: ignore[missing-argument]
+        return real(uri, storage_options, key_column=key_column, required_columns=required_columns)
 
-    publication.assert_quality = observing  # type: ignore[assignment]
-    try:
-        _publish(ns, version)
-    finally:
-        publication.assert_quality = real  # type: ignore[assignment]
+    monkeypatch.setattr(publication, "assert_quality", observing)
+    _publish(ns, version)
 
     assert seen == [version], f"the candidate was not pinned while the gate ran: {seen}"
 
@@ -293,10 +300,10 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     settings = Settings()
 
     good = _write(ns, [1, 2, 3])
-    await publish_table("pages", PublishRequest(version=good, key_column="id"), ns, settings, {}, _Emitter(), None)  # ty: ignore[invalid-argument-type]
+    await publish_table("pages", PublishRequest(version=good, key_column="id"), ns, settings, {}, _Emitter(), None)
 
     bad = _write(ns, [4, None, 6])
-    await publish_table("pages", PublishRequest(version=bad, key_column="id"), ns, settings, {}, _Emitter(), None)  # ty: ignore[invalid-argument-type]
+    await publish_table("pages", PublishRequest(version=bad, key_column="id"), ns, settings, {}, _Emitter(), None)
 
     assert [a["action"] for a in announced] == ["table_published"], "a rejection must announce nothing"
     assert (announced[0]["from_version"], announced[0]["to_version"]) == (None, good)

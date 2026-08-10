@@ -112,6 +112,12 @@ services:
     # seven inert variables on the gateway and compute.
     governedAuth: true
     lanceWriter: true
+    # NOT a `daprIngest` service, and that distinction is the whole reason the flag exists. Here
+    # APP_API_TOKEN is a POLICY input the door reads per request (unset == dev-open), so it is armed
+    # only alongside the user door — the fleet.yaml block states both arms. A `daprIngest` service
+    # instead REFUSES TO START without it. Written out rather than left absent: absence is exactly what
+    # let this token ride `lanceWriter`, an unrelated storage flag, for a release.
+    daprIngest: false
     env:
       # Lineage is both WRITTEN and READ here, and the two need different halves of one service.
       # RASK_LINEAGE_ENDPOINT is lineage-kit's emitter target: unset, its transport degrades to a
@@ -189,6 +195,40 @@ services:
     port: 8840
     replicas: 1
     frontDoor: true
+    # The run door spends GPU compute (model nodes invoke live Serve endpoints), so on a governed
+    # stack it checks the estate writer tier — FlowsSettings extends GovernedAuthSettings (LANCE_*).
+    governedAuth: true
+    waitFor: []
+  # The notification plane (open_notifications.md D2/S1): one InboxActor per subject, holding
+  # claim-check pointers with durable read state, so the bell counts YOUR work instead of the whole
+  # estate's. Its own app-id because an inbox aggregates lineage runs and catalog governance and
+  # belongs to neither producer.
+  #
+  # `frontDoor: true` because the gateway carries /api/notifications unconditionally — an install
+  # without this Deployment answers ERR_DIRECT_INVOKE on the route the bell polls, in every zone.
+  #
+  # replicas: 1 is the fleet default, not an actor constraint: Dapr placement distributes actor ids
+  # across hosts, and the bus subscription's `queueGroupName` makes replicas a competing-consumer
+  # group. What must NOT be scaled is uvicorn WORKERS inside one pod — see the dockerfile.
+  notifications:
+    module: "notifications:app"
+    port: 8850
+    replicas: 1
+    frontDoor: true
+    # The inbox door verifies the bearer and re-derives visibility per recipient — NotificationsSettings
+    # extends GovernedAuthSettings, so the prefix is LANCE_ like ingest's and flows'.
+    governedAuth: true
+    # This service HOSTS a sidecar-delivered route (`POST /lineage-events`) and refuses to start
+    # without the token: `register_subscriptions` calls `assert_app_token_configured`, which raises
+    # whenever RASK_DAPR_ENABLED is true and APP_API_TOKEN is unset — the estate's fail-closed rule for
+    # a live delivery route. So this flag is not a preference, it is the difference between a running
+    # pod and a CrashLoopBackOff on the DEFAULT install (dapr.sidecars is on).
+    #
+    # It is the first fleet.yaml service to need the token: every other caller of
+    # `assert_app_token_configured` is a lance-plane pod (catalog, lineage, the medallion producer and
+    # movers, maintenance) templated elsewhere, each rendering APP_API_TOKEN explicitly. In fleet.yaml
+    # the token had only ever been reachable through `lanceWriter`, which this service is not.
+    daprIngest: true
     waitFor: []
   gateway:
     module: "gateway:app"
@@ -1013,6 +1053,25 @@ stateStore:
     # visible to this app-id. Measured live 2026-08-06: the service booted healthy, served its catalog,
     # and 500'd on the first POST /runs — the scope is the whole difference.
     - flows
+    # ── `notifications` needs STATE, and it is the entry that forces the rollout. ────────────────────
+    # The whole service is actor state: one InboxActor per subject, holding the pointer rows and the
+    # compaction reminder. Unscoped, the sidecar answers "Actor state store not configured - actor
+    # hosting disabled" to every actor call. The pod does NOT crash-loop and does not even report
+    # itself degraded: `ActorRuntime.register_actor` is process-local (it never touches the sidecar),
+    # so the lifespan sets `actors_registered = True`, `require_actor_plane` lets the request through,
+    # and the refusal happens per INVOCATION — today as an untranslated 500 from every inbox route on
+    # a pod whose probes stay green. Symptom: a healthy pod and a bell that never fills.
+    #
+    # THIS ADDITION IS A COORDINATED ROLLOUT, and that is a scheduling fact rather than a code one.
+    # `lance-statestore` carries `actorStateStore: "true"`, and daprd refuses to hot-reload any actor
+    # state store (open_dapr.md §2.21, measured 2026-08-07): the component is re-read only at sidecar
+    # BOOT, so already-running pods of every scoped app keep the OLD scope list until they restart.
+    # Adding an app-id while it has no pod is the single safe case and this is it — nothing regresses
+    # on the other four, they simply do not observe the change — but the notifications pod itself must
+    # come up AFTER the component carrying this scope exists. open_notifications.md §11 q4 holds the
+    # window open for its other passengers (the lance-ray rename, the Dapr Configuration/ActorStateTTL
+    # decision, the state.postgresql v1→v2 move); ride them together or not at all.
+    - notifications
 
 # --- Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
 # managed/operator path (CloudNativePG for AGE, rustfs-operator for S3 — the rask deployment), DISABLE these
@@ -1507,10 +1566,62 @@ openfga:
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { memory: 512Mi }
-  # Pin to v1.8.0: v1.18.0's migration 006 (DROP INDEX CONCURRENTLY) breaks against the AGE-shared
-  # Postgres; v1.8.0 migrates cleanly. Server + our migrate Job both use this tag (schema match).
+  # v1.18.3 (2026-08-05), moved off the long-standing v1.8.0 pin. Server + our migrate Job use the
+  # SAME tag (templates/openfga-migrate.yaml) so the migrated schema always matches the binary.
+  #
+  # WHY: weighted-graph resolution. OpenFGA is moving Check/ListObjects/Expand/ListUsers onto it and
+  # will REMOVE the legacy fallback (openfga.dev blog 2026-07-21). Our model was audited against all
+  # five incompatibility classes and is compatible — OPEN-WORK.md §J — so this upgrade is safe from
+  # the MODEL side; nothing to migrate there. (Weighted-graph Check is still experimental behind a
+  # flag in 1.18.x, so this buys readiness, not new behaviour.)
+  #
+  # THE MIGRATION HISTORY, kept because the old comment's diagnosis was WRONG and someone will
+  # otherwise re-derive it: the blocker was never "v1.18.0 migration 006" — v1.18.0's migration 008
+  # is MySQL-only. What this upgrade crosses is v1.10.0's `!!REQUIRES MIGRATION!!` COLLATION
+  # migration (openfga#2661), which rewrites indexes for sort order; that is where the observed
+  # `DROP INDEX CONCURRENTLY` came from, and Postgres refuses that statement inside a transaction
+  # block.
+  #
+  # WHY IT IS NOT A BLOCKER HERE: the estate's stated posture is that RESEEDING THE FGA STORE IS
+  # ACCEPTABLE (owner ruling 2026-08-08 — the tuples are re-seedable from `scripts/fga_seed_*` and
+  # the model is version-controlled), so we do not need an in-place collation migration to succeed.
+  # On a fresh/reseeded database the migrations run 001..N from scratch and the question does not
+  # arise. If an in-place upgrade of a data-bearing store is ever wanted instead, THAT is when the
+  # collation migration has to be proven first.
+  #
+  # If the migrate Job does fail: it never completes (backoffLimit 30), the server never becomes
+  # Ready against an unmigrated schema, `helm upgrade --wait` times out and leaves the release in
+  # `pending-upgrade` (refusing later upgrades until `helm rollback rask <rev>` — CLAUDE.md). The
+  # answer then is to drop and recreate the openfga database rather than to revert the tag.
   image:
-    tag: v1.8.0
+    tag: v1.18.3
+  # THE FEATURE this upgrade is for. `weighted_graph_check` puts Check on the weighted-graph
+  # algorithm now instead of waiting for it to become the default — OpenFGA is moving every query
+  # endpoint onto it and will remove the legacy fallback (openfga.dev, 2026-07-21). Turning it on is
+  # safe for us specifically: the model was audited against all five incompatibility classes and is
+  # clean (OPEN-WORK.md §J) — no `and`/`but not` anywhere, every multi-type TTU resolves on every
+  # allowed parent type, and no check call passes a userset/wildcard subject outside the catalog's
+  # access simulator. Incompatible models silently FALL BACK to the legacy algorithm rather than
+  # breaking, and 1.18.x logs a diagnostic when v2 would differ from v1 — so the flag is also the
+  # cheapest way to find out we are wrong.
+  #
+  # NOT set here, deliberately: `pipeline_list_objects` is already the DEFAULT since v1.11.6, and
+  # `datastore_throttling` changes behaviour under load on a Postgres THREE consumers share — decide
+  # that one against measurements, not by switching it on blind.
+  #
+  # WHY AN ENV VAR AND NOT `experimentals:` — 0.3.9's values.schema.json ENUMERATES the four flags it
+  # knew about and `weighted_graph_check` post-dates it, so `experimentals: [weighted_graph_check]`
+  # fails schema validation before a single template renders. That is not a helm-4 quirk: `helm lint
+  # chart` and `helm template chart` both die on it under the CI-pinned 3.16.4 as well. `extraEnvVars`
+  # carries no enum, the subchart appends it verbatim to the server container's env, and
+  # OPENFGA_EXPERIMENTALS is the EXACT variable `experimentals:` renders (deployment.yaml, `join ","`)
+  # — so the binary is configured identically. It also reaches the subchart's bundled migrate
+  # container, which is inert here: datastore.applyMigrations is false and templates/openfga-migrate.yaml
+  # owns migration instead. Move this back to `experimentals:` when the subchart reaches a version whose
+  # enum lists the flag; that bump is blocked on Chart.lock (see chart/Chart.yaml under openfga).
+  extraEnvVars:
+    - name: OPENFGA_EXPERIMENTALS
+      value: weighted_graph_check
   datastore:
     engine: postgres
     # DSN comes from the infra-credentials Secret (key openfga-datastore-uri) — the SAME secret the AGE
@@ -1522,9 +1633,12 @@ openfga:
     existingSecret: rask-infra-credentials
     secretKeys:
       uriKey: openfga-datastore-uri
-    # The chart's bundled migrate (both job + initContainer types) fails to pass the datastore flags in
+    # The chart's bundled migrate (both job + initContainer types) failed to pass the datastore flags in
     # 0.3.9, so we disable it and run our own proven migrate Job (templates/openfga-migrate.yaml) that
-    # waits for the AGE Postgres first. The server then connects to the already-migrated db.
+    # waits for the AGE Postgres first. The server then connects to the already-migrated db. KEPT on the
+    # 0.3.12 bump on purpose — our Job also carries the NetworkPolicy component label and the wait-age
+    # init that the bundled one has no equivalent for, so re-testing the bundled path is its own change,
+    # not a side effect of a version bump.
     applyMigrations: false
     waitForMigrations: false
 

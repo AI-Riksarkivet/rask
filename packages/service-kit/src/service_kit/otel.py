@@ -24,8 +24,29 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     alone to opt in.
 
     Returns True if instrumentation was applied, False if skipped.
+
+    **An explicit `Settings` DECIDES — the endpoint env is only a fallback.** This used to be
+    `(settings is not None and settings.otel_enabled) or bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))`,
+    an `or` that made ambient env an override nothing could turn off: a caller passing
+    `RASK_OTEL_ENABLED=false` still got a live exporter whenever the variable happened to be set in
+    the environment. "Off" that cannot be selected is not a setting.
+
+    That is not theoretical, and the place it bites is the one place it must not: **`dagger call test`**.
+    Dagger injects `OTEL_EXPORTER_OTLP_ENDPOINT` into every container it runs, for its own telemetry.
+    So inside CI every app built by a test wired a real exporter aimed at Dagger's collector, which
+    rejects application metrics (`unknown aggregation from pb` in the engine log) — and the SDK then
+    retries with exponential backoff. The suite did not fail; it *slept*. Measured on this branch:
+    `packages/service-kit/tests` took **33s at HEAD with 31 tests and 128s with 47** — ~2.7s per unit
+    test, all of it backoff — and a full run sat in `hrtimer_nanosleep` at ~1.7% CPU for the best part
+    of an hour. `test_setup_otel_noop_when_disabled` has been asserting exactly this and failing on
+    main; it was reporting a real defect, not being wrong.
+
+    The fallback is preserved for the case that motivated it: `services/gateway` calls this with no
+    `Settings` at all and opts in through the endpoint alone. Production is unaffected either way —
+    `chart/templates/_helpers.tpl` renders `RASK_OTEL_ENABLED: "true"` and `OTEL_EXPORTER_OTLP_ENDPOINT`
+    from the SAME `observability.enabled` guard, so the two can never disagree there.
     """
-    enabled = (settings is not None and settings.otel_enabled) or bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+    enabled = settings.otel_enabled if settings is not None else bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
     if not enabled:
         return False
 

@@ -116,36 +116,53 @@ spec:
                  file cannot call the helper because it cannot template at all. Deriving it here means
                  the ingest plane follows the bucket every other tier follows, including a rename. */}}
             - { name: RASK_INGEST_WAREHOUSE, value: "s3://{{ include "lance.stageBucket" (list $root $root.Values.medallion.producer.bronzeNamespace) }}/ingest" }
-            {{- if and $root.Values.dapr.sidecars (or (not $svc.governedAuth) $root.Values.auth.enabled) }}
-            {{- /* ARMED ONLY IF THERE IS ALSO A KEY. The two halves of this door used to render under
-                 unrelated conditions — this one on `dapr.sidecars`, the USER half below on
-                 `auth.enabled` — and the shipped combination is sidecars ON, auth OFF. That arms the
-                 lock and renders no key: `authorize_ingest` finds APP_API_TOKEN set (so not dev-open),
-                 finds `oidc_enabled` false (so no user path), and falls through to
-                 `PermissionDeniedError`. Measured on the live release: every `POST /api/ingests`
-                 answered 403, from the UI and from a shell alike, with no human able to start a run.
+            {{- end }}
+            {{- /* APP_API_TOKEN — ONE render site, TWO reasons a fleet service needs it, and they are
+                 not the same reason. This block used to sit NESTED inside `if $svc.lanceWriter` above,
+                 which tied the estate's service credential to whether a service writes Lance — two
+                 unrelated facts. `notifications` is what exposed it: it writes no Lance and its bus
+                 handler calls `assert_app_token_configured`, so it rendered with `RASK_DAPR_ENABLED=true`
+                 and NO token and raised at import — a chart that renders green and a pod that never
+                 starts. Un-nesting is the root fix; `ingest`'s render is unchanged (it now carries
+                 `daprIngest: false` and reaches this block by the lanceWriter arm, on its original
+                 condition).
 
-                 The comment on the USER half below PREDICTED this outcome in as many words — "left a
-                 signed-in project admin with NO way in and the UI path dead rather than merely
-                 ungoverned" — which is worth noting: the reasoning was right and written down, and
-                 the two conditions still drifted apart, because nothing rendered them together.
+                 The two arms, and why one condition cannot serve both:
 
-                 For a `governedAuth` service the token is therefore left UNSET when the user door is
-                 not wired. That is the estate's dev-open default, the same one every other door
-                 takes, and it keeps the UI path alive instead of dead. A service that does NOT
-                 declare governedAuth is unaffected — it has no user half to be inconsistent with.
+                 `daprIngest` — the service HOSTS a sidecar-delivered route and FAILS CLOSED without the
+                 token (`service_kit.governed.dapr_auth.assert_app_token_configured` raises whenever
+                 RASK_DAPR_ENABLED is true and APP_API_TOKEN is unset). So it is gated on
+                 `dapr.sidecars` ALONE: that key sets RASK_DAPR_ENABLED in the configmap AND renders the
+                 Secret this reference reads, so the three move together and the pod cannot come up armed
+                 without a key. Adding `auth.enabled` here would crash-loop the pod on an ungoverned dev
+                 stack, which is the estate's DEFAULT combination.
 
-                 The SERVICE half of the ingest control door. `authorize_ingest` treats an UNSET
-                 APP_API_TOKEN as dev-open, matching every other door in the estate — which means a
-                 deployment that forgets it runs an unauthenticated write API and looks identical to
-                 one that is protected. Rendered from the same secret the medallion producer and the
-                 movers read, so the whole plane presents one service identity. Gated on
-                 dapr.sidecars because that is what creates the secret (the medallion templates make
-                 the same reference under the same condition, so it can never dangle). */}}
+                 `lanceWriter` — ingest's control door, where the token is a POLICY input rather than a
+                 startup precondition: `authorize_ingest` reads an unset token as dev-open, so setting it
+                 with no user door wired 403s every caller (measured live: every POST /api/ingests, from
+                 the UI and a shell alike). Hence the extra `governedAuth => auth.enabled` arm — the
+                 lock is armed only if there is also a key.
+
+                 Setting BOTH flags on one service would render APP_API_TOKEN twice;
+                 tests/unit/test_invariants.py::test_no_env_var_is_rendered_TWICE_on_any_workload is the
+                 guard, so the interaction fails a gate rather than shipping a duplicate-key pod spec. */}}
+            {{- $needsAppToken := false }}
+            {{- if $svc.daprIngest }}{{- $needsAppToken = true }}{{- end }}
+            {{- if and $svc.lanceWriter (or (not $svc.governedAuth) $root.Values.auth.enabled) }}{{- $needsAppToken = true }}{{- end }}
+            {{- if and $root.Values.dapr.sidecars $needsAppToken }}
+            {{- /* One secret for both arms, so the whole plane presents ONE service identity — the same
+                 `{{ .Release.Name }}-dapr-app-token` the medallion producer, the movers and the
+                 maintenance cron read. It cannot dangle: `dapr.sidecars` is what renders that Secret
+                 (dapr-app-token.yaml's gating invariant) and it also gates this reference.
+
+                 Worth keeping from the ingest incident, because it recurred here in mirror image: the
+                 comment on the USER door below PREDICTED the 403 outcome in as many words, and the two
+                 conditions still drifted apart — because nothing RENDERED them together. Prose next to a
+                 condition does not hold two conditions in agreement; only one expression does. That is
+                 why `$needsAppToken` is computed once above rather than repeated per arm. */}}
             - name: APP_API_TOKEN
               valueFrom:
                 secretKeyRef: { name: {{ $root.Release.Name }}-dapr-app-token, key: token }
-            {{- end }}
             {{- end }}
             {{- if and $root.Values.auth.enabled $svc.governedAuth }}
             {{- /* The USER door, for services that declare `governedAuth` — NOT every frontDoor

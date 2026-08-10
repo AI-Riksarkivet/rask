@@ -14,8 +14,10 @@ the invocation one.
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from service_kit.governed.settings import GovernedAuthSettings
 
-class FlowsSettings(BaseSettings):
+
+class FlowsSettings(GovernedAuthSettings, BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

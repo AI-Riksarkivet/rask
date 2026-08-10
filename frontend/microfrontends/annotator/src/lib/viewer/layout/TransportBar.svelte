@@ -18,7 +18,15 @@
 	// FRAME STEPPING is video-only, because a frame is a video concept — but the KEYS are shared, so
 	// `onframe` is optional and Shift+Arrow simply does nothing on audio rather than doing something
 	// different.
-	import { ChevronsLeft, ChevronsRight, Gauge, Pause, Play, SkipBack, SkipForward } from '@lucide/svelte';
+	import {
+		ChevronsLeft,
+		ChevronsRight,
+		Gauge,
+		Pause,
+		Play,
+		SkipBack,
+		SkipForward,
+	} from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
 
 	import { fmtTime, frameIndex } from '../transport';
@@ -131,7 +139,10 @@
 
 	<!-- Tenths, not whole seconds: audio segment boundaries are routinely a tenth apart, and a
 	     display that rounds shows two different boundaries as the same number. -->
-	<span class="text-muted-foreground shrink-0 pl-1 text-xs tabular-nums" data-testid="transport-time">
+	<span
+		class="text-muted-foreground shrink-0 pl-1 text-xs tabular-nums"
+		data-testid="transport-time"
+	>
 		{fmtTime(currentTime)} / {fmtTime(duration)}
 		{#if fps}
 			<!-- The frame INDEX, so one annotator can tell another "it is on frame 412" and be

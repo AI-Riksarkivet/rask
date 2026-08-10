@@ -32,6 +32,7 @@ import pytest
 from lance_namespace import PermissionDeniedError
 from lineage.api.fga_deps import enforce_output_authz, is_external_source
 from lineage.core.config import LineageSettings
+from lineage.models import Dataset, Job, Run, RunEvent
 
 
 GOVERNED = "bind86-bronze$pages"
@@ -39,25 +40,27 @@ EXTERNAL_NS = "s3://images-batch"
 EXTERNAL_NAME = "bind86-src/run1"
 
 
-class _Dataset:
-    def __init__(self, namespace: str, name: str) -> None:
-        self.namespace = namespace
-        self.name = name
+def _dataset(namespace: str, name: str) -> Dataset:
+    return Dataset(namespace=namespace, name=name)
 
 
-class _Run:
-    facets: dict = {}
+def _event(*, inputs: list[Dataset] | None = None, outputs: list[Dataset] | None = None) -> RunEvent:
+    """A REAL event carrying only the inputs and outputs the guard reads.
 
-
-class _Event:
-    """The shape `enforce_output_authz` reads — inputs, outputs and a run. Not a RunEvent import, because
-    the guard touches exactly these three attributes and constructing a real one drags the OpenLineage
-    client into a test about an authorization decision."""
-
-    def __init__(self, *, inputs: list[_Dataset] | None = None, outputs: list[_Dataset] | None = None) -> None:
-        self.inputs = inputs or []
-        self.outputs = outputs or []
-        self.run = _Run()
+    The stub this replaces said a real one "drags the OpenLineage client into a test about an
+    authorization decision". It does not: `RunEvent` is this service's OWN pydantic model
+    (`lineage.models`) and imports nothing heavier than pydantic. The stub bought nothing and cost
+    the type gate five diagnostics — and it could not have caught the guard reading a field the
+    real event does not carry, which is the only thing a stub here would be for.
+    """
+    return RunEvent(
+        eventType="START",
+        eventTime="2026-08-09T00:00:00Z",
+        run=Run(runId="run-1"),
+        job=Job(namespace="ingest", name="ingest-run"),
+        inputs=inputs or [],
+        outputs=outputs or [],
+    )
 
 
 class _Principal:
@@ -118,7 +121,7 @@ def request_with(monkeypatch):
 async def test_an_EXTERNAL_source_is_not_authorized_at_all(settings, request_with) -> None:
     """The regression. An ingest START naming its S3 source must pass with no tuple in existence."""
     request, fake = request_with({f"table:{GOVERNED}"})
-    event = _Event(inputs=[_Dataset(EXTERNAL_NS, EXTERNAL_NAME)])
+    event = _event(inputs=[_dataset(EXTERNAL_NS, EXTERNAL_NAME)])
 
     await enforce_output_authz(event, request, settings, _Principal())
 
@@ -132,7 +135,7 @@ async def test_a_GOVERNED_input_the_caller_cannot_see_is_STILL_refused(settings,
     """The half the fix must not cost. This is the forgery the guard exists to stop: an authenticated
     reader recording `I read gold$catalog` into the authoritative audit graph."""
     request, _ = request_with(set())
-    event = _Event(inputs=[_Dataset("gold", "gold$catalog")])
+    event = _event(inputs=[_dataset("gold", "gold$catalog")])
 
     with pytest.raises(PermissionDeniedError, match="can_get_metadata"):
         await enforce_output_authz(event, request, settings, _Principal())
@@ -149,8 +152,8 @@ async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settin
     check being skipped, because the skip is the mechanism and the identity is the guarantee.
     """
     request, _ = request_with(set())
-    forged = _Dataset("s3://anything", "gold$catalog")
-    event = _Event(inputs=[forged])
+    forged = _dataset("s3://anything", "gold$catalog")
+    event = _event(inputs=[forged])
 
     await enforce_output_authz(event, request, settings, _Principal())
 
@@ -165,7 +168,7 @@ async def test_OUTPUTS_are_never_exempted(settings, request_with) -> None:
     producer claiming to have written the outside world — not a case to make permissive, and the
     asymmetry is deliberate rather than an oversight in the filter."""
     request, _ = request_with(set())
-    event = _Event(outputs=[_Dataset(EXTERNAL_NS, EXTERNAL_NAME)])
+    event = _event(outputs=[_dataset(EXTERNAL_NS, EXTERNAL_NAME)])
 
     with pytest.raises(PermissionDeniedError, match="can_write_data"):
         await enforce_output_authz(event, request, settings, _Principal())
@@ -175,7 +178,7 @@ async def test_OUTPUTS_are_never_exempted(settings, request_with) -> None:
 async def test_a_MIXED_event_authorizes_the_governed_input_and_skips_the_external_one(settings, request_with) -> None:
     """A run that reads a raw source AND a governed table must be judged on the governed half only."""
     request, fake = request_with({f"table:{GOVERNED}"})
-    event = _Event(inputs=[_Dataset(EXTERNAL_NS, EXTERNAL_NAME), _Dataset("bind86-bronze", GOVERNED)])
+    event = _event(inputs=[_dataset(EXTERNAL_NS, EXTERNAL_NAME), _dataset("bind86-bronze", GOVERNED)])
 
     await enforce_output_authz(event, request, settings, _Principal())
 

@@ -46,9 +46,7 @@ interface DockLayoutsDocument<T> {
  *  single annotated line in `readDocument`. */
 const EnvelopeSchema = v.looseObject({
 	exists: v.optional(v.boolean()),
-	value: v.optional(
-		v.looseObject({ workbenches: v.optional(v.record(v.string(), v.unknown())) }),
-	),
+	value: v.optional(v.looseObject({ workbenches: v.optional(v.record(v.string(), v.unknown())) })),
 });
 
 export interface DockLayoutStoreOptions {

@@ -19,6 +19,7 @@ from typing import Self
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from service_kit.control_events import CONTROL_TOPIC
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 # Re-exported, NOT redefined. The bronze naming convention is shared with the ingest plane, so its one
@@ -279,7 +280,11 @@ class MedallionSettings(BaseSettings):
     # publication head, which is what keeps this additive: a deployment that has not enabled the
     # catalog's control emitter registers no subscription and behaves exactly as before.
     control_pubsub: str = Field(default="", alias="MEDALLION_CONTROL_PUBSUB")
-    control_topic: str = Field(default="catalog.control.v1", alias="MEDALLION_CONTROL_TOPIC")
+    # The topic name is IMPORTED, never re-typed: `catalog.control.v1` is a cross-plane versioned
+    # contract owned by its producer's model module, and both other consumers (catalog, maintenance)
+    # already import the same constant. A second literal is a second source of truth that a rename
+    # would silently leave behind — this subscription would keep listening to a topic nobody publishes.
+    control_topic: str = Field(default=CONTROL_TOPIC, alias="MEDALLION_CONTROL_TOPIC")
     # --- Ray TRAIN head (#115a, docs/RAY-TRAIN.md): OWN topic (D1 — long-running, terminal-on-failure;
     # never a field on the stage trigger) + submit-and-ack consumer (D2). The trainer has its OWN service
     # identity + rung (D5): reader on the feature namespaces, writer on namespace:<models> ONLY.

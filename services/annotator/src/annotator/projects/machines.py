@@ -65,8 +65,9 @@ TASK_EDGES: Final[dict[tuple[TaskState, str], tuple[TaskState, str | None]]] = {
     (TaskState.SKIPPED, "requeue"): (TaskState.UNASSIGNED, "can_manage"),
 }
 
-#: A reviewer may not accept their own submission (§5.2). The API layer enforces it against the
-#: task's `submitted_by`; naming the events here keeps the rule discoverable from the machine.
+#: A reviewer may not accept their own submission (§5.2), checked against the task's `submitted_by`.
+#: Naming the events here keeps the rule discoverable from the machine — and gives
+#: :func:`identity_violation`, which both the API layer and the actor apply, one place to read it.
 SELF_REVIEW_FORBIDDEN: Final[frozenset[str]] = frozenset({"accept", "fix_and_accept", "request_changes"})
 
 #: §5.2 rule 2 — "only the lease holder writes … even a manager". `skip` belongs here with
@@ -76,14 +77,47 @@ SELF_REVIEW_FORBIDDEN: Final[frozenset[str]] = frozenset({"accept", "fix_and_acc
 LEASE_HOLDER_ONLY: Final[frozenset[str]] = frozenset({"save_draft", "submit", "skip"})
 
 #: §5.2 — `release` is "lease holder OR can_manage". It is the documented escape hatch for a task
-#: pinned to someone unavailable, so it is deliberately NOT in `LEASE_HOLDER_ONLY`; the API layer
-#: allows the holder, or anyone holding `can_manage`.
+#: pinned to someone unavailable, so it is deliberately NOT in `LEASE_HOLDER_ONLY`:
+#: :func:`identity_violation` allows the holder, or anyone the caller states holds `can_manage`.
 HOLDER_OR_MANAGER: Final[frozenset[str]] = frozenset({"release"})
 
 #: §5.2 rule 5 — "nothing escapes a published project". Once a project reaches one of these, every
 #: task transition is rejected: provenance is frozen with the artifact, and a task that moved after
 #: the publish would describe a dataset that no longer matches it.
 FROZEN_PROJECT_STATES: Final[frozenset[ProjectState]] = frozenset({ProjectState.PUBLISHING, ProjectState.PUBLISHED, ProjectState.ARCHIVED})
+
+
+def identity_violation(
+    *,
+    event: str,
+    subject: str | None,
+    assignee: str | None,
+    submitted_by: str | None,
+    subject_can_manage: bool = False,
+) -> str | None:
+    """The three IDENTITY-BOUND rules of §5.2, as a pure function of the task's own identity rows.
+
+    They are not edges and cannot live in `TASK_EDGES`: they depend on WHO is firing and on columns
+    the table does not carry. They live here, next to the sets that name them, because both sides of
+    the sidecar have to apply them — the HTTP layer against its pre-turn snapshot (that is where a
+    clean 403 comes from) and the actor inside its own turn (that is where the answer is true). Two
+    implementations would drift, and the one that drifted would be the one that decided.
+
+    `subject_can_manage` is a VERIFIED INPUT, not a check performed here. `release` is "lease holder
+    OR can_manage", and `can_manage` is an OpenFGA fact: the caller resolves it and states it, which
+    is what keeps this module — and the actor that imports it — testable with no store, no sidecar
+    and no running OpenFGA.
+
+    Returns the reason the transition is refused, or `None` when nothing here objects.
+    """
+    if event in SELF_REVIEW_FORBIDDEN and submitted_by is not None and submitted_by == subject:
+        return "a reviewer may not review their own submission"
+    if event in LEASE_HOLDER_ONLY and assignee not in (None, subject):
+        # §5.2 rule 2 — "even a manager". A manager who wants the task must `release` and re-`assign`.
+        return f"the task is held by {assignee}"
+    if event in HOLDER_OR_MANAGER and assignee not in (None, subject) and not subject_can_manage:
+        return f"the task is held by {assignee} — releasing it needs can_manage"
+    return None
 
 
 def project_transition(state: ProjectState, event: str) -> tuple[ProjectState, str | None]:

@@ -9,6 +9,7 @@ are exercised.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock
 
 import lance
@@ -902,7 +903,7 @@ def test_project_policy_rejects_a_malformed_project_id(client: TestClient, tmp_p
 # `set_namespace_policy` stores the DEFAULT root on every record (see the policies.py module docstring).
 
 
-def _list_policies_for(client: TestClient, project: str) -> dict[str, object]:
+def _list_policies_for(client: TestClient, project: str) -> dict[str, Any]:
     """The listing, asserted 200 — the settings override is already in place at every call site."""
     resp = client.get(f"/v1/projects/{project}/policies")
     assert resp.status_code == 200, resp.text

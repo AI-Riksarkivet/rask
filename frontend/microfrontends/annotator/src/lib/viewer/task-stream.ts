@@ -104,9 +104,15 @@ export function neighbour(
 export function taskCanvasHref(task: StreamTask, projectId: string, base = ''): string {
 	const keys = (task.source.keys ?? []).join(',');
 	const dataset = task.source.where ? `dataset=${encodeURIComponent(task.source.where)}&` : '';
+	// The task's declared modality picks the VIEWER (`kind=` → the route's temporal/text canvases).
+	// Omitted for image — the default — and for anything unknown: a bad value must fall back to the
+	// image canvas rather than ride the URL into a viewer registry miss. Without this, `kind=` was
+	// hand-URL-only and no text/audio/video TASK could ever reach its own canvas from the queue.
+	const kind = task.media?.kind;
+	const kindParam = kind === 'audio' || kind === 'video' || kind === 'text' ? `&kind=${kind}` : '';
 	return `${base}/?${dataset}keys=${encodeURIComponent(keys)}&task=${encodeURIComponent(
 		task.task_id,
-	)}&project=${encodeURIComponent(projectId)}`;
+	)}&project=${encodeURIComponent(projectId)}${kindParam}`;
 }
 
 /** What the canvas needs to render the stream control: position, bounds, and where the arrows go. */

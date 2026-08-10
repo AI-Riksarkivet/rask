@@ -8,8 +8,10 @@
  * rewire. (See RA_ANNO_MERGE.md §5c–5d.)
  */
 
-/** Media modality of a unit to annotate — the sole per-modality fork point. */
-export type MediaKind = 'image' | 'audio' | 'video';
+/** Media modality of a unit to annotate — the sole per-modality fork point. `text` is the
+ *  doccano/Argilla case: the DOCUMENT is the canvas — its rows' text renders as the central
+ *  surface, and there is no pixel medium at all. */
+export type MediaKind = 'image' | 'audio' | 'video' | 'text';
 
 /** Everything a viewer needs to render + annotate one unit, resolved from the
  *  descriptor upstream so the viewer itself is decoupled from routing/data. */

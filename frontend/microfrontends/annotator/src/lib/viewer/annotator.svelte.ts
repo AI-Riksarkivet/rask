@@ -26,6 +26,7 @@ import { canonicalShapeType, engineToolsFor } from '@rask/labeling/shape-types';
 import { isChunkSelection } from '@rask/labeling/types';
 import { PRODUCERS } from '@rask/labeling/producers';
 import { rowSignature } from '@rask/labeling/history';
+import { remapSpans } from './span-remap';
 import {
 	AnnotationsHttpError,
 	type InsertRow,
@@ -35,7 +36,8 @@ import {
 	payloadIsEmpty,
 	postSave,
 } from '@rask/labeling/annotations-client';
-import { type AnnoRow, effectiveField, projectRows, rawField } from './annotation-rows';
+import { type AnnoRow, effectiveField, numField, projectRows, rawField } from './annotation-rows';
+import { type TrackRow, boxAt, newTrackId, tracksFrom } from './tracks';
 import { requestAssist } from './remote/assist.remote';
 import { submitBatchJob } from './remote/jobs.remote';
 
@@ -66,8 +68,37 @@ export interface BrushOptions {
 	output: 'mask' | 'polygon';
 }
 
+/** Display-only image adjustments (1 = neutral on every axis) — see `imageAdjust`. */
+export interface ImageAdjust {
+	brightness: number;
+	contrast: number;
+	saturation: number;
+}
+
+const NEUTRAL_ADJUST: ImageAdjust = { brightness: 1, contrast: 1, saturation: 1 };
+
 /** Fields the sidebar can edit inline. */
-export type EditableField = 'label' | 'status' | 'group' | 'text';
+export type EditableField = 'label' | 'status' | 'group' | 'text' | 'metadata';
+
+/** A MANUALLY drawn rect below this (5×5 px) is an accidental click, not an annotation. Applied
+ *  here — not in the tool — because the same click IS meaningful when an assist producer is armed. */
+const MANUAL_MIN_AREA = 25;
+
+/** One signed prompt point of an interactive refinement session (image coords).
+ *  `positive: false` is a background click — "not this", the SAM convention. */
+export interface AssistPoint {
+	x: number;
+	y: number;
+	positive: boolean;
+}
+
+/** One typed per-class attribute, as the ontology declares it (`OutputAttr` server-side). */
+export interface AttrSpec {
+	name: string;
+	type: 'free' | 'int' | 'enum' | 'bool';
+	choices: string[];
+	required: boolean;
+}
 
 /** One reversible field edit (relabel / status / text / group).
  *  `before`/`after` are the effective (overlay-aware) string values. */
@@ -163,6 +194,17 @@ export class AnnotatorController {
 	// segmenter as its region prompt instead of being inserted as a manual shape — the
 	// ra-atr SAM click-to-segment loop. Null = normal drawing.
 	assistProducer = $state<string | null>(null);
+	// ── the interactive point-prompt session (SAM click convention) ──
+	// While armed, CLICKS accumulate as signed points and each one re-runs the producer with
+	// the FULL set — refining ONE object, so each answer REPLACES the previous prediction
+	// instead of stacking beside it. A drag (a real box) starts over as a region prompt.
+	assistPoints = $state<AssistPoint[]>([]);
+	/** The sign the NEXT click carries: true = foreground ("include this"), false =
+	 *  background ("not this") — the ± toggle on the armed pill. */
+	assistPointPositive = $state(true);
+	/** The rows the session's LATEST refinement inserted — retracted before the next one
+	 *  lands. Cleared (keeping the last prediction) by Done/disarm/save-reload. */
+	private _assistSessionRows: { id: string; index: number }[] = [];
 	// True when the magnetic corner-snap tool can run — a still image is loaded
 	// (video frames don't qualify). Gates their toolbar buttons.
 	cvCapable = $state(false);
@@ -181,6 +223,10 @@ export class AnnotatorController {
 		maskMode: 'instance',
 		output: 'mask',
 	});
+	// Image display adjustments (1 = neutral). View-only state, not annotation data: it rides a
+	// ColorMatrixFilter on the page sprite and is never saved — faded manuscript scans need a
+	// contrast lift to trace at all, and that lift must not survive into anyone's annotations.
+	imageAdjust = $state<ImageAdjust>({ ...NEUTRAL_ADJUST });
 
 	// ── layer grouping (mirrored from LayerStore) ──
 	readonly layers = new LayerStore();
@@ -205,12 +251,19 @@ export class AnnotatorController {
 	// deletes immediately (filtered from `rows`); new shapes render after save+reload.
 	private _inserts = $state<InsertRow[]>([]);
 	private _deletes = $state<string[]>([]);
+	// Row ids of UNDONE inserts — the sidebar's twin of the canvas hide an insert-undo performs.
+	// Not `_deletes`: these rows were never saved, so nothing about them may reach the wire.
+	private readonly _suppressed = new SvelteSet<string>();
 	// Geometry moves of EXISTING shapes, keyed by row index (the canvas already renders
 	// them via the plugin's dirty overlay; this queues them for Save).
 	private readonly _geoEdits = new SvelteMap<number, GeometryUpdate>();
 	// Segment-TIME resizes of EXISTING audio/video annotations, keyed by row index (the
 	// waveform region already reflects the drag; this queues {t_start,t_end} for Save).
 	private readonly _temporalEdits = new SvelteMap<number, { t_start: number; t_end: number }>();
+	// Re-anchored SPAN offsets, keyed by row index — written only by the transcription-edit remap
+	// (offsets are deliberately not editable fields; a free-form edit of one is a corruption
+	// vector). Display overlay + Save channel in one, like the temporal map beside it.
+	private readonly _spanEdits = new SvelteMap<number, { char_start: number; char_end: number }>();
 
 	private _detachViewport: (() => void) | null = null;
 	// POST target for Save (same URL the annotations are GET from). Null ⇒ read-only.
@@ -236,7 +289,16 @@ export class AnnotatorController {
 	/** Flat rows for the sidebar list, overlay-aware (pure projection in annotation-rows). */
 	readonly rows = $derived.by<AnnoRow[]>(() => {
 		const t = this.table;
-		return t ? projectRows(t, this._overrides, this._deletes) : [];
+		if (!t) return [];
+		const projected = projectRows(t, this._overrides, [...this._deletes, ...this._suppressed]);
+		// The span-offset overlay (the transcription-edit remap) wins over the table, exactly as
+		// the field overlay does inside projectRows — a remapped span must RENDER remapped, or the
+		// highlight sits on the wrong characters until the save round-trips.
+		if (this._spanEdits.size === 0) return projected;
+		return projected.map((r) => {
+			const edit = this._spanEdits.get(r.index);
+			return edit ? { ...r, charStart: edit.char_start, charEnd: edit.char_end } : r;
+		});
 	});
 
 	/** Distinct groups for the current group-by column, with counts. */
@@ -370,7 +432,8 @@ export class AnnotatorController {
 			this._geoDirty ||
 			this._inserts.length > 0 ||
 			this._deletes.length > 0 ||
-			this._temporalEdits.size > 0,
+			this._temporalEdits.size > 0 ||
+			this._spanEdits.size > 0,
 	);
 	readonly canSave = $derived(this.dirty && !this.saving && this._saveUrl !== null);
 
@@ -389,6 +452,13 @@ export class AnnotatorController {
 		im.setEditMode(this.mode === 'edit');
 		im.setTool(this.activeTool);
 		im.setBrushOptions(this.brushOptions);
+		// Adjustments survive a unit change / video frame swap: a contrast lift chosen for a faded
+		// volume applies to the next page too, until reset. Guarded so a neutral state never touches
+		// the plugin (unit-test harnesses attach engine doubles without an image plugin).
+		if (this.imageAdjusted) this._applyImageAdjust();
+		// Track display is a function of (rows, playhead) — evaluate it for the newly attached
+		// table (no-op unless a viewer turned track mode on).
+		this._syncTracks();
 		this.cvCapable = im.cvCapable; // still image loaded ⇒ the magnetic CV tool is available
 		this.cvReady.clear();
 		im.onCvToolReady = (tool) => this.cvReady.add(tool);
@@ -422,11 +492,24 @@ export class AnnotatorController {
 		};
 		im.onCommit = (shape) => {
 			// In SAM mode the drawn box/point is a region prompt (→ a mask prediction), not a
-			// manual annotation — its bbox travels as the region (a point = a zero box = click).
+			// manual annotation — its bbox travels as the region (a point = a zero box = click; the
+			// backend grows it into a patch). The tools now commit EVERYTHING, clicks included, so
+			// the accidental-click policy lives here, where the meaning is known: an armed producer
+			// honours the click, an unarmed canvas discards a sub-5×5 rect the way the tool itself
+			// used to — a gate in the tool made click-to-segment unreachable for everyone.
 			if (this.assistProducer) {
-				const region = { x: shape.x, y: shape.y, width: shape.width, height: shape.height };
-				void this.assist('', region, this.assistProducer);
-			} else {
+				if (shape.type === 'rect' && shape.width * shape.height <= MANUAL_MIN_AREA) {
+					// A CLICK is a session point: it accumulates with every previous click and the
+					// producer re-runs over the full signed set, REFINING the same object.
+					this.addAssistPoint(shape.x + shape.width / 2, shape.y + shape.height / 2);
+				} else {
+					// A real DRAG starts over: the box is the prompt, any point session is finished
+					// (its last prediction stays — the box is a new object, not a refinement).
+					this.finishAssistSession();
+					const region = { x: shape.x, y: shape.y, width: shape.width, height: shape.height };
+					void this.assist('', { region, producer: this.assistProducer });
+				}
+			} else if (shape.type !== 'rect' || shape.width * shape.height > MANUAL_MIN_AREA) {
 				this._appendInsert(this._buildInsert(shape));
 			}
 		};
@@ -497,6 +580,24 @@ export class AnnotatorController {
 		this.ctx?.plugins.interaction.setBrushOptions(this.brushOptions);
 	}
 
+	// ── image adjustments (display-only; never saved) ──
+	get imageAdjusted(): boolean {
+		const a = this.imageAdjust;
+		return a.brightness !== 1 || a.contrast !== 1 || a.saturation !== 1;
+	}
+	setImageAdjust(patch: Partial<ImageAdjust>): void {
+		this.imageAdjust = { ...this.imageAdjust, ...patch };
+		this._applyImageAdjust();
+	}
+	resetImageAdjust(): void {
+		this.imageAdjust = { ...NEUTRAL_ADJUST };
+		this._applyImageAdjust();
+	}
+	private _applyImageAdjust(): void {
+		const { brightness, contrast, saturation } = this.imageAdjust;
+		this.ctx?.plugins.image.setImageAdjustments(brightness, contrast, saturation);
+	}
+
 	// ── selection ──
 	select(index: number | null): void {
 		// While a relation is armed, a click on a shape is an ENDPOINT, not a selection. Letting it
@@ -564,6 +665,98 @@ export class AnnotatorController {
 	 *
 	 *  Empty on an unconstrained canvas, where the caller falls back to a plain name. */
 	textSpanClasses = $state<string[]>([]);
+
+	// ── item-level classification (the Label-Studio "Choices" question, over any modality) ──
+	/** Classes the TASK declares as `tag`-drawable — item-level choices, not shapes. Set from the
+	 *  ontology by the shell, exactly like `textSpanClasses`. Empty ⇒ no classification bar. */
+	tagClasses = $state<string[]>([]);
+	/** The item's current tags — one `tag` row per active choice, deletes respected. MULTILABEL by
+	 *  design (the safe superset — CVAT's image tags and LS's `choice="multiple"` behave so);
+	 *  single-choice enforcement belongs to the ontology's validators at submit, not to the bar. */
+	readonly activeTags = $derived(
+		new Set(this.rows.filter((r) => r.shape === 'tag' && r.label).map((r) => r.label)),
+	);
+	// ── transcription (the row's `text` facet — the primary content, not a tool or a field) ──
+	/** Per declared class: whether its regions CARRY TRANSCRIBED TEXT. Set from the ontology by
+	 *  the shell, exactly like `tagClasses`. Empty ⇒ no task constraint — the workspace's
+	 *  historical behaviour (the text editor offered everywhere) is the unconstrained fallback. */
+	classTranscribe = $state<Record<string, boolean>>({});
+	/** Whether the inspector should OFFER transcription editing for a row of `label`.
+	 *
+	 *  Unconstrained (no ontology, or no classes declared) ⇒ yes, everywhere — the pre-declaration
+	 *  behaviour. Constrained ⇒ yes only where declared; a row whose label is NOT a declared class
+	 *  (an unlabeled draft, a document row) stays editable, because no declaration covers it and
+	 *  refusing on a rule that does not exist would be a wrong answer. This is what makes
+	 *  "transcription" answerable in the model at last: a detection box does not offer a text
+	 *  field it has no business carrying, an OCR paragraph does. */
+	offersTranscription(label: string): boolean {
+		// A declared class answers with its declaration; everything else (no ontology, or a label
+		// no class covers) is unconstrained and stays editable.
+		return this.classTranscribe[label] ?? true;
+	}
+
+	// ── per-row ATTRIBUTES (the ontology's typed per-class fields: reading order, script, …) ──
+	/** Attribute declarations per CLASS, from the task's ontology — set by the shell exactly like
+	 *  `tagClasses`. Empty ⇒ no attribute editor. Values are edited as STRINGS: the submit
+	 *  validator parses int/bool/enum from strings, so the string IS the wire value. */
+	classAttributes = $state<Record<string, AttrSpec[]>>({});
+	/** The declared attributes for a row's class — [] when its class declares none. */
+	attributesFor(label: string): AttrSpec[] {
+		return this.classAttributes[label] ?? [];
+	}
+	/** A row's current attribute values, parsed from its `metadata` JSON (overlay-aware). */
+	rowAttributes(index: number): Record<string, string> {
+		const raw = this.rows.find((r) => r.index === index)?.metadata ?? '{}';
+		try {
+			const parsed = JSON.parse(raw) as Record<string, unknown>;
+			return Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, String(v)]));
+		} catch {
+			return {};
+		}
+	}
+	/** Set (or clear, with '') ONE attribute on a row. A field edit like any other: the merged JSON
+	 *  goes through `updateField`, so it rides the same overlay, undo stack and Save delta. */
+	setAttribute(index: number, name: string, value: string): void {
+		const current = this.rowAttributes(index);
+		if (value === '') delete current[name];
+		else current[name] = value;
+		this.updateField(index, 'metadata', JSON.stringify(current));
+	}
+
+	/** Toggle an item-level choice: on ⇒ append a `tag` row (rides the same insert overlay, undo
+	 *  stack and Save delta as a drawn shape); off ⇒ delete that row. The chip IS the row. */
+	toggleTag(label: string): void {
+		const existing = this.rows.find((r) => r.shape === 'tag' && r.label === label);
+		if (existing) {
+			this.deleteRow(existing.index);
+			return;
+		}
+		this._appendInsert(
+			makeInsertRow({
+				shape_type: 'tag',
+				label,
+				// Pin to the current moment like every insert (0 for images/text).
+				t_start: this.timeCursor,
+				t_end: this.timeCursor,
+				status: 'accepted',
+				source: 'human',
+			}),
+		);
+	}
+
+	/** Restore the DRAFT's relations at open. Links live on the task draft, not the annotations
+	 *  table, and nothing read them back — reopening a task showed zero links and the next save
+	 *  posted an empty list, silently destroying every drawn relation. Declines to clobber: links
+	 *  drawn before the (async) draft read resolves win over the snapshot they are newer than. */
+	restoreLinks(links: AnnoLink[]): void {
+		if (this.links.length > 0) return;
+		this.links = links.map((l) => ({
+			name: l.name,
+			from_shape: l.from_shape,
+			to_shape: l.to_shape,
+		}));
+		this._pushLinksToCanvas();
+	}
 
 	/** Arm link-drawing for `name`, or disarm when it is already armed (a toggle, like the tools).
 	 *
@@ -686,8 +879,14 @@ export class AnnotatorController {
 	}
 
 	deleteSelected(): void {
-		const i = this.selectedIndex;
-		if (i == null) return;
+		if (this.selectedIndex == null) return;
+		this.deleteRow(this.selectedIndex);
+	}
+
+	/** Delete ANY row by index — the undoable delete the canvas and the span surface share. Split
+	 *  from deleteSelected so a child row (a text-span tag's ✕) can be removed without first
+	 *  stealing the selection from the parent being annotated. */
+	deleteRow(i: number): void {
 		const t = this.table;
 		const id = t ? rawField(t, 'id', i) : null;
 		if (id) {
@@ -701,7 +900,7 @@ export class AnnotatorController {
 		this.ctx?.plugins.arrow.setDeleted(i);
 		this.ctx?.plugins.arrow.sync();
 		this._geoDirty = true;
-		this.select(null);
+		if (this.selectedIndex === i) this.select(null);
 	}
 
 	// ── temporal (audio / video segments) ──
@@ -731,6 +930,105 @@ export class AnnotatorController {
 	/** Move the playhead (video scrub/play) so newly-drawn shapes pin to this moment. */
 	setTimeCursor(seconds: number): void {
 		this.timeCursor = seconds;
+		this._syncTracks();
+	}
+
+	// ── object tracks (video) ──
+	// Rows sharing a `group` + carrying a time are KEYFRAMES of one object (tracks.ts). While track
+	// mode is on, the canvas shows each track's INTERPOLATED box at the playhead instead of every
+	// keyframe at once. Gated by the viewer, never inferred: on an image every row has t_start=0,
+	// so reading stills as tracks would collapse any two same-group shapes into one.
+	trackMode = $state(false);
+	setTrackMode(on: boolean): void {
+		this.trackMode = on;
+		this._syncTracks();
+	}
+
+	/** Re-evaluate every track at the playhead and hand the canvas its display state.
+	 *  Wholesale on every call — the overlay is a pure function of (rows, timeCursor). */
+	private _syncTracks(): void {
+		const arrow = this.ctx?.plugins.arrow;
+		if (!arrow?.setTrackDisplay) return;
+		const t = this.table;
+		if (!this.trackMode || !t) {
+			arrow.setTrackDisplay(new Map(), new Set());
+			arrow.sync();
+			return;
+		}
+		const indexOf = new Map<string, number>();
+		const trackRows: TrackRow[] = [];
+		for (let i = 0; i < t.numRows; i++) {
+			const id = rawField(t, 'id', i) ?? String(i);
+			indexOf.set(id, i);
+			trackRows.push({
+				id,
+				// Overlay-aware: assigning a track id in the inspector (or via addTrackKeyframe)
+				// must form the track NOW, not after the save round-trips.
+				group: effectiveField(t, this._overrides, 'group', i) ?? '',
+				tStart: numField(t, 't_start', i),
+				x: numField(t, 'x', i),
+				y: numField(t, 'y', i),
+				width: numField(t, 'width', i),
+				height: numField(t, 'height', i),
+				label: effectiveField(t, this._overrides, 'label', i) ?? '',
+			});
+		}
+		const overrides = new Map<number, { x: number; y: number; w: number; h: number }>();
+		const hidden = new Set<number>();
+		// Two keyframes make a track; a lone grouped shape keeps its ordinary frame-pinned
+		// rendering, so turning track mode on never changes single-shape behaviour.
+		for (const track of tracksFrom(trackRows).filter((tr) => tr.keyframes.length >= 2)) {
+			const box = boxAt(track, this.timeCursor);
+			const [anchor, ...rest] = track.keyframes;
+			if (!anchor) continue;
+			const anchorIndex = indexOf.get(anchor.id);
+			if (box && anchorIndex != null) {
+				overrides.set(anchorIndex, { x: box.x, y: box.y, w: box.width, h: box.height });
+			} else if (anchorIndex != null) {
+				// Outside the track's lifetime: absent, not clamped — see boxAt's contract.
+				hidden.add(anchorIndex);
+			}
+			for (const kf of rest) {
+				const i = indexOf.get(kf.id);
+				if (i != null) hidden.add(i);
+			}
+		}
+		arrow.setTrackDisplay(overrides, hidden);
+		// The canvas renders on demand — setTrackDisplay only marks dirty, and a playhead move has
+		// no other reason to re-sync, so without this the overlay changes and nothing repaints.
+		arrow.sync();
+	}
+
+	/** Duplicate the SELECTED shape as a keyframe of its track at the current moment — the CVAT
+	 *  gesture: mark the object where its motion changes, let interpolation fill the frames
+	 *  between. An ungrouped shape is promoted to a track first (a fresh collision-safe id on the
+	 *  existing row, undoable like any field edit), so "select box → seek → add keyframe" works
+	 *  from a plain drawn box with no ceremony. */
+	addTrackKeyframe(): string | null {
+		const t = this.table;
+		const index = this.selectedIndex;
+		if (!this.trackMode || !t || index == null) return null;
+		let group = effectiveField(t, this._overrides, 'group', index) ?? '';
+		if (!group) {
+			group = newTrackId();
+			this.updateField(index, 'group', group);
+		}
+		const row = makeInsertRow({
+			shape_type: 'bbox',
+			x: numField(t, 'x', index) ?? 0,
+			y: numField(t, 'y', index) ?? 0,
+			width: numField(t, 'width', index) ?? 0,
+			height: numField(t, 'height', index) ?? 0,
+			t_start: this.timeCursor,
+			t_end: this.timeCursor,
+			label: effectiveField(t, this._overrides, 'label', index) ?? '',
+			group,
+			status: 'accepted',
+			source: 'human',
+		});
+		this._appendInsert(row);
+		this._syncTracks();
+		return row.id;
 	}
 
 	/** Forward a key to the engine's active tool — polygon/brush Enter-commit,
@@ -740,9 +1038,43 @@ export class AnnotatorController {
 	}
 
 	/** Arm/disarm an interactive segmenter (SAM): while armed, the next drawn box/point
-	 *  becomes its region prompt rather than a manual annotation. Null = normal drawing. */
+	 *  becomes its region prompt rather than a manual annotation. Null = normal drawing.
+	 *  Switching producer (or disarming) FINISHES any point session — the last prediction
+	 *  stays, as a reviewable `status=prediction` row like any other. */
 	setAssistProducer(producer: string | null): void {
+		if (producer !== this.assistProducer) this.finishAssistSession();
 		this.assistProducer = producer;
+	}
+
+	/** Append one signed click to the point session and re-run the armed producer over the
+	 *  FULL set — the response REPLACES the session's previous prediction. */
+	addAssistPoint(x: number, y: number): void {
+		if (!this.assistProducer) return;
+		this.assistPoints = [...this.assistPoints, { x, y, positive: this.assistPointPositive }];
+		void this.assist('', { producer: this.assistProducer, points: this.assistPoints });
+	}
+
+	/** End the point session KEEPING its last prediction ("Done" on the armed pill — the
+	 *  object is segmented; the next click starts a fresh session on a new object). */
+	finishAssistSession(): void {
+		this.assistPoints = [];
+		this.assistPointPositive = true;
+		this._assistSessionRows = [];
+	}
+
+	/** Retract the session's previous prediction rows so the refinement REPLACES them —
+	 *  the same hide an insert-undo performs: never saved, so nothing reaches the wire. */
+	private _retractSessionRows(): void {
+		if (this._assistSessionRows.length === 0) return;
+		const arrow = this.ctx?.plugins.arrow;
+		const ids = new Set(this._assistSessionRows.map((r) => r.id));
+		this._inserts = this._inserts.filter((r) => !ids.has(r.id));
+		for (const row of this._assistSessionRows) {
+			this._suppressed.add(row.id);
+			arrow?.setDeleted(row.index);
+		}
+		arrow?.sync();
+		this._assistSessionRows = [];
 	}
 
 	/** Map exemplar row INDICES → stable annotation ids (the few-shot reference an INSID3
@@ -751,6 +1083,21 @@ export class AnnotatorController {
 		const t = this.table;
 		if (!t || !indices?.length) return [];
 		return indices.map((i) => rawField(t, 'id', i)).filter((id): id is string => !!id);
+	}
+
+	/** Minimum confidence an assist prediction needs to reach the queue (0 = keep everything).
+	 *  Scoreless shapes always pass: absence of a score is not a low score. */
+	assistMinConfidence = $state(0);
+
+	/** The last batch submit's WIRE outcome — the honest half of a fire-and-forget. The sync
+	 *  LabelOutcome says only "a submit left"; whether it landed, as what job, on which backend
+	 *  (mock ⇒ nothing will run) arrives here for any surface that stays on screen. */
+	lastJob = $state<{ id: string; backend: string } | { error: string } | null>(null);
+
+	/** The open unit's key-path (`doc/speech/chunk`), parsed from the annotations URL — the value a
+	 *  chunk-level Selection needs to say "this item". Null on an unattached canvas. */
+	get unitKey(): string | null {
+		return this._saveUrl ? (assistTargetFor(this._saveUrl)?.key ?? null) : null;
 	}
 
 	/** INSID3 few-shot propagate: take the picked annotations as EXEMPLARS and propagate
@@ -772,14 +1119,10 @@ export class AnnotatorController {
 	 *  (index = numRows, so the index-keyed overlay/selection stay valid), re-render the
 	 *  WebGPU canvas, re-apply pending field patches (sync re-materializes caches).
 	 *  Shared by manual draws (onCommit) and AI-assist predictions. */
-	private _appendInsert(row: InsertRow): void {
+	private _appendInsert(row: InsertRow): number {
 		// Recorded BEFORE the append, so `index` is the row index the appended row will occupy.
-		this._pushUndo({
-			kind: 'insert',
-			index: this.table?.numRows ?? this._inserts.length,
-			at: this._inserts.length,
-			row,
-		});
+		const index = this.table?.numRows ?? this._inserts.length;
+		this._pushUndo({ kind: 'insert', index, at: this._inserts.length, row });
 		this._inserts = [...this._inserts, row];
 		const t = this.table;
 		if (t) {
@@ -797,10 +1140,14 @@ export class AnnotatorController {
 			this.table = next;
 			this.count = next.numRows;
 			this._reapplyOverrides();
+			// A new row may be a keyframe of an existing track (addTrackKeyframe, an assist
+			// prediction landing mid-clip) — re-evaluate before the next render.
+			this._syncTracks();
 		} else {
 			this.count = this._inserts.length;
 		}
 		this._geoDirty = true;
+		return index;
 	}
 
 	/** Interactive AI-assist (the ra-atr "draw/prompt → shapes" loop): run a producer
@@ -808,9 +1155,13 @@ export class AnnotatorController {
 	 *  `source=model:…` — reviewed/accepted like any prediction, persisted on Save. */
 	async assist(
 		prompt: string,
-		region?: { x: number; y: number; width: number; height: number },
-		producer = 'grounding-dino',
+		opts: {
+			region?: { x: number; y: number; width: number; height: number };
+			producer?: string;
+			points?: AssistPoint[];
+		} = {},
 	): Promise<void> {
+		const { region, producer = 'grounding-dino', points } = opts;
 		const url = this._saveUrl;
 		// GroundingDINO detects from a TEXT prompt; SAM segments from the REGION alone.
 		const needsPrompt = producer === 'grounding-dino';
@@ -829,6 +1180,7 @@ export class AnnotatorController {
 				producer,
 				prompt,
 				region: region ?? null,
+				points: points ?? null,
 				// The SERVER checks the producer's return against this task's captured template. The
 				// id is all the client sends — never the rules it is judged by.
 				taskId: reviewSelection.taskId ?? null,
@@ -848,23 +1200,54 @@ export class AnnotatorController {
 					{ description: result.dropped[0] },
 				);
 			}
-			for (const s of result.shapes) {
-				this._appendInsert(
-					makeInsertRow({
-						shape_type: canonicalShapeType(s.shape_type) ?? 'bbox',
-						x: s.x,
-						y: s.y,
-						width: s.width,
-						height: s.height,
-						polygon: s.polygon ?? [],
-						// Pin the prediction to the current video moment (0 for images).
-						t_start: this.timeCursor,
-						t_end: this.timeCursor,
-						label: s.label || prompt,
-						status: 'prediction',
-						source: result.source ?? `model:${producer}`,
-					}),
+			// The CONFIDENCE THRESHOLD — the reviewer's knob, applied at arrival: a prediction below
+			// it never reaches the queue, and the count is said out loud (a silent filter reads as a
+			// model that found less). Scoreless shapes pass — absence of a score is not a low score.
+			const below = result.shapes.filter(
+				(s) =>
+					this.assistMinConfidence > 0 &&
+					s.confidence != null &&
+					s.confidence < this.assistMinConfidence,
+			).length;
+			if (below > 0) {
+				toast.info(
+					`${below} prediction${below === 1 ? '' : 's'} below the ${this.assistMinConfidence.toFixed(2)} confidence threshold`,
 				);
+			}
+			// A point-session refinement answers about the SAME object — retract the session's
+			// previous rows (only once the new answer is IN HAND, so a failed request keeps the
+			// old prediction) and record the new ones for the next round to replace.
+			const refining = points !== undefined && points.length > 0;
+			if (refining) this._retractSessionRows();
+			for (const s of result.shapes) {
+				if (
+					this.assistMinConfidence > 0 &&
+					s.confidence != null &&
+					s.confidence < this.assistMinConfidence
+				)
+					continue;
+				const row = makeInsertRow({
+					shape_type: canonicalShapeType(s.shape_type) ?? 'bbox',
+					x: s.x,
+					y: s.y,
+					width: s.width,
+					height: s.height,
+					polygon: s.polygon ?? [],
+					// Pin the prediction to the current video moment (0 for images).
+					t_start: this.timeCursor,
+					t_end: this.timeCursor,
+					label: s.label || prompt,
+					status: 'prediction',
+					source: result.source ?? `model:${producer}`,
+					// The scores the review queue ranks by — dropped here for a while, which
+					// left every prediction unrankable and the "active-learning order" reading
+					// as insertion order. Null (not 0) when the backend made no estimate — a 0
+					// is a CLAIM of certainty, and "no estimate" must stay distinguishable.
+					confidence: s.confidence ?? null,
+					uncertainty: s.uncertainty ?? null,
+				});
+				const index = this._appendInsert(row);
+				if (refining) this._assistSessionRows.push({ id: row.id, index });
 			}
 		} catch (e) {
 			this.saveError = e instanceof Error ? e.message : String(e);
@@ -904,6 +1287,40 @@ export class AnnotatorController {
 		if (before === value) return;
 		this._pushUndo({ kind: 'field', index, field, before, after: value });
 		this._setField(index, field, value);
+		// A TEXT edit shifts the text under every span anchored to this row — re-anchor them or
+		// they silently point at the wrong characters (§8d.1). Known limitation, said out loud:
+		// undoing the text edit restores the text but not the offsets; before this existed the
+		// offsets were wrong after EVERY edit, undone or not.
+		if (field === 'text') this._remapChildSpans(index, before, value);
+	}
+
+	/** Re-anchor `parentIndex`'s child spans for an `oldText → newText` edit: shifted/stretched
+	 *  spans land on the span-edit overlay (display + Save channel in one); spans whose anchored
+	 *  text was edited away are DELETED rather than guessed at. Insert rows additionally update
+	 *  their own pending payload — their ids are unknown to the server's patch path. */
+	private _remapChildSpans(parentIndex: number, oldText: string, newText: string): void {
+		const parentId = this.rows.find((r) => r.index === parentIndex)?.id;
+		if (!parentId) return;
+		const spans = this.rows
+			.filter((r) => r.parentId === parentId && r.charStart != null && r.charStart >= 0)
+			.map((r) => ({ index: r.index, start: r.charStart ?? 0, end: r.charEnd ?? 0 }));
+		if (spans.length === 0) return;
+		for (const s of remapSpans(oldText, newText, spans)) {
+			const row = this.rows.find((r) => r.index === s.index);
+			if (!row) continue;
+			if (s.start === null || s.end === null) {
+				this.deleteRow(s.index);
+				continue;
+			}
+			const original = spans.find((sp) => sp.index === s.index);
+			if (original && original.start === s.start && original.end === s.end) continue;
+			this._spanEdits.set(s.index, { char_start: s.start, char_end: s.end });
+			const insert = this._inserts.find((ins) => ins.id === row.id);
+			if (insert) {
+				insert.char_start = s.start;
+				insert.char_end = s.end;
+			}
+		}
 	}
 	setStatus(index: number, status: string): void {
 		// Manual mode = ONE instance of the LabelOp abstraction (human · verdict ·
@@ -977,6 +1394,15 @@ export class AnnotatorController {
 		// Batch locus = a silver deriver over a chunk-level selection: enqueue via the jobs
 		// seam (lance-ns runs it; the result surfaces async by media id + Lance version).
 		if (op.execution === 'batch') {
+			// The jobs seam runs DERIVERS (predict/propagate/judge). A batch `set`/`verdict` is a
+			// bulk field-write — the TAGS plane's job — and the service Literal refuses it; posting
+			// it anyway was a guaranteed 422 the fire-and-forget toast reported as a failed submit.
+			if (op.op !== 'predict' && op.op !== 'propagate' && op.op !== 'judge') {
+				return {
+					status: 'unsupported',
+					reason: `batch '${op.op}' is not a jobs op — bulk field-writes ride the tags plane`,
+				};
+			}
 			if (isChunkSelection(op.target)) {
 				// Fire-and-forget submit; the toasts are the only submit-side feedback (results
 				// surface async on the read plane by media id + Lance version). HONEST MOCK:
@@ -992,18 +1418,26 @@ export class AnnotatorController {
 					// the open unit — resolve to stable ids the deriver can fetch masks/features by.
 					exemplars: this._exemplarIds(op.payload.exemplars),
 				})
-					.then((res) =>
-						!res.ok
+					.then((res) => {
+						// The wire truth, recorded for surfaces that outlive the toast (the
+						// propagate panel's outcome line): a sync "queued" that the transport then
+						// refused must not stand as the last word on screen.
+						this.lastJob = !res.ok
+							? { error: res.detail }
+							: { id: res.data.job_id, backend: res.data.backend };
+						return !res.ok
 							? toast.error(`Job submit failed: ${res.detail}`)
 							: res.data.backend === 'mock'
 								? toast.warning(
 										`Batch job mocked (${op.producer} · ${res.data.job_id}) — no jobs runner deployed, nothing will run`,
 									)
-								: toast.success(`Batch job queued (${op.producer} · ${res.data.job_id})`),
-					)
-					.catch((e: unknown) =>
-						toast.error(`Job submit failed: ${e instanceof Error ? e.message : String(e)}`),
-					);
+								: toast.success(`Batch job queued (${op.producer} · ${res.data.job_id})`);
+					})
+					.catch((e: unknown) => {
+						const detail = e instanceof Error ? e.message : String(e);
+						this.lastJob = { error: detail };
+						toast.error(`Job submit failed: ${detail}`);
+					});
 			}
 			return { status: 'queued', job: `${spec.source}:${op.op}`, note: 'batch deriver enqueued' };
 		}
@@ -1093,12 +1527,16 @@ export class AnnotatorController {
 			case 'insert': {
 				// A drawn row cannot be removed from an immutable Arrow table, so undo HIDES it (the
 				// same overlay a delete uses) and drops it from the save payload — the row never
-				// reaches the server either way, which is what "undone" has to mean.
+				// reaches the server either way, which is what "undone" has to mean. `_suppressed`
+				// is the SIDEBAR half of that hiding: `rows` cannot read the canvas overlay, and
+				// without it an undone draw kept a ghost row (and a ghost tag chip) in the queue.
 				if (direction === 'undo') {
 					this._inserts = this._inserts.filter((_, i) => i !== op.at);
+					this._suppressed.add(op.row.id);
 					arrow?.setDeleted(op.index);
 				} else {
 					this._inserts = [...this._inserts.slice(0, op.at), op.row, ...this._inserts.slice(op.at)];
+					this._suppressed.delete(op.row.id);
 					arrow?.unsetDeleted(op.index);
 				}
 				arrow?.sync();
@@ -1235,6 +1673,7 @@ export class AnnotatorController {
 			overrides: this._overrides,
 			geoEdits: this._geoEdits,
 			temporalEdits: this._temporalEdits,
+			spanEdits: this._spanEdits,
 			inserts: this._inserts,
 			deletes: this._deletes,
 			version: this._version,
@@ -1308,9 +1747,14 @@ export class AnnotatorController {
 		this._redo = [];
 		this._inserts = [];
 		this._deletes = [];
+		this._suppressed.clear();
 		this._geoEdits.clear();
 		this._temporalEdits.clear();
+		this._spanEdits.clear();
 		this._geoDirty = false;
+		// A save-reload renumbers rows, so the point session's index-keyed replacement set is
+		// invalid — the session ends (its last prediction is now a SAVED row like any other).
+		this.finishAssistSession();
 	}
 
 	/** Re-fetch the persisted annotations into the canvas + controller, clearing the
@@ -1347,6 +1791,9 @@ export class AnnotatorController {
 		// table. Re-pushing here is what stops a reload — which renumbers every row — from leaving
 		// each edge pointing at whatever now happens to sit at its old index.
 		this._pushLinksToCanvas();
+		// Positional like the delete overlay, and reconciled the same way: recompute against the
+		// renumbered rows rather than letting stale indices hide unrelated shapes.
+		this._syncTracks();
 		this.select(null);
 	}
 

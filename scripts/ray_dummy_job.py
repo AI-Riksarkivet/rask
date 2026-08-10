@@ -15,7 +15,13 @@ from __future__ import annotations
 
 import sys
 
-from dummy_runner.job import main
+# Suppressed, and NOT a missing dependency: `dummy_runner` lives in `runners/dummy`, a SEALED model
+# environment matched by no uv workspace glob on purpose (root `pyproject.toml` — the heavy model pins
+# must never enter the fleet's resolution). It is therefore unresolvable from the root environment BY
+# DESIGN and will stay that way; the module is on PATH only inside the Ray image that ships it.
+# Suppressed rather than "fixed", because the only fix would be adding `runners/*` to the workspace —
+# the exact thing the seal exists to prevent.
+from dummy_runner.job import main  # ty: ignore[unresolved-import]
 
 
 if __name__ == "__main__":

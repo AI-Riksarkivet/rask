@@ -38,7 +38,7 @@ from lineage_kit.schemas import custom_facet
 from pydantic import BaseModel, Field
 
 from annotator.projects.agreement import group_scores, summarize
-from annotator.projects.models import AnnotationProject, Draft, Shape, Task, TaskState
+from annotator.projects.models import AnnotationProject, Draft, Link, Shape, Task, TaskState
 
 
 #: The only state that contributes SHAPES. Every other terminal state contributes a sentinel row.
@@ -88,6 +88,13 @@ PUBLISHED_LABELS_SCHEMA: Final[pa.Schema] = pa.schema(
         ("mask", pa.string()),
         ("label", pa.string()),
         ("text", pa.string()),
+        # The TEXTUAL facet — a span INTO another published row's `text` (token classification,
+        # the value half of KIE). Validated at submit since the facet landed, and DROPPED here
+        # until 2026-08: a published NER dataset carried the substrings but not the anchors, which
+        # is not a dataset a trainer can consume. `parent_id` addresses the row by annotation_id.
+        ("parent_id", pa.string()),
+        ("char_start", pa.int32()),
+        ("char_end", pa.int32()),
         # The ontology declares per-class attributes with REAL types (free/int/enum/bool), enforces
         # them at submit and publishes them — and while this was `pa.string()` no downstream consumer
         # could filter on one. Declared, enforced, unqueryable. `pa.json_()` makes
@@ -98,6 +105,11 @@ PUBLISHED_LABELS_SCHEMA: Final[pa.Schema] = pa.schema(
         # it. `_json_attributes` already emits `{}` rather than "" for a shapeless row, which matters
         # because an empty string is not valid JSON.
         ("attributes", pa.json_()),
+        # This row's OUTGOING relations — `[{"name", "to"}]`, `to` an annotation_id in the same
+        # publish. Drawn links were validated at submit (endpoint classes, required relations) and
+        # then dropped here — KIE/DocQA structure that had been enforced never reached a consumer.
+        # JSON like `attributes`: an edge list is user-shaped, and `json_get_*` makes it queryable.
+        ("links", pa.json_()),
         ("group", pa.string()),
         ("difficult", pa.bool_()),
         # who made it — server-stamped, never client-claimed
@@ -207,8 +219,10 @@ def _row(
     *,
     publish_id: str,
     published_at: datetime,
+    links: list[Link] | None = None,
 ) -> dict[str, Any]:
-    """One row of `PUBLISHED_LABELS_SCHEMA`. `shape=None` builds the sentinel."""
+    """One row of `PUBLISHED_LABELS_SCHEMA`. `shape=None` builds the sentinel. `links` is the
+    DRAFT's full edge list — the row publishes only the edges leaving this shape."""
     source = task.source
     return {
         "project_id": project.project_id,
@@ -232,7 +246,11 @@ def _row(
         "mask": shape.mask if shape else None,
         "label": shape.label if shape else None,
         "text": shape.text if shape else None,
+        "parent_id": shape.parent_id if shape else None,
+        "char_start": shape.char_start if shape else None,
+        "char_end": shape.char_end if shape else None,
         "attributes": _json_attributes(shape),
+        "links": _json_links(shape, links),
         "group": shape.group if shape else None,
         "difficult": bool(shape.difficult) if shape else False,
         "source": (shape.source or "human") if shape else "",
@@ -249,6 +267,23 @@ def _row(
         "lead_time_seconds": task.lead_time_seconds,
         "published_at": published_at,
     }
+
+
+def _json_links(shape: Shape | None, links: list[Link] | None) -> str:
+    """The JSON text for one row's `links` — the edges LEAVING this shape, `[{"name", "to"}]`.
+
+    Sorted like `_json_attributes` (replay determinism), and always valid JSON: `[]` for the
+    sentinel, a shapeless row, or a draft with no relations — never `""`, which the `pa.json_()`
+    column refuses at write time."""
+    import json  # noqa: PLC0415 - only needed on this path
+
+    if shape is None or not links:
+        return "[]"
+    outgoing = sorted(
+        ({"name": link.name, "to": link.to_shape} for link in links if link.from_shape == shape.shape_id),
+        key=lambda e: (e["name"], e["to"]),
+    )
+    return json.dumps(outgoing, separators=(",", ":"))
 
 
 def _json_attributes(shape: Shape | None) -> str:
@@ -323,7 +358,9 @@ def build_plan(
                 # recorded as one rather than vanishing.
                 plan.rows.append(_row(project, task, attribution, None, publish_id=publish_id, published_at=published_at))
             for shape in shapes:
-                plan.rows.append(_row(project, task, attribution, shape, publish_id=publish_id, published_at=published_at))
+                plan.rows.append(
+                    _row(project, task, attribution, shape, publish_id=publish_id, published_at=published_at, links=draft.links if draft else None)
+                )
         elif task.state is TaskState.SKIPPED:
             # ONE sentinel row, and NONE of the draft's shapes (§7.1).
             attribution = _attribution(task, draft, "skipped")

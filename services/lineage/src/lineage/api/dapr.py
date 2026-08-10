@@ -74,4 +74,13 @@ def register_dapr(app: FastAPI) -> None:
             dead_letter_topic=settings.dapr_dlq_topic or None,
         )(on_lineage_event)
         if settings.dapr_dlq_topic:
-            dapr_app.subscribe(pubsub=settings.dapr_pubsub, topic=settings.dapr_dlq_topic, route="/lineage-dlq")(on_dead_letter)
+            # The parking route rides its OWN durable component (deliverPolicy=new), never the main
+            # ingest component: that one is deliverPolicy=all + ephemeral so replay can rebuild the
+            # graph — semantics that made this route re-park up to 168h of already-parked dead
+            # letters on every pod restart, spiking the terminal-loss metric with no new loss
+            # (open_dapr.md §2.10). The fallback keeps a dev stack without the component working.
+            dapr_app.subscribe(
+                pubsub=settings.dapr_dlq_pubsub or settings.dapr_pubsub,
+                topic=settings.dapr_dlq_topic,
+                route="/lineage-dlq",
+            )(on_dead_letter)

@@ -119,7 +119,10 @@ export function explorerZoneNav(
 			href,
 			match,
 			icon,
-			unavailable: view === null ? 'loading the corpus descriptor…' : (WHY[title] ?? 'not available for this corpus'),
+			unavailable:
+				view === null
+					? 'loading the corpus descriptor…'
+					: (WHY[title] ?? 'not available for this corpus'),
 		};
 	});
 

@@ -273,6 +273,7 @@ def test_every_first_party_deployment_is_hardened() -> None:
     first_party = (
         "gateway", "catalog", "lineage", "compaction", "lance-ray",
         "bronze-to-silver", "silver-to-gold", "media-to-silver", "web",
+        "notifications",
     )  # fmt: skip
     unhardened: list[str] = []
     for doc in rendered.split("\n---"):
@@ -451,15 +452,28 @@ _PINNED_TOPICS: list[tuple[str, str]] = [
     ("services/catalog/src/catalog/core/config.py", 'default="lineage.events.v1", alias="LANCE_DAPR_TOPIC"'),
     ("services/maintenance/src/maintenance/core/config.py", 'default="lineage.events.v1", alias="MAINTENANCE_LINEAGE_TOPIC"'),
     ("services/medallion/src/medallion/core/config.py", 'default="lineage.events.v1", alias="MEDALLION_LINEAGE_TOPIC"'),
+    # The medallion's publication head rides the CATALOG's control topic, so it IMPORTS the producer's
+    # constant rather than re-typing the name — what catalog + maintenance already do. Pinned as the
+    # import AND the use: either alone can be satisfied while the other re-literalizes the string.
+    ("services/medallion/src/medallion/core/config.py", "from service_kit.control_events import CONTROL_TOPIC"),
+    ("services/medallion/src/medallion/core/config.py", 'default=CONTROL_TOPIC, alias="MEDALLION_CONTROL_TOPIC"'),
     # the intra-cascade trigger topics (unversioned by design: both ends deploy atomically from one chart)
     ("services/medallion/src/medallion/core/config.py", 'default="medallion.bronze", alias="MEDALLION_SUB_TOPIC"'),
     ("services/medallion/src/medallion/core/config.py", 'default="medallion.bronze", alias="MEDALLION_BRONZE_TOPIC"'),
     ("services/medallion/src/medallion/core/config.py", 'default="training.jobs", alias="MEDALLION_TRAIN_TOPIC"'),
     ("services/medallion/src/medallion/core/config.py", 'default="medallion.media", alias="MEDALLION_MEDIA_TOPIC"'),
+    # The inbox is the SECOND consumer of the run-lifecycle topic, and the one that reads it as a
+    # notification rather than as graph input — so the name it subscribes is the same compatibility
+    # unit, pinned in the same act.
+    ("services/notifications/src/notifications/api/settings.py", 'default="lineage.events.v1", alias="RASK_NOTIFICATIONS_LINEAGE_TOPIC"'),
     # the stream bindings the topics land on (nats-stream-job) + the DLQ parking subjects
     ("chart/templates/nats-stream-job.yaml", 'add_if_missing CATALOG_CONTROL "catalog.control.>"'),
     ("chart/templates/nats-stream-job.yaml", 'add_if_missing DLQ "dlq.>"'),
     ("chart/templates/services.yaml", 'LINEAGE_DLQ_TOPIC, value: "dlq.lineage.events"'),
+    # Per-app DLQ subject, never a shared one — §2.11's two-apps-counting-each-other's-parks defect.
+    # Rendered by the configmap under the resiliency gate, because the app ships the setting empty:
+    # dead-lettering without a retry policy behind it parks on the first failure.
+    ("chart/templates/configmap.yaml", 'RASK_NOTIFICATIONS_DLQ_TOPIC: "dlq.notifications"'),
 ]
 
 
@@ -470,6 +484,29 @@ def test_event_topic_constants_are_pinned(relpath: str, needle: str) -> None:
         f"{relpath} no longer contains `{needle}` — the event-fabric topic contract (DATA-CONTRACT §7.2) "
         "names this exact constant. A deliberate rename must update the doc + this pin together; a "
         "BREAKING payload change must instead add a NEW .vN topic with parallel consumers."
+    )
+
+
+def test_medallion_never_re_types_the_catalog_control_topic() -> None:
+    """The pin above says the constant is imported; this says no SECOND spelling of it may reappear.
+
+    A pin is satisfiable by an import that some other module then shadows with its own literal — which
+    is exactly how `core/config.py` came to carry `"catalog.control.v1"` while three other consumers
+    imported `CONTROL_TOPIC`. The name belongs to its producer's model module (DATA-CONTRACT §7.2:
+    "the ONE shared constant both sides import"); a rename there must reach every subscriber, and a
+    duplicate is a subscriber the rename silently leaves listening to a topic nobody publishes to.
+    """
+    import ast  # local: the AST is the point — a prose mention of the topic in a comment is not a duplicate
+
+    offenders = [
+        f"{py.relative_to(REPO)}:{node.lineno}"
+        for py in _svc("medallion").rglob("*.py")
+        for node in ast.walk(ast.parse(py.read_text()))
+        if isinstance(node, ast.Constant) and node.value == "catalog.control.v1"
+    ]
+    assert not offenders, (
+        f"{offenders} spell `catalog.control.v1` out as a string literal instead of importing CONTROL_TOPIC "
+        "from service_kit.control_events — the topic name has exactly one definition site (DATA-CONTRACT §7.2)."
     )
 
 
@@ -1059,6 +1096,52 @@ def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
     )
 
 
+def test_every_pod_whose_app_fails_closed_on_the_app_token_is_given_one() -> None:
+    """A pod running code that REFUSES TO START without APP_API_TOKEN must be rendered one.
+
+    `service_kit.governed.dapr_auth.assert_app_token_configured` raises at startup when Dapr ingest is
+    on and the token is unset — deliberately, because the alternative is a live sidecar-delivered route
+    with no authentication. That makes the token a startup PRECONDITION for those apps, and a
+    precondition the chart can omit silently: the render is valid YAML, `helm upgrade` succeeds, and the
+    pod CrashLoopBackOffs with the reason buried in container logs.
+
+    `notifications` shipped exactly that. It writes no Lance, and in fleet.yaml the token had only ever
+    been reachable from inside `if $svc.lanceWriter` — an unrelated STORAGE flag — so the first fleet
+    service to host a Dapr-delivered route rendered `RASK_DAPR_ENABLED=true` with no token at all. Every
+    prior caller of the assert is a lance-plane pod templated somewhere else, each naming APP_API_TOKEN
+    explicitly, which is why one shared render site had never been needed and its absence never showed.
+
+    Derived from the module each Deployment actually RUNS, not from a hand-kept list of service names —
+    a list is the thing that drifts, which is the lesson the lineage-allowlist gate already encodes.
+    """
+    rendered = _helm_template()
+
+    fail_closed = {path.relative_to(SERVICES).parts[0] for path in SERVICES.rglob("*.py") if "assert_app_token_configured(" in path.read_text(errors="ignore")}
+    assert fail_closed, "no service calls assert_app_token_configured — this guard has nothing to check"
+
+    # fleet.yaml renders `args: - "<svc>:app"`; the lance templates render `<pkg>.<module>:app`. Both
+    # name the import root, which is the services/ directory name.
+    module_re = re.compile(r'^\s*-\s+"?([a-z_]+)(?:\.[a-z_.]+)?:app"?\s*$', re.MULTILINE)
+    checked = 0
+    missing: list[str] = []
+    for doc in yaml.safe_load_all(rendered):
+        if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
+            continue
+        raw = yaml.safe_dump(doc)
+        if not {m.group(1) for m in module_re.finditer(raw)} & fail_closed:
+            continue
+        checked += 1
+        if "APP_API_TOKEN" not in raw:
+            missing.append((doc.get("metadata") or {}).get("name", "?"))
+
+    assert checked, "no rendered Deployment runs a fail-closed module — the module parse has drifted"
+    assert not missing, (
+        f"{sorted(missing)} run code that calls assert_app_token_configured but are rendered WITHOUT "
+        "APP_API_TOKEN. The chart installs cleanly and the pod CrashLoopBackOffs on startup. Give the "
+        "service `daprIngest: true` in values.yaml (fleet.yaml) or render the token in its own template."
+    )
+
+
 def test_the_ingress_admits_a_real_page_image() -> None:
     """ingress-nginx caps a request body at **1 MB** by default, and every image surface in this
     estate is larger than that.
@@ -1230,10 +1313,7 @@ def test_the_lineage_allowlist_is_DERIVED_from_every_declared_identity() -> None
 
     rendered = _helm_template("auth.enabled=true")
 
-    declared = {
-        m.group(1)
-        for m in re.finditer(r'name:\s*RASK_LINEAGE_SERVICE_IDENTITY,\s*value:\s*"?([\w-]+)"?', rendered)
-    }
+    declared = {m.group(1) for m in re.finditer(r'name:\s*RASK_LINEAGE_SERVICE_IDENTITY,\s*value:\s*"?([\w-]+)"?', rendered)}
     assert declared, "no service declares a lineage identity — the derivation has nothing to read, so this gate is vacuous"
 
     allowlist_match = re.search(r'name:\s*LINEAGE_SERVICE_SUBJECTS,\s*value:\s*"([^"]*)"', rendered)
@@ -1265,3 +1345,342 @@ def test_the_allowlist_admits_NO_EMPTY_subject() -> None:
 
     assert "" not in subjects, f"the allowlist contains an EMPTY subject: {subjects!r} — it would admit an unidentified caller"
     assert len(subjects) == len(set(subjects)), f"the allowlist repeats a subject: {subjects!r}"
+
+
+def test_every_DURABLE_pubsub_component_has_a_sidecar_retry_target() -> None:
+    """A trigger consumer that must not lose messages must also be named in the Resiliency CRD.
+
+    THE REGRESSION THIS GATES. The cascade's control component
+    (`catalog-control-pubsub-<producer>`) carried a `durableName` — the chart's own marker for "a
+    trigger published while this app is down must be DELIVERED on recovery" — and was absent from
+    the Resiliency CRD's `targets.components`, which ranges only over the `lance.subPubsub` family.
+    The `/publication-arrival` subscription declares a `dead_letter_topic`, and Dapr sends there
+    after the FIRST failure when no retry policy targets the component. So the most expensive
+    trigger in the estate got zero retries and parked on one transient blip — while the CRD existed,
+    the app was in `scopes:`, and every neighbour was covered.
+
+    The rule is stated as a PROPERTY rather than a list of names on purpose: a future subscriber
+    added to one template and not the other fails here, which is exactly how this one was missed.
+    """
+    rendered = _helm_template("dapr.enabled=true", "dapr.resiliency.enabled=true")
+    docs = [d for d in yaml.safe_load_all(rendered) if d]
+
+    durable = {
+        d["metadata"]["name"]
+        for d in docs
+        if d.get("kind") == "Component"
+        and (d.get("spec") or {}).get("type") == "pubsub.jetstream"
+        and any(m.get("name") == "durableName" for m in (d.get("spec") or {}).get("metadata") or [])
+        # DLQ components are EXEMPT, and not as a convenience. A dead-letter handler must
+        # unconditionally ACK — a RETRY from a DLQ route requeues the message onto the DLQ forever —
+        # so its subscription never returns RETRY and an inbound retry policy could never engage.
+        # Requiring one would push a meaningless target into the CRD and teach the next reader that
+        # a DLQ is retried, which is the opposite of the rule. (This exemption is not hypothetical:
+        # `lineage-pubsub-lineage-dlq` is durable, by design, and correctly has no target.)
+        and not d["metadata"]["name"].endswith("-dlq")
+    }
+    assert durable, "no durable pub/sub component rendered — this gate would pass vacuously"
+
+    targeted: set[str] = set()
+    for d in docs:
+        if d.get("kind") != "Resiliency":
+            continue
+        targeted |= set(((d.get("spec") or {}).get("targets") or {}).get("components") or {})
+
+    missing = durable - targeted
+    assert not missing, (
+        f"durable pub/sub components with NO inbound retry target: {sorted(missing)} — with a dead_letter_topic declared, Dapr parks these on the FIRST failure"
+    )
+
+
+def test_the_rustfs_tenant_carries_NO_plaintext_credential() -> None:
+    """The Tenant CR's OIDC client secret must be a `secretKeyRef`, never a `value:`.
+
+    THE REGRESSION THIS GATES. `RUSTFS_IDENTITY_OPENID_CLIENT_SECRET` shipped as
+    `value: {{ .Values.dex.clientSecret }}` — readable in `kubectl get tenant -o yaml`,
+    `kubectl describe` and `helm get manifest` — while every sibling credential in the estate was
+    already behind a guard. It sat outside that guard because a Tenant is consumed by the RustFS
+    operator, which has no daprd sidecar and so cannot read the Dapr secret store the fleet services
+    use. That is the case `infra-credentials.yaml` exists for, and this asserts the Tenant actually
+    uses it.
+
+    Latent-by-default is not a defence: `rustfs.oidc.enabled` is off in the shipped values, so this
+    renders only on estates running STS credential vending — which is precisely where a leaked client
+    secret is worth the most.
+    """
+    rendered = _helm_template("rustfs.enabled=true", "rustfs.oidc.enabled=true")
+    docs = [d for d in yaml.safe_load_all(rendered) if d]
+
+    tenants = [d for d in docs if d.get("kind") == "Tenant"]
+    assert tenants, "no Tenant rendered — this gate would pass vacuously"
+
+    for tenant in tenants:
+        for env in (tenant.get("spec") or {}).get("env") or []:
+            if not str(env.get("name", "")).endswith("_CLIENT_SECRET"):
+                continue
+            assert "value" not in env, f"{env['name']} renders a PLAINTEXT value on the Tenant CR: {env!r}"
+            ref = ((env.get("valueFrom") or {}).get("secretKeyRef")) or {}
+            assert ref.get("name") and ref.get("key"), f"{env['name']} has neither a value nor a usable secretKeyRef: {env!r}"
+
+            # The reference must RESOLVE — a secretKeyRef at an absent key is a pod that never starts,
+            # and it would only surface on the enabled path, which is the narrowest possible place to
+            # discover it.
+            secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
+            target = secrets.get(ref["name"])
+            assert target is not None, f"{env['name']} references Secret {ref['name']!r}, which the chart does not render"
+            keys = set(target.get("stringData") or {}) | set(target.get("data") or {})
+            assert ref["key"] in keys, f"{env['name']} references key {ref['key']!r}, absent from Secret {ref['name']!r} (has {sorted(keys)})"
+
+
+# --------------------------------------------------------------------------------------------------
+# 12. COLLECTION — a suite that runs nowhere is a claim, not a gate
+# --------------------------------------------------------------------------------------------------
+
+
+def _configured_testpaths() -> list[str]:
+    import tomllib
+
+    return tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["pytest"]["ini_options"]["testpaths"]
+
+
+def test_every_workspace_test_directory_is_in_the_root_testpaths() -> None:
+    """`testpaths` is EXPLICIT, so writing a suite and running it are two separate acts.
+
+    This estate has already paid for the gap three times over: `services/catalog/tests` and
+    `services/lineage/tests` were written and collected by nothing, and three landed regression suites
+    (the catalog's replayed-commit door, lineage's external-source authz and its privileged-identity
+    door) sat green-by-absence until 2026-08-09. Every one of them passed review — the directory is not
+    where anybody looks.
+
+    Derived from the tree rather than from a list, so the day a new member lands with tests the gate
+    already covers it. The reverse direction is checked too: a testpath naming a directory that no
+    longer exists makes pytest print `file or directory not found` and exit 4, which fails the whole
+    run rather than the one suite.
+    """
+    configured = set(_configured_testpaths())
+    present = {str(path.relative_to(REPO)) for glob in ("packages/*/tests", "services/*/tests") for path in REPO.glob(glob) if path.is_dir()}
+    assert present, "no workspace test directories found — this gate would pass vacuously"
+
+    uncollected = sorted(path for path in present if path not in configured)
+    assert not uncollected, (
+        f"these test directories exist and are collected by NOTHING: {uncollected}. Every run stays green "
+        "while the suites inside them never execute — add them to [tool.pytest.ini_options] testpaths."
+    )
+
+    stale = sorted(path for path in configured if path.startswith(("packages/", "services/")) and not (REPO / path).is_dir())
+    assert not stale, f"these testpaths name a directory that does not exist — pytest exits 4 and NO suite runs: {stale}"
+
+
+def test_the_notifications_suite_is_collected_by_name() -> None:
+    """The generic gate above cannot notice a services/ layout change that stops the glob matching, and
+    the notification plane is exactly the kind of new member whose suites nobody would miss for a
+    while. Named, so this one cannot go quiet either way."""
+    assert "services/notifications/tests" in _configured_testpaths()
+
+
+def test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one() -> None:
+    """The sidecar's TWO halves on the one Deployment that cannot work without it.
+
+    `test_every_dapr_annotated_pod_carries_the_injector_webhook_label` proves the correspondence for
+    every pod that asks — and says nothing at all about a pod that never asks. That is the vacuous case
+    this closes: the whole notification plane is actor state plus one bus subscription, so a
+    Deployment rendered with no `dapr.io/*` annotations would come up healthy, serve its health surface
+    and its gateway row, and fail every inbox route forever — on a pod whose probes stay green,
+    because actor registration is process-local and cannot notice that no sidecar was injected.
+
+    The app-id is asserted because it is not decoration: `lance-statestore`'s `scopes`, the
+    `lineage-pubsub-notifications` component's subscriber list and the resiliency CRD all key on that
+    exact string, and a mismatch disables actor hosting with no error anywhere.
+    """
+    rendered = _helm_template()
+
+    pod = next(
+        (
+            (doc.get("spec") or {}).get("template")
+            for doc in yaml.safe_load_all(rendered)
+            if isinstance(doc, dict) and doc.get("kind") == "Deployment" and "notifications" in ((doc.get("metadata") or {}).get("name") or "")
+        ),
+        None,
+    )
+    assert pod is not None, "no notifications Deployment rendered — the service is not deployed at all"
+
+    meta = pod.get("metadata") or {}
+    annotations = meta.get("annotations") or {}
+    assert annotations.get("dapr.io/enabled") == "true", f"the notifications pod does not ask for a sidecar: {sorted(annotations)}"
+    assert annotations.get("dapr.io/app-id") == "notifications"
+    assert annotations.get("dapr.io/app-port") == "8850"
+    assert (meta.get("labels") or {}).get("dapr.io/enabled") == "true", (
+        "the notifications pod asks for a sidecar by ANNOTATION but carries no injector LABEL — the "
+        "fail-closed webhook skips it and it comes up un-injected, with every inbox route failing"
+    )
+
+
+# --------------------------------------------------------------------------------------------------
+# 12. The notification plane's WIRING — the four facts that live in the chart and nowhere else
+#
+# The service's own suites prove what each route answers; none of them can see whether anything ever
+# reaches those routes. Each guard below covers one address that is written down in exactly one place,
+# read somewhere else, and whose omission produces a HEALTHY pod: a gateway proxying to itself, a
+# subscription on a component that does not exist, an actor host with no state store, and a kubelet
+# probing a path the app does not serve. Three of the four have already shipped once in this estate on
+# a neighbouring service.
+# --------------------------------------------------------------------------------------------------
+
+
+def _rendered_docs(*set_values: str) -> list[dict]:
+    return [doc for doc in yaml.safe_load_all(_helm_template(*set_values)) if isinstance(doc, dict)]
+
+
+def _fleet_config(docs: list[dict]) -> dict[str, str]:
+    """The fleet ConfigMap — the one carrying `RASK_API_PREFIX` and the gateway's upstream addresses."""
+    for doc in docs:
+        if doc.get("kind") == "ConfigMap" and "RASK_API_PREFIX" in (doc.get("data") or {}):
+            return doc["data"]
+    raise AssertionError("no fleet ConfigMap rendered — every gateway upstream would fall back to a localhost default")
+
+
+def _notifications_container(docs: list[dict]) -> dict:
+    for doc in docs:
+        if doc.get("kind") == "Deployment" and "notifications" in ((doc.get("metadata") or {}).get("name") or ""):
+            return doc["spec"]["template"]["spec"]["containers"][0]
+    raise AssertionError("no notifications Deployment rendered")
+
+
+def test_the_gateway_learns_where_the_inbox_lives_rather_than_proxying_to_itself() -> None:
+    """`RASK_NOTIFICATIONS_URL` is the only thing standing between the row and a self-proxy.
+
+    The gateway's row defaults to `http://127.0.0.1:8850` — inside the gateway POD that address is the
+    gateway, where no inbox route exists, so every call answers a 404 indistinguishable from an
+    unrouted path while the service is up and healthy one Service name away. This is not a
+    hypothetical: `RASK_INGEST_URL` shipped missing and the configmap now carries a comment saying so
+    (`chart/templates/configmap.yaml`), which is a comment and not a gate.
+
+    The port is compared against the container's OWN port rather than a literal: the failure this
+    catches second is the address being right and the port stale.
+    """
+    docs = _rendered_docs()
+    url = _fleet_config(docs).get("RASK_NOTIFICATIONS_URL")
+    port = _notifications_container(docs)["ports"][0]["containerPort"]
+
+    assert url, "the chart renders no RASK_NOTIFICATIONS_URL — the gateway's /api/notifications row proxies to the gateway itself"
+    assert "127.0.0.1" not in url and "localhost" not in url, f"the gateway is pointed at itself: {url}"
+    assert url.endswith(f":{port}"), f"the gateway addresses {url} while the pod listens on {port}"
+
+
+def test_the_inbox_subscribes_on_a_component_the_chart_actually_renders() -> None:
+    """A subscription names its pubsub component by string, and a name that resolves to nothing is a
+    STARTUP error the pod survives: daprd logs it, the app serves its health surface and its gateway
+    row, and not one lineage event is ever delivered.
+
+    Both ends are asserted because they fail in different deployments. The chart's value is what the
+    pod reads; the app's DEFAULT is what a dev run without the ConfigMap reads, and the two drifting
+    apart is how a subscription works in one environment and is silently dead in the other. Same shape
+    as `test_user_state_store_default_matches_the_component_the_catalog_is_scoped_to`, for the same
+    reason: the name is a coordinate, and nothing else compares its two ends.
+    """
+    from notifications.api.settings import IngressSettings
+
+    docs = _rendered_docs()
+    configured = _fleet_config(docs)["RASK_NOTIFICATIONS_PUBSUB"]
+    component = next((d for d in docs if d.get("kind") == "Component" and d["metadata"]["name"] == configured), None)
+
+    assert component is not None, f"the inbox is configured to subscribe on {configured!r}, which the chart renders no Component for"
+    assert IngressSettings.model_fields["pubsub"].default == configured, (
+        f"the service defaults to {IngressSettings.model_fields['pubsub'].default!r} while the chart configures {configured!r} — "
+        "a dev run and a deployed pod would subscribe on different components"
+    )
+    # `scopes` is a ROOT field of a Dapr Component, not part of `spec`: an unscoped app-id gets
+    # "component not found" from its sidecar, which is the same silence as a missing component.
+    assert "notifications" in (component.get("scopes") or []), f"{configured} is not scoped to notifications — its sidecar refuses to load it"
+
+
+def test_the_inbox_subscription_starts_from_new_and_keeps_a_durable_cursor() -> None:
+    """The two consumer settings that decide what a rollout does to a badge.
+
+    `deliverPolicy: all` is right for lineage — replaying the retained stream into an idempotent MERGE
+    is its outage-durability story — and catastrophic here: an inbox would re-notify a week of history
+    on every deploy, which is a badge that lies loudest right after a release. `durableName` is the
+    other half: without it the queue-group consumer is deleted with its last member, so a run that
+    terminated while this app was down is skipped on reconnect and its author is never told.
+
+    Both are chart-side facts with no code that can check them, and the pair is what makes the
+    subscription correct — `new` alone loses events, durable alone replays them.
+    """
+    docs = _rendered_docs()
+    configured = _fleet_config(docs)["RASK_NOTIFICATIONS_PUBSUB"]
+    component = next(d for d in docs if d.get("kind") == "Component" and d["metadata"]["name"] == configured)
+    settings = {m["name"]: m.get("value") for m in component["spec"]["metadata"]}
+
+    assert settings.get("deliverPolicy") == "new", f"the inbox consumer is {settings.get('deliverPolicy')!r} — a rollout would re-notify the retained backlog"
+    assert settings.get("durableName"), "the inbox consumer is ephemeral — a run that terminated while the pod was down never reaches its author"
+    assert settings.get("queueGroupName") == "notifications", (
+        "without its own queue group every replica receives every message (jetstream sets a DeliverGroup only when "
+        "queueGroupName is non-empty), so a scaled deployment delivers each notification once per pod"
+    )
+
+
+def test_the_actor_state_store_is_scoped_to_the_service_whose_whole_state_it_is() -> None:
+    """`lance-statestore` carries `actorStateStore: "true"`, and an app-id missing from its `scopes`
+    gets "Actor state store not configured - actor hosting disabled" from its own sidecar.
+
+    The notification plane is nothing BUT actor state — one InboxActor per subject holding the pointer
+    rows and the compaction reminder — so unscoped it fails at every INVOCATION and at no earlier
+    point: `ActorRuntime.register_actor` is process-local and cannot notice a missing scope, so
+    `actors_registered` is True, `require_actor_plane` admits the request, and the sidecar's refusal
+    reaches the caller untranslated. The pod is Ready with a permanently empty bell. Nothing crashes
+    and nothing else would notice.
+
+    Found by property rather than by name: the store is whichever Component declares itself the actor
+    state store, so a rename cannot make this pass vacuously.
+    """
+    docs = _rendered_docs()
+    stores = [
+        doc
+        for doc in docs
+        if doc.get("kind") == "Component"
+        and any(m.get("name") == "actorStateStore" and str(m.get("value")).lower() == "true" for m in (doc["spec"].get("metadata") or []))
+    ]
+
+    assert len(stores) == 1, f"expected exactly one actor state store, found {[d['metadata']['name'] for d in stores]}"
+    assert "notifications" in (stores[0].get("scopes") or []), (
+        f"{stores[0]['metadata']['name']} is not scoped to notifications — the sidecar disables actor hosting and every inbox route fails "
+        "on a pod that reports itself healthy"
+    )
+
+
+def test_the_kubelet_probes_the_inbox_on_a_path_the_service_actually_serves() -> None:
+    """The chart probes a LITERAL; the app derives that path from `RASK_API_PREFIX`. Nothing renders
+    the two together, and a mismatch is a CrashLoopBackOff whose cause is in neither file.
+
+    `chart/templates/fleet.yaml` takes `healthPath | default "/api/health"` for both probes, and
+    `services.notifications` sets no `healthPath` — so the default is load-bearing here and is correct
+    only while the prefix is `/api`. The service's own suite proves the badge is mounted UNDER the
+    prefix (`services/notifications/tests/test_probe_wiring.py`); this is the other end of the same
+    claim, and neither half can see the mismatch alone.
+
+    The app is rebuilt under the chart's own prefix rather than the ambient one, because `app` is a
+    module-level singleton built from the environment at import — asking the process's current app
+    would answer about whichever suite imported it first.
+    """
+    import importlib
+    import os
+
+    docs = _rendered_docs()
+    config = _fleet_config(docs)
+    container = _notifications_container(docs)
+    probed = {container[probe]["httpGet"]["path"] for probe in ("livenessProbe", "readinessProbe")}
+
+    previous = os.environ.get("RASK_API_PREFIX")
+    os.environ["RASK_API_PREFIX"] = config["RASK_API_PREFIX"]
+    try:
+        import notifications
+
+        served = set(importlib.reload(notifications).app.openapi()["paths"])
+    finally:
+        if previous is None:
+            os.environ.pop("RASK_API_PREFIX", None)
+        else:
+            os.environ["RASK_API_PREFIX"] = previous
+        importlib.reload(importlib.import_module("notifications"))
+
+    assert probed <= served, f"the kubelet probes {sorted(probed - served)}, which the service does not serve under {config['RASK_API_PREFIX']}"

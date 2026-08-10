@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from ingest import create_app
+from ingest.sources import SourceDescriptor
 
 
 ADAPTERS = Path(__file__).resolve().parents[1] / "src" / "ingest" / "adapters.py"
@@ -34,8 +35,13 @@ BUILTIN_KINDS = ("local-dir", "s3-prefix")
 
 
 @pytest.fixture
-def sources(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+def sources(monkeypatch: pytest.MonkeyPatch) -> list[SourceDescriptor]:
     """The endpoint's payload, read through the real app factory.
+
+    Parsed back through `SourceDescriptor` rather than kept as raw JSON: the tests below read
+    `entry.options[i].name` and `.required`, which on a `dict[str, object]` are untyped subscripts
+    that no gate can check — the reason two of them carried a `# type: ignore`. Validating here
+    also asserts the served shape IS the model the endpoint declares, which was previously assumed.
 
     Through `create_app()` rather than by calling `describe_sources()` directly, because the registry
     is populated by an import-time side effect inside the factory — a test that imports the registry
@@ -50,16 +56,16 @@ def sources(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
     monkeypatch.setenv("RASK_API_PREFIX", "/api")
     response = TestClient(create_app()).get("/api/sources")
     assert response.status_code == 200, response.text
-    return response.json()
+    return [SourceDescriptor.model_validate(entry) for entry in response.json()]
 
 
-def test_every_builtin_kind_is_offered(sources: list[dict[str, object]]) -> None:
+def test_every_builtin_kind_is_offered(sources: list[SourceDescriptor]) -> None:
     """The three built-ins, including the two the UI could not previously reach."""
-    served = {str(entry["kind"]) for entry in sources}
+    served = {entry.kind for entry in sources}
     assert set(BUILTIN_KINDS) <= served, f"registered kinds missing from the endpoint: {sorted(set(BUILTIN_KINDS) - served)}"
 
 
-def test_each_kind_declares_the_options_its_adapter_READS(sources: list[dict[str, object]]) -> None:
+def test_each_kind_declares_the_options_its_adapter_READS(sources: list[SourceDescriptor]) -> None:
     """The descriptors are only useful if they match the code, so this checks them against it.
 
     Every `spec.options.get("x")` in `adapters.py` is a field that kind consumes; a form built from a
@@ -67,7 +73,7 @@ def test_each_kind_declares_the_options_its_adapter_READS(sources: list[dict[str
     until someone tries. Read from the AST rather than by eye, so adding an option to an adapter
     without describing it fails here rather than in a cluster.
     """
-    described = {str(entry["kind"]): {str(opt["name"]) for opt in entry["options"]} for entry in sources}  # type: ignore[index,union-attr]
+    described = {entry.kind: {opt.name for opt in entry.options} for entry in sources}
 
     read: dict[str, set[str]] = {}
     tree = ast.parse(ADAPTERS.read_text(encoding="utf-8"))
@@ -88,7 +94,7 @@ def test_each_kind_declares_the_options_its_adapter_READS(sources: list[dict[str
                 and isinstance(node.args[0], ast.Constant)
             )
             if is_options_get:
-                read.setdefault(kind, set()).add(str(node.args[0].value))  # type: ignore[union-attr]
+                read.setdefault(kind, set()).add(str(node.args[0].value))
 
     assert read, "found no `spec.options.get(...)` calls — the AST walk is checking nothing"
 
@@ -97,24 +103,24 @@ def test_each_kind_declares_the_options_its_adapter_READS(sources: list[dict[str
         assert undescribed == [], f"{kind!r} reads options {undescribed} that no caller is told about"
 
 
-def test_a_required_option_is_the_one_the_adapter_REFUSES_without(sources: list[dict[str, object]]) -> None:
+def test_a_required_option_is_the_one_the_adapter_REFUSES_without(sources: list[SourceDescriptor]) -> None:
     """`required` has to mean what the adapter enforces, or a form validates the wrong thing.
 
     Both refusals are real: "local-dir source requires options.root", "s3-prefix source requires
     options.bucket". A descriptor marking something else required would block a legal ingest; one
     marking nothing required would let the UI submit a request the backend always rejects.
     """
-    required = {str(entry["kind"]): {str(opt["name"]) for opt in entry["options"] if opt["required"]} for entry in sources}  # type: ignore[index,union-attr]
+    required = {entry.kind: {opt.name for opt in entry.options if opt.required} for entry in sources}
 
     assert required["local-dir"] == {"root"}
     assert required["s3-prefix"] == {"bucket"}
 
 
-def test_a_builtin_kind_carries_a_human_label(sources: list[dict[str, object]]) -> None:
+def test_a_builtin_kind_carries_a_human_label(sources: list[SourceDescriptor]) -> None:
     """A select showing `s3-prefix` is a registry key leaking into the product.
 
     Cheap to get wrong in the direction that matters: `label` defaults to `kind`, so an unlabelled
     registration renders its key and nothing fails.
     """
-    unlabelled = sorted(str(entry["kind"]) for entry in sources if entry["kind"] in BUILTIN_KINDS and entry["label"] == entry["kind"])
+    unlabelled = sorted(entry.kind for entry in sources if entry.kind in BUILTIN_KINDS and entry.label == entry.kind)
     assert unlabelled == [], f"kinds rendering their registry key as a label: {unlabelled}"

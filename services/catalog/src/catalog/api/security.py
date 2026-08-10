@@ -21,7 +21,15 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError, Unau
 
 from catalog.api.dependencies import SettingsDep
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
-from service_kit.governed.dapr_auth import ServiceDoorClosed, is_public_caller, service_principal
+from service_kit.governed.dapr_auth import (
+    CredentialRejected,
+    SecretStoreUnreadable,
+    ServiceDoorClosed,
+    SubjectNotAllowed,
+    dedicated_token_from_store,
+    is_public_caller,
+    service_principal,
+)
 from service_kit.governed.oidc import IDToken, OIDCVerifier
 
 
@@ -42,15 +50,18 @@ def authenticate(
 ) -> IDToken | None:
     """Authenticate the request: an OIDC bearer (human/external) OR the SERVICE door.
 
-    THE SERVICE DOOR IS SHUT BY DEFAULT (`service_subjects` empty) and this function then behaves
-    exactly as it always has. It exists because a service had NO way to authenticate here: the
+    THE SERVICE DOOR IS SHUT BY DEFAULT (`service_subjects` empty): with no subject allowlisted no
+    caller can pass it, and any request that does not ask for it — i.e. anything without BOTH service
+    headers, which is every request the gateway proxies, since it strips them — is answered by OIDC
+    exactly as it always was. It exists because a service had NO way to authenticate here: the
     catalog verified OIDC JWTs and nothing else, so every ingest run died at its first activity with
     `catalog refused describe (401): Missing bearer token` — and a JWT expires, so the static token
     the medallion carries for the same purpose is the wrong shape for the problem.
 
-    The mechanism is the one lineage already runs, extracted rather than re-invented, so the estate
-    keeps ONE service-to-service auth model and the lessons paid for there (the public-caller
-    laundering path, privileged subjects needing their own credential) apply here for free.
+    The mechanism is the one lineage runs — the SAME BODY, not a second copy (open_dapr.md §2.8).
+    A fork lived in each service for a while and they disagreed about the unconfigured door: lineage
+    refused, this one swallowed the signal and re-asked OIDC. One door now, and both call sites give
+    the refusal; `service_kit.governed.dapr_auth.ServiceDoorClosed` carries the reasoning.
     """
     if not settings.oidc_enabled:
         return None
@@ -58,7 +69,13 @@ def authenticate(
     # Both headers, never the token alone: with `dapr.io/app-token-secret` set the SIDECAR stamps
     # `dapr-api-token` on every request it delivers, so gating on the token would divert a
     # gateway-proxied HUMAN into the service door and 403 them on the missing identity.
-    if settings.service_subjects and dapr_api_token is not None and x_lance_service_identity is not None:
+    #
+    # `settings.service_subjects` is NOT part of this condition, and removing it is part of the §2.8
+    # one-door fix. An empty allowlist is a question about the door, and the door answers it — here it
+    # meant a caller who explicitly asked to be a service was silently re-asked for a bearer instead,
+    # while lineage (no such pre-gate) refused the same request. Same headers, same config, two
+    # answers. The allowlist check now happens in exactly one place, for both services.
+    if dapr_api_token is not None and x_lance_service_identity is not None:
         # THE LAUNDERING PATH, refused AT THE SERVICE DOOR — not at the top of this function.
         #
         # The rule is sound and unchanged: a service principal is never something the public front
@@ -93,11 +110,34 @@ def authenticate(
                 identity=x_lance_service_identity,
                 allowed_subjects=settings.service_subjects,
                 privileged_subjects=settings.privileged_subjects,
+                # The shared resolver (open_dapr.md §2.8): without it, this door's privileged branch
+                # could never open — every privileged subject was hard-refused with "no dedicated
+                # credential provisioned" regardless of what the store held, because the callback
+                # defaulted to None. The store read is deferred inside the resolver, so it happens only
+                # when a privileged subject is actually being verified — never on the shared-token path
+                # and never for an unlisted subject, which the door checks first.
+                dedicated_token=dedicated_token_from_store(settings.dapr_secret_store, settings.dapr_secret_key),
             )
-        except ServiceDoorClosed:
-            # No APP_API_TOKEN here: nothing to verify, so fall through to OIDC rather than admitting
-            # a caller who merely named a subject.
-            pass
+        except ServiceDoorClosed as exc:
+            # No APP_API_TOKEN here: the door does not exist in this deployment. The caller asked for it
+            # by sending both service headers, so say that — this used to `pass` and re-ask OIDC, which
+            # answered a missing APP_API_TOKEN with "Missing bearer token" and sent operators to the IdP.
+            audit("authn", FAILURE, reason="service_door_unconfigured")
+            raise UnauthenticatedError(str(exc)) from exc
+        except SubjectNotAllowed as exc:
+            # The allowlist answers "may this SUBJECT use the door" — an unlisted name is barred, not
+            # unrecognised, and it never reached the credential store.
+            audit("authn", FAILURE, reason="subject_not_allowed")
+            raise PermissionDeniedError(str(exc)) from exc
+        except CredentialRejected as exc:
+            # "May THIS CALLER be that subject" answered no — including the privileged subject whose
+            # dedicated credential was never provisioned, which must never fall back to the shared token.
+            audit("authn", FAILURE, reason="service_credential")
+            raise UnauthenticatedError(str(exc)) from exc
+        except SecretStoreUnreadable as exc:
+            # An outage is an outage, never a 401: the absent-vs-unreadable rule (§2.17).
+            audit("authn", FAILURE, reason="secret_store_unreadable")
+            raise ServiceUnavailableError(str(exc)) from exc
         else:
             audit("authn", SUCCESS, subject=principal.sub)
             # A SYNTHETIC token, and every field is deliberate. `IDToken` requires the conformant

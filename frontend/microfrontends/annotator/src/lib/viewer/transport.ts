@@ -110,8 +110,10 @@ export function keyAction(
 	if (key === ' ' || key === 'Spacebar') return { kind: 'playPause' };
 	// Shift+arrow = one FRAME; bare arrow = five seconds. The frame step is the finer act, so it
 	// takes the modifier — matching CVAT, where the bare arrow is the coarse move.
-	if (key === 'ArrowRight') return mods.shift ? { kind: 'frame', direction: 1 } : { kind: 'skip', delta: 5 };
-	if (key === 'ArrowLeft') return mods.shift ? { kind: 'frame', direction: -1 } : { kind: 'skip', delta: -5 };
+	if (key === 'ArrowRight')
+		return mods.shift ? { kind: 'frame', direction: 1 } : { kind: 'skip', delta: 5 };
+	if (key === 'ArrowLeft')
+		return mods.shift ? { kind: 'frame', direction: -1 } : { kind: 'skip', delta: -5 };
 	if (key === 'r' || key === 'R') return { kind: 'rate' };
 	return null;
 }

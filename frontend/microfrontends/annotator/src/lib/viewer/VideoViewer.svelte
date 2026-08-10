@@ -6,16 +6,23 @@
 	// frame is snapshotted UNDER the overlay so bbox/polygon/mask are drawn on the exact
 	// frame, and each new shape is pinned to that moment (controller.timeCursor →
 	// t_start/t_end). One annotations table + Save path with images + audio segments.
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { loadAnnotations } from '@rask/labeling/annotations-client';
-	
-	import type { PixiContext } from '@rask/engine';
+
+	import { type PixiContext, type TemporalSegment, WaveSurface } from '@rask/engine';
 	import { Button } from '@rask/ui/button';
 	// @rask/ui has no slider yet, so the seek bar keeps the @rask/ui primitive — it is already
 	// token-styled, so it themes with the rest of the transport.
 	import { Slider } from '@rask/ui/slider';
 	import TransportBar from './layout/TransportBar.svelte';
-	import { clampTime, keyAction, nextRate, skip as skipBy, stepFrame, transportShouldHandle } from './transport';
+	import {
+		clampTime,
+		keyAction,
+		nextRate,
+		skip as skipBy,
+		stepFrame,
+		transportShouldHandle,
+	} from './transport';
 	import PixiCanvas from './PixiCanvas.svelte';
 	import type { ViewerProps } from './types';
 
@@ -52,6 +59,9 @@
 			c.plugins.arrow.sync();
 			// Spatial attach (this viewer HAS a canvas) — draw tools, zoom, layers all bind.
 			controller?.attach(c, table, unit.annotationsUrl, version);
+			// A time axis makes same-group rows KEYFRAMES (tracks.ts) — video only, on purpose:
+			// stills all sit at t=0 and would read as one-instant tracks.
+			controller?.setTrackMode(true);
 			onload?.(table.numRows);
 		} catch (e) {
 			// Honest failure over a hung "loading…" chip; not rethrown (onready is fired
@@ -127,11 +137,17 @@
 
 	function onKeydown(e: KeyboardEvent): void {
 		if (!transportShouldHandle(e.target)) return;
-		const action = keyAction(e.key, { shift: e.shiftKey, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey });
+		const action = keyAction(e.key, {
+			shift: e.shiftKey,
+			ctrl: e.ctrlKey,
+			meta: e.metaKey,
+			alt: e.altKey,
+		});
 		if (!action) return;
 		e.preventDefault();
 		if (action.kind === 'playPause') togglePlay();
-		else if (action.kind === 'skip') seekTo(skipBy(video?.currentTime ?? 0, action.delta, duration));
+		else if (action.kind === 'skip')
+			seekTo(skipBy(video?.currentTime ?? 0, action.delta, duration));
 		else if (action.kind === 'frame') frameStep(action.direction);
 		else setRate();
 	}
@@ -150,8 +166,80 @@
 		return `${m}:${sec.toString().padStart(2, '0')}`;
 	}
 
+	// ── the AUDIO LANE — the video's soundtrack as a labelable timeline (the CVAT/Label-Studio
+	// composition: frame on top, waveform under it, transport at the bottom). Bound to the SAME
+	// hidden <video>, so playback, seeking and the playhead are one clock; audio-event segments
+	// ride the exact rows/Save path the audio viewer writes.
+	let waveEl = $state<HTMLElement | null>(null);
+	let wave = $state<WaveSurface | null>(null);
+	// True when the clip's audio could not be decoded (or there is none): the lane falls back to
+	// a FLAT timeline whose regions still work — labeling events on a silent clip is still
+	// labeling — and says so instead of showing an empty strip that reads as broken.
+	let noAudio = $state(false);
+
+	const segments = $derived.by<TemporalSegment[]>(() => {
+		const out: TemporalSegment[] = [];
+		for (const r of controller?.rows ?? []) {
+			if (r.tStart == null || r.tEnd == null || r.tEnd <= r.tStart) continue;
+			out.push({ id: r.id, start: r.tStart, end: r.tEnd, label: r.label });
+		}
+		return out;
+	});
+	const indexById = $derived(new Map((controller?.rows ?? []).map((r) => [r.id, r.index])));
+	const editable = $derived(controller?.mode === 'edit');
+
+	function makeSurface(el: HTMLElement, opts: { peaks?: number[][]; duration?: number }) {
+		return new WaveSurface(
+			el,
+			{ url: unit.mediaUrl ?? '', media: video ?? undefined, height: 56, ...opts },
+			{
+				onCreate: ({ start, end }) =>
+					controller?.addTemporalSegment({ t_start: start, t_end: end }),
+				onResize: (id, start, end) => {
+					const i = indexById.get(id);
+					if (i != null) controller?.updateSegmentTime(i, start, end);
+				},
+				onSelect: (id) => controller?.select(id == null ? null : (indexById.get(id) ?? null)),
+				onError: () => {
+					// No decodable audio — swap to the flat timeline. Guarded so a failure of the
+					// FALLBACK itself cannot loop.
+					if (noAudio || disposed || !waveEl) return;
+					noAudio = true;
+					wave?.destroy();
+					wave = makeSurface(waveEl, {
+						peaks: [[0, 0]],
+						duration: video?.duration || duration || 1,
+					});
+				},
+			},
+		);
+	}
+
+	// Lifecycle: needs the container AND a loaded clip (the fallback needs a real duration).
+	$effect(() => {
+		const el = waveEl;
+		if (!el || !ready || !unit.mediaUrl) return;
+		const s = untrack(() => makeSurface(el, {}));
+		wave = s;
+		return () => {
+			s.destroy();
+			wave = null;
+		};
+	});
+	// Rows → regions; mode → drag/resize. Same wiring as the audio viewer.
+	$effect(() => {
+		if (wave)
+			wave.setSegments(
+				segments,
+				untrack(() => editable),
+			);
+	});
+	$effect(() => wave?.setEditable(editable));
+
 	onDestroy(() => {
 		disposed = true;
+		// Track mode belongs to THIS viewer's time axis — the next unit may be a still.
+		controller?.setTrackMode(false);
 		// Release the seven engine closures attach() installed over the controller; without this
 		// the engine keeps writing a destroyed component's state.
 		controller?.detach();
@@ -185,6 +273,20 @@
 		<PixiCanvas {onready} />
 	</div>
 
+	<!-- The soundtrack's lane: drag to label an audio event, exactly like the audio viewer —
+	     same rows, same Save. Flat "timeline only" when the clip has no decodable audio. -->
+	<div class="border-border bg-card relative shrink-0 border-t px-2 py-1">
+		<div bind:this={waveEl} class="w-full" data-testid="video-waveform"></div>
+		{#if noAudio}
+			<span
+				class="text-muted-foreground pointer-events-none absolute top-1.5 right-3 text-[10px]"
+				data-testid="video-waveform-silent"
+			>
+				no audio track — timeline only
+			</span>
+		{/if}
+	</div>
+
 	<TransportBar
 		{playing}
 		{currentTime}
@@ -206,5 +308,20 @@
 			onValueChange={seek}
 			aria-label="Seek"
 		/>
+		<!-- The CVAT gesture: select a box, seek, add a keyframe — frames between keyframes
+		     interpolate. Needs a selection; disabled says so rather than vanishing. -->
+		<Button
+			variant="ghost"
+			size="sm"
+			class="shrink-0 px-2 text-xs"
+			disabled={controller?.selectedIndex == null}
+			title={controller?.selectedIndex == null
+	? 'Select a shape, seek to where its motion changes, then add a keyframe'
+	: 'Add a keyframe for the selected object at this moment'}
+			data-testid="add-keyframe"
+			onclick={() => controller?.addTrackKeyframe()}
+		>
+			+ keyframe
+		</Button>
 	</TransportBar>
 </div>

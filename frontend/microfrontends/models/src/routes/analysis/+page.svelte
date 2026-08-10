@@ -83,13 +83,17 @@
 	<section class="flex flex-col gap-2 rounded-lg border p-5">
 		<div class="flex items-center gap-2">
 			<h2 class="font-medium">GPU metrics (DCGM)</h2>
-			<span class="text-muted-foreground rounded-full border px-2 py-0.5 text-xs">Dummy — exporter not wired</span>
+			<span class="text-muted-foreground rounded-full border px-2 py-0.5 text-xs"
+				>Dummy — exporter not wired</span
+			>
 		</div>
 		<p class="text-muted-foreground text-sm">
 			Per-run GPU utilisation, memory and thermals from the NVIDIA DCGM exporter — the training-run
 			slice of the full view at /compute/gpu.
 		</p>
-		<div class="text-muted-foreground/60 grid h-32 place-items-center rounded-lg border border-dashed text-sm">
+		<div
+			class="text-muted-foreground/60 grid h-32 place-items-center rounded-lg border border-dashed text-sm"
+		>
 			dcgm-exporter embed target
 		</div>
 	</section>

@@ -75,10 +75,14 @@ through the sidecar. Keep `tests/unit/test_invariants.py`'s scope check — an a
 four zones, shared `@repo/api/runs-feed`), because `GET /runs` already carries the lifecycle — but *read*
 and *dismissed* are per-subject state the run feed cannot carry.
 
-**Why it is open.** It needs B1.
+**Why it is open.** It needs B1. *(B1's "no actor type is registered" is stale since the open_anno
+build — the annotator registers three, `services/annotator/src/annotator/main.py:91-93`; the missing
+piece is an inbox host, not actor infrastructure.)*
 
 **What closes it.** One actor per subject inbox, unread counts that cannot race, expiry via reminders rather
-than a sweeper cron.
+than a sweeper cron. **Designed in full as `open_notifications.md`** (2026-08-08): a `services/notifications`
+deployable hosting the inbox actor, bus + reconciler ingress, project watches, channel fan-out — its slice
+S1 is what closes this item.
 
 ### B2b · ratch's runner imports become the Ray-native name seam *(new, 2026-07-27)*
 
@@ -3454,3 +3458,107 @@ straight from the browser to RustFS (creds from the Dapr secret store, never env
   end to end.
 - **Server-declared palette** — `services/flows` declares the node catalog and the frontend still
   ships its own registry; the seam exists and is unused.
+
+---
+
+## J. OpenFGA weighted-graph readiness — audited 2026-08-08, model is COMPATIBLE
+
+OpenFGA is moving Check/BatchCheck/ListObjects/Expand/ListUsers onto a weighted-graph resolution
+algorithm ([openfga.dev blog, 2026-07-21](https://openfga.dev/blog/weighted-graph-upcoming-changes);
+ListObjects already runs on it, incompatible models fall back to the legacy algorithm, and **that
+fallback will be removed** — no date announced). Incompatible models will then FAIL TO BUILD.
+`packages/service-kit/src/service_kit/governed/auth/model.fga` was audited against all five
+incompatibility classes. **Nothing to migrate** — recorded so nobody re-derives it:
+
+1. **Missing relation on a multi-type TTU** (the class that kills a model): CLEAN, verified
+   mechanically — 26/26 `X from Y` × allowed-parent-type pairs resolve. The genuinely at-risk spot is
+   `transaction.parent: [namespace, warehouse]`, and all three of its TTUs (`owner`/`writer`/`reader
+   from parent`) exist on BOTH types; `namespace.parent: [warehouse, namespace]` likewise for all
+   four rungs — `warehouse.validator` (model.fga:59) exists only to serve that TTU and is what keeps
+   it whole. **Adding a type to any `parent`-style union means adding every rung that TTUs it.**
+2. **Tuple cycles in `and` / `but not`**: N/A — the model contains ZERO intersection and ZERO
+   exclusion; every relation is a pure union. Our two recursions (`role.assignee` accepting
+   `role#assignee`, self-nesting `namespace.parent`) are pure-union recursion, which is explicitly
+   the *supported* form.
+3. **Userset/wildcard check subject against an exclusion → hard error**: N/A — no `but not`, and no
+   wildcard (`:*`) anywhere in the model.
+4. **Alias traversal at check time removed** (only the exact relation stored in the tuple matches):
+   no impact. We DO accept group refs as subjects (`role#assignee`, `team#member`) and we DO have one
+   path that passes usersets as the check subject — the catalog access simulator / admin endpoints
+   (`access.py:157`, `access_admin.py:347,385,501-503`, all `qualify=False`). But the model defines
+   no alias of `assignee`/`member` that any type list accepts, so a probe names the same relation the
+   tuple stores.
+5. **Self-referential usersets now return FALSE** instead of a schema-only TRUE: no impact, and an
+   improvement. Type lists accept only `user`, `role#assignee`, `team#member` as subjects — never
+   `table#reader` — so a probe like `check("table:t1#reader","reader","table:t1")` was always
+   meaningless yet answered TRUE under the legacy algorithm; the simulator will now answer FALSE,
+   which is correct. No test depends on the old answer: every `check:` in `model.fga.yaml` uses a
+   concrete `user:<id>` subject.
+
+**What IS open is the version, not the model.** The server is pinned to **v1.8.0** with a documented
+blocker (`chart/values.yaml:1513-1516`): v1.18.0's migration 006 (`DROP INDEX CONCURRENTLY`) breaks
+against the AGE-shared Postgres. The weighted-graph rollout lands in newer releases, so the fallback's
+eventual removal makes that upgrade path mandatory rather than optional — and the migration blocker is
+what has to be solved first, on a store whose schema is shared with the lineage graph. Two follow-ups:
+(a) unblock the OpenFGA upgrade (own the migration against AGE-shared Postgres, or move OpenFGA to its
+own database); (b) when the announced `fga model validate` ships, add it to the `ms-authz` CI job
+beside the existing `fga model test` so compatibility is machine-checked, not re-audited by hand.
+
+### J-followups — what the v1.18.3 upgrade opened (2026-08-08)
+
+The image is v1.18.3 and `weighted_graph_check` is ON — set as `chart/values.yaml`
+`openfga.extraEnvVars` → `OPENFGA_EXPERIMENTALS`, **not** the `experimentals:` key this line named
+until 2026-08-10. The 0.3.9 subchart's `values.schema.json` enumerates the four flags it knew about,
+and `weighted_graph_check` post-dates it, so the `experimentals:` form failed schema validation and
+took the WHOLE chart render down — under helm 3.16.4, the CI pin, as well as helm 4. Corrected here
+because anyone auditing whether the flag is on greps for `experimentals:`, finds only comment prose,
+and would conclude the feature had been silently dropped.
+Three things it made available that are NOT wired, each deliberately left as its own change:
+
+1. **Subchart 0.3.9 → 0.3.12** (its appVersion IS v1.18.3). Needs `helm dependency update ./chart`
+   with helm on PATH — `Chart.lock` carries a digest over the dependency set, so hand-editing the
+   version desyncs it and `helm dependency build` (run by `make k3s-install` and both
+   `scripts/*_e2e_stack.sh`) fails outright. Every value key we set was verified present in 0.3.12.
+2. **OpenFGA is outside the estate's telemetry plane.** v1.11.3 added `OTEL_*` env support and
+   v1.17.0 a configurable trace sampler (`OPENFGA_TRACE_SAMPLER`, `traceidratio` default); v1.10.4/
+   v1.14.0 added `datastore_item_count` and `openfga_iter_query_duration_ms`. Today nothing exports
+   them: the subchart's `telemetry.metrics` is a Prometheus `/metrics` endpoint and **this estate does
+   not scrape** (zero `prometheus.io/scrape` in `chart/templates/`; the model is OTLP-push → Vector →
+   GreptimeDB). So the real work is pointing `telemetry.trace.otlp.endpoint` at the collector and
+   deciding how metrics reach GreptimeDB — including the trace header GreptimeDB requires
+   (`x-greptime-pipeline-name=greptime_trace_v1`, see `docs/DEPLOY.md`). Every governed request pays
+   an FGA check and we currently have **no FGA panel at all**, so this is the highest-value follow-up.
+3. **Connection contention on the shared Postgres, now with different pooling.** v1.10.4/v1.11.0 was a
+   BREAKING switch from `database/sql` to `pgxpool`. OpenFGA defaults to `MaxOpenConns: 30` /
+   `MaxIdleConns: 10` (upstream `pkg/server/config/config.go`), and the AGE Postgres sets no
+   `max_connections` so it runs on Postgres' default 100 — shared with the lineage graph, the Dapr
+   state store (`lance-statestore`) and the backup Job. 30 of 100 to one consumer is worth measuring
+   before it is tuned; `datastore.maxOpenConns`/`maxIdleConns` are the levers, and
+   `datastore_throttling` (experimental) is the other. **Deliberately not set blind** — pick numbers
+   from observed connection counts, which needs (2) first.
+
+### J-model — two model changes that need the `fga` CLI (2026-08-08)
+
+Found by sweeping the model against the openfga skill's own checklists. Both are recorded rather than
+applied because the skill's non-negotiable rule is that no `.fga`/`.fga.yaml` change ships without
+`fga model test` green, and the CLI cannot be installed in the authoring sandbox (GitHub release
+downloads return 403; `make bootstrap` installs it into `.localbin` on a normal dev box). The
+create-on-parent coverage audit itself IS applied — as comments in `model.fga`, which cannot change
+DSL semantics (proven: the comment-stripped model is byte-identical, so `fga model transform` and the
+`model.json` drift-diff are unaffected).
+
+1. **`transaction.can_set_property` and `transaction.can_cancel` are dead** — defined, but referenced
+   by no other relation and by no string in `services/` or `packages/`. `api/fga_deps.py` picks only
+   between `can_describe` and `can_set_status`. They are leaf permissions so nothing inherits through
+   them. Per `optimize-simplify` they are removal candidates; that rule also forbids deleting on a
+   usage sweep alone, so the change is: run the dependency scan, delete, `fga model test`, regenerate
+   `model.json`. Alternatively keep them and grow `alter_transaction` into the property/cancel actions —
+   they are already the right doors.
+2. **Test the shapes the weighted graph changes.** `weighted_graph_check` is now ON (chart values), and
+   `model.fga.yaml` currently carries 21 cases / 18 `check` blocks / 2 `list_objects` / 1 `list_users`,
+   every one with a concrete `user:<id>` subject. The behaviours the weighted graph alters are exactly
+   the ones with no coverage: a USERSET subject (`role:x#assignee`, `team:eng#member`) as the check
+   user — which the catalog access simulator does pass (`qualify=False`) — and the self-referential
+   userset case. Adding `check` cases for those pins the answers our simulator will now give, so a
+   future flag/version flip is caught by CI instead of by an operator reading a wrong TRUE. Also worth
+   adding: `list_users` coverage for the rungs the admin console reads, since only one exists today.

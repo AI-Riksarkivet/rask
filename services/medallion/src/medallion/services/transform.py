@@ -5,6 +5,9 @@ transform's OpenLineage event (``inputs=[from_dataset]`` -> ``outputs=[to_datase
 edge) and publishes the next stage's trigger, so a single producer event cascades bronze->silver->gold
 (R23: the producer ingests external raw straight into bronze; there is no raw tier).
 
+The trigger is untrusted input: it is validated through ``trigger_guards.StageTrigger`` before anything
+reads it, and a payload that fails is DROPped (DATA-CONTRACT §7.3 — never repaired, never raised).
+
 Idempotent + best-effort: with ``compute_enabled`` the transform does a REAL in-process Lance write (the
 fake-Ray compute) and the emit carries the real version; off, it's a pure lineage emit (version 1). The
 graph MERGEs on run_id, and a compute/publish outage returns ``RETRY`` so the Dapr sidecar redelivers.
@@ -29,13 +32,14 @@ from openfga_sdk import OpenFgaClient
 from opentelemetry import trace
 
 from medallion.core.config import MedallionSettings, project_namespace
-from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_transition
+from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_refused, record_transition
 from medallion.schemas.events import build_run_event
 from medallion.services import htr_stage
 from medallion.services.compute import measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.promotion import promotion_lineage
 from medallion.services.ray_submit import submit_stage_job
+from medallion.services.trigger_guards import parse_stage_trigger, uri_within
 from service_kit import dapr_publish
 from service_kit.governed import fga
 from service_kit.lakehouse import outbox
@@ -73,7 +77,10 @@ _QUALITY_BLOCKED = {"status": "DROP"}
 
 async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any, *, fga_client: OpenFgaClient | None = None) -> dict[str, str]:
     """Handle one upstream stage trigger: emit the transform's lineage, then trigger the next stage.
-    ``event`` is the untrusted Dapr CloudEvent envelope (hence ``Any`` + the ``isinstance`` guard).
+    ``event`` is the untrusted Dapr CloudEvent envelope (hence ``Any``); it is parsed and shape-checked
+    by ``trigger_guards.parse_stage_trigger`` before any field is read, and a payload that is not a
+    valid :class:`~medallion.services.trigger_guards.StageTrigger` — a non-dict envelope, a non-string
+    field, a ``token`` outside the ``Idempotency-Key`` shape — is DROPped (DATA-CONTRACT §7.3).
 
     When ``fga_client`` is set (MEDALLION_FGA_ENABLED), the mover first CHECKS it is authorized to produce
     the target stage — ``can_promote`` for the silver->gold mover, ``can_create_table`` for the others — as
@@ -89,10 +96,34 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
     identity + the FGA object. FAIL CLOSED: an unsafe project or one arriving with resolution disabled
     (no ``MEDALLION_CONTROL_ROOT``) is DROPped; a project with no active warehouse records a FAIL run and
     DROPs — never a fallback to the default roots, which would transform the WRONG tenant's data while
-    emitting real-looking lineage for it. No ``project`` → today's behavior, byte-identical."""
-    data = event.get("data") if isinstance(event, dict) else None
-    token = data.get("token") if isinstance(data, dict) else None
+    emitting real-looking lineage for it. No ``project`` → today's behavior, byte-identical.
+
+    ``from_uri`` on the trigger names the upstream the catalog actually vended (I2), and is honoured
+    only INSIDE the root this stage resolved — the mover opens it with its own object-store credentials,
+    so an unconfined value reads whatever those credentials can reach. Outside the root → ``DROP``.
+    That root is the TENANT'S WAREHOUSE for a project trigger, which is what makes I2 work: the vended
+    ``<root>/<hash>_<ns>$<name>`` sits directly under it. With NO project the root is ``MEDALLION_FROM_URI``
+    itself — a dataset URI, not a warehouse — so only that URI or a path beneath it can be named, and
+    I2 is effectively project-only. That costs nothing today: the one publisher that sets ``from_uri``
+    (``publication_trigger``) always carries the project, because the mover cannot resolve its tiers
+    without it. A single-tenant deployment that ever needs a vended location must resolve a root here
+    rather than widen the check."""
     transition = f"{settings.from_namespace}->{settings.to_namespace}"
+    # VALIDATE-OR-DROP, before a single field is read. Every value on this payload becomes an S3 key
+    # prefix, a Lance read URI, a Ray submission id or a lineage graph value, and the BUS is a wider
+    # trust surface than the token-guarded HTTP heads that also produce these triggers — so the shape
+    # is checked once, here, by `trigger_guards` — the same validate-or-DROP rule the TRAINING trigger's
+    # consumer already applies to its own payload (`services/train.py`) and that this handler simply had
+    # no counterpart for. It lives in a module neither handler owns so the two cannot silently diverge.
+    # Malformed → DROP: redelivery cannot fix deterministic garbage and a raising handler poisons the
+    # subscription (DATA-CONTRACT §7.3). At WARNING because a DROP is an ack — Dapr neither redelivers
+    # nor dead-letters, so an unrecorded drop makes the event simply cease to exist.
+    trigger = parse_stage_trigger(event)
+    if trigger is None:
+        log.warning("medallion_stage_malformed", extra={"transition": transition, "event": str(event)[:200]})
+        record_refused(transition, "malformed")
+        return _DROP
+    token = trigger.token
 
     # LANE DISCRIMINATION. Two ingest lanes — bronze$events and the page lane bronze$pages —
     # publish to the SAME medallion.bronze topic, so every mover subscribed to it sees both. The trigger
@@ -107,7 +138,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
     #
     # Absent → no claim → proceed. The field is a discriminator, not a requirement: an external bronze
     # writer may omit it, and triggers queued before this field existed must still drain at rollout.
-    arrived = data.get("dataset") if isinstance(data, dict) else None
+    arrived = trigger.dataset
     if arrived is not None and arrived != settings.from_dataset:
         # OBSERVABLE, at INFO and on a counter. A DROP is an ack: Dapr neither redelivers nor
         # dead-letters, so if the app records nothing the event simply ceases to exist. Before this
@@ -123,7 +154,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
         )
         return _DROP  # deterministic — redelivery cannot make this the right mover
 
-    raw_project = data.get("project") if isinstance(data, dict) else None
+    raw_project = trigger.project
     project = ""
     if raw_project is not None:
         if not is_safe_project(raw_project):
@@ -185,10 +216,15 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
         # (threadpool). No active warehouse is deterministic → the dedicated except below records the
         # FAIL run and DROPs; a transient registry outage raises IO errors into the generic RETRY path.
         from_uri, to_uri = settings.from_uri, settings.to_uri
+        # The storage domain this stage is entitled to READ — the tenant's resolved warehouse root, or
+        # the env-configured upstream when single-tenant. A trigger-supplied `from_uri` is confined to
+        # it below; nothing else defines what this mover's credentials are allowed to open.
+        read_root = settings.from_uri
         if project:
             root = await run_in_threadpool(project_root, settings.control_root, settings.storage_options(), project)
             if root is None:
                 raise UnresolvableProjectError(f"project {project!r} has no active warehouse")
+            read_root = root
             from_uri = f"{root}/medallion/{settings.from_namespace}"
             to_uri = f"{root}/medallion/{settings.to_namespace}"
 
@@ -208,9 +244,29 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
         # cascade fired correctly, woke, and found nothing, for every ingest-written table. I2
         # ("resolve the location through the CATALOG, never compose a path") read from the consuming
         # end. Only the READ side: the mover still owns where it WRITES.
-        supplied = data.get("from_uri") if isinstance(data, dict) else None
+        #
+        # CONFINED to `read_root`, because the name is honoured by OPENING it with this mover's own
+        # object-store credentials: unbounded, the field is a read primitive for every bucket that
+        # credential can reach, and the trigger arrives off a topic anything in the mesh can publish to.
+        # The catalog's vended location (`<root>/<hash>_<ns>$<name>`) sits inside the same root the
+        # registry resolved, so the legitimate publisher is unaffected. Outside it → DROP, never a
+        # silent fall-back to the composed path: a trigger naming a source this stage may not read is
+        # not a trigger to run with a different source, and substituting one would transform a dataset
+        # nobody asked for under real-looking lineage.
+        supplied = trigger.from_uri
         if supplied:
-            from_uri = str(supplied)
+            if not uri_within(read_root, supplied):
+                log.warning(
+                    "medallion_stage_from_uri_refused",
+                    extra={"transition": transition, "token": token, "project": project, "supplied": supplied[:200], "root": read_root},
+                )
+                # On a counter as well as the log: this is the one refusal that means someone is
+                # publishing triggers this mover must not honour, and a DROP is an ack — without a
+                # series there is nothing for an alert to fire on. The offending URI stays on the log
+                # line; the counter carries only the closed reason vocabulary.
+                record_refused(transition, "unconfined_uri")
+                return _DROP
+            from_uri = supplied
         # 0. Fake-Ray compute (opt-in): a REAL in-process Lance write of the downstream dataset, so the
         # emitted lineage carries the actual version + measured output statistics (rows + on-disk bytes),
         # and the cascade produces data, not just provenance. Blocking Lance/S3 IO → threadpool. Off →

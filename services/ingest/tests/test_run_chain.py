@@ -51,16 +51,36 @@ def _fixtures(root: Path, count: int) -> None:
         (root / f"page-{i:03d}.tif").write_bytes(b"II*\x00" + f"page-{i}".encode())
 
 
+def _empty_bronze(path: Path) -> str:
+    """The dataset `ensure_dataset` would have created, at the location it would have vended.
+
+    `enumerate_chunks` REFUSES to run against a table it cannot read (F12c): the anti-join's empty
+    set means "skip nothing", so degrading to it re-lands every object bronze already holds. The
+    activity that precedes it in the workflow creates this dataset, so these tests create it too
+    rather than handing the activity a path that does not exist.
+    """
+    from ingest.catalog import LocalCatalog
+    from ingest.runtime import BRONZE_SCHEMA
+
+    uri = str(path)
+    LocalCatalog(BRONZE_SCHEMA).ensure_at(uri)
+    return uri
+
+
 def test_enumerate_produces_chunks_not_units(activity_ctx: WorkflowActivityContext, tmp_path: Path) -> None:
     """The decision that dissolved the tracker: activities carry CHUNKS.
 
     A million persisted-and-replayed activity results would melt the state store. One child per
     ~1000 keys returns one compact result, and the workflow's own durable state becomes the ledger.
     """
-    _fixtures(tmp_path, 5)
-    spec = RunSpec(run_id="r1", kind="local-dir", project="p", dataset="pages", options={"root": str(tmp_path)})
+    source = tmp_path / "src"
+    source.mkdir()
+    _fixtures(source, 5)
+    # The source tree and the dataset are SIBLINGS: `local-dir` rglobs its root, so a bronze dataset
+    # inside it would enumerate its own Lance files as units.
+    spec = RunSpec(run_id="r1", kind="local-dir", project="p", dataset="pages", options={"root": str(source)})
 
-    chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": str(tmp_path / "bronze.lance")})
+    chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": _empty_bronze(tmp_path / "bronze.lance")})
 
     assert len(chunks) == 1, "5 units must be ONE chunk, not five activity results"
     parsed = ChunkSpec.model_validate(chunks[0])
@@ -71,12 +91,14 @@ def test_enumerate_produces_chunks_not_units(activity_ctx: WorkflowActivityConte
 def test_enumeration_slices_at_the_chunk_boundary(activity_ctx: WorkflowActivityContext, tmp_path: Path) -> None:
     from ingest import workflow as wf_mod
 
-    _fixtures(tmp_path, 7)
+    source = tmp_path / "src"
+    source.mkdir()
+    _fixtures(source, 7)
     original = wf_mod.CHUNK_SIZE
     wf_mod.CHUNK_SIZE = 3
     try:
-        spec = RunSpec(run_id="r2", kind="local-dir", project="p", dataset="d", options={"root": str(tmp_path)})
-        chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": str(tmp_path / "bronze.lance")})
+        spec = RunSpec(run_id="r2", kind="local-dir", project="p", dataset="d", options={"root": str(source)})
+        chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": _empty_bronze(tmp_path / "bronze.lance")})
     finally:
         wf_mod.CHUNK_SIZE = original
 
@@ -138,7 +160,7 @@ async def test_a4_a7_the_full_chain_lands_rows_and_commits_once(activity_ctx: Wo
     LocalCatalog(BRONZE_SCHEMA).ensure_at(uri)
     monkeypatch.setenv("RASK_INGEST_ACTIVE_DATASET", uri)
 
-    chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": str(tmp_path / "bronze.lance")})
+    chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": _empty_bronze(tmp_path / "bronze.lance")})
     chunk = ChunkSpec.model_validate(chunks[0])
     assert await publish_chunk_units(chunk) == 4
 

@@ -12,6 +12,7 @@ import logging
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from service_kit.exceptions import ForbiddenError
 from service_kit.governed.audit import FAILURE, audit
@@ -72,15 +73,20 @@ async def list_datasets(state: StateDep, checker: CheckerDep, subject: CurrentSu
     answer to "what can I search" is a shorter list, not a 403.
     """
     registry = _registry(state)
-    datasets: list[DatasetSummary] = []
-    for dataset_id in registry.list_ids():
-        try:
-            descriptor = registry.get(dataset_id).descriptor
-        except (UnknownDatasetError, ValueError) as exc:
-            logger.warning("skipping dataset %s: %s", dataset_id, exc)
-            continue
-        datasets.append(
-            DatasetSummary(
+
+    # Off the loop: `registry.get` opens Lance/S3 under a threading.Lock, and this is the first call
+    # every zone makes on page load — inline it serialized the whole process behind one cold dataset
+    # (open_python-audit VS-02). The row table is read HERE, in the same pass, so `_may_see` below
+    # never re-opens the registry per dataset (the descriptor was being read twice).
+    def _collect() -> list[tuple[DatasetSummary, str | None]]:
+        collected: list[tuple[DatasetSummary, str | None]] = []
+        for dataset_id in registry.list_ids():
+            try:
+                descriptor = registry.get(dataset_id).descriptor
+            except (UnknownDatasetError, ValueError) as exc:
+                logger.warning("skipping dataset %s: %s", dataset_id, exc)
+                continue
+            summary = DatasetSummary(
                 id=dataset_id,
                 tables={
                     name: TableFacts(
@@ -92,36 +98,29 @@ async def list_datasets(state: StateDep, checker: CheckerDep, subject: CurrentSu
                 },
                 capabilities=[name for name in descriptor.declared.capabilities if descriptor.capability_available(name)],
             )
-        )
+            # The ROW table is the visibility gate: the one search actually reads. Gating on ALL
+            # tables would make visibility mean "may read everything" — stricter than the question
+            # ("may I search this corpus"). None = the corpus declares no search: a real shape, and
+            # `_may_see` DENIES it under authz rather than inventing an object to check (guessing an
+            # identifier would authorize against something the catalog never governs).
+            search = descriptor.declared.search
+            collected.append((summary, search.row_table if search is not None else None))
+        return collected
+
+    pairs = await run_in_threadpool(_collect)
 
     # Checked CONCURRENTLY: a registry of a dozen corpora would otherwise pay a dozen serial
     # round-trips to OpenFGA on the first page every user loads. With FGA off the checker is a local
     # `return True`, so this costs nothing on a dev stack.
-    async def _may_see(dataset_id: str) -> bool:
-        table = _row_table(registry, dataset_id)
+    async def _may_see(dataset_id: str, table: str | None) -> bool:
         if table is None:
             # Nothing to name as an FGA object. Deny under authz rather than guess an identifier —
             # but only when authz is ON, so a dev stack with FGA off still lists it as it always did.
             return not settings.fga_enabled
         return await checker(user=subject, relation=READ_METADATA, obj=corpus_object(settings, dataset_id, table))
 
-    permitted = await asyncio.gather(*(_may_see(d.id) for d in datasets))
-    return DatasetsResponse(datasets=[d for d, ok in zip(datasets, permitted, strict=True) if ok])
-
-
-def _row_table(registry: DatasetRegistry, dataset_id: str) -> str | None:
-    """The table a corpus's search reads — the one whose grant decides whether the corpus is visible.
-
-    A corpus has many tables and gating on ALL of them would make visibility mean "may read
-    everything", which is stricter than the question being asked ("may I search this corpus").
-
-    `None` when the corpus declares no search at all (`Search | None` on the descriptor). That is a
-    real shape, not a defect — a corpus can be viewable without being searchable — and it is handled
-    at the call site by DENYING rather than by inventing an object to check. Guessing an identifier
-    would authorize against something the catalog never governs, which reads as a grant.
-    """
-    search = registry.get(dataset_id).descriptor.declared.search
-    return search.row_table if search is not None else None
+    permitted = await asyncio.gather(*(_may_see(s.id, table) for s, table in pairs))
+    return DatasetsResponse(datasets=[s for (s, _t), ok in zip(pairs, permitted, strict=True) if ok])
 
 
 @router.get("/datasets/{dataset_id}/descriptor")
@@ -133,7 +132,7 @@ async def dataset_descriptor(dataset_id: str, state: StateDep, checker: CheckerD
     every table, every column name, every declared capability. Guarding the list and leaving this
     open would mean the list only had to be guessed.
     """
-    handle = dataset_handle(state, dataset_id)
+    handle = await run_in_threadpool(dataset_handle, state, dataset_id)
     # `Search | None` — the same shape the listing handles, and it must be handled identically here:
     # with no row table there is nothing to name as an FGA object, so DENY rather than guess one.
     # Reading it unguarded was a 500 (`'NoneType' object has no attribute 'row_table'`).

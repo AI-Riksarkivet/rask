@@ -139,11 +139,11 @@ treat `body` as an untrusted `Any` and guard with `isinstance` before touching `
 
 | Topic | Producer → consumer | Schema (the pydantic model) | Where the name lives |
 |---|---|---|---|
-| `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), movers/trainer (via the `packages/service-kit/src/service_kit/lakehouse/outbox.py` stage→publish→drop path), compaction (`compaction/core/lineage_emit.py`) → lineage subscriber | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_DAPR_TOPIC` / `LANCE_DAPR_TOPIC` / `COMPACTION_LINEAGE_TOPIC` / `MEDALLION_LINEAGE_TOPIC` in each service's `core/config.py` |
+| `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), movers/trainer (via the `packages/service-kit/src/service_kit/lakehouse/outbox.py` stage→publish→drop path), compaction (`compaction/core/lineage_emit.py`) → lineage **and notifications** subscribers, one per-app component each | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_DAPR_TOPIC` / `LANCE_DAPR_TOPIC` / `COMPACTION_LINEAGE_TOPIC` / `MEDALLION_LINEAGE_TOPIC` in each service's `core/config.py`; `RASK_NOTIFICATIONS_LINEAGE_TOPIC` in `notifications/api/settings.py`, rendered from `pubsub.topic` by the chart configmap |
 | `catalog.control.v1` | catalog (`catalog/core/control_emit.py`) → every catalog replica (broadcast, no `queueGroupName`) | `service_kit.control_events.CatalogControlEvent` | `CONTROL_TOPIC` in `packages/service-kit/src/service_kit/control_events.py` — the ONE shared constant both sides import |
 | `medallion.bronze` / `medallion.silver` / `medallion.media` | producer head (bronze arrival) + each mover → the next mover | pointer trigger `{token, dataset, namespace[, project]}` (claim-check §5) | `MEDALLION_BRONZE_TOPIC` / `MEDALLION_MEDIA_TOPIC` defaults in `medallion/core/config.py`; per-mover `subTopic`/`pubTopic` in `chart/values.yaml` `medallion.movers` |
 | `training.jobs` | `POST /train` head (`medallion/services/train.py`) → the trainer consumer | pointer trigger `{token, model, features:[{dataset, version}], config}` | `MEDALLION_TRAIN_TOPIC` default in `medallion/core/config.py` (`medallion.train.topic` in values) |
-| `dlq.*` | the Dapr sidecar on retry exhaustion → each app's parking route | the original delivery, parked | `dlq.lineage.events` (chart `services.yaml`), `dlq.<subTopic>` + `dlq.lance-ray` (chart `medallion.yaml`); the `DLQ` stream binds `dlq.>` in `nats-stream-job.yaml` |
+| `dlq.*` | the Dapr sidecar on retry exhaustion → each app's parking route | the original delivery, parked | `dlq.lineage.events` (chart `services.yaml`), `dlq.<subTopic>` + `dlq.lance-ray` (chart `medallion.yaml`), `dlq.notifications` (chart `configmap.yaml`); the `DLQ` stream binds `dlq.>` in `nats-stream-job.yaml` |
 
 The two **cross-plane** topics carry an explicit `.v1`: the version in the NAME is the compatibility
 unit — a consumer subscribed to `lineage.events.v1` is entitled to `RunEvent`-shaped payloads
@@ -163,7 +163,16 @@ garbage), and a handler never raises on malformed input — a crash would poison
   (events are refresh hints; the audit trail is the durable record — `services/catalog/api/dapr.py`).
 - medallion triggers: strict field guards (`_safe_name` / `_safe_dataset` / int-version / the 8 KiB
   config cap) → `_DROP`; deny-by-FGA is also `DROP` (redelivery won't grant the rung), only
-  transient outages `RETRY` (`services/medallion/services/{transform,train}.py`).
+  transient outages `RETRY`. The guards live in **two** places and the split is deliberate:
+  `services/medallion/services/train.py` keeps its own segment/int-version/8 KiB guards for the
+  TRAINING trigger, while the STAGE trigger validates through
+  `services/medallion/services/trigger_guards.py` (`parse_stage_trigger` + `uri_within`) — a module
+  neither handler owns, so the name grammar the two must agree on cannot drift inside one of them.
+  `uri_within` is the half that is a security boundary rather than a shape rule: a trigger may NAME
+  the upstream it wants read, but the mover reads that location with its OWN object-store
+  credentials, so the name is honoured only inside the storage root the stage already resolved.
+  Both refusals are counted (`medallion.stage.refused`) — a `DROP` is an ack, so an uncounted drop
+  makes the event simply cease to exist.
 
 ### 7.4 Evolution: additive-only within a topic; breaking = a new `.vN` topic
 

@@ -113,7 +113,7 @@ function attached() {
 describe('geometry actions are undoable', () => {
 	it('DRAW: undo removes the shape from the save payload and hides it', () => {
 		const { h, c } = attached();
-		h.draw({ type: 'rect', x: 1, y: 2, width: 3, height: 4 });
+		h.draw({ type: 'rect', x: 1, y: 2, width: 30, height: 40 });
 
 		expect(c.canUndo, 'drawing did not push an undo op').toBe(true);
 		const afterDraw = c.pendingInserts;
@@ -171,7 +171,7 @@ describe('geometry actions are undoable', () => {
 		const { h, c } = attached();
 		c.select(0);
 		c.updateField(0, 'label', 'renamed');
-		h.draw({ type: 'rect', x: 1, y: 2, width: 3, height: 4 });
+		h.draw({ type: 'rect', x: 1, y: 2, width: 30, height: 40 });
 		c.select(0);
 		c.deleteSelected();
 
@@ -186,11 +186,11 @@ describe('geometry actions are undoable', () => {
 
 	it('a new action drops the redo branch', () => {
 		const { h, c } = attached();
-		h.draw({ type: 'rect', x: 1, y: 2, width: 3, height: 4 });
+		h.draw({ type: 'rect', x: 1, y: 2, width: 30, height: 40 });
 		c.undo();
 		expect(c.canRedo).toBe(true);
 
-		h.draw({ type: 'rect', x: 9, y: 9, width: 9, height: 9 });
+		h.draw({ type: 'rect', x: 9, y: 9, width: 90, height: 90 });
 		expect(c.canRedo, 'an undone future survived a new action').toBe(false);
 	});
 });

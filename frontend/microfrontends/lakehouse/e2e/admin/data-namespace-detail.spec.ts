@@ -31,6 +31,14 @@ const ACL = {
 	],
 };
 
+/** The signed-in caller's OWN verdicts — what the page renders its actions from. Distinct from `ACL`
+ *  above, which is who-holds-what and is owner-gated; this one describes only the caller. */
+const MY_PERMISSIONS = {
+	object: 'namespace:gold',
+	subject: 'user:alice',
+	permissions: { can_get_metadata: true, can_delete: true, can_update_properties: true },
+};
+
 let token: string;
 
 const seed = async (page: Page, routes: Record<string, unknown>): Promise<void> => {
@@ -63,6 +71,12 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 			body: { status: 'deleted', kind: 'namespace', id: 'gold' },
 		},
 		'POST /v1/namespace/gold/access/list': ACL,
+		// The SELF-view. Seeded for every test in this file because the policy card renders FROM it:
+		// unseeded it 404s, `perms` stays unanswered, and Edit/Remove/Set policy are correctly absent —
+		// which would fail the three specs below as a missing button rather than as the authz story it
+		// actually is. `can_delete` is the rung the catalog gates policy writes on, so this is the
+		// admin these tests have always been signed in as, now stated on the wire instead of assumed.
+		'POST /v1/namespace/gold/access/my-permissions': MY_PERMISSIONS,
 		'POST /v1/namespace/gold/access/grant': {
 			object: 'namespace:gold',
 			user: 'user:bob',
@@ -198,4 +212,90 @@ test('the registry links each namespace name to its detail page', async ({ page 
 	// failed on the pre-migration suite too.
 	await expect(page).toHaveURL(/\/lakehouse\/catalog\/namespaces\/gold$/);
 	await expect(page.getByRole('heading', { name: 'gold', exact: true })).toBeVisible();
+});
+
+// UPWARD VISIBILITY made this page reachable by someone who cannot act on it: a grant on ONE table
+// now lights `can_get_metadata` on every namespace above it, so a reader legitimately lands here.
+// Before the self-view the page rendered Edit / Remove / Set policy to that person unconditionally
+// and only reported the denial after the click — a button whose sole purpose was to fail.
+test('a caller who may only SEE the namespace gets no policy actions, and is told which rung is missing', async ({
+	page,
+}) => {
+	await seed(page, {
+		// The single-table grantee: visible, and nothing more. `can_delete` false is the whole test.
+		'POST /v1/namespace/gold/access/my-permissions': {
+			object: 'namespace:gold',
+			subject: 'user:ivan',
+			permissions: { can_get_metadata: true, can_delete: false, can_update_properties: false },
+		},
+	});
+	await page.goto('/lakehouse/catalog/namespaces/gold');
+
+	// The page still RENDERS — visibility is the point of the child edge.
+	await expect(page.getByRole('heading', { name: 'gold', exact: true })).toBeVisible();
+	// …and it names the missing rung rather than going silent, which would read as a broken page.
+	await expect(page.getByText('Changing this policy needs the owner rung')).toBeVisible({
+		timeout: 15_000,
+	});
+	// The three actions are ABSENT, not disabled: a disabled control still advertises the operation.
+	await expect(page.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Remove', exact: true })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Set policy', exact: true })).toHaveCount(0);
+});
+
+// The GRANT AXIS. Granting used to be a side-effect of `owner`, so the picker offered four data
+// rungs and nothing else — there was no way to say "administer access but read nothing". These two
+// are the axis, and they carry explanatory labels because picking the wrong one hands out the
+// authority to hand out authority.
+test('the grant picker offers the grant-axis rungs, labelled for what they do', async ({
+	page,
+}) => {
+	await page.goto('/lakehouse/catalog/namespaces/gold');
+	await page.getByRole('tab', { name: 'access' }).click();
+	await page.getByRole('button', { name: 'Access review' }).click();
+	await page.getByLabel('Grant rung').click();
+
+	// The four data rungs keep their bare names — `reader` means what it says.
+	await expect(page.getByRole('option', { name: 'reader', exact: true })).toBeVisible();
+	await expect(page.getByRole('option', { name: 'owner', exact: true })).toBeVisible();
+	// The grant axis does not, so it is spelled out in the option itself.
+	await expect(
+		page.getByRole('option', { name: /manage_grants — may grant anything/ }),
+	).toBeVisible();
+	await expect(
+		page.getByRole('option', { name: /pass_grants — may re-grant what they hold/ }),
+	).toBeVisible();
+});
+
+// MANAGED ACCESS (C4). The flag is the REASON an owner's grant controls are absent, so the page has
+// to say so — an unexplained absence is indistinguishable from a bug, and the person best placed to
+// misread it is the owner who expected to be able to grant.
+test('a namespace with centralized granting says so, to the owner it constrains', async ({
+	page,
+}) => {
+	await seed(page, {
+		'POST /v1/namespace/gold/managed-access/describe': {
+			object: 'namespace:gold',
+			managed_access: true,
+		},
+	});
+	await page.goto('/lakehouse/catalog/namespaces/gold');
+	await page.getByRole('tab', { name: 'access' }).click();
+	await expect(page.getByText(/Granting here is/)).toBeVisible({ timeout: 15_000 });
+	await expect(page.getByText(/a grant-manager on the warehouse above does that/)).toBeVisible();
+});
+
+test('an UNMANAGED namespace stays silent — no policy, no notice', async ({ page }) => {
+	await seed(page, {
+		'POST /v1/namespace/gold/managed-access/describe': {
+			object: 'namespace:gold',
+			managed_access: false,
+		},
+	});
+	await page.goto('/lakehouse/catalog/namespaces/gold');
+	await page.getByRole('tab', { name: 'access' }).click();
+	await expect(page.getByRole('button', { name: 'Access review' })).toBeVisible({
+		timeout: 15_000,
+	});
+	await expect(page.getByText(/Granting here is/)).toHaveCount(0);
 });

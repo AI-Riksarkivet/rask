@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 from flows import health, routes
 from flows.config import FlowsSettings
-from flows.dependencies import FlowScheduler
+from flows.dependencies import FlowScheduler, ScheduleUnconfirmed
 from service_kit.exceptions import register_handlers
 
 
@@ -61,6 +61,17 @@ class _RecordingScheduler(FlowScheduler):
         self.dispatched.append((run_id, dict(payload)))
 
 
+class _RefusingScheduler(FlowScheduler):
+    """Answers with one of the seam's failure outcomes. Which one it is decides whether the route
+    may degrade to the inline lane, so the two are driven separately — see `DaprFlowScheduler`."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def schedule(self, run_id: str, payload: dict[str, object]) -> None:
+        raise self.error
+
+
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     app = FastAPI()
@@ -71,6 +82,7 @@ def client() -> Iterator[TestClient]:
     app.state.http = httpx.AsyncClient()
     app.state.runs = {}
     app.state.workflow_scheduler = None
+    app.state.workflow_reader = None
     with TestClient(app) as test_client:
         yield test_client
 
@@ -203,6 +215,76 @@ def test_the_durable_lane_takes_over_when_a_scheduler_is_present(client: TestCli
     assert payload["seeds"] == {"t": "page bytes stand-in"}
     # Readable immediately, so a client can poll the same resource in either lane.
     assert client.get(f"/api/flows/runs/{run_id}").status_code == 200
+
+
+@respx.mock
+def test_an_unconfirmed_schedule_refuses_instead_of_running_the_graph_twice(client: TestClient) -> None:
+    """`ScheduleUnconfirmed` means the engine may already be running this graph, so the inline lane
+    is exactly the wrong answer: the run would execute twice and the caller would hear about the
+    inline one. 503 with the derived id is the retryable answer — same key, same run.
+
+    Serve is mocked but must never be called: the assertion is that NOTHING executed.
+    """
+    route = respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=ALTO))
+    client.app.state.workflow_scheduler = _RefusingScheduler(ScheduleUnconfirmed("the workflow engine neither started nor refused run run-x within 7s"))  # type: ignore[attr-defined]
+
+    resp = client.post("/api/flows/runs", json=CHAIN, headers={"Idempotency-Key": "k-1"})
+
+    assert resp.status_code == 503
+    assert "retry with the same Idempotency-Key" in resp.json()["detail"]
+    assert not route.called
+    assert _runs(client) == {}  # a refused run leaves no resource behind
+
+
+@respx.mock
+def test_a_confirmed_refusal_still_degrades_to_the_inline_lane(client: TestClient) -> None:
+    """The measured 2026-08-06 behaviour, pinned so the fix above cannot quietly take it away: when
+    the scheduler has ESTABLISHED that no instance exists (a sidecar whose state store is not scoped
+    to this app), the graph is still perfectly runnable here and now."""
+    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=ALTO))
+    client.app.state.workflow_scheduler = _RefusingScheduler(RuntimeError("the state store is not configured to use the actor runtime"))  # type: ignore[attr-defined]
+
+    resp = client.post("/api/flows/runs", json=CHAIN)
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "succeeded"
+
+
+@respx.mock
+def test_the_same_idempotency_key_resolves_to_the_same_run_and_executes_once(client: TestClient) -> None:
+    """The retry-safety the schedule seam depends on: without a caller key there is nothing for a
+    503'd client to converge on, and every retry would be a new run."""
+    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=ALTO))
+
+    first = client.post("/api/flows/runs", json=CHAIN, headers={"Idempotency-Key": "page-7"}).json()
+    second = client.post("/api/flows/runs", json=CHAIN, headers={"Idempotency-Key": "page-7"}).json()
+
+    assert first["run_id"] == second["run_id"]
+    assert second == first  # the same document, not a re-execution
+    assert respx.calls.call_count == 1
+    assert len(_runs(client)) == 1
+
+
+def test_a_key_less_post_still_gets_a_fresh_run_each_time(client: TestClient) -> None:
+    """No key means nothing to converge ON. Inventing one would make every retry a new run while
+    pretending otherwise, so the randomness stays in the key and the id derivation stays single."""
+    scheduler = _RecordingScheduler()
+    client.app.state.workflow_scheduler = scheduler  # type: ignore[attr-defined]
+
+    ids = {client.post("/api/flows/runs", json=CHAIN).json()["run_id"] for _ in range(3)}
+
+    assert len(ids) == 3
+    assert len(scheduler.dispatched) == 3
+
+
+def test_a_run_id_is_derived_from_the_subject_and_the_key() -> None:
+    """Deterministic across processes — it is the workflow INSTANCE id, so a retry on another
+    replica must land on the same instance. Scoped by subject, or one caller's `Idempotency-Key: 1`
+    would resolve to another caller's run."""
+    assert routes.run_id_for("alice", "k") == routes.run_id_for("alice", "k")
+    assert routes.run_id_for("alice", "k") != routes.run_id_for("bob", "k")
+    assert routes.run_id_for("alice", "k") != routes.run_id_for("alice", "other")
+    assert routes.run_id_for("alice", "k").startswith("run-")
 
 
 @respx.mock

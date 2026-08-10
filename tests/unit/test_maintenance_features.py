@@ -174,7 +174,8 @@ def test_a_wire_type_it_cannot_skip_stops_rather_than_misreading() -> None:
             # field 3, wire type 3 (group start — removed from proto3 and unskippable here)
             return bytes([3 << 3 | 3, 0xFF, 0xFF])
 
+    # A `ManifestCarrier`, structurally: the one private attribute the detector reads is all it declares.
     class _Dataset:
         _ds = _Manifest()
 
-    assert features.manifest_feature_flags(_Dataset()) == (0, 0)  # ty: ignore[invalid-argument-type] — a stand-in for the one private attribute read
+    assert features.manifest_feature_flags(_Dataset()) == (0, 0)

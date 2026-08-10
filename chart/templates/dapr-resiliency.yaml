@@ -50,8 +50,36 @@ spec:
 {{- $subscribers = append $subscribers (dict "appId" .daprAppId) }}
 {{- end }}
 {{- end }}
+{{- /* The inbox subscription, registered in the SAME act that mints its component. Both halves of the
+     omission are silent and they point opposite ways: unregistered, an app-returned RETRY falls back to
+     the broker's crash-recovery schedule with no dead-lettering at all; dead-lettering turned on WITHOUT
+     this line, the FIRST transient failure parks the message — the publication head's defect, measured
+     and fixed this session. `IngressSettings.dlq_topic` therefore ships empty, and enabling it is an act
+     that presupposes this line. */}}
+{{- $subscribers = append $subscribers (dict "appId" "notifications") }}
 {{- range $subscribers }}
       {{ include "lance.subPubsub" (list $ .appId) }}:
+        inbound:
+          retry: pubsubDeliveryRetry
+{{- end }}
+{{- /* The CASCADE CONTROL component, which $subscribers does NOT reach. `lance.subPubsub` renders
+     `lance-pubsub-<appId>` — the lineage-topic component — while the `/publication-arrival`
+     subscription rides `catalog-control-pubsub-<producer>` (dapr-component.yaml, the "CASCADE's view
+     of the same control stream" block). The producer app-id is in $subscribers, so `scopes:` below
+     already covers it and the CRD applied; only the component target was missing, which is exactly
+     the shape that makes this invisible — the policy exists, the app is in scope, and the one
+     subscription it was supposed to protect is not named.
+
+     What the omission COST, and why this is not cosmetic: `bronze_arrival.py` declares a
+     `dead_letter_topic` on that subscription, and Dapr sends to the DLT after the FIRST failure when
+     no retry policy targets the component. So the most expensive trigger in the estate — a
+     publication, the thing the durable+queue-group component above exists to guarantee delivery of —
+     got zero retries and parked on one transient blip.
+
+     Rendered from the same expression dapr-component.yaml:71 uses, under the same two conditions, so
+     a rename of `pubsub.controlName` cannot leave the policy pointing at a component that is gone. */}}
+{{- if and .Values.catalog.controlEmit .Values.medallion.enabled }}
+      {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}-{{ .Values.medallion.producer.daprAppId }}:
         inbound:
           retry: pubsubDeliveryRetry
 {{- end }}

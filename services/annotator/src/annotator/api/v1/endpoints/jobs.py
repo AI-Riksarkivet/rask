@@ -17,17 +17,34 @@ import logging
 from typing import Literal
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from service_kit.exceptions import ServiceUnavailableError
+from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.media.deps import StateDep
 from service_kit.media.state import AppState
 
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+# SERVICE-ONLY, declared rather than assumed. `/apply` submits a corpus-scale deriver and shipped with
+# no auth dependency at all, while every sibling task/project route on this app carries
+# `CheckerDep`/`CurrentSubject` — an omission, since nothing marked it deliberate.
+#
+# The gate is `require_dapr_token` rather than the neighbours' FGA pair, and the REQUEST SHAPE is what
+# decides that: `JobRequest` names a producer, an op, a scope and an optional `dataset` — there is no
+# project id to check a per-project relation against, and `scope.level="corpus"` is estate-wide by
+# construction. Inventing a door for an object the request never identifies is a worse answer than
+# naming the boundary this seam actually sits behind.
+#
+# And it genuinely sits behind one: the gateway proxies only `/api/explorer/annotations` →
+# `/api/annotations` (`gateway/__init__.py::_routes()`), so `/api/jobs` has NO public row and is
+# reachable in-cluster only. `require_dapr_token` proves "arrived via Dapr", never "trusted caller"
+# (`dapr_auth.py:33-45`) — which is exactly the claim being made: a service-to-service seam until a
+# runner exists that can carry a user's identity, at which point this becomes an FGA check against the
+# project the job targets.
+router = APIRouter(prefix="/api/jobs", tags=["jobs"], dependencies=[Depends(require_dapr_token)])
 
 
 class JobScope(BaseModel):

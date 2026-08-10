@@ -106,7 +106,10 @@ Deployed; `auth.enabled=false` by default. Set `auth.enabled=true` to wire OIDC 
 OpenFGA `can_get_metadata` checks into the catalog + lineage. The OIDC `ALLOW_INSECURE` escape hatch is
 SCHEME-DERIVED from the issuer (2026-07-12): a plain-http issuer (the in-cluster dev Dex) opens it, an
 https issuer (any real IdP) keeps the verifier's HTTPS guard enforced — never hardcoded open. OpenFGA's schema migrates against the AGE
-Postgres (pinned to v1.8.0; the openfga db's `search_path` is forced off AGE's `ag_catalog`).
+Postgres (pinned to v1.18.3; the openfga db's `search_path` is forced off AGE's `ag_catalog`). That
+pin moved off v1.8.0 for weighted-graph readiness and **crosses v1.10.0's `!!REQUIRES MIGRATION!!`
+collation migration** — read the hazard note in `chart/values.yaml` under `openfga.image` and run it
+in a maintenance window on any data-bearing estate.
 
 **First estate admin (`auth.bootstrapAdmin`).** Set it to a Dex subject (the id_token's `sub`, e.g.
 `alice`) and a post-install/upgrade hook Job grants that user `owner` on the FGA root object

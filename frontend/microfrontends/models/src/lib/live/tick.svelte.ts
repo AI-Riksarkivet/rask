@@ -16,7 +16,6 @@ import { lineageFeed } from './feeds.remote';
  */
 export { liveRead, type LiveCursor };
 
-
 /**
  * The lineage cursor, taken from the ONE shared `lineageFeed` stream — the feed the shell's
  * notification bell also renders. SvelteKit dedupes identical live-query instances onto a single

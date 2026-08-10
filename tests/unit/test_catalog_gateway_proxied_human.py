@@ -52,12 +52,26 @@ def _creds() -> HTTPAuthorizationCredentials:
 
 
 def _settings(**over: Any) -> Any:
-    """Minimal structural settings — `authenticate` reads only these four."""
+    """Structural stand-in for `catalog.core.config.Settings` — every field `authenticate` reads.
+
+    THE STORE COORDINATES ARE NOT OPTIONAL HERE. Since §2.8 unified the two call sites, the resolver
+    is BUILT before the door is called (`dedicated_token_from_store(settings.dapr_secret_store,
+    settings.dapr_secret_key)` is an argument expression), so both fields are read on every request
+    that carries both service headers — not only on the privileged path. Omitting them made an
+    under-specified double raise `AttributeError` where the door should have answered, which is a
+    test-harness failure wearing a security test's name.
+
+    The subject lists are `str`, matching the real `Settings` fields (`config.py:206`, `:209`). They
+    were tuples, which survived only because no test reached the door's `.split()` — one leaked
+    `APP_API_TOKEN` in the environment and the same `AttributeError` would have appeared there.
+    """
     base: dict[str, Any] = {
         "oidc_enabled": True,
         "oidc_audience": "lance-catalog",
-        "service_subjects": (),
-        "privileged_subjects": (),
+        "service_subjects": "",
+        "privileged_subjects": "",
+        "dapr_secret_store": "lance-secrets",
+        "dapr_secret_key": "lance",
     }
     base.update(over)
     return SimpleNamespace(**base)
@@ -95,7 +109,7 @@ def test_the_sidecar_stamped_token_alone_does_not_divert_a_human() -> None:
     """
     token = security.authenticate(
         _request(oidc=_verifier()),
-        _settings(service_subjects=("medallion",)),
+        _settings(service_subjects="medallion"),
         _creds(),
         dapr_api_token="the-estate-service-token",
         x_lance_service_identity=None,
@@ -117,7 +131,7 @@ def test_public_front_door_still_cannot_mint_a_service_principal() -> None:
     with pytest.raises(PermissionDeniedError):
         security.authenticate(
             _request(oidc=_verifier()),
-            _settings(service_subjects=("medallion",)),
+            _settings(service_subjects="medallion"),
             None,
             dapr_api_token="the-estate-service-token",
             x_lance_service_identity="medallion",
@@ -134,7 +148,7 @@ def test_public_caller_cannot_launder_even_while_holding_a_valid_bearer() -> Non
     with pytest.raises(PermissionDeniedError):
         security.authenticate(
             _request(oidc=_verifier()),
-            _settings(service_subjects=("medallion",)),
+            _settings(service_subjects="medallion"),
             _creds(),
             dapr_api_token="the-estate-service-token",
             x_lance_service_identity="medallion",
@@ -158,18 +172,25 @@ def test_anonymous_through_the_gateway_is_unauthenticated_not_permitted() -> Non
 # --------------------------------------------------------------------------- #
 
 
-def test_a_non_public_caller_is_never_refused_as_a_public_front_door() -> None:
+def test_a_non_public_caller_is_never_refused_as_a_public_front_door(monkeypatch: pytest.MonkeyPatch) -> None:
     """A genuine service invocation must not hit the public-caller refusal at all.
 
-    With no `APP_API_TOKEN` configured the door is CLOSED, so this falls through to OIDC and — with
-    no bearer — ends at 401. That is the correct outcome and the point of the test: the failure is
-    `Unauthenticated` (no credentials), NOT `PermissionDenied` (public front door). Asserting the
-    *type* of refusal is what distinguishes "we didn't recognise you" from "you are barred".
+    With no `APP_API_TOKEN` configured the door is CLOSED, and since open_dapr.md §2.8 unified the
+    two call sites that is a 401 NAMING the missing token, not a fall-through to OIDC — which
+    answered the same request with "Missing bearer token" and sent operators to the IdP. Either way
+    the point of the test is the TYPE of refusal: `Unauthenticated` (we could not authenticate you),
+    NOT `PermissionDenied` (you are barred as a public front door).
+
+    The `delenv` makes that precondition REAL. It was inherited from the ambient environment, so a
+    developer with `APP_API_TOKEN` exported got the same 401 from a different branch (a rejected
+    credential) and the prose above described a path the run never took.
     """
+    monkeypatch.delenv("APP_API_TOKEN", raising=False)
+
     with pytest.raises(UnauthenticatedError):
         security.authenticate(
             _request(oidc=_verifier()),
-            _settings(service_subjects=("medallion",)),
+            _settings(service_subjects="medallion"),
             None,
             dapr_api_token="",
             x_lance_service_identity="medallion",
@@ -181,3 +202,55 @@ def test_direct_call_with_no_dapr_header_is_unaffected() -> None:
     """The shape every pre-existing test used — must keep behaving identically."""
     token = security.authenticate(_request(oidc=_verifier()), _settings(), _creds())
     assert token is not None and token.sub == _SUB
+
+
+# --------------------------------------------------------------------------- #
+# §2.8 — the privileged door OPENS through catalog.authenticate itself
+# --------------------------------------------------------------------------- #
+
+
+def test_catalog_authenticate_passes_the_resolver_so_the_privileged_door_opens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """open_dapr.md §2.8: the original defect was one missing kwarg at THIS call site — the shared
+    service_principal had the dedicated_token parameter and the catalog never passed it, so its
+    privileged branch hard-refused every privileged subject no matter what was seeded. The prior
+    tests all built the resolver in-test and called service_principal directly, so deleting the
+    kwarg reproduced the defect with everything green. This goes through catalog.authenticate:
+    delete `dedicated_token=` from security.py and it fails."""
+    from service_kit.governed import dapr_auth
+
+    monkeypatch.setenv("APP_API_TOKEN", "shared-token")
+    dapr_auth._secret_bundle.cache_clear()
+    monkeypatch.setattr(
+        "service_kit.governed.secrets.fetch_dapr_secret",
+        lambda *_a, **_k: {"service-token-service-trainer": "trainer-own"},
+    )
+    settings = _settings(
+        service_subjects="service-trainer",
+        privileged_subjects="service-trainer",
+        dapr_secret_store="lance-secrets",
+        dapr_secret_key="lance",
+    )
+
+    admitted = security.authenticate(
+        _request(oidc=_verifier()),
+        settings,
+        None,
+        dapr_api_token="trainer-own",
+        x_lance_service_identity="service-trainer",
+        dapr_caller_app_id="lance-ray",
+    )
+    assert admitted is not None and admitted.sub == "service-trainer"
+    assert admitted.iss == "rask://service-door"
+
+    # The refusal is the shared door's 401 (fastapi.HTTPException — the shared service_principal's
+    # own type, not the catalog's problem classes; the status is what matters to the caller).
+    with pytest.raises(Exception, match="may not claim"):
+        security.authenticate(
+            _request(oidc=_verifier()),
+            settings,
+            None,
+            dapr_api_token="shared-token",
+            x_lance_service_identity="service-trainer",
+            dapr_caller_app_id="lance-ray",
+        )
+    dapr_auth._secret_bundle.cache_clear()

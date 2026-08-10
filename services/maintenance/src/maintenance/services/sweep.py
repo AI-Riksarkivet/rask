@@ -22,7 +22,7 @@ from opentelemetry.trace import StatusCode
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
-from maintenance.core.metrics import record_reclaimed, record_refused, record_run
+from maintenance.core.metrics import record_dataset_swept, record_reclaimed, record_refused, record_run, record_run_started
 from maintenance.services import purge
 from maintenance.services.optimize import DatasetResult, compact_one, discover_datasets
 from service_kit.governed import fga
@@ -105,6 +105,10 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     introduce new buckets. A bucket that does not exist (or is unreadable) is skipped, not fatal: one
     missing tenant bucket must not stop the sweep for everyone else.
     """
+    # BEFORE discovery, not after the loop like `record_run()`: a pass killed at dataset 400 of 900
+    # was observationally identical to a tick that never arrived (open_dapr.md §2.20). started minus
+    # completed is the lost-pass count.
+    record_run_started()
     older_than = timedelta(days=settings.older_than_days)
     options = settings.storage_options()
     fs = _s3fs(settings)
@@ -176,7 +180,14 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
         log.warning("trash_expiry_report_failed", extra={"error": str(exc)})
     results: list[DatasetResult] = []
     now = datetime.now(UTC)
+    # The FAIL-emit cap's own argument (top of this module), applied to the sweep it lives in: the
+    # discovery listing order is deterministic across ticks, so a pass that consistently dies at
+    # dataset N never maintained anything after N — silently, forever (open_dapr.md §2.19). Shuffling
+    # rotates which datasets sit behind a recurring failure point; per-dataset pacing stays with the
+    # policy stamps, which don't care about order.
+    random.shuffle(uris)
     for uri in uris:
+        record_dataset_swept()
         with tracer.start_as_current_span("compaction.compact") as span:
             span.set_attribute("lance.dataset_uri", uri)
             effective_older_than: timedelta | None = older_than
