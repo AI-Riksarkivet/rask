@@ -35,10 +35,13 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Iterator
 
 import httpx
-from medallion.services.iiif_produce import IIIFVolumeSource
 from medallion.services.ingest import ingest_to_bronze
+
+from service_kit.lakehouse.sources import SourceObject
+from storage import build_image_url, fetch_image, get_image_ids
 
 
 #: The PUBLIC Riksarkivet IIIF endpoint. The chart defaults to https://iiifintern-ai.ra.se, which
@@ -115,6 +118,46 @@ def register(location: str) -> None:
         _tolerate_only_already_exists(r, "register table")
         if r.status_code == 409:
             print(f"  table {table_id!r}: already registered — converged")
+
+
+class IIIFVolumeSource:
+    """One IIIF volume as a :class:`~service_kit.lakehouse.sources.SourceAdapter`.
+
+    **Why this lives in the script rather than in a service.** It used to be
+    ``medallion.services.iiif_produce.IIIFVolumeSource``, deleted by ``09823f56`` ("the medallion
+    sheds acquisition") — and this file kept importing it, so it has raised ``ModuleNotFoundError``
+    before doing anything ever since, taking step 3 of ``make seed-dev`` with it. It was the last
+    ``ty`` diagnostic in the repo.
+
+    Repointed rather than deleted, and NOT at the ingest plane, because both of the obvious moves are
+    wrong: deleting it breaks ``scripts/seed_dev_estate.sh`` (which runs this file) and leaves the
+    estate with no bronze-page seed at all, while ``/api/ingest`` has no IIIF door to point at —
+    ``ingest.adapters`` registers local-dir and s3-prefix only, the ``iiif`` source kind having been
+    removed by explicit ruling. That ruling was about IIIF as a WATCHED SINK in a service; a one-shot
+    developer seed is the explicit snapshot importer it left room for. So the acquisition lives HERE,
+    where the one caller is, built on the surviving ``storage`` IIIF helpers — the same
+    manifest → URL → fetch sequence ``scripts/download_iiif.py`` already performs.
+
+    The adapter surface is deliberately the whole of ``SourceAdapter``: one ``iter_objects``. Nothing
+    else is needed, and ``KeyedSourceAdapter`` (enumerate-without-fetch) buys nothing for a seed of
+    three pages that is going to fetch all of them anyway.
+    """
+
+    def __init__(self, volume: str, *, base_url: str, query_params: str, timeout: float, max_pages: int) -> None:
+        self.volume, self.base_url, self.query_params = volume, base_url, query_params
+        self.timeout, self.max_pages = timeout, max_pages
+
+    def iter_objects(self) -> Iterator[SourceObject]:
+        # ONE client for the manifest and every page: connection reuse, and a single place the
+        # timeout is set. Closed on the way out even if the caller stops consuming early.
+        with httpx.Client(timeout=self.timeout) as client:
+            image_ids = get_image_ids(self.volume, base_url=self.base_url, timeout=self.timeout, client=client)
+            for image_id in image_ids[: self.max_pages]:
+                url = build_image_url(image_id, base_url=self.base_url, query_params=self.query_params)
+                # `iiif://<volume>/<image>` and not the fetch URL: the provenance recorded in bronze
+                # must survive `SEED_IIIF_BASE` pointing at RA's internal endpoint on one machine and
+                # the public one on another. The URI names the OBJECT; the base names the route to it.
+                yield SourceObject(uri=f"iiif://{self.volume}/{image_id}", data=fetch_image(url, client=client))
 
 
 def main() -> None:
