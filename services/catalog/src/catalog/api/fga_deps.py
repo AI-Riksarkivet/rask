@@ -369,6 +369,7 @@ async def _authorize_grant(
     user: str,
     fga_type: str,
     segments: list[str],
+    revoking: bool,
 ) -> None:
     """Authorize grant/revoke on the RUNG in the body — ``can_grant_<relation>``, not a blanket bar.
 
@@ -383,8 +384,30 @@ async def _authorize_grant(
     so a non-dict, a non-string relation, or a rung the model has no ``can_grant_*`` for is a 403 —
     never a 500, and never a check on a phantom relation.
 
-    Revoke is gated identically to grant, deliberately: taking a rung away is the same authority as
-    handing it out, and a weaker revoke bar would let a delegate strip the owner who delegated to them.
+    **REVOKE IS NOT GATED IDENTICALLY TO GRANT, and used to be.** The old rule said "taking a rung
+    away is the same authority as handing it out, and a weaker revoke bar would let a delegate strip
+    the owner who delegated to them" — true of ``owner``, and false of everything at or below the
+    delegate's own rung. ``can_grant_reader`` is ``manage_grants or (reader and pass_grants)``, so
+    kevin (``writer`` + ``pass_grants``, the fixture's "delegate and no more") could DELETE carol's
+    reader tuple, and every other reader/writer/validator tuple on the object including the owner's.
+    Revoke now goes to ``can_revoke_grant``, which is ``manage_grants`` alone.
+
+    SQL's WITH GRANT OPTION — which this axis is modelled on — lets a delegate revoke the grants THEY
+    made. That needs the granting actor recorded ON the tuple, which this store does not carry, so
+    the conservative bar is the honest one until it does.
+
+    **AND A GRANT MAY NOT BE SELF-DIRECTED UNLESS IT IS A NO-OP.** ``can_grant_owner`` is
+    ``manage_grants``, so the C2 headline persona — "administers access, cannot read the data" — was
+    a state its holder could leave in one authorized call: judy POSTs herself ``owner`` and now holds
+    ``can_read_data`` on data she was deliberately never given, leaving one audit row identical to a
+    legitimate delegation. OpenFGA cannot express "grantee is not the caller" — there is no such
+    construct — so this separation of duties belongs HERE, at the only layer that knows both. A
+    caller who ALREADY holds the rung is unaffected (re-granting yourself what you have changes
+    nothing), which is what keeps an owner's ordinary self-referential grant working.
+
+    The userset form is covered too, and has to be: refusing only a literal ``user:<sub>`` would leave
+    ``role:x#assignee`` as the same escalation one indirection away, for any userset the caller is
+    already inside.
     """
     body = await request.json()
     if not isinstance(body, dict):
@@ -392,10 +415,64 @@ async def _authorize_grant(
     relation = body.get("relation")
     if not isinstance(relation, str) or not relation:
         raise PermissionDeniedError("malformed access request body: 'relation' must be a string")
+    obj = _object(fga_type, segments, settings.delimiter)
+    if revoking:
+        if f"can_grant_{relation}" not in _grant_actions(fga_type):
+            # Shape-checked against the GRANT actions on purpose: the set of rungs that may be taken
+            # away is the set that may be handed out. Only the AUTHORITY differs.
+            raise PermissionDeniedError(f"{relation!r} is not a grantable rung on {fga_type}")
+        await _require(client, user=user, relation="can_revoke_grant", obj=obj)
+        return
     action = f"can_grant_{relation}"
     if action not in _grant_actions(fga_type):
         raise PermissionDeniedError(f"{relation!r} is not a grantable rung on {fga_type}")
-    await _require(client, user=user, relation=action, obj=_object(fga_type, segments, settings.delimiter))
+    await _require(client, user=user, relation=action, obj=obj)
+    await _refuse_self_elevation(client, user=user, grantee=body.get("user"), relation=relation, obj=obj)
+
+
+async def _refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: object, relation: str, obj: str) -> None:
+    """Refuse a grant that would hand the CALLER a rung they do not already hold.
+
+    Separation of duties, enforced at the only layer that can see both sides. See
+    :func:`_authorize_grant` for why it cannot live in the model.
+
+    Reads the grantee the same way :func:`~catalog.api.v1.endpoints.access._access_mutate` does — a
+    bare id is a user, a qualified string is passed through — because a guard that resolved it
+    DIFFERENTLY from the code that writes the tuple would be guarding a grant nobody makes.
+
+    Order matters: this runs AFTER the ``can_grant_*`` check, so a caller who may not grant the rung
+    at all is refused for that reason and never learns whether the self-grant rule would also have
+    caught them.
+    """
+    if not isinstance(grantee, str) or not grantee:
+        return  # not a grant this guard can reason about; the endpoint's own validation owns the shape
+    subject = f"user:{user}"
+    resolved = grantee if ":" in grantee else f"user:{grantee}"
+    if resolved != subject:
+        if "#" not in resolved:
+            return  # a plain grant to somebody else
+        # A USERSET. `role:validators#assignee` names everyone holding `assignee` on that role, so a
+        # caller already inside it is granting themselves by indirection. One check, and only on the
+        # userset path — the common case costs nothing.
+        userset_object, _, userset_relation = resolved.partition("#")
+        try:
+            inside = await fga.check(client, user=subject, relation=userset_relation, obj=userset_object, qualify=False)
+        except ServiceUnavailableError:  # authz layer down mid-decision — fail closed, like every other door
+            audit("can_grant_self", FAILURE, subject=user, resource=obj, reason="authz_unavailable")
+            raise
+        if not inside:
+            return
+    # The caller is the grantee. Allowed only when it changes nothing they do not already have.
+    try:
+        already = await fga.check(client, user=subject, relation=relation, obj=obj, qualify=False)
+    except ServiceUnavailableError:
+        audit("can_grant_self", FAILURE, subject=user, resource=obj, reason="authz_unavailable")
+        raise
+    if already:
+        return
+    audit("can_grant_self", DENY, subject=user, resource=obj, grantee=resolved, relation=relation)
+    log.info("self_elevation_refused", extra={"sub": user, "relation": relation, "object": obj, "grantee": resolved})
+    raise PermissionDeniedError(f"a grant may not raise your own access: you do not hold {relation} on {obj}")
 
 
 async def _authorize_batch(request: Request, client: OpenFgaClient, settings: Settings, *, user: str) -> None:
@@ -519,7 +596,7 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     # Grant/revoke authorize on the RUNG BEING HANDED OUT, which lives in the body — so, like the
     # batch routes above, this one cannot be answered from the path alone.
     if suffix in _GRANT_SUFFIXES:
-        await _authorize_grant(request, client, settings, user=token.sub, fga_type=fga_type, segments=segments)
+        await _authorize_grant(request, client, settings, user=token.sub, fga_type=fga_type, segments=segments, revoking=suffix == "access/revoke")
         return
     relation = _action_relation(fga_type, suffix)
     obj = _object(fga_type, segments, settings.delimiter)

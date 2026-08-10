@@ -172,6 +172,20 @@ type warehouse
     # they were delegated.
     define can_grant_manage_grants: manage_grants
     define can_grant_pass_grants: manage_grants
+    # REVOKING is `manage_grants` alone, and is NOT the mirror of `can_grant_<rung>`.
+    # It was, and the symmetry was wrong. `can_grant_reader` is `manage_grants or (reader and
+    # pass_grants)`, so routing revoke at it let a DELEGATE strip grants they never issued: kevin,
+    # holding `writer` + `pass_grants` and nothing else, could delete carol's `reader` — and every
+    # other reader/writer/validator tuple on the object, including the ones the owner issued. The old
+    # rule's stated justification ("a weaker revoke bar would let a delegate strip the owner who
+    # delegated to them") is satisfied only for `owner`; at and below the delegate's own rung it was
+    # not satisfied at all.
+    # SQL's WITH GRANT OPTION lets a delegate revoke the grants THEY made. That needs the granting
+    # actor recorded ON the tuple, which this store does not carry, so the honest bar is the
+    # conservative one: a delegate may hand out what they hold and may not take anything back.
+    # Owners keep it — `manage_grants` derives from `owner` — except inside a managed scope, which is
+    # exactly what C4's flag is for.
+    define can_revoke_grant: manage_grants
     # Seeing who holds what follows from being able to CHANGE who holds what — the same bar, derived
     # rather than restated, so a rung added above cannot leave this behind.
     define can_read_assignments: manage_grants
@@ -228,6 +242,20 @@ type namespace
     define can_grant_validator: manage_grants or (validator and pass_grants)
     define can_grant_manage_grants: manage_grants
     define can_grant_pass_grants: manage_grants
+    # REVOKING is `manage_grants` alone, and is NOT the mirror of `can_grant_<rung>`.
+    # It was, and the symmetry was wrong. `can_grant_reader` is `manage_grants or (reader and
+    # pass_grants)`, so routing revoke at it let a DELEGATE strip grants they never issued: kevin,
+    # holding `writer` + `pass_grants` and nothing else, could delete carol's `reader` — and every
+    # other reader/writer/validator tuple on the object, including the ones the owner issued. The old
+    # rule's stated justification ("a weaker revoke bar would let a delegate strip the owner who
+    # delegated to them") is satisfied only for `owner`; at and below the delegate's own rung it was
+    # not satisfied at all.
+    # SQL's WITH GRANT OPTION lets a delegate revoke the grants THEY made. That needs the granting
+    # actor recorded ON the tuple, which this store does not carry, so the honest bar is the
+    # conservative one: a delegate may hand out what they hold and may not take anything back.
+    # Owners keep it — `manage_grants` derives from `owner` — except inside a managed scope, which is
+    # exactly what C4's flag is for.
+    define can_revoke_grant: manage_grants
     define can_read_assignments: manage_grants
     define can_set_managed_access: manage_grants
 
@@ -266,6 +294,20 @@ type table
     define can_grant_validator: manage_grants or (validator and pass_grants)
     define can_grant_manage_grants: manage_grants
     define can_grant_pass_grants: manage_grants
+    # REVOKING is `manage_grants` alone, and is NOT the mirror of `can_grant_<rung>`.
+    # It was, and the symmetry was wrong. `can_grant_reader` is `manage_grants or (reader and
+    # pass_grants)`, so routing revoke at it let a DELEGATE strip grants they never issued: kevin,
+    # holding `writer` + `pass_grants` and nothing else, could delete carol's `reader` — and every
+    # other reader/writer/validator tuple on the object, including the ones the owner issued. The old
+    # rule's stated justification ("a weaker revoke bar would let a delegate strip the owner who
+    # delegated to them") is satisfied only for `owner`; at and below the delegate's own rung it was
+    # not satisfied at all.
+    # SQL's WITH GRANT OPTION lets a delegate revoke the grants THEY made. That needs the granting
+    # actor recorded ON the tuple, which this store does not carry, so the honest bar is the
+    # conservative one: a delegate may hand out what they hold and may not take anything back.
+    # Owners keep it — `manage_grants` derives from `owner` — except inside a managed scope, which is
+    # exactly what C4's flag is for.
+    define can_revoke_grant: manage_grants
     define can_read_assignments: manage_grants
 
 # A materialized view = a derived, refreshable dataset under a namespace (id = namespace path + view

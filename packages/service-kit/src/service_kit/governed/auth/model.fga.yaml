@@ -501,6 +501,49 @@ tests:
         object: table:acme_silver_features
         assertions: { can_grant_writer: false }
 
+  - name: REVOKING is not the mirror of granting — a delegate may hand on, never take back
+    # The bar that was wrong. `access/revoke` used to be gated on `can_grant_<rung>`, so kevin —
+    # `writer` + `pass_grants`, "a delegate and no more" — could DELETE any reader/writer/validator
+    # tuple on the object, including ones the owner issued. Revoking is `manage_grants` alone now.
+    check:
+      - user: user:kevin
+        object: namespace:acme_silver
+        assertions:
+          # He may still hand on what he holds…
+          can_grant_writer: true
+          can_grant_reader: true
+          # …and may take nothing away. This is the whole fix.
+          can_revoke_grant: false
+      - user: user:leo # the option alone was never a rung, and is not a revoke authority either
+        object: namespace:acme_silver
+        assertions: { can_revoke_grant: false }
+      - user: user:judy # the security admin revokes, because that IS grant management
+        object: warehouse:acme_bucket
+        assertions: { can_revoke_grant: true }
+      - user: user:judy # and it cascades with the rest of the axis
+        object: table:acme_silver_features
+        assertions: { can_revoke_grant: true }
+      - user: user:alice # an owner keeps it — `manage_grants` derives from `owner`
+        object: namespace:acme_silver
+        assertions: { can_revoke_grant: true }
+      - user: user:eve # an outsider gains nothing
+        object: namespace:acme_silver
+        assertions: { can_revoke_grant: false }
+
+  - name: inside a MANAGED scope even the owner cannot revoke — the flag has to bind both directions
+    # C4 withdraws the owner's `manage_grants`, so mona keeps every data power and loses granting.
+    # Revoke deriving from the same relation is what stops the flag being half a policy: an owner who
+    # could still REVOKE could clear the grants the grant-manager made and re-make them at will.
+    check:
+      - user: user:mona
+        object: namespace:beta_locked
+        assertions:
+          can_revoke_grant: false
+          can_grant_reader: false
+      - user: user:nora # the records manager, who is who the flag centralizes it on
+        object: namespace:beta_locked
+        assertions: { can_revoke_grant: true }
+
   - name: the grant option alone grants nothing — it qualifies a rung, it is not a rung
     check:
       - user: user:leo
