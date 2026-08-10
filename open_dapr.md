@@ -479,14 +479,31 @@ check`, `ruff format --check` and `uvx ty check` all clean.
    acquisition now lives in the script, on the surviving `storage` IIIF helpers, with a test — which
    is what it lacked (its only reader was `ty`, so deleting something else broke it silently).
    `uvx ty check` is now clean.
-4. **Ingest residuals** — STILL OPEN, unchanged: same-key-different-spec has no defined semantics
-   (wants a **409**, on both the dedupe and re-drive branches); F8's classifier is untested against a
-   live `grpc.RpcError`; Dapr's duplicate-instance refusal is scoped to ACTIVE instances, so a
-   re-drive after COMPLETED re-harvests (`reuse_id_policy` would close it); `list_ingests` renders a
-   fail-closed 503 as an empty list.
-5. **F12a's LocalCatalog residual** — STILL OPEN, and the citation was wrong: it is
-   `lander.py:126-127`, not `:122`. See the §2.5 correction above for why the distinction matters.
-   Dev/test-only stands for `:126-127`.
+4. ~~**Ingest residuals.**~~ **CLOSED — two fixed, two were wrong.**
+   * (a) same-key-different-spec → **409**, checked before BOTH branches. The dedupe branch answered
+     `deduplicated=true` for a run that ingested something else; the re-drive branch silently
+     REPURPOSED the record onto the new spec. This removed a behaviour a comment called legitimate
+     and a test pinned; that test's real invariant (the record names the spec it dispatched) survives
+     and is now unfalsifiable rather than merely asserted.
+   * (d) `list_ingests` → the bare `except Exception` now catches only `PermissionDeniedError`.
+     `ServiceUnavailableError` and `UnauthenticatedError` are not properties of a ROW: the first made
+     a fail-closed authz outage render as "you own nothing", the second told a caller with a bad
+     bearer that their token works.
+   * (c) **WRONG TWICE, no change needed.** `is_redrivable` returns False whenever `scheduled` is
+     set, whatever the run's STATUS, so a COMPLETED run hits dedupe and never reaches the engine —
+     the re-harvest is unreachable. And `reuse_id_policy` is a **no-op**: the vendored SDK says
+     "deprecated and has no effect" with `TODO(v1.21): remove — deprecated in 1.18`, and 1.18+
+     runtimes ignore it entirely. Dapr 1.18 frees a TERMINAL instance id by itself; purge is for
+     instances still RUNNING. Any future item proposing `reuse_id_policy` is proposing nothing.
+   * (b) F8's classifier is still untested against a live `grpc.RpcError` — a test-only gap, the one
+     residual of this item.
+5. ~~**F12a's LocalCatalog residual.**~~ **CLOSED, and the reason it mattered was not the stated one.**
+   The carried `read_version` now reaches `Lander.commit_fragments`. But an Append does NOT get
+   conflict detection from it — appends COMMUTE and Lance rebases them, measured against pylance, so
+   a deliberately stale version is ACCEPTED. What carrying it buys is one behaviour instead of two,
+   one fewer dataset open on a retried path, and the correct semantic for the day the operation stops
+   commuting. The citation was also wrong: `:122` is the empty-fragment no-op and IS on the deployed
+   path; the residual was `:126-127`.
 6. ~~**2 pre-existing failures** in `tests/integration/test_authz.py`.~~ **CLOSED — stale assertions,
    not an authz regression.** `GET /v1/table` returns `sorted(set(...))` and `_paginate`'s keyset
    cursor depends on that ordering; the tests pinned the source order. 54 passed.
