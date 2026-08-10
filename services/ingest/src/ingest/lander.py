@@ -107,7 +107,7 @@ class Lander:
     def ensure(self, project: str, dataset: str, schema: pa.Schema) -> str:
         return self._catalog.ensure_dataset(project, dataset, schema)
 
-    def commit_fragments(self, dataset_uri: str, fragments_json: Sequence[str], run_id: str) -> CommitResult:
+    def commit_fragments(self, dataset_uri: str, fragments_json: Sequence[str], run_id: str, read_version: int | None = None) -> CommitResult:
         """Fragments -> ONE Append commit -> catalog registration.
 
         Deliberately ONE commit for the whole run (D6). Bronze shows the prior version until this
@@ -117,14 +117,39 @@ class Lander:
 
         An empty fragment list is a no-op, not an empty commit: a run whose every unit failed should
         leave no version behind to explain.
+
+        ``read_version`` is the version the run OBSERVED when it planned its work, carried in rather
+        than re-read here — the F12a residual, closed so both catalog branches behave identically.
+
+        **MEASURED, because the obvious justification for this is wrong.** An Append does NOT get
+        conflict detection from ``read_version``: appends COMMUTE, so Lance rebases them. Committing
+        an Append against a deliberately stale version is accepted (verified against pylance in
+        ``tests/test_lander.py``); only a version that does not exist yet fails, and it fails as a
+        manifest lookup, not as a conflict. So carrying it here buys three real things and not the
+        fourth one might assume:
+
+          * ONE behaviour instead of two. ``runtime.py``'s catalog branch has carried it since F12a;
+            this branch re-read it. Two commit paths that disagree about what version they are
+            building on is a difference nobody can hold in their head.
+          * One less dataset open per ``finalize`` — an S3 round-trip on a path that is retried.
+          * The correct SEMANTIC for the day the operation stops commuting. An Overwrite, a Delete or
+            a schema change against a re-read version is a genuine lost update; the Append is the only
+            reason today's re-read is survivable, and that is a property of the operation, not of this
+            function.
+
+        It does NOT buy conflict rejection today. Anything that claims it does is describing a
+        different Lance operation.
+
+        ``None`` and not ``0`` as the "not supplied" sentinel: version 0 is a legal Lance version, so
+        a falsy default would silently mean "re-read" for a caller that meant "the empty dataset".
         """
         if not fragments_json:
             ds = lance.dataset(dataset_uri)
             return CommitResult(dataset_uri=dataset_uri, version=ds.version, rows=ds.count_rows())
 
         fragments = [lance.fragment.FragmentMetadata.from_json(f) for f in fragments_json]
-        base = lance.dataset(dataset_uri)
-        committed = lance.LanceDataset.commit(dataset_uri, LanceOperation.Append(fragments), read_version=base.version)
+        base_version = read_version if read_version is not None else lance.dataset(dataset_uri).version
+        committed = lance.LanceDataset.commit(dataset_uri, LanceOperation.Append(fragments), read_version=base_version)
         self._catalog.register_version(dataset_uri, committed.version, run_id)
         _ensure_partition_index(committed)
         # Counted from the FRAGMENTS, not as a before/after difference against the dataset. A

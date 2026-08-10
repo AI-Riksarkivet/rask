@@ -457,7 +457,11 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *,
 
         ensure_indexes_at(uri)
     else:
-        result = Lander(catalog).commit_fragments(uri, all_fragments, run_id=spec.run_id)
+        # The SAME carried version the catalog branch uses. This branch is dev/test-only
+        # (`LocalCatalog` has no `commit`), which is the only reason F12a's fix stopped here — but
+        # `finalize` is an at-least-once activity in both, so a retry re-reading the version is the
+        # same defect wearing a different catalog.
+        result = Lander(catalog).commit_fragments(uri, all_fragments, run_id=spec.run_id, read_version=read_version)
     # Only after the commit lands. Purging earlier would delete the record a retried finalize needs,
     # turning a recoverable failure into exactly the data loss staging exists to prevent.
     purge_staged(uri, spec.run_id)

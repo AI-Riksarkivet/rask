@@ -12,6 +12,7 @@ format — the estate's `_FakeRayClient` pattern.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import lance
 import pyarrow as pa
@@ -141,3 +142,67 @@ def test_ensure_is_idempotent(lander: tuple[Lander, _FakeCatalog]) -> None:
 
     assert again == uri
     assert lance.dataset(again).count_rows() == 1
+
+
+# --------------------------------------------------------------------------- #
+# read_version — carried, not re-read (the F12a residual)
+# --------------------------------------------------------------------------- #
+
+
+def test_the_carried_version_is_what_reaches_the_commit(lander: tuple[Lander, _FakeCatalog], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The property that is actually true, asserted on the CALL rather than on an outcome.
+
+    An outcome assertion cannot see this: an Append COMMUTES, so Lance accepts a stale `read_version`
+    and rebases (pinned below). That makes the carried version invisible in the resulting dataset —
+    which is exactly why re-reading it survived undetected on this branch while the catalog branch
+    carried it. So the pin is on what is handed to `lance`.
+    """
+    land, _ = lander
+    uri = land.ensure("p", "pages", SCHEMA)
+    land.commit_fragments(uri, write_unit_fragments(uri, _batch([1])), run_id="run-A")
+
+    seen: dict[str, Any] = {}
+    real = lance.LanceDataset.commit
+
+    # `*args`/`**kw` rather than the real signature: the spy DELEGATES, so restating `commit`'s
+    # parameter list here would be a second copy to keep in step with pylance for no benefit.
+    def spy(*args: Any, **kw: Any) -> Any:
+        seen["read_version"] = kw.get("read_version")
+        return real(*args, **kw)
+
+    monkeypatch.setattr(lance.LanceDataset, "commit", staticmethod(spy))
+    land.commit_fragments(uri, write_unit_fragments(uri, _batch([2])), run_id="run-B", read_version=1)
+
+    assert seen["read_version"] == 1, "the carried version was dropped and the current one re-read"
+
+
+def test_an_append_commutes_so_a_stale_version_is_NOT_refused(lander: tuple[Lander, _FakeCatalog]) -> None:
+    """The premise that makes the re-read survivable, pinned against pylance rather than assumed.
+
+    Written because the opposite is the natural guess, and acting on it would mean claiming this
+    change fixes a lost update. It does not: appends commute and Lance rebases them. If a future
+    pylance makes an Append conflict-checked, THIS test goes red and the carried version stops being
+    a consistency tidy-up and becomes a correctness fix — which is the moment to re-read the
+    docstring in `lander.commit_fragments`.
+    """
+    land, _ = lander
+    uri = land.ensure("p", "pages", SCHEMA)
+    first = land.commit_fragments(uri, write_unit_fragments(uri, _batch([1])), run_id="run-A")
+
+    land.commit_fragments(uri, write_unit_fragments(uri, _batch([2])), run_id="run-B", read_version=first.version - 1)
+
+    assert sorted(lance.dataset(uri).to_table(columns=["id"]).column("id").to_pylist()) == [1, 2]
+
+
+def test_an_omitted_read_version_still_reads_the_current_one(lander: tuple[Lander, _FakeCatalog]) -> None:
+    """Backwards-compatible by default: every existing caller passes nothing and keeps the old
+    behaviour. `None` is the sentinel and not `0`, because 0 is a legal Lance version — a falsy
+    default would silently mean "re-read" for a caller that meant "the empty dataset"."""
+    land, _ = lander
+    uri = land.ensure("p", "pages", SCHEMA)
+    land.commit_fragments(uri, write_unit_fragments(uri, _batch([1])), run_id="run-A")
+
+    result = land.commit_fragments(uri, write_unit_fragments(uri, _batch([2])), run_id="run-B")
+
+    assert sorted(lance.dataset(uri).to_table(columns=["id"]).column("id").to_pylist()) == [1, 2]
+    assert result.version > 1

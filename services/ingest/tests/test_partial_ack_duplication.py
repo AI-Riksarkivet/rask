@@ -278,7 +278,10 @@ def test_finalize_does_not_OVERRULE_the_exact_cover(tmp_path: Path, monkeypatch:
 
     class _Lander:
         def __init__(self, catalog: object) -> None: ...
-        def commit_fragments(self, uri: str, frags: list[str], *, run_id: str) -> object:
+        # `read_version` is accepted (and ignored — this test is about the fragment cover) because the
+        # real `Lander.commit_fragments` takes it: a structural fake that omits a parameter the caller
+        # passes fails as a TypeError from inside the code under test, which reads as a product bug.
+        def commit_fragments(self, uri: str, frags: list[str], *, run_id: str, read_version: int | None = None) -> object:
             committed.append(list(frags))
             from ingest.lander import CommitResult
 
