@@ -40,6 +40,8 @@ import httpx
 from lance_namespace import ServiceUnavailableError
 from pydantic import BaseModel, JsonValue, ValidationError
 
+from service_kit.exceptions import ConflictError
+
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +82,17 @@ class UserStateDocument(StrEnum):
     #: same bucket appear and disappear depending on who is looking, which is indistinguishable from
     #: the store being broken. The estate-admin door on the write is what keeps that safe.
     ATTACHED_STORES = "attached-stores"
+
+
+class UserStateConflict(ConflictError):
+    """A first-write etag check lost the race — the document changed since it was read.
+
+    Distinct from `ServiceUnavailableError` on purpose: the store is healthy and the write was
+    correctly refused, so the caller's move is to re-read and re-apply, not to back off.
+    """
+
+    def __init__(self, key: str) -> None:
+        super().__init__(f"the state document {key!r} changed since it was read — re-read and retry")
 
 
 class UserStateUnreadable(Exception):
@@ -206,8 +219,16 @@ class UserStateStore:
         response = await self._call("GET", f"{self._base}/{key}", op="get", key=key)
         if response.status_code == httpx.codes.NO_CONTENT or not response.content:
             return None
+        return self._parse(response.content, subject=subject, document=document, key=key)
+
+    def _parse(self, content: bytes, *, subject: str, document: UserStateDocument, key: str) -> StoredState:
+        """The two failure modes a stored record can have, both of which must look UNAVAILABLE.
+
+        Shared by `get` and `get_versioned` so the leak-and-overwrite reasoning below has exactly one
+        implementation — a second copy is how one of the two paths quietly grows a `return None`.
+        """
         try:
-            stored = StoredState.model_validate_json(response.content)
+            stored = StoredState.model_validate_json(content)
         except ValidationError as exc:
             # NOT absent. This module's own docstring says a store that is down must look unavailable and
             # never empty, "or the next autosave would overwrite the real document" — and an unparseable
@@ -227,23 +248,52 @@ class UserStateStore:
             raise UserStateUnreadable(document, "the stored record belongs to another subject")
         return stored
 
-    async def put(self, *, subject: str, document: UserStateDocument, value: JsonValue) -> StoredState:
+    async def get_versioned(self, *, subject: str, document: UserStateDocument) -> tuple[StoredState | None, str | None]:
+        """:meth:`get`, plus the sidecar's ETag — the token a later :meth:`put` uses to detect a race.
+
+        A separate method rather than a wider return on `get`, because the versioned read is the
+        exception: per-subject documents have one writer and need no token, and every existing caller
+        would otherwise pay for a concern it does not have.
+
+        The etag is `None` for a document that does not exist yet. That is not a missing token — it is
+        the correct one for "I believe nobody has written this", and `put` turns it into the sidecar's
+        create-if-absent semantics rather than a blind overwrite.
+        """
+        key = state_key(subject, document)
+        response = await self._call("GET", f"{self._base}/{key}", op="get", key=key)
+        etag = response.headers.get("ETag")
+        if response.status_code == httpx.codes.NO_CONTENT or not response.content:
+            return None, None
+        return self._parse(response.content, subject=subject, document=document, key=key), etag
+
+    async def put(self, *, subject: str, document: UserStateDocument, value: JsonValue, etag: str | None = None, concurrent: bool = False) -> StoredState:
         """Write (or overwrite) one subject's document and return the record as persisted.
 
-        Last write wins, deliberately: this is one person's own work, and the localStorage it replaces had
-        exactly those semantics across their own tabs. There is no etag round trip because there is no
-        second writer to lose a race with — adding optimistic concurrency with no contender would be
-        machinery for a conflict that cannot happen.
+        LAST WRITE WINS BY DEFAULT, and that default is right for what this module was built for: one
+        person's own work, replacing a localStorage whose semantics across their own tabs were exactly
+        that. Optimistic concurrency with no contender is machinery for a conflict that cannot happen.
+
+        **It is wrong for a SHARED document, and one caller has one** (open_dapr.md §2.7). The catalog's
+        `POST /v1/stores` read-modify-writes `ATTACHED_STORES` under `ESTATE_SUBJECT` — an estate-scoped
+        key every admin writes — so two concurrent attaches each read N stores and each wrote N+1,
+        silently dropping one. The docstring here asserted the opposite ("there is no second writer to
+        lose a race with") and that assertion is what made the defect invisible.
+
+        So the round trip is OPT-IN: pass `concurrent=True` with the `etag` from
+        :meth:`get_versioned`, and the write carries Dapr's `first-write` concurrency. A mismatch is a
+        `UserStateConflict` (a 409 mapped in `_call`), never the fail-closed 503 — the store is healthy
+        and the caller's move is to re-read and re-apply.
         """
         key = state_key(subject, document)
         stored = StoredState(subject=subject, document=document, updated_at=datetime.now(UTC), value=value)
-        await self._call(
-            "POST",
-            self._base,
-            op="put",
-            key=key,
-            json=[{"key": key, "value": stored.model_dump(mode="json")}],
-        )
+        entry: dict[str, object] = {"key": key, "value": stored.model_dump(mode="json")}
+        if concurrent:
+            # `first-write` is what makes the etag load-bearing: under Dapr's default (`last-write`) the
+            # token is accepted and ignored, which would be the same lost update wearing a safety belt.
+            entry["options"] = {"concurrency": "first-write"}
+            if etag is not None:
+                entry["etag"] = etag
+        await self._call("POST", self._base, op="put", key=key, json=[entry])
         return stored
 
     async def delete(self, *, subject: str, document: UserStateDocument) -> None:
@@ -263,6 +313,13 @@ class UserStateStore:
             response = await self._client.request(method, url, json=json, timeout=self._timeout)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == httpx.codes.CONFLICT:
+                # NOT an outage — the store is working exactly as asked. Dapr answers a first-write
+                # etag mismatch with 409, which means another writer changed the document between this
+                # caller's read and its write. Mapping it to the 503 below would tell the caller to
+                # retry a broken dependency when what they must actually do is re-read and re-apply.
+                log.info("user_state_etag_conflict", extra={"op": op, "key": key, "store": self._store})
+                raise UserStateConflict(key) from exc
             log.warning(
                 "user_state_store_rejected",
                 extra={

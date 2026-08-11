@@ -28,7 +28,7 @@ from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.user_state import UserStateStoreDep
 from service_kit.exceptions import ConflictError, ServiceUnavailableError, ValidationError
-from service_kit.governed.user_state import ESTATE_SUBJECT, UserStateDocument, UserStateUnreadable
+from service_kit.governed.user_state import ESTATE_SUBJECT, UserStateConflict, UserStateDocument, UserStateStore, UserStateUnreadable
 from service_kit.schemas.storage import (
     GOVERNED_TIERS,
     Store,
@@ -58,6 +58,22 @@ async def _attached(state: UserStateStoreDep) -> list[Store]:
     except UserStateUnreadable as exc:
         raise ServiceUnavailableError(f"the attached-store registry is unreadable: {exc}") from exc
     return [] if stored is None else _ATTACHED.validate_python(stored.value)
+
+
+async def _attached_versioned(state: UserStateStore | None) -> tuple[list[Store], str | None]:
+    """:func:`_attached`, plus the ETag the write must carry to detect a concurrent attach.
+
+    Separate from `_attached` because every OTHER caller is a read that neither has nor wants a token —
+    only the write path needs one, and giving the common read a second return value it discards is how
+    the token ends up dropped at the one call site that needed it.
+    """
+    if state is None:
+        return [], None
+    try:
+        stored, etag = await state.get_versioned(subject=ESTATE_SUBJECT, document=UserStateDocument.ATTACHED_STORES)
+    except UserStateUnreadable as exc:
+        raise ServiceUnavailableError(f"the attached-store registry is unreadable: {exc}") from exc
+    return ([] if stored is None else _ATTACHED.validate_python(stored.value)), etag
 
 
 @router.get("/stores", response_model=StoreRegistry, summary="Every registered object store")
@@ -99,18 +115,35 @@ async def attach_store(
     if not store.name.strip() or not store.bucket.strip():
         raise ValidationError("both `name` and `bucket` are required")
 
-    existing = await _attached(state)
-    taken = {s.name for s in registered_stores()} | {s.name for s in existing}
-    if store.name in taken:
-        raise ConflictError(f"a store named {store.name!r} is already registered")
-
+    # READ-MODIFY-WRITE UNDER AN ETAG (open_dapr.md §2.7). This document is ESTATE-scoped — every
+    # estate admin writes the same key — so the blind read-then-write it used to do lost updates: two
+    # concurrent attaches each read N stores and each wrote N+1, and whichever landed second erased the
+    # other's. `UserStateStore.put`'s own docstring asserted there was "no second writer to lose a race
+    # with", which is true of the per-USER documents this module was built for and false of this one.
+    #
+    # Retried rather than surfaced, once, because the caller cannot do anything with the conflict that
+    # this loop cannot do for them: re-read, re-check the name, re-write. A second conflict means real
+    # contention on an admin-frequency endpoint, and THAT is worth telling the caller about.
     attached = store.model_copy(update={"read_only": True})
-    await state.put(
-        subject=ESTATE_SUBJECT,
-        document=UserStateDocument.ATTACHED_STORES,
-        value=_ATTACHED.dump_python([*existing, attached], mode="json"),
-    )
-    return StoreRegistry(stores=[*registered_stores(), *existing, attached])
+    for attempt in range(2):
+        existing, etag = await _attached_versioned(state)
+        taken = {s.name for s in registered_stores()} | {s.name for s in existing}
+        if store.name in taken:
+            raise ConflictError(f"a store named {store.name!r} is already registered")
+        try:
+            await state.put(
+                subject=ESTATE_SUBJECT,
+                document=UserStateDocument.ATTACHED_STORES,
+                value=_ATTACHED.dump_python([*existing, attached], mode="json"),
+                etag=etag,
+                concurrent=True,
+            )
+        except UserStateConflict:
+            if attempt == 0:
+                continue
+            raise
+        return StoreRegistry(stores=[*registered_stores(), *existing, attached])
+    raise ServiceUnavailableError("the attached-store registry is being written concurrently — retry")
 
 
 @router.get(
