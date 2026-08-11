@@ -216,3 +216,60 @@ tests:
       - eval_time: 40m
         alertname: NotificationsReconcilerStalled
         exp_alerts: []
+
+  # 11. Dapr scheduler serving ZERO sidecars for 6 min → DaprSchedulerServingNoSidecars fires (5m `for`).
+  #     Reminders live in the scheduler's etcd since Dapr 1.15, so zero connected sidecars means NO
+  #     reminder can fire for any actor — and the symptom is silence, never an error.
+  - interval: 1m
+    input_series:
+      - series: 'dapr_scheduler_sidecars_connected{pod="dapr-scheduler-server-0"}'
+        values: "0+0x9"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DaprSchedulerServingNoSidecars
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: dapr
+            exp_annotations:
+              summary: "The Dapr scheduler is serving ZERO sidecars — no actor reminder can fire"
+              description: >-
+                Reminders live in the scheduler's etcd (Dapr >= 1.15), so with no sidecars connected every
+                reminder-bounded behaviour silently stops: the annotator's lease reminder never expires, the
+                publish watchdog never re-drives, the InboxActor never compacts. Nothing errors — work just
+                stops. Check `kubectl get pods -l app=dapr-scheduler-server` and the etcd PVCs; a rollback or
+                PVC loss here is not recoverable from the state store, which holds no copy of the reminders.
+                Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+  # 12. A HEALTHY scheduler must NOT fire it. The live cluster reads 48; anything above zero is serving.
+  - interval: 1m
+    input_series:
+      - series: 'dapr_scheduler_sidecars_connected{pod="dapr-scheduler-server-0"}'
+        values: "48+0x9"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DaprSchedulerServingNoSidecars
+        exp_alerts: []
+
+  # 13. NO series at all → DaprSchedulerMetricsMissing fires. This is the one that keeps the rule above
+  #     honest: an unscraped metric makes `max(...) == 0` evaluate over an empty vector, so the critical
+  #     alert goes SILENT exactly when it is blind. `absent()` is what distinguishes the two.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="unrelated"}'
+        values: "1+0x19"
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DaprSchedulerMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: dapr
+            exp_annotations:
+              summary: "No Dapr scheduler metrics for 15m — the reminder alert cannot fire"
+              description: >-
+                `dapr_scheduler_sidecars_connected` has no series. Either the scheduler is gone or the
+                collector's `dapr-control-plane` scrape job is not matching it (it keeps pods annotated
+                `dapr.io/control-plane` on the container port named `metrics`). Until this clears,
+                DaprSchedulerServingNoSidecars is blind.
+                Runbook: docs/RUNBOOK-oncall.md#cascade-stalled

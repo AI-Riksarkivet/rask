@@ -182,3 +182,59 @@ groups:
             in lineage's LINEAGE_SERVICE_SUBJECTS allowlist AND that the subject holds grants on the datasets
             it should see. A reconciler that is admitted but ungranted runs perfectly and reconciles zero.
             Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+  - name: dapr-control-plane
+    rules:
+      # THE REMINDER FAILURE DOMAIN (open_dapr.md §6 Q11), which nothing watched.
+      #
+      # Since Dapr 1.15 actor REMINDERS live in the scheduler's own etcd, not in the actor state store
+      # — confirmed on this estate: `dapr-scheduler-server` is a 3-replica StatefulSet with a 16 Gi
+      # etcd PVC. So reminders can be lost INDEPENDENTLY of the state they bound, and `ActorStateTTL`
+      # is off here, so there is no TTL backstop underneath them.
+      #
+      # The symptom of a lost reminder is SILENCE — a lease that never expires, a publish that never
+      # re-drives, an inbox that never compacts. Nothing fails; work simply stops happening. That is
+      # why this alerts on the SERVING side rather than waiting for a downstream symptom.
+      #
+      # `dapr_scheduler_sidecars_connected` is the ONLY Dapr-specific metric the scheduler exposes —
+      # verified against a live pod, where the other 38 families are Go runtime and process metrics —
+      # and it is the right one: it counts the sidecars the scheduler can actually serve, so zero means
+      # no reminder can fire for ANY actor in the estate.
+      #
+      # THIS RULE WAS UNFIREABLE UNTIL THE SCRAPE LANDED WITH IT. The collector's `dapr-sidecars` job
+      # keeps only pods annotated `dapr.io/enabled=true`; a control-plane pod carries
+      # `dapr.io/control-plane=<component>` instead, so the scheduler was never scraped at all. A rule
+      # on an unscraped series is a green gate over nothing — the `dapr-control-plane` scrape job in
+      # otel-collector.yaml is half of this fix, not an optimisation beside it.
+      - alert: DaprSchedulerServingNoSidecars
+        expr: max(dapr_scheduler_sidecars_connected) == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: dapr
+        annotations:
+          summary: "The Dapr scheduler is serving ZERO sidecars — no actor reminder can fire"
+          description: >-
+            Reminders live in the scheduler's etcd (Dapr >= 1.15), so with no sidecars connected every
+            reminder-bounded behaviour silently stops: the annotator's lease reminder never expires, the
+            publish watchdog never re-drives, the InboxActor never compacts. Nothing errors — work just
+            stops. Check `kubectl get pods -l app=dapr-scheduler-server` and the etcd PVCs; a rollback or
+            PVC loss here is not recoverable from the state store, which holds no copy of the reminders.
+            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+      # The scrape itself, asserted. If the control-plane job stops producing series the rule above
+      # cannot fire, and its silence would be indistinguishable from health — the failure mode this
+      # whole entry is about, one level up.
+      - alert: DaprSchedulerMetricsMissing
+        expr: absent(dapr_scheduler_sidecars_connected)
+        for: 15m
+        labels:
+          severity: warning
+          service: dapr
+        annotations:
+          summary: "No Dapr scheduler metrics for 15m — the reminder alert cannot fire"
+          description: >-
+            `dapr_scheduler_sidecars_connected` has no series. Either the scheduler is gone or the
+            collector's `dapr-control-plane` scrape job is not matching it (it keeps pods annotated
+            `dapr.io/control-plane` on the container port named `metrics`). Until this clears,
+            DaprSchedulerServingNoSidecars is blind.
+            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled

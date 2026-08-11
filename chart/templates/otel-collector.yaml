@@ -107,6 +107,41 @@ data:
                   target_label: namespace
                 - source_labels: [__meta_kubernetes_pod_name]
                   target_label: pod
+            # Dapr CONTROL PLANE metrics (:9090) — a SECOND job, because the sidecar job above cannot
+            # reach them: it keeps only pods annotated `dapr.io/enabled=true`, and a control-plane pod
+            # carries `dapr.io/control-plane=<component>` instead. So every control-plane metric was
+            # unscraped, and an alert written on one would have been a rule that can never fire.
+            #
+            # The scheduler is the one that matters (open_dapr.md §6 Q11). Since Dapr 1.15 REMINDERS
+            # live in the scheduler's own etcd, not in the actor state store — verified on this cluster:
+            # `dapr-scheduler-server` is a 3-replica StatefulSet with a 16 Gi etcd PVC. So it is a
+            # failure domain that can be lost INDEPENDENTLY of the data its reminders bound, and the
+            # symptom of a lost reminder is SILENCE: a lease that never expires, a publish that never
+            # re-drives, an inbox that never compacts. `ActorStateTTL` is off on this estate, so there
+            # is no TTL backstop underneath it either.
+            #
+            # `dapr_scheduler_sidecars_connected` is the only Dapr-specific metric the scheduler
+            # exposes (verified against a live pod — the other 38 families are Go runtime/process), and
+            # it is the right one: it counts sidecars that can actually be served, so zero means no
+            # reminder can fire for anyone.
+            - job_name: dapr-control-plane
+              scrape_interval: 30s
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces: { names: [{{ .Release.Namespace }}] }
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_annotation_dapr_io_control_plane]
+                  action: keep
+                  regex: ".+"
+                - source_labels: [__meta_kubernetes_pod_container_port_name]
+                  action: keep
+                  regex: metrics
+                - source_labels: [__meta_kubernetes_pod_annotation_dapr_io_control_plane]
+                  target_label: dapr_control_plane
+                - source_labels: [__meta_kubernetes_namespace]
+                  target_label: namespace
+                - source_labels: [__meta_kubernetes_pod_name]
+                  target_label: pod
     processors:
       memory_limiter:
         check_interval: 1s
