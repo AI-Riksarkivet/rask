@@ -53,7 +53,12 @@ class _Ctx:
         self.activities.append((getattr(fn, "__name__", str(fn)), input or {}))
         return _Task()
 
-    def call_child_workflow(self, fn: Any, *, input: Any = None) -> _Task:  # noqa: A002
+    # `instance_id` is accepted (and unused — this fake returns a completed task) because the REAL
+    # `DaprWorkflowContext.call_child_workflow` takes it, and `ingest_run` now passes it so an
+    # abandonment path can name the children it must stop (§2.4). A fake that omits a parameter the
+    # code under test supplies fails as a TypeError swallowed by the error boundary — which reads as
+    # a product bug, not a fixture gap.
+    def call_child_workflow(self, fn: Any, *, input: Any = None, instance_id: str | None = None) -> _Task:  # noqa: A002
         return _Task()
 
     def create_timer(self, _delta: Any) -> _Task:

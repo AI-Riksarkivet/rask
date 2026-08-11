@@ -360,6 +360,10 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
     # `enumerate_chunks` has no count to report. Zero there is the truth: nothing was enumerated.
     units_total = 0
     terminal_emitted = False
+    #: The fan-out's child instance ids, so an ABANDONMENT path can name what it is walking away from.
+    #: Bound here rather than at the fan-out because the error boundary below opens at `emit_start` —
+    #: a failure before the fan-out has no children, and `[]` makes that the same code path.
+    child_ids: list[str] = []
     try:
         # THE CEILINGS, PINNED. An activity result is history, so every replay of this run branches on
         # the numbers its FIRST execution saw — which is what stops a rolling deploy changing whether a
@@ -478,7 +482,14 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
         # Fan out. when_all is fan-in: the parent suspends until every child has drained, and survives
         # its own pod dying because the history replays. This is the durable-orchestration property that
         # a hand-rolled counter had to imitate.
-        fanout = wf.when_all([ctx.call_child_workflow(chunk_run, input=c) for c in chunks])
+        # DERIVED FROM POSITION, not read off the payload. It is the same string either way — a real
+        # `ChunkSpec.chunk_id` is `<run_id>-c<index // CHUNK_SIZE>`, and these are enumerated in that
+        # order — but indexing the dict would put a `KeyError` inside the ORCHESTRATOR, where it is a
+        # terminal workflow failure rather than a bad payload. Position is always available and always
+        # replays the same. Without an id the runtime mints one, and a parent that abandons the fan-out
+        # then has no NAME for the children it must stop.
+        child_ids = [f"{spec.run_id}-c{i}" for i in range(len(chunks))]
+        fanout = wf.when_all([ctx.call_child_workflow(chunk_run, input=c, instance_id=cid) for c, cid in zip(chunks, child_ids, strict=True)])
 
         # THE RUN DEADLINE — A15's other half, which nothing enforced.
         #
@@ -510,6 +521,11 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
                     errors={"run": f"exceeded the {limits.max_run_hours}h ceiling (RASK_INGEST_MAX_RUN_HOURS) with {units_total} units enumerated"},
                     errors_total=1,
                 ).model_dump()
+                # STOP THE CHILDREN BEFORE RECLAIMING THEIR QUEUE. `emit_terminal` releases the run's
+                # JetStream subject and DELETES the per-run durable (`runtime.release_run_units` →
+                # `queue.release_run`) — the exact consumer every live `drain_chunk` is pulling from.
+                # Abandoning the fan-out and then pulling the queue out from under it is §2.4.
+                yield ctx.call_activity(terminate_chunks, input={"child_ids": child_ids}, retry_policy=ACTIVITY_RETRY)
                 terminal_emitted = True
                 yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": timed_out}, retry_policy=ACTIVITY_RETRY)
                 return timed_out
@@ -563,6 +579,18 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
             errors_total=1,
         ).model_dump()
         failed["units_total"] = units_total
+        # THE SAME STOP, and this branch is why §2.4 got WORSE rather than staying put. `when_all`
+        # completes on the FIRST failed child (`_durabletask/task.py` — late arrivals are ignored), so
+        # this boundary is reached while every SIBLING is still draining, and `emit_terminal` below
+        # deletes the durable they are pulling from. Before the boundary existed, only a >24h deadline
+        # could reach that state; now one permanently-bad object does.
+        #
+        # Dispatched only when there ARE children: the boundary opens at `emit_start`, long before the
+        # fan-out, so most failures reaching here have none — and an activity that would immediately
+        # return still costs a real workflow-history event on every one of them. The branch is
+        # replay-safe: `child_ids` derives from `chunks`, an ACTIVITY RESULT, so it is history.
+        if child_ids:
+            yield ctx.call_activity(terminate_chunks, input={"child_ids": child_ids}, retry_policy=ACTIVITY_RETRY)
         yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": failed}, retry_policy=ACTIVITY_RETRY)
         return failed
 
@@ -956,7 +984,73 @@ def _run_async(coro: Any) -> Any:  # noqa: ANN401
 
 
 WORKFLOWS = (ingest_run, chunk_run)
-ACTIVITIES = (emit_start, resolve_limits, ensure_dataset, enumerate_chunks, publish_units, drain_chunk, reconcile_chunk, finalize, emit_terminal)
+
+
+def terminate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
+    """Stop the fan-out's children before the run reclaims their queue. §2.4.
+
+    **THE DEFECT THIS CLOSES.** Two paths abandon a live fan-out — the run deadline, and the error
+    boundary — and both then call `emit_terminal`, which releases the run's JetStream subject and
+    DELETES the per-run durable (`runtime.release_run_units` → `queue.release_run`). That durable is
+    exactly what every live `drain_chunk` is pulling from. So the run walked away from its children
+    and then pulled the queue out from under them.
+
+    It got WORSE, not better, when the §2.3 error boundary landed: `when_all` completes on the FIRST
+    failed child, so the boundary is now reached while every SIBLING is still draining. Before, only a
+    run that outlived `RASK_INGEST_MAX_RUN_HOURS` could reach that state; now one permanently-bad
+    object does.
+
+    **WHAT THIS CAN AND CANNOT DO, stated because the SDK is explicit and the difference matters.**
+    `terminate_workflow` stops a child from scheduling ANY FURTHER work, and it is recursive by
+    default. It does NOT stop an activity already executing — the SDK says so outright: "terminating a
+    workflow has no effect on any in-flight activity function executions … there is no way to
+    terminate an in-flight activity execution." So a `drain_chunk` mid-fetch keeps going until it
+    returns, and the release may still land under it.
+
+    That residual is BOUNDED rather than eliminated, and bounding it is the gain: no NEW drain can
+    start, so the window is one activity's runtime instead of the rest of the run. Whether a drain
+    that finishes against a deleted consumer fails loudly or silently is `open_dapr.md` §6 Q9, which
+    needs a live cluster to settle.
+
+    Best-effort by construction, like `release_run_units` and the lineage emit: this runs while a run
+    is already terminating, and a tidy-up that fails must not turn a run that recorded its outcome
+    into one that died. Terminating an already-terminal child is the NORMAL race, not an error.
+    """
+    child_ids = [str(cid) for cid in (payload.get("child_ids") or [])]
+    if not child_ids:
+        return {"terminated": 0, "requested": 0}
+
+    # Local imports, matching every other activity here: workflow scope must stay free of anything
+    # that reaches a sidecar at import time.
+    import logging
+
+    import dapr.ext.workflow as wf_client
+
+    log = logging.getLogger(__name__)
+    terminated = 0
+    client = wf_client.DaprWorkflowClient()
+    for child_id in child_ids:
+        try:
+            client.terminate_workflow(child_id)
+            terminated += 1
+        except Exception:
+            log.debug("could not terminate chunk workflow %s — it has most likely already finished", child_id, exc_info=True)
+    log.info("terminated %d of %d chunk workflows before releasing the run's queue", terminated, len(child_ids))
+    return {"terminated": terminated, "requested": len(child_ids)}
+
+
+ACTIVITIES = (
+    emit_start,
+    resolve_limits,
+    ensure_dataset,
+    enumerate_chunks,
+    publish_units,
+    drain_chunk,
+    reconcile_chunk,
+    finalize,
+    emit_terminal,
+    terminate_chunks,
+)
 
 
 def register(runtime: wf.WorkflowRuntime) -> None:

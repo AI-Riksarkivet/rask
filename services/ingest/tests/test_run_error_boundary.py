@@ -50,7 +50,12 @@ class _Ctx:
         self.activities.append((getattr(fn, "__name__", str(fn)), input or {}))
         return _Task()
 
-    def call_child_workflow(self, fn: Any, *, input: Any = None) -> _Task:  # noqa: A002
+    # `instance_id` is accepted (and unused — this fake returns a completed task) because the REAL
+    # `DaprWorkflowContext.call_child_workflow` takes it, and `ingest_run` now passes it so an
+    # abandonment path can name the children it must stop (§2.4). A fake that omits a parameter the
+    # code under test supplies fails as a TypeError swallowed by the error boundary — which reads as
+    # a product bug, not a fixture gap.
+    def call_child_workflow(self, fn: Any, *, input: Any = None, instance_id: str | None = None) -> _Task:  # noqa: A002
         return _Task()
 
     def create_timer(self, _delta: Any) -> _Task:
@@ -140,6 +145,13 @@ def test_a_failed_chunk_reaches_emit_terminal_with_a_FAIL_outcome() -> None:
     # The runtime throws the RECORDED child failure into the generator at the yield point.
     gen.throw(RuntimeError("Activity task #8 failed: catalog refused describe (403)"))
 
+    # STOP THE CHILDREN FIRST (§2.4). `when_all` completes on the FIRST failed child, so this
+    # boundary is reached while siblings are still draining — and `emit_terminal` deletes the
+    # JetStream durable they are pulling from. The order is the fix, so it is asserted, not skipped.
+    names = [n for n, _ in ctx.activities]
+    assert names[-1] == "terminate_chunks", f"the boundary released the queue without stopping the fan-out — calls were {names}"
+    gen.send({"terminated": 1, "requested": 1})
+
     # The generator must now be suspended on emit_terminal — not dead.
     names = [n for n, _ in ctx.activities]
     assert names[-1] == "emit_terminal", f"the failure did not route to the terminal step — calls were {names}"
@@ -168,6 +180,13 @@ def test_a_PERMANENTLY_REFUSED_finalize_also_leaves_a_FAIL_record() -> None:
 
     # finalize exhausts its retries -> the runtime throws the recorded failure.
     gen.throw(RuntimeError("commit conflict on bronze$pages at read_version 7"))
+
+    # The §2.4 child-stop runs here TOO, and that is deliberate rather than incidental: the fan-in
+    # completing does not prove every child is finished — `when_all` returns on the first FAILURE, and
+    # a chunk that failed leaves siblings live. One ordering for every abandonment path is easier to
+    # hold than a rule about which of them may skip it.
+    assert ctx.activities[-1][0] == "terminate_chunks"
+    gen.send({"terminated": 0, "requested": 1})
 
     assert ctx.activities[-1][0] == "emit_terminal"
     outcome = ctx.activities[-1][1]["outcome"]
@@ -244,6 +263,9 @@ def test_emit_terminal_failing_INSIDE_the_boundary_still_fails_the_workflow() ->
     gen = _drive_to_fanout(ctx)
 
     gen.throw(RuntimeError("chunk dead"))
+    # Through the §2.4 child-stop first — see `test_a_failed_chunk_reaches_emit_terminal_with_a_FAIL_outcome`.
+    assert ctx.activities[-1][0] == "terminate_chunks"
+    gen.send({"terminated": 1, "requested": 1})
     assert ctx.activities[-1][0] == "emit_terminal"
 
     with pytest.raises(RuntimeError, match="lineage door down"):
