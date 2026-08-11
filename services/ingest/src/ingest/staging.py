@@ -44,6 +44,7 @@ symmetry that is not there.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -107,6 +108,78 @@ def stage_fragments(dataset_uri: str, run_id: str, unit_keys: Sequence[str] | st
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(payload)
     return name
+
+
+def unit_manifest_uri(dataset_uri: str, run_id: str) -> str:
+    """Where a run's ENUMERATED UNIT LIST lives — deliberately OUTSIDE its fragment-staging prefix.
+
+    `_ingest_staging/_units/<run_id>.json`, a SIBLING of `_ingest_staging/<run_id>/`, and the location
+    is the whole safety argument. `discover_staged` reads everything under the run's prefix and treats
+    each record as a fragment manifest, and `_read_all` is asymmetric about how deep it looks: on the
+    filesystem it globs `*.json` at the top level, on an object store it LISTS THE PREFIX RECURSIVELY.
+    So a unit manifest tucked anywhere beneath the run prefix would be invisible to the recovery path
+    in dev and read by it in production — the worst shape a bug can have, in the one code path where a
+    mistake is duplicated or lost rows.
+
+    (It would in fact survive today: `discover_staged` skips any record with no `fragments`. Being
+    outside the prefix means the recovery path's correctness does not DEPEND on that defensive branch.)
+    """
+    return f"{dataset_uri.rstrip('/')}/{STAGING_DIR}/_units/{run_id}.json"
+
+
+def write_unit_manifest(dataset_uri: str, run_id: str, pairs: Sequence[tuple[str, str | None]]) -> str:
+    """Persist the run's enumerated `(key, token)` list once, so chunk descriptors can be POINTERS.
+
+    §2.13: `enumerate_chunks` used to return every key and token inline, which put the whole set into
+    one activity result AND again into each child's input — the payload that hit grpc's 4 MiB ceiling
+    at roughly 38k units, on a plane whose own docstrings advertise million-unit harvests. Written
+    here, the workflow carries `(offset, count)` and history becomes O(chunks) instead of O(units).
+
+    Object storage, not the state store: this is bulk run data, and the state store is where the
+    workflow's own history lives — the thing being kept small.
+    """
+    payload = json.dumps({"run_id": run_id, "units": [[key, token] for key, token in pairs]}).encode()
+    uri = unit_manifest_uri(dataset_uri, run_id)
+    if _is_object_store(uri):
+        bucket, key = _split(uri)
+        _client().put_object(Bucket=bucket, Key=key, Body=payload, ContentType="application/json")
+    else:
+        target = Path(uri)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+    return uri
+
+
+def read_unit_slice(dataset_uri: str, run_id: str, offset: int, count: int) -> list[tuple[str, str | None]]:
+    """One chunk's `(key, token)` window, read back from the manifest.
+
+    Raises rather than returning a short slice when the manifest is missing: an absent manifest means
+    the chunk cannot know what to publish, and publishing nothing would report a chunk that quietly
+    ingested zero units as successful. `drain_chunk`'s short-drain reconcile is built to notice a
+    shortfall, not an empty intent.
+    """
+    uri = unit_manifest_uri(dataset_uri, run_id)
+    if _is_object_store(uri):
+        bucket, key = _split(uri)
+        try:
+            raw = _client().get_object(Bucket=bucket, Key=key)["Body"].read().decode()
+        except Exception as exc:
+            raise UnitManifestMissing(run_id, uri) from exc
+    else:
+        path = Path(uri)
+        if not path.exists():
+            raise UnitManifestMissing(run_id, uri)
+        raw = path.read_text(encoding="utf-8")
+    units = json.loads(raw).get("units") or []
+    window = units[offset : offset + count]
+    return [(str(pair[0]), pair[1] if len(pair) > 1 and pair[1] is not None else None) for pair in window]
+
+
+class UnitManifestMissing(RuntimeError):
+    """The run's enumerated unit list is gone, so a chunk cannot know what to publish."""
+
+    def __init__(self, run_id: str, uri: str) -> None:
+        super().__init__(f"the unit manifest for run {run_id!r} is missing at {uri} — the run cannot be published from pointers")
 
 
 class StagingOverlapError(RuntimeError):
@@ -279,7 +352,7 @@ def purge_staged(dataset_uri: str, run_id: str) -> int:
     prevent.
     """
     root = staging_root(dataset_uri, run_id)
-    removed = 0
+    removed = _purge_unit_manifest(dataset_uri, run_id)
     if _is_object_store(root):
         bucket, prefix = _split(root)
         client = _client()
@@ -295,6 +368,27 @@ def purge_staged(dataset_uri: str, run_id: str) -> int:
         path.unlink()
         removed += 1
     return removed
+
+
+def _purge_unit_manifest(dataset_uri: str, run_id: str) -> int:
+    """Remove the run's unit manifest. Counted with the fragment manifests — it is run staging too.
+
+    It needs its own removal precisely BECAUSE it lives outside the run's staging prefix (see
+    `unit_manifest_uri`): the prefix delete that clears the fragments cannot reach it, so without this
+    every completed run would leave one manifest behind forever.
+    """
+    uri = unit_manifest_uri(dataset_uri, run_id)
+    if _is_object_store(uri):
+        bucket, key = _split(uri)
+        with contextlib.suppress(Exception):
+            _client().delete_object(Bucket=bucket, Key=key)
+            return 1
+        return 0
+    path = Path(uri)
+    if not path.exists():
+        return 0
+    path.unlink()
+    return 1
 
 
 # ── scheme split ──────────────────────────────────────────────────────────────────────

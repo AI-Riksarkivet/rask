@@ -218,11 +218,35 @@ class ChunkSpec(BaseModel):
 
     run_id: str
     chunk_id: str
+    #: THE POINTER (§2.13). A chunk names its window into the run's unit manifest
+    #: (`staging.unit_manifest_uri`) instead of carrying the keys themselves. Carrying them put the
+    #: whole key set into ONE activity result and again into EACH child's input, which is what met
+    #: grpc's 4 MiB ceiling at roughly 38k units — on a plane whose docstrings advertise millions.
+    #: With pointers, workflow history is O(chunks) and the dispatch budget stops being a scale limit.
+    #:
+    #: `count` of 0 with an empty `keys` means an empty chunk, which `enumerate_chunks` never emits.
+    offset: int = 0
+    count: int = 0
+    #: THE LEGACY INLINE FORM, kept for the rollout only. A chunk enqueued by the previous build is
+    #: replayed by the new one — Dapr hands back the recorded input verbatim — so the publish path
+    #: must still understand a descriptor that carries its keys. New descriptors leave these empty.
     keys: list[str] = Field(default_factory=list)
     #: Positional-parallel VERSION TOKENS for `keys` (S3 listing ETags) — identity material the
     #: workers fold into row ids. Defaulted empty so a chunk enqueued by an older build still
     #: validates; publish pads with None.
     tokens: list[str | None] = Field(default_factory=list)
+
+    @property
+    def expected_units(self) -> int:
+        """How many units this chunk stands for, whichever form it is in.
+
+        The ONE place the pointer/inline distinction is resolved. Without it every consumer would grow
+        its own `len(keys) or count`, and the one that forgot would silently treat a pointer chunk as
+        empty — which reads as a chunk that legitimately had no work rather than one whose intent was
+        never loaded.
+        """
+        return self.count or len(self.keys)
+
     #: Resolved ONCE, by `enumerate_chunks`, and carried. It used to be re-derived at each end from
     #: env — `RASK_INGEST_ACTIVE_DATASET` or `{warehouse}/{run_id}.lance` for workers, and
     #: `{warehouse}/{project}/{dataset}.lance` for finalize. Those are different datasets: workers
@@ -634,7 +658,9 @@ def chunk_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     # its fetch timed out because another pod held the units — is indistinguishable from a complete
     # one in its own result, and only the stream knows the difference. `num_pending == 0` on a
     # WORK_QUEUE stream means every unit was acked, by whichever worker did it.
-    if errors_total or int(drained.get("units_done") or 0) < len(chunk.keys):
+    # `count` for a pointer chunk, `len(keys)` for a legacy inline one — `expected_units` is the one
+    # place that difference is resolved, so no other site has to know which form it holds.
+    if errors_total or int(drained.get("units_done") or 0) < chunk.expected_units:
         reconciled: dict[str, Any] = yield ctx.call_activity(reconcile_chunk, input=chunk.model_dump(), retry_policy=ACTIVITY_RETRY)
         extra = {key: value for key, value in (reconciled.get("errors") or {}).items() if key not in errors}
         errors.update(extra)
@@ -834,6 +860,14 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
                 len(pairs),
             )
 
+    # THE UNIT LIST IS WRITTEN ONCE, to object storage, and the chunks POINT at it (§2.13). Inline
+    # keys made this activity's result O(units) and each child's input O(units) again; the manifest
+    # makes both O(chunks). Written BEFORE the descriptors exist so a descriptor can never name a
+    # window that was not persisted.
+    from ingest.staging import write_unit_manifest
+
+    write_unit_manifest(uri, spec.run_id, pairs)
+
     chunks: list[dict[str, Any]] = []
     for index in range(0, len(pairs), CHUNK_SIZE):
         window = pairs[index : index + CHUNK_SIZE]
@@ -841,8 +875,8 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
             ChunkSpec(
                 run_id=spec.run_id,
                 chunk_id=f"{spec.run_id}-c{index // CHUNK_SIZE}",
-                keys=[key for key, _ in window],
-                tokens=[token for _, token in window],
+                offset=index,
+                count=len(window),
                 dataset_uri=uri,
                 # Carried, not re-resolved — same reason as `dataset_uri` above.
                 sizing=spec.sizing,

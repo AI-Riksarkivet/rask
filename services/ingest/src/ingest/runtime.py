@@ -217,9 +217,22 @@ async def publish_chunk_units(chunk: ChunkSpec) -> int:
         from ingest.sources import SourceSpec, partition_key_for
 
         spec = SourceSpec(kind=chunk.kind, project=chunk.project, dataset=chunk.dataset, options=chunk.options)
-        # Tokens are positional-parallel to keys, resolved at ENUMERATE where the listing was in
-        # hand; a chunk from an older build carries none and every token degrades to None.
-        tokens = list(chunk.tokens) + [None] * (len(chunk.keys) - len(chunk.tokens))
+        # THE UNITS, from the pointer (§2.13) or from the descriptor itself. A chunk now names a window
+        # into the run's unit manifest instead of carrying its keys, which is what took the workflow's
+        # payloads from O(units) to O(chunks). The inline branch is the ROLLOUT path and not dead code:
+        # a chunk enqueued by the previous build is replayed by this one with its recorded input, so
+        # both shapes are live until every in-flight run has drained.
+        #
+        # Read HERE, in activity scope, where I/O belongs — the workflow body never touches it.
+        if chunk.keys:
+            # Tokens are positional-parallel to keys, resolved at ENUMERATE where the listing was in
+            # hand; a chunk from an older build carries none and every token degrades to None.
+            tokens = list(chunk.tokens) + [None] * (len(chunk.keys) - len(chunk.tokens))
+            pairs = list(zip(chunk.keys, tokens, strict=True))
+        else:
+            from ingest.staging import read_unit_slice
+
+            pairs = read_unit_slice(chunk.dataset_uri, chunk.run_id, chunk.offset, chunk.count)
         tasks = [
             UnitTask(
                 run_id=chunk.run_id,
@@ -229,7 +242,7 @@ async def publish_chunk_units(chunk: ChunkSpec) -> int:
                 partition_key=partition_key_for(spec, key),
                 token=token,
             )
-            for key, token in zip(chunk.keys, tokens, strict=True)
+            for key, token in pairs
         ]
         return await queue.publish_units(tasks)
     finally:
@@ -261,7 +274,7 @@ async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
         # chunks of one run could write different layouts and the operator would have no record of
         # which numbers the run actually used.
         worker = Worker(queue, UriFetcher(), PayloadValidator(), name=chunk.chunk_id, sizing=chunk.sizing)
-        outcome = await worker.drain_chunk(chunk.run_id, chunk.chunk_id, len(chunk.keys), chunk.dataset_uri)
+        outcome = await worker.drain_chunk(chunk.run_id, chunk.chunk_id, chunk.expected_units, chunk.dataset_uri)
         # BOUNDED HERE, at the first point the result becomes workflow history. The map is keyed by
         # UNIT, so a chunk whose every key is corrupt carries one entry per page — and this dict is
         # then persisted as the activity result, returned by the child, merged by the parent and fed

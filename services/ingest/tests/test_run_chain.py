@@ -85,7 +85,13 @@ def test_enumerate_produces_chunks_not_units(activity_ctx: WorkflowActivityConte
     assert isinstance(chunks, list), f"enumeration was refused: {chunks}"
     assert len(chunks) == 1, "5 units must be ONE chunk, not five activity results"
     parsed = ChunkSpec.model_validate(chunks[0])
-    assert len(parsed.keys) == 5
+    # A chunk is a POINTER now (§2.13): it names its window into the run's unit manifest rather than
+    # carrying 5 keys inline, which is what took the workflow's payloads from O(units) to O(chunks).
+    assert parsed.expected_units == 5
+    assert parsed.keys == [], "the descriptor must not carry the keys any more"
+    from ingest.staging import read_unit_slice
+
+    assert len(read_unit_slice(parsed.dataset_uri, parsed.run_id, parsed.offset, parsed.count)) == 5
     assert parsed.run_id == "r1"
 
 
@@ -103,7 +109,9 @@ def test_enumeration_slices_at_the_chunk_boundary(activity_ctx: WorkflowActivity
     finally:
         wf_mod.CHUNK_SIZE = original
 
-    assert [len(ChunkSpec.model_validate(c).keys) for c in chunks] == [3, 3, 1]
+    assert [ChunkSpec.model_validate(c).expected_units for c in chunks] == [3, 3, 1]
+    # …and the windows tile the manifest exactly once, which is the property the boundary test is for.
+    assert [(ChunkSpec.model_validate(c).offset, ChunkSpec.model_validate(c).count) for c in chunks] == [(0, 3), (3, 3), (6, 1)]
     ids = [ChunkSpec.model_validate(c).chunk_id for c in chunks]
     assert len(set(ids)) == 3, "chunk ids must be unique — the drained event keys off them"
 

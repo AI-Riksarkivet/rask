@@ -180,9 +180,14 @@ def test_a_NEW_object_enumerates_EXACTLY_ONE_unit(activity_ctx: WorkflowActivity
     (root / "c.tif").write_bytes(b"II*\x00c")
     chunks = _enumerate(activity_ctx, root, uri)
 
+    # POINTERS, not inline keys (§2.13) — so the skip is proven by resolving the chunk's window
+    # against the run's unit manifest, which is where the keys now live.
+    from ingest.staging import read_unit_slice
+
     assert len(chunks) == 1
-    assert len(chunks[0]["keys"]) == 1
-    assert chunks[0]["keys"][0].endswith("c.tif")
+    assert chunks[0]["count"] == 1
+    resolved = read_unit_slice(uri, chunks[0]["run_id"], chunks[0]["offset"], chunks[0]["count"])
+    assert next(key for key, _ in resolved).endswith("c.tif")
 
 
 def test_a_REPLACED_token_enumerates_the_key_AGAIN(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -262,4 +267,4 @@ def test_an_EMPTY_bronze_is_not_a_failure(activity_ctx: WorkflowActivityContext,
     chunks = _enumerate(activity_ctx, root, uri)
 
     assert len(chunks) == 1
-    assert len(chunks[0]["keys"]) == 1
+    assert chunks[0]["count"] == 1
