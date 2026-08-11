@@ -621,6 +621,9 @@ the last committed version is the minimum.
 
 ### 2.4 The deadline path abandons its children, then purges the queue underneath them
 
+**CLOSED 2026-08-11, and it had WIDENED first.** `when_all` completes on the first failed child, so §2.3's boundary reached the abandon-then-purge on ANY chunk failure, not only a >24h run. Children now get deterministic ids (`<run_id>-c<n>`) and both abandonment paths terminate them before `emit_terminal` releases the queue. NOT fully eliminated: the SDK cannot stop an in-flight activity, so the window is one activity's runtime rather than zero — see §6 Q9.
+
+
 **CONFIRMED · severity medium** (medium only because reaching it requires a >24 h run; the
 mechanism is not in doubt).
 
@@ -654,6 +657,9 @@ and only then release the queue. If terminating children is not wanted, at minim
 
 ### 2.13 `enumerate_chunks` returns the run's entire key set as one activity result
 
+**CLOSED 2026-08-11.** Chunks are POINTERS (`offset`/`count`) into a per-run unit manifest on object storage, so history is O(chunks). The manifest lives OUTSIDE the run's staging prefix on purpose: `_read_all` lists recursively on S3 and top-level on a filesystem, so a manifest under the prefix would be read by the crash-recovery path in production and not in dev. The inline form survives as a rollout path only — Dapr replays an in-flight run with its recorded input.
+
+
 **PARTLY · severity medium. Structure CONFIRMED, magnitude UNVERIFIABLE from source.**
 
 The structure is exactly as described: `keys = list(iter_unit_keys(build_source(source_spec)))`
@@ -678,6 +684,9 @@ carries O(chunks), which is what the docstring already claims.
 
 ### 2.2 The "orchestrator IS the outbox" docstring overstates delivery
 
+**CLOSED 2026-08-11 (doc-only).** The surviving docstring said "the orchestrator IS the outbox", which claims a DELIVERY guarantee the checkpoint does not give — `lineage._emit` swallows by ruling (§2.22). Reworded to say what the checkpoint proves (the activity RAN) and what it does not.
+
+
 **CONFIRMED · severity low.** (The larger claim this entry originally carried — that the
 swallowing `_emit` is a defect to be fixed by letting it raise — was ruled BY-DESIGN. See §2.22.)
 
@@ -699,6 +708,9 @@ a deterministic uuid5 (`lineage.py:126-130`), so a replayed emit rewrites one ru
 the code to match them — that would revert I8; see §2.22.
 
 ### 2.1 `service_kit`'s `DaprClient` seam is aimed at the sidecar's HTTP port
+
+**CLOSED 2026-08-11 — DELETED, not repaired.** Two re-verifications found no caller, so `build_dapr_client`/`get_dapr`/`DaprClientDep`/`_import_dapr_client` and the per-service lifespan wrapper are gone, with a test pinning them gone. Repairing the port would have kept a shared abstraction alive that no caller has ever wanted.
+
 
 **CONFIRMED (the port) · severity low. Dead-code hygiene, not a cascade defect.**
 
@@ -758,6 +770,9 @@ nothing: `_disarm_lease` already swallows a failed unregister (`:319-323`) and a
 reminder is already handled (`:332-334`).
 
 ### 2.7 `POST /v1/stores` read-modify-writes a **shared** document with no etag
+
+**CLOSED 2026-08-11.** `get_versioned` returns the sidecar ETag, `put(..., etag=, concurrent=True)` carries it with Dapr's `first-write`, a 409 maps to `UserStateConflict` (not the fail-closed 503), and the route retries once. Opt-in, so per-user documents keep last-write-wins. NOTE the etag alone is not the fix — under Dapr's DEFAULT concurrency a token is accepted and ignored.
+
 
 **CONFIRMED · severity medium** (narrow window — two admins attaching at once).
 
@@ -1059,25 +1074,31 @@ These two are recorded so the same claim is not re-filed. Both were in the first
   a transport blip is lost for that run, recoverable only by the lineage reconcile sweep
   (`docs/LINEAGE.md`). **What survives is the docstring defect only — §2.2.**
 
-### 2.23 Not put through the adversarial pass
+### 2.23 Not put through the adversarial pass — SETTLED 2026-08-11
 
-Three items from the first draft's §2 were in neither verification slice. They are **neither
-confirmed nor refuted** — re-verify before acting on any of them. They are held here rather than
-deleted so the work is not silently lost, and rather than in §2 so they are not mistaken for
-verified findings.
+All three were re-verified against HEAD. **Two were already false or fixed; one is partly closed.**
+They are kept rather than deleted because "we checked and it was not true" is a result.
 
-- **`flows` never reads workflow state** — claimed at `services/flows/src/flows/routes.py:113`:
-  the durable lane stores `RunState(status="running")` into a process-local dict and `get_run`
-  (`:129-134`) returns only `runs.get(run_id)`; `get_workflow_state` claimed absent under
-  `services/flows`.
-- **No terminate, pause, resume or purge anywhere** — claimed from a repo-wide grep, with the
-  corollary that `RASK_INGEST_MAX_UNITS` is unset in the chart (deployed default `0` = unbounded)
-  so a mis-pointed source has no lever but the 24 h timer, and that workflow history is never
-  collected.
-- **`MAX_RUN_HOURS` and `MAX_UNITS` are env reads consulted from workflow scope** —
-  `workflow.py:67`, `:82`, branched on at `:218` and `:275`; claimed to diverge the action stream
-  if the value changes under a rolling restart. Note that §3's `RunSpec`/`ChunkSpec` item, which
-  **was** verified CONFIRMED, is the same class of hazard one field away.
+- ~~**`flows` never reads workflow state.**~~ **REFUTED.** It reads it twice:
+  `services/flows/src/flows/lifespan.py:246` (`get_workflow_state(...) is not None`, the existence
+  probe) and `:262` (`fetch_payloads=True`, the status read). The claim described `routes.py`'s
+  process-local dedupe dict and generalised from it.
+- **No terminate, pause, resume or purge anywhere** — **PARTLY CLOSED.**
+  * `terminate_workflow` now exists (`services/ingest/src/ingest/workflow.py`'s `terminate_chunks`),
+    added by §2.4's fix so an abandoned fan-out is stopped before its queue is reclaimed.
+  * **purge** is answered without application code: Dapr 1.18's Configuration CRD carries
+    `workflow.stateRetentionPolicy`, now set in `chart/templates/observability.yaml`. An app-side
+    sweep could not have worked — `DaprWorkflowClient` has `purge_workflow(id)` but NO list-instances
+    API, and the only index that could drive one (`InMemoryRunStore`) is "deliberately NOT durable".
+  * `RASK_INGEST_MAX_UNITS` is now SET in `chart/values.yaml` (250000), so the deployed default is no
+    longer unbounded, and `enumerate_chunks` refuses before building a payload it cannot dispatch.
+  * **Still open: pause and resume**, plus a terminate/purge surface an OPERATOR can reach — the ones
+    here are internal. That is a management-API gap, tracked as its own item rather than under this
+    one.
+- ~~**`MAX_RUN_HOURS` and `MAX_UNITS` are env reads consulted from workflow scope.**~~ **FIXED.** The
+  reads are `RunLimits.from_env()` (`workflow.py:144-145`), reached only from the `resolve_limits`
+  ACTIVITY, and the workflow branches on the returned value — an activity result is history, so it
+  replays byte-identical. This is exactly the shape the entry asked for.
 
 ---
 
