@@ -22,6 +22,7 @@ from annotator.projects.project_actor import AnnotationProjectActor
 from annotator.projects.tenant_actor import TenantProjectsActor
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
+from service_kit.governed.actor_warmup import warm_actor_proxy_factory
 from service_kit.governed.dapr_auth import guard_actor_routes
 from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
@@ -104,6 +105,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await actor_ext.register_actor(TenantProjectsActor)
             app.state.actors_registered = True
             logger.info("annotator: AnnotationTaskActor + AnnotationProjectActor + TenantProjectsActor registered with the sidecar")
+            # The SDK's proxy factory runs a BLOCKING `wait_for_sidecar()` on first use (60 s default,
+            # a `time.sleep` loop), so whichever request opens the first actor proxy pays it ON THE
+            # EVENT LOOP. Measured in the notifications service, where it made a wall-clock budget
+            # unenforceable; this plane has the same call shape, so it gets the same warm-up.
+            await warm_actor_proxy_factory()
         except Exception:
             app.state.actors_registered = False
             logger.exception("annotator: actor registration failed — the task plane will 503")

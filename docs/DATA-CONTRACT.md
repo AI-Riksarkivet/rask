@@ -197,6 +197,49 @@ this repo's CI — an independently-released service, or tenant-authored consume
 structural guarantee dissolves and a registry (or published JSON-schema artifacts per topic
 version) becomes the contract carrier.
 
+### 7.6 Becoming a notification producer
+
+The notification plane turns events into things addressed to a PERSON. It is a consumer of the fabric
+above, not a parallel one — so a service that wants its work to reach someone adds a topic and a door,
+never a special case inside `services/notifications`.
+
+**Three targeting sources, and a new producer picks one rather than inventing a fourth.** Who gets
+told is derived, never supplied by the producer:
+
+| Source | Recipients come from | The producer's obligation |
+| --- | --- | --- |
+| **authorship** | the run's verified `author` facet | stamp it — the HTTP door overwrites it with the token sub, so it cannot be forged |
+| **project watch** | the watch registry, gated on `project#member` | carry the tenant on the event (`run.facets.lance.project`) |
+| **naming a subject** | `extra.subject` on a control event | name the subject; being named IS the targeting |
+
+**Delivery gates on `can_be_notified`, rendering gates on `can_get_metadata`, and the split is
+load-bearing.** `can_get_metadata` answers "is there anything beneath this you may see?" — right for
+drawing a breadcrumb, wrong for interrupting someone. Upward visibility means a grant on one table
+makes every container above it metadata-visible, so gating a PUSH on it would mail a namespace-scoped
+event to everyone holding a grant anywhere beneath it. A notification asserts a stake in the object
+itself, which is what `can_be_notified` names.
+
+**So a new producer owes exactly four things**, and none of them is a change to the notification
+service:
+
+1. **A topic**, published through `service_kit.dapr_publish.publish_event` (claim-check guard at
+   900 KiB) and pinned in `tests/unit/test_invariants.py` like every other topic literal.
+2. **A subscription** for it on `notifications`' own per-app pubsub component — one component per
+   subscriber app-id, because `queueGroupName` lives on the component and a shared group would SPLIT
+   the stream between apps instead of delivering to each.
+3. **A door**: the FGA type and relation its delivery check runs against. This is the part that is
+   genuinely per-producer — an `annotation_project` event is not checked as a `table`, so it needs
+   `can_be_notified` on its own type rather than reuse of the lineage path.
+4. **A terminal-state discipline.** Notify on what needs attention: failures loudest, completions
+   second. "Your run started" tells the person who clicked start nothing and is noise to everyone
+   else, which is why START events notify nobody.
+
+What a producer does NOT do is write into an inbox. It publishes; the plane derives the audience,
+re-checks visibility per recipient, and stores a claim-check POINTER — never a payload copy. That is
+what keeps the fabric's own rule intact one layer up: an event is a refresh hint, and the governed
+read is still the only path to the data.
+
+
 ## Related docs
 [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`DURABILITY.md`](DURABILITY.md) (CAS validation) ·
 [`RAY-TRAIN.md`](RAY-TRAIN.md) (D1 pins, D4 registry) · [`RESILIENCE.md`](RESILIENCE.md)

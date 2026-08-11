@@ -25,6 +25,7 @@ from notifications.config import get_notifications_settings
 from notifications.inbox_actor import InboxActor
 from notifications.watch_actor import WatchIndexActor
 from service_kit.config import Settings
+from service_kit.governed.actor_warmup import warm_actor_proxy_factory
 from service_kit.governed.dapr_auth import guard_actor_routes
 from service_kit.schemas.health import Readiness, ReadinessStatus
 
@@ -141,6 +142,13 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
                 await actor_ext.register_actor(WatchIndexActor)
                 app.state.actors_registered = True
                 log.info("notifications: InboxActor + WatchIndexActor registered")
+                # Pay the SDK's BLOCKING sidecar handshake HERE rather than on the first request.
+                # MEASURED against a real process: without it, one cron tick against an unreachable
+                # sidecar pinned the event loop for 60 s and the pass's own `asyncio.timeout` never
+                # fired — a wall-clock budget cannot bound work that blocks the scheduler it runs on.
+                # Advisory: the routes already gate on `actors_registered`, so a cold factory is a
+                # slow first call, never a wrong answer.
+                await warm_actor_proxy_factory()
             except Exception:
                 app.state.actors_registered = False
                 log.exception("notifications: actor registration failed — the inbox will 503")
