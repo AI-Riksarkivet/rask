@@ -7,6 +7,9 @@ import {
 	inboxReadState,
 	markInboxSeen,
 	readInbox,
+	readPrefs as readPrefsUpstream,
+	writePrefs as writePrefsUpstream,
+	type ChannelPreferences,
 	type DismissResult,
 	type InboxPanel,
 	type InboxReadState,
@@ -190,3 +193,34 @@ async function requestWatches(
 		return null;
 	}
 }
+
+/**
+ * This subject's channel preferences — the settings surface's read.
+ *
+ * `null` is the un-wired answer, not an error, and the page renders it as "channels are unavailable
+ * on this stack" rather than as an empty form: an empty form invites you to type into something that
+ * cannot save, which is the one outcome the settings index's own comment refuses ("a settings form
+ * that silently discards what you type is worse than one that admits it does not exist yet").
+ */
+export const readPrefs = query(async (): Promise<ChannelPreferences | null> => {
+	const result = await readPrefsUpstream(inboxRequest());
+	return result.ok ? result.data : null;
+});
+
+/** The full preferences document. A PUT replaces it, so the form always sends every field. */
+const ChannelPreferencesInput = v.object({
+	channels: v.array(v.string()),
+	destinations: v.record(v.string(), v.string()),
+	digest_seconds: v.nullable(v.number()),
+});
+
+export const savePrefs = command(
+	ChannelPreferencesInput,
+	async (prefs): Promise<ChannelPreferences | null> => {
+		const result = await writePrefsUpstream(inboxRequest(), prefs);
+		if (!result.ok) return null;
+		// Single-flight the read this write invalidates, the estate's mutation shape.
+		void readPrefs().refresh();
+		return result.data;
+	},
+);

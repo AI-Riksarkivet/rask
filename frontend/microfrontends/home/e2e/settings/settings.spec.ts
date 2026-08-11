@@ -45,6 +45,7 @@ test('an estate admin gets Settings in the bar, and the page carries the estateâ
 		['Users & roles', '/settings/access'],
 		['Projects', '/projects'],
 		['Audit', '/settings/audit'],
+		['Notifications', '/settings/notifications'],
 	] as const) {
 		const link = rows(page).getByRole('link', { name: new RegExp(`^${name}`) });
 		await expect(link).toHaveAttribute('href', href);
@@ -53,7 +54,7 @@ test('an estate admin gets Settings in the bar, and the page carries the estateâ
 
 	// The unwired half says so rather than pretending. A settings form that silently discards what you
 	// type is worse than one that admits it cannot save yet.
-	for (const row of ['Notifications', 'New-project defaults', 'Credentials']) {
+	for (const row of ['New-project defaults', 'Credentials']) {
 		await expect(page.getByText(row, { exact: true })).toBeVisible();
 	}
 	await expect(page.getByText('Not wired').first()).toBeVisible();

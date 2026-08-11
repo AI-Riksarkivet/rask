@@ -121,6 +121,28 @@
 		</a>
 	</section>
 
+	<section class="flex flex-col gap-2" aria-labelledby="settings-notifications">
+		<h2
+			id="settings-notifications"
+			class="text-muted-foreground text-xs font-semibold tracking-wide uppercase"
+		>
+			Notifications
+		</h2>
+		<p class="text-muted-foreground text-xs">
+			Per-SUBJECT, unlike everything above it — these are your channels and your watches, not the
+			platform's. It sits here because this is where the main menu puts configuration; note that this
+			whole section is estate-admin gated, so a non-admin cannot currently reach their own preferences.
+			Moving it is an IA decision, not a second guard.
+		</p>
+		<a href="/settings/notifications" class={PLATFORM_ROW}>
+			{@render platformRow(
+				Bell,
+				'Notifications',
+				'Email and Slack delivery, digest batching, and the projects you watch.',
+			)}
+		</a>
+	</section>
+
 	<section class="flex flex-col gap-2" aria-labelledby="settings-preferences">
 		<h2
 			id="settings-preferences"

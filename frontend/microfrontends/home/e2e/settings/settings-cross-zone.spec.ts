@@ -90,6 +90,7 @@ test('no settings row leaves the estate — every one is served by this app', as
 		'/projects',
 		'/settings/access',
 		'/settings/audit',
+		'/settings/notifications',
 	]);
 	expect(links.filter((l) => ZONE_BASES.includes(l.href.split('/')[1] ?? ''))).toEqual([]);
 
@@ -164,7 +165,10 @@ test('the unwired rows read as decisions, not as broken controls', async ({ page
 	await seed(page, { 'GET /v1/me': ME_ADMIN, 'GET /v1/projects': [] });
 	await page.goto('/settings');
 
-	for (const title of ['Notifications', 'New-project defaults', 'Credentials']) {
+	// Notifications LEFT this list when its page landed: it is a real route now (`/settings/notifications`,
+	// over the service's own `GET|PUT /prefs` + `/watches`), so asserting it as unwired would pin the
+	// page to a state it has grown out of.
+	for (const title of ['New-project defaults', 'Credentials']) {
 		const card = page.locator('[data-slot="card"]').filter({ hasText: title });
 		await expect(card).toHaveCount(1);
 		// Named as unbuilt…

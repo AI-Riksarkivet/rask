@@ -259,3 +259,60 @@ export function inboxReadState(feed: InboxFeed): InboxReadState {
 		dismissed: feed.notifications.filter((n) => n.dismissed).map((n) => n.notification_id),
 	};
 }
+
+/**
+ * Where this subject wants to be pushed, beyond the bell — the S5 channel plane's per-user half.
+ *
+ * `channels` is an OPEN list of ids, never an enum: the service's channel table is a
+ * `dict[str, Sender]` and the chart mints one Component per destination, so a client that pinned
+ * today's `email`/`slack` would refuse to parse the whole document the day an operator adds a third.
+ * The UI renders what it knows and passes the rest through untouched.
+ *
+ * `destinations` is channel id → the address the SUBJECT supplied. Nothing here is inferred from a
+ * token: an address a plane guessed is an address it can guess wrong, and the wrong guess here is
+ * mail to a stranger.
+ *
+ * `digest_seconds` is `null` for immediate, which stays the default — a digest trades timeliness for
+ * volume and the notification worth having is the urgent one. A terminal FAILURE is never digested
+ * whatever this says; that rule lives in the service, not in the form.
+ */
+export interface ChannelPreferences {
+	channels: string[];
+	destinations: Record<string, string>;
+	digest_seconds: number | null;
+}
+
+const ChannelPreferencesSchema = v.object({
+	channels: v.optional(v.array(v.string()), []),
+	destinations: v.optional(v.record(v.string(), v.string()), {}),
+	digest_seconds: v.optional(v.nullable(v.number()), null),
+});
+
+/** This subject's channel preferences. Absent state reads as OFF — the honest default. */
+export async function readPrefs(req: InboxRequest): Promise<ApiResult<ChannelPreferences>> {
+	const result = await upstreamJSON({
+		fetch: req.fetch,
+		base: req.base,
+		path: '/prefs',
+		bearer: req.bearer,
+		upstream: UPSTREAM,
+	});
+	return parsed(result, ChannelPreferencesSchema, UPSTREAM);
+}
+
+/** Replace this subject's preferences. A PUT, not a PATCH: the service stores the whole document, so
+ *  a partial write would silently drop the keys it omitted. */
+export async function writePrefs(
+	req: InboxRequest,
+	prefs: ChannelPreferences,
+): Promise<ApiResult<ChannelPreferences>> {
+	const result = await upstreamJSON({
+		fetch: req.fetch,
+		base: req.base,
+		path: '/prefs',
+		init: { method: 'PUT', body: JSON.stringify(prefs) },
+		bearer: req.bearer,
+		upstream: UPSTREAM,
+	});
+	return parsed(result, ChannelPreferencesSchema, UPSTREAM);
+}
