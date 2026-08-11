@@ -11,14 +11,9 @@ import os
 import sys
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import TYPE_CHECKING, Annotated
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, Request
-
-
-if TYPE_CHECKING:
-    from dapr.clients import DaprClient
+from fastapi import APIRouter, FastAPI
 
 from service_kit.config import Settings
 from service_kit.exceptions import register_handlers
@@ -48,26 +43,18 @@ def build_settings() -> Settings:
     return Settings.model_validate({})
 
 
-def _import_dapr_client() -> "type[DaprClient]":
-    # Lazy import: the dapr SDK is only required when RASK_DAPR_ENABLED is true.
-    from dapr.clients import DaprClient
-
-    return DaprClient
-
-
-def build_dapr_client(settings: Settings) -> "DaprClient | None":
-    """Dapr SDK client at the local sidecar, or None when Dapr is disabled."""
-    if not settings.dapr_enabled:
-        return None
-    dapr_client_cls = _import_dapr_client()
-    return dapr_client_cls(f"http://127.0.0.1:{settings.dapr_http_port}")
-
-
-def get_dapr(request: Request) -> "DaprClient | None":
-    return request.app.state.dapr
-
-
-DaprClientDep = Annotated["DaprClient | None", Depends(get_dapr)]
+# THE DAPR CLIENT SEAM IS DELETED (open_dapr.md §2.1). It built `DaprClient("http://127.0.0.1:3500")`
+# — the sidecar's HTTP port handed to a gRPC client, which talks 50001 — and a test pinned that wrong
+# constant as if it were the contract. Two re-verifications found the same thing: NOTHING called it.
+# Every service that actually publishes builds its own client (`medallion.mover` / `medallion.producer`
+# construct `dapr.aio.clients.DaprClient` in their own lifespans, with their own `get_dapr` and
+# `DaprClientDep` in `medallion.api.dependencies`), and the four `make_service_app` services never
+# touched `app.state.dapr` at all.
+#
+# So the wrong port was inert — but a broken seam that looks available is worse than no seam: the next
+# service to want a Dapr client would have reached for the one already wired into the app factory and
+# got a client pointed at the wrong port. Deleted rather than repaired to the gRPC port, because
+# repairing it would keep a shared abstraction alive that no caller has ever wanted.
 
 
 def default_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
@@ -109,13 +96,11 @@ def make_service_app(
 
         @asynccontextmanager
         async def wrapped(app: FastAPI) -> AsyncIterator[None]:
-            app.state.dapr = build_dapr_client(s)
-            try:
-                async with base(app):
-                    yield
-            finally:
-                if app.state.dapr is not None:
-                    app.state.dapr.close()
+            # Nothing is wrapped around the base lifespan any more — `app.state.dapr` used to be built
+            # here for every service and read by none (§2.1). Kept as a wrapper rather than collapsed to
+            # `base_factory` so the ONE place a cross-cutting startup concern belongs still exists.
+            async with base(app):
+                yield
 
         return wrapped
 

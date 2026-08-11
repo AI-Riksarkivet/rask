@@ -1,4 +1,12 @@
-"""service-kit Dapr wiring — config gating + client factory (no sidecar needed)."""
+"""service-kit Dapr wiring — the config gating and the shared front-door guard (no sidecar needed).
+
+The CLIENT FACTORY that used to be tested here is gone (open_dapr.md §2.1). It built
+`DaprClient("http://127.0.0.1:3500")` — the sidecar's HTTP port handed to a gRPC client — and the
+test below it asserted that wrong constant as though it were the contract, which is how a defect
+acquires a green gate. Two re-verifications found no caller at all: every service that publishes
+builds its own client. The settings survive because other code reads the same environment variables;
+only the factory and its dependency are gone.
+"""
 
 import pytest
 
@@ -21,30 +29,17 @@ def test_dapr_enabled_from_env() -> None:
     assert s.dapr_http_port == "3555"
 
 
-def test_build_dapr_client_none_when_disabled() -> None:
-    from service_kit import build_dapr_client
+def test_the_client_factory_seam_stays_deleted() -> None:
+    """§2.1, pinned so it cannot come back by muscle memory.
 
-    assert build_dapr_client(_settings()) is None
-
-
-def test_build_dapr_client_builds_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    A shared factory on `service_kit` is the obvious place for the next service wanting a Dapr client
+    to reach — and the one that lived here pointed at the wrong port. Re-adding one is a decision to
+    make deliberately (and against the gRPC port, 50001), not a convenience to rediscover.
+    """
     import service_kit
 
-    captured: dict[str, str] = {}
-
-    class FakeDaprClient:
-        def __init__(self, address: str) -> None:
-            captured["address"] = address
-
-        def close(self) -> None:
-            captured["closed"] = "yes"
-
-    # Patch the lazy import target so no real dapr package / sidecar is needed.
-    monkeypatch.setattr(service_kit, "_import_dapr_client", lambda: FakeDaprClient, raising=True)
-
-    client = service_kit.build_dapr_client(_settings(RASK_DAPR_ENABLED="true", DAPR_HTTP_PORT="3500"))
-    assert isinstance(client, FakeDaprClient)
-    assert captured["address"] == "http://127.0.0.1:3500"
+    for gone in ("build_dapr_client", "get_dapr", "DaprClientDep", "_import_dapr_client"):
+        assert not hasattr(service_kit, gone), f"service_kit.{gone} is back — see open_dapr.md §2.1 before keeping it"
 
 
 # ── the public front door must never take a service-token path ────────────────

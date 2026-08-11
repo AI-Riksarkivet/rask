@@ -183,9 +183,18 @@ def test_the_terminal_emit_is_a_checkpointed_ACTIVITY_not_an_inline_call() -> No
     than papering over its absence. An outbox exists to stop a crash between the COMMIT and the EMIT
     from losing the record permanently. Here the emit is a Dapr Workflow ACTIVITY: the runtime
     checkpoints activity completion in its state store and re-executes any activity that did not
-    return, so the workflow cannot advance past the terminal emit without it having happened. The
-    orchestrator IS the outbox, and re-delivery is safe because `lineage_run_id` is a deterministic
-    uuid5 — a replayed emit rewrites the same run rather than forking a second one.
+    RETURN, so the workflow cannot advance past the terminal emit without that activity having RUN.
+    Re-delivery is safe because `lineage_run_id` is a deterministic uuid5 — a replayed emit rewrites
+    the same run rather than forking a second one.
+
+    **WHAT THE CHECKPOINT ATTESTS, and what it does not** (open_dapr.md §2.2). It attests that the
+    activity ran to completion. It does NOT attest that the event was DELIVERED: `lineage._emit`
+    swallows a failed emission on purpose (I8 — "a run whose data landed must not be reported as
+    failed because the graph was unreachable"), so the activity returns successfully whether or not
+    the lineage service ever saw the event. This docstring used to read "the orchestrator IS the
+    outbox", which claims the delivery guarantee an outbox gives and this does not have. The
+    difference is exactly the crash window an outbox closes and this design accepts, by ruling
+    (§2.22 kept the swallow); saying otherwise here made the accepted risk look eliminated.
 
     Move this call inline into the orchestrator body and that guarantee silently evaporates: it would
     still work, right up to the first crash between commit and emit.
