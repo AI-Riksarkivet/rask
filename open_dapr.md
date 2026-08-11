@@ -1636,7 +1636,17 @@ Three of the first draft's seven are now answered and have been struck.
    `open_ingest_design.md` §4's recommendation (one owner per signal). Implementation is
    ingest-plane work and still open; until it lands, §2.12's honest double-cascade comment is the
    accurate description.
-5. **Does the ingest → Ray-dashboard egress pass under `networkPolicy.enabled`?** §5.7.
+5. ~~**Does the ingest → Ray-dashboard egress pass under `networkPolicy.enabled`?**~~ **ANSWERED
+   2026-08-11 — YES, and the premise is moot today.** Measured against the live k3s release plus a
+   render with the policy ON:
+   * `ingest` has NO Ray reference at all (`grep` over `services/ingest/src` is empty), so this egress
+     exists only if §5's spike is adopted. The question was conditional and read as pending.
+   * It would pass regardless: `allow-egress-intra-namespace` is `to: [podSelector: {}]` with **no port
+     restriction**, and the Ray head is in-namespace — `rask-ray-22nls-head-svc` in `default`, dashboard
+     on 8265 (live). The `lance-ray` NetworkPolicy restricts INGRESS to the medallion producer on 8000
+     and does not cover the Ray head at all.
+   * The real constraint is the one `values.yaml:1026` already documents: an OFF-cluster Ray needs a
+     `networkPolicy.extraEgress` entry, like the externalized S3/NATS/OTLP endpoints.
 6. **Is `app-id: lance-ray` worth renaming now, or does it ride the next state-store change?**
    The rename touches component scopes, DLQ topics, resiliency targets and the scope list, and
    the state store cannot hot-reload — so it is one coordinated rollout either way.
@@ -1646,9 +1656,26 @@ Three of the first draft's seven are now answered and have been struck.
 8. **What is the measured size of an `enumerate_chunks` result at the advertised scale?** §2.13's
    structure is confirmed but its magnitude is not establishable from source — no gRPC limit and
    no state-store row limit is set anywhere in this repo. Measure before sizing the fix.
-9. **Does an orphaned `drain_chunk` fail loudly or silently after §2.4 deletes its consumer?**
-   Needs a run, not a read. It decides whether the deadline path is noisy-broken or
-   silently-broken.
+9. ~~**Does an orphaned `drain_chunk` fail loudly or silently after §2.4 deletes its consumer?**~~
+   **ANSWERED 2026-08-11 — BOTH, in that order.** Settled by experiment against the live NATS
+   (throwaway `Q9_PROBE` work-queue stream, durable deleted under an in-flight `fetch`):
+   * The IN-FLIGHT fetch returns **0 messages and raises nothing** — indistinguishable from "no units
+     available right now".
+   * The NEXT fetch raises `nats ServiceUnavailableError`.
+
+   Read against the drain loop (`worker.py:367-372`), that resolves to: the empty batch makes no
+   progress, so `while units_done + pending + errors < expected` re-enters and fetches again; the
+   second fetch's `ServiceUnavailableError` is **not** a `TimeoutError`, so the loop's only `except`
+   does not catch it and it escapes `drain_chunk`. The activity then burns its four `ACTIVITY_RETRY`
+   attempts and the child fails.
+
+   So it is NOISY-broken rather than silently-broken — but the noise MISNAMES the cause: an operator
+   reads "NATS unavailable" for a consumer their own run's terminal path deleted. It also confirms
+   §2.4's ordering is the right fix (stop the children first, so no NEW drain starts), and it is the
+   argument for the residual there being bounded rather than harmless.
+
+   Worth noting the near-miss: had the loop caught `Exception` instead of `TimeoutError`, this would
+   have been fully silent — a chunk reporting a short drain with no reason anywhere.
 
 *(10–12 added 2026-08-08 from an external-material scan — the OneUptime Dapr corpus, 2,122 posts
 enumerated, 10 read against the estate's positions; shallow source, every claim marked verify.)*
