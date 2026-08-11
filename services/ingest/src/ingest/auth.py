@@ -115,8 +115,19 @@ async def authorize_ingest(
     refused by one door and trusted by another.
     """
     expected = os.environ.get("APP_API_TOKEN")
-    if not expected:
-        return  # dev: no service token configured, exactly like the estate's other doors
+    # An absent service token means "this deployment has no SERVICE door" — never "this deployment has
+    # no door". Returning on it alone was a full bypass of the user path as well: an estate with
+    # `LANCE_OIDC_ENABLED=true`, a live FGA client and a blank or unset `APP_API_TOKEN` accepted every
+    # ingest from anyone who could reach the port, while every surface reported authorization as ON.
+    # That is open_python-audit's ING-01, and the blank case is the likely one — a secret that renders
+    # empty is far more common than one nobody wired, and it fails OPEN rather than loudly.
+    #
+    # So the open posture is now conditioned on what it always claimed to mean: no service token AND no
+    # user authentication configured, i.e. the documented local-dev stack. With either configured, the
+    # request falls through to the OIDC + FGA project-admin path and, failing that, to the
+    # `PermissionDeniedError` at the end of this function.
+    if not expected and not (settings.oidc_enabled or settings.fga_enabled):
+        return  # dev: nothing configured to authenticate against, exactly like the estate's other doors
 
     target = project or settings.service_project
     obj = f"project:{target}"
@@ -124,7 +135,10 @@ async def authorize_ingest(
     # who is actually asking. Fall through to the user-bearer path — never allow on the token alone.
     from_public_door = is_public_caller(dapr_caller_app_id)
 
-    if not from_public_door and dapr_api_token and secrets.compare_digest(dapr_api_token.encode(), expected.encode()):
+    # `expected` is now reachable as None (auth on, no service token), so it is tested FIRST — the
+    # comparison would otherwise raise AttributeError on `None.encode()` and answer 500 where the
+    # honest answer is "this deployment has no service door, use a bearer".
+    if expected and not from_public_door and dapr_api_token and secrets.compare_digest(dapr_api_token.encode(), expected.encode()):
         if project and project != settings.service_project:
             audit("ingest_service_token", DENY, subject=f"service:{dapr_caller_app_id or 'direct'}", resource=obj, reason="cross_project")
             raise PermissionDeniedError("the service token cannot ingest into another project; use a project-admin bearer")

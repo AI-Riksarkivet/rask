@@ -262,3 +262,65 @@ def test_a_DIRECT_caller_with_no_dapr_hop_still_works(monkeypatch: pytest.Monkey
 
     with TestClient(_app()) as client:
         assert client.post("/ingests", json={"project": "demo"}, headers={"dapr-api-token": SERVICE_TOKEN}).status_code == 200
+
+
+# ── ING-01: an absent service token is not an absent door ─────────────────────────────────────────
+#
+# Every test above SETS `APP_API_TOKEN`, which is exactly how the bypass survived a read-through audit.
+# `authorize_ingest` opened with `if not expected: return`, so a deployment with OIDC enabled, a live
+# FGA client and a BLANK or unset service token accepted every ingest from anyone who could reach the
+# port — while `/v1/me`, the navbar and the catalog all reported authorization as ON. The blank case is
+# the likelier one: a secret that renders empty is far more common than one nobody wired, and it failed
+# open rather than loudly.
+
+
+@pytest.fixture
+def _oidc_on_without_service_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_oidc_on` minus the service token — the deployment shape the bypass lived in."""
+    monkeypatch.delenv("APP_API_TOKEN", raising=False)
+    monkeypatch.setenv("LANCE_OIDC_ENABLED", "true")
+    monkeypatch.setenv("LANCE_OIDC_ISSUER", "https://issuer.test")
+    monkeypatch.setenv("LANCE_OIDC_AUDIENCE", "rask")
+
+
+@pytest.mark.usefixtures("_oidc_on_without_service_token")
+def test_an_unset_service_token_does_not_open_the_door_when_auth_is_ON() -> None:
+    """ING-01. The SERVICE door is absent; the USER door must still be shut."""
+    with TestClient(_app(fga=object()), raise_server_exceptions=False) as client:
+        assert client.post("/ingests", json={"project": "demo"}).status_code == 403
+
+
+@pytest.mark.usefixtures("_oidc_on_without_service_token")
+def test_a_stray_service_token_header_cannot_authenticate_when_none_is_configured() -> None:
+    """With no `APP_API_TOKEN`, any `dapr-api-token` a caller invents must authenticate nothing.
+
+    Also guards the `expected and …` ordering: comparing against `None` would raise and answer 500,
+    which reads as a broken service rather than as a refused credential.
+    """
+    with TestClient(_app(fga=object()), raise_server_exceptions=False) as client:
+        response = client.post("/ingests", json={"project": "demo"}, headers={"dapr-api-token": "anything-at-all"})
+
+    assert response.status_code == 403
+
+
+def test_a_BLANK_service_token_does_not_open_the_door_when_auth_is_ON(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The likelier shape of the same fault — a secret that rendered empty, not one nobody wired."""
+    monkeypatch.setenv("APP_API_TOKEN", "")
+    monkeypatch.setenv("LANCE_OIDC_ENABLED", "true")
+    monkeypatch.setenv("LANCE_OIDC_ISSUER", "https://issuer.test")
+    monkeypatch.setenv("LANCE_OIDC_AUDIENCE", "rask")
+
+    with TestClient(_app(fga=object()), raise_server_exceptions=False) as client:
+        assert client.post("/ingests", json={"project": "demo"}).status_code == 403
+
+
+def test_the_local_dev_posture_is_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing configured to authenticate against: the documented open stack stays open.
+
+    The half that keeps the fix honest. Closing the door unconditionally would break `make dev-micro`
+    and every local ingest — and a fix that forces everyone to run OIDC locally is a fix nobody keeps.
+    """
+    monkeypatch.delenv("APP_API_TOKEN", raising=False)
+
+    with TestClient(_app()) as client:
+        assert client.post("/ingests", json={"project": "demo"}).status_code == 200
