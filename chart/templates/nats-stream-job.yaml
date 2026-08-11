@@ -91,6 +91,50 @@ spec:
                     --no-allow-rollup
                 fi
               }
+              # RETENTION IS A FAN-OUT CORRECTNESS INVARIANT, and nothing asserted it (open_dapr.md §6 Q10).
+              #
+              # Both creation helpers are `if exists; then skip`, so a stream created ONCE with the wrong
+              # retention keeps it forever and the chart is right while the cluster is wrong — exactly the
+              # drift the work-queue helper below documents for that stream, generalised. (Kept off one
+              # line on purpose: `test_the_INGEST_stream_has_ONE_definition_and_the_chart_agrees_with_the_code`
+              # finds the creation call by scanning for a line naming both the stream and the helper, so a
+              # COMMENT mentioning both hijacks it — which is exactly what this comment first did.)
+              # What each wrong value
+              # costs is not cosmetic:
+              #
+              #   work      on a stream with MULTIPLE per-app durables: the FIRST ack deletes the message,
+              #             so the apps steal deliveries from each other. The cascade silently under-runs —
+              #             every consumer looks healthy and each sees a fraction of the traffic.
+              #   interest  empties the stream whenever no durable is attached, which is precisely the
+              #             state an ephemeral `deliverPolicy=all` replay consumer relies on NOT being.
+              #
+              # Neither shows up as an error anywhere: they present as "some events did not arrive". So it
+              # is checked here and FAILS THE JOB, rather than logged — a warning in a Job nobody reads is
+              # how the INGEST drift survived to be measured live on 2026-08-06.
+              assert_retention() {
+                local want="$2" got
+                # `sed`, not `jq` — the durable-drift loop below parses the same way, and this Job's
+                # image (natsio/nats-box) is not guaranteed to carry jq. One parsing idiom per file.
+                got=$(nats --server "$S" stream info "$1" --json 2>/dev/null | sed -n 's/.*"retention":[ ]*"\([a-z]*\)".*/\1/p' | head -1)
+                if [ -z "$got" ]; then
+                  echo "stream $1: not present yet — creation below will set retention=$want"
+                elif [ "$got" != "$want" ]; then
+                  echo "!! STREAM $1 HAS retention=$got, THE CHART INTENDS $want."
+                  echo "!! A stream is never re-created once it exists, so this cannot self-heal."
+                  echo "!! work-on-a-shared-stream makes per-app durables steal each other's deliveries;"
+                  echo "!! interest empties the stream for the ephemeral replay consumer. Both look like"
+                  echo "!! 'some events did not arrive'."
+                  echo "!! Drain it and run: nats --server $S stream rm $1   then re-run this Job."
+                  exit 1
+                else
+                  echo "stream $1: retention=$got (as intended)"
+                fi
+              }
+              for stream in LINEAGE MEDALLION TRAINING DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
+                assert_retention "$stream" limits
+              done
+              assert_retention INGEST work
+
               add_if_missing LINEAGE "lineage.events.>"
               add_if_missing MEDALLION "medallion.>"
               add_if_missing TRAINING "training.>"

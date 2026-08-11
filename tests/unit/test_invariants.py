@@ -1826,3 +1826,38 @@ def test_every_sidecar_references_the_config_that_carries_retention() -> None:
 
     assert 'dapr.io/config: "lance-tracing"' in rendered, "no sidecar references the retention config"
     assert _lance_tracing_config(rendered) is not None, "the referenced Configuration does not exist — a dangling reference"
+
+
+def test_every_stream_has_its_retention_ASSERTED_not_merely_created() -> None:
+    """§6 Q10 — retention is a fan-out correctness invariant, and creation alone cannot hold it.
+
+    Both creation helpers in the stream Job are `if exists; then skip`, so a stream created ONCE with
+    the wrong retention keeps it forever: the chart is right while the cluster is wrong, and nothing
+    says so. That is not hypothetical — it was measured live on 2026-08-06, when INGEST was running
+    `limits` while `queue.py` was built on `work`.
+
+    What the wrong value costs is why this is a hard failure rather than a log line. `work` on a stream
+    with several per-app durables means the FIRST ack deletes the message, so the apps steal deliveries
+    from each other; `interest` empties the stream whenever no durable is attached, which is the exact
+    state an ephemeral replay consumer depends on not happening. Neither surfaces as an error — both
+    present as "some events did not arrive".
+
+    Asserted on the rendered Job so a stream added without an assertion is caught HERE, not by a
+    cascade that quietly under-runs.
+    """
+    job = _helm_template()
+    marker = "assert_retention"
+
+    assert marker in job, "the stream Job no longer asserts retention — a mis-created stream is undetectable again"
+    # Every stream the Job creates must also be asserted. Parsed from the creation calls so a NEW
+    # stream cannot be added with no assertion and still pass.
+    created = {
+        line.split()[1]
+        for line in job.splitlines()
+        if "_if_missing " in line and not line.strip().startswith("#") and len(line.split()) > 1 and line.split()[1].isupper()
+    }
+    asserted = {line.split()[1] for line in job.splitlines() if line.strip().startswith(f"{marker} ") and len(line.split()) > 1}
+    asserted |= {"LINEAGE", "MEDALLION", "TRAINING", "DLQ", "CATALOG_CONTROL"} if "for stream in LINEAGE" in job else set()
+
+    missing = created - asserted
+    assert not missing, f"these streams are created but their retention is never asserted: {sorted(missing)}"
