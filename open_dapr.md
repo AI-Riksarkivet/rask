@@ -1709,12 +1709,29 @@ enumerated, 10 read against the estate's positions; shallow source, every claim 
     `tracing.samplingRate`, and which is itself gated on `lance.otelEnabled`). So for actor state
     bounded by a reminder there is no TTL backstop underneath the reminder — the durable-looking
     guarantee rests entirely on a store that can be lost independently of the data it bounds.
-12. **Resiliency shape guards, cheap:** (a) `targets.apps.<id>.retry` does NOT govern inbound
-    pub/sub delivery — only `targets.components.<pubsub>.inbound.retry` does; a render assertion
-    should refuse any inbound retry declared under `targets.apps`. (b) Confirm every `dlq.*`
-    handler unconditionally acks (a RETRY from a DLQ handler requeues forever) — ours do today
-    (`dlq.py`, `dapr.py`), pin it. (c) INVESTIGATE (30 min, component source): whether
-    `pubsub.jetstream` honours per-subscription `metadata.deliverPolicy` in `/dapr/subscribe` —
-    if real, the one-component-per-subscriber sprawl collapses to one shared component with
-    per-subscription overrides. While there: decide `maxAckPending`/`flowControl`/`heartbeat`
-    explicitly (we currently ride component defaults).
+12. ~~**Resiliency shape guards, cheap.**~~ **(a) and (b) DONE 2026-08-11; (c) PARTLY ANSWERED.**
+    - **(a) inbound retry must sit on the COMPONENT** — pinned by
+      `test_inbound_retry_is_declared_on_the_COMPONENT_never_on_the_app`. `targets.apps.<id>.retry`
+      governs service invocation OUT of an app; inbound pub/sub delivery is governed only by
+      `targets.components.<pubsub>.inbound.retry`. The two read almost identically in YAML, so a
+      delivery policy under `apps` renders, validates and applies to nothing. Asserted structurally
+      across ALL rendered Resiliency CRs — the estate renders two (one pub/sub, one invocation), and a
+      per-CR assertion fails the invocation one for legitimately having no components.
+    - **(b) every DLQ handler acks unconditionally** — pinned by `tests/unit/test_dlq_handlers_ack.py`,
+      `ast`-parsed rather than driven, plus a gate that a FOURTH handler cannot land unlisted. Keyed on
+      the `@dapr_app.subscribe(... topic=<dlq> ...)` decorator; a text heuristic flagged two files that
+      handle no dead letters, and a gate that cries wolf gets deleted.
+    - **(c) per-subscription `deliverPolicy` — HALF SETTLED, and the half that is settled is the SDK.**
+      `DaprApp.subscribe` takes `metadata: dict[str, str]` and places it on the `/dapr/subscribe`
+      payload (`.venv/.../dapr/ext/fastapi/app.py:90`), so per-subscription overrides ARE expressible.
+      What remains is whether `pubsub.jetstream` READS `deliverPolicy`/`durableName` from the
+      subscription rather than only from the component — components-contrib is not vendored here, so it
+      needs a deploy-cycle experiment: give one subscriber `metadata={"deliverPolicy": "new"}` against a
+      component declaring `all`, then read the created consumer's `deliver_policy` off NATS. If it
+      honours it, **12 `pubsub.jetstream` components collapse to about 2** (measured: 12 rendered today,
+      one per subscriber, differing only in `deliverPolicy`/`durableName`).
+    - **The "while there" knobs are now MEASURED rather than assumed** (live consumer on `LINEAGE`,
+      2026-08-11): `ack_wait=720s` and `max_deliver=3` are set by the chart; **`max_ack_pending=1000`
+      is NATS's own default**, and `idle_heartbeat`/`flow_control` are **unset**. So the estate rides
+      defaults for all three. 1000 unacked in flight is generous for handlers that do object-store work;
+      deciding it explicitly is a small, separate change.

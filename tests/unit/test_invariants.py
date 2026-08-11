@@ -1861,3 +1861,40 @@ def test_every_stream_has_its_retention_ASSERTED_not_merely_created() -> None:
 
     missing = created - asserted
     assert not missing, f"these streams are created but their retention is never asserted: {sorted(missing)}"
+
+
+def test_inbound_retry_is_declared_on_the_COMPONENT_never_on_the_app() -> None:
+    """§6 Q12(a) — the resiliency key that looks right and governs nothing.
+
+    Dapr applies `targets.apps.<id>.retry` to SERVICE INVOCATION *out of* that app. Inbound pub/sub
+    DELIVERY is governed only by `targets.components.<pubsub>.inbound.retry`. The two read almost
+    identically in YAML, and putting a delivery policy under `apps` yields a CR that renders, validates
+    and silently applies nothing to the thing it was written for — the cascade keeps whatever the
+    component default is while the chart claims a policy.
+
+    Asserted structurally on the rendered CR rather than by reading the file, so a future `apps` entry
+    that grows an `inbound` block is caught here.
+    """
+    import yaml as _yaml
+
+    rendered = _helm_template("dapr.resiliency.enabled=true")
+    policies = [d for d in _yaml.safe_load_all(rendered) if d and d.get("kind") == "Resiliency"]
+
+    assert policies, "no Resiliency CR rendered — this gate would pass vacuously"
+
+    # COLLECTIVELY, not per-CR: the estate renders TWO — one for pub/sub (carrying `components`) and one
+    # for service invocation (carrying `apps`). Asserting both properties of every CR fails the
+    # invocation one for legitimately having no components, which is what the first version of this test
+    # did.
+    inbound_components: list[str] = []
+    for cr in policies:
+        targets = (cr.get("spec") or {}).get("targets") or {}
+        for app_id, block in (targets.get("apps") or {}).items():
+            assert "inbound" not in block, (
+                f"targets.apps.{app_id} declares an `inbound` block. Inbound pub/sub delivery is governed "
+                f"ONLY by targets.components.<pubsub>.inbound — this policy renders, validates, and applies "
+                f"to nothing."
+            )
+        inbound_components += [name for name, block in (targets.get("components") or {}).items() if "inbound" in block]
+
+    assert inbound_components, "no component anywhere declares an `inbound` policy — pub/sub delivery is ungoverned"
