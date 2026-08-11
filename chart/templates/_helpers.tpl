@@ -155,8 +155,12 @@ app.kubernetes.io/component: {{ $component }}
          `dapr-api-token` on delivered requests → sidecar-only routes reject forged direct POSTs
        - the daprd resource bounds + disable-builtin-k8s-secret-store (+ optional seccomp) via
          lance.daprSidecarResources
-       - dapr.io/config: lance-tracing — gated on lance.otelEnabled EXACTLY like the app containers' OTel
-         wiring (observability.enabled OR externalOtlpEndpoint), so sidecar traces flip with the apps'.
+       - dapr.io/config: lance-tracing — UNCONDITIONAL. It was gated on lance.otelEnabled, which was
+         right while that Configuration held only tracing and wrong the moment it also held the
+         workflow state-retention policy: turning telemetry off silently turned retention off with it,
+         and workflow history is then kept forever. The object now always renders (the tracing STANZA
+         inside it is what carries the otel gate), so this reference cannot dangle — which is the
+         property the old gate existed to protect.
      Usage: {{- include "rask.daprAnnotations" (list $root $appId $appPort) | nindent 8 }} */}}
 {{/* ---------------------------------------------------------------------------------------------
      DAPR SIDECAR INJECTION — the second `helm install --wait` ordering defect (2026-07-28).
@@ -201,9 +205,7 @@ dapr.io/max-body-size: {{ . | quote }}
 {{- end }}
 dapr.io/app-token-secret: {{ $root.Release.Name }}-dapr-app-token
 {{- include "lance.daprSidecarResources" $root | nindent 0 }}
-{{- if include "lance.otelEnabled" $root }}
 dapr.io/config: "lance-tracing"
-{{- end }}
 {{- end }}
 {{- end -}}
 

@@ -15,23 +15,62 @@ stringData:
   GREPTIMEDB_STANDALONE__STORAGE__SECRET_ACCESS_KEY: {{ .Values.rustfs.secretKey | quote }}
 {{- end }}
 ---
-{{- if and .Values.dapr.enabled (include "lance.otelEnabled" .) }}
-# Dapr tracing Configuration — sidecars annotated with dapr.io/config: lance-tracing. There is NO otel
-# exporter here (mirrors rask: the apps export OTLP to the OTel Collector, which forwards to GreptimeDB;
-# Dapr's own sidecar spans can't
-# carry GreptimeDB's required db-name/pipeline headers). samplingRate "1" keeps Dapr sampling every
-# request so the W3C trace context always propagates across the pub/sub boundary — which is what makes
-# the app-level distributed trace span catalog → (Dapr/NATS) → lineage end to end. Gated on otelEnabled,
-# NOT observability.enabled: the app pods that reference this config also render when telemetry ships to an
-# external collector (externalOtlpEndpoint), so a dangling dapr.io/config reference must not happen.
+{{- if .Values.dapr.enabled }}
+# THE SIDECAR Configuration. Named for tracing because that is all it carried when it was written; it
+# now also carries the workflow state-retention policy, and it renders whether or not telemetry ships.
+#
+# **Why it is no longer gated on otelEnabled.** A sidecar may reference exactly ONE `dapr.io/config`,
+# so everything configured per-sidecar has to live in one object. While this was gated, turning
+# telemetry off also took the workflow retention policy with it — and retention is a durability
+# concern, not an observability one. The gate now lives on the tracing STANZA, which is the thing
+# that is actually about telemetry, and the annotation in `rask.daprAnnotations` is unconditional to
+# match. That direction is safe: the guard the old comment protected was against a DANGLING
+# `dapr.io/config` reference, and a Configuration that always exists cannot dangle.
+#
+# WORKFLOW STATE RETENTION — the thing nothing collected. Workflow history is append-only and
+# `stateRetentionPolicy` is the only lever that removes it: the CRD says "If not set, workflow
+# instances will not be automatically purged", and nothing else in this estate purges them. Measured
+# on the live cluster 2026-08-10 before this landed: 1367 rows in `daprstate` for
+# `dapr.internal.default.ingest.workflow`, `count(expiredate) = 0`, oldest row 2026-08-03 — i.e.
+# every instance since the plane's first deploy, retained forever, with no TTL, no sweep and no alert.
+#
+# Per-terminal-state rather than `anyTerminal`, because the states are not worth the same. A COMPLETED
+# run's history is the least interesting thing in the estate once its lineage event has landed —
+# lineage IS the durable record (docs/DECISIONS.md), so this is a cache of a fact stored elsewhere. A
+# FAILED or TERMINATED run's history is the post-mortem, and is kept several times longer, because the
+# question it answers ("why did this run die") is asked days later.
+#
+# There is deliberately NO application-side purge to go with this. `DaprWorkflowClient` exposes
+# `purge_workflow(instance_id)` but NO list-instances API, and the one index that could drive a sweep
+# — `InMemoryRunStore` — is documented as "deliberately NOT durable", so after a restart it cannot
+# name the instances that need collecting while their history persists. A sweep built on it would
+# collect only what happened since the last pod start. This policy is enforced by the scheduler and
+# needs no such index.
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
 metadata:
   name: lance-tracing
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
+{{- if include "lance.otelEnabled" . }}
+  # There is NO otel exporter here (mirrors rask: the apps export OTLP to the OTel Collector, which
+  # forwards to GreptimeDB; Dapr's own sidecar spans can't carry GreptimeDB's required
+  # db-name/pipeline headers). samplingRate "1" keeps Dapr sampling every request so the W3C trace
+  # context always propagates across the pub/sub boundary — which is what makes the app-level
+  # distributed trace span catalog → (Dapr/NATS) → lineage end to end. Gated on otelEnabled, NOT
+  # observability.enabled: telemetry also ships to an external collector (externalOtlpEndpoint).
   tracing:
     samplingRate: {{ .Values.observability.samplingRate | quote }}
+{{- end }}
+{{- with .Values.dapr.workflowRetention }}
+{{- if .enabled }}
+  workflow:
+    stateRetentionPolicy:
+      completed: {{ .completed | quote }}
+      failed: {{ .failed | quote }}
+      terminated: {{ .terminated | quote }}
+{{- end }}
+{{- end }}
 {{- end }}
 ---
 # RETIRED (gateway fold): the observability edge-auth Secret backed the nginx gateway's public

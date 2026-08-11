@@ -22,6 +22,7 @@ import json
 import pathlib
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -1759,3 +1760,69 @@ def test_the_notifications_reconciler_is_admitted_to_the_lineage_service_door() 
 
     assert claimed, "the notifications service declares no RASK_LINEAGE_SERVICE_IDENTITY — its reconciler cannot reach the feed"
     assert claimed in subjects, f"lineage admits {subjects} but notifications claims {claimed!r} — every reconcile tick would 401"
+
+
+def _lance_tracing_config(rendered: str) -> dict[str, Any] | None:
+    """The one Dapr `Configuration` every sidecar references, or None if it did not render."""
+    for doc in yaml.safe_load_all(rendered):
+        if doc and doc.get("kind") == "Configuration" and doc.get("metadata", {}).get("name") == "lance-tracing":
+            spec: dict[str, Any] = doc.get("spec") or {}
+            return spec
+    return None
+
+
+def _retention_policy(spec: dict[str, Any]) -> dict[str, Any]:
+    """The retention stanza, or an empty mapping. Narrowed rather than `or {}`-chained: the render is
+    untyped YAML, so a `workflow` key holding something that is not a mapping must read as ABSENT here
+    rather than raise an AttributeError that looks like a chart bug."""
+    workflow = spec.get("workflow")
+    if not isinstance(workflow, dict):
+        return {}
+    policy = workflow.get("stateRetentionPolicy")
+    return policy if isinstance(policy, dict) else {}
+
+
+def test_workflow_history_has_a_retention_policy() -> None:
+    """Workflow history is append-only, and `stateRetentionPolicy` is the ONLY thing that collects it.
+
+    Dapr's own CRD: "If not set, workflow instances will not be automatically purged." Nothing else in
+    this estate purges them and nothing can — `DaprWorkflowClient` exposes `purge_workflow(id)` but no
+    list-instances API, and `InMemoryRunStore` is documented as "deliberately NOT durable", so a sweep
+    built on it would collect only what happened since the last pod start.
+
+    Measured live 2026-08-10 before this landed: 1367 rows in `daprstate` for
+    `dapr.internal.default.ingest.workflow`, `count(expiredate) = 0`, oldest row 2026-08-03 — every
+    instance since the plane's first deploy, retained forever.
+    """
+    spec = _lance_tracing_config(_helm_template())
+
+    assert spec is not None, "the Configuration every sidecar references did not render"
+    policy = _retention_policy(spec)
+    assert policy, "workflow history has no retention policy — it is retained forever"
+    assert policy.get("completed"), "a COMPLETED run's history is never collected"
+    assert policy.get("failed"), "a FAILED run's history is never collected"
+
+
+def test_retention_does_not_disappear_when_telemetry_is_off() -> None:
+    """THE REGRESSION THIS GUARDS, and it is the reason the Configuration is no longer otel-gated.
+
+    A sidecar may reference exactly ONE `dapr.io/config`, so everything per-sidecar lives in one
+    object — and that object used to render only when `lance.otelEnabled`. Retention is a DURABILITY
+    concern, so hanging it there meant turning telemetry off silently returned the estate to unbounded
+    workflow history. The gate now sits on the tracing stanza, which is the part that is about
+    telemetry.
+    """
+    spec = _lance_tracing_config(_helm_template("observability.enabled=false"))
+
+    assert spec is not None, "the Configuration vanished with telemetry — every sidecar's config reference now dangles"
+    assert _retention_policy(spec), "retention was lost with telemetry"
+    assert "tracing" not in spec, "tracing must still drop out when telemetry is off"
+
+
+def test_every_sidecar_references_the_config_that_carries_retention() -> None:
+    """A policy on an object nothing references governs nothing. Asserted with telemetry OFF, because
+    that is the configuration in which the reference used to be omitted."""
+    rendered = _helm_template("observability.enabled=false")
+
+    assert 'dapr.io/config: "lance-tracing"' in rendered, "no sidecar references the retention config"
+    assert _lance_tracing_config(rendered) is not None, "the referenced Configuration does not exist — a dangling reference"

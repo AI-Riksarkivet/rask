@@ -1453,6 +1453,32 @@ nats:
 # --- Dapr control plane (subchart) — injects the daprd sidecar into annotated pods ----------------
 dapr:
   enabled: true
+  # WORKFLOW STATE RETENTION — the only thing that collects workflow history.
+  #
+  # Dapr's own CRD: "If not set, workflow instances will not be automatically purged." Nothing else
+  # in this estate purges them, and nothing can: `DaprWorkflowClient` has `purge_workflow(id)` but no
+  # list-instances API, and the only index that could name the instances — `InMemoryRunStore` — is
+  # documented as "deliberately NOT durable", so a sweep built on it would collect only what happened
+  # since the last pod start. Measured live 2026-08-10, before this landed: 1367 rows in `daprstate`
+  # for `dapr.internal.default.ingest.workflow`, `count(expiredate) = 0`, oldest 2026-08-03 — every
+  # instance since the plane's first deploy, on a store with no TTL, no sweep and no alert.
+  #
+  # PER-TERMINAL-STATE, because the states are not worth the same:
+  #   · `completed` — short. A successful run's history is a cache of a fact stored durably elsewhere:
+  #     the lineage event IS the record (docs/DECISIONS.md), so once it has landed the history answers
+  #     nothing lineage does not. 7 days is a comfortable margin over the reconciler's own windows.
+  #   · `failed` / `terminated` — long. This is the post-mortem, and "why did that run die" is a
+  #     question asked days later, usually after someone notices downstream. 30 days.
+  # `anyTerminal` is deliberately unset: setting it alongside these would be a second, blunter rule
+  # governing the same objects.
+  #
+  # Turning this off returns the estate to unbounded growth — it is a flag so a deployment that wants
+  # forensic retention can opt out knowingly, not so it can be forgotten.
+  workflowRetention:
+    enabled: true
+    completed: "168h"
+    failed: "720h"
+    terminated: "720h"
   # Memory bound (#139) — see the note under `openfga.resources`. Five control-plane components, all
   # controller loops rather than data paths, so all sized as controllers. The sidecar injector's
   # `resources` here bound the INJECTOR itself; per-app daprd sidecar sizing is a separate concern
