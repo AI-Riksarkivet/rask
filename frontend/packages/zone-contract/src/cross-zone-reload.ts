@@ -37,7 +37,7 @@ const ZONE_PATH = new RegExp(`^\\/(${ZONES.join('|')})(?:\\/|$)`);
  * direction (these are the home zone, so a link to them FROM home stays soft). Two lists because the
  * gate cannot import the shell; a divergence surfaces as a failure here rather than as silence.
  */
-const HOME_ROUTES = ['projects', 'settings'];
+const HOME_ROUTES = ['projects', 'settings', 'preferences'];
 
 const HOME_PATH = new RegExp(`^\\/(${HOME_ROUTES.join('|')})(?:\\/|$)`);
 

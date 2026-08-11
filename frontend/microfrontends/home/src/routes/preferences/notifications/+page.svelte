@@ -13,11 +13,15 @@
 	// `GET|PUT /prefs` and S4's `/watches`). The bell tells you what happened; this decides whether
 	// anything ALSO reaches you when the tab is shut.
 	//
-	// THE ROUTE IS UNDER AN ESTATE-ADMIN DOOR AND THESE PREFERENCES ARE NOT ESTATE-SCOPED. The
-	// `/settings/**` layout load 404s any non-admin, and channel prefs + project watches are per
-	// SUBJECT — so on a governed stack this page is reachable by admins alone while the feature it
-	// configures belongs to everyone. Recorded here rather than worked around: moving it is an IA
-	// decision (the main menu's shape), not a thing to solve with a second guard.
+	// WHY `/preferences` AND NOT `/settings`. It shipped under `/settings/notifications` for one
+	// commit and that was wrong: `settings/+layout.server.ts` 404s any non-admin — deliberately, and
+	// as a LAYOUT load so the door cannot be forgotten per child — while channel prefs and project
+	// watches are per SUBJECT. The feature belongs to everyone and the door admitted almost nobody.
+	//
+	// Relaxing the guard for one child was the other option and it is the worse one: that file's own
+	// comment is that a door which has to be remembered per child is a door that will be forgotten.
+	// So the page moved instead. `/settings` keeps only what configures the INSTALLATION; anything
+	// scoped to you lives here and is reached from the account menu, which every signed-in user has.
 	//
 	// WHAT IS DELIBERATELY NOT HERE: the SMTP host, the Slack webhook and their credentials. Those are
 	// Dapr Component config, and the settings index already states the rule for that class — secrets

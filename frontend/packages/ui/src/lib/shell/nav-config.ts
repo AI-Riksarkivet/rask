@@ -663,7 +663,7 @@ const SETTINGS_ENTRY: TopNavEntry = {
  * because the gate cannot import the shell, and both are one line — a divergence shows up as a
  * cross-zone test failure rather than as silence.
  */
-export const HOME_ROUTES = ['projects', 'settings'];
+export const HOME_ROUTES = ['projects', 'settings', 'preferences'];
 
 /** The owning ZONE of a path ('' = the home zone, which serves the origin root and `HOME_ROUTES`).
  *  A link whose zone differs from the current pathname's leaves this app's route manifest, so it

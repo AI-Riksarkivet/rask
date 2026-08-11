@@ -1,14 +1,7 @@
 <script lang="ts">
 	import { Badge } from '@rask/ui/badge';
 	import { Card } from '@rask/ui/card';
-	import {
-		Bell,
-		FolderKanban,
-		KeyRound,
-		ScrollText,
-		SlidersHorizontal,
-		Users,
-	} from '@lucide/svelte';
+	import { FolderKanban, KeyRound, ScrollText, SlidersHorizontal, Users } from '@lucide/svelte';
 	import type { PageData } from './$types';
 
 	// SETTINGS — the PLATFORM level: what configures the whole installation, as opposed to what any one
@@ -27,8 +20,9 @@
 	//     keeps only its PER-OBJECT grants plane (the access tab on one table or namespace), which is a
 	//     different question at a different level.
 	//
-	//   · NOTIFICATIONS, NEW-PROJECT DEFAULTS and CREDENTIALS are named but NOT built, and say which
-	//     missing thing blocks each. They are deliberately not controls at all — no toggle, no field,
+	//   · NEW-PROJECT DEFAULTS and CREDENTIALS are named but NOT built, and say which
+	//     missing thing blocks each. (NOTIFICATIONS left this page entirely: it is per-SUBJECT, so it
+	//     lives at `/preferences/notifications`, outside this route's estate-admin door.) They are deliberately not controls at all — no toggle, no field,
 	//     nothing to click — because a settings form that silently discards what you type is worse
 	//     than one that admits it does not exist yet.
 	let { data }: { data: PageData } = $props();
@@ -117,28 +111,6 @@
 				ScrollText,
 				'Audit',
 				'The platform trail — what was done, by whom, and whether it was allowed.',
-			)}
-		</a>
-	</section>
-
-	<section class="flex flex-col gap-2" aria-labelledby="settings-notifications">
-		<h2
-			id="settings-notifications"
-			class="text-muted-foreground text-xs font-semibold tracking-wide uppercase"
-		>
-			Notifications
-		</h2>
-		<p class="text-muted-foreground text-xs">
-			Per-SUBJECT, unlike everything above it — these are your channels and your watches, not the
-			platform's. It sits here because this is where the main menu puts configuration; note that this
-			whole section is estate-admin gated, so a non-admin cannot currently reach their own preferences.
-			Moving it is an IA decision, not a second guard.
-		</p>
-		<a href="/settings/notifications" class={PLATFORM_ROW}>
-			{@render platformRow(
-				Bell,
-				'Notifications',
-				'Email and Slack delivery, digest batching, and the projects you watch.',
 			)}
 		</a>
 	</section>

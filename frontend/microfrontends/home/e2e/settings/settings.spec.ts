@@ -45,7 +45,6 @@ test('an estate admin gets Settings in the bar, and the page carries the estateâ
 		['Users & roles', '/settings/access'],
 		['Projects', '/projects'],
 		['Audit', '/settings/audit'],
-		['Notifications', '/settings/notifications'],
 	] as const) {
 		const link = rows(page).getByRole('link', { name: new RegExp(`^${name}`) });
 		await expect(link).toHaveAttribute('href', href);

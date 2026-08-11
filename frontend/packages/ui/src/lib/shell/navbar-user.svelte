@@ -67,9 +67,18 @@
 			<Moon class="hidden size-4 dark:block" />
 			Toggle theme
 		</DropdownMenu.Item>
-		<DropdownMenu.Item disabled>
-			<Settings class="size-4" />
-			Settings (soon)
+		<!-- The account menu is where PER-SUBJECT configuration belongs, which is why this row stopped
+		     being `disabled` and started going somewhere. It was "Settings (soon)" — a dead control, the
+		     shape this estate refuses everywhere else — while the notification preferences it should
+		     have pointed at sat behind `/settings`'s estate-admin door, reachable by almost nobody.
+		     `/preferences` is a home-zone route, so this is CROSS-ZONE from all six other zones and
+		     carries `data-sveltekit-reload`: without it SvelteKit soft-navigates into a route the
+		     current zone does not own and 404s. `HOME_ROUTES` is what teaches `zoneOf` that. -->
+		<DropdownMenu.Item>
+			<a href="/preferences" data-sveltekit-reload class="flex w-full items-center gap-2">
+				<Settings class="size-4" />
+				Preferences
+			</a>
 		</DropdownMenu.Item>
 		{#if authEnabled}
 			<DropdownMenu.Separator />

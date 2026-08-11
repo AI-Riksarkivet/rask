@@ -90,7 +90,6 @@ test('no settings row leaves the estate — every one is served by this app', as
 		'/projects',
 		'/settings/access',
 		'/settings/audit',
-		'/settings/notifications',
 	]);
 	expect(links.filter((l) => ZONE_BASES.includes(l.href.split('/')[1] ?? ''))).toEqual([]);
 
