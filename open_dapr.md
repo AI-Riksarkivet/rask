@@ -1393,6 +1393,58 @@ survives every failure, the per-tick cap bounds the blast radius (`purge.py:481`
 off** (`chart/values.yaml:862`, `trashPurge: false`). So not now — but this is the piece to reopen,
 and it is a bounded per-record child workflow, not a whole-estate sweep.
 
+
+### 4.1 The `purge_expired_trash` revisit — asked for by §4, done 2026-08-11
+
+**Verdict: still not now, and the reopen condition is now precise rather than "later".**
+
+Every premise §4 rested on holds at HEAD: it still ships OFF (`chart/values.yaml:957`,
+`trashPurge: false`), the per-tick cap is still 25 (`:960`), the ordered sequence is still
+revoke → delete → clear → announce (`purge.py:14-25`), and the half-applied comment is verbatim
+(`purge.py:397`). With the feature disabled there is no live defect, so adopting an engine for it now
+would be paying for a path nothing takes.
+
+**One argument is sharper than §4 stated, and it is the reopen trigger.** §4 said a half-applied record
+"depends on the next cron tick happening at all". The real dependency is worse: the retry depends on the
+next tick passing `report_is_clean` (`purge.py:172`), **a gate that may never be satisfiable again**. So a
+record whose bytes are deleted and grants revoked but whose trash record could not be cleared is not
+merely delayed — it can be stranded indefinitely, in a half-applied destructive state, with the estate
+reporting nothing wrong.
+
+That is a genuine durable-resumption case and it is what a workflow buys. It is NOT a compensation/saga
+case, and the distinction matters for anyone implementing it: the steps are deliberately ordered so a
+failure leaves a RECOVERABLE state (the record survives every failure above it), so the shape is
+idempotent-retry-to-completion, not forward-then-undo.
+
+**Reopen the day `trashPurge` is enabled** — a bounded per-record CHILD workflow, one instance per trash
+record, not a whole-estate sweep. Until then this is correctly a no.
+
+### 4.2 A version-safety hazard introduced by §2.4's own fix — filed 2026-08-11
+
+**Self-reported, and it is the same class the determinism review flagged for `resolve_limits`.**
+
+§2.4's fix inserts `terminate_chunks` immediately BEFORE `emit_terminal` on both abandonment paths
+(`workflow.py:552-554` deadline, `:617-618` error boundary). Dapr replays a workflow against its recorded
+history and raises `_get_wrong_action_name_error` when the code produces a different action than history
+holds at that position — **raised inside `process_event`, outside the generator, so the error boundary
+cannot catch it**. The instance goes terminal FAILED.
+
+**Reachability, stated honestly:** a run must have been mid-abandonment (the deadline fired, or the
+boundary entered) AND still replaying across the deploy. `emit_terminal` carries `ACTIVITY_RETRY`
+(4 attempts, 5s→40s backoff), so that window is real rather than theoretical, but it is narrow — a run
+that has not reached an abandonment path is unaffected, and that is almost all of them.
+
+**Why it is filed rather than fixed:** the estate has NO versioning seam. `is_patched`,
+`continue_as_new` and named workflow versions appear nowhere in `services/` or `packages/`, though the
+SDK exposes them — verified by the determinism pass. Dapr's own guidance is to patch or introduce a new
+named version; neither is expressible here today. The options are therefore: drain in-flight runs before
+deploying this change, accept the narrow window (a terminal FAILED is visible, not silent), or build the
+versioning seam.
+
+**The general lesson, which outlives this instance:** any change to the NUMBER or ORDER of activities in
+a live workflow is a deploy-coupled change in this estate, and nothing warns about it. That gap is worth
+closing before the medallion cascade adds a second workflow host.
+
 ---
 
 ## 5. Dapr Workflow over Ray jobs
