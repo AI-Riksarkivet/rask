@@ -25,20 +25,30 @@
  *   - Dex reachable, with the static users `alice` and `bob`.
  *   - The ingress (or a port-forward) on ORIGIN.
  *
+ * WHY IT LIVES IN `tests/e2e` AND NOT `scripts/`. It imports `@playwright/test`, and ESM resolves a
+ * bare specifier relative to the SCRIPT, not the working directory — so the same file under
+ * `scripts/` cannot see the only install of it in this repo (`tests/e2e/node_modules`) no matter
+ * where it is invoked from. `tests/e2e` is also where it belongs on its own terms: the standalone
+ * Playwright project with its own lockfile, whose whole purpose is driving a RUNNING deploy.
+ *
  * RUN
- *   ORIGIN=http://localhost:8090 node scripts/verify_notifications_two_users.mjs
+ *   kubectl port-forward -n kube-system svc/traefik 8080:80 &
+ *   cd tests/e2e && node verify_notifications_two_users.mjs
  */
 import { chromium } from '@playwright/test';
 
-const ORIGIN = process.env.ORIGIN ?? 'http://localhost:8090';
-const DEX_HOST = process.env.DEX_HOST ?? 'rask-dex:5556';
+// 8080, not 8090, and NOT a separate Dex host — both are facts about this deployment, read from it
+// rather than assumed: `rask-web-home` carries `OIDC_ISSUER=http://localhost:8080/dex` and
+// `OIDC_REDIRECT_URI=http://localhost:8080/auth/callback`, and the ingress routes `/dex` to
+// `rask-dex` alongside `/` to the home zone. So ONE origin serves the estate and its issuer, and the
+// `--host-resolver-rules` mapping the older drives need (their Dex was a separate host the browser
+// could not resolve) is unnecessary here and would silently misdirect the token exchange.
+//
+//   kubectl port-forward -n kube-system svc/traefik 8080:80
+const ORIGIN = process.env.ORIGIN ?? 'http://localhost:8080';
 const SHOT = process.env.SHOT_DIR ?? '/tmp/rask-notifications-drive';
 
-// The issuer-derived authorize URL is not resolvable from the host, so chromium is taught the map.
-// Tokens keep `iss=http://<dex>/dex`, which is what the services verify against.
-const browser = await chromium.launch({
-	args: [`--host-resolver-rules=MAP ${DEX_HOST} 127.0.0.1:5556`],
-});
+const browser = await chromium.launch();
 
 let failures = 0;
 const check = (label, ok, detail = '') => {
