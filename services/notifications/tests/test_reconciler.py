@@ -430,6 +430,33 @@ def _slow_ingest(seconds: float, status: dict[str, str] | None = None) -> Callab
     return _ingest
 
 
+def _ingest_fast_then_stalling(fast_calls: int, stall_seconds: float, status: dict[str, str] | None = None) -> Callable[..., Awaitable[dict[str, str]]]:
+    """An ingest that is FREE for `fast_calls`, then stalls — so an over-budget walk is deterministic.
+
+    The budget test used to be a wall-clock race: every ingest cost 0.03s and the budget was 0.1s, so
+    the pass had to fit a whole 2-row page (0.06s) into 0.1s to park anything at all. That is 40ms of
+    slack for the HTTP mock, the parking write and event-loop scheduling — fine on an idle machine,
+    and it failed in the full suite where the CPU is contended. The failure looked like the product
+    bug the test exists to catch ("an over-budget walk recorded nothing"), which is the worst way for
+    a flake to present.
+
+    Making the numbers bigger would only move the race. Instead the two things the test needs are made
+    INDEPENDENT of load: the first page's ingests cost nothing, so a page always completes and is
+    always parked; the next one stalls for far longer than any budget, so the timeout always fires.
+    Neither outcome depends on how fast the machine is.
+    """
+    calls = 0
+
+    async def _ingest(*args: object, **kwargs: object) -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        if calls > fast_calls:
+            await asyncio.sleep(stall_seconds)
+        return status if status is not None else DAPR_SUCCESS
+
+    return _ingest
+
+
 def _descending_pages(top: int, per_page: int, pages: int) -> list[httpx.Response]:
     """`pages` responses walking down from `top`, each carrying `per_page` rows."""
     responses = []
@@ -445,13 +472,16 @@ def _descending_pages(top: int, per_page: int, pages: int) -> list[httpx.Respons
 @respx.mock
 async def test_a_walk_cut_off_by_the_budget_parks_where_it_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
     """The regression: an over-budget pass used to record NOTHING and restart from the top forever."""
-    monkeypatch.setattr("notifications.api.reconciler.ingest_run_event", _slow_ingest(0.03))
+    # Exactly one 2-row page runs for free, so a page is ALWAYS completed and parked; the next ingest
+    # stalls for 30s against a 0.5s budget, so the timeout ALWAYS fires. Neither half is a race, which
+    # is what this test needs and what its wall-clock version did not have.
+    monkeypatch.setattr("notifications.api.reconciler.ingest_run_event", _ingest_fast_then_stalling(fast_calls=2, stall_seconds=30))
     respx.get(f"{LINEAGE}/events").mock(side_effect=_descending_pages(top=1000, per_page=2, pages=20))
     plane = _Plane()
     store, memory = _store(1)
 
     with pytest.raises(LineageFeedBudgetExceeded):
-        await reconcile(client=_feed_client(page_limit=2), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=20, budget_seconds=0.1)
+        await reconcile(client=_feed_client(page_limit=2), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=20, budget_seconds=0.5)
 
     assert memory.records, "an over-budget walk recorded nothing — the backlog could never be drained"
     seq, resume_from, pending_high = memory.records[-1]

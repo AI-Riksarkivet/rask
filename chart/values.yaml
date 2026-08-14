@@ -1127,6 +1127,24 @@ stateStore:
     # window open for its other passengers (the lance-ray rename, the Dapr Configuration/ActorStateTTL
     # decision, the state.postgresql v1→v2 move); ride them together or not at all.
     - notifications
+    # ── `medallion` needs STATE for S1's stage watcher. ──────────────────────────────────────────────
+    # The Ray lane's `stage_run` (`medallion/workflow.py`) waits for a submitted Ray job to reach a
+    # terminal state on a DURABLE timer, which is Dapr Workflow, which runs on the ACTOR runtime — so
+    # without this scope the sidecar cannot load `lance-statestore` and `schedule_new_workflow` fails
+    # with "the state store is not configured to use the actor runtime", naming a component that
+    # declares `actorStateStore: "true"` and is simply invisible to this app-id. Same failure `flows`
+    # and `ingest` each hit live; the scope is the whole difference.
+    #
+    # SAME COORDINATED-ROLLOUT RULE as `notifications` above: daprd refuses to hot-reload an actor
+    # state store, so a running mover pod keeps the OLD scope list until it restarts. A mover deployed
+    # before this component change must be `kubectl rollout restart`ed, or it will dispatch into a
+    # workflow engine it cannot reach — and because the dispatch seam logs a re-attach on ANY schedule
+    # error, that failure would read as "already running" rather than as the outage it is.
+    #
+    # The mover only starts its workflow runtime when `ray.enabled` is on (mover.py lifespan), so a
+    # chart with the Ray lane off scopes a component it never loads — harmless, and simpler than making
+    # the scope itself conditional on a compute toggle.
+    - medallion
 
 # --- Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
 # managed/operator path (CloudNativePG for AGE, rustfs-operator for S3 — the rask deployment), DISABLE these

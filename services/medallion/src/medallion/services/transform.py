@@ -38,8 +38,7 @@ from medallion.services import htr_stage
 from medallion.services.compute import measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.promotion import promotion_lineage
-from medallion.services.ray_submit import submit_stage_job
-from medallion.services.trigger_guards import parse_stage_trigger, uri_within
+from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, uri_within
 from service_kit import dapr_publish
 from service_kit.governed import fga
 from service_kit.lakehouse import outbox
@@ -73,6 +72,74 @@ _DROP = {"status": "DROP"}
 # promote — DROP so Dapr doesn't redeliver (the data is deterministically bad; no DLQ is configured,
 # so the drop is final — the failed run in the lineage graph is the audit trail).
 _QUALITY_BLOCKED = {"status": "DROP"}
+
+
+def _dispatch_stage_workflow(
+    settings: MedallionSettings,
+    *,
+    from_uri: str,
+    to_uri: str,
+    token: str | None,
+    lineage_json: str,
+    trigger: StageTrigger,
+) -> str:
+    """Schedule `stage_run` for this trigger and return its instance id (S1).
+
+    A SEAM over `DaprWorkflowClient`, the same reason ingest has one: a test must be able to assert
+    that the ray branch DISPATCHES rather than measures, and it cannot stand up a sidecar to do it.
+
+    The instance id is deterministic in the work — `stage_submission_id` already hashes `from->to`
+    with the token — so a redelivered trigger re-attaches to the running instance instead of starting
+    a second watcher over the same job. Dapr answers a duplicate `schedule_new_workflow` for a live
+    instance with an error, which is why that is caught and reported as the re-attach it is: the first
+    instance is still watching, and that is the correct outcome, not a failure to dispatch.
+    """
+    import dapr.ext.workflow as wf
+
+    from medallion.services.ray_submit import stage_submission_id
+    from medallion.workflow import StageJobSpec, stage_run
+
+    stage = settings.to_namespace
+    instance_id = f"stage-{stage_submission_id(stage, token, from_uri, to_uri)}"
+    spec = StageJobSpec(
+        from_uri=from_uri,
+        to_uri=to_uri,
+        stage=stage,
+        token=token,
+        lineage_json=lineage_json,
+        trigger=trigger.model_dump(),
+    )
+    client = wf.DaprWorkflowClient()
+    try:
+        client.schedule_new_workflow(workflow=stage_run, input=spec.model_dump(), instance_id=instance_id)
+    except Exception:
+        # A schedule failure is TWO different events wearing one exception, and they need opposite
+        # answers. "This instance already exists" means a watcher is already on this exact job and the
+        # trigger is fully handled — acking is right. Anything else (no sidecar, state store not
+        # scoped, engine down) means NOTHING is watching, and swallowing it would ack a trigger whose
+        # work never starts: the job is submitted by the workflow, so no workflow means no job at all.
+        #
+        # So the existence of the instance is CHECKED rather than assumed. An unscoped state store is
+        # the likeliest form of the second case (values.yaml scopes `medallion` for exactly this, and
+        # daprd cannot hot-reload an actor state store), and it is precisely the one a blanket swallow
+        # would render as a silent success on every delivery.
+        if not _stage_workflow_exists(client, instance_id):
+            raise
+        log.info("medallion_stage_workflow_reattach", extra={"instance_id": instance_id})
+    return instance_id
+
+
+def _stage_workflow_exists(client: Any, instance_id: str) -> bool:
+    """Whether `instance_id` names a workflow the engine knows about.
+
+    Read through a helper so the failure to ANSWER is not read as "absent": if the state lookup itself
+    raises, the engine is unreachable, which is the case that must RETRY — returning False there sends
+    the caller down the re-raise path, which is the answer we want for an unreachable engine too.
+    """
+    try:
+        return client.get_workflow_state(instance_id) is not None
+    except Exception:
+        return False
 
 
 async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any, *, fga_client: OpenFgaClient | None = None) -> dict[str, str]:
@@ -324,20 +391,44 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                             catalog_token=settings.catalog_token,
                             delimiter=settings.delimiter,
                         )
-                    elif use_ray:
-                        # EVENT-DRIVEN real-Ray: submit the stage transform to the Ray cluster IN RESPONSE
-                        # TO this trigger (`ray job submit` via the Ray Jobs REST API), then measure the
-                        # written dataset so the lineage emit matches the in-process path. A job
-                        # failure/timeout raises → the except below RETRYs and the sidecar redelivers.
+                    elif use_ray and not trigger.ray_job_done:
+                        # S1 — DISPATCH, and return. This branch used to submit and then measure on the
+                        # very next line, which is the defect `medallion.workflow` exists to close:
+                        # `submit_stage_job` returns the instant Ray ACCEPTS the submission, so the
+                        # measure opened the destination before the job had written it. When the
+                        # destination survived from a prior run that measure SUCCEEDED, and the run
+                        # emitted a COMPLETE stamped with a version and row count this job never
+                        # produced, then fired the next tier off it — with nothing red anywhere.
+                        #
+                        # The waiting now lives in a workflow: it submits, polls to a terminal state on
+                        # a DURABLE timer, and only on SUCCEEDED re-publishes this trigger with
+                        # `ray_job_done`, which re-enters this handler through the `elif` below. The
+                        # handler still acks in milliseconds, so A13's objection — a poll holding an ack
+                        # across the job's runtime until the redelivery window is exhausted — does not
+                        # apply to it.
                         span.set_attribute("lance.medallion.compute", "ray")
-                        await submit_stage_job(
+                        span.set_attribute("lance.medallion.ray_phase", "dispatched")
+                        instance_id = _dispatch_stage_workflow(
                             settings,
                             from_uri=from_uri,
                             to_uri=to_uri,
-                            stage=settings.to_namespace,
-                            token=token,  # deterministic submission id → redelivery re-attaches (idempotent)
-                            lineage_json=lineage_doc.to_json(),  # the job stamps it in ITS commit (R26)
+                            token=token,
+                            lineage_json=lineage_doc.to_json(),
+                            trigger=trigger,
                         )
+                        log.info(
+                            "medallion_stage_dispatched_to_workflow",
+                            extra={"transition": transition, "instance_id": instance_id, "to_uri": to_uri},
+                        )
+                        return _SUCCESS
+                    elif use_ray:
+                        # The job is TERMINAL-OK — the workflow read SUCCEEDED before re-publishing — so
+                        # the destination exists and measuring it is now a question about this run's
+                        # output rather than a race with it.
+                        span.set_attribute("lance.medallion.compute", "ray")
+                        span.set_attribute("lance.medallion.ray_phase", "completed")
+                        if trigger.ray_submission_id:
+                            span.set_attribute("lance.medallion.ray_submission_id", trigger.ray_submission_id)
                         # measure_stage, not a bare measure: the Ray job transformed out-of-process, so the
                         # column edges are RECONSTRUCTED from the upstream + written schemas — otherwise the
                         # columnLineage facet would be empty on exactly the path production runs.

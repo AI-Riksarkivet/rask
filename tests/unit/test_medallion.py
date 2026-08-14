@@ -161,12 +161,13 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
     production seam (the real end-to-end proof is in tests/unit/test_column_lineage_emit.py)."""
     from medallion.services.compute import WriteResult
 
-    submitted: dict[str, Any] = {}
+    dispatched: dict[str, Any] = {}
 
-    async def fake_submit(_settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str, lineage_json: str = "") -> None:
-        submitted.update({"from": from_uri, "to": to_uri, "stage": stage, "token": token, "lineage": lineage_json})
+    def fake_dispatch(_settings: Any, *, from_uri: str, to_uri: str, token: str | None, lineage_json: str, trigger: Any) -> str:
+        dispatched.update({"from": from_uri, "to": to_uri, "token": token, "lineage": lineage_json, "trigger": trigger})
+        return "stage-ray-silver-tok-abc"
 
-    monkeypatch.setattr(mover, "submit_stage_job", fake_submit)
+    monkeypatch.setattr(mover, "_dispatch_stage_workflow", fake_dispatch)
     _fake_upstream(monkeypatch)
     measured = WriteResult(version=7, row_count=5, size_bytes=99, column_map=[("id", "id", "IDENTITY")])
     measured_uris: dict[str, str] = {}
@@ -176,18 +177,32 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
         return measured
 
     monkeypatch.setattr(mover, "measure_stage", fake_measure_stage)
-    dapr = _FakeDapr()
 
-    status = asyncio.run(mover.handle_stage(cast(Any, dapr), _RAY_MOVER, {"data": {"token": "tok"}}))
+    # PASS 1 — the trigger arrives. S1: the handler DISPATCHES a watcher and returns; it must NOT
+    # measure, because the job it just asked for has not run. Measuring here is the defect.
+    first = _FakeDapr()
+    status = asyncio.run(mover.handle_stage(cast(Any, first), _RAY_MOVER, {"data": {"token": "tok"}}))
 
     assert status == {"status": "SUCCESS"}
-    assert {k: submitted[k] for k in ("from", "to", "stage", "token")} == {"from": "/tmp/from", "to": "/tmp/to", "stage": "silver", "token": "tok"}
+    assert {k: dispatched[k] for k in ("from", "to", "token")} == {"from": "/tmp/from", "to": "/tmp/to", "token": "tok"}
+    assert measured_uris == {}, "the ray branch measured before the job could have written anything"
+    assert first.calls == [], "a COMPLETE was emitted for a job that had not run"
+
+    # PASS 2 — the workflow read SUCCESSED and re-published the trigger with `ray_job_done`. NOW the
+    # destination exists, so the measure is a question about this run's output rather than a race.
+    dapr = _FakeDapr()
+    status = asyncio.run(mover.handle_stage(cast(Any, dapr), _RAY_MOVER, {"data": {"token": "tok", "ray_job_done": True}}))
+
+    assert status == {"status": "SUCCESS"}
     # The measure reads BOTH ends — it needs the upstream schema to reconstruct the edges.
     assert measured_uris == {"from": "/tmp/from", "to": "/tmp/to"}
     lineage, trigger = dapr.calls  # emit then next-stage trigger
     # R26: the consume-layer provenance document rides the submission, so the JOB stamps it in its own
     # commit — the distributed path cannot produce a dataset the in-process path would have stamped.
-    handed_over = LineageDoc.model_validate_json(submitted["lineage"])
+    # The doc handed to the DISPATCH (pass 1) is the one the job stamps, and its run_id must be the
+    # same one pass 2's COMPLETE carries — the run id is derived from the token, so the two passes name
+    # ONE run rather than two halves of a split identity.
+    handed_over = LineageDoc.model_validate_json(dispatched["lineage"])
     assert handed_over.run_id == lineage["data"]["run"]["runId"]
     assert handed_over.output.name == "silver$features"
     facets = lineage["data"]["outputs"][0]["facets"]
@@ -196,15 +211,24 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
     assert trigger["topic"] == "medallion.silver"
 
 
-def test_mover_ray_branch_retries_when_job_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    from medallion.services.ray_submit import RayJobError
+def test_mover_ray_branch_retries_when_the_watcher_cannot_be_dispatched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """S1 moved WHERE a ray failure surfaces, and this is the case that must not be swallowed.
 
-    async def fake_submit(*_a: Any, **_k: Any) -> None:
-        raise RayJobError("ray job FAILED")
+    The Ray job is now submitted by the workflow, so a failure to DISPATCH the workflow means no job
+    is ever submitted at all. Acking that would lose the work silently — the pre-S1 version of this
+    test caught the same class of loss one layer down (`submit_stage_job` raising), and the layer moved.
 
-    monkeypatch.setattr(mover, "submit_stage_job", fake_submit)
+    The likeliest real cause is the state store not being scoped to `medallion` (values.yaml scopes it
+    for exactly this, and daprd cannot hot-reload an actor state store), which produces a schedule
+    error on EVERY delivery — the shape a blanket swallow would render as permanent silent success.
+    """
+
+    def fake_dispatch(*_a: Any, **_k: Any) -> str:
+        raise RuntimeError("the state store is not configured to use the actor runtime")
+
+    monkeypatch.setattr(mover, "_dispatch_stage_workflow", fake_dispatch)
     status = asyncio.run(mover.handle_stage(cast(Any, _FakeDapr()), _RAY_MOVER, {"data": {"token": "t"}}))
-    assert status == {"status": "RETRY"}  # a failed Ray job → RETRY → Dapr redelivers (re-attaches)
+    assert status == {"status": "RETRY"}  # nothing is watching and nothing was submitted → redeliver
 
 
 def test_mover_write_is_single_flight_under_concurrent_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -247,12 +271,13 @@ def test_ray_mover_submits_for_blob_upstreams(monkeypatch: pytest.MonkeyPatch) -
 
     measured = WriteResult(version=7, row_count=5, size_bytes=99)
     monkeypatch.setattr(mover, "measure_stage", lambda _from, _to, _so: measured)
-    submitted: list[str] = []
+    dispatched: list[str] = []
 
-    async def fake_submit(*_a: Any, **_k: Any) -> None:
-        submitted.append("ray")
+    def fake_dispatch(*_a: Any, **_k: Any) -> str:
+        dispatched.append("ray")
+        return "stage-ray-silver-tok-abc"
 
-    monkeypatch.setattr(mover, "submit_stage_job", fake_submit)
+    monkeypatch.setattr(mover, "_dispatch_stage_workflow", fake_dispatch)
     transformed: list[str] = []
 
     def fake_transform(_f: str, _t: str, _so: dict[str, str], *, stage: str) -> WriteResult:
@@ -266,7 +291,8 @@ def test_ray_mover_submits_for_blob_upstreams(monkeypatch: pytest.MonkeyPatch) -
     status = asyncio.run(mover.handle_stage(cast(Any, dapr), _RAY_MOVER, {"data": {"token": "tok"}}))
 
     assert status == {"status": "SUCCESS"}
-    assert submitted == ["ray"]  # the Ray job WAS submitted — blobs no longer force in-process
+    # The blob upstream still goes to RAY — S1 changed WHEN the job is waited for, not WHICH lane runs.
+    assert dispatched == ["ray"]
     assert transformed == []  # in-process transform did NOT run
 
 

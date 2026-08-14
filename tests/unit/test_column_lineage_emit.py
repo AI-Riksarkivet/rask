@@ -302,13 +302,24 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
     seed_bronze(bronze, {}, rows=4)  # columns [id, payload, stage]
     settings = _mover_settings(bronze, silver).model_copy(update={"ray_enabled": True})
 
-    async def fake_submit(_settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str, lineage_json: str = "") -> None:
-        _ray_job_write(from_uri, to_uri, stage, lineage_json)  # the cluster wrote it; this process only measures
+    # S1: the handler DISPATCHES a watcher, and the Ray job runs out-of-process. The fake stands in for
+    # the whole of that — the workflow submitting, the cluster writing, the poll reading SUCCEEDED —
+    # so that the second delivery below measures a destination that genuinely exists. Before S1 this
+    # test had the write happening inside the handler's own submit call, which is exactly the ordering
+    # the production code did NOT have: there, `submit_stage_job` returned before the cluster wrote.
+    def fake_dispatch(_settings: Any, *, from_uri: str, to_uri: str, token: str | None, lineage_json: str, trigger: Any) -> str:
+        _ray_job_write(from_uri, to_uri, settings.to_namespace, lineage_json)
+        return "stage-ray-silver-t1-abc"
 
-    monkeypatch.setattr(mover, "submit_stage_job", fake_submit)
+    monkeypatch.setattr(mover, "_dispatch_stage_workflow", fake_dispatch)
+
+    dispatch_only = _FakeDapr()
+    assert asyncio.run(handle_stage(cast(DaprClient, dispatch_only), settings, {"data": {"token": "t1"}})) == {"status": "SUCCESS"}
+    assert dispatch_only.published == [], "the dispatch pass emitted lineage for a job it had not yet waited for"
+
     dapr = _FakeDapr()
 
-    result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1"}}))
+    result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1", "ray_job_done": True}}))
     assert result == {"status": "SUCCESS"}
 
     lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)

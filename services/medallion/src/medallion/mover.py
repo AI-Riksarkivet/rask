@@ -61,11 +61,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if not (store_id and model_id):
             store_id, model_id = await fga.provision(settings.fga_api_url)
         app.state.fga = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
+    # THE WORKFLOW WORKER (S1). Without this the mover can SCHEDULE `stage_run` and nothing will ever
+    # execute it: `DaprWorkflowClient` only enqueues, and the runtime is what registers the definitions
+    # and pulls work. Ingest's first in-cluster deploy had the engine running in the sidecar and still
+    # could not run a workflow because the APP side was absent — an asymmetry that looks healthy from
+    # every angle except an actual run. Only started when the Ray lane is on, because that is the only
+    # lane with a job to wait for.
+    app.state.workflow_runtime = None
+    if settings.ray_enabled:
+        try:
+            import dapr.ext.workflow as wf
+
+            from medallion.workflow import register
+
+            runtime = wf.WorkflowRuntime()
+            register(runtime)
+            runtime.start()  # spawns the worker's own threads; does not block the event loop
+            app.state.workflow_runtime = runtime
+            log.info("dapr workflow runtime started")
+        except Exception:
+            # Non-fatal, same reasoning as ingest: a service that refuses to start because its sidecar
+            # is not up yet turns an ordering blip into a CrashLoopBackOff. A stage that cannot
+            # schedule fails loudly at dispatch, where an operator can see it.
+            log.warning("dapr workflow runtime unavailable — ray stages cannot wait for their jobs", exc_info=True)
     app.state.startup_complete = True
     try:
         yield
     finally:
         app.state.shutting_down = True
+        if app.state.workflow_runtime is not None:
+            with suppress(Exception):
+                app.state.workflow_runtime.shutdown()
         with suppress(Exception):
             await app.state.dapr.close()
         if app.state.fga is not None:

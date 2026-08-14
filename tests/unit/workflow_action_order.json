@@ -26,5 +26,13 @@
     "call_activity(terminate_chunks)",
     "call_activity(emit_terminal)",
     "call_activity(emit_terminal)"
+  ],
+  "services/medallion/src/medallion/workflow.py::stage_run": [
+    "call_activity(submit_stage)",
+    "create_timer(timedelta(seconds=spec.poll_interval_seconds))",
+    "call_activity(poll_stage)",
+    "call_activity(report_stage_outcome)",
+    "call_activity(publish_stage_ready)",
+    "call_activity(report_stage_outcome)"
   ]
 }

@@ -107,6 +107,18 @@ class StageTrigger(BaseModel):
     project: str | None = None
     from_uri: str | None = None
 
+    #: S1: the Ray stage job for this trigger reached SUCCEEDED, so the destination is written and the
+    #: mover may measure it. Set ONLY by `medallion.workflow.publish_stage_ready`, after a terminal
+    #: status read — never by an upstream producer, which has no way to know.
+    #:
+    #: This is a CLAIM like every other field on this model, and it is deliberately not treated as
+    #: privileged: the re-published trigger re-enters through this same guard, and the worst a forged
+    #: `ray_job_done` can do is make the mover measure a destination early — precisely the pre-S1
+    #: behaviour, not an escalation. What it must NOT do is skip the submit silently, which is why the
+    #: handler logs the branch it took.
+    ray_job_done: bool = False
+    ray_submission_id: str | None = None
+
     @field_validator("token")
     @classmethod
     def _token_is_well_shaped(cls, value: str | None) -> str | None:

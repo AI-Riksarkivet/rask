@@ -220,9 +220,10 @@ def publish_stage_ready(ctx: WorkflowActivityContext, payload: dict[str, Any]) -
     not a privileged back channel, and a payload this activity malformed would be DROPped exactly as
     an external one would.
     """
-    from dapr.clients import DaprClient
+    from dapr.aio.clients import DaprClient
 
     from medallion.core.config import get_settings
+    from service_kit.dapr_publish import publish_event
 
     spec = StageJobSpec.model_validate(payload["spec"])
     outcome = StageJobOutcome.model_validate(payload["outcome"])
@@ -234,15 +235,25 @@ def publish_stage_ready(ctx: WorkflowActivityContext, payload: dict[str, Any]) -
     trigger["ray_job_done"] = True
     trigger["ray_submission_id"] = outcome.submission_id
 
-    with DaprClient() as client:
-        client.publish_event(
-            pubsub_name=settings.pubsub,
-            # The mover's OWN subscription topic: this wakes the same handler the original trigger
-            # reached, so the measure/emit/cascade path is the one already under test — not a fork.
-            topic_name=settings.sub_topic,
-            data=json.dumps(trigger),
-            data_content_type="application/json",
-        )
+    async def _publish() -> None:
+        # `service_kit.dapr_publish.publish_event`, never the SDK call directly: the bare
+        # `publish_event` is unbounded, so a wedged sidecar hangs this activity forever — and a
+        # workflow activity that never returns is a workflow that never advances. The estate has an
+        # invariant test for exactly this (`test_every_publish_goes_through_the_timeout_wrapper`),
+        # which is what caught the first draft of this function.
+        async with DaprClient() as client:
+            await publish_event(
+                client,
+                timeout_seconds=settings.publish_timeout_seconds,
+                pubsub_name=settings.pubsub,
+                # The mover's OWN subscription topic: this wakes the same handler the original trigger
+                # reached, so the measure/emit/cascade path is the one already under test — not a fork.
+                topic_name=settings.sub_topic,
+                data=json.dumps(trigger),
+                data_content_type="application/json",
+            )
+
+    _run_async(_publish())
     log.info("medallion_stage_ready_published", extra={"submission_id": outcome.submission_id, "topic": settings.sub_topic})
 
 
