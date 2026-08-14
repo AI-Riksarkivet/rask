@@ -1,0 +1,30 @@
+{
+  "services/flows/src/flows/workflow.py::flow_run_workflow": [
+    "call_activity(run_node)",
+    "when_all"
+  ],
+  "services/ingest/src/ingest/workflow.py::chunk_run": [
+    "call_activity(publish_units)",
+    "call_activity(drain_chunk)",
+    "call_activity(reconcile_chunk)"
+  ],
+  "services/ingest/src/ingest/workflow.py::ingest_run": [
+    "call_activity(emit_start)",
+    "call_activity(resolve_limits)",
+    "call_activity(ensure_dataset)",
+    "call_activity(enumerate_chunks)",
+    "call_activity(emit_terminal)",
+    "call_activity(emit_terminal)",
+    "call_activity(emit_terminal)",
+    "when_all",
+    "call_child_workflow(chunk_run)",
+    "create_timer(timedelta(hours=limits.max_run_hours))",
+    "when_any",
+    "call_activity(terminate_chunks)",
+    "call_activity(emit_terminal)",
+    "call_activity(finalize)",
+    "call_activity(terminate_chunks)",
+    "call_activity(emit_terminal)",
+    "call_activity(emit_terminal)"
+  ]
+}
