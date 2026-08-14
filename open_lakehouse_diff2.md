@@ -573,6 +573,20 @@ Relevant for the archives estate beyond models: EAD files, IIIF sidecars.
 10. `_collect_descendants` recurses unbounded (no depth cap) while the listing walk caps at
     `_MAX_NAMESPACE_DEPTH=8` (`tables.py:74` vs `namespaces.py` (agent-read)) — a pathological tree
     is bounded in one walker, a stack overflow in the other. Align the bound.
+11. **Grant PROVENANCE is not recordable** — distinct from the lineage plane, which is healthy.
+    Lineage (dataset derivation: OpenLineage events → AGE) answers "how did this data come to be";
+    provenance (attribution/custody: who granted, who acted, under what authority) is scattered
+    across #41 audit rows, `TupleOrigin`, and registry `created_by` — and its weakest link is that
+    an OpenFGA tuple cannot carry its grantor: `can_revoke_grant` had to be made manage_grants-only
+    for exactly this reason (`model.fga:191-204` (agent-read)), and `read_changes` cannot attribute
+    actors (`fga.py:849-855` (agent-read)). Consequence: an access review can enumerate WHO HAS a
+    grant but not WHO GAVE it, except by correlating the OpenFGA changelog against the estate's
+    audit stream by timestamp. Fix options (design decision): a `granted_by`/`granted_at` sidecar
+    record per grant on the control root (same shape as protection records), written by the
+    /access/grant door in the same request; or accept and DOCUMENT the correlation procedure in the
+    openfga skill so reviews have a sanctioned method. Comparator note: Lakekeeper has the same
+    tuple limitation and leans on audit events as the history — nobody has solved this inside
+    OpenFGA itself.
 
 ---
 
