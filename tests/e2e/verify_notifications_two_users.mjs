@@ -47,6 +47,12 @@ import { chromium } from '@playwright/test';
 //   kubectl port-forward -n kube-system svc/traefik 8080:80
 const ORIGIN = process.env.ORIGIN ?? 'http://localhost:8080';
 const SHOT = process.env.SHOT_DIR ?? '/tmp/rask-notifications-drive';
+// Lineage is addressed DIRECTLY (see emitRun) — the gateway cannot carry a service token.
+const LINEAGE_URL = process.env.LINEAGE_URL ?? 'http://localhost:8001';
+const APP_TOKEN = process.env.APP_API_TOKEN ?? '';
+const SERVICE_IDENTITY = process.env.LINEAGE_SERVICE_IDENTITY ?? 'service-web';
+// The output the emitting identity must hold `can_write_data` on (model.fga: `can_write_data: writer`).
+const OUTPUT = process.env.DRIVE_OUTPUT ?? 'bronze$events';
 
 const browser = await chromium.launch();
 
@@ -90,25 +96,37 @@ async function badge(page) {
  * subscription. `enforce_author` overwrites whatever the body claims with the token's sub, which is
  * why the author cannot simply be asserted here — it is the door that decides.
  */
-async function emitRun(page, { runId, state, outputs = ['silver$pages'] }) {
-	return page.evaluate(
-		async ({ runId, state, outputs }) => {
-			const res = await fetch('/api/lineage/v1/lineage', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					eventType: state,
-					eventTime: new Date().toISOString(),
-					producer: 'rask://verify_notifications_two_users',
-					job: { namespace: 'rask-drive', name: `drive_${runId}` },
-					run: { runId, facets: { lance: { _producer: 'drive', run_id: runId } } },
-					outputs: outputs.map((name) => ({ namespace: 'silver', name })),
-				}),
-			});
-			return { status: res.status, body: await res.text().catch(() => '') };
+/**
+ * Emit ONE terminal OpenLineage event, authored by `subject`, through lineage's SERVICE DOOR.
+ *
+ * NOT from the browser, and that is a fact about the estate rather than a convenience. A page-side
+ * `fetch('/api/lineage/...')` carries no bearer: the session lives in a sealed httpOnly cookie scoped
+ * to the ZONE, and the gateway does not translate cookie to bearer. Worse, going through the gateway
+ * at all forecloses the service door — `is_public_caller` refuses a service token presented by a
+ * public front door (the measured bypass), so the request falls through to OIDC and 401s. Measured
+ * both ways here: `/api/lineage/api/v1/lineage` through the gateway answers 401 "Missing bearer
+ * token", while the same body against lineage directly authenticates.
+ *
+ * So the drive talks to lineage on LINEAGE_URL with the pair the door wants.
+ */
+async function emitRun({ runId, state, authorSub, outputName = OUTPUT }) {
+	const res = await fetch(`${LINEAGE_URL}/api/v1/lineage`, {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+			'dapr-api-token': APP_TOKEN,
+			'x-lance-service-identity': SERVICE_IDENTITY,
 		},
-		{ runId, state, outputs },
-	);
+		body: JSON.stringify({
+			eventType: state,
+			eventTime: new Date().toISOString(),
+			producer: 'rask://verify_notifications_two_users',
+			job: { namespace: 'rask-drive', name: `drive_${runId}` },
+			run: { runId, facets: { author: { name: authorSub, sub: authorSub } } },
+			outputs: [{ namespace: outputName.split('$')[0], name: outputName }],
+		}),
+	});
+	return { status: res.status, body: await res.text().catch(() => '') };
 }
 
 console.log(`\n▸ two-user notification drive against ${ORIGIN}\n`);
@@ -121,8 +139,8 @@ console.log(`   baseline: alice=${before.alice} bob=${before.bob}`);
 
 // ── alice's run FAILS ────────────────────────────────────────────────────────────────────────────
 const runId = `drive-alice-${Date.now()}`;
-const emitted = await emitRun(alice.page, { runId, state: 'FAIL' });
-check('lineage accepted the FAIL event', emitted.status < 400, `HTTP ${emitted.status}`);
+const emitted = await emitRun({ runId, state: 'FAIL', authorSub: 'alice' });
+check('lineage accepted the FAIL event', emitted.status < 400, `HTTP ${emitted.status} ${emitted.body.slice(0, 160)}`);
 
 // The bus hop plus the fan-out is not instant; poll rather than sleep once and hope.
 let after = { alice: before.alice, bob: before.bob };
@@ -139,7 +157,7 @@ await bob.page.screenshot({ path: `${SHOT}/bob-after-fail.png` }).catch(() => {}
 
 // ── the reverse, because one direction proves only that SOMETHING moved ──────────────────────────
 const bobRun = `drive-bob-${Date.now()}`;
-await emitRun(bob.page, { runId: bobRun, state: 'COMPLETE' });
+await emitRun({ runId: bobRun, state: 'COMPLETE', authorSub: 'bob' });
 let reverse = { alice: after.alice, bob: after.bob };
 for (let attempt = 0; attempt < 10 && reverse.bob <= after.bob; attempt += 1) {
 	reverse = { alice: await badge(alice.page), bob: await badge(bob.page) };
