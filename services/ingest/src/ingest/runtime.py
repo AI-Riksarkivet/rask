@@ -159,12 +159,27 @@ def warehouse_root() -> str:
 
 
 def dataset_uri(spec: RunSpec) -> str:
-    """Resolve {project, dataset} to a location — I2's "no hardcoded dataset paths".
+    """Resolve a run to the location it writes — I2's "no hardcoded dataset paths".
 
-    In-cluster this resolves THROUGH the catalog; the env form is the local/dev fallback. Either way
-    the caller never names a path, which is what stops volume B overwriting volume A.
+    Keyed on ``spec.namespace``, NOT ``spec.project``, and that is the whole of this function. The two
+    are different levels — a project selects the storage root, a namespace is the medallion TIER — and
+    this helper was left behind when `RunSpec.namespace` became "THE ONE PLACE a project becomes a
+    namespace". It kept composing the pre-namespace shape:
+
+        dataset_uri  ->  <warehouse>/p/pages.lance          (project)
+        catalog.ensure(spec.namespace, ...) -> <warehouse>/p-bronze/pages.lance   (tier)
+
+    Production never noticed, because production does not call this — `finalize_run` goes through
+    `catalog.ensure(spec.namespace, spec.dataset)` and every other writer resolves the same way. The
+    only remaining caller was `test_run_chain`, which therefore staged fragments at one path and
+    committed at another: the commit found no data files, the run produced no visible version, and the
+    test asserted "a run must produce exactly ONE visible commit" against a path nothing had written.
+
+    So this now derives from the same property the catalog keys on, and the two cannot diverge again.
+    It stays a function rather than being deleted because it is the path-based form the LOCAL catalog
+    needs (`ensure_at`), and open-coding the composition at each test site is how the drift started.
     """
-    return f"{warehouse_root().rstrip('/')}/{spec.project}/{spec.dataset}.lance"
+    return f"{warehouse_root().rstrip('/')}/{spec.namespace}/{spec.dataset}.lance"
 
 
 def _rows_in(fragments_json: list[str]) -> int:

@@ -190,10 +190,32 @@ async def test_a4_a7_the_full_chain_lands_rows_and_commits_once(activity_ctx: Wo
 
     assert result["rows"] == 4
     assert result["status"] == "COMPLETE"
-    assert lance.dataset(uri).version == before + 1, "a run must produce exactly ONE visible commit"
 
-    table = lance.dataset(uri).to_table()
-    assert table.column("payload")[0].as_py().startswith(b"II*\x00"), "bronze must hold the bytes as received"
+    # A7, asserted as the DATA property rather than as version arithmetic. `version == before + 1`
+    # counted every commit, and the lander deliberately makes more than one: the first commit on a
+    # dataset also creates the `partition_key` BITMAP and `id` scalar indexes, and each of those is
+    # its own Lance commit ("CREATE ONCE, MAINTAIN ELSEWHERE" — lander.py). So a first run legitimately
+    # moves 1 -> 4, and only ONE of those three added rows.
+    #
+    # This assertion passed for years for the WRONG REASON: `dataset_uri` composed the pre-namespace
+    # path, so the fragments were staged under `<wh>/p/` and committed under `<wh>/p-bronze/`. The
+    # index creation then failed on a missing data file, was swallowed by lander's never-fatal
+    # contract ("could not ensure the scalar indexes — queries will scan"), and left exactly one
+    # commit for the arithmetic to find. Fixing the path revealed the assertion had been measuring
+    # index FAILURE, not commit discipline.
+    dataset = lance.dataset(uri)
+    # `total_rows` in the version metadata is CUMULATIVE, so a commit is data-visible only where it
+    # DIFFERS from the version before it. Index commits carry the row count forward unchanged, which
+    # is exactly what makes this able to tell the two kinds apart.
+    history = sorted(((v["version"], int(v["metadata"].get("total_rows", 0))) for v in dataset.versions()), key=lambda vr: vr[0])
+    data_commits = [ver for (ver, rows), (_, prev) in zip(history[1:], history[:-1], strict=True) if ver > before and rows != prev]
+    assert data_commits == [before + 1], f"a run must produce exactly ONE data-visibility commit, got {data_commits}"
+    assert dataset.count_rows() == 4
+
+    # `payload` is a BLOB column, so a written cell is a descriptor and carries no bytes — the same
+    # drift `test_worker_queue` had. `read_blobs` is the reader path, and it keys by ROW INDEX.
+    blobs = dict(dataset.read_blobs("payload", indices=[0]))
+    assert blobs[0].startswith(b"II*\x00"), "bronze must hold the bytes as received"
 
 
 def test_completing_with_errors_is_not_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
