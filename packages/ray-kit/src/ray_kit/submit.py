@@ -93,6 +93,42 @@ def lineage_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k.startswith("RASK_LINEAGE_")}
 
 
+async def job_status(client: httpx.AsyncClient, sub_id: str) -> str | None:
+    """One status read for ``sub_id`` — ``None`` when the job is not (yet) known to the dashboard.
+
+    A SINGLE read, deliberately: this is not the `while True: sleep()` completion poll that A13 deleted
+    from `medallion/services/ray_submit.py`, and it must not grow back into one. That loop was wrong
+    because it held a Dapr ack across the whole job runtime, so a job outliving the redelivery window
+    exhausted it. The fix is not "poll faster" — it is to put the WAITING somewhere durable, which is
+    what `medallion.workflow.stage_run` does with `ctx.create_timer`. The workflow decides when to ask
+    again; this function only answers the question once.
+
+    ``None`` rather than a raise for an unknown id, because the two callers mean different things by it:
+    a workflow polling immediately after submit may legitimately see the id before the dashboard does,
+    and treating that as failure would abort a healthy job on a race. A TRANSPORT failure is still a
+    raise — an unreachable dashboard is not evidence about the job.
+    """
+    try:
+        response = await client.get(f"/api/jobs/{sub_id}")
+    except httpx.HTTPError as exc:
+        raise RayJobError(f"failed to read status of ray job {sub_id}: {exc}") from exc
+    if response.status_code == 404:
+        return None
+    if response.status_code >= 400:
+        raise RayJobError(f"failed to read status of ray job {sub_id}: HTTP {response.status_code}")
+    status = response.json().get("status")
+    return str(status) if status is not None else None
+
+
+def is_terminal(status: str | None) -> bool:
+    """Whether ``status`` is a state Ray will never move out of.
+
+    Centralised so a caller cannot check only ``SUCCEEDED`` and hang forever on a job that FAILED —
+    the asymmetry that makes "wait for completion" loops subtly wrong.
+    """
+    return status == TERMINAL_OK or status in TERMINAL_BAD
+
+
 async def submit_or_reattach(client: httpx.AsyncClient, sub_id: str, body: Mapping[str, object]) -> None:
     """``POST /api/jobs/``, tolerating an id that already exists.
 
