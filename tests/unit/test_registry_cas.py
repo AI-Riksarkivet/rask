@@ -67,8 +67,24 @@ _SO = {"endpoint": "http://rf:9000", "access_key_id": "k", "secret_access_key": 
 
 
 def _client_error(code: str, status: int) -> ClientError:
+    """A ClientError shaped like botocore's own — every `ResponseMetadata` key, not just the one read.
+
+    `_ResponseMetadataTypeDef` is a total TypedDict: botocore always populates all five. Supplying
+    only `HTTPStatusCode` built a fake no real call can produce, and `create_json` reads the block
+    through `.get()` chains that swallow the difference — so a consumer that grew a `RetryAttempts`
+    read would pass here and `KeyError` in production against the very error this fixture models.
+    """
     return ClientError(
-        {"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}},
+        {
+            "Error": {"Code": code, "Message": code},
+            "ResponseMetadata": {
+                "RequestId": "req-test",
+                "HostId": "host-test",
+                "HTTPStatusCode": status,
+                "HTTPHeaders": {},
+                "RetryAttempts": 0,
+            },
+        },
         "PutObject",
     )
 
@@ -120,7 +136,9 @@ def test_create_warehouse_record_second_mint_refused(tmp_path: Any) -> None:
     warehouses.create_warehouse_record(root, so, {"id": "wh-a", "bucket": "b", "root_uri": "s3://b", "project": "acme", "created_at": "t"})
     with pytest.raises(records.RecordExistsError):
         warehouses.create_warehouse_record(root, so, {"id": "wh-a", "bucket": "b2", "root_uri": "s3://b2", "project": "evil", "created_at": "t"})
-    assert warehouses.get_warehouse(root, so, "wh-a")["project"] == "acme"  # type: ignore[index]
+    winner = warehouses.get_warehouse(root, so, "wh-a")
+    assert winner is not None, "the refused second mint must leave the FIRST record standing, not delete it"
+    assert winner["project"] == "acme"
 
 
 def test_bind_namespace_is_write_once(tmp_path: Any) -> None:

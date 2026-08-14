@@ -355,4 +355,6 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
     r = client.post("/v1/warehouses", json={"id": "wh-conv", "project": "acme"})
     assert r.status_code == 200, r.text
     monkeypatch.setattr(wh_svc, "get_warehouse", real_get)
-    assert wh_svc.get_warehouse(root, {}, "wh-conv")["status"] == "deactivated"  # type: ignore[index]
+    surviving = wh_svc.get_warehouse(root, {}, "wh-conv")
+    assert surviving is not None, "the loser's rebuild must not have DELETED the record it lost the race for"
+    assert surviving["status"] == "deactivated"
