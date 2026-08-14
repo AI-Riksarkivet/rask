@@ -23,6 +23,11 @@ dependencies = [
     "lance-namespace>=0.9.0",
     "dapr>=1.18.1",
     "dapr-ext-fastapi>=1.18.1",
+    # S1's stage watcher (`medallion/workflow.py`): the Ray lane waits for a submitted job to reach a
+    # terminal state on a DURABLE timer, which is Dapr Workflow. Executes in the daprd sidecar the
+    # chart already injects, on the actor state store `values.yaml` scopes to this app-id — same
+    # reasoning as ingest and flows, which each declare it for their own workflow.
+    "dapr-ext-workflow>=1.18",
     "opentelemetry-distro>=0.65b0",
     "opentelemetry-exporter-otlp>=1.44.0",
     "opentelemetry-instrumentation-fastapi>=0.65b0",
