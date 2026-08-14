@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -385,6 +386,28 @@ def make_client(
 # --------------------------------------------------------------------------- #
 
 
+def condition_context(context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The context a CONDITION is evaluated against, with the clock supplied by default.
+
+    ONE helper for the whole estate, because the failure it prevents is silent. The model's
+    ``non_expired_grant`` takes ``current_time`` from the CALLER (the tuple carries only
+    ``grant_time`` + ``grant_duration``), and OpenFGA cannot evaluate a CEL expression whose
+    parameters are missing — so a read that omits the clock does not get "no opinion", it gets a
+    **DENY**, and a perfectly valid time-boxed grant reads as already expired. Every read below
+    therefore defaults the clock in rather than trusting each call site to remember it, which is
+    exactly the class of bug F2 records: the wrappers could not even accept a context, so no caller
+    could have passed one.
+
+    An explicit value WINS on every key — an audit or access-simulation that asks "was this allowed
+    last Tuesday" passes its own ``current_time`` and gets it. Keys the matched condition does not
+    declare are simply unused, so defaulting the clock is safe for unconditional tuples too.
+
+    RFC 3339 with an explicit offset is what the CEL ``timestamp`` type parses; a naive
+    ``datetime.now()`` would serialise without one and fail the parse at the server.
+    """
+    return {"current_time": datetime.now(UTC).isoformat(), **(context or {})}
+
+
 async def check(
     client: OpenFgaClient,
     *,
@@ -434,7 +457,7 @@ async def check(
                 relation=relation,
                 object=obj,
                 contextual_tuples=contextual_tuples,
-                context=context,
+                context=condition_context(context),
             )
         )
         return bool(response.allowed)
@@ -452,17 +475,22 @@ async def batch_check(
     user: str,
     relation: str,
     objects: list[str],
+    context: dict[str, Any] | None = None,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
 ) -> dict[str, bool]:
     """Return ``{object: allowed}`` for one user across many objects in one round-trip.
 
+    ``context`` is per-item and defaulted through :func:`condition_context`, so a batch spanning
+    time-boxed grants answers on the same clock as a single :func:`check` would. Without it every
+    conditional tuple in the batch would come back denied.
+
     A read-only/idempotent authorization path, so it gets the same bounded retry +
     fail-closed treatment as :func:`check` (transient OpenFGA/transport faults retried;
     outage → ``ServiceUnavailableError`` → 503).
     """
-    items = [ClientBatchCheckItem(user=f"user:{user}", relation=relation, object=o) for o in objects]
+    items = [ClientBatchCheckItem(user=f"user:{user}", relation=relation, object=o, context=condition_context(context)) for o in objects]
 
     @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_batch_check() -> dict[str, bool]:
@@ -483,6 +511,7 @@ async def list_objects(
     relation: str,
     object_type: str,
     qualify: bool = True,
+    context: dict[str, Any] | None = None,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
@@ -496,6 +525,10 @@ async def list_objects(
     resource rungs deliberately refuse ``team#member`` directly (a team reaches data through a role), so
     the userset question is the one that explains a real grant.
 
+    ``context`` is defaulted through :func:`condition_context`. It matters MORE here than on a single
+    check: a listing that omits the clock silently drops every object reachable only through a
+    time-boxed grant, and a short list reads as a correct answer rather than an error.
+
     Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as
     :func:`check`.
     """
@@ -503,7 +536,7 @@ async def list_objects(
 
     @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_list_objects() -> list[str]:
-        response = await client.list_objects(ClientListObjectsRequest(user=subject, relation=relation, type=object_type))
+        response = await client.list_objects(ClientListObjectsRequest(user=subject, relation=relation, type=object_type, context=condition_context(context)))
         return list(response.objects)
 
     try:
@@ -530,6 +563,7 @@ async def list_users(
     user_type: str = "user",
     user_relation: str | None = None,
     qualified: bool = False,
+    context: dict[str, Any] | None = None,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
@@ -553,6 +587,10 @@ async def list_users(
     Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as :func:`check`
     (outage → ``ServiceUnavailableError`` → 503 — never an empty list that reads as "nobody").
 
+    ``context`` is defaulted through :func:`condition_context`, so an access review counts the
+    holders of a live time-boxed grant instead of omitting them — the same silent-undercount hazard
+    as :func:`list_objects`, pointed the other way.
+
     Caveat: the ListUsers API has no pagination, and the server truncates silently at its
     ``listUsersMaxResults`` / ``listUsersDeadline`` limits (OpenFGA defaults: 1000 subjects / 3s) —
     so a result at or past the cap is logged as possibly truncated; an under-reported review must
@@ -567,6 +605,7 @@ async def list_users(
                 object=FgaObject(type=obj_type, id=obj_id),
                 relation=relation,
                 user_filters=[UserTypeFilter(type=user_type, relation=user_relation)],
+                context=condition_context(context),
             )
         )
         subjects: list[str] = []

@@ -494,6 +494,30 @@ tests:
         context: { current_time: "2026-07-29T14:00:00Z" }
         assertions: { can_write_data: false }
 
+  - name: a time-boxed grant works DIRECTLY on a table, not only inherited from its namespace
+    # The TABLE rung declares the conditional form itself, which the cascade test above cannot prove —
+    # there the only conditional tuple sits on the namespace and the table merely inherits it. This
+    # table is given NO parent on purpose, so the direct conditional tuple is the only thing that can
+    # produce access, and expiry is therefore the table rung's own behaviour rather than the parent's.
+    tuples:
+      - user: user:contractor
+        relation: writer
+        object: table:bronze$scratch
+        condition:
+          name: non_expired_grant
+          context:
+            grant_time: "2026-07-29T09:00:00Z"
+            grant_duration: 4h
+    check:
+      - user: user:contractor
+        object: table:bronze$scratch
+        context: { current_time: "2026-07-29T10:30:00Z" }
+        assertions: { writer: true, can_write_data: true }
+      - user: user:contractor
+        object: table:bronze$scratch
+        context: { current_time: "2026-07-29T14:00:00Z" }
+        assertions: { writer: false, can_write_data: false }
+
   - name: a permanent grant is unaffected by the condition being available
     # The rungs accept BOTH forms, so every pre-existing unconditional grant must keep working with no
     # context supplied at all. This is the migration-safety assertion.
