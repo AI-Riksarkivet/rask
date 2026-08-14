@@ -7,7 +7,8 @@ had observed — the same shape of mistake as the `blob_field` regression it sit
 
 So this file calls all three, and pins what each is FOR:
 
-    read_blobs        complete payloads, eagerly, as (id, bytes). The batch/training path.
+    read_blobs        complete payloads, eagerly, as (ROW INDEX, bytes) — measured, and not the `id`
+                      column, which for real bronze rows is a hash. The batch/training path.
     take_blobs        BlobFile handles — seek, partial read, streaming. The viewer path: serving a
                       byte range of a 40 MB scan without pulling 40 MB.
     read_blob_ranges  explicit (row, offset, length) triples in ONE call. The path for reading many
@@ -64,14 +65,54 @@ def _dataset(tmp_path: Path, payloads: list[bytes | None], schema: pa.Schema = B
     return lance.dataset(uri)
 
 
-def test_read_blobs_returns_whole_payloads_WITH_their_ids(tmp_path: Path) -> None:
-    """The eager path. The id in each tuple is what makes the result mappable back to a row."""
+def test_read_blobs_returns_whole_payloads_keyed_by_ROW_INDEX(tmp_path: Path) -> None:
+    """The eager path, and the key is the ROW INDEX — not the `id` column.
+
+    This said "the id in each tuple is what makes the result mappable back to a row" for as long as
+    it existed, and never tested it: `_dataset` numbers `id` as `range(len(payloads))`, so index and
+    id are the same integer here and the two readings are indistinguishable. They are not the same
+    thing anywhere else — `id` is `identity.unit_id`, a hash of the source key, so in every real
+    bronze table it is a large arbitrary int64 no row index will ever equal.
+
+    Believing the old claim is a silent mis-attribution: `dict(read_blobs(...))[some_id]` raises
+    KeyError at best, and at worst — for a table whose ids happen to start low — hands back another
+    row's bytes. The companion test below pins the distinction with ids that cannot be confused for
+    indices.
+    """
     dataset = _dataset(tmp_path, list(PAYLOADS))
 
     got = dataset.read_blobs("payload", indices=[0, 1, 2])
 
     assert [(i, len(b)) for i, b in got] == [(0, 504), (1, 484), (2, 604)]
     assert dict(got)[1] == PAYLOADS[1]
+
+
+def test_read_blobs_keys_are_INDICES_even_when_the_id_column_says_otherwise(tmp_path: Path) -> None:
+    """The measurement that corrected the docstring above, made unmissable.
+
+    Bronze `id`s are hashes of the source key, so this fixture uses ids no index can collide with.
+    If `read_blobs` ever starts keying by the `id` column, this fails loudly rather than letting the
+    estate map payloads onto the wrong rows.
+    """
+    uri = str(tmp_path / "bronze.lance")
+    table = pa.table(
+        {
+            "id": pa.array([9_000_001, 9_000_002, 9_000_003], pa.int64()),
+            "source_uri": pa.array([f"file:///p{i}.tif" for i in range(3)]),
+            "payload": blob_array(list(PAYLOADS)),
+            "sha256": pa.array([hashlib.sha256(p).hexdigest() for p in PAYLOADS], pa.string()),
+            "etag": pa.array([None] * 3, pa.string()),
+            "stage": pa.array(["bronze"] * 3, pa.string()),
+            "partition_key": pa.array([None] * 3, pa.string()),
+        },
+        schema=BRONZE_SCHEMA,
+    )
+    lance.write_dataset(table, uri, **CREATION_FLAGS)
+
+    got = dict(lance.dataset(uri).read_blobs("payload", indices=[0, 1, 2]))
+
+    assert sorted(got) == [0, 1, 2], "keys are row indices; the id column plays no part"
+    assert got[2] == PAYLOADS[2]
 
 
 def test_take_blobs_returns_SEEKABLE_handles(tmp_path: Path) -> None:
@@ -136,9 +177,11 @@ _NULLABLE_SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("source_uri",
 def test_ALL_THREE_apis_silently_drop_a_null_row(tmp_path: Path) -> None:
     """Measured on pylance 9.0.0. Not one API — all three, and each fails differently.
 
-    `read_blobs` is survivable because every tuple carries its id. `read_blob_ranges` answers `[]`
-    for a null row with no error. `take_blobs` is the dangerous one: a bare list, no row identity
-    anywhere on the handle, so `handles[i]` silently becomes a DIFFERENT row's bytes.
+    `read_blobs` is survivable because every tuple carries the ROW INDEX it came from — which is the
+    property that matters here, and is what makes the surviving rows re-identifiable after a drop.
+    `read_blob_ranges` answers `[]` for a null row with no error. `take_blobs` is the dangerous one:
+    a bare list, no row identity anywhere on the handle, so `handles[i]` silently becomes a
+    DIFFERENT row's bytes.
     """
     dataset = _dataset(tmp_path, [PAYLOADS[0], None, PAYLOADS[2]], schema=_NULLABLE_SCHEMA)
 

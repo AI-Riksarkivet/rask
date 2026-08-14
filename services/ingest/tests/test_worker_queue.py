@@ -23,12 +23,11 @@ import pytest
 import pytest_asyncio
 from ingest.lander import create_empty
 from ingest.queue import STREAM, UnitTask, WorkQueue, unit_subject
+from ingest.runtime import BRONZE_SCHEMA, _rows_in
 from ingest.worker import Worker, units_to_table
 
 
 NATS_URL = os.getenv("RASK_NATS_URL", "nats://localhost:4222")
-
-BRONZE_SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("source_uri", pa.string()), pa.field("payload", pa.binary())])
 
 
 def _reachable() -> bool:
@@ -87,7 +86,11 @@ async def test_the_stream_is_the_outstanding_work_ledger(queue: WorkQueue, tmp_p
     outcome = await Worker(queue, fetcher, name="w1").drain_chunk(run, "c0", expected=4, dataset_uri=uri)
 
     assert outcome.units_done == 4
-    assert len(outcome.fragments) == 4
+    # ROWS, not fragments. This asserted `len(fragments) == 4` — one fragment per unit, which is the
+    # defect `test_fragment_batching.py` was written to kill (500 pages meant 500 fragments in one
+    # commit). The invariant that survived batching is that every drained unit reaches the dataset;
+    # how many fragments carry them is a sizing decision, not a correctness one.
+    assert _rows_in(outcome.fragments) == 4
     assert sorted(fetcher.fetched) == sorted(t.key for t in tasks)
 
     # The ledger property: nothing outstanding remains after every unit was acked. Re-attaching to
@@ -120,7 +123,10 @@ async def test_a_corrupt_unit_parks_and_does_not_poison_the_run(queue: WorkQueue
 
     assert outcome.units_done == 2
     assert "iiif://v/1" in outcome.errors
-    assert len(outcome.fragments) == 2, "a corrupt unit must not contribute a fragment"
+    # Again rows, not fragments — and here the row count is the whole point of the test. The refused
+    # unit must leave NO trace in the data, and with batching the two survivors share one fragment,
+    # so a fragment count can no longer tell a parked unit from a written one.
+    assert _rows_in(outcome.fragments) == 2, "the corrupt unit contributed a ROW — parking did not refuse the write"
     await queue.close()
 
 
@@ -150,9 +156,18 @@ async def test_fragments_written_by_the_worker_commit_through_the_lander(queue: 
     result = Lander(cat).commit_fragments(uri, outcome.fragments, run_id=run)
 
     assert result.rows == 3
-    table = lance.dataset(uri).to_table()
+    dataset = lance.dataset(uri)
+    table = dataset.to_table()
     assert sorted(table.column("source_uri").to_pylist()) == [f"iiif://v/{i}" for i in range(3)]
-    assert table.column("payload")[0].as_py() == b"bytes-for-iiif://v/0"
+
+    # The payload comes back through `read_blobs`, not off the row. A written blob cell holds a
+    # DESCRIPTOR (`kind`/`position`/`size`/`blob_id`/`blob_uri`) and no bytes at all, whatever tier
+    # it landed in — so `table.column("payload")[0].as_py()` can never assert fidelity, only that a
+    # descriptor exists. This asserts the bytes SURVIVED the write, which is what the write path is
+    # for. `read_blobs` keys its tuples by ROW INDEX (measured), so the pairing is positional.
+    blobs = dict(dataset.read_blobs("payload", indices=list(range(3))))
+    fetched = {uri_: blobs[i] for i, uri_ in enumerate(table.column("source_uri").to_pylist())}
+    assert fetched == {f"iiif://v/{i}": f"bytes-for-iiif://v/{i}".encode() for i in range(3)}
     assert cat.registered == [(uri, 2, run)], "the commit must be registered with the run id"
     await queue.close()
 
@@ -165,7 +180,9 @@ def test_the_bronze_batch_is_faithful_to_source() -> None:
     caller-chosen key.
     """
     t = units_to_table([("iiif://v/1", b"\xff\xd8raw"), ("iiif://v/2", b"other")])
-    assert t.column("payload")[0].as_py() == b"\xff\xd8raw", "bronze must not transform the bytes"
+    # `payload` is a BLOB column (`blob_array`), so the cell is a descriptor struct rather than the
+    # bytes. Before a write the bytes live in its `data` field; this table has never been written.
+    assert t.column("payload")[0].as_py()["data"] == b"\xff\xd8raw", "bronze must not transform the bytes"
 
     again = units_to_table([("iiif://v/1", b"different-bytes")])
     assert again.column("id")[0].as_py() == t.column("id")[0].as_py(), "id must derive from the URI alone"
