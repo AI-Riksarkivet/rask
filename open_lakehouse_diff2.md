@@ -23,6 +23,22 @@ the vendored `lance_docs/` — `namespace.md` 7 563 lines, `file_format.md` 5 48
 **Branch note.** Authored on `claude/catalog-layer-lance-comparison-cdfikh`. Nothing in this file
 has been fixed yet; every finding describes the tree as of this commit.
 
+**ADVERSARIAL VERIFICATION PASS — 2026-08-14, same day (run `wf_8943ea70`, 11 agents).** Every
+finding was put through a skeptical re-read against the ACTUAL CODE (docstrings, comments, skills
+and docs/ disallowed as evidence of behavior; every absence claim re-established by documented
+grep), and the ten other `open_*.md` specs were scanned for overlaps, contradictions and binding
+rulings. Outcome: **F1, F4, F5 CONFIRMED as written (F5 strengthened); F2, F3, F6, F7, F8, F10
+CORRECTED in place** — the corrections are folded into each finding below, marked
+`[verify]`, and the material ones are honest: F2's failure mode is a 503 (not 403) and its own
+premise had trusted a drifted docstring; F3's comparator claim was wrong (rask HAS a
+Lakekeeper-style creation guard on one door — it just doesn't cover the others and dies in the
+same outage); F7 described a pre-2026-08-05 chart state; F6(c) is WORSE than filed (the leak is
+invisible to the reconciler, the original acceptance criterion was vacuous). No finding was
+REFUTED outright; F10.3's consequence was cut down to its real residual. Where this record
+confirms a claim, the `(agent-read)` caveat on its citations is superseded. Cross-spec results
+are in §5.5 — several findings are ALREADY FILED elsewhere (notably F1/F4 = open_python-audit.md
+CAT-CORE-05) and two contradictions with other specs need resolving on THEIR side.
+
 ---
 
 ## §0 The question that was asked, and the answer
@@ -238,20 +254,34 @@ rask is the only one of the four whose id-minting is check-then-act.
 - The ONE caller that does it right: the access simulator, `access_admin.py:347` (agent-read),
   passes context.
 
-**Failure scenario.** Estate admin writes `reader` on `table:acme$bronze$pages` for `user:eve` with
-`grant_time=now, grant_duration=86400` via `POST /v1/access/tuples`. The simulator says ALLOW. Every
-real route — describe, query, credentials — 403s for the entire window, because `_require`'s check
-evaluates the conditional tuple with no `current_time`. The feature is write-only: it can be
-granted, validated, simulated, audited — and never authorizes anything.
+**Failure scenario `[verify]` — CORRECTED: the symptom is a 503 authz-outage, not a 403.** Estate
+admin writes `reader` on `table:acme$bronze$pages` for `user:eve` with a live window via
+`POST /v1/access/tuples`. The simulator says ALLOW. On every real route, OpenFGA cannot evaluate
+the CEL condition without `current_time` — it does NOT return `allowed=false`, it FAILS the query
+with a 400 evaluation error (OpenFGA docs; openfga/openfga#1511; rask's own
+`access_admin.py:243-246` comment states exactly this). rask's `check()` catches that via
+`_FAIL_CLOSED` (`fga.py:100, 444-446` (verified by pass)) and raises `ServiceUnavailableError`, so
+`_require` audits FAILURE `authz_unavailable` and the route answers **503**. Consequence is worse
+than the original filing: writing a time-boxed grant MANUFACTURES authz-outage symptoms for that
+subject (503s + FAILURE audit rows that look like an OpenFGA incident), and a `list_objects`
+evaluation error can break the LIST endpoints for them entirely. The feature is still write-only.
+Note for the record: the original finding's "DENY" premise came from `fga.py:403-408`'s check()
+docstring, which is itself drifted about OpenFGA semantics — fix that docstring in the same
+commit (a verifier catching the auditor trusting a docstring is exactly why §0.5's rules exist).
 
-**Fix specification.** Thread `context={"current_time": <RFC3339 now>}` through every enforcement
-check: `_require`, `_require_any`, `batch_check` call sites, and the `list_objects`/`list_users`
-listing filters (OpenFGA accepts context on all of these). Centralize in `fga_deps` (one
-`_now_context()` helper) so no call site can forget it — the same "inside the library so no write
-site can skip it" pattern `_audit_tuples` already uses (`fga.py:1042-1055` (agent-read)).
-Alternative (if the feature is judged unwanted): delete the condition from the model + the
-tuple-editor validation and document per-object grants as permanent — a dead apparatus that LOOKS
-like it works is the worst of the three states.
+**Fix specification `[verify — scope enlarged]`.** The library wrappers must be extended FIRST:
+`batch_check`, `list_objects` and `list_users` in `service_kit/governed/fga.py` accept **no
+`context` parameter at all** (`fga.py:449-476, 479-517, 525-588` (verified by pass)), so a helper
+in `fga_deps` alone cannot reach them. Then thread `context={"current_time": <RFC3339 now>}`
+through every enforcement call: `_require` (:277), `_require_any` (:300), the grant-surface
+pre-checks (:459, :467, :530, :536, :541), and every listing filter (`credentials.py:65`,
+`tables.py:167`, `namespaces.py:517`, `models.py:100`, `warehouses.py:230,299`, `me.py:88,108`,
+`access.py:114,170,233` — the pass's complete enumeration). Centralize the clock in ONE helper so
+no call site can forget it — the `_audit_tuples`-inside-the-library pattern. Constraint from
+§5.5: the provision-side test `test_fga_provision.py` pins that the conditions block is written —
+the fix must not break it. Alternative (if the feature is judged unwanted): delete the condition
+from the model + tuple-editor validation and document per-object grants as permanent — but note
+the model-edit gate in §5.5 (no `fga` CLI in-sandbox) applies to that route.
 
 **Acceptance criteria.**
 - Integration test (FGA on, real OpenFGA container as in the existing fga suites): write a
@@ -289,11 +319,28 @@ caller), cannot be dropped through the API by its creator (no `can_drop`), and n
 will ever repair it. Operator remediation today: hand-written tuples via the estate-admin editor —
 the exact "ghost" class `scripts/seed_estate.py` was built to prevent.
 
-**Comparator precedent.** Lakekeeper, same dual-write, two mitigations rask lacks: (a) a
-`GenericTableCreationGuard` — DB row committed first, and if the subsequent OpenFGA write fails the
-guard DELETES the just-committed row (compensating cleanup, logged if even that fails); (b) a
-write-capable `lakekeeper openfga reconcile` CLI (`add-missing` / `add-and-delete-drift`,
-`--dry-run`) that rebuilds structural parent/child edges from Postgres while preserving grants.
+**Comparator precedent `[verify]` — CORRECTED: rask HAS mitigation (a), on one door.** The
+original claim "two mitigations rask lacks" was wrong: the Arrow create door carries a
+Lakekeeper-style compensating cleanup (`data.py:255-266` (verified by pass) — on seed failure it
+revokes tuples then natively drops the fresh table, gated by `_compensation_allowed`,
+`data.py:70-79`, fresh-id only, logged if the cleanup itself fails). Two things keep the finding
+alive: (i) the guard exists ONLY there — `declare_table` (`tables.py:207-208`), `register_table`
+(`:461-462`) and `undrop` (`:545-548`, where `trash.clear` at :547 runs BEFORE the seed, so a
+failed seed also destroys the retry's trash record) are all bare native-then-seed; and (ii) the
+compensation's FIRST step is itself an FGA call (`revoke_ownership` → `read_object_tuples`), which
+raises against the same down OpenFGA before the native drop is ever reached (retry budget: 3
+attempts, 0.2s backoff — a 30s blip is not ridden out), so the stranded state is reachable even on
+the guarded door. Also verified: NO retry mode converges on the Arrow door by design —
+`exist_ok` deliberately skips the seed (anti-seizure, `data.py:255`) and `overwrite` 403s at
+`require_can_drop_table` (`:217`) because the creator holds no tuples. Lakekeeper's second
+mitigation — a write-capable `openfga reconcile` CLI (`add-missing`/`add-and-delete-drift`,
+`--dry-run`) — rask genuinely lacks. `[verify]` scoping: the stale-tuples-after-drop state applies
+to the DESTRUCTIVE drop path; a trashed drop defers its revoke to the purge, which IS an
+automated cron-retried path (`purge.py:339`) — but the destructive path is the code default
+(`trash_grace_days=0` in code; the chart ships 7, see F7) and always the `purge=true` path.
+`adopt_existing` is in the public OpenAPI schema and generated TS client, but description-less
+and framed only as bytes-first migration, never as bind-failure repair (`schemas.py:620-628`) —
+"undocumented as a repair path" is the accurate form.
 
 **Fix specification** (either/both; (a) is smaller, (b) is more general):
 1. **Compensating cleanup on create.** If `seed_ownership` fails after a native create, best-effort
@@ -366,9 +413,17 @@ IAM-semantics policy evaluator (`tests/unit/test_vending.py:174-228` (agent-read
 validates the policy DOCUMENT rask builds, not the store's enforcement of it. RustFS's actual
 session-policy fidelity is untested anywhere that runs.
 
-**Fix specification.** In the e2e: `creds = body["credentials"]["storage_options"]` and switch to
-the bare key names (mirror `_client` kwargs accordingly). Then actually run it once against a
-deployed stack (`make e2e-isolation`) and record the result here; then wire it to CI (#84).
+**Fix specification `[verify — strengthened]`.** In the e2e: `creds =
+body["credentials"]["storage_options"]` and switch to the bare key names (mirror `_client` kwargs;
+note line 113's `creds.get("region")` also misses — region lives inside `storage_options`, so even
+a patched key lookup silently defaults to us-east-1). Additionally: **`make e2e-isolation` does
+not exist** — the test's own docstring (line 19) and this file's earlier text cite a Makefile
+target that no Makefile defines (verified: e2e targets are `e2e-ci`/`e2e-ray-ci`/`e2e` only), so
+the fix must also CREATE the target (or wire the suite into an existing one). Then run it once
+against a deployed vending-enabled stack, record the result here, and wire it to CI (#84).
+Placement constraint from §5.5: `services/catalog/tests` is NOT in the root `testpaths` — any new
+regression pin must land in a collected path (`tests/unit/test_vending.py` is the natural home)
+or add its directory to `testpaths` in the same commit.
 
 **Acceptance criteria.** The e2e passes against a deployed vending-enabled stack; a deliberate
 sabotage run (widen the session policy to the bucket root) makes the cross-tenant GET assertion
@@ -397,25 +452,44 @@ declared-only table (no location) falls through to the DESTRUCTIVE native drop
 (`tables.py:340-353` (agent-read)); the cascade path handles declared-only explicitly with a
 `location=''` record (skill #96 (verified against skill); `namespaces.py` (agent-read)).
 Fix: unify — single-door drop of a declared-only table with grace on writes the same `location=''`
-record (undrop of it = re-declare). Acceptance: drop+undrop a declared-only table through BOTH
-doors with grace on; no destructive native call observed on either.
+record. `[verify]` Note the cascade UNDROP currently SKIPS declared-only records with a warning
+(`namespaces.py:395-406`, `undrop_skipped_declared_only_table`) rather than re-declaring — so
+either implement re-declare on undrop for both doors, or document the record as informational-
+only; today's cascade record is effectively the latter. Acceptance: drop+undrop a declared-only
+table through BOTH doors with grace on; no destructive native call observed on either; undrop
+behavior identical on both.
 
-**(c) The purge leaks warehouse bindings.**
+**(c) The purge leaks warehouse bindings — `[verify]` WORSE than filed: the leak is INVISIBLE.**
 Evidence: recoverable cascade deliberately KEEPS the top-level binding so undrop can route
-(`namespaces.py:311` gates unbind on `not recoverable` (agent-read)); the purge deletes bytes →
-tuples → records but never touches `_warehouses/bindings/` (`purge.py:354-431` walk
-(agent-read)). A cascaded-then-expired namespace therefore leaves a dangling binding — the exact
-class the reconciler's `dangling_bindings` category reports, re-created by rask's own lifecycle.
+(`namespaces.py:311-312` (verified by pass)); the purge walk is check → revoke → delete_location →
+`trash.clear` → emit, with NO unbind anywhere (`purge.py:354-430`; `grep -rn unbind
+services/maintenance/src/` → zero hits — documented absence). The original claim that this is
+"the exact class `dangling_bindings` reports" was WRONG: `reconcile.py:398-403` defines
+`dangling_bindings` as bindings whose **warehouse_id has no warehouse record** — the cascade→
+expire→purge leak leaves the warehouse record intact and only the namespace gone, and NO
+reconciler category compares a binding's `top_ns` against live namespaces (verified against every
+`top_ns` use in reconcile.py). The leaked binding is therefore undetected by anything. This also
+falsifies `open_dapr.md §4.1`'s "every failure leaves a RECOVERABLE state / idempotent-retry-to-
+completion" claim for the purge — residue exists that nothing retries (→ §5.5 contradictions).
 Fix: purge of a namespace-kind trash record whose id is a bound `top_ns` unbinds after the last
-record of that subtree is reclaimed (and emits `namespace_dropped` so #46 evicts caches).
-Acceptance: cascade-drop a bound top-level namespace with grace on → expire → purge → reconciler
-reports zero `dangling_bindings`.
+record of that subtree is reclaimed (emitting `namespace_dropped` so #46 evicts caches); AND add a
+reconciler category (`orphaned_bindings`: binding whose `top_ns` names no live namespace) so the
+class is at least visible if the fix regresses.
+Acceptance `[verify — original criterion was vacuous]`: cascade-drop a bound top-level namespace
+with grace on → expire → purge → assert `_warehouses/bindings/` no longer contains the `top_ns`
+entry (asserting "reconciler reports zero dangling_bindings" passes even WITH the leak — do not
+use it).
 
-**(d) The sweep keeps maintaining trashed datasets.**
+**(d) The sweep keeps maintaining trashed datasets. `[verify: CONFIRMED]`**
 Evidence: a trashed table is deregistered but its bytes keep their `_versions/` marker in a swept
-bucket; `discover_dataset_uris` is marker-based (`optimize.py:52-101` (agent-read)), so
-`compact_one` keeps compacting AND `cleanup_old_versions` keeps deleting version history of data
-the owner believes frozen pending undrop.
+bucket; discovery (`discover_datasets`, `optimize.py:68-101` — the name `discover_dataset_uris`
+survives only in the stale module docstring at `optimize.py:3`) is purely marker-based, excluding
+only `__`-prefixed dirs and the control registries; it consults neither trash records nor
+`__manifest`. Every discovered URI reaches `compact_one` (`sweep.py:232`), whose only skips are
+policy-disabled/interval and feature-flag refusals; the sweep's sole trash contact is the
+report-only expiry log. So `compact_one` keeps compacting AND `cleanup_old_versions`
+(cleanup_enabled default True) keeps deleting version history of data the owner believes frozen
+pending undrop.
 Fix: sweep loads the trash index for each bucket's control root and SKIPS any dataset URI matching
 a live trash record (report them as their own summarize() line, like refusals — never silently).
 Acceptance: sweep tick over a bucket containing a trashed dataset → dataset untouched, counted in
@@ -427,29 +501,46 @@ asset-record work should record base URIs so purge can at least NAME what it did
 
 ### F7 (P1) — The shipped default posture exercises almost none of the safety apparatus, and the fleet bypasses vending entirely
 
-**Evidence** (all agent-read against config/chart):
-- `LANCE_TRASH_GRACE_DAYS` default 0 → drops destroy immediately (`config.py:81`).
-- `vending.mode` default `mode_b` (`chart/values.yaml:692-693`) → NO scoped credentials exist;
-  the entire #74 isolation apparatus is dormant unless web_identity/sts is opted into.
-- `MAINTENANCE_TRASH_PURGE_ENABLED` default off; orphan scan default off.
-- `warehouses_enabled` default off (`config.py:71`) → `require_warehouse_scoped` is a no-op.
-- `fga_lock_root_create` off → top-level namespace/table create is OPEN self-serve: any
-  authenticated caller, no FGA decision at all (`fga_deps.py:269-271` (agent-read)).
-- The fleet holds static root S3 keys: `MEDALLION_S3_*`
-  (`services/medallion/src/medallion/core/config.py:210-236`), viewer/maintenance/lineage
-  similarly — credential-level tenant isolation exists only for EXTERNAL clients, on an opt-in
-  path. Databricks ships vending as THE access mechanism and soft-delete ON (7 days); Gravitino's
-  model has every consumer (incl. GVFS) on vended creds.
+**Evidence `[verify — two claims corrected, rest confirmed exact]`:**
+- ~~`LANCE_TRASH_GRACE_DAYS` default 0 → drops destroy immediately~~ **CORRECTED: the DEPLOY path
+  ships a 7-day grace.** `chart/values.yaml:731` sets `trashGraceDays: 7` and
+  `chart/templates/services.yaml:77` renders `LANCE_TRASH_GRACE_DAYS=7` even when the key is
+  missing (`hasKey|ternary` with a hardcoded 7 fallback) — fixed 2026-08-05 per the values.yaml
+  comment; the original claim described the pre-fix state. The code default 0 (`config.py:81`)
+  bites only bare, chart-less runs (dev-micro, tests).
+- `vending.mode` default `mode_b` (`config.py:246`, `chart/values.yaml:692-693`) → NO scoped
+  credentials exist; **confirmed including prod** — grep of `values-prod.yaml` /
+  `values-local.yaml` / `values-live-pins.yaml` finds no overlay overriding it. The #74 isolation
+  apparatus is dormant in every shipped posture.
+- `MAINTENANCE_TRASH_PURGE_ENABLED` default False (`maintenance config.py:141`,
+  `values.yaml:957`); orphan scan default False (`config.py:160`). Confirmed.
+- `warehouses_enabled` default False (`config.py:71`, `services.yaml:82`) →
+  `require_warehouse_scoped` is a documented no-op. Confirmed.
+- ~~`fga_lock_root_create` off → open self-serve~~ **CORRECTED: prod already locks it.**
+  `chart/values-prod.yaml:20-22` sets `auth.enabled: true` + `lockRootCreate: true` ("prod: a
+  token alone can't create root namespaces"), rendered by `services.yaml:153`. Only the base/dev
+  posture leaves it off, and the template comment documents that as deliberate ("Off in dev
+  (self-serve); ON in prod"). The open-create gate itself is `api/fga_deps.py:269-271` as claimed.
+- The fleet holds static root S3 keys — **confirmed and completed by the pass**: medallion
+  (`MEDALLION_S3_ACCESS_KEY_ID`, `config.py:209-222`; chart injects `rustfs.accessKey` at
+  `medallion.yaml:179,313`), maintenance (`config.py:82`, default literally `rustfsadmin`;
+  `maintenance.yaml:118`), lineage (`config.py:126-129`; `services.yaml:314`), viewer via
+  `service_kit.media` (`media/config.py:78-80`; `explorer.yaml:200`). With `secrets_from_dapr`
+  the plaintext moves to OpenBao but it is the same static root key. Credential-level tenant
+  isolation exists only for EXTERNAL clients, on an opt-in path. Databricks ships vending as THE
+  access mechanism; Gravitino's model has every consumer (incl. GVFS) on vended creds.
 
-**This is a decision list, not a bug list.** Each default is individually reasoned (grace changes
-drop semantics for every caller; mode_b is the RustFS-without-STS reality). But jointly, a default
-deploy has Lakekeeper-grade machinery with OSS-Unity-grade enforcement. The ask: make the posture
-an explicit, owner-ratified matrix (dev vs prod values files), specifically deciding: (1) prod
-grace days > 0? (2) prod vending = web_identity (RustFS-native, chart already has the wiring,
-`chart/templates/services.yaml:104-111`)? (3) `fga_lock_root_create=true` in prod? (4) a roadmap
-item for fleet services consuming vended per-tier creds instead of root keys (they can call the
-same `/credentials` door with their service identity — the service-door identity plumbing exists,
-`security.py:78-160` (agent-read)).
+**This is a decision list, not a bug list — and `[verify]` two of the four decisions are already
+made.** Each default is individually reasoned (mode_b is the RustFS-without-STS reality). The
+remaining asks: (1) ~~prod grace days~~ DONE (7d since 2026-08-05); (2) prod vending =
+web_identity? (RustFS-native, chart wiring exists, `services.yaml:104-111`) — still mode_b
+everywhere, the REAL remaining posture gap; (3) ~~`fga_lock_root_create` in prod~~ DONE
+(values-prod); (4) a roadmap item for fleet services consuming vended per-tier creds instead of
+root keys (the service-door identity plumbing exists, `security.py:78-160`). Constraint from
+§5.5: `open_ingest_design.md §2` records a RULING against building human-vs-service tier guards
+into the write doors — posture hardening is tuple-seeding and values policy, not new code guards.
+Also §5.5: the fleet-key redesign and `open_gateway.md` Phase 2 (dapr-api-token guard fate) are
+the same decision and must be made together.
 
 ---
 
@@ -470,7 +561,12 @@ spec-correct 501" → 406) in the same commit. `tests/unit/test_ns_errors_contra
 update its expectation deliberately.
 Caveat to record: the spec declares 406 on only a handful of routes; using it estate-wide for
 declined ops is the spec's *intent* (code 0) even where the route table omits it — note this in the
-map's comment.
+map's comment. `[verify]` The contract test's pin is behavioral, not a map-value assertion
+(`test_ns_errors_contract.py:48` asserts `status == 501` through `problem_detail`), and a
+repo-wide grep for `406` across `packages/` + `services/catalog` returns zero code hits — the fix
+introduces the status, it doesn't redirect an existing one. Adjacent per §5.5:
+`open_python-audit.md` catalog-api-10 files a sibling misuse (501-vs-400 on the access surfaces)
+— land both inside its E4 one-error-taxonomy consolidation, not as a lone patch.
 
 **(b) Spec self-contradictions to pin in tests** (so an implementing agent doesn't "fix" rask to a
 buggy prose line) — all (spec), from the `wf_88eb56e8` scan:
@@ -505,13 +601,19 @@ Acceptance: audit stream shows one row per issuance on both paths.
 
 ### F9 (P2) — No generic/opaque asset rung; the model registry squats on the `table` type
 
-**Evidence.** The Lance-only gate: `data.py:96-108` (agent-read) — right call for the DATA plane.
-But the model registry authorizes ONNX artifact trees as `table:models$<model>`
-(`endpoints/models.py:8-13,51-63` (agent-read)); `list_artifacts` is the one plain-path,
-non-Lance surface (`services/models.py:155-175` (agent-read)); a bare artifact dir with no
-per-model Lance registry dataset is listable-but-ungovernable (null versions, unpromotable); and
-promotion correctness leans on "last row of the registry dataset" + "compaction preserves row
-order" (`services/models.py:1-16` (agent-read)) — a convention, not a key.
+**Evidence `[verify — one detail corrected]`.** The Lance-only gate: `data.py:96-108` — right
+call for the DATA plane. The model registry authorizes model objects as `table:models$<model>`
+(`endpoints/models.py:5-13, 51-62`; `fga_deps.py:907` for can_promote); `list_artifacts` is the
+one plain-path, non-Lance surface (`services/models.py:155-174` — "the tree is OUTSIDE any Lance
+dataset by design"); promotion correctness leans on "last row of the registry dataset" +
+"compaction preserves rows and their order" (`services/models.py:6-10, 69, 197`) — a convention,
+not a key. CORRECTION: the "listable-but-ungovernable" case is a bare directory under
+`models_root` that is not a readable Lance dataset (lists with null versions,
+`endpoints/models.py:66-74`; promote 404s via `_open`). A bare ARTIFACT tree is not even that —
+artifact trees live under the SEPARATE `model_artifacts_root` (`config.py:136-147`), which
+`list_models` never enumerates, so it is invisible to the listing rather than listable. The
+essence stands: half-plain-file assets governed under the `table` type, with the visible/
+promotable boundary drawn by implementation accident rather than by an asset model.
 
 **Comparator precedent.** This is EXACTLY Lakekeeper's Generic Table (name + format tag + location
 + properties + opaque blobs; identity/authz/vending/lifecycle; NO data ops — and their reuse
@@ -542,10 +644,13 @@ Relevant for the archives estate beyond models: EAD files, IIIF sidecars.
 2. `fga.py:3-6` docstring says "nine types"; `model.fga` defines ten (`annotation_project`)
    (agent-read). One-line fix.
 3. Binding cache is forever-positive with best-effort broadcast eviction over a ring-buffer
-   transport with no dead-letter (`api/dapr.py:73-80` (agent-read)); a dropped `warehouse_deleted`
-   event leaves a replica routing a tenant at a deleted (possibly purged) bucket until restart.
-   Fix: TTL floor (minutes) on the cache — bounds the damage without giving up the immutability
-   premise.
+   transport with no dead-letter (`api/dapr.py:64-80`). `[verify — consequence CORRECTED]`: a
+   dropped `warehouse_deleted` event does NOT leave a replica routing at a deleted bucket —
+   `dependencies.py:75-97` reads warehouse STATUS live on every request and a missing record
+   fails closed to 403. The real residual: persistent 403s on a since-re-bound namespace until
+   restart, wrong-bucket routing only during the partial-delete window (record still present) or
+   under warehouse-id reuse. Fix stands (TTL floor, minutes) but is P2-sized, matching the
+   corrected consequence.
 4. Trash-window privilege bleed: grants stay live on a freed id (correct, #75), so a same-id
    RE-CREATE during the grace window inherits the old table's tuples, and undrop seeds the
    UNDROPPER as owner (`tables.py:517-548` (agent-read)) — an implicit ownership transfer. Fix
@@ -559,13 +664,21 @@ Relevant for the archives estate beyond models: EAD files, IIIF sidecars.
    (`purge.py:342-351` (agent-read)) — consumers attribute expiry purges to a user drop until the
    vocabulary regen adds `*_purged` actions (`make openapi` + `gen:types:catalog` +
    `test_openapi_contract`, per the skill's wire-contract rule).
-7. Scaling maintenance replicas silently defeats the sweep's in-process `asyncio.Lock`
-   single-flight (`routes.py:41-49` notes `compactionReplicas=1` (agent-read)); no chart guard
-   exists, unlike the catalog's replicas>1-requires-controlEmit render failure. Fix: the same
-   render-failure pattern for `maintenance.replicas > 1`.
-8. ListUsers truncates silently at ~1000 subjects (`fga.py:520-559`, `access.py:20-22`
-   (agent-read)) — an access-review surface that can under-report with only a log line. Fix:
-   surface truncation in the response (`truncated: true`) so reviews cannot silently lie.
+7. `[verify — CORRECTED, exposure narrower]` The sweep's `asyncio.Lock` single-flight claims
+   cluster-wide validity via `compactionReplicas=1` (`routes.py:41-49`) — but that values key
+   **exists nowhere in the chart** (the comment is itself drift), and `maintenance.yaml:47`
+   HARDCODES `replicas: 1`, so scaling is not reachable through values at all — only via kubectl
+   scale or a template edit. Today the lock actually holds (this matches `open_dapr.md §3`'s
+   reading). Fix: `open_batch_process.md B13` already PLANS the right shape — invariant tests
+   binding each lock-as-cluster-lock to its replica count, landing with the transform build;
+   coordinate there rather than adding a render guard for a key that doesn't exist. Also fix the
+   routes.py comment.
+8. `[verify — CORRECTED, fix half-exists]` ListUsers truncates silently at the server cap 1000
+   (`fga.py:520-522, 583-588` — log.warning only). The proposed `truncated: true` flag ALREADY
+   EXISTS on the admin door (`AccessListUsersResponse.truncated`, `schemas.py:218`, set at
+   `access_admin.py:431`); the gap is only the per-object `/access/list` review
+   (`AccessListResponse`/`RelationGrants`, `schemas.py:27-36` — no flag). Fix: add the same flag
+   there; the admin door is the pattern to copy.
 9. `revoke_object_tuples` reconstructs only the inverse `child` edge; any future model shape where
    a dropped object appears as USER on another object would survive drops
    (`fga.py:1267-1277` (agent-read)). Guard: a model-contract test asserting no such shapes exist,
@@ -711,19 +824,136 @@ Ordered by value-per-effort; each item is independently landable.
 
 | # | Item | Findings | Size | Notes |
 |---|---|---|---|---|
-| 1 | Conditional PUT on id-minting registry writes + skill correction | F1 | S-M | boto3 `IfNoneMatch="*"`; 412 → code 14/AlreadyExists; new `cas`-marker e2e |
-| 2 | `context` threaded through every FGA check | F2 | S | one helper in `fga_deps`; integration test with real window |
-| 3 | Fix + run the isolation e2e; wire to CI (#84) | F5 | S | shape + key names; sabotage-run proof |
+| 1 | Conditional PUT on id-minting registry writes + skill correction | F1 | S-M | boto3 `IfNoneMatch="*"`; 412 → code 14/AlreadyExists; new `cas`-marker e2e. = CAT-CORE-05 (§5.5), wave-2 slot |
+| 2 | `context` threaded through every FGA check | F2 | M | wrapper signatures FIRST (`batch_check`/`list_objects`/`list_users` take no context), then one clock helper; integration test with real window |
+| 3 | Fix + run the isolation e2e; wire to CI (#84) | F5 | S | shape + key names + region; CREATE the missing make target; sabotage-run proof; pin lands in a collected testpath (§5.5.7) |
 | 4 | ETag/version-conditioned read-modify-write on mutable records | F4 | M | status, protection, trash; bounded retry |
 | 5 | Dual-write repair: create-side compensating cleanup + write-capable structural reconcile | F3 | M-L | Lakekeeper's guard + reconcile pattern; keep report AST gate on the report module |
 | 6 | Trash-plane coherence: record-first ordering, declared-only unification, purge unbinds, sweep skips trashed | F6 | M | four small fixes, one theme |
 | 7 | `Unsupported` → 406 + docs/skill/COVERAGE updates | F8a | S | update the pinned contract test deliberately |
 | 8 | Describe-path vend audit row | F8c | S | |
-| 9 | Posture matrix decision (grace, vending default, root-create lock, fleet-on-vending roadmap) | F7 | owner | decision doc, then values files |
+| 9 | Posture decision: prod vending + fleet-on-vending roadmap | F7 | owner | grace-days and root-create lock are ALREADY DONE in the chart (`[verify]`); remaining: vending mode in prod + fleet static keys — decide together with `open_gateway.md` Phase 2 (§5.5) |
 | 10 | Generic `asset` rung design (models first consumer) | F9 | L | needs owner ratification; Lakekeeper/Gravitino precedent in §3 |
 | 11 | Hygiene batch | F10.1-10 | S each | independent one-liners |
 
 ---
+
+## §5.5 Cross-references to the other `open_*` specs (verification pass, 2026-08-14)
+
+The ten sibling working specs were scanned in full. Three kinds of result; an implementer MUST
+read this section before starting any F-item, because several fixes are already filed, planned,
+or ruled on elsewhere.
+
+### Already filed elsewhere — coordinate, do not re-file
+
+- **F1 + F4 = `open_python-audit.md` CAT-CORE-05** ("Control-plane registry writes are plain
+  overwrites with no compare-and-swap", `warehouses.py:78, :177` — filed med/E3, execution wave 2)
+  plus SKG-08 (the four hand-rolled record registries as one family) and SKG-09 (records as
+  unvalidated dicts). This file's contribution on top: the TOCTOU-on-TENANT-ISOLATION-GUARDS
+  framing and failure scenarios, which CAT-CORE-05's lost-update framing doesn't carry. The
+  audit's Appendix C ordering (wave 1 = E1+E2+E9 first) applies — slot the F1 fix into wave 2
+  rather than forking the ordering. Machine-readable twin: `open_python-audit.findings.json`.
+- **F3 partial**: SKG-01 (swallowed-rejection → stale grant + false SUCCESS audit) and SKG-02
+  (partial-batch audit skip) file adjacent FGA write-path defects, and SKG-01's fix is
+  PRESCRIPTIVE — use OpenFGA `ConflictOptions(on_duplicate_writes=IGNORE, ...)` so the SERVER
+  decides idempotency, and never audit an unconfirmed write. F3 remediation must build on that,
+  not invent a parallel classifier.
+- **F10.7 = `open_dapr.md §3`** (phantom `compactionReplicas` key, adjudicated: lock holds today,
+  the defect is drift) **+ `open_batch_process.md` B13** which already PLANS the invariant tests —
+  land there.
+- **F10 items also filed**: ListUsers truncation = SKG-04; binding-cache unbounded global =
+  SKG-11 (and `tests/unit/test_binding_cache_eviction.py` already pins part of the eviction
+  contract); unbounded cascade recursion = catalog-api-07; F8a's territory = catalog-api-10
+  (sibling 501-vs-400 misuse) → ride E4's one-taxonomy consolidation.
+- **Two FGA defects near this file's scope are already adjudicated OPEN and unfixed**
+  (`open_dapr.md` HANDOFF 2026-08-10): a manage_grants-only principal can self-grant owner, and
+  the inverse `child` edge is never backfilled on the pre-existing estate (upward visibility inert
+  there). F10.9's guard-test proposal should reference, not re-discover, these.
+
+### Contradictions to resolve — on THEIR side or ours, explicitly
+
+- **`open_projects.md §4.5`** claims the id regex is "single-sourced (identifiers.py:31-33)" under
+  its do-not-re-file list. F10.1 shows a second, divergent pattern at
+  `warehouse_registry.py:37` (verified, both patterns quoted in F10.1). open_projects' claim is
+  scoped to the catalog service and misses the service-kit copy — correct that entry when F10.1
+  lands.
+- **`open_dapr.md §4/§4.1`** asserts the purge leaves "a RECOVERABLE state" on every failure
+  ("idempotent-retry-to-completion, not forward-then-undo"). F6(c) falsifies this for bindings:
+  the cascade→expire→purge path leaves residue nothing retries AND nothing reports. §4.1's
+  disposition ("reopen the day trashPurge is enabled") now has a second reason to reopen.
+- **`open_batch_process.md §6`** (Rejected list) states "writes are server-side, FGA-gated,
+  CAS-guarded" as achieved posture — overstated per F1; its B8 build ("`_transforms/` records
+  under the control root … CAS'd") assumes a CAS seam that does not exist yet. B8 should either
+  land after F1's conditional-write seam or build it.
+- **`open_python-audit.md`'s maintenance section** treats the report-only reconciler as a pinned
+  design property (AST-gate test praised, reconciler defects filed WITHIN the report-only
+  contract). F3's repair-path proposal deliberately challenges that boundary — the resolution
+  recorded here: keep the REPORT module report-only and its AST gate; the repair lives in a NEW
+  module/endpoint the gate does not cover (F3 fix spec option 2 already says this).
+
+### Binding rulings and constraints an implementer inherits
+
+1. **FGA model edits are gated and the gate is unreachable in-sandbox** (`open_projects.md §6`):
+   `fga model test` needs the `fga` CLI, which cannot be installed here (release binary 403s
+   through the proxy). Affects F2's delete-the-condition alternative, F9's new type, F10.2's
+   docstring-vs-model fix if resolved model-side. Model changes are owner-executed.
+2. **"Never write FGA tuples — report the exact missing tuple and STOP"** is a standing agent
+   constraint (`open_batch_process.md §7`). F3's write-capable structural reconcile and any
+   child-edge backfill are therefore OWNER-EXECUTED migrations; an agent may build the tool, not
+   run it against the estate.
+3. **Root-create lock trap** (`open_projects.md §5`, quoting `model.fga:82-85`): with
+   `fga_lock_root_create` on, a missing parent relation is an OpenFGA 400 → fail-closed 503 for
+   EVERYONE, and `transaction` declares `parent: [namespace, warehouse]` so every new `can_create_*`
+   must exist on BOTH types. Any F9 type addition or F7 posture change must audit the full
+   parent-relation matrix first — this is the same 400→503 failure class F2 documents.
+4. **F9's design space is pre-constrained by three recorded rulings**: (a) the model already
+   documents WHY a dedicated type was rejected for `store` (`model.fga:100-105` — nothing would
+   seed the tuples for code-defined defaults; `open_projects.md §4.4` argues this does NOT
+   transfer to types needing one seeded tuple — engage that argument, don't repeat it); (b) a new
+   type must define the `_GRANTABLE_BASE` rungs (owner/writer/reader/validator) or it is
+   ungrantable through `/access/grant` (`open_projects.md §4.1`); (c) the annotator/assist plane
+   resolves models via RAY SERVE discovery, bindingly ("there is no second model plane",
+   `open_assist_discovery.md:7-9,102-107`) — an F9 asset rung must not assume the assist plane as
+   a consumer, and must preserve `models$<name>` addressing + the version==Lance-commit
+   crash-safety (`open_anno_active.md:266-269, 483-495`) that the train-loop work builds on.
+5. **The existence-oracle ruling is settled** (`open_ingest_design.md §1d`, "recorded here so it
+   is not re-litigated"): describe AND exists both 403 on an absent table; `_create_empty` is the
+   only door that answers does-this-table-exist. F8c's audit fix must not alter describe/exists
+   semantics — the ingest ensure-sequence and the annotator publish design depend on them.
+6. **Where audit belongs** (`open_medallion_workflow.md §4.2`, ruling): durable decisions are
+   recorded in LINEAGE facets, not retention-bounded stores. F8c's describe-vend audit should
+   follow the existing #41 audit stream convention, and anything promoted to "durable decision
+   record" status belongs in lineage.
+7. **Test-wiring hazard** (`open_python-audit.md` X2/CAT-CORE-03): `services/catalog/tests` and
+   `services/lineage/tests` are ABSENT from root `testpaths` — suites placed there are silently
+   inert. Every acceptance test in this file must land in a collected path or extend `testpaths`
+   in the same commit. (F5's pin → `tests/unit/test_vending.py`.)
+8. **Lint blind spot** (`SKG-14`): the whole `lakehouse/**` scope sits under a blanket 21-rule
+   ruff exemption — F6/F10 hygiene fixes there are unlinted until that exemption is lifted;
+   don't mistake a clean `make lint` for coverage.
+9. **In-flight collisions**: `open_batch_process.md` B8 adds `_transforms/` records under the same
+   control root (coordinate with F1's seam); the bulk grid's act-first ontology PATCH
+   (`open_bulk_active.md §5`, landed 2026-08-09) sits on the annotations table, which is
+   catalog-governed — F1/F4/F6 semantic changes land under a live save wire whose OCC pattern
+   (`base_version` → 409 → re-fetch) is ALSO the estate's precedent for F4's
+   conditional-read-modify-write shape. Reuse it conceptually.
+10. **Dapr-CAS caveat if any fix uses Dapr state instead of raw S3** (`open_dapr.md §2.7`,
+    CLOSED): an ETag alone is IGNORED under Dapr's default concurrency — `concurrency: first-write`
+    must be explicit. The registry CAS in F1 uses raw boto3 `If-None-Match` and does not inherit
+    this, but F4 implementers considering the landed UserStateStore pattern do.
+11. **Sandbox verification limits** (`open_anno_active.md §0`): full pytest hangs on Dapr actor
+    suites in cloud sandboxes (use targeted `uv run pytest tests/unit/...`); no helm binary; no
+    k3s/Dagger; some egress blocked. State scope-cuts explicitly when verifying F3/F6/F7 fixes
+    here — don't let "couldn't run it" read as "verified".
+
+### Scope confirmation
+
+`open_anno_active.md`, `open_assist_discovery.md`, `open_bulk_active.md` file NOTHING in this
+file's scope (annotator/assist/bulk planes; governance explicitly out of scope for them) and
+contradict nothing — checked, including the near-miss on annotation-row provenance vs F8c
+(different planes). The specs' own lifecycles: all are self-deleting working docs; references
+into them will dangle as their backlogs drain — cite the finding ids (CAT-CORE-05, SKG-01, B8,
+B13) alongside file names so the trail survives.
 
 ## §6 Sources
 
