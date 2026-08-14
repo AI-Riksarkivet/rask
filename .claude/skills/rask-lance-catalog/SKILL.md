@@ -85,14 +85,17 @@ one client error path serves the whole API.
 | State | Store |
 | --- | --- |
 | table data + versions | Lance datasets on object storage (rustfs) |
-| project registry (`_projects/<id>.json`), warehouse registry + namespace bindings | JSON records on the control root, CAS'd conditional writes (the `cas` e2e marker proves the primitive) |
+| project registry (`_projects/<id>.json`), warehouse registry + namespace bindings | JSON records on the control root. **Id-MINTING creates are conditional** (`If-None-Match: *` via `service_kit.lakehouse.records.create_json` — F1, `open_lakehouse_diff2.md`): project mint, warehouse mint and the write-once bindings are store-arbitrated, a lost race surfaces as 409, never last-writer-wins. **Mutable-field read-modify-writes (warehouse `status`, protection, trash) are STILL plain overwrites** — F4's ETag seam is open; do not claim CAS for them. |
 | authz | OpenFGA on its chart-managed Postgres |
 | lineage | AGE (Postgres), chart-managed |
 
 A relational app-DB was removed at P7a and must not creep back for the catalog: registry writes are
-admin-frequency, CAS handles their concurrency, and deletes are bottom-up single-object operations
-by design — there is no multi-object transaction to need one. The moment that changes (atomic
-cross-object invariants, high-frequency filtered listings), it is a design decision, not a default.
+admin-frequency, the conditional creates arbitrate the id-mint races, and deletes are bottom-up
+single-object operations by design — there is no multi-object transaction to need one. The moment
+that changes (atomic cross-object invariants, high-frequency filtered listings), it is a design
+decision, not a default. The conditional-put primitive is proven live by TWO `cas`-marker e2e
+suites: `test_object_store_cas_e2e.py` (Lance's own manifest commits) and
+`test_registry_cas_e2e.py` (the registry seam, contended 8-way).
 
 ## Lifecycle
 

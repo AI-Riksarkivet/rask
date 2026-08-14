@@ -294,3 +294,65 @@ def test_create_denied_for_non_admin_403(client: TestClient, tmp_path: Any, monk
     monkeypatch.setattr(fga_module, "check", deny)
     resp = client.post("/v1/warehouses", json={"id": "wh-a", "project": "acme"}, headers={"authorization": "Bearer t"})
     assert resp.status_code == 403, resp.text
+
+
+# --------------------------------------------------------------------------- #
+# F1 (open_lakehouse_diff2.md) — the mint race is closed AT THE STORE
+# --------------------------------------------------------------------------- #
+
+
+def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The TOCTOU the conditional create closes: the takeover guard's read happens BEFORE the rival's
+    # record lands (simulated by a first read that returns None), so the guard passes for BOTH
+    # creates — only store arbitration can refuse the second. Before F1 this ended in a silent
+    # last-writer-wins overwrite: evil's record replaced acme's, with both projects' FGA edges live.
+    monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
+    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
+    _mk_projects(client, "acme", "evil")
+    assert client.post("/v1/warehouses", json={"id": "wh-race", "project": "acme"}).status_code == 200
+
+    real_get = wh_svc.get_warehouse
+    reads = {"n": 0}
+
+    def racy_get(root: str, so: dict[str, str], wid: str) -> dict[str, str] | None:
+        reads["n"] += 1
+        if reads["n"] == 1:  # the guard's read: the rival's write is "not yet visible"
+            return None
+        return real_get(root, so, wid)  # the post-conflict re-read sees the truth
+
+    monkeypatch.setattr(wh_svc, "get_warehouse", racy_get)
+    # evil names a DIFFERENT bucket so the (unblinded) bucket-claim scan cannot catch this — the
+    # id-mint conditional create is the only remaining defense, which is the point of the test.
+    r = client.post("/v1/warehouses", json={"id": "wh-race", "project": "evil", "bucket": "evil-bkt"})
+    assert r.status_code == 409, r.text
+    assert reads["n"] >= 2  # the conflict forced a re-read — the store, not the guard, refused
+    monkeypatch.setattr(wh_svc, "get_warehouse", real_get)
+    assert wh_svc.get_warehouse(f"file://{tmp_path}", {}, "wh-race")["project"] == "acme"  # type: ignore[index]
+
+
+def test_create_warehouse_lost_race_same_project_converges(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Same race, same project (a GitOps controller re-POSTing concurrently): must converge like the
+    # sequential idempotent path — 200, and the winner's mutable lifecycle fields carried forward.
+    # The quarantine rule is the load-bearing half: the loser's rebuilt record must NOT resurrect a
+    # deactivated warehouse (the F4 interleaving, closed on the racing-create path by the re-read).
+    monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
+    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
+    _mk_projects(client, "acme")
+    assert client.post("/v1/warehouses", json={"id": "wh-conv", "project": "acme"}).status_code == 200
+    root = f"file://{tmp_path}"
+    wh_svc.set_warehouse_status(root, {}, "wh-conv", "deactivated")
+
+    real_get = wh_svc.get_warehouse
+    reads = {"n": 0}
+
+    def racy_get(rt: str, so: dict[str, str], wid: str) -> dict[str, str] | None:
+        reads["n"] += 1
+        if reads["n"] == 1:
+            return None
+        return real_get(rt, so, wid)
+
+    monkeypatch.setattr(wh_svc, "get_warehouse", racy_get)
+    r = client.post("/v1/warehouses", json={"id": "wh-conv", "project": "acme"})
+    assert r.status_code == 200, r.text
+    monkeypatch.setattr(wh_svc, "get_warehouse", real_get)
+    assert wh_svc.get_warehouse(root, {}, "wh-conv")["status"] == "deactivated"  # type: ignore[index]

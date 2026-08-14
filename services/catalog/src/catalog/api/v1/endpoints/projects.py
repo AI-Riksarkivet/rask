@@ -65,6 +65,7 @@ from catalog.services import projects as project_registry
 from catalog.services import warehouses
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
+from service_kit.lakehouse.records import RecordExistsError
 
 
 log = logging.getLogger(__name__)
@@ -201,7 +202,20 @@ async def create_project(
         # an idempotent re-POST must never silently strip protection, same rule as warehouse `status`.
         "protected": (existing.get("protected") if existing else None) or "false",
     }
-    await run_in_threadpool(project_registry.put_project, settings.registry_root, so, record)
+    if existing is None:
+        # The tenant MINT is conditional (F1): two concurrent creates of one id both read "absent"
+        # above; the store refuses the second, which then converges on the winner's identity fields
+        # exactly like the sequential idempotent re-POST.
+        try:
+            await run_in_threadpool(project_registry.create_project_record, settings.registry_root, so, record)
+        except RecordExistsError:
+            fresh = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id) or {}
+            record["created_at"] = fresh.get("created_at") or record["created_at"]
+            record["created_by"] = fresh.get("created_by") or record["created_by"]
+            record["protected"] = fresh.get("protected") or record["protected"]
+            await run_in_threadpool(project_registry.put_project, settings.registry_root, so, record)
+    else:
+        await run_in_threadpool(project_registry.put_project, settings.registry_root, so, record)
     granted = await fga_deps.seed_project_admin(client, settings, token, project=project_id)
     log.info("project_created", extra={"project": project_id, "existing": existing is not None})
     await emit_control(

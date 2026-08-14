@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
+    ConcurrentModificationError,
     CreateNamespaceRequest,
     CreateNamespaceResponse,
     DropNamespaceRequest,
@@ -66,6 +67,7 @@ from catalog.schemas import (
 from catalog.services import native, warehouses
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
+from service_kit.lakehouse.records import RecordExistsError
 
 
 log = logging.getLogger(__name__)
@@ -205,7 +207,33 @@ async def create_warehouse(
         protected = "true"
     if protected:
         record["protected"] = protected
-    await run_in_threadpool(warehouses.put_warehouse, settings.registry_root, so, record)
+    if existing is None:
+        # The id-MINT is conditional (F1): the takeover guard above read the registry BEFORE deciding,
+        # and a rival create landing between that read and this write used to win silently — the store
+        # now refuses the second create, whatever the guard saw.
+        try:
+            await run_in_threadpool(warehouses.create_warehouse_record, settings.registry_root, so, record)
+        except RecordExistsError:
+            # Lost the mint race. Re-read and re-apply the takeover guard against the WINNER.
+            fresh = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
+            if fresh is None:
+                # won-then-vanished (raced a concurrent delete): retryable, never a blind overwrite —
+                # code 14 → 409 so the caller retries into a clean create.
+                raise ConcurrentModificationError(f"warehouse {warehouse_id!r} create raced a concurrent delete; retry") from None
+            if fresh.get("project") != project:
+                raise NamespaceAlreadyExistsError(f"warehouse {warehouse_id!r} is already registered to another project") from None
+            # Same-project concurrent create: converge on the winner's mutable lifecycle fields — the
+            # same carry-forward the sequential idempotent path applies (incl. the quarantine rule:
+            # a re-create must never resurrect a deactivated warehouse).
+            record["status"] = fresh.get("status", "active")
+            record["created_at"] = fresh.get("created_at") or record["created_at"]
+            if fresh.get("serving") and not record.get("serving"):
+                record["serving"] = fresh["serving"]
+            if fresh.get("protected") and not record.get("protected"):
+                record["protected"] = fresh["protected"]
+            await run_in_threadpool(warehouses.put_warehouse, settings.registry_root, so, record)
+    else:
+        await run_in_threadpool(warehouses.put_warehouse, settings.registry_root, so, record)
     await fga_deps.seed_warehouse(client, settings, token, warehouse_id=warehouse_id, project=project)
     log.info("warehouse_created", extra={"warehouse": warehouse_id, "bucket": bucket, "project": project})
     actor = f"user:{token.sub}" if token else None

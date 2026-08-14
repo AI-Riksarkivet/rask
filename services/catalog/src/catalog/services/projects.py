@@ -23,6 +23,7 @@ import pyarrow.fs as pafs
 
 from catalog.services.warehouses import _read_json, _write_json
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+from service_kit.lakehouse.records import create_json
 
 
 log = logging.getLogger(__name__)
@@ -31,13 +32,23 @@ _PROJECTS_PREFIX = "_projects"
 
 
 def put_project(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
-    """Persist a project record at ``_projects/<id>.json`` (overwrite — create is idempotent).
-
-    The caller stamps ``created_at``/``created_by`` (kept out of here so unit tests stay
-    deterministic) and carries mutable lifecycle fields (``protected``) forward on a re-create,
-    exactly like the warehouse registry does for ``status``.
+    """Persist a project record at ``_projects/<id>.json`` (overwrite — for a record whose existence is
+    already settled: the sequential idempotent re-POST). The tenant MINT goes through
+    :func:`create_project_record` (F1). The caller stamps ``created_at``/``created_by`` (kept out of
+    here so unit tests stay deterministic) and carries mutable lifecycle fields (``protected``)
+    forward on a re-create, exactly like the warehouse registry does for ``status``.
     """
     _write_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", record)
+
+
+def create_project_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
+    """Mint ``_projects/<id>.json`` iff absent — the STORE arbitrates (F1).
+
+    Raises :class:`service_kit.lakehouse.records.RecordExistsError` on a lost race; the caller
+    re-reads and converges on the winner's identity fields (``created_at``/``created_by``), exactly
+    like the sequential idempotent re-POST path.
+    """
+    create_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", record)
 
 
 def get_project(control_root: str, storage_options: StorageOptions, project_id: str) -> dict[str, str] | None:

@@ -155,6 +155,28 @@ Acceptance criteria. An implementing agent should re-verify Evidence first (espe
 
 ### F1 (P0) — Registry writes are unconditional overwrites; the "CAS'd JSON registries" claim is aspirational, and the TOCTOU windows sit on exactly the tenant-isolation guards
 
+**STATUS: LANDED 2026-08-14 (same session as the verification pass).** Shipped:
+`service_kit.lakehouse.records.create_json` — the ONE conditional-create seam (S3: boto3
+`put_object(IfNoneMatch="*")`, 412 → `RecordExistsError`; local FS: `open(..., "xb")`, same
+exactly-one-winner semantics so unit tests prove the door logic without object storage); the
+warehouse id-mint (`create_warehouse_record` + endpoint re-read-and-re-guard on a lost race,
+including the same-project convergence carrying the winner's `status` — the racing-create half of
+F4's quarantine rule), the write-once binding (`bind_namespace` now refuses a conflicting bind AT
+THE STORE, idempotent on identical re-bind), and the project mint (`create_project_record` +
+convergence on the winner's identity fields). Tests: `tests/unit/test_registry_cas.py` (seam +
+door semantics, 10 tests), two endpoint race tests in `tests/integration/test_warehouses.py`
+(guard-blinded first read — the exact TOCTOU — refused 409 by store arbitration; same-project race
+converges 200 without resurrecting a deactivated warehouse), and the live contended half
+`tests/e2e-py/test_registry_cas_e2e.py` (`cas` marker, 8-way barrier race, exactly-one-winner —
+the silent-ignore detector). Skill corrected in the same commit.
+**Residuals, deliberately NOT covered here:** (a) the cross-ID bucket-claim race — two creates
+with DIFFERENT warehouse ids claiming the same bucket create two distinct records, so id-keyed
+conditional creates cannot arbitrate it; closing it needs a bucket-keyed claim record
+(`_warehouses/bucket-claims/<bucket>.json`), which should be designed WITH #85's four-store
+collapse, not before it; (b) trash/protection creates stay unconditional — they move with F6's
+record-first reordering; (c) mutable-field RMW (status/protection toggles) is F4's ETag seam,
+unchanged. The original finding text below is kept for the record.
+
 **Evidence.**
 - `services/catalog/src/catalog/services/warehouses.py:78-83` `_write_json` (verified via
   `put_warehouse` docstring at :96-97 "overwrite — create is idempotent"): plain
@@ -824,7 +846,7 @@ Ordered by value-per-effort; each item is independently landable.
 
 | # | Item | Findings | Size | Notes |
 |---|---|---|---|---|
-| 1 | Conditional PUT on id-minting registry writes + skill correction | F1 | S-M | boto3 `IfNoneMatch="*"`; 412 → code 14/AlreadyExists; new `cas`-marker e2e. = CAT-CORE-05 (§5.5), wave-2 slot |
+| 1 | ~~Conditional PUT on id-minting registry writes + skill correction~~ **LANDED 2026-08-14** (see F1 STATUS; residuals: bucket-claim record w/ #85, trash/protection w/ F6) | F1 | done | closes the CAT-CORE-05 mint half; the RMW half is row 4 |
 | 2 | `context` threaded through every FGA check | F2 | M | wrapper signatures FIRST (`batch_check`/`list_objects`/`list_users` take no context), then one clock helper; integration test with real window |
 | 3 | Fix + run the isolation e2e; wire to CI (#84) | F5 | S | shape + key names + region; CREATE the missing make target; sabotage-run proof; pin lands in a collected testpath (§5.5.7) |
 | 4 | ETag/version-conditioned read-modify-write on mutable records | F4 | M | status, protection, trash; bounded retry |

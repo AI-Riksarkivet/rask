@@ -21,9 +21,10 @@ import logging
 from typing import Any
 
 import pyarrow.fs as pafs
-from lance_namespace import ServiceUnavailableError
+from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
 
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+from service_kit.lakehouse.records import RecordExistsError, create_json
 
 
 log = logging.getLogger(__name__)
@@ -94,9 +95,22 @@ def _read_json(root_uri: str, storage_options: StorageOptions, key: str) -> dict
 
 
 def put_warehouse(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
-    """Persist a warehouse record at ``_warehouses/<id>.json`` (overwrite — create is idempotent). The
-    caller stamps ``created_at`` (kept out of here so unit tests stay deterministic)."""
+    """Persist a warehouse record at ``_warehouses/<id>.json`` (overwrite — for a record whose EXISTENCE
+    is already settled: the sequential idempotent re-create and status/lifecycle updates). The id-MINT
+    goes through :func:`create_warehouse_record` instead — overwriting on first create is how the
+    F1 takeover race happened. The caller stamps ``created_at`` (kept out of here so unit tests stay
+    deterministic)."""
     _write_json(control_root, storage_options, f"{_REGISTRY_PREFIX}/{record['id']}.json", record)
+
+
+def create_warehouse_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
+    """Mint ``_warehouses/<id>.json`` iff absent — the STORE arbitrates (F1).
+
+    Raises :class:`service_kit.lakehouse.records.RecordExistsError` on a lost race. The caller
+    re-reads and re-applies its guards against the WINNER's record (the cross-project takeover
+    guard's read may predate the rival's write; this refusal is what closes that window).
+    """
+    create_json(control_root, storage_options, f"{_REGISTRY_PREFIX}/{record['id']}.json", record)
 
 
 def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, str] | None:
@@ -139,14 +153,23 @@ def projects_claiming_bucket(records: list[dict[str, str]], bucket: str) -> set[
 def bind_namespace(control_root: str, storage_options: StorageOptions, top_ns: str, warehouse_id: str, root_uri: str) -> None:
     """Record that top-level namespace ``top_ns`` physically lives in ``warehouse_id`` (root ``root_uri``).
 
-    A binding is immutable (a namespace's warehouse never changes), so a resolver may cache it forever.
+    A binding is immutable (a namespace's warehouse never changes), so a resolver may cache it forever —
+    which is exactly why the write is WRITE-ONCE AT THE STORE (F1): the endpoint's pre-check reads then
+    decides, and two concurrent binds of one ``top_ns`` both used to pass it, the overwrite re-routing
+    tenant A's tables at tenant B's bucket with the forever-positive caches pinning the damage. Now the
+    second create is refused by the store regardless of what its caller read. Same-binding re-runs stay
+    idempotent (the partial-failure retry path: binding written, a later step failed, caller retries);
+    a DIFFERENT binding raises ``NamespaceAlreadyExistsError`` (code 2 → 409).
     """
-    _write_json(
-        control_root,
-        storage_options,
-        f"{_BINDINGS_PREFIX}/{top_ns}.json",
-        {"top_ns": top_ns, "warehouse_id": warehouse_id, "root_uri": root_uri},
-    )
+    payload = {"top_ns": top_ns, "warehouse_id": warehouse_id, "root_uri": root_uri}
+    key = f"{_BINDINGS_PREFIX}/{top_ns}.json"
+    try:
+        create_json(control_root, storage_options, key, payload)
+    except RecordExistsError:
+        existing = _read_json(control_root, storage_options, key)
+        if existing is not None and existing.get("warehouse_id") == warehouse_id and existing.get("root_uri") == root_uri:
+            return  # the retry converging on its own earlier write
+        raise NamespaceAlreadyExistsError(f"namespace {top_ns!r} is already bound to another warehouse") from None
 
 
 def warehouse_for_namespace(control_root: str, storage_options: StorageOptions, top_ns: str) -> str | None:
