@@ -67,8 +67,10 @@ const DEFAULT_VIEWER_API = 'http://localhost:8101';
 
 /**
  * Retention budget. The corpus declares three atlas spaces (text/visual/caption) at ~6.6 MB each, so 32
- * MiB holds every space of every dataset a zone realistically serves, with headroom, inside the 512Mi
- * default pod tier (`resources.default` in chart/values.yaml) that also has to run SSR.
+ * MiB holds every space of every dataset a zone realistically serves, with headroom. The real ceiling is
+ * the zones' OWN tier — `frontend.resources.limits.memory: 256Mi` (chart/values.yaml), NOT the fleet's
+ * 512Mi default this comment used to cite (#141) — so this cache may claim at most ~1/8th of the pod,
+ * shared with the Bun SSR heap. Raise the pod tier before raising this budget.
  */
 const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
 
