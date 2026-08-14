@@ -240,16 +240,61 @@ Everything here was established this session and bounds the design.
 
 ---
 
-## 8. Open questions
+## 8. The four questions, answered — three from precedent, one with a default
 
-1. **What makes a promotion `needs_review`?** Row-count delta band, a new value in a controlled field,
-   first promotion of a volume — this is an archive policy question, not an engineering one, and it
-   decides how often a human is interrupted. **Owner input needed.**
-2. **Who may approve?** `can_promote` is the natural relation and already exists. Does approval need a
-   *different* relation from the one the mover holds — i.e. must a human approver be distinct from the
-   service identity that would otherwise auto-promote? (Separation of duties says yes; this session
-   closed exactly that hole on the grant axis.)
-3. **What is the approval timeout, and what does expiry MEAN?** Reject, or hold indefinitely? A run
-   that expires silently is the same "silence as a symptom" failure mode as a lost reminder.
-4. **Does the Ray job need cancelling on rejection?** If a promotion is rejected while its job runs,
-   the job keeps burning cluster. Needs a Ray-side stop activity (§6).
+These were filed as "owner input needed". Three of them the estate has already answered, in rulings
+made this session or already in the code; punting on those was wrong. The fourth needed a measurement,
+not a decision. What genuinely remains for an owner is narrower and is stated at the end.
+
+**1. What makes a promotion `needs_review`? — PROPOSED DEFAULT, configurable.**
+The only part that is truly archival is the *threshold*, not the *shape*. The shape follows from what
+`assert_quality` already computes:
+
+| Outcome | Condition | Behaviour |
+|---|---|---|
+| **BLOCK** | any hard assertion fails (`blob_resolves`, `not_null` on the key column) | terminal FAIL — no human asked. This is today's `_QUALITY_BLOCKED` and it is correct. |
+| **REVIEW** | row-count delta outside `promotionReviewBand` (default ±25%), **or** first promotion of this dataset | wait for a decision |
+| **PROMOTE** | otherwise | as today |
+
+`row_count_positive` already exists, so the delta needs only the previous version's count — which the
+Lance dataset carries. **First-promotion** is the case worth having even if the band is later widened
+to nothing: it is the one where nobody has ever looked, and it fires once per dataset rather than
+per run. The band is a values knob so tightening it is a config change, not a deploy.
+
+**2. Must the approver be a DIFFERENT identity from the service that would auto-promote? — YES.**
+Not a preference: it is the ruling this session already made one layer down. `can_grant_owner` was
+`manage_grants`, so a grant-manager could grant *itself* `owner` — the "administers access, cannot
+read the data" persona was one authorized call from holding everything, and that was closed by
+refusing a self-directed grant of a rung the caller does not hold. An approval gate whose approver is
+the identity that would otherwise have auto-promoted is the same defect wearing a different hat: the
+gate renders, audits, and changes nothing. So the decision route refuses a decision whose subject is
+the run's own producer identity, exactly as `_refuse_self_elevation` does.
+
+**3. What is the timeout, and what does expiry MEAN? — REJECT, loudly, and it must not be "hold".**
+Two independent reasons, both already settled here:
+- **Silence is the failure mode this estate keeps getting bitten by** — `list_ingests` rendering an
+  authz outage as an empty list, an orphaned drain returning zero messages, a lost reminder that
+  simply stops work. An approval that expires into nothing is that same shape. Expiry is therefore a
+  terminal FAILED carrying "no decision within Nh", visible in lineage like any other failure.
+- **"Hold indefinitely" is not available.** A RUNNING instance is never collected by
+  `stateRetentionPolicy` (it only governs terminal states), so an indefinite hold reintroduces exactly
+  the unbounded workflow-history growth that was closed this session.
+
+Default **72h** — long enough to cross a weekend, short enough that the state store is not holding
+open instances for weeks. A rejected-by-expiry promotion is re-drivable: the data is still in silver.
+
+**4. Does rejection have to cancel the running Ray job? — NO, and the question dissolves on ordering.**
+Measured rather than reasoned: `transform.py` runs `submit_stage_job` (:333) → `measure_stage` (:345)
+→ `assert_quality` (:366). The gate asserts on the **written** dataset, so by the time anyone is asked
+to approve, the job has already finished. There is no long-running job to cancel in the normal case —
+and the SDK could not stop its in-flight activity anyway. **No Ray-side stop activity is needed for
+S4.** (It would be needed only if an approval were ever placed *upstream* of the compute, which this
+design does not do.)
+
+## 9. What is actually left for an owner
+
+1. **The review band's value.** `promotionReviewBand` default ±25% is a starting number, not a
+   measured one — nobody has looked at what a normal silver→gold delta is on this corpus. The shape
+   does not depend on the answer; the interrupt rate does.
+2. **Q6 — the `lance-ray` rename.** One coordinated rollout (the state store cannot hot-reload), same
+   cost whenever it happens. Purely scheduling.
