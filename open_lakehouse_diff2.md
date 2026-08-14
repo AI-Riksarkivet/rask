@@ -81,6 +81,51 @@ design the catalog's state correctly?* — diffed against Lakekeeper's Generic T
 
 ---
 
+## §0.5 Method — how the verdict was derived, and how to challenge it
+
+The verdict is not a bug hunt and not a feature checklist. It rests on three legs, and an auditor
+should attack each on its own terms:
+
+1. **A requirements baseline from the format itself** (leg for "what must a Lance catalog own?").
+   The `lance_docs/` scan established which responsibilities EXIST and which layer the format
+   assigns them to: commit arbitration → the object store's manifest CAS (so a Lance catalog does
+   not need a transactional DB for it — the neutralizer for "but Lakekeeper/Unity run Postgres");
+   table state → the manifest (a catalog duplicating it mints a second source of truth); everything
+   above the root namespace → deliberately unowned, with attachment points provided (path-grammar
+   authz, `vend_credentials`, codes 15/16); registry uniqueness → "MUST be enforced via atomic
+   conditional commits" (dir-V2). "Correct in shape" means each state class sits in a layer capable
+   of owning it, judged against THIS ledger — not against any comparator.
+2. **Comparator triangulation** (leg for "is the shape sound?"). Three researchers built dossiers;
+   three SEPARATE diff agents each received rask's code analysis plus ONE dossier and produced an
+   independent state-design verdict. Convergence was read as validation (rask independently
+   reaching Lakekeeper's exact trash-keeps-tuples rule; the identical credential-tier derivation in
+   all three systems); divergence was read as a tradeoff to cost both ways (→ §2), demoted to a GAP
+   only where the comparator's feature covers a failure rask demonstrably has (Lakekeeper's
+   creation cleanup guard vs F3). All three diff agents converged on "correct in shape, one
+   primitive short" without seeing each other's output.
+3. **Claims-vs-code tracing** (leg the findings came from). Every property the code, docstrings,
+   and skills CLAIM was traced to whether the implementation delivers it: "CAS'd JSON registries" →
+   every write path opened → overwrites (F1); the takeover-guard comments → the read-decide-write
+   sequence → check-then-act (F1); the conditions apparatus → the `context` parameter traced grant
+   to check → never passed (F2); "until reconciled" → the reconciler's repair path → report-only by
+   AST gate (F3); "spec-correct 501" → the vendored spec → 406 (F8a). **Admission rule:** a
+   candidate finding was dropped unless it produced a concrete failure scenario (specific inputs or
+   interleaving → specific wrong outcome). That is why every P0/P1 above reads as a reproduction
+   sketch, not a "there might be a race".
+
+**Limits, stated plainly:** this is static analysis + spec reading + comparator research. Nothing
+was executed against a live cluster in the authoring session; runtime facts cited (the store
+honoring `If-None-Match:*`, OpenFGA's all-or-nothing batch Write) come from the repo's EXISTING
+e2e suites and live-probed notes. The `(agent-read)` marker exists because subagent-cited lines
+were not all re-opened by the author. Consequently: an implementer re-verifies Evidence first,
+writes the failing test from the Failure scenario second, and fixes third — the acceptance
+criteria are what convert this file's static claims into runtime truth. To CHALLENGE a finding,
+attack its leg: show the spec assigns the responsibility differently (leg 1), show the comparator
+premise is wrong from its cited sources (leg 2), or show the traced code path does deliver the
+claim (leg 3).
+
+---
+
 ## §1 Findings — each self-contained for audit + implementation
 
 Severity: **P0** = security/correctness on tenant-isolation or authz paths. **P1** = real defect or
