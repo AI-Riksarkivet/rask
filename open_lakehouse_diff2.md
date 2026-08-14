@@ -840,7 +840,10 @@ Ordered by value-per-effort; each item is independently landable.
 
 ## §5.5 Cross-references to the other `open_*` specs (verification pass, 2026-08-14)
 
-The ten sibling working specs were scanned in full. Three kinds of result; an implementer MUST
+The ten sibling working specs were scanned in full. (**`OPEN-WORK.md` — the durable register, a
+different genre — was MISSED by this pass** because it doesn't match the lowercase glob; it was
+scanned separately the same day and its results are §5.6. Read §5.6 too: it contains a pre-filed
+twin of F3's fix and an owner ruling that collides with F9.) Three kinds of result; an implementer MUST
 read this section before starting any F-item, because several fixes are already filed, planned,
 or ruled on elsewhere.
 
@@ -954,6 +957,103 @@ contradict nothing — checked, including the near-miss on annotation-row proven
 (different planes). The specs' own lifecycles: all are self-deleting working docs; references
 into them will dangle as their backlogs drain — cite the finding ids (CAT-CORE-05, SKG-01, B8,
 B13) alongside file names so the trail survives.
+
+## §5.6 Cross-references to `OPEN-WORK.md` — the durable register (scanned 2026-08-14, full 3582 lines)
+
+**Why this file exists and how the conventions relate** (its own words): `open_*.md` files are
+WORKING plans under the fold-then-delete convention — "when the work lands, what is still live
+moves here and the file goes" (`OPEN-WORK.md:1221-1223`); `OPEN-WORK.md` is "THE one register"
+(header, `:1-9`), created because lance-ns tracked open items as session task-ids that died with
+sessions; "not deletable; reconciled at P8, never dropped" (`:1209-1216`). **Consequence for this
+file: when the F-items land, their live residue folds INTO OPEN-WORK — and must RECONCILE the
+overlaps below, not duplicate them.** Staleness note: the header says "Status as of 2026-07-27"
+but sections I/J are amended through 2026-08-11; the FOLDED trackers (RASK-INTEGRATION,
+ASSESSMENT, BENCH, `:1350+`) are explicitly pre-merge records — historical rulings, not
+current-tree facts.
+
+### Already filed in the register — reconcile, don't duplicate
+
+- **E3 #11 (`:767-768`) IS F3's fix option 2**, filed 2026-07-27 from the same Lakekeeper study:
+  "Reconcile-from-catalog — additive FGA rebuild + opt-in drift deletion with dry-run; absent."
+  F3's write-capable structural reconcile has been on the register all along — implement it AS
+  #11, citing both.
+- **I.4 #84 (`:1182-1183`) is F5's CI half** — "credential attack in CI (needs web-identity
+  vending + a second tenant admin)" — and names web-identity vending as prerequisite, tying F5's
+  completion to F7's row-9 decision.
+- **I.6 #85 (`:1200`) — "collapse the four control-root JSON stores"** — the registries F1/F4
+  harden are already slated for consolidation. The CAS seam and the collapse must be ONE design;
+  building the seam per-store and then collapsing builds it twice.
+- **mode_b vending is a WRITTEN OWNER DEFERRAL** — "Written deferrals (don't re-litigate,
+  schedule): … mode_b vending" (`:2092-2093`), and E3 #14 (`:775-777`) carries the conditional
+  follow-on (`/refresh-credentials`, only if STS/web-identity enabled). F7 row 9 is therefore
+  "schedule an already-deferred decision", not a new thread. The fleet-on-vended-creds end-state
+  is ALSO already the stated seam contract: "workload identity … vends short-TTL, table-scoped
+  creds via `POST /v1/table/{id}/credentials` (web_identity flow). No durable secret on compute"
+  (`:1986-1989`).
+- **F1's primitive is pre-proven in the register**: "RustFS conditional-PUT … VERIFIED 2026-08-03
+  — it IS enforced … second `If-None-Match: *` PUT rejected with PreconditionFailed" (`:525-533`).
+- **F6's baseline contract** is the live-driven #96 closure (`:1167-1173`, cascade trash/undrop,
+  tuples KEPT — #75's rule at subtree scale) + #75 (`:1137-1139`); F10.4/F10.5 are residuals of
+  that rule and any fix must preserve it. **#79's ordering ruling** (`:1188-1197`): trash purge
+  FIRST, gated on a clean drift report — constrains when F6(c)'s unbind fix can be exercised live.
+- **F9's first consumer is deprioritized by ruling**: "Models registry MLflow parity (was #101) —
+  Deprioritized until after the product pass" (`:629`).
+
+### Contradictions with the register — resolve explicitly when landing
+
+- **F9 vs the folded BENCH rulings — the sharpest collision in either direction.** BENCH records:
+  generic-table registration "out of scope (Lance-only) … deliberate non-goal" (`:2155-2161`);
+  "UC volumes as ungoverned file dirs — do NOT build — blob-v2 in-table is the deliberate
+  alternative" (`:2199-2207`); "no in-scope catalog feature is missing" (`:2211-2219`). These are
+  2026-07-22 rulings against approximately F9's precedents. Arguably distinguishable — BENCH
+  retired generic tables as FOREIGN-CATALOG INTEROP, F9 proposes a rung for rask's OWN non-Lance
+  assets — but F9's owner-ratification step MUST engage `:2201-2203` head-on or it will
+  (correctly) be rejected as re-litigating a recorded scope decision.
+- **F8a vs RASK-INTEGRATION decision 3** (`:3009-3014`): "the 7 genuinely backend-stubbed ops …
+  stay 501 until the upstream Rust DirectoryNamespace implements them" — enshrines the wrong
+  status per the spec's 406 mapping. When F8a lands, correct this register entry AND
+  `docs/COVERAGE.md` in the same commit.
+- **F10.3 vs #46's closure** (`:1178-1179`): "scale-into-staleness is now a render error, not a
+  runtime surprise" is over-broad — the render guard closes only the controlEmit-off case; a
+  dropped broadcast event still yields persistent 403s until restart (F10.3's verified residual).
+- **F6(a)/(b) vs #96's unscoped phrasing**: #96 was driven on the CASCADE door only; the entry
+  reads as trash-plane coherence achieved, but the single-table door retains the crash window
+  (F6a) and destructively drops declared-only tables the cascade records (F6b). Scope the entry
+  when F6 lands.
+
+### Prerequisites and in-flight collisions from the register
+
+- **E3 #12 — URL-encode FGA subjects (`:762-765`)**: "mandatory before prod OIDC … OIDC subjects
+  here are emails. Smallest and sharpest of the set." Touches every tuple write F3 reworks — do
+  #12 first or fold it into F3's door changes; do not let them race.
+- **E3 #9 — versioned authz-model migration (`:765-767`)**: the missing machinery for F2's
+  delete-the-condition alternative AND F9's new type. Without it, model changes are raw
+  owner-executed edits (§5.5.1's CLI gate on top).
+- **E3 #10 — split tuple helpers + golden tuple tests (`:769-770`)**: collides with F3's
+  seed/revoke changes; land the golden tests with (or before) F3.
+- **E3 #2 — credentials-vs-config response split (`:771-772`)**: touches the exact response shape
+  F5's e2e parses — coordinate or the e2e is fixed against a shape about to change.
+- **E3 #3 — request_id/actor propagation (`:772-774`)** is adjacent to F10.11's grant-provenance
+  gap ("record it or build it").
+- **Section J environment facts for F2** (`:3482-3582`): OpenFGA v1.18.3 with
+  `weighted_graph_check` ON via `OPENFGA_EXPERIMENTALS` (and the `experimentals:` chart key
+  BREAKS the whole render — touch with care); model audited weighted-graph compatible; the
+  provision half of conditions was already fixed once ("fga.provision silently dropped
+  model['conditions'] … every FGA-enabled service fail-closed 503", `:297-303`) and
+  `test_fga_provision.py` pins it — the estate has ALREADY witnessed the 400→503 class F2
+  describes, fleet-wide.
+- **Registry-plane neighbors of F1/F4**: #48 warehouse-delete partial-failure honesty, #67
+  ghost-projects migration, #43 separate-rustfs-instances (`:1198-1200`).
+- **F6(d)'s code neighbor**: #62 couples to §H1 (`:1071-1097`) — per-request `lance.dataset()`
+  opens + cache ceilings ~17× pod limits, "confirmed live" — the same open-path the sweep fix
+  touches.
+
+### Updated start-order consequence (supersedes the §5 note where they differ)
+
+Nothing here blocks §5 rows 1–8 outright, but three couplings tighten: (1) F1's seam should be
+co-designed with #85's four-store collapse; (2) F3's door changes should carry #12 (subject
+encoding) and #10's golden tests; (3) F5's e2e fix should be aware of #2's pending response-shape
+split. F9 now has TWO gates: the §5.5 rulings and the BENCH scope decision above.
 
 ## §6 Sources
 
