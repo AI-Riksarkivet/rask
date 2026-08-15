@@ -109,6 +109,19 @@ def _chart_injected_envs() -> set[str]:
     return envs
 
 
+def _chart_template_reads(text: str) -> str:
+    """A chart template with its env-INJECTION lines removed, leaving only what could be a READ.
+
+    `- { name: FOO, value: ... }` and `- name: FOO` are declarations; an env is only "read" here if it
+    appears somewhere else in the template — inside an embedded script. Dropping the declarations is
+    what keeps the dead-env guard able to fail.
+    """
+    import re as _re
+
+    stripped = _re.sub(r"^\s*-?\s*\{?\s*name:\s*[A-Z0-9_]+.*$", "", text, flags=_re.MULTILINE)
+    return _re.sub(r"^\s*-\s*name:\s*[A-Z0-9_]+\s*$", "", stripped, flags=_re.MULTILINE)
+
+
 def _first_party_source() -> str:
     """ALL first-party source — python services AND the SvelteKit frontend.
 
@@ -134,6 +147,16 @@ def _first_party_source() -> str:
     if fe.exists():
         for ext in ("*.ts", "*.svelte", "*.js"):
             parts += [p.read_text(errors="ignore") for p in fe.rglob(ext) if "node_modules" not in p.parts and ".svelte-kit" not in p.parts]
+    # Chart templates can EMBED a first-party script that reads an env — `bootstrap-admin.yaml` runs an
+    # inline python bootstrap that does `os.environ.get("FGA_SERVICE_READERS", "")`. Without this the
+    # guard called a genuinely-consumed var dead, which is a false positive on a test whose whole job is
+    # to be trusted.
+    #
+    # THE INJECTION LINES ARE STRIPPED FIRST, and that is the load-bearing half. A template names every
+    # env it injects (`- name: FOO`), so scanning templates raw would make every var match its own
+    # injection site and this test could never fail again — a guard that cannot fail is worse than no
+    # guard, because it reads as coverage. Only the REMAINDER (the script bodies) counts as a read.
+    parts += [_chart_template_reads(p.read_text(errors="ignore")) for p in (REPO / "chart" / "templates").rglob("*.yaml")]
     return "\n".join(parts)
 
 
