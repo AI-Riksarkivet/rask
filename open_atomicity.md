@@ -168,3 +168,54 @@ Sixteen were found; these are the ones that describe the estate rather than one 
   (`repository.py:455`), but `record_event` opens its OWN pooled connection, so the graph write and the feed
   row are not atomic with each other — and they could be.
 * **`flows` emits nothing at all** — no publishes, no lineage, no `RASK_LINEAGE_*` env.
+
+---
+
+## STATUS (2026-08-15) — all eleven items resolved
+
+Worked under a `/goal` requiring, per item: the defect proven RED first, the fix, the test green, the
+full suite pasted at >= 4349 with zero failures, `ty` + `ruff` clean, and a named-path commit pushed.
+
+| # | Item | Verdict | Commit |
+| --- | --- | --- | --- |
+| 1 | reminder failure policy | DONE | `a413d9ee` |
+| 2 | digest one-shot | DONE | `4b468f1a` |
+| 3 | single-flight lock -> actor | **DROPPED** + guard shipped | `fd63cc9f` |
+| 4 | tenacity -> Dapr Resiliency | DONE | `01dde164` |
+| 5 | duplicate cascade trigger | **BLOCKED** | — |
+| 6 | train completion watcher | **DROPPED** | — |
+| 7 | outbox key collision | DONE | `7142dfee` |
+| 8 | catalog + maintenance bare publishes | **BLOCKED** | — |
+| 9 | `/events` external-source drop | DONE | `c6719caa` |
+| 10 | media head's namespace | DONE | `b2b4944f` |
+| 11 | reconciler poison-row escape | DONE | `f26219ee` |
+
+### Why three did not land
+
+**3 — DROPPED.** Not a live defect: notifications is `replicas: 1` in values.yaml, absent from
+values-prod.yaml's HA list, and 1 in the live cluster. The fix would also invert the semantics it was
+meant to preserve — Dapr actors are turn-based, so they QUEUE, while `reconcile_cron` argues
+"Skipping is the right answer rather than queueing". The estate had already ruled identically for
+medallion's movers. What WAS wrong is that medallion's single-replica constraint is enforced by a value
+and this one was true by accident; that is now a test.
+
+**5 — BLOCKED, mechanism located.** The two heads derive the correlation token from different sources:
+`ingest_trigger.py:112` uses the bronze-write event's `lance.token` run facet, `publication_trigger.py:103`
+uses the control event's `event_id`. Same table, different tokens, different `stage_submission_id`,
+different `instance_id` — so the workflow dedupe that already exists never engages. Making them share a
+token asserts that "table ingested" and "table published" are the SAME work, which is a medallion
+semantics decision. A prior adversarial review of this exact change also concluded that de-duplicating
+on that key "halts every distributed cascade".
+
+**6 — DROPPED.** The premise is false. `scripts/ray_train_job.py:4`: the training job "emits OpenLineage
+`START -> RUNNING(progress) -> COMPLETE|FAIL` itself". Completion IS recorded, does reach the durable
+feed and does notify. A Workflow monitor would emit a SECOND COMPLETE for the same run. S1's watcher
+exists because the stage mover must MEASURE the output and continue the cascade; training has no
+downstream stage waiting on it.
+
+**8 — BLOCKED on a latency decision.** Neither catalog nor maintenance has `outbox_uri` config, so this
+needs new settings and chart wiring in both. More importantly, catalog's emit is explicitly "the
+inline-awaited emit on the create/write request path": staging to S3 first adds an object-store write
+to EVERY catalog table create/write, on a user-facing request. That trade needs deciding, not
+assuming. The audit itself de-prioritised the maintenance half ("a compaction mints no logical data").
+Item 7 has removed the blocker that made this dangerous to attempt.
