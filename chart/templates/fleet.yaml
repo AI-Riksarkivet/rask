@@ -190,6 +190,27 @@ spec:
             {{- range $k, $v := $svc.env }}
             - { name: {{ $k }}, value: {{ $v | quote }} }
             {{- end }}
+            {{- /* WHICH CHANNELS THIS DEPLOYMENT MAY SEND, derived from the SAME `channels.*.enabled`
+                   flags that render the Components in notifications-channels.yaml.
+
+                   Without this the two halves disagree silently and the feature is inert: enabling
+                   `channels.email` produced a `bindings.smtp` Component, a secret reference and a
+                   scope entry — and a service that never sent anything, because `RASK_NOTIFICATIONS_CHANNELS`
+                   was read by settings.py and written by NOTHING in this chart. `channel_push()`
+                   returns None on an empty list (proxies.py:181-183), so `fan_out` gets no push at
+                   all and every channel send is skipped without a log line. An operator sees a
+                   correctly-provisioned Component and no email, which is the worst shape of failure:
+                   the configuration they touched looks applied.
+
+                   DERIVED, never a second literal, for the reason the binding name three fields up
+                   already carries: a hand-written `env.RASK_NOTIFICATIONS_CHANNELS` would be a
+                   parallel source of truth that drifts the first time someone flips `enabled`. */}}
+            {{- if $svc.channels }}
+            {{- $chans := list }}
+            {{- if (($svc.channels).email).enabled }}{{- $chans = append $chans "email" }}{{- end }}
+            {{- if (($svc.channels).slack).enabled }}{{- $chans = append $chans "slack" }}{{- end }}
+            - { name: RASK_NOTIFICATIONS_CHANNELS, value: {{ join "," $chans | quote }} }
+            {{- end }}
           readinessProbe:
             httpGet: {path: {{ $svc.healthPath | default "/api/health" }}, port: http}
             initialDelaySeconds: 5
