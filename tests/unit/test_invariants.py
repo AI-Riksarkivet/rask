@@ -42,6 +42,7 @@ def _svc(name: str) -> pathlib.Path:
 
 
 CHART = REPO / "chart"
+MAKEFILE = REPO / "Makefile"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -2368,4 +2369,59 @@ def test_a_ONE_SHOT_reminder_never_uses_a_DROP_policy() -> None:
         "Use a retrying policy — `ActorReminderFailurePolicy.constant_policy(interval=..., max_retries=...)` "
         "— as `LEASE_REMINDER` does. `drop_policy()` is correct ONLY when `period > 0`, where the next "
         "scheduled tick is the retry."
+    )
+
+
+def test_every_RELEASE_touching_helm_call_goes_through_the_driver_seam() -> None:
+    """Helm moved to the SQL storage driver, and forgetting it does not error — it LIES.
+
+    The release lives in Postgres since 2026-08-15 (the Secret backend hit Kubernetes' hard 1 MiB
+    limit). A `helm` invocation without `HELM_DRIVER=sql` reads the EMPTY Secret backend, concludes the
+    release is absent, and — because the deploy targets use `upgrade --install` — installs over a live
+    estate instead of upgrading it. There is no error to notice: it looks like a fresh cluster.
+
+    So every release-touching call must go through ONE seam that sets the driver, the same way every
+    image build goes through `scripts/dagger-image.sh`. `make k3s-up` used `$(HELM)` and would have
+    been fixed by changing that variable alone; `kind-deploy` called BARE `helm upgrade --install` and
+    would have kept the old behaviour silently. That is the bypass this gate exists to catch.
+
+    Read-only subcommands are exempt and deliberately so — `helm template`, `lint`, `repo`,
+    `dependency`, `show`, `version` never touch the release store, and routing them through a wrapper
+    that REQUIRES a reachable database would break `make k3s-install` on a host with no cluster yet.
+    """
+    RELEASE_SUBCOMMANDS = ("upgrade", "install", "uninstall", "rollback", "history", "list", "status", "get")
+
+    offenders: list[str] = []
+    for line_no, line in enumerate(MAKEFILE.read_text(encoding="utf-8").splitlines(), start=1):
+        body = line.split("#", 1)[0]  # a comment mentioning helm is not a call
+        if not body.strip().startswith(("helm ", "@helm ", "-helm ")):
+            continue
+        rest = body.strip().split(None, 1)
+        sub = rest[1].split()[0] if len(rest) > 1 else ""
+        if sub in RELEASE_SUBCOMMANDS:
+            offenders.append(f"Makefile:{line_no}: {body.strip()[:90]}")
+
+    assert not offenders, (
+        "these Makefile recipes call `helm` DIRECTLY for a release operation, bypassing the driver "
+        "seam:\n  " + "\n  ".join(offenders) + "\n\n"
+        "Without HELM_DRIVER=sql they read the empty Secret backend, report the release as absent, and "
+        "`upgrade --install` then RE-INSTALLS over a live estate with no error. Use $(HELM), which "
+        "routes through scripts/helm.sh."
+    )
+
+
+def test_the_helm_seam_REQUIRES_the_sql_driver_rather_than_falling_back() -> None:
+    """A seam that silently degrades to the Secret backend is worse than no seam at all.
+
+    The failure this guards is not "helm errors"; it is "helm succeeds against the wrong store". So the
+    wrapper has to FAIL when it cannot build the DSN, not shrug and let the default driver answer.
+    """
+    seam = REPO / "scripts/helm.sh"
+    assert seam.exists(), "scripts/helm.sh is missing — $(HELM) points at a seam that does not exist"
+    text = seam.read_text(encoding="utf-8")
+
+    assert "HELM_DRIVER" in text and "sql" in text, "the seam does not set HELM_DRIVER=sql"
+    assert "exit 1" in text, (
+        "the seam has no failure path. If it cannot resolve the AGE address it must EXIT, not fall "
+        "through to helm's default Secret driver — a silent wrong-store success is the whole hazard."
     )

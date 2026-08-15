@@ -430,7 +430,10 @@ COMPOSE_IMAGES = gateway compute controlplane ingest notifications
 # compute ZONE.)
 # "home" is the catch-all; the rest are pinned to their /<zone> base path.
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
-HELM ?= KUBECONFIG=$(KUBECONFIG) helm
+# Routed through scripts/helm.sh, which sets HELM_DRIVER=sql. NOT bare `helm`: the release lives in
+# Postgres, and against the default Secret backend helm reports it ABSENT and `upgrade --install`
+# re-installs over a live estate WITHOUT erroring. Read-only subcommands pass straight through.
+HELM ?= KUBECONFIG=$(KUBECONFIG) ./scripts/helm.sh
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
 # lance-rest-catalog is the ONE lakehouse image (catalog + lineage + medallion + maintenance +
 # media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
@@ -555,7 +558,8 @@ k3s-pins: ## Capture what the cluster is RUNNING into chart/values-live-pins.yam
 	@# `KUBECONFIG=... kubectl`. KUBECONFIG is already in the environment; the script's own `kubectl`
 	@# default is the right one.
 	@KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh chart/values-live-pins.yaml
-	@echo ">> now: helm upgrade rask ./chart -f chart/values-live-pins.yaml   (changes only what you meant to)"
+	@echo ">> now: make k3s-up   (or ./scripts/helm.sh upgrade rask ./chart -f chart/values-live-pins.yaml)"
+	@echo ">> NOT bare 'helm upgrade' — the release lives in Postgres; see scripts/helm.sh"
 
 k9s: bootstrap ## Browse the k3s cluster in k9s (the chart's NOTES.txt points here)
 	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/k9s
@@ -642,7 +646,7 @@ kind-preload: bootstrap ## Pull the chart's third-party images into the host cac
 # and post-install hooks run AFTER --wait, which was itself blocked on the server the migration had to
 # unblock. Keeping --wait off was the workaround; keeping it ON is now the regression test.
 kind-deploy: k3s-deps ## helm upgrade --install release `rask` into the kind cluster
-	helm upgrade --install rask ./chart --kube-context kind-$(KIND_CLUSTER) --wait --wait-for-jobs --timeout 900s
+	$(HELM) upgrade --install rask ./chart --kube-context kind-$(KIND_CLUSTER) --wait --wait-for-jobs --timeout 900s
 	$(LOCALBIN)/kubectl --context kind-$(KIND_CLUSTER) rollout status deploy/rask-gateway --timeout=300s
 
 kind-down: ## Delete the rask kind cluster
