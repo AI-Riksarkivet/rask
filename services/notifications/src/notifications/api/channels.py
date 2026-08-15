@@ -152,8 +152,22 @@ def _defers(notification_id: str) -> bool:
     return state not in {"FAIL", "FAILED", "ABORT"}
 
 
-def make_push(table: ChannelTable, *, open_inbox: Callable[[str], Any]) -> Callable[[str, dict[str, Any]], Awaitable[None]]:
+def make_push(table: ChannelTable, *, open_inbox: Callable[[str], Any], defer: bool = True) -> Callable[[str, dict[str, Any]], Awaitable[None]]:
     """The concrete `ChannelPush`: read a subject's prefs, push the pointer, claim as you go.
+
+    `defer=False` is the DIGEST DRAIN's pusher, and it exists because the drain is a different caller
+    with a different policy — not because a caller sometimes wants to skip a rule.
+
+    `InboxActor.send_digest` drains the window and hands each pointer back to a pusher. Handed the
+    deferring one, every pointer meets the exact conditions that deferred it in the first place
+    (`digest_seconds` still set, `_defers()` still true for a non-failure) and is armed AGAIN: the
+    window reopens, fires, re-arms, and the notification is never sent. Only the reminder ticking
+    forever says anything is wrong. Terminal failures were never affected — `_defers` sends those
+    immediately — which is why this survived: the notification people actually watch for worked.
+
+    A construction-time policy rather than a per-call flag keeps `ChannelPush` a two-argument
+    callable at every call site, so neither the fan-out nor the reconciler has to know the digest
+    exists.
 
     Reads prefs PER DELIVERY rather than caching them, and that is the honest trade: a cache would
     keep mailing someone for its TTL after they turned email off, and "I unsubscribed and it kept
@@ -177,7 +191,7 @@ def make_push(table: ChannelTable, *, open_inbox: Callable[[str], Any]) -> Calla
         # successes is the trade nobody wants made for them, and it is the one a naive digest makes
         # silently. The row is already written either way, so the bell is correct regardless.
         digest_seconds = prefs.get("digest_seconds")
-        if digest_seconds and _defers(pointer.notification_id):
+        if defer and digest_seconds and _defers(pointer.notification_id):
             await inbox.arm_digest({"seconds": int(digest_seconds)})
             return
 

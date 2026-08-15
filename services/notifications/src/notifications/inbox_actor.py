@@ -573,9 +573,11 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         at the runtime's own pace forever, and the rows are still in the inbox: the bell is correct
         whatever the channel plane does.
         """
-        from notifications.proxies import channel_push
+        # `digest_push`, NOT `channel_push`: the drain must not be handed the pusher that defers, or
+        # every pointer it just drained meets the same conditions again and re-arms this very window.
+        from notifications.proxies import digest_push
 
-        push = channel_push()
+        push = digest_push()
         if push is None:
             return
         try:

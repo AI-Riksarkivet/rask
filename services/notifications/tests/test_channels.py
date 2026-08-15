@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from notifications.api import prefs as prefs_module
-from notifications.api.channels import EMAIL, SLACK, deliver_to_channels, render
+from notifications.api.channels import EMAIL, SLACK, deliver_to_channels, make_push, render
 from notifications.api.fanout import InboxOpener
 from notifications.config import get_notifications_settings
 from notifications.inbox_actor import InboxActor
@@ -532,3 +532,69 @@ class TestDigestRoundTrip:
         client.put("/notifications/prefs", json={"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}, "digest_seconds": 3600})
 
         assert client.get("/notifications/prefs").json()["digest_seconds"] == 3600
+
+
+# --- the digest must SEND when it fires, not re-arm itself ---------------------------------------
+#
+# `InboxActor.send_digest` drains the window and hands each pointer back to `channel_push()` — the
+# same callable that put them there. With the defer branch still live, the drained pointer meets the
+# identical conditions that deferred it (digest_seconds set, `_defers()` true for a non-failure) and
+# is armed AGAIN. The window reopens, fires, re-arms: a digested notification is never sent, and the
+# only trace is a reminder that keeps ticking.
+#
+# Terminal FAILUREs were never affected — `_defers` sends those immediately — which is why this
+# survived: the notification people actually watch for worked.
+
+
+class _DigestInbox:
+    """Prefs with a digest window, plus the two calls the send path makes on the actor."""
+
+    def __init__(self, *, digest_seconds: int | None = 60) -> None:
+        self.armed: list[dict[str, Any]] = []
+        self.claimed: list[tuple[str, str]] = []
+        self._digest = digest_seconds
+
+    async def get_prefs(self) -> dict[str, Any]:
+        return {"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}, "digest_seconds": self._digest}
+
+    async def arm_digest(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.armed.append(payload)
+        return {}
+
+    async def claim_channel(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.claimed.append((str(payload["notification_id"]), str(payload["channel"])))
+        return {"claimed": True}
+
+
+class TestDigestDrain:
+    @pytest.mark.asyncio
+    async def test_the_normal_path_still_defers_a_non_failure_into_the_window(self) -> None:
+        inbox, email = _DigestInbox(), _Recorder()
+        push = make_push({EMAIL: email}, open_inbox=lambda _s: inbox)
+
+        await push("alice", _pointer(notification_id="run-2@COMPLETE").model_dump(mode="json"))
+
+        assert inbox.armed == [{"seconds": 60}]
+        assert email.sends == []
+
+    @pytest.mark.asyncio
+    async def test_the_drain_sends_rather_than_re_arming_the_window_it_came_from(self) -> None:
+        inbox, email = _DigestInbox(), _Recorder()
+        push = make_push({EMAIL: email}, open_inbox=lambda _s: inbox, defer=False)
+
+        await push("alice", _pointer(notification_id="run-2@COMPLETE").model_dump(mode="json"))
+
+        assert inbox.armed == [], "the drain re-armed the digest instead of sending it"
+        assert len(email.sends) == 1, "the digested notification was never sent"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("defer", [True, False])
+    async def test_a_terminal_failure_sends_on_both_paths(self, defer: bool) -> None:
+        """The case that always worked, pinned so a fix to the case that did not cannot break it."""
+        inbox, email = _DigestInbox(), _Recorder()
+        push = make_push({EMAIL: email}, open_inbox=lambda _s: inbox, defer=defer)
+
+        await push("alice", _pointer(notification_id="run-3@FAIL").model_dump(mode="json"))
+
+        assert inbox.armed == []
+        assert len(email.sends) == 1

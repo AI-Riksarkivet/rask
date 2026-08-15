@@ -27,6 +27,8 @@ from service_kit.governed.user_state import DAPR_APP_ID_SEPARATOR, encode_subjec
 if TYPE_CHECKING:
     from dapr.actor import ActorInterface
 
+    from notifications.api.channels import ChannelTable
+
 
 logger = logging.getLogger(__name__)
 
@@ -163,18 +165,20 @@ async def watchers_of(project_id: str) -> list[str]:
 
 
 @lru_cache(maxsize=1)
-def channel_push() -> "Callable[[str, dict[str, Any]], Awaitable[None]] | None":
-    """This deployment's channel pusher, or `None` when no channel is enabled.
+def _channel_table() -> "ChannelTable | None":
+    """This deployment's channel senders, built ONCE.
+
+    Split out from `channel_push` so the two pushers over it — the deferring one and the digest
+    drain's — share a single `DaprClient`. `DaprClient()` opens a channel, so building it per pusher
+    would open one per variant, and building it at import would make merely importing this module
+    require a sidecar.
 
     `None` rather than an empty table, because the two say different things to the fan-out: an empty
     table still costs a prefs read per delivery to discover it can send nothing, while `None` skips
     the hop entirely. On an estate with channels off — the default — that is the whole cost removed
     rather than merely made cheap.
-
-    The Dapr client is built lazily and cached for the process: `DaprClient()` opens a channel, so
-    constructing it at import would make merely importing this module require a sidecar.
     """
-    from notifications.api.channels import EMAIL, SLACK, ChannelTable, make_binding_sender, make_push
+    from notifications.api.channels import EMAIL, SLACK, ChannelTable, make_binding_sender
     from notifications.api.settings import get_ingress_settings
 
     settings = get_ingress_settings()
@@ -190,6 +194,30 @@ def channel_push() -> "Callable[[str, dict[str, Any]], Awaitable[None]] | None":
         table[EMAIL] = make_binding_sender(client, binding=settings.email_binding, operation="create", timeout_seconds=settings.channel_timeout_seconds)
     if SLACK in enabled:
         table[SLACK] = make_binding_sender(client, binding=settings.slack_binding, operation="post", timeout_seconds=settings.channel_timeout_seconds)
-    if not table:
-        return None
-    return make_push(table, open_inbox=inbox_for)
+    return table or None
+
+
+@lru_cache(maxsize=1)
+def channel_push() -> "Callable[[str, dict[str, Any]], Awaitable[None]] | None":
+    """This deployment's channel pusher, or `None` when no channel is enabled."""
+    from notifications.api.channels import make_push
+
+    table = _channel_table()
+    return None if table is None else make_push(table, open_inbox=inbox_for)
+
+
+@lru_cache(maxsize=1)
+def digest_push() -> "Callable[[str, dict[str, Any]], Awaitable[None]] | None":
+    """The pusher the DIGEST DRAIN uses — identical, except that it does not defer.
+
+    A separate accessor rather than a parameter on `channel_push`, because that one is
+    `lru_cache(maxsize=1)`: a parameter would make the two variants evict each other on every
+    alternating call. Two cached entries over ONE table is the shape that costs nothing.
+
+    Handing the drain the DEFERRING pusher is what made a digested notification unsendable — it
+    re-armed the very window it had just been drained from. See `make_push`.
+    """
+    from notifications.api.channels import make_push
+
+    table = _channel_table()
+    return None if table is None else make_push(table, open_inbox=inbox_for, defer=False)
