@@ -661,6 +661,50 @@ e2e-isolation: ## Cross-tenant credential attack vs a deployed vending-enabled s
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! set LANCE_E2E_CATALOG_URL, LANCE_E2E_TOKEN, LANCE_E2E_TENANT_B_TOKEN, LANCE_E2E_PROJECT_B (and LANCE_E2E_S3)"; exit 1; }
 	uv run pytest tests/e2e-py/test_credential_isolation_e2e.py -m e2e -v
 
+# ---- one target per e2e suite marker (audit H1) ------------------------------
+# pyproject.toml declares twelve per-suite markers with the comment "used by the e2e make targets
+# (e.g. `pytest -m media`)". NONE of them was selected by any target, script or CI job — measured:
+# `grep -rnE '\-m ["']?(cas|compaction|…)' Makefile scripts .github .dagger` returned nothing. So
+# eleven live suites ran in no lane at all, and the declarations read as if they drove something.
+#
+# Every marker now has exactly one invocation site, and `test_e2e_collection_gate.py` FAILS if a
+# declared marker loses it again — the gate is what makes this stay true, not the targets.
+#
+# All of them need a live deployed stack (that is what `e2e` means here); they are runnable proofs,
+# not a CI lane. `make e2e-ci` remains the governed-kind-stack entry point, and wiring the
+# security-shaped ones (governed-union, gateway, cas) into CI is the follow-up — it needs an edit to
+# `.github/workflows/ci.yml`, which a concurrent session is holding.
+E2E_SUITES = cas compaction duckdb gateway governed-union medallion media media-catalog observability user-state ray-batch ray-train
+.PHONY: $(addprefix e2e-,$(E2E_SUITES))   # declared HERE, not up with the other .PHONY: make
+                                          # expands a rule's prerequisites AS IT READS the line,
+                                          # so referencing E2E_SUITES before this assignment
+                                          # expands to nothing and silently declares no target.
+
+e2e-cas:            ## Object-store + registry conditional-write (CAS) proofs
+	uv run pytest tests/e2e-py -m cas -v
+e2e-compaction:     ## Maintenance sweep / compaction / GC proofs
+	uv run pytest tests/e2e-py -m compaction -v
+e2e-duckdb:         ## DuckDB-over-Lance proof
+	uv run pytest tests/e2e-py -m duckdb -v
+e2e-gateway:        ## Dapr service-invocation gateway routing proof
+	uv run pytest tests/e2e-py -m gateway -v
+e2e-governed-union: ## Full governed-union proof (the estate's widest authz path)
+	uv run pytest tests/e2e-py -m governed_union -v
+e2e-medallion:      ## Medallion bronze→silver→gold cascade proof
+	uv run pytest tests/e2e-py -m medallion -v
+e2e-media:          ## Media-lane proof
+	uv run pytest tests/e2e-py -m media -v
+e2e-media-catalog:  ## Annotator/catalog live-mode proof
+	uv run pytest tests/e2e-py -m media_catalog -v
+e2e-observability:  ## OTLP → GreptimeDB observability proof
+	uv run pytest tests/e2e-py -m observability -v
+e2e-user-state:     ## Durable user-state (dock layouts, read state) proof
+	uv run pytest tests/e2e-py -m user_state -v
+e2e-ray-batch:      ## Ray batch proof
+	uv run pytest tests/e2e-py -m ray_batch -v
+e2e-ray-train:      ## Ray train proof
+	uv run pytest tests/e2e-py -m ray_train -v
+
 # ---- the local image path (registry + Dagger engine) ------------------------
 # `make dev-registry` once per host (a local registry on :5000, and k3s pointed at it), and
 # `make dagger-engine` once (an engine that may push to a plain-HTTP registry). Every

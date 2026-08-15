@@ -132,3 +132,45 @@ def test_every_invoked_pytest_path_exists():
         "having run none of the suites below it, or (in a docstring) sends a human down the same "
         "dead end:\n  " + "\n  ".join(dead)
     )
+
+
+def test_every_declared_marker_has_an_invocation_site() -> None:
+    """A per-suite marker that nothing SELECTS is a suite that runs nowhere (audit H1).
+
+    `pyproject.toml` declares twelve per-suite selectors with a comment saying they are "used by the
+    e2e make targets (e.g. `pytest -m media`)". They were not: measured across the Makefile, scripts,
+    `.dagger` and the workflows, NOTHING named any of them, so eleven live suites — 29 tests,
+    including `governed_union`, `gateway` and the registry-CAS proofs — executed in no target, no
+    script and no CI job. The declarations read as if they drove something, which is why nobody
+    looked.
+
+    THIS IS THE HALF THAT MAKES IT STAY FIXED. Adding the targets closes it once; this assertion is
+    what turns "somebody deleted the target" from a silent loss back into a red test. Its sibling
+    above catches an invocation site naming a test FILE that does not exist; this catches the mirror
+    case — a declared marker with no site at all.
+
+    Deliberately NOT asserting that each marker selects ≥1 test: that needs a collection run per
+    marker (~13 subprocesses) and the sibling `test_every_suite_file_is_collected` already proves no
+    suite has fallen out of collection. What is unprotected without this is the WIRING, not the tests.
+    """
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    declared = [m.split(":")[0].strip() for m in pyproject["tool"]["pytest"]["ini_options"]["markers"]]
+
+    # `slow` and `e2e` are POSTURE markers, not per-suite selectors: they are used with `not` in the
+    # default runs (`-m "not slow and not e2e"`), which is an invocation site of the opposite kind.
+    per_suite = [m for m in declared if m not in {"slow", "e2e"}]
+
+    sites = "\n".join(
+        site.read_text(encoding="utf-8", errors="ignore")
+        for glob in INVOCATION_GLOBS
+        if not glob.startswith("tests/")  # a suite naming its own marker is not an invocation of it
+        for site in sorted(REPO_ROOT.glob(glob))
+    )
+    unselected = [m for m in per_suite if not re.search(rf"-m\s+['\"]?{re.escape(m)}\b", sites)]
+
+    assert not unselected, (
+        f"these markers are declared but SELECTED BY NOTHING — their suites run in no target, script "
+        f"or CI job, and the declaration is what makes that invisible: {unselected}. Give each one an "
+        "invocation site (the `e2e-<suite>` targets in the Makefile), or delete the declaration and "
+        "the marker from its suite."
+    )
