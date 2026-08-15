@@ -2281,3 +2281,37 @@ def test_every_actor_reminder_declares_its_failure_policy() -> None:
         "loop is a try/except inside the callback — which also hides the failure from daprd. Pass "
         "`failure_policy=ActorReminderFailurePolicy.drop_policy()` (or `constant_policy(...)`)."
     )
+
+
+def test_notifications_stays_single_replica_while_its_single_flight_lock_is_process_local() -> None:
+    """The reconcile tick's overlap guard is an `asyncio.Lock` — per PROCESS, not per estate.
+
+    At one replica that is correct and cheap. At two, both pods tick, both read the same un-advanced
+    cursor, and both walk the same rows: double the FGA and actor load exactly when lineage or the
+    sidecar is already the slow thing. Nothing fails loudly; it just costs twice.
+
+    The estate has already ruled on this exact shape, for the medallion movers — `values-prod.yaml`
+    pins `moverReplicas: 1` with "the mover single-flight lock is PROCESS-LOCAL … Raise only after a
+    cross-pod lock ships." That constraint is written down and enforced by a value. This one was only
+    ever true by accident, so this test is the missing half.
+
+    A Dapr actor with a fixed id WOULD give a cross-pod guard, and is deliberately not used: actors are
+    turn-based, so they QUEUE. `reconcile_cron` argues for the opposite — "Skipping is the right answer
+    rather than queueing: the work is not lost, it is what the pass already in flight is doing." An
+    actor-based lock would have to re-implement skipping on top of queueing to preserve that.
+
+    So: raise the replica count only together with a cross-pod guard that still SKIPS, and delete this
+    test in the same commit.
+    """
+    cron = (SERVICES / "notifications" / "src" / "notifications" / "api" / "reconcile_cron.py").read_text()
+    if "asyncio.Lock()" not in cron:
+        return  # a cross-pod guard shipped; this test has done its job and should be deleted
+
+    for profile in ("values.yaml", "values-prod.yaml"):
+        values = yaml.safe_load((REPO / "chart" / profile).read_text()) or {}
+        declared = ((values.get("services") or {}).get("notifications") or {}).get("replicas")
+        assert declared in (None, 1), (
+            f"chart/{profile} runs notifications at {declared} replicas while its reconcile overlap "
+            "guard is a process-local asyncio.Lock, so every pod ticks and re-walks the same rows. "
+            "Ship a cross-pod guard that SKIPS (not an actor, which queues) before raising this."
+        )
