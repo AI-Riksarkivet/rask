@@ -302,6 +302,38 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions, delimiter:
     )
 
 
+def _top_level_namespaces_across(roots: list[str], storage_options: StorageOptions, delimiter: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """``(namespace, root)`` pairs across EVERY root, plus the roots that could not be read (F3.3).
+
+    The scan read exactly ONE root — the shared default bucket — while a warehouse-enabled estate puts
+    each tenant's namespaces in that tenant's OWN bucket. So the whole per-warehouse namespace layer
+    was outside the reconciler's field of view: not merely unrepaired, UNREPORTED, and a zero in a
+    drift report is read as "checked and clean". That report is also the gate `purge_expired_trash`
+    consults before deleting anything, so the blind spot let it certify an estate it had never looked at.
+
+    The root travels WITH each namespace rather than being applied to the batch, because
+    `UnboundNamespace.root` is what tells an operator which bucket to go and look in — and with more
+    than one root in play, a batch-level root would be wrong for every finding but one.
+
+    PER-ROOT TOLERANCE, and the alternative was measured and rejected. Raising on the first unreadable
+    root turns one unreachable tenant bucket — a deleted warehouse, revoked credentials, a quarantined
+    tenant — into a `CategoryUnavailable`, which blocks `report_is_clean` and with it the purge, for
+    the WHOLE estate. So a failed root is reported as an `IncompleteScan` and the readable ones still
+    report, which is exactly the rule the orphan scan already follows: name the input to distrust
+    rather than either hiding the gap or stopping everything.
+    """
+    found: set[tuple[str, str]] = set()
+    unreadable: list[tuple[str, str]] = []
+    for root in roots:
+        try:
+            # `|=`, not `.update(...)`: the module's read-only AST guard bans any call named `update`
+            # and cannot tell a set method from a store write. Augmented assignment is not a call.
+            found |= {(name, root) for name in _top_level_namespaces(root, storage_options, delimiter)}
+        except Exception as exc:  # noqa: BLE001 — one unreachable bucket must not blind the whole scan
+            unreadable.append((root, f"{type(exc).__name__}: {exc}"))
+    return sorted(found), unreadable
+
+
 def _list_bucket_names(client: Any) -> tuple[list[str], str | None]:
     """Every bucket the credentials can see, sorted, plus a truncation reason when the listing paged.
 
@@ -395,9 +427,9 @@ def _orphaned_annotation_tasks(edges: Iterable[tuple[str, str]], project_ids: se
     return [OrphanedAnnotationTask(annotation_project=task_id, tenant=tenant_id) for task_id, tenant_id in sorted(set(edges)) if tenant_id not in project_ids]
 
 
-def _unbound_namespaces(namespaces: Iterable[str], bound: set[str], root: str) -> list[UnboundNamespace]:
-    """Top-level namespaces on the shared root that no binding claims."""
-    return [UnboundNamespace(namespace=name, root=root) for name in sorted(namespaces) if name not in bound]
+def _unbound_namespaces(namespaces: Iterable[tuple[str, str]], bound: set[str]) -> list[UnboundNamespace]:
+    """Top-level namespaces that no binding claims, each carrying the root it was actually found on."""
+    return [UnboundNamespace(namespace=name, root=root) for name, root in sorted(namespaces) if name not in bound]
 
 
 def _orphan_buckets(buckets: Iterable[str], claimed: set[str], platform: set[str]) -> list[OrphanBucket]:
@@ -440,7 +472,7 @@ class Sources(BaseModel):
     warehouse_records_error: str | None = None
     bindings: list[dict[str, str]] | None = None
     bindings_error: str | None = None
-    namespaces: list[str] | None = None
+    namespaces: list[tuple[str, str]] | None = None
     namespaces_error: str | None = None
     buckets: list[str] | None = None
     buckets_error: str | None = None
@@ -532,7 +564,15 @@ async def load_sources(
     sources.bindings, sources.bindings_error = await _registry_source(
         sources, "registry:bindings", control_root, storage_options, _BINDINGS_PREFIX, ("top_ns", "warehouse_id")
     )
-    sources.namespaces, sources.namespaces_error = await _read_blocking("catalog:namespaces", _top_level_namespaces, namespace_root, storage_options, delimiter)
+    # EVERY root, not just the shared one (diff2 F3.3). Reuses the warehouse registry already loaded
+    # above rather than reading it again — two reads would be two answers, and the second could
+    # disagree with the one `dangling_bindings` was computed from.
+    warehouse_roots = sorted({str(r["root_uri"]) for r in (sources.warehouse_records or []) if r.get("root_uri")})
+    namespace_roots = [namespace_root, *(r for r in warehouse_roots if r != namespace_root)]
+    scanned, sources.namespaces_error = await _read_blocking("catalog:namespaces", _top_level_namespaces_across, namespace_roots, storage_options, delimiter)
+    if scanned is not None:
+        sources.namespaces, unreadable_roots = scanned
+        sources.incomplete.extend(IncompleteScan(source=f"catalog:namespaces:{root}", reason=reason) for root, reason in unreadable_roots)
     sources.buckets, sources.buckets_error = await _bucket_source(sources, bucket_client)
     return sources
 
@@ -581,11 +621,14 @@ def build_report(
 
     if not warehouses_enabled:
         report.skipped.append(CategorySkipped(category="unbound_namespaces", reason=_WAREHOUSES_OFF))
-    elif (reason := _first(sources.namespaces_error, sources.bindings_error)) is not None:
+    # `warehouse_records_error` joins the guard: that registry is what ENUMERATES the roots to scan,
+    # so without it the scan silently covers the shared root alone — which is the pre-F3.3 blind spot
+    # reappearing as a clean report rather than as an unavailable category.
+    elif (reason := _first(sources.namespaces_error, sources.bindings_error, sources.warehouse_records_error)) is not None:
         report.unavailable.append(CategoryUnavailable(category="unbound_namespaces", reason=reason))
     else:
         bound = {str(b["top_ns"]) for b in sources.bindings or []}
-        report.unbound_namespaces = _unbound_namespaces(sources.namespaces or [], bound, namespace_root)
+        report.unbound_namespaces = _unbound_namespaces(sources.namespaces or [], bound)
         report.counts["unbound_namespaces"] = len(report.unbound_namespaces)
 
     if (reason := _first(sources.buckets_error, sources.warehouse_records_error)) is not None:

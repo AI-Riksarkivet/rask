@@ -130,13 +130,21 @@ class _Estate:
         self.control_root = f"file://{tmp_path / 'control'}"
         self.namespace_root = f"file://{tmp_path / 'data'}"
         (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+        # A REAL, readable warehouse root — not a bare `s3://bkt-a` URI nothing backs. Since diff2 F3.3
+        # the reconciler scans EVERY registered warehouse's root for top-level namespaces, not just the
+        # shared one, so a fictional root makes the fixture report an unreadable-root IncompleteScan
+        # that says nothing about the estate under test. A registered warehouse on a real deployment
+        # has a bucket the reconciler's credentials can open; the fixture now models that.
+        # `bucket` stays `bkt-a` — that is the field the bucket-claim and orphan-bucket categories use.
+        self.warehouse_root = f"file://{tmp_path / 'wh-a'}"
+        (tmp_path / "wh-a").mkdir(parents=True, exist_ok=True)
         proj_svc.put_project(self.control_root, {}, {"id": "acme", "created_at": "t", "created_by": "alice", "protected": "false"})
         wh_svc.put_warehouse(
             self.control_root,
             {},
-            {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t"},
+            {"id": "wh-a", "bucket": "bkt-a", "root_uri": self.warehouse_root, "project": "acme", "created_at": "t"},
         )
-        wh_svc.bind_namespace(self.control_root, {}, "team_ns", "wh-a", "s3://bkt-a")
+        wh_svc.bind_namespace(self.control_root, {}, "team_ns", "wh-a", self.warehouse_root)
         self.namespace_dir(tmp_path, "team_ns")
         self.fga = _FakeFga(
             {
@@ -630,3 +638,56 @@ def test_a_registry_bucket_that_duplicates_the_configured_one_is_not_scanned_twi
     sources.warehouse_records = [{"id": "w", "bucket": "configured-bucket", "project": "p"}]
 
     assert mod._scannable_buckets(report, _settings_for_scan(tmp_path), sources) == ["configured-bucket"]
+
+
+# --------------------------------------------------------------------------- #
+# diff2 F3.3 — the scan opened ONE root while the estate has many
+# --------------------------------------------------------------------------- #
+
+
+def test_an_unbound_namespace_in_a_WAREHOUSE_bucket_is_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The blind spot: a warehouse-enabled estate puts each tenant's namespaces in that tenant's OWN
+    bucket, and the scan read only the shared default root.
+
+    So an entire per-warehouse namespace layer sat outside the reconciler's field of view — not merely
+    unrepaired, UNREPORTED. And this report is the gate `purge_expired_trash` consults before deleting
+    anything (`report_is_clean`), so the blind spot let the reclaimer certify an estate it had never
+    looked at.
+
+    The finding carries the root it was actually found on, because with more than one root in play
+    "which bucket do I go and look in" is the only actionable part.
+    """
+    estate = _Estate(tmp_path)
+    # A namespace created in the WAREHOUSE's own root, claimed by no binding.
+    connect("dir", {"root": str(tmp_path / "wh-a")}).create_namespace(CreateNamespaceRequest(id=["stray_tenant_ns"]))
+
+    report = estate.run(monkeypatch)
+
+    found = {(u.namespace, u.root) for u in report.unbound_namespaces}
+    assert ("stray_tenant_ns", estate.warehouse_root) in found, f"the warehouse root was not scanned — unbound_namespaces reported {found}"
+
+
+def test_one_unreadable_warehouse_root_does_not_blind_the_whole_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Per-root tolerance, and the alternative was measured and rejected.
+
+    Raising on the first unreadable root turns ONE unreachable tenant bucket — a deleted warehouse,
+    revoked credentials, a quarantined tenant — into a `CategoryUnavailable`, which blocks
+    `report_is_clean` and with it the purge, for the WHOLE estate. So an unreadable root is named as an
+    `IncompleteScan` (the input to distrust) while every readable root still reports, which is exactly
+    the rule the orphan scan already follows.
+    """
+    estate = _Estate(tmp_path)
+    wh_svc.put_warehouse(
+        estate.control_root,
+        {},
+        {"id": "wh-gone", "bucket": "bkt-gone", "root_uri": "s3://bkt-gone", "project": "acme", "created_at": "t"},
+    )
+    connect("dir", {"root": str(tmp_path / "wh-a")}).create_namespace(CreateNamespaceRequest(id=["still_found"]))
+
+    report = estate.run(monkeypatch)
+
+    # The category still REPORTS — it is not unavailable…
+    assert "unbound_namespaces" not in {u.category for u in report.unavailable}
+    assert "still_found" in {u.namespace for u in report.unbound_namespaces}
+    # …and the unreadable root is named rather than silently dropped.
+    assert any(i.source == "catalog:namespaces:s3://bkt-gone" for i in report.incomplete), f"the unreadable root was not reported: {report.incomplete}"
