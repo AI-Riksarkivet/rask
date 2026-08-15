@@ -87,12 +87,31 @@ def test_oidc_and_openfga_authorization_chain(server: str) -> None:
     # No token → 401 (OIDC enforced).
     assert requests.post(f"{server}/v1/namespace/e2ens/create", json={}, timeout=10).status_code == 401
 
-    # Valid token, no tuple → 403 (OpenFGA denies).
-    assert requests.post(f"{server}/v1/namespace/e2ens/create", headers=headers, json={}, timeout=10).status_code == 403
-
-    # Grant writer → the create reaches the backend (200, or 409 if it already exists).
-    _grant(store, model, sub, "writer", obj)
+    # Valid token, no tuple → the create is ALLOWED, and that is the intended posture for THIS stack.
+    #
+    # This asserted 403 and was wrong about the stack it runs against (audit H2). Top-level creation
+    # is self-serve unless `fga_lock_root_create` is set — `_create_parent_check` returns None for a
+    # single-segment id, so there is no parent to check and nothing to deny. The estate decides that
+    # per environment and has already decided it: `chart/values.yaml` ships `auth.lockRootCreate:
+    # false`, `chart/values-prod.yaml` ships `true`. `scripts/e2e_stack.sh` sets `auth.enabled=true`
+    # and does NOT set lockRootCreate, so this suite runs against the OPEN default — which is exactly
+    # what `scripts/auth_e2e.sh` (the script CI runs) has always expected: `expect 200 ... "alice
+    # create namespace"`. Two artifacts asserted opposite outcomes for one request; the shell script
+    # was right and this was describing production.
     assert requests.post(f"{server}/v1/namespace/e2ens/create", headers=headers, json={}, timeout=10).status_code in (200, 409)
+
+    # THE DENY THAT ACTUALLY EXISTS is on the parent, so prove it on a NESTED create.
+    #
+    # The old sequence granted `writer` on `namespace:e2ens` and then re-created `e2ens`, which
+    # proved nothing: a create gates on the PARENT, never on the object being created, so that grant
+    # was inert and the create had already succeeded for an unrelated reason. Creating a CHILD is
+    # where the parent check bites — and it is the rung a locked-root estate falls back to anyway.
+    child = "e2ens.e2child"
+    assert requests.post(f"{server}/v1/namespace/{child}/create", headers=headers, json={}, timeout=10).status_code == 403
+
+    # Grant writer ON THE PARENT → the nested create reaches the backend (200, or 409 if it exists).
+    _grant(store, model, sub, "writer", obj)
+    assert requests.post(f"{server}/v1/namespace/{child}/create", headers=headers, json={}, timeout=10).status_code in (200, 409)
 
     # Grant reader → describe succeeds.
     _grant(store, model, sub, "reader", obj)

@@ -55,7 +55,7 @@ nobody, and its dead-path regex checks file paths rather than make targets, so
 Then extend the collection gate: every declared marker must match ≥1 test AND be named by ≥1
 invocation site; every `make <target>` cited in a suite docstring must exist.
 
-### H2 — `tests/e2e-py/test_auth_e2e.py:91` · asserts a 403 the catalog stopped issuing
+### H2 — `tests/e2e-py/test_auth_e2e.py:91` · asserts a 403 the catalog stopped issuing — **CLOSED**
 
 ```python
 # Valid token, no tuple → 403 (OpenFGA denies).
@@ -74,6 +74,28 @@ request; only the skipping one claims the deny.
 **Fix:** decide which is the intended posture. Either assert the open-create default plus a NESTED
 create (which does gate), or run the stack with `LANCE_FGA_LOCK_ROOT_CREATE=true` — the configuration
 the assertion actually describes. Then give the file the CI lane `e2e-auth` already boots.
+
+**CLOSED — and there was no posture to decide.** The estate had already decided it, per environment:
+`chart/values.yaml:663` ships `auth.lockRootCreate: false`, `chart/values-prod.yaml:22` ships `true`
+("prod: a token alone can't create root namespaces — needs a warehouse create grant"). It is a
+supported chart toggle rendered at `chart/templates/services.yaml:153`, not dead config.
+
+So the two artifacts were not asserting opposite intentions — they were describing two DIFFERENT
+environments while neither said which. `scripts/e2e_stack.sh:106` sets `auth.enabled=true` and does
+NOT set `lockRootCreate`, so this suite runs against the OPEN default; `scripts/auth_e2e.sh` was
+right and this file was describing production.
+
+Fixed by asserting the open default WITH the reason, and by moving the deny onto the rung that
+actually has one. The old follow-up was inert twice over: it granted `writer` on
+`namespace:e2ens` and then re-created `e2ens`, but a create gates on the PARENT, never on the object
+being created — so the grant did nothing and the create had already succeeded for an unrelated
+reason. It now creates a CHILD (`e2ens.e2child`), asserts 403 without a parent grant, grants writer
+on the parent, and asserts the create lands.
+
+NOT EXECUTED HERE: this suite needs the governed kind stack (`make e2e-ci`), which builds images and
+boots a cluster. The change is reasoned from `_create_parent_check` (top-level → `None` unless
+locked; nested → `namespace:<parent>`) and from the values files above, and it now agrees with the
+shell script CI runs. Flagged as needing one live run.
 
 ### H3 — `nav-truth.test.ts:104-110` · the scanner drops 5 of 45 leaves; the floor absorbs it — **CLOSED**
 
