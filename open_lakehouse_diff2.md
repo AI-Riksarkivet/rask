@@ -805,9 +805,15 @@ and the next should arrive as a requirement rather than be guessed at from the c
 
 ### F10 (P2) — Smaller confirmed drift/hygiene items (one line each, all need re-verify at fix time)
 
-**STATUS: items 1–10 CONFIRMED, item 11 REFUTED (2026-08-15). Items 2, 7, 8, 9, 10 LANDED
-(`3357f7dd`); items 1, 3, 4, 5, 6 OPEN AND WAITING ON A DECISION.** Items 1–10 were re-verified by
-hand and hold as drift/hygiene facts (line numbers drifted; mechanisms are where stated).
+**STATUS: items 1–10 CONFIRMED, item 11 REFUTED (2026-08-15). Items 1, 2, 6, 7, 8, 9, 10 LANDED;
+items 3, 4, 5 OPEN AND WAITING ON A DECISION.** Items 1–10 were re-verified by hand and hold as
+drift/hygiene facts (line numbers drifted; mechanisms are where stated).
+
+*(This line was itself stale, corrected 2026-08-15: it read "2, 7, 8, 9, 10 LANDED … 1, 3, 4, 5, 6
+OPEN" after item 1 had been landed and struck through in the list below, and after item 6 shipped in
+`3309ae5f` — verified present at HEAD in `control_events.py` and `purge.py`. A status line that
+under-reports what shipped is the same defect class this document is full of: the artefact and the
+claim about it drifting apart.)*
 
 LANDED — the five that are defects rather than opinions:
 - **10** depth-capped `_collect_descendants`, importing the constant rather than copying it (the whole
