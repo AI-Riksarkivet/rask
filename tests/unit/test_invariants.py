@@ -22,7 +22,7 @@ import json
 import pathlib
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 import yaml
@@ -49,33 +49,104 @@ CHART = REPO / "chart"
 # --------------------------------------------------------------------------------------------------
 
 
-def _bare_lineage_publishes() -> list[str]:
-    """Every `dapr_publish.publish_event(...)` whose topic_name is `settings.lineage_topic`.
+#: Every publish site in `services/`, classified by WHAT THE TOPIC CARRIES.
+#:
+#: A declare-your-intent registry, not a pattern match, and the reason is that the pattern match did not
+#: work. The guard this replaces looked for the literal `topic_name=settings.lineage_topic` inside a
+#: `dapr_publish.publish_event(` window — and EVERY site in the estate names its topic through a variable
+#: (`self._topic`, `settings.pub_topic`, ...), so it matched nothing. It was a test that could only pass,
+#: green for as long as it existed while two bare lineage publishes sat in front of it.
+#:
+#: A better regex cannot fix that: both lineage offenders take the topic as a CONSTRUCTOR argument, so no
+#: pattern over the call site can resolve what it publishes to. The only thing that can is a human saying
+#: so once, here — and a new or moved site failing until somebody does.
+#:
+#: Keyed by (module, topic expression): both survive edits that a line number would not.
+_PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
+    # LINEAGE — an event DESCRIBING a committed write. Losing one means the data landed and the graph
+    # never learned of it, so these must be staged through `outbox.publish_lineage_with_outbox`.
+    ("services/catalog/src/catalog/core/lineage_emit.py", "self._topic"): "lineage-bare",
+    ("services/maintenance/src/maintenance/core/lineage_emit.py", "self._topic"): "lineage-bare",
+    # CONTROL — a governance refresh hint. `service_kit/control_events.py` declares these best-effort by
+    # contract: a consumer re-reads state through the governed path, so a dropped one costs a re-read.
+    ("services/catalog/src/catalog/core/control_emit.py", "self._topic"): "control",
+    ("services/maintenance/src/maintenance/core/control_emit.py", "self._topic"): "control",
+    # TRIGGER — an instruction to DO work. Correctly bare: the outbox re-ingests lineage, it never
+    # re-fires triggers. Their durability question is a different one (open_atomicity.md section 2).
+    ("services/medallion/src/medallion/services/ingest_trigger.py", "settings.bronze_topic"): "trigger",
+    ("services/medallion/src/medallion/services/media_produce.py", "settings.media_topic"): "trigger",
+    ("services/medallion/src/medallion/services/publication_trigger.py", "settings.bronze_topic"): "trigger",
+    ("services/medallion/src/medallion/services/train.py", "settings.train_topic"): "trigger",
+    ("services/medallion/src/medallion/services/transform.py", "settings.pub_topic"): "trigger",
+    ("services/medallion/src/medallion/workflow.py", "settings.sub_topic"): "trigger",
+}
 
-    A lineage event MUST go through `outbox.publish_lineage_with_outbox` (stage → publish → drop) so a
-    crash between the Lance commit and the publish ack leaves the event recoverable. A bare publish is
-    the exact commit→publish loss window #4 exists to close. TRIGGER topics (pub_topic / media_topic /
-    bronze_topic / train_topic) are correctly bare: the outbox re-ingests lineage, it never re-fires triggers.
+#: The lineage publishes that do NOT go through the outbox. KNOWN DEBT, not permission — the plan and the
+#: reason the fix is not simply "route them through it today" are in `open_atomicity.md` section 4(f).
+#: This set may shrink. It may not grow.
+_KNOWN_BARE_LINEAGE: Final[frozenset[str]] = frozenset(module for (module, _topic), intent in _PUBLISH_INTENT.items() if intent == "lineage-bare")
+
+_PUBLISH_CALL = re.compile(r"\bpublish_event\(")
+_TOPIC_KWARG = re.compile(r"topic_name=([A-Za-z_][A-Za-z_0-9\.\[\]]*)")
+
+
+def _observed_publish_sites() -> dict[tuple[str, str], str]:
+    """Every publish site under `services/`, as (module, topic expression) -> "file:line".
+
+    Matches a BARE `publish_event(` rather than the dotted spelling, because both are in use: most sites
+    call `dapr_publish.publish_event(...)`, while `medallion/workflow.py` imports the wrapper directly
+    (`from service_kit.dapr_publish import publish_event`) and calls it unqualified. A guard keyed on the
+    dotted form misses that one — which is exactly the shape of the bug this registry replaces.
     """
-    offenders: list[str] = []
-    for py in SERVICES.rglob("*.py"):
+    observed: dict[tuple[str, str], str] = {}
+    for py in sorted(SERVICES.rglob("*.py")):
+        if "tests" in py.parts:
+            continue
         lines = py.read_text().splitlines()
         for i, line in enumerate(lines):
-            if "dapr_publish.publish_event(" not in line:
+            if not _PUBLISH_CALL.search(line):
                 continue
-            # the topic kwarg sits within the call's next few lines
-            window = "\n".join(lines[i : i + 8])
-            if "topic_name=settings.lineage_topic" in window:
-                offenders.append(f"{py.relative_to(REPO)}:{i + 1}")
-    return offenders
+            topic = _TOPIC_KWARG.search("\n".join(lines[i : i + 10]))
+            module = str(py.relative_to(REPO))
+            observed[(module, topic.group(1) if topic else "<no topic_name>")] = f"{module}:{i + 1}"
+    return observed
 
 
-def test_every_lineage_publish_goes_through_the_outbox() -> None:
-    offenders = _bare_lineage_publishes()
-    assert not offenders, (
-        "#4 claims 'every lineage publish is staged', but these publish to the LINEAGE topic WITHOUT the "
-        f"outbox — a crash after the Lance commit loses the event forever: {offenders}. "
-        "Use outbox.publish_lineage_with_outbox(...). (Trigger topics may stay bare.)"
+def test_every_publish_site_declares_what_its_topic_carries() -> None:
+    """A new publish site must be classified before it can ship.
+
+    The point is the CLASSIFICATION, not the count: whether an event describes a write, hints at a refresh,
+    or commands work decides whether losing it is recoverable — and that is a judgement only the author can
+    make. Failing here is the prompt to make it.
+    """
+    observed = _observed_publish_sites()
+    undeclared = sorted(location for key, location in observed.items() if key not in _PUBLISH_INTENT)
+    assert not undeclared, (
+        f"these publish sites are not classified in _PUBLISH_INTENT: {undeclared}. Add each one as "
+        "'lineage' (describes a committed write -> must be staged through the outbox), 'control' (a "
+        "best-effort refresh hint) or 'trigger' (an instruction to do work). See open_atomicity.md."
+    )
+    stale = sorted(f"{module} ({topic})" for (module, topic) in _PUBLISH_INTENT if (module, topic) not in observed)
+    assert not stale, (
+        f"_PUBLISH_INTENT declares publish sites that no longer exist: {stale}. A stale entry makes the guard describe an estate that is not there — delete it."
+    )
+
+
+def test_the_set_of_bare_lineage_publishes_does_not_grow() -> None:
+    """#4 claims 'every lineage publish is staged'. Two are not, and this pins that number.
+
+    Recorded rather than asserted-away because the fix has a prerequisite: `stage_event` keys the staged
+    object on `<run_id>.json` while the run id excludes event_type, so a COMPLETE and a FAIL for one run
+    share one object — `transform.py` documents that having destroyed a staged COMPLETE. Routing more
+    producers through the outbox before fixing the key would spread a lossy implementation, so the debt is
+    made VISIBLE here instead of silently missed, as it was by the guard this replaces.
+    """
+    observed = _observed_publish_sites()
+    bare = {module for (module, _topic), location in observed.items() if module in _KNOWN_BARE_LINEAGE}
+    assert bare == set(_KNOWN_BARE_LINEAGE), (
+        f"the bare-lineage-publish set changed: {sorted(bare)} vs the pinned {sorted(_KNOWN_BARE_LINEAGE)}. "
+        "It may SHRINK (route one through outbox.publish_lineage_with_outbox and delete its entry) but it "
+        "may not grow."
     )
 
 
