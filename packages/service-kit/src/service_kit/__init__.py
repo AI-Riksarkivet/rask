@@ -43,7 +43,7 @@ def build_settings() -> Settings:
     return Settings.model_validate({})
 
 
-# THE DAPR CLIENT SEAM IS DELETED (open_dapr.md §2.1). It built `DaprClient("http://127.0.0.1:3500")`
+# THE DAPR CLIENT SEAM IS DELETED. It built `DaprClient("http://127.0.0.1:3500")`
 # — the sidecar's HTTP port handed to a gRPC client, which talks 50001 — and a test pinned that wrong
 # constant as if it were the contract. Two re-verifications found the same thing: NOTHING called it.
 # Every service that actually publishes builds its own client (`medallion.mover` / `medallion.producer`

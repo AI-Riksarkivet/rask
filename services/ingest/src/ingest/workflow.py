@@ -1064,7 +1064,7 @@ def terminate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> d
 
     That residual is BOUNDED rather than eliminated, and bounding it is the gain: no NEW drain can
     start, so the window is one activity's runtime instead of the rest of the run. Whether a drain
-    that finishes against a deleted consumer fails loudly or silently is `open_dapr.md` §6 Q9, which
+    that finishes against a deleted consumer fails loudly or silently is an OPEN QUESTION, which
     needs a live cluster to settle.
 
     Best-effort by construction, like `release_run_units` and the lineage emit: this runs while a run

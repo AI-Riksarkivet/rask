@@ -98,7 +98,7 @@ def publish_token(settings: Any) -> str | None:
     }
     # The client secret comes from the SAME bundle when the store serves it — this credential was the
     # one outside the estate's fail-closed secrets guard, riding plaintext pod env while the comment
-    # above its chart row claimed otherwise (open_dapr.md §2.9). The env field stays only as the
+    # above its chart row claimed otherwise. The env field stays only as the
     # no-OpenBao fallback, the same shape as every other guarded credential.
     client_secret = bundle.get("publisher-oidc-client-secret") or settings.publish_client_secret or ""
     auth = (settings.publish_client_id, client_secret) if settings.publish_client_id else None

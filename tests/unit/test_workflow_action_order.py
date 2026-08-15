@@ -12,7 +12,7 @@ THIS HAS HAPPENED TWICE IN THIS REPO, and neither was noticed at review time:
   * `bd191c08` inserted `resolve_limits` ahead of `ensure_dataset` and changed that activity's return
     type, so any instance in flight across that deploy diverges.
   * §2.4's own fix inserted `terminate_chunks` before `emit_terminal` on both abandonment paths —
-    self-reported in open_dapr.md §4.2 after the fact.
+    self-reported after the fact.
 
 WHAT THIS GATE DOES, AND DELIBERATELY DOES NOT DO. It does not prevent the change: sometimes the
 sequence must change, and §2.4's was a genuine fix. It makes the change VISIBLE — a snapshot the
@@ -27,7 +27,7 @@ human does.
 THE REAL FIX IS A VERSIONING SEAM, and the estate has none: `is_patched`, `continue_as_new` and named
 workflow versions appear nowhere under `services/` or `packages/`, though the SDK exposes them. Until
 one exists, "drain before deploying" is the only safe answer and this gate is what prompts asking the
-question. See open_dapr.md §4.2.
+question.
 """
 
 from __future__ import annotations
@@ -124,7 +124,7 @@ def test_the_activity_sequence_matches_the_committed_snapshot() -> None:
             f"  1. Can an in-flight instance be at a position that moved? (Positions AFTER the change are safe; "
             f"an instance that has not reached them yet replays the new code cleanly.)\n"
             f"  2. If yes, the deploy needs in-flight runs DRAINED first, or a versioning seam — the estate has "
-            f"none today (open_dapr.md §4.2).\n"
+            f"none today.\n"
             f"  3. Then regenerate: RASK_UPDATE_WORKFLOW_SNAPSHOT=1 uv run pytest {Path(__file__).name}"
         )
 

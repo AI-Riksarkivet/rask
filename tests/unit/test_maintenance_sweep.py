@@ -118,7 +118,7 @@ def test_summarize_reports_refusals_as_their_own_category() -> None:
 
 
 def test_a_tick_aborted_before_the_loop_still_counts_as_started(monkeypatch: Any) -> None:
-    """open_dapr.md §2.20: `compaction.runs` fired only AFTER the sweep loop, so a pass killed
+    """`compaction.runs` fired only AFTER the sweep loop, so a pass killed
     mid-flight was observationally identical to a tick that never arrived. The started counter must
     fire before anything abortable — here the policy-registry read, whose failure aborts the tick by
     design — so started-minus-completed is a real lost-pass count."""

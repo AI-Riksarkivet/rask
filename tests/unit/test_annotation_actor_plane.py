@@ -4,7 +4,7 @@
 purpose: the read-plane annotation routes need no actors, so a broken task plane must not take the
 media surface down with it. It documented the consequence as "the task endpoints surface it as a 503
 instead" — and nothing consulted the flag, so a failed registration answered every task route with
-whatever the actor call happened to raise. (open_dapr.md, `main.py:94`.)
+whatever the actor call happened to raise.
 
 These pin both halves of the promise: the task routes refuse with a reason, and the pod stays READY
 so the read plane keeps serving.

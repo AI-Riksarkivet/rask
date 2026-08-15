@@ -273,7 +273,7 @@ class UserStateStore:
         person's own work, replacing a localStorage whose semantics across their own tabs were exactly
         that. Optimistic concurrency with no contender is machinery for a conflict that cannot happen.
 
-        **It is wrong for a SHARED document, and one caller has one** (open_dapr.md §2.7). The catalog's
+        **It is wrong for a SHARED document, and one caller has one**. The catalog's
         `POST /v1/stores` read-modify-writes `ATTACHED_STORES` under `ESTATE_SUBJECT` — an estate-scoped
         key every admin writes — so two concurrent attaches each read N stores and each wrote N+1,
         silently dropping one. The docstring here asserted the opposite ("there is no second writer to

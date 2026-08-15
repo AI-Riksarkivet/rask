@@ -167,7 +167,7 @@ spec:
             {{- if not (include "lance.secretsViaDapr" $root) }}
             # No OpenBao → the plaintext fallback, same as every guarded credential. With the store on,
             # the client secret is seeded as publisher-oidc-client-secret and read from the SAME bundle
-            # as the publisher password (open_dapr.md §2.9 — this row shipped unguarded while the
+            # as the publisher password (this row shipped unguarded while the
             # comment above claimed the fail-closed rule applied).
             - { name: MEDIA_PUBLISH_CLIENT_SECRET, value: {{ $root.Values.dex.clientSecret | quote }} }
             {{- end }}

@@ -112,7 +112,7 @@ data:
             # carries `dapr.io/control-plane=<component>` instead. So every control-plane metric was
             # unscraped, and an alert written on one would have been a rule that can never fire.
             #
-            # The scheduler is the one that matters (open_dapr.md §6 Q11). Since Dapr 1.15 REMINDERS
+            # The scheduler is the one that matters. Since Dapr 1.15 REMINDERS
             # live in the scheduler's own etcd, not in the actor state store — verified on this cluster:
             # `dapr-scheduler-server` is a 3-replica StatefulSet with a 16 Gi etcd PVC. So it is a
             # failure domain that can be lost INDEPENDENTLY of the data its reminders bound, and the

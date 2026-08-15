@@ -10,7 +10,7 @@ hard to reason about even when it is working. Written for an adversarial re-read
 carries its evidence, and §7 lists what I did **not** check so the next session attacks the right
 things.
 
-**Evidence convention** (same markers as `open_dapr.md`, and they are not interchangeable):
+**Evidence convention** (the markers are not interchangeable):
 
 - `path:line` — **read from source** at `HEAD` on `claude/notifications-service-separation-h9bi73`
   (= `main`, `63b04c8`). Read, not executed.

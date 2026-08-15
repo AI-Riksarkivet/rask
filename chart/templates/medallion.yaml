@@ -293,7 +293,7 @@ spec:
             # Keyed by the mover's APP-ID, not its subTopic: two movers share medallion.bronze
             # (bronze-to-silver + pages-to-gold-htr), and a per-subTopic name had both declaring AND
             # subscribing the same DLQ — every dead letter delivered to both, parked and counted twice,
-            # attributed to neither (open_dapr.md §2.11). The producer's dlq.medallion-producer is the precedent.
+            # attributed to neither. The producer's dlq.medallion-producer is the precedent.
             - { name: MEDALLION_DLQ_TOPIC, value: "dlq.{{ .daprAppId }}" }
             {{- end }}
             {{- if .requiredColumns }}

@@ -1,6 +1,6 @@
 """#6.8 — the MEASURED size of an `enumerate_chunks` result, and the ceiling it implies.
 
-`open_dapr.md` §2.13 established the STRUCTURE (chunks carry a pointer into the run's unit manifest
+The chunk STRUCTURE is established (chunks carry a pointer into the run's unit manifest
 instead of the keys themselves) and §6.8 recorded that its magnitude "is not establishable from
 source — no gRPC limit and no state-store row limit is set anywhere in this repo. Measure before
 sizing the fix."

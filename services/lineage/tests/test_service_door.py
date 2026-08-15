@@ -1,6 +1,6 @@
 """The lineage call site drives the SHARED service door, and renders its refusals as problem+json.
 
-open_dapr.md §2.8's residual: the shared resolver landed but not the shared door. This module kept a
+The residual of unifying the service doors: the shared resolver landed but not the shared door. This module kept a
 full second copy of `service_kit.governed.dapr_auth.service_principal` — same allowlist, same
 privileged branch, and a DIFFERENT answer when `APP_API_TOKEN` was unset. The catalog's equivalent
 suite (`tests/unit/test_catalog_gateway_proxied_human.py`) drives `catalog.authenticate` itself for
@@ -217,7 +217,7 @@ def test_an_unprovisioned_privileged_credential_FAILS_CLOSED(monkeypatch: pytest
 
 
 def test_an_UNREADABLE_store_is_a_503_not_a_missing_credential(monkeypatch: pytest.MonkeyPatch) -> None:
-    """open_dapr.md §2.17, through the real door: `fetch_dapr_secret` returns {} both when the store
+    """The absent-vs-unreadable rule, through the real door: `fetch_dapr_secret` returns {} both when the store
     is down and when the bundle is empty, and both used to produce the identical 401. An outage must
     say outage — the absent-vs-unreadable rule the estate enforces in the state plane."""
     _seed_store(monkeypatch, {})

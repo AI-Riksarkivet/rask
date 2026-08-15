@@ -1,6 +1,6 @@
 """The estate's ONE service door — its refusals, and the fact that they are the door's own types.
 
-open_dapr.md §2.8 landed the shared resolver but not the shared door: `services/lineage` kept a full
+The shared resolver landed but not the shared door: `services/lineage` kept a full
 second copy of this body, and the two disagreed about the unconfigured door — lineage refused, the
 catalog swallowed the signal and re-asked OIDC. Two doors with different answers to the same question
 is worse than either answer, because whichever one an auditor reads, the other is the one that ran.

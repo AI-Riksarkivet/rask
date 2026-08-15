@@ -329,6 +329,4 @@ def test_an_oversized_graph_is_REFUSED_at_the_door_with_the_node_NAMED(client: T
     body = resp.json()
     assert body["status"] == 422
     assert body["problems"], "refused with an EMPTY problems list — the builder has nothing to paint"
-    assert any("b" in p and str(MAX_NODE_FAN_IN) in p for p in body["problems"]), (
-        f"the 422 must name the offending node AND the ceiling: {body['problems']}"
-    )
+    assert any("b" in p and str(MAX_NODE_FAN_IN) in p for p in body["problems"]), f"the 422 must name the offending node AND the ceiling: {body['problems']}"

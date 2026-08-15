@@ -233,7 +233,7 @@ scopes:
      the /lineage-dlq parking subscription rode it too — so every pod restart re-attached at the
      beginning of the retained stream and re-parked up to 168h of already-parked dead letters:
      ERROR logs + DEAD_LETTERED counts spiking on every rollout with no new loss, training operators
-     to ignore the one metric that means provenance is missing (open_dapr.md §2.10). deliverPolicy=new
+     to ignore the one metric that means provenance is missing. deliverPolicy=new
      plus a durable cursor parks each dead letter exactly once. Consumer config matches the
      resiliency-mode values the nats-stream-job's durable-drift reconcile expects (EXP_MAXD/EXP_BOFF) —
      this component only renders when resiliency is on, which is also the only time LINEAGE_DLQ_TOPIC

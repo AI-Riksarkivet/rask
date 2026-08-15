@@ -114,7 +114,7 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     missing tenant bucket must not stop the sweep for everyone else.
     """
     # BEFORE discovery, not after the loop like `record_run()`: a pass killed at dataset 400 of 900
-    # was observationally identical to a tick that never arrived (open_dapr.md §2.20). started minus
+    # was observationally identical to a tick that never arrived. started minus
     # completed is the lost-pass count.
     record_run_started()
     older_than = timedelta(days=settings.older_than_days)
@@ -266,7 +266,7 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     record_trashed_skipped(len(skipped_trashed))
     # The FAIL-emit cap's own argument (top of this module), applied to the sweep it lives in: the
     # discovery listing order is deterministic across ticks, so a pass that consistently dies at
-    # dataset N never maintained anything after N — silently, forever (open_dapr.md §2.19). Shuffling
+    # dataset N never maintained anything after N — silently, forever. Shuffling
     # rotates which datasets sit behind a recurring failure point; per-dataset pacing stays with the
     # policy stamps, which don't care about order.
     random.shuffle(uris)

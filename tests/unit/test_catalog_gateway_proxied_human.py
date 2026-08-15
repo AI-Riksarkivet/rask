@@ -175,7 +175,7 @@ def test_anonymous_through_the_gateway_is_unauthenticated_not_permitted() -> Non
 def test_a_non_public_caller_is_never_refused_as_a_public_front_door(monkeypatch: pytest.MonkeyPatch) -> None:
     """A genuine service invocation must not hit the public-caller refusal at all.
 
-    With no `APP_API_TOKEN` configured the door is CLOSED, and since open_dapr.md §2.8 unified the
+    With no `APP_API_TOKEN` configured the door is CLOSED, and since the two service doors were unified the
     two call sites that is a 401 NAMING the missing token, not a fall-through to OIDC — which
     answered the same request with "Missing bearer token" and sent operators to the IdP. Either way
     the point of the test is the TYPE of refusal: `Unauthenticated` (we could not authenticate you),
@@ -210,7 +210,7 @@ def test_direct_call_with_no_dapr_header_is_unaffected() -> None:
 
 
 def test_catalog_authenticate_passes_the_resolver_so_the_privileged_door_opens(monkeypatch: pytest.MonkeyPatch) -> None:
-    """open_dapr.md §2.8: the original defect was one missing kwarg at THIS call site — the shared
+    """the original defect was one missing kwarg at THIS call site — the shared
     service_principal had the dedicated_token parameter and the catalog never passed it, so its
     privileged branch hard-refused every privileged subject no matter what was seeded. The prior
     tests all built the resolver in-test and called service_principal directly, so deleting the

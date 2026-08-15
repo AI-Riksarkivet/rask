@@ -14,7 +14,7 @@ older defect — which is why the ordering is pinned here rather than left to re
 WHAT IS NOT CLAIMED. `terminate_workflow` cannot stop an activity already executing; the SDK is
 explicit ("there is no way to terminate an in-flight activity execution"). So this bounds the window
 to one activity's runtime instead of the rest of the run. Whether a drain that finishes against a
-deleted consumer fails loudly or silently is open_dapr.md §6 Q9 and needs a live cluster.
+deleted consumer fails loudly or silently is an open question and needs a live cluster.
 """
 
 from __future__ import annotations

@@ -187,7 +187,7 @@ def test_the_terminal_emit_is_a_checkpointed_ACTIVITY_not_an_inline_call() -> No
     Re-delivery is safe because `lineage_run_id` is a deterministic uuid5 — a replayed emit rewrites
     the same run rather than forking a second one.
 
-    **WHAT THE CHECKPOINT ATTESTS, and what it does not** (open_dapr.md §2.2). It attests that the
+    **WHAT THE CHECKPOINT ATTESTS, and what it does not**. It attests that the
     activity ran to completion. It does NOT attest that the event was DELIVERED: `lineage._emit`
     swallows a failed emission on purpose (I8 — "a run whose data landed must not be reported as
     failed because the graph was unreachable"), so the activity returns successfully whether or not

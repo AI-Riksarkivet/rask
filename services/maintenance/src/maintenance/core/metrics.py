@@ -78,12 +78,12 @@ _trash_bytes = _meter.create_counter(
 _KINDS = ("table", "namespace")
 
 
-#: §2.19/§2.20 (open_dapr.md) — the lost-pass detectors. `compaction.runs` fires only AFTER the sweep
+#: The lost-pass detectors. `compaction.runs` fires only AFTER the sweep
 #: loop, so a process killed at dataset 400 of 900 was observationally identical to a tick that never
 #: arrived. `started` fires before discovery; started minus completed IS the lost-pass count, and
 #: `datasets.swept` inside the loop says how far a lost pass got. This pair is also the prerequisite
 #: for any sweep-cadence or durability decision: without it nobody can measure how often a pass is
-#: actually lost (open_dapr.md §4).
+#: actually lost.
 _runs_started = _meter.create_counter(
     "compaction.runs.started",
     unit="{run}",

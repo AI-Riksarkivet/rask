@@ -81,7 +81,7 @@ class ServicePrincipal:
 def _service_principal(settings: SettingsDep, token: str | None, identity: str | None) -> ServicePrincipal:
     """Render the estate's ONE service door in lineage's problem vocabulary. It decides nothing.
 
-    THE FORK IS GONE (open_dapr.md §2.8). This function used to be a full second copy of
+    THE FORK IS GONE. This function used to be a full second copy of
     `service_kit.governed.dapr_auth.service_principal` — same two questions, same allowlist, same
     privileged branch, and a DIFFERENT answer when `APP_API_TOKEN` was unset: it refused where the
     shared door signalled fall-through. Two doors that disagree is worse than either answer, because
@@ -130,7 +130,7 @@ def _service_principal(settings: SettingsDep, token: str | None, identity: str |
         # restore it while looking configured.
         raise UnauthenticatedError(str(exc)) from exc
     except SecretStoreUnreadable as exc:
-        # An outage is an outage, never a 401: the absent-vs-unreadable rule (open_dapr.md §2.17).
+        # An outage is an outage, never a 401: the absent-vs-unreadable rule.
         raise ServiceUnavailableError(str(exc)) from exc
     return ServicePrincipal(principal.sub)
 
@@ -160,7 +160,7 @@ def authenticate(
     #
     # BOTH headers, on the other hand, is the caller ASKING for the service door, so the door is the
     # only one they get: a refusal inside this branch is final and never re-asks OIDC. The catalog
-    # answers identically (open_dapr.md §2.8) — that agreement is the point.
+    # answers identically — that agreement is the point.
     if dapr_api_token is not None and x_lance_service_identity is not None:
         # THE LAUNDERING PATH, refused AT THE SERVICE DOOR. The gateway forwards through Dapr service
         # invocation and the callee's daprd stamps a valid `dapr-api-token` on the way in, so an

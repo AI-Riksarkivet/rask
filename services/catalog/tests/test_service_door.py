@@ -1,6 +1,6 @@
 """The catalog call site gives the SAME answers as lineage, in its own problem vocabulary.
 
-open_dapr.md §2.8 left two service doors running. `tests/unit/test_catalog_gateway_proxied_human.py`
+Unifying the service doors left two of them running for a while. `tests/unit/test_catalog_gateway_proxied_human.py`
 already pins the half that mattered most here — that a gateway-proxied HUMAN authenticates as the
 human, and that the privileged branch opens now that the resolver is passed. What this module pins is
 the half that only becomes visible once lineage's fork is deleted: the two call sites must answer the
@@ -165,7 +165,7 @@ def test_the_privileged_subject_is_admitted_with_ITS_OWN_credential(monkeypatch:
 
 
 def test_an_UNREADABLE_store_is_a_503_not_a_missing_credential(monkeypatch: pytest.MonkeyPatch) -> None:
-    """open_dapr.md §2.17: an outage must say outage, never the same 401 a misconfigured subject gets."""
+    """an outage must say outage, never the same 401 a misconfigured subject gets."""
     _seed_store(monkeypatch, {})
 
     with pytest.raises(ServiceUnavailableError, match="unreadable"):

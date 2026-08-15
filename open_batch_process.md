@@ -44,7 +44,7 @@ Activity inputs/outputs, Dapr history and published events carry **only** datase
 version numbers, fragment-metadata JSON, row-id ranges, counts and bounded error maps.
 The estate has this leak twice and has already written down that it is a leak:
 `services/flows/src/flows/models.py:178-186` (`NodeResult.payload_text`, uncapped, its own
-docstring names the follow-up) and `open_dapr.md` §2.13 (`enumerate_chunks` returns the
+docstring names the follow-up) and the chunk-structure work (`enumerate_chunks` returns the
 whole key set, carried a second time as each child's input) — and history lands in the
 single-replica CNPG Postgres that also holds the lineage graph (§5.5(4)). The shape to
 copy is already in-tree: `ingest/workflow.py::ChunkResult` — fragments as metadata JSON,
@@ -163,7 +163,7 @@ result >  threshold                → written to staging_root(dataset_uri, run_
 ```
 
 Default **measured, not guessed** — measure `enumerate_chunks`' result at advertised scale
-first (`open_dapr.md` open question #8; the 120 MB figure is the doc's own arithmetic,
+first (open question #8; the 120 MB figure is that analysis's own arithmetic,
 unverified). Host it by generalising `ingest/staging.py` from "fragments awaiting commit"
 to "per-run durable side-channel" — it already has the right properties (hash-of-the-work
 naming so retries converge; exact-cover resolution; purge only after commit). No `get`
@@ -190,13 +190,13 @@ back. Every bound is `int | None` with None meaning unbounded — never 0, never
 ### B12. Randomise iteration order; count what a pass actually did
 
 `sweep.py:179` iterates a deterministic listing — a pass that consistently dies at dataset
-N never maintains anything after N, silently, forever (`open_dapr.md` §2.19 CONFIRMED) —
+N never maintains anything after N, silently, forever (CONFIRMED) —
 while the same module shuffles its retry list 140 lines later. And `record_run()` fires
 only after the loop, so a process killed at item 400 of 900 is observationally identical
 to a tick that never arrived (§2.20). **Shape:** shuffle or persist a rotation offset in
 the sweep; a `started` counter before the loop + per-item counters inside it, emitted on
 empty ticks too ("adding 0 CREATES the series"); the transform fan-out gets per-item
-isolation and randomised order from day one. `open_dapr.md` §4 makes the counters a
+isolation and randomised order from day one. The Dapr audit makes the counters a
 **prerequisite** for any durability argument.
 
 ### B13. Reuse the lance-ray global Pool; single-flight claims get chart gates
@@ -268,7 +268,7 @@ repo-wide against in-process polling). `/ray/health` stays live but bounded.
 15. Shutdown cancels nothing Ray-side — **a stated property**: the deadline leg of
     `when_any` produces a FAILED terminal outcome through the one terminal step; abandoned
     jobs are reclaimed by `prune_jobs` + the reconciler. (The losing `when_any` leg cannot
-    be cancelled — `open_dapr.md` §3.)
+    be cancelled.)
 16. Size reads in **bytes, not rows** — bronze rows are ~1.8 MB page images; memory is the
     product of batch size × threads (`MAINTENANCE_SCAN_BATCH_SIZE` × threads precedent).
 
@@ -369,7 +369,7 @@ partitions must never report COMPLETE.**
 3. Re-measure ray 2.56 idle-worker behaviour before touching `max_calls` (B5).
 4. ~~Fix `submission_id`~~ — **DONE**, first axis (`2d18976a`); the code-identity axis
    lands with this build (B3).
-5. Verify like it ships: the kill test is `open_dapr.md` §5.7 Test B — kill the Ray head
+5. Verify like it ships: the kill test is Test B — kill the Ray head
    and confirm the workflow observes the job vanish rather than hanging until the timer.
 
 ---

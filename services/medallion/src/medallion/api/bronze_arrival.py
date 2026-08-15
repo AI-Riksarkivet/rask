@@ -60,7 +60,7 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
     # `medallion.bronze` trigger, and a table that emits BOTH signals CASCADES TWICE — there is no
     # token de-duplication in the movers (a comment here claimed one until 2026-08-08; transform.py
     # only reads the token into logs/lineage run-ids, and the two heads mint incompatible tokens
-    # anyway — open_dapr.md §2.12). Accepted because the stage write is overwrite-convergent (the
+    # anyway). Accepted because the stage write is overwrite-convergent (the
     # single-flight `_write_lock` plus deterministic content make the second pass a same-bytes
     # overwrite), at the cost of duplicate compute and duplicate lineage Runs per hop. The real fix
     # is retiring one head so the `published` tag is the single trigger — open_ingest_design.md §4;

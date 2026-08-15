@@ -878,7 +878,7 @@ There are **four** trigger surfaces today and they do not agree on what "ready" 
 `bronze_arrival.py:55-62` claims "the movers' own token de-duplication is what keeps a table that
 emits BOTH signals from cascading twice" — and all of `transform.py` was read: **there is no dedup
 store.** The guards are overwrite-idempotency and MERGE-on-run_id, which make a double cascade
-harmless-ish, not absent. (This is `open_dapr.md` §2.12, verified CONFIRMED.)
+harmless-ish, not absent. (Verified CONFIRMED.)
 
 ### Retire `/bronze-arrival`, respecting its stated sequencing
 
@@ -1019,8 +1019,7 @@ The estate already has the worked three-door precedent for manual promotion at
 6. **Was the second bronze lane deliberately dropped, or lost in an edit?** `ingest_trigger.py:40-43`
    describes TWO lanes while `:54` implements one. **If deliberate, the ingest plane has had no
    lineage-head path since** — which changes "retire the lineage head" from a cleanup into a
-   statement that it was already dead. (See `open_dapr.md` §3, where the truncated docstring is
-   verified CONFIRMED.)
+   statement that it was already dead. (The truncated docstring is verified CONFIRMED.)
 7. **Is `medallion.compute: false` (chart default, `values.yaml:729`) the intended production
    posture?** With it off the movers emit provenance and write **nothing** (`transform.py:222`,
    `synthetic=result is None` at `:345`). Every recommendation about movers registering and

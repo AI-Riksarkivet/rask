@@ -115,7 +115,7 @@ async def attach_store(
     if not store.name.strip() or not store.bucket.strip():
         raise ValidationError("both `name` and `bucket` are required")
 
-    # READ-MODIFY-WRITE UNDER AN ETAG (open_dapr.md §2.7). This document is ESTATE-scoped — every
+    # READ-MODIFY-WRITE UNDER AN ETAG. This document is ESTATE-scoped — every
     # estate admin writes the same key — so the blind read-then-write it used to do lost updates: two
     # concurrent attaches each read N stores and each wrote N+1, and whichever landed second erased the
     # other's. `UserStateStore.put`'s own docstring asserted there was "no second writer to lose a race

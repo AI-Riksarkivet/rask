@@ -97,7 +97,7 @@ def test_lineage_subscription_declares_dlq_when_configured(monkeypatch: pytest.M
 
 
 def test_lineage_parking_rides_its_OWN_durable_component_never_the_replay_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    """open_dapr.md §2.10: the main lineage component is deliverPolicy=all + ephemeral BY DESIGN
+    """the main lineage component is deliverPolicy=all + ephemeral BY DESIGN
     (replay rebuilds the graph). The parking subscription riding it re-parked up to 168h of
     already-parked dead letters on every pod restart. The chart provisions a dedicated durable
     `-dlq` component and names it in LINEAGE_DLQ_PUBSUB — this pins that the subscription actually

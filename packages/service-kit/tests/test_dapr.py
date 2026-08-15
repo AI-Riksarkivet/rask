@@ -1,6 +1,6 @@
 """service-kit Dapr wiring — the config gating and the shared front-door guard (no sidecar needed).
 
-The CLIENT FACTORY that used to be tested here is gone (open_dapr.md §2.1). It built
+The CLIENT FACTORY that used to be tested here is gone. It built
 `DaprClient("http://127.0.0.1:3500")` — the sidecar's HTTP port handed to a gRPC client — and the
 test below it asserted that wrong constant as though it were the contract, which is how a defect
 acquires a green gate. Two re-verifications found no caller at all: every service that publishes
@@ -39,7 +39,7 @@ def test_the_client_factory_seam_stays_deleted() -> None:
     import service_kit
 
     for gone in ("build_dapr_client", "get_dapr", "DaprClientDep", "_import_dapr_client"):
-        assert not hasattr(service_kit, gone), f"service_kit.{gone} is back — see open_dapr.md §2.1 before keeping it"
+        assert not hasattr(service_kit, gone), f"service_kit.{gone} is back — the client-factory seam was deleted deliberately; check git history first"
 
 
 # ── the public front door must never take a service-token path ────────────────

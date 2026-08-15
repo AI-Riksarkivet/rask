@@ -11,7 +11,7 @@ that can wait for a human**.
 **Evidence convention.** `path:line` — read from source this pass. `(measured 2026-08-11)` — observed
 against the live k3s release or a running process. `UNVERIFIED` — inference, named inline.
 
-**What this does NOT re-litigate.** `open_dapr.md` §4 ruled Workflow OUT for the maintenance sweep and
+**What this does NOT re-litigate.** Workflow was ruled OUT for the maintenance sweep and
 §5 analysed Workflow-over-Ray. Both were re-verified this pass and both still hold; §4 is now
 *stronger* (its prescribed §2.19/§2.20 fixes landed and delivered the coverage guarantee without an
 engine). This document is about the cascade, which neither covered.
@@ -163,8 +163,8 @@ def promote_to_gold(ctx: DaprWorkflowContext, payload: dict[str, Any]):
 ```
 
 **Why a workflow rather than a table and a cron.** The wait is hours-to-days and must survive every
-pod restart in between; nothing else in the estate can hold a paused process that long. `open_dapr.md`
-§4's own contrast applies in reverse here: the sweep re-derives its work each tick and so needs no
+pod restart in between; nothing else in the estate can hold a paused process that long. The
+maintenance-sweep contrast applies in reverse here: the sweep re-derives its work each tick and so needs no
 resumption, while an approval **is** a plan worth resuming — losing it loses a human's decision.
 
 **Three things this design must get right, and they are where it can go wrong:**

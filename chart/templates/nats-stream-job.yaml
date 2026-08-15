@@ -91,7 +91,7 @@ spec:
                     --no-allow-rollup
                 fi
               }
-              # RETENTION IS A FAN-OUT CORRECTNESS INVARIANT, and nothing asserted it (open_dapr.md §6 Q10).
+              # RETENTION IS A FAN-OUT CORRECTNESS INVARIANT, and nothing asserted it.
               #
               # Both creation helpers are `if exists; then skip`, so a stream created ONCE with the wrong
               # retention keeps it forever and the chart is right while the cluster is wrong — exactly the

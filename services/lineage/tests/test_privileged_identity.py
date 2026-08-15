@@ -18,8 +18,7 @@ An allowlist cannot close that: it answers "may this SUBJECT use the door", neve
 that subject". These tests pin the second question, at lineage's rendering of the door.
 
 WHAT MOVED, and why. These tests used to monkeypatch a lineage-local `_dedicated_token`, and the
-door itself was a lineage-local copy of `service_kit.governed.dapr_auth.service_principal`
-(open_dapr.md §2.8). Both are gone: there is one door and one resolver. So the RESOLVER's own
+door itself was a lineage-local copy of `service_kit.governed.dapr_auth.service_principal`. Both are gone: there is one door and one resolver. So the RESOLVER's own
 contract — caching, the request-path retry budget, absent vs unreadable — is pinned next to it in
 `packages/service-kit/tests/test_service_door.py`, and what stays here is the escalation itself,
 driven through the real secret store seam so no test-only stub can make the door look right.
@@ -149,7 +148,7 @@ def test_an_UNLISTED_subject_is_still_refused_before_any_credential_check(monkey
 
 
 def test_an_UNREADABLE_store_is_a_503_not_a_missing_credential(monkeypatch: pytest.MonkeyPatch) -> None:
-    """open_dapr.md §2.17, at lineage's rendering: `fetch_dapr_secret` returns {} both when the store
+    """The absent-vs-unreadable rule, at lineage's rendering: `fetch_dapr_secret` returns {} both when the store
     is down and when the bundle is empty, and both used to produce the identical 401 "no dedicated
     credential" — the absent-vs-unreadable conflation the estate solved properly in the state plane.
     An outage must say outage, and only this call site can say it in lineage's problem vocabulary."""

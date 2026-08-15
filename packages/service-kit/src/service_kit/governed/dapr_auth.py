@@ -155,7 +155,7 @@ class ServiceDoorClosed(ServiceDoorError):
 
     THE UNIFIED NO-CREDENTIAL ANSWER IS A REFUSAL THAT NAMES ITSELF (401), NOT A FALL-THROUGH TO
     OIDC. This class used to say the opposite and the two call sites disagreed accordingly —
-    lineage refused, the catalog swallowed it and re-asked OIDC (open_dapr.md §2.8). The refusal
+    lineage refused, the catalog swallowed it and re-asked OIDC. The refusal
     wins on three counts:
 
       * REACHING THIS DOOR IS DELIBERATE. A caller only gets here by sending BOTH ``dapr-api-token``
@@ -205,7 +205,7 @@ def _secret_bundle(store: str, key: str) -> tuple[tuple[str, str], ...]:
 
     retries=1, not the boot budget: this is reached from sync REQUEST dependencies (the AnyIO
     threadpool), where 10 exponential-backoff attempts stalled a worker for minutes per cold call
-    (open_dapr.md §2.17; the viewer's per-store reads set the precedent). An unreadable store
+    (the viewer's per-store reads set the precedent). An unreadable store
     RAISES — lru_cache never caches exceptions, so the next request retries — and a successful
     bundle is cached until restart: rotating a dedicated credential means a rollout, the same
     trade the viewer already made."""
@@ -220,7 +220,7 @@ def _secret_bundle(store: str, key: str) -> tuple[tuple[str, str], ...]:
 def dedicated_token_from_store(store: str, key: str) -> Callable[[str], str | None]:
     """The estate's ONE resolver for a privileged subject's dedicated credential.
 
-    Lifted from `services/lineage` (open_dapr.md §2.8): the shared `service_principal` grew the
+    Lifted from `services/lineage`: the shared `service_principal` grew the
     `dedicated_token=` parameter for exactly this callback, but the catalog never passed one — so
     its privileged door hard-refused every privileged subject with "no dedicated credential
     provisioned" no matter what was seeded — while lineage kept a private fork of the resolver.
@@ -246,7 +246,7 @@ def service_principal(
 
     THE ESTATE'S ONLY SERVICE DOOR. Extracted from `services/lineage` when the catalog needed the
     same door — but for a while lineage kept its own copy alongside, and the two answered the
-    no-credential question differently (open_dapr.md §2.8). Two doors with different answers to the
+    no-credential question differently. Two doors with different answers to the
     same question is worse than either answer: whichever one an auditor reads, the other is live.
     There is now one body here and two thin renderings at the call sites.
 

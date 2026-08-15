@@ -237,7 +237,7 @@ async def test_leaving_claimed_disarms_the_reminder(event: str) -> None:
 async def test_a_failed_store_leaves_the_lease_reminder_armed(event: str) -> None:
     """Disarm AFTER persist, never before. If the store raises, the persisted state is still CLAIMED
     and the reminder must still be armed — the reverse order strands a claimed task with no
-    self-expiry, exactly what the lease reminder exists to prevent. (open_dapr.md §2.6.)"""
+    self-expiry, exactly what the lease reminder exists to prevent."""
     actor = await _claimed()
 
     actor.sm.fail_save_with = RuntimeError("state store down")
@@ -707,7 +707,7 @@ async def test_a_link_pointing_the_WRONG_WAY_is_refused() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# The identity-bound rules of §5.2, re-evaluated INSIDE the turn (open_dapr.md, `tasks.py:203`)
+# The identity-bound rules of §5.2, re-evaluated INSIDE the turn
 #
 # The HTTP layer checks all three against a PRE-TURN snapshot of the task, which is what lets it
 # answer 403 with a reason without spending a turn — but a snapshot is not a precondition. Between

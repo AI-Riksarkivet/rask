@@ -185,7 +185,7 @@ groups:
 
   - name: dapr-control-plane
     rules:
-      # THE REMINDER FAILURE DOMAIN (open_dapr.md §6 Q11), which nothing watched.
+      # THE REMINDER FAILURE DOMAIN, which nothing watched.
       #
       # Since Dapr 1.15 actor REMINDERS live in the scheduler's own etcd, not in the actor state store
       # — confirmed on this estate: `dapr-scheduler-server` is a 3-replica StatefulSet with a 16 Gi

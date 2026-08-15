@@ -1151,7 +1151,7 @@ stateStore:
     #
     # THIS ADDITION IS A COORDINATED ROLLOUT, and that is a scheduling fact rather than a code one.
     # `lance-statestore` carries `actorStateStore: "true"`, and daprd refuses to hot-reload any actor
-    # state store (open_dapr.md §2.21, measured 2026-08-07): the component is re-read only at sidecar
+    # state store (measured 2026-08-07): the component is re-read only at sidecar
     # BOOT, so already-running pods of every scoped app keep the OLD scope list until they restart.
     # Adding an app-id while it has no pod is the single safe case and this is it — nothing regresses
     # on the other four, they simply do not observe the change — but the notifications pod itself must

@@ -142,7 +142,7 @@ def compact_one(
     leaves its new fragments unindexed, so index optimization must follow it, and cleanup runs LAST
     because it reclaims the superseded versions that BOTH earlier steps produced, in one pass. (This
     sentence had the last two steps swapped until 2026-08-08 while the code and the inline comment
-    below were right — open_dapr.md §2.18.) The two ``*_enabled`` flags let a policy skip a STEP
+    below were right.) The two ``*_enabled`` flags let a policy skip a STEP
     without reordering them — an operator who wants compaction but not version reclamation (a tier
     under legal hold, say) can have exactly that.
 

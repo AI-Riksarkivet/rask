@@ -11,7 +11,7 @@ the vendored `lance_docs/` — `namespace.md` 7 563 lines, `file_format.md` 5 48
 6 441, `ray.md`, `ns_catalog/spec.yaml` 6 663, `ns_catalog/catalog/{dir,rest}`,
 `ns_catalog/namespace/**`). Comparator sources are listed in §6.
 
-**Evidence convention** (same as `open_dapr.md`):
+**Evidence convention:**
 
 - `path:line (verified)` — the cited lines were **opened and read in the authoring session** on this
   working tree. Safe to trust modulo later commits.
@@ -599,7 +599,7 @@ services/maintenance/src/` → zero hits — documented absence). The original c
 expire→purge leak leaves the warehouse record intact and only the namespace gone, and NO
 reconciler category compares a binding's `top_ns` against live namespaces (verified against every
 `top_ns` use in reconcile.py). The leaked binding is therefore undetected by anything. This also
-falsifies `open_dapr.md §4.1`'s "every failure leaves a RECOVERABLE state / idempotent-retry-to-
+falsifies the "every failure leaves a RECOVERABLE state / idempotent-retry-to-
 completion" claim for the purge — residue exists that nothing retries (→ §5.5 contradictions).
 Fix: purge of a namespace-kind trash record whose id is a bound `top_ns` unbinds after the last
 record of that subtree is reclaimed (emitting `namespace_dropped` so #46 evicts caches); AND add a
@@ -922,7 +922,7 @@ rendered, and the `openfga` skill documents no provenance procedure. That is a p
    cluster-wide validity via `compactionReplicas=1` (`routes.py:41-49`) — but that values key
    **exists nowhere in the chart** (the comment is itself drift), and `maintenance.yaml:47`
    HARDCODES `replicas: 1`, so scaling is not reachable through values at all — only via kubectl
-   scale or a template edit. Today the lock actually holds (this matches `open_dapr.md §3`'s
+   scale or a template edit. Today the lock actually holds (which matches the earlier
    reading). Fix: `open_batch_process.md B13` already PLANS the right shape — invariant tests
    binding each lock-as-cluster-lock to its replica count, landing with the transform build;
    coordinate there rather than adding a render guard for a key that doesn't exist. Also fix the
@@ -1115,7 +1115,7 @@ or ruled on elsewhere.
   PRESCRIPTIVE — use OpenFGA `ConflictOptions(on_duplicate_writes=IGNORE, ...)` so the SERVER
   decides idempotency, and never audit an unconfirmed write. F3 remediation must build on that,
   not invent a parallel classifier.
-- **F10.7 = `open_dapr.md §3`** (phantom `compactionReplicas` key, adjudicated: lock holds today,
+- **F10.7** (phantom `compactionReplicas` key, adjudicated: lock holds today,
   the defect is drift) **+ `open_batch_process.md` B13** which already PLANS the invariant tests —
   land there.
 - **F10 items also filed**: ListUsers truncation = SKG-04; binding-cache unbounded global =
@@ -1123,7 +1123,7 @@ or ruled on elsewhere.
   contract); unbounded cascade recursion = catalog-api-07; F8a's territory = catalog-api-10
   (sibling 501-vs-400 misuse) → ride E4's one-taxonomy consolidation.
 - **Two FGA defects near this file's scope are already adjudicated OPEN and unfixed**
-  (`open_dapr.md` HANDOFF 2026-08-10): a manage_grants-only principal can self-grant owner, and
+  (HANDOFF 2026-08-10): a manage_grants-only principal can self-grant owner, and
   the inverse `child` edge is never backfilled on the pre-existing estate (upward visibility inert
   there). F10.9's guard-test proposal should reference, not re-discover, these.
 
@@ -1134,7 +1134,7 @@ or ruled on elsewhere.
   `warehouse_registry.py:37` (verified, both patterns quoted in F10.1). open_projects' claim is
   scoped to the catalog service and misses the service-kit copy — correct that entry when F10.1
   lands.
-- **`open_dapr.md §4/§4.1`** asserts the purge leaves "a RECOVERABLE state" on every failure
+- **The Dapr audit** asserted the purge leaves "a RECOVERABLE state" on every failure
   ("idempotent-retry-to-completion, not forward-then-undo"). F6(c) falsifies this for bindings:
   the cascade→expire→purge path leaves residue nothing retries AND nothing reports. §4.1's
   disposition ("reopen the day trashPurge is enabled") now has a second reason to reopen.
@@ -1194,7 +1194,7 @@ or ruled on elsewhere.
    catalog-governed — F1/F4/F6 semantic changes land under a live save wire whose OCC pattern
    (`base_version` → 409 → re-fetch) is ALSO the estate's precedent for F4's
    conditional-read-modify-write shape. Reuse it conceptually.
-10. **Dapr-CAS caveat if any fix uses Dapr state instead of raw S3** (`open_dapr.md §2.7`,
+10. **Dapr-CAS caveat if any fix uses Dapr state instead of raw S3** (
     CLOSED): an ETag alone is IGNORED under Dapr's default concurrency — `concurrency: first-write`
     must be explicit. The registry CAS in F1 uses raw boto3 `If-None-Match` and does not inherit
     this, but F4 implementers considering the landed UserStateStore pattern do.

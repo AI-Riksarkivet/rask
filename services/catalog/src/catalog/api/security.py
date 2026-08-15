@@ -58,7 +58,7 @@ def authenticate(
     `catalog refused describe (401): Missing bearer token` — and a JWT expires, so the static token
     the medallion carries for the same purpose is the wrong shape for the problem.
 
-    The mechanism is the one lineage runs — the SAME BODY, not a second copy (open_dapr.md §2.8).
+    The mechanism is the one lineage runs — the SAME BODY, not a second copy.
     A fork lived in each service for a while and they disagreed about the unconfigured door: lineage
     refused, this one swallowed the signal and re-asked OIDC. One door now, and both call sites give
     the refusal; `service_kit.governed.dapr_auth.ServiceDoorClosed` carries the reasoning.
@@ -110,7 +110,7 @@ def authenticate(
                 identity=x_lance_service_identity,
                 allowed_subjects=settings.service_subjects,
                 privileged_subjects=settings.privileged_subjects,
-                # The shared resolver (open_dapr.md §2.8): without it, this door's privileged branch
+                # The shared resolver: without it, this door's privileged branch
                 # could never open — every privileged subject was hard-refused with "no dedicated
                 # credential provisioned" regardless of what the store held, because the callback
                 # defaulted to None. The store read is deferred inside the resolver, so it happens only

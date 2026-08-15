@@ -105,7 +105,7 @@ def test_lineage_boot_fails_when_only_the_reconcile_route_mounts(
 
 
 def test_the_privileged_door_OPENS_with_the_shared_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
-    """open_dapr.md §2.8: `service_principal` grew `dedicated_token=` for the privileged branch, but
+    """`service_principal` grew `dedicated_token=` for the privileged branch, but
     the catalog never passed a resolver — so its privileged door hard-refused every privileged
     subject with 'no dedicated credential provisioned' no matter what the store held. This pins the
     shared resolver end-to-end: the seeded credential admits its holder, the shared token cannot
