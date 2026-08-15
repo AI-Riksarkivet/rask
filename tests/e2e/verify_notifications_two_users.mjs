@@ -53,6 +53,24 @@ const APP_TOKEN = process.env.APP_API_TOKEN ?? '';
 const SERVICE_IDENTITY = process.env.LINEAGE_SERVICE_IDENTITY ?? 'service-web';
 // The output the emitting identity must hold `can_write_data` on (model.fga: `can_write_data: writer`).
 const OUTPUT = process.env.DRIVE_OUTPUT ?? 'bronze$events';
+/** How long to let the bell's live query settle after a reload. */
+const SETTLE_MS = Number(process.env.SETTLE_MS ?? 2500);
+/** WALL-CLOCK bound on one wait, not an attempt count.
+ *
+ *  The first run of this drive exited 124 because the waits were `for (attempt < 10)` over TWO pages
+ *  at 2.5 s each: when the badge never moves — the exact case a FAILED emit produces — that is ~50 s
+ *  per phase and the whole run outgrew its timeout, so the harness reported a TIMEOUT where it had
+ *  actually finished deciding. A failing assertion must cost about as much as a passing one. */
+const WAIT_MS = Number(process.env.WAIT_MS ?? 45_000);
+
+/** Poll `read()` until `done(value)` or the deadline. Returns the last value either way — this
+ *  reports, it never throws, because "it did not move" IS the finding. */
+async function until(read, done) {
+	const deadline = Date.now() + WAIT_MS;
+	let value = await read();
+	while (!done(value) && Date.now() < deadline) value = await read();
+	return value;
+}
 
 const browser = await chromium.launch();
 
@@ -83,7 +101,7 @@ async function signIn(user, startPath = '/lakehouse/') {
 async function badge(page) {
 	await page.reload({ waitUntil: 'domcontentloaded' });
 	// The bell opens a live query on mount; give it a beat to land rather than racing it.
-	await page.waitForTimeout(2500);
+	await page.waitForTimeout(SETTLE_MS);
 	const text = await page.locator('[data-slot="notification-count"]').first().textContent().catch(() => null);
 	return text === null ? 0 : Number(text.trim().replace('+', ''));
 }
@@ -143,10 +161,10 @@ const emitted = await emitRun({ runId, state: 'FAIL', authorSub: 'alice' });
 check('lineage accepted the FAIL event', emitted.status < 400, `HTTP ${emitted.status} ${emitted.body.slice(0, 160)}`);
 
 // The bus hop plus the fan-out is not instant; poll rather than sleep once and hope.
-let after = { alice: before.alice, bob: before.bob };
-for (let attempt = 0; attempt < 10 && after.alice <= before.alice; attempt += 1) {
-	after = { alice: await badge(alice.page), bob: await badge(bob.page) };
-}
+const after = await until(
+	async () => ({ alice: await badge(alice.page), bob: await badge(bob.page) }),
+	(v) => v.alice > before.alice,
+);
 console.log(`   after alice's FAIL: alice=${after.alice} bob=${after.bob}`);
 
 check('alice was told about her own failed run', after.alice > before.alice, `${before.alice} → ${after.alice}`);
@@ -158,10 +176,10 @@ await bob.page.screenshot({ path: `${SHOT}/bob-after-fail.png` }).catch(() => {}
 // ── the reverse, because one direction proves only that SOMETHING moved ──────────────────────────
 const bobRun = `drive-bob-${Date.now()}`;
 await emitRun({ runId: bobRun, state: 'COMPLETE', authorSub: 'bob' });
-let reverse = { alice: after.alice, bob: after.bob };
-for (let attempt = 0; attempt < 10 && reverse.bob <= after.bob; attempt += 1) {
-	reverse = { alice: await badge(alice.page), bob: await badge(bob.page) };
-}
+const reverse = await until(
+	async () => ({ alice: await badge(alice.page), bob: await badge(bob.page) }),
+	(v) => v.bob > after.bob,
+);
 console.log(`   after bob's COMPLETE: alice=${reverse.alice} bob=${reverse.bob}`);
 check('bob was told about his own completed run', reverse.bob > after.bob, `${after.bob} → ${reverse.bob}`);
 check("alice was NOT told about bob's run", reverse.alice === after.alice, `${after.alice} → ${reverse.alice}`);
