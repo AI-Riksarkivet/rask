@@ -52,6 +52,29 @@ spec:
             - { name: FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
             # Must match the catalog's LANCE_FGA_ROOT_OBJECT default (services/catalog/core/config.py).
             - { name: FGA_ROOT_OBJECT, value: "warehouse:lance_catalog" }
+            {{- if .Values.services.notifications }}
+            # SERVICE principals that must READ the estate, comma-separated. Today that is exactly the
+            # notifications reconciler, and the grant is not a convenience.
+            #
+            # Lineage's `GET /events` is governed: a row is returned only if the CALLER can_get_metadata
+            # on every dataset it names. The reconciler's own docstring states the consequence — "a
+            # deployment that forgets those grants gets a reconciler that runs cleanly and reconciles
+            # nothing" — and that is precisely what a fresh cluster did. Measured on local k3s before
+            # this block existed: `service-ingest` saw 80 events, `service-web` 4, and `notifications`
+            # ZERO, while every tick still logged `lineage_feed_reconciled` and every pod stayed 2/2
+            # Running. The estate's targeted inbox was silently incapable of targeting anyone.
+            #
+            # `reader` on the root object, not `owner`: the reconciler must SEE runs to work out who to
+            # tell, and nothing more. Delivery is re-authorized per recipient at fan-out (can_be_notified)
+            # and rendering again at read (can_get_metadata), so this grant widens what the SERVICE may
+            # observe without widening what any PERSON receives.
+            #
+            # The identity is read from the same values path services.yaml uses for
+            # LINEAGE_SERVICE_SUBJECTS, so the subject lineage's door admits and the subject granted here
+            # cannot drift apart.
+            - name: FGA_SERVICE_READERS
+              value: {{ (get (.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications" | quote }}
+            {{- end }}
             {{- with .Values.auth.fgaStoreId }}
             # The operator-pinned store (env parity with the catalog's LANCE_FGA_STORE_ID): the script
             # prefers this over the name lookup, so a pinned store named anything BUT `lance-catalog`
@@ -93,22 +116,32 @@ spec:
               if store_id is None:
                   sys.exit(f"timed out waiting for OpenFGA store {store_name!r} at {api}")
 
-              tuple_key = {"user": user, "relation": "owner", "object": obj}
-              r = httpx.post(f"{api}/stores/{store_id}/check", json={"tuple_key": tuple_key}, timeout=10)
-              if r.status_code == 200 and r.json().get("allowed"):
-                  print(f"bootstrap-admin: {user} already owner of {obj} — nothing to do")
-                  sys.exit(0)
+              # The admin's `owner`, then one `reader` per service principal that must READ the estate.
+              # A LIST rather than one tuple because the second kind exists at all: see FGA_SERVICE_READERS.
+              # Each is checked before it is written, so re-running this hook on every upgrade stays a
+              # no-op, and one already-granted subject never short-circuits another that is still missing
+              # — the early `sys.exit(0)` this replaced did exactly that, and would have hidden every
+              # service grant behind an admin who was already in place.
+              readers = [s.strip() for s in os.environ.get("FGA_SERVICE_READERS", "").split(",") if s.strip()]
+              grants = [(user, "owner")] + [(r if ":" in r else f"user:{r}", "reader") for r in readers]
 
-              r = httpx.post(
-                  f"{api}/stores/{store_id}/write",
-                  json={"writes": {"tuple_keys": [tuple_key]}},
-                  timeout=10,
-              )
-              if r.status_code == 200:
-                  print(f"bootstrap-admin: granted {user} owner {obj}")
-              elif r.status_code in (400, 409) and "already exists" in r.text:
-                  # Duplicate write raced past the check — the grant is in place, which is all we want.
-                  print(f"bootstrap-admin: {user} owner {obj} already written (concurrent) — ok")
-              else:
-                  sys.exit(f"tuple write failed: HTTP {r.status_code} {r.text}")
+              for subject_id, relation in grants:
+                  tuple_key = {"user": subject_id, "relation": relation, "object": obj}
+                  r = httpx.post(f"{api}/stores/{store_id}/check", json={"tuple_key": tuple_key}, timeout=10)
+                  if r.status_code == 200 and r.json().get("allowed"):
+                      print(f"bootstrap-admin: {subject_id} already {relation} of {obj} — nothing to do")
+                      continue
+
+                  r = httpx.post(
+                      f"{api}/stores/{store_id}/write",
+                      json={"writes": {"tuple_keys": [tuple_key]}},
+                      timeout=10,
+                  )
+                  if r.status_code == 200:
+                      print(f"bootstrap-admin: granted {subject_id} {relation} {obj}")
+                  elif r.status_code in (400, 409) and "already exists" in r.text:
+                      # Duplicate write raced past the check — the grant is in place, which is all we want.
+                      print(f"bootstrap-admin: {subject_id} {relation} {obj} already written (concurrent) — ok")
+                  else:
+                      sys.exit(f"tuple write failed: HTTP {r.status_code} {r.text}")
 {{- end }}
