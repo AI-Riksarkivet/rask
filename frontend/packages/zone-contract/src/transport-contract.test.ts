@@ -238,9 +238,65 @@ describe('a remote function declared in two zones declares the same input schema
 	 * fix lands in the wrong zone — but it is a naming problem, not a contract breach, and this gate
 	 * is not the place to fail the build over it.)
 	 */
+	/**
+	 * The declaration's own source — balanced from `command(`/`query(` to its matching paren, with
+	 * comments and string bodies stepped over so neither can be mistaken for code.
+	 *
+	 * The search used to be `body.slice(0, 600)` over the RAW source, and both halves of that were
+	 * wrong in the same direction — quietly, and on the one function the file exists for. 600 chars
+	 * is shorter than a documented remote function: this estate comments heavily, so `createWarehouse`
+	 * reaches its `catalogJSON('/v1/warehouses', …)` at roughly char 800 in BOTH zones, past the
+	 * window. And on the raw source the pattern read prose: home's comment contains
+	 * "`query.live`/`command`", whose backtick-slash-backtick matched as a path of `/`.
+	 *
+	 * So home keyed `createWarehouse -> /`, lakehouse keyed `createWarehouse -> ` (empty), the two
+	 * never met, and their schemas were never compared. A declaration is a syntactic unit; bounding
+	 * the search by it has no window to outgrow.
+	 */
+	function declSource(src: string, name: string): string {
+		const at = src.indexOf(`export const ${name} =`);
+		if (at < 0) return '';
+		const open = src.indexOf('(', at);
+		if (open < 0) return '';
+		let depth = 0;
+		let i = open;
+		while (i < src.length) {
+			const c = src[i]!;
+			const n = src[i + 1];
+			if (c === '/' && n === '/') {
+				while (i < src.length && src[i] !== '\n') i++;
+				continue;
+			}
+			if (c === '/' && n === '*') {
+				i += 2;
+				while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++;
+				i += 2;
+				continue;
+			}
+			if (c === "'" || c === '"' || c === '`') {
+				i++;
+				while (i < src.length && src[i] !== c) i += src[i] === '\\' ? 2 : 1;
+				i++;
+				continue;
+			}
+			if (c === '(') depth++;
+			else if (c === ')' && --depth === 0) return src.slice(open, i + 1);
+			i++;
+		}
+		return src.slice(open);
+	}
+
+	/** The declaration with comments removed — prose can no longer be read as a path. */
+	function codeOf(src: string, name: string): string {
+		return declSource(src, name)
+			.replace(/\/\/.*$/gm, '')
+			.replace(/\/\*[\s\S]*?\*\//g, '');
+	}
+
 	function upstreamPath(src: string, name: string): string {
-		const body = src.slice(src.indexOf(`export const ${name} =`));
-		return /['`](\/[\w/.$-]*)['`]/.exec(body.slice(0, 600))?.[1] ?? '';
+		// The whole quoted token, so an interpolated path (`/v1/tables/${id}/columns`) keys stably
+		// instead of failing to match and collapsing to ''.
+		return /['"`](\/[^'"`\n]*)['"`]/.exec(codeOf(src, name))?.[1] ?? '';
 	}
 
 	const byName = new Map<string, Map<string, string>>();
@@ -259,7 +315,31 @@ describe('a remote function declared in two zones declares the same input schema
 		// The gate's whole value is the comparison below; a regex that stopped matching would make it
 		// assert nothing while staying green. `createWarehouse` is the case that motivated the file.
 		expect(byName.size).toBeGreaterThan(10);
-		expect([...byName.keys()].some((k) => k.startsWith('createWarehouse '))).toBe(true);
+
+		// PRESENCE IS NOT ENOUGH — that is this guard's own lesson. It asserted only that SOME key
+		// began with `createWarehouse `, which a SPLIT key satisfies: home keyed
+		// `createWarehouse -> /` (matched out of a prose comment) and lakehouse keyed
+		// `createWarehouse -> ` (its real path lay past the old 600-char window). The guard passed on
+		// a half while the comparison it guards never ran at all. So assert the pair actually MEETS.
+		const warehouse = shared.find(([key]) => key.startsWith('createWarehouse '));
+		expect(
+			warehouse?.[0],
+			'createWarehouse is the case this file was written for. It must be COMPARED across zones — ' +
+				'a key that merely EXISTS can be one half of a pair that never met.',
+		).toBeDefined();
+		expect([...(warehouse?.[1].keys() ?? [])].sort()).toEqual(['home', 'lakehouse']);
+
+		// A canary on `upstreamPath` itself. If it stops resolving, every key collapses to `name -> `
+		// and unrelated functions start SHARING one — drift reported where there is none, and hidden
+		// where there is. Measured today: 7 of 69 legitimately have no literal path (built from a
+		// variable), so half the corpus is a wide margin that still catches a total collapse.
+		const unresolved = [...byName.keys()].filter((key) => key.endsWith(' -> '));
+		expect(
+			unresolved.length,
+			`${unresolved.length} of ${byName.size} remote functions resolved NO upstream path. The ` +
+				'identity key is name + path, so a collapse makes unrelated functions collide.',
+		).toBeLessThan(byName.size / 2);
+
 		expect(shared.length).toBeGreaterThan(0);
 	});
 
