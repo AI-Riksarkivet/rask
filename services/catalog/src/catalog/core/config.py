@@ -228,6 +228,15 @@ class Settings(BaseSettings):
     # True, top-level creation also requires can_create_* on fga_root_object — an admin-gated
     # root that must be seeded to bootstrap. Nested creation always gates on the parent.
     fga_lock_root_create: bool = Field(default=False, alias="LANCE_FGA_LOCK_ROOT_CREATE")
+    # diff2 F10 item 3 — the FLOOR under #46's broadcast eviction of the warehouse-binding cache.
+    # That cache is positive-forever (a binding is immutable), and the broadcast that invalidates it
+    # on the three mutations which break that premise rides a pub/sub subscription with no
+    # dead-lettering: a dropped event leaves an entry nothing will ever evict. Live status reads mean
+    # a stale entry cannot route at a deleted bucket, so the residual is persistent 403s on a
+    # since-re-bound namespace until restart, plus wrong-bucket routing under warehouse-id reuse — a
+    # TTL bounds all of it to a window instead of the process lifetime. Minutes, because this is a
+    # backstop for a lost event and not a consistency mechanism; 0 disables it.
+    warehouse_binding_cache_ttl_seconds: float = Field(default=300.0, alias="LANCE_WAREHOUSE_BINDING_CACHE_TTL_SECONDS")
     # Per-request OpenFGA client timeout (seconds). A hung authz call fails fast and is
     # retried rather than pinning a request worker. Wired into fga.make_client at startup.
     fga_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_FGA_TIMEOUT_SECONDS")

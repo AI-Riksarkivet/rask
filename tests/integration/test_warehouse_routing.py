@@ -12,6 +12,7 @@ warehouse's root and is ABSENT from the default root.
 from __future__ import annotations
 
 import io
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -275,3 +276,65 @@ def test_undrop_refuses_when_the_id_was_bound_elsewhere_during_the_grace_window(
         "warehouse_id": "wh-b",
         "root_uri": str(other),
     }
+
+
+# --------------------------------------------------------------------------- #
+# diff2 F10 item 3 — a TTL floor under the forever-positive binding cache
+# --------------------------------------------------------------------------- #
+
+
+def test_a_stale_binding_cache_entry_expires_instead_of_lasting_until_restart(
+    routing: tuple[TestClient, Path, Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cache is POSITIVE-FOREVER, and #46's broadcast eviction is best-effort.
+
+    A binding is immutable, so caching a resolved one forever is sound — until one of the three
+    mutations that break that premise happens and the control event announcing it is dropped. That
+    broadcast rides a pub/sub subscription with no dead-lettering, so a lost event leaves an entry
+    nothing will ever evict, and the consequence lasts for the life of the PROCESS.
+
+    Live warehouse-status reads mean the stale entry cannot route at a deleted bucket (the finding's
+    own text corrects that), so what the TTL bounds is the rest: persistent 403s on a since-re-bound
+    namespace, and wrong-bucket routing under warehouse-id reuse.
+
+    Asserted through the resolver rather than the dict, so it is the ROUTING that recovers, not just
+    a key that disappeared.
+    """
+    from catalog.api import dependencies as deps
+
+    client, _default_root, warehouse_root, registry = routing
+    _register_warehouse(registry, warehouse_root)
+
+    # Warm the cache through a real request.
+    assert client.post("/v1/namespace/tenantns/describe", json={}).status_code in (200, 404)
+    cache = client.app.state.warehouse_binding_cache
+    assert "tenantns" in cache, "the resolver did not cache the binding — this test proves nothing"
+
+    # A mutation lands whose control event is LOST: the binding is rewritten behind the replica's back.
+    other = registry.parent / "wh-moved"
+    other.mkdir(exist_ok=True)
+    wh_svc.unbind_namespace(f"file://{registry}", {}, "tenantns")
+    wh_svc.put_warehouse(f"file://{registry}", {}, {"id": "wh-m", "bucket": "wh-m", "root_uri": str(other), "project": "acme"})
+    wh_svc.bind_namespace(f"file://{registry}", {}, "tenantns", "wh-m", str(other))
+
+    # Without a TTL the replica keeps the old entry forever. Advance past the window.
+    real_monotonic = time.monotonic
+    monkeypatch.setattr(deps.time, "monotonic", lambda: real_monotonic() + 10_000)
+
+    resolved = client.app.state.warehouse_binding_cache
+    assert deps._fresh_cached_binding(resolved, "tenantns", 300.0) is None, "the stale entry outlived its TTL"
+    assert "tenantns" not in resolved, "the expired entry was not evicted"
+
+
+def test_the_ttl_can_be_disabled_and_then_the_entry_is_kept(routing: tuple[TestClient, Path, Path, Path]) -> None:
+    """`0` restores the pre-F10.3 forever-positive behaviour, deliberately — the knob is an escape
+    hatch for an estate that would rather pay the 403s than the extra registry read."""
+    from catalog.api import dependencies as deps
+
+    client, _default_root, warehouse_root, registry = routing
+    _register_warehouse(registry, warehouse_root)
+    assert client.post("/v1/namespace/tenantns/describe", json={}).status_code in (200, 404)
+
+    cache = client.app.state.warehouse_binding_cache
+    assert deps._fresh_cached_binding(cache, "tenantns", 0.0) is not None
+    assert "tenantns" in cache

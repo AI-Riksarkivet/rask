@@ -839,8 +839,9 @@ and the next should arrive as a requirement rather than be guessed at from the c
 
 ### F10 (P2) — Smaller confirmed drift/hygiene items (one line each, all need re-verify at fix time)
 
-**STATUS: items 1–10 CONFIRMED, item 11 REFUTED (2026-08-15). Items 1, 2, 6, 7, 8, 9, 10 LANDED;
-items 3, 4, 5 OPEN AND WAITING ON A DECISION.** Items 1–10 were re-verified by hand and hold as
+**STATUS: items 1–10 CONFIRMED, item 11 REFUTED (2026-08-15). Items 1, 2, 3, 4b, 6, 7, 8, 9, 10 LANDED;
+item 5 was never a defect (undrop deliberately ignores the clock — see the finding); item 1r remains
+DEFERRED behind task #67.** Items 1–10 were re-verified by hand and hold as
 drift/hygiene facts (line numbers drifted; mechanisms are where stated).
 
 *(This line was itself stale, corrected 2026-08-15: it read "2, 7, 8, 9, 10 LANDED … 1, 3, 4, 5, 6

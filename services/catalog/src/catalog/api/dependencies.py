@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterable
 from typing import Annotated
 
@@ -56,7 +57,7 @@ async def _resolve_warehouse_root(request: Request, settings: Settings, top_ns: 
     # The cache holds the FULL binding record ({warehouse_id, root_uri}) so the deactivation check below has
     # the warehouse_id without a second binding read.
     cache: dict[str, dict[str, str]] = request.app.state.warehouse_binding_cache
-    binding = cache.get(top_ns)
+    binding = _fresh_cached_binding(cache, top_ns, settings.warehouse_binding_cache_ttl_seconds)
     if binding is None:
         try:
             binding = await run_in_threadpool(warehouses.binding_for_namespace, settings.registry_root, settings.storage_options(), top_ns)
@@ -69,7 +70,11 @@ async def _resolve_warehouse_root(request: Request, settings: Settings, top_ns: 
             log.warning("warehouse_binding_lookup_failed", extra={"top_ns": top_ns, "error": str(exc)})
             raise ServiceUnavailableError(f"warehouse binding lookup failed for {top_ns!r}") from exc
         if binding is not None:
-            cache[top_ns] = binding
+            # The freshness stamp rides INSIDE the record under a reserved key rather than in a
+            # parallel dict: `evict_stale_bindings` mutates this very dict in place and scans its
+            # VALUES for a warehouse_id, so a second structure would be one more thing to keep in
+            # sync — and the one that drifts is the one nothing reads on the hot path.
+            cache[top_ns] = {**binding, _CACHED_AT: str(time.monotonic())}
     if binding is None:
         return None
     # Deactivation gate (P2.3 lifecycle): a deactivated warehouse quarantines EVERY op on its bound
@@ -96,6 +101,42 @@ async def _resolve_warehouse_root(request: Request, settings: Settings, top_ns: 
             f"warehouse {binding['warehouse_id']!r} is deactivated (quarantined); operations on namespace {top_ns!r} are suspended until it is reactivated"
         )
     return binding["root_uri"]
+
+
+#: Reserved key stamping when a cached binding was resolved. Underscore-prefixed so it cannot collide
+#: with a real record field (`top_ns` / `warehouse_id` / `root_uri`).
+_CACHED_AT = "_cached_at"
+
+
+def _fresh_cached_binding(cache: dict[str, dict[str, str]], top_ns: str, ttl_seconds: float) -> dict[str, str] | None:
+    """The cached binding for ``top_ns`` if it is still fresh, evicting it if not (diff2 F10 item 3).
+
+    The cache is POSITIVE-FOREVER on the premise that a binding is immutable, and #46 added
+    broadcast eviction for the three mutations that break that premise. This is the FLOOR under that
+    broadcast, because the broadcast is best-effort: it rides a pub/sub subscription with no
+    dead-lettering, so a dropped event leaves an entry that nothing will ever evict.
+
+    What that costs is narrower than it first looks and the finding's own text corrects it: warehouse
+    STATUS is read live on every request and a missing record fails closed to 403, so a stale entry
+    does NOT route at a deleted bucket. The residual is persistent 403s on a since-re-bound namespace
+    until the process restarts, plus wrong-bucket routing during a partial-delete window or under
+    warehouse-id reuse. A TTL bounds all three to the window rather than to the process lifetime.
+
+    Minutes, not seconds: the read this avoids is one S3 GET on the request hot path, and bindings
+    genuinely almost never change — the TTL is a backstop for a lost event, not a consistency
+    mechanism. `0` disables it, restoring the pre-F10.3 forever-positive behaviour.
+    """
+    entry = cache.get(top_ns)
+    if entry is None:
+        return None
+    if ttl_seconds <= 0:
+        return entry
+    if time.monotonic() - float(entry.get(_CACHED_AT) or 0.0) >= ttl_seconds:
+        # pop by key, matching `evict_stale_bindings`' own concurrency argument: dict ops are atomic
+        # under the GIL and a racing resolver simply re-reads the registry, which is the right outcome.
+        cache.pop(top_ns, None)
+        return None
+    return entry
 
 
 def _namespace_for_root(request: Request, settings: Settings, root_uri: str) -> LanceNamespace:
