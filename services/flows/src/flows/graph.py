@@ -12,7 +12,7 @@ the same graphs for the same stated reasons.
 from collections import deque
 
 from flows.catalog import KNOWN_KINDS
-from flows.models import FlowGraph
+from flows.models import MAX_GRAPH_NODES, MAX_NODE_FAN_IN, FlowGraph
 
 
 def validate_graph(graph: FlowGraph) -> list[str]:
@@ -34,6 +34,13 @@ def validate_graph(graph: FlowGraph) -> list[str]:
     if not graph.nodes:
         problems.append("graph has no nodes")
 
+    # SIZE, before shape. The durable lane writes every node's payload to the actor state store and
+    # reloads that history on every replay, so an unbounded node count is an unbounded history — the
+    # per-payload `MAX_PAYLOAD_CHARS` cap bounds one document, not a run. Named with the ceiling so
+    # the caller knows what to cut to rather than bisecting.
+    if len(graph.nodes) > MAX_GRAPH_NODES:
+        problems.append(f"graph has {len(graph.nodes)} nodes, over the {MAX_GRAPH_NODES}-node ceiling")
+
     seen: set[str] = set()
     for node in graph.nodes:
         if node.id in seen:
@@ -51,6 +58,15 @@ def validate_graph(graph: FlowGraph) -> list[str]:
         if edge.source == edge.target:
             problems.append(f"self-loop on node: {edge.source}")
             self_loop = True
+
+    # FAN-IN, measured through `upstreams` itself rather than recounted here. That function is what
+    # `workflow.py` builds each activity input from, so counting any other way bounds a number that
+    # never reaches the wire — and it already drops dangling and self edges, which are reported above
+    # as their own problems. Counting EDGES is the point: duplicates are tolerated by design and each
+    # one is another full copy of the same payload in the same message.
+    for node_id, incoming in upstreams(graph).items():
+        if len(incoming) > MAX_NODE_FAN_IN:
+            problems.append(f"node {node_id} has {len(incoming)} incoming edges, over the {MAX_NODE_FAN_IN}-edge ceiling")
 
     if not self_loop and topo_order(graph) is None:
         problems.append("graph has a cycle")

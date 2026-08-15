@@ -120,3 +120,94 @@ def test_a_node_still_tolerates_editor_only_fields() -> None:
         }
     )
     assert [n.id for n in graph.nodes] == ["a"]
+
+
+# --- Size bounds: what stops one run from writing an unbounded workflow history ------------------
+
+
+def test_a_graph_larger_than_the_node_cap_is_REFUSED() -> None:
+    """The durable lane persists every node's payload to the actor state store, so an unbounded
+    node count is an unbounded history — and history is RELOADED on every replay.
+
+    `MAX_PAYLOAD_CHARS` already bounds ONE payload (256 KiB). Nothing bounded how many of them a
+    single run could produce, so the ceiling on a run was the ceiling on a drawing.
+    """
+    from flows.models import MAX_GRAPH_NODES
+
+    ok = _graph([(f"n{i}", "text") for i in range(MAX_GRAPH_NODES)], [])
+    assert validate_graph(ok) == [], "a graph exactly AT the cap must run — an off-by-one here refuses legitimate work"
+
+    too_big = _graph([(f"n{i}", "text") for i in range(MAX_GRAPH_NODES + 1)], [])
+    problems = validate_graph(too_big)
+    assert problems, f"a {MAX_GRAPH_NODES + 1}-node graph was accepted — the history it writes is bounded by nothing"
+    assert any(str(MAX_GRAPH_NODES) in p for p in problems), f"the refusal must name the ceiling, so the caller knows what to cut to: {problems}"
+
+
+def test_a_node_with_too_many_INCOMING_EDGES_is_refused_and_NAMED() -> None:
+    """The sharp cliff, and the one reachable with a small graph.
+
+    `workflow.py` builds each activity input as `inputs=[outputs[u] for u in incoming[node_id]]`, so
+    ONE `NodeJob` carries one full payload per incoming edge. At `MAX_PAYLOAD_CHARS` (256 KiB) each
+    and daprd's `--max-body-size` of 32Mi (verified live on daprd 1.18.1, where that one flag governs
+    HTTP *and* gRPC), 128 upstreams sits exactly on the limit — and JSON escaping pushes a text
+    payload past its raw size, so the true cliff is lower and depends on the CONTENT.
+
+    Past it the sidecar rejects the activity input and the run wedges rather than failing with a
+    problem the builder can paint. Refusing at validate time is the difference between a 422 naming
+    the node and a run that stops with nothing to show.
+    """
+    from flows.models import MAX_NODE_FAN_IN
+
+    sources = [(f"s{i}", "text") for i in range(MAX_NODE_FAN_IN + 1)]
+    graph = _graph([*sources, ("sink", "inspect")], [(f"s{i}", "sink") for i in range(MAX_NODE_FAN_IN + 1)])
+
+    problems = validate_graph(graph)
+    assert problems, f"a node with {MAX_NODE_FAN_IN + 1} upstreams was accepted — its activity input is bounded by nothing"
+    assert any("sink" in p for p in problems), f"the refusal must NAME the node so the builder can paint it: {problems}"
+
+
+def test_the_fan_in_bound_counts_EDGES_not_distinct_sources() -> None:
+    """The amplifier case, and the reason this bound cannot be written against distinct sources.
+
+    `upstreams` APPENDS per edge (`graph.py`), so a duplicated edge contributes a SECOND copy of the
+    same payload to the same `NodeJob`. `validate_graph` tolerates duplicate edges on purpose — the
+    suite's own `test_a_duplicated_edge_does_not_invent_a_cycle` pins that, noting a drag-created
+    duplicate is easy to produce on a canvas. So the cheapest way to blow the message limit is one
+    upstream dragged repeatedly, which a distinct-source count would wave straight through.
+    """
+    from flows.models import MAX_NODE_FAN_IN
+
+    graph = FlowGraph(
+        nodes=[FlowNode(id="a", kind="text"), FlowNode(id="b", kind="inspect")],
+        edges=[FlowEdge(source="a", target="b") for _ in range(MAX_NODE_FAN_IN + 1)],
+    )
+
+    problems = validate_graph(graph)
+    assert problems, (
+        f"{MAX_NODE_FAN_IN + 1} copies of ONE edge were accepted: two distinct sources, but "
+        f"{MAX_NODE_FAN_IN + 1} payloads in the activity input. Counting distinct sources misses this."
+    )
+    assert any("b" in p for p in problems), f"the refusal must name the target node: {problems}"
+
+
+def test_the_bounds_are_ARITHMETICALLY_consistent_with_the_payload_cap_and_the_sidecar_limit() -> None:
+    """A bound whose arithmetic nobody checked is a bound that drifts.
+
+    Worst case for one activity input is `MAX_NODE_FAN_IN * MAX_PAYLOAD_CHARS`. That must stay
+    comfortably under daprd's 32Mi `--max-body-size`, with room for the node config, the serve
+    origin, JSON envelope overhead and — the one that bites — escape expansion, which can nearly
+    double a text payload full of quotes and newlines.
+
+    This test fails if someone raises the fan-in cap or the payload cap without redoing that sum.
+    """
+    from flows.models import MAX_NODE_FAN_IN, MAX_PAYLOAD_CHARS
+
+    daprd_max_body_bytes = 32 * 1024 * 1024  # `--max-body-size=32Mi`, chart/values.yaml `dapr.maxBodySize`
+    worst_case_raw = MAX_NODE_FAN_IN * MAX_PAYLOAD_CHARS
+
+    assert worst_case_raw * 2 <= daprd_max_body_bytes, (
+        f"worst-case activity input is {MAX_NODE_FAN_IN} x {MAX_PAYLOAD_CHARS} = {worst_case_raw} bytes raw, "
+        f"which does not leave a 2x margin for JSON escape expansion under the {daprd_max_body_bytes}-byte "
+        f"sidecar limit. Lower MAX_NODE_FAN_IN, lower MAX_PAYLOAD_CHARS, or raise dapr.maxBodySize — but do "
+        f"the sum, because past this limit the sidecar rejects the input and the run WEDGES rather than failing."
+    )

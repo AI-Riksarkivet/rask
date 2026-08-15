@@ -36,6 +36,30 @@ MAX_PAYLOAD_CHARS = 256 * 1024
 #: numbers are what turn "the answer looks wrong" into "the payload was 3 MiB".
 PAYLOAD_TRUNCATED_MARKER = "\n…[flows truncated this payload: {total} characters exceeded the {cap}-character ceiling]"
 
+#: The two STRUCTURAL bounds. `MAX_PAYLOAD_CHARS` caps one payload; these cap how many of them a
+#: single run can put on the wire and in the durable history. Without them the payload cap bounded
+#: nothing in aggregate — the ceiling on a run was the ceiling on a drawing.
+#:
+#: `MAX_NODE_FAN_IN` is the sharp one, and it is reachable with a two-node graph. `workflow.py`
+#: builds each activity input as `inputs=[outputs[u] for u in incoming[node_id]]`, so ONE `NodeJob`
+#: carries one full payload per incoming EDGE. Counting edges rather than distinct sources is
+#: deliberate: `graph.upstreams` appends per edge and `validate_graph` tolerates duplicate edges on
+#: purpose (a drag-created duplicate is easy to produce on a canvas), so one upstream dragged N times
+#: puts N payloads in one message while presenting a single source.
+#:
+#: THE ARITHMETIC, which `test_the_bounds_are_ARITHMETICALLY_consistent_...` re-checks so it cannot
+#: drift: worst case is 32 x 256 KiB = 8 MiB raw against daprd's `--max-body-size=32Mi` (verified
+#: live on daprd 1.18.1, where that single flag governs HTTP *and* gRPC — there is no separate
+#: `max-grpc-message-size` to raise). The 4x margin is for the node config, the serve origin, the
+#: JSON envelope and above all escape expansion, which can nearly double a text payload full of
+#: quotes and newlines. Past the limit the sidecar REJECTS the activity input and the run wedges
+#: with nothing to paint, which is why this is refused at validate time as a 422 naming the node.
+#:
+#: Both numbers are DEFAULTS chosen from that arithmetic, not from a profile of real flows — a
+#: visual builder graph does not approach either. Raising one means redoing the sum.
+MAX_GRAPH_NODES = 256
+MAX_NODE_FAN_IN = 32
+
 #: Terminal-or-running vocabulary, shared by a run and by each of its nodes so a caller reads one
 #: set of words. A node that never got to run because an upstream failed is `failed` with the
 #: error "upstream failed" — not a fourth state, because "blocked" is a *reason*, not an outcome.

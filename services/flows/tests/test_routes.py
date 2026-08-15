@@ -298,3 +298,37 @@ def test_the_run_store_is_bounded_and_evicts_the_oldest(client: TestClient) -> N
     assert len(_runs(client)) == 3  # max_runs from the fixture
     assert client.get(f"/api/flows/runs/{ids[0]}").status_code == 404
     assert client.get(f"/api/flows/runs/{ids[-1]}").status_code == 200
+
+
+def test_an_oversized_graph_is_REFUSED_at_the_door_with_the_node_NAMED(client: TestClient) -> None:
+    """The bound has to reach the 422 BODY, not just the pure function.
+
+    `validate_graph`'s new size checks are worth nothing to a caller unless they arrive as
+    `RunRefused.problems` — that list is what the builder paints, and a run refused with an empty
+    list is indistinguishable from a run refused for a reason nobody can see.
+
+    Driven at the fan-in bound rather than the node cap because it is the reachable one: two nodes
+    and a repeatedly-dragged edge, which is how a real canvas produces it. No Serve mock is
+    registered on purpose — a graph refused at the door must never reach the executor.
+    """
+    from flows.models import MAX_NODE_FAN_IN
+
+    over = MAX_NODE_FAN_IN + 1
+    resp = client.post(
+        "/api/flows/runs",
+        json={
+            "graph": {
+                "nodes": [{"id": "a", "kind": "text"}, {"id": "b", "kind": "inspect"}],
+                "edges": [{"source": "a", "target": "b"} for _ in range(over)],
+            },
+            "seeds": {"a": "hello"},
+        },
+    )
+
+    assert resp.status_code == 422, f"an over-wide graph was accepted: {resp.status_code}"
+    body = resp.json()
+    assert body["status"] == 422
+    assert body["problems"], "refused with an EMPTY problems list — the builder has nothing to paint"
+    assert any("b" in p and str(MAX_NODE_FAN_IN) in p for p in body["problems"]), (
+        f"the 422 must name the offending node AND the ceiling: {body['problems']}"
+    )
