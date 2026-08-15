@@ -2315,3 +2315,57 @@ def test_notifications_stays_single_replica_while_its_single_flight_lock_is_proc
             "guard is a process-local asyncio.Lock, so every pod ticks and re-walks the same rows. "
             "Ship a cross-pod guard that SKIPS (not an actor, which queues) before raising this."
         )
+
+
+def test_a_ONE_SHOT_reminder_never_uses_a_DROP_policy() -> None:
+    """A dropped tick is recoverable only if another one is coming. On a one-shot, none is.
+
+    `test_every_actor_reminder_declares_its_failure_policy` requires each `register_reminder` to
+    STATE a policy. It cannot tell whether the policy fits the reminder, and the two legal answers
+    have opposite consequences depending on `period`:
+
+      * period > 0 (periodic) — `drop_policy()` is right. The tick is lost, the next one arrives on
+        schedule, and the actor is not pinned retrying a poison payload.
+      * period == 0 (one-shot) — `drop_policy()` means the callback runs AT MOST once and, if it
+        fails, NEVER. Whatever the reminder was going to do is silently not done, forever.
+
+    The estate has both, and the annotator already models the split correctly: `LEASE_REMINDER` is
+    one-shot and takes `constant_policy(interval=10s, max_retries=6)`, because a dropped lease expiry
+    leaves a task CLAIMED forever.
+
+    THE CASE THIS CAUGHT. `DIGEST_REMINDER` was converted from periodic to one-shot while keeping
+    `_DROP_THE_TICK`. `arm_digest` writes `DIGEST_KEY={"pending": True}` before registering, and
+    `_digest_pending()` refuses to re-arm while that flag is set — so one failed tick leaves the
+    window open, never re-fired and never re-armable. Silent and permanent, which is the exact
+    failure class the reminder existed to prevent.
+    """
+    import ast
+
+    offenders: list[str] = []
+    for py in SERVICES.rglob("*.py"):
+        if "tests" in py.parts:
+            continue
+        try:
+            tree = ast.parse(py.read_text(encoding="utf-8"))
+        except SyntaxError:  # pragma: no cover — a broken file is another gate's problem
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not ast.unparse(node.func).endswith("register_reminder"):
+                continue
+            if len(node.args) < 4:
+                continue
+            period = ast.unparse(node.args[3])
+            # `timedelta(0)` / `timedelta(seconds=0)` — the two spellings of "fire once".
+            if not re.fullmatch(r"timedelta\(\s*(?:seconds\s*=\s*)?0\s*\)", period):
+                continue
+            policy = next((ast.unparse(k.value) for k in node.keywords if k.arg == "failure_policy"), "")
+            if "DROP" in policy.upper() or "drop_policy" in policy:
+                offenders.append(f"{py.relative_to(REPO)}:{node.lineno} period={period} policy={policy}")
+
+    assert not offenders, (
+        "these reminders fire ONCE and drop the tick on failure, so a single failed callback means the "
+        "work never happens and nothing retries it:\n  " + "\n  ".join(offenders) + "\n\n"
+        "Use a retrying policy — `ActorReminderFailurePolicy.constant_policy(interval=..., max_retries=...)` "
+        "— as `LEASE_REMINDER` does. `drop_policy()` is correct ONLY when `period > 0`, where the next "
+        "scheduled tick is the retry."
+    )

@@ -105,6 +105,18 @@ DIGEST_REMINDER = "digest"
 #: any dead-letter surface. Declaring the policy says the same thing where an operator can see it.
 _DROP_THE_TICK: Final = ActorReminderFailurePolicy.drop_policy()
 
+#: For a ONE-SHOT reminder, where dropping is not "lose one tick" but "never happen".
+#:
+#: `_DROP_THE_TICK` above is right for the periodic compaction reminder: the next tick IS the retry.
+#: The digest reminder fires ONCE (`period=0`), and `arm_digest` writes `DIGEST_KEY={"pending": True}`
+#: before registering it, which `_digest_pending()` then treats as "a window is already open" and
+#: refuses to re-arm. So a single failed digest tick left the window open, never re-fired and never
+#: re-armable — silent and permanent, the failure class the reminder exists to prevent.
+#:
+#: Same shape and reasoning as the annotator's `_RETRY_THE_ONE_SHOT` for its lease expiry, and bounded
+#: for the same reason: a permanently poisoned tick still has to give up rather than pin the actor.
+_RETRY_THE_ONE_SHOT: Final = ActorReminderFailurePolicy.constant_policy(interval=timedelta(seconds=10), max_retries=6)
+
 
 def _parse[T: BaseModel](partition: str, raw: str, model: type[T]) -> T:
     """Decode a stored record, or refuse it. Schema drift is UNREADABLE, never absent."""
@@ -538,7 +550,7 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         # `inbox_digest_disarm_failed` — after which it fired on an already-drained window once per
         # period, forever. A window that closes itself needs no second call to have been correct.
         # (The annotator's lease reminder documents the same primitive: "`period=0` = fire once".)
-        await self.register_reminder(DIGEST_REMINDER, b"", timedelta(seconds=seconds), timedelta(0), failure_policy=_DROP_THE_TICK)
+        await self.register_reminder(DIGEST_REMINDER, b"", timedelta(seconds=seconds), timedelta(0), failure_policy=_RETRY_THE_ONE_SHOT)
         await self._state_manager.set_state(DIGEST_KEY, json.dumps({"pending": True, "seconds": seconds}))
         await self._state_manager.save_state()
         return {"armed": True, "seconds": seconds}
