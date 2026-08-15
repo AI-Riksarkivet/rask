@@ -1,7 +1,11 @@
 """The compaction + GC core — infra-light so the discovery + aggregation logic is unit-testable.
 
-``discover_dataset_uris`` is pure list-logic over a pyarrow filesystem; ``compact_one`` wraps the two
+``discover_datasets`` is pure list-logic over a pyarrow filesystem; ``compact_one`` wraps the two
 blocking Lance maintenance calls. Both keep IO at the edges so the orchestration can be tested with fakes.
+
+(The function was ``discover_dataset_uris`` until it started returning a :class:`Discovery` — uris AND
+the prefixes the depth bound stopped at — because the truncation must not be droppable. This docstring
+kept the dead name, which is how a reader ends up grepping for a symbol that has no definition.)
 """
 
 from __future__ import annotations

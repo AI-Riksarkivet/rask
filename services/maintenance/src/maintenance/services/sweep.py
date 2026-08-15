@@ -393,5 +393,10 @@ def summarize(results: list[DatasetResult]) -> dict[str, Any]:
         "fragments_removed": sum(r.fragments_removed for r in results),
         "indices_optimized": sum(r.indices_optimized for r in results),
         "versions_removed": sum(r.old_versions_removed for r in results),
+        # `bytes_removed` was WRITE-ONLY until 2026-08-15: `compact_one` assigned it from the Lance
+        # cleanup stats and nothing ever read it, so every tick measured how much it had reclaimed and
+        # discarded the number while reporting three counts that do not answer the question. "How much
+        # did we get back" is the one thing a reclaimer exists to tell you.
+        "bytes_removed": sum(r.bytes_removed for r in results),
         "errors": {r.uri: r.error for r in results if r.error},
     }

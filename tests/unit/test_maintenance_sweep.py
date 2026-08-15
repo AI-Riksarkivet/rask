@@ -18,7 +18,7 @@ def _dir(path: str) -> pafs.FileInfo:
 
 
 class _FakeFS:
-    """Path-aware fake covering the two calls discover_dataset_uris makes: listing a prefix
+    """Path-aware fake covering the two calls discover_datasets makes: listing a prefix
     (FileSelector) and probing a single path (the ``_versions`` dataset marker)."""
 
     def __init__(self, tree: dict[str, list[pafs.FileInfo]]) -> None:
@@ -171,3 +171,31 @@ def test_on_cron_single_flight_skips_an_overlapping_sweep(monkeypatch: Any) -> N
     # once the lock is free again, a tick runs the sweep exactly once
     ok = asyncio.run(routes.on_cron(settings, cast(Any, object())))
     assert ok["status"] == "ok" and ran == [1]
+
+
+def test_summarize_reports_the_BYTES_reclaimed(tmp_path: Any) -> None:
+    """#8's third claim, closed rather than merely reported.
+
+    `DatasetResult.bytes_removed` was WRITE-ONLY: assigned at optimize.py:283 from the Lance cleanup
+    stats and read by nothing (measured — two occurrences in the whole service, the declaration and
+    that assignment). The sweep therefore measured how much it had reclaimed on every tick and threw
+    the number away, while `summarize` reported fragments, indices and versions.
+
+    "How much did we get back" is the one question a reclaimer exists to answer, and an operator
+    reading the cron response could not answer it.
+    """
+    from maintenance.services.optimize import DatasetResult
+    from maintenance.services.sweep import summarize
+
+    out = summarize(
+        [
+            DatasetResult(uri="s3://b/a.lance", old_versions_removed=2, bytes_removed=1024),
+            DatasetResult(uri="s3://b/b.lance", old_versions_removed=1, bytes_removed=512),
+            DatasetResult(uri="s3://b/c.lance", refused="flag 16"),
+        ]
+    )
+
+    assert out["bytes_removed"] == 1536, "the reclaimed bytes were measured and discarded"
+    # The neighbouring counts must not shift — this is an addition, not a re-shape of the response.
+    assert out["versions_removed"] == 3
+    assert out["refused"] == 1
