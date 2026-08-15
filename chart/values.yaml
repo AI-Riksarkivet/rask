@@ -839,11 +839,30 @@ medallion:
   # RESPONSE TO its Dapr trigger (Ray Jobs REST API, httpx-only — no ray package in the mover image), instead
   # of the in-process fake-Ray write. Default off. Production is KubeRay (the RayService this chart already
   # renders under ray.enabled); the raw Ray head here is the on-kind proof.
-  # ON by default, for the same reason `compute` is: Ray IS the compute plane here. The in-process
-  # "fake-Ray" write is a fallback for a cluster with no Ray, not the intended path — and shipping the
-  # fallback as the default meant S1's whole reason for existing (waiting for a Ray job to reach a
-  # terminal state before measuring it) was dead code in the shipped configuration.
-  ray: true
+  # OFF by default again (2026-08-15), and the reason is measured rather than a preference.
+  #
+  # It was flipped ON so S1's watcher would not be dead code in the shipped configuration. That
+  # argument is still right, but the configuration it produced could never work: `rayAddress` derives
+  # to the chart's KubeRay cluster, whose image is `.docker/ray-cluster.dockerfile` — the HTR/CUDA
+  # image built from `runners/htr`. It carries torch and htrflow and NO pylance, so every stage job
+  # died `ModuleNotFoundError: No module named 'lance'`. Baking the job scripts into that image (which
+  # this session also did, and which stands) only moved the failure from `exit 2 / can't open file` to
+  # `exit 1 / no module`.
+  #
+  # The lane is designed against `.docker/ray-lance.dockerfile` — "a thin CPU Ray image for the
+  # medallion compute seam: official Ray + the lance-ray Data integration" — deployed by
+  # `deploy/ray-lance-demo.yaml` as a SEPARATE `ray-lance-head`. The chart does not deploy that, so
+  # ON-by-default pointed every mover at a cluster that cannot run the work.
+  #
+  # Turning it off restored the documented default and the cascade completed end to end on the first
+  # drive: bronze -> silver -> gold, all three COMPLETE in the lineage graph (2026-08-15 20:59). That
+  # is the first time the SUCCESS path has ever run; before this only the FAIL path had.
+  #
+  # To turn it back on, give the estate a Lance-capable Ray cluster FIRST — either point `rayAddress`
+  # at a `ray-lance` head, or make the unified cluster's image carry pylance at the same version the
+  # workspace writes with (ray-lance.dockerfile calls a version split there "a correctness bug, not a
+  # currency preference"). Do not re-enable it against the HTR image.
+  ray: false
   # DERIVED from the RayService this chart renders, not a hardcoded hostname. `ray-lance-head` was the
   # on-kind demo's raw head and does not exist in a KubeRay deployment — measured 2026-08-15, it fails
   # DNS from inside a pod while `rask-ray-head-svc` answers `/api/version` with ray 2.56.1.

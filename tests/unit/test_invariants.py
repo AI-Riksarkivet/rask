@@ -73,7 +73,8 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     ("services/catalog/src/catalog/core/control_emit.py", "self._topic"): "control",
     ("services/maintenance/src/maintenance/core/control_emit.py", "self._topic"): "control",
     # TRIGGER — an instruction to DO work. Correctly bare: the outbox re-ingests lineage, it never
-    # re-fires triggers. Their durability question is a different one (open_atomicity.md section 2).
+    # re-fires triggers. Their durability question is a different one, and is DECIDED: the caller-retry
+    # idempotency-token contract is the carrier (open_medallion_workflow.md section 11).
     ("services/medallion/src/medallion/services/ingest_trigger.py", "settings.bronze_topic"): "trigger",
     ("services/medallion/src/medallion/services/media_produce.py", "settings.media_topic"): "trigger",
     ("services/medallion/src/medallion/services/publication_trigger.py", "settings.bronze_topic"): "trigger",
@@ -144,7 +145,8 @@ def test_every_publish_site_declares_what_its_topic_carries() -> None:
     assert not undeclared, (
         f"these publish sites are not classified in _PUBLISH_INTENT: {undeclared}. Add each one as "
         "'lineage' (describes a committed write -> must be staged through the outbox), 'control' (a "
-        "best-effort refresh hint) or 'trigger' (an instruction to do work). See open_atomicity.md."
+        "best-effort refresh hint) or 'trigger' (an instruction to do work). The outbox's scope, and why "
+        "Dapr's own cannot replace it, are in docs/DECISIONS.md."
     )
     stale = sorted(f"{module} ({topic})" for (module, topic) in _PUBLISH_INTENT if (module, topic) not in observed)
     assert not stale, (
@@ -1764,16 +1766,32 @@ def test_the_actor_state_store_is_scoped_to_the_service_whose_whole_state_it_is(
     )
 
 
-def test_the_ray_lane_is_ON_by_default_because_this_is_a_ray_first_platform() -> None:
-    """Ray IS the compute plane here — the in-process write is a no-Ray fallback, not the intent.
+def test_the_ray_lane_is_OFF_until_a_LANCE_CAPABLE_cluster_exists() -> None:
+    """The Ray lane may only default ON against a cluster that can actually run the job. None exists.
 
-    Both shipped `false` until 2026-08-15, which made the DEFAULT configuration one where the cascade
-    emits lineage describing data a fake computed, and where S1's whole reason for existing — waiting
-    for a Ray job to reach a terminal state before measuring it — was dead code nobody ran.
+    This gate previously asserted the opposite. It was written on the argument that Ray IS the compute
+    plane and that leaving the lane off made S1's watcher dead code — which is still true, and still
+    not sufficient. The configuration it produced could never work, and that was MEASURED, not argued:
 
-    `compute` is asserted alongside `ray` because the settings validator refuses `ray` without it
-    (`MEDALLION_RAY_ENABLED requires MEDALLION_COMPUTE_ENABLED`) — measured live as a crash-loop, which
-    is the right failure but a poor default.
+      * `rayAddress` derives to the chart's KubeRay head, whose image is
+        `.docker/ray-cluster.dockerfile` — the HTR/CUDA image built from `runners/htr`. It carries
+        torch and htrflow and no pylance.
+      * Every submitted stage job died. First `exit 2 / can't open file` (the scripts were not baked),
+        then, once they were, `exit 1 / ModuleNotFoundError: No module named 'lance'`.
+      * With the lane OFF the cascade completed on the first drive — bronze -> silver -> gold, all
+        three COMPLETE in the graph (2026-08-15 20:59). That was the first successful run ever; before
+        it only the FAIL path had fired, which read as missing data rather than a broken image.
+
+    The lane is designed against `.docker/ray-lance.dockerfile` ("a thin CPU Ray image for the
+    medallion compute seam"), deployed separately as `ray-lance-head` by `deploy/ray-lance-demo.yaml`.
+    The chart does not deploy it, so ON-by-default aimed every mover at a cluster that cannot run the
+    work — a failure that surfaces only when a trigger arrives.
+
+    `compute` stays ON and is asserted here: it is what the in-process lane needs, and the settings
+    validator refuses `ray` without it anyway.
+
+    To flip this back, give the estate a Lance-capable Ray cluster FIRST and change this test with the
+    evidence that it exists. Do not re-enable against the HTR image.
     """
     docs = _rendered_docs()
     movers = [
@@ -1786,7 +1804,11 @@ def test_the_ray_lane_is_ON_by_default_because_this_is_a_ray_first_platform() ->
     assert movers, "no medallion movers rendered — the fixture cannot prove anything"
     for container in movers:
         env = {e["name"]: e.get("value") for e in container["env"]}
-        assert env.get("MEDALLION_RAY_ENABLED") == "true", "the Ray lane is off by default on a Ray-first platform"
+        assert env.get("MEDALLION_COMPUTE_ENABLED") == "true", "the in-process compute lane must be on — it is what runs the cascade today"
+        assert env.get("MEDALLION_RAY_ENABLED") != "true", (
+            "the Ray lane is ON by default, but the chart deploys no Lance-capable Ray cluster. Every stage "
+            "job dies ModuleNotFoundError: No module named 'lance' against the HTR image. See this test's docstring."
+        )
         assert env.get("MEDALLION_COMPUTE_ENABLED") == "true", "ray without compute fails the settings validator at boot"
 
 
@@ -1801,8 +1823,13 @@ def test_the_ray_address_names_a_service_the_chart_actually_creates() -> None:
     Derived from the release name rather than pinned, and pointing at the STABLE head service: the
     RayCluster KubeRay owns carries a generated suffix (`rask-ray-22nls`) that no chart can name and
     that changes on re-provision.
+
+    RENDERED WITH THE LANE FORCED ON, because the default is now off (no Lance-capable cluster exists
+    — see `test_the_ray_lane_is_OFF_until_a_LANCE_CAPABLE_cluster_exists`) and the address is only
+    emitted when it is on. The property under test is what the value SAYS when it is present, so the
+    fixture has to produce one; asserting against the default would silently test nothing.
     """
-    docs = _rendered_docs()
+    docs = _rendered_docs("medallion.ray=true")
     services = {(doc.get("metadata") or {}).get("name") for doc in docs if doc.get("kind") == "Service"}
     addresses = {
         e.get("value")
