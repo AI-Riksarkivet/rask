@@ -2195,7 +2195,7 @@ def test_every_assert_retention_EXPECTS_a_string_nats_can_actually_emit() -> Non
             f"`assert_retention {stream} {want}` expects a retention nats-server never emits.\n"
             f"  got-side vocabulary: {sorted(NATS_RETENTIONS)}\n"
             f"  expected-side value: {want!r}\n\n"
-            f"The comparison is `[ \"$got\" != \"$want\" ]` against the value parsed out of "
+            f'The comparison is `[ "$got" != "$want" ]` against the value parsed out of '
             f"`nats stream info --json`, so a value outside that set mismatches unconditionally, the Job "
             f"exits 1, and `helm upgrade --wait-for-jobs` fails the whole release."
         )
@@ -2242,3 +2242,42 @@ def test_every_database_the_age_chart_creates_ALSO_gets_the_age_EXTENSION() -> N
             f"Add, after the CREATE DATABASE, a `\\c` into the new database followed by "
             f"`CREATE EXTENSION IF NOT EXISTS age;`."
         )
+
+
+def _reminders_without_a_failure_policy() -> list[str]:
+    """Every `register_reminder(` call that does not state what happens when its callback FAILS.
+
+    Dapr's default is to retry a failing reminder callback FOREVER — the docs are explicit that a
+    reminder "will be retried" until the actor unregisters it or is deleted. A poison tick therefore
+    pins the actor at the runtime's own pace, indefinitely.
+
+    rask avoids that today by catching everything inside the callback and logging, which works and
+    costs something real: the failure never reaches daprd, so it is absent from the sidecar's metrics
+    and from any dead-letter surface. The estate is choosing a policy by hiding the failure rather
+    than by declaring one.
+
+    `ActorReminderFailurePolicy` (dapr 1.18.3, `dapr.actor.runtime.failure_policy`) is the declared
+    form: `drop_policy()` discards a failed tick, `constant_policy(interval, max_retries)` bounds the
+    retry. Either is a decision a reader can see; a bare `register_reminder` is one they cannot.
+    """
+    offenders: list[str] = []
+    for py in SERVICES.rglob("*.py"):
+        if "tests" in py.parts:
+            continue
+        lines = py.read_text().splitlines()
+        for i, line in enumerate(lines):
+            if "register_reminder(" not in line or "unregister_reminder(" in line:
+                continue
+            if "failure_policy" not in "\n".join(lines[i : i + 8]):
+                offenders.append(f"{py.relative_to(REPO)}:{i + 1}")
+    return offenders
+
+
+def test_every_actor_reminder_declares_its_failure_policy() -> None:
+    offenders = _reminders_without_a_failure_policy()
+    assert not offenders, (
+        f"these reminders never say what happens when their callback fails: {offenders}. Dapr's "
+        "default retries forever, so the only thing standing between a poison tick and an infinite "
+        "loop is a try/except inside the callback — which also hides the failure from daprd. Pass "
+        "`failure_policy=ActorReminderFailurePolicy.drop_policy()` (or `constant_policy(...)`)."
+    )

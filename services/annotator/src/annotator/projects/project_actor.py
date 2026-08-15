@@ -27,9 +27,10 @@ import json
 import logging
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Final
 
 from dapr.actor import Actor, ActorInterface, Remindable, actormethod
+from dapr.actor.runtime.failure_policy import ActorReminderFailurePolicy
 
 from annotator.projects.machines import IllegalTransition, may_publish, project_transition
 from annotator.projects.models import (
@@ -65,6 +66,19 @@ PUBLISH_REMINDER = "publish-run"
 #: races a live run costs a pure read and stands down.
 _PUBLISH_DUE = timedelta(seconds=1)
 _PUBLISH_PERIOD = timedelta(seconds=60)
+
+
+#: A failed reminder tick is DISCARDED rather than retried.
+#:
+#: Correct only because every reminder using it REPEATS: the period is the retry, so a tick that fails
+#: is followed by the next one on schedule. Dapr's default is the opposite — a failing callback "will be
+#: retried" until the actor unregisters it or is deleted, so a poison tick pins the actor forever at the
+#: runtime's own pace.
+#:
+#: rask already avoided that, by catching everything inside the callback and logging. That works and
+#: costs something: the failure never reaches daprd, so it is invisible to the sidecar's metrics and to
+#: any dead-letter surface. Declaring the policy says the same thing where an operator can see it.
+_DROP_THE_TICK: Final = ActorReminderFailurePolicy.drop_policy()
 
 
 class AnnotationProjectActorInterface(ActorInterface):
@@ -254,7 +268,7 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
             # `publishing` with no watchdog, the exact stranding this reminder exists to prevent.
             # (A reminder armed for a store that then fails is benign: the tick sees a non-publishing
             # project and stands down.)
-            await self.register_reminder(PUBLISH_REMINDER, b"", _PUBLISH_DUE, _PUBLISH_PERIOD)
+            await self.register_reminder(PUBLISH_REMINDER, b"", _PUBLISH_DUE, _PUBLISH_PERIOD, failure_policy=_DROP_THE_TICK)
 
         await self._store(project)
         return project.model_dump(mode="json")

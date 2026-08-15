@@ -39,9 +39,10 @@ bearing rather than stylistic:
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, override
+from typing import Any, Final, override
 
 from dapr.actor import Actor, ActorInterface, Remindable, actormethod
+from dapr.actor.runtime.failure_policy import ActorReminderFailurePolicy
 from pydantic import BaseModel, ValidationError
 
 from notifications.config import get_notifications_settings
@@ -90,6 +91,19 @@ COMPACTION_REMINDER = "compaction"
 #: periods and unrelated jobs: compaction bounds storage on the estate's schedule, a digest batches
 #: pushes on the SUBJECT's. Folding them would tie a user preference to a retention policy.
 DIGEST_REMINDER = "digest"
+
+
+#: A failed reminder tick is DISCARDED rather than retried.
+#:
+#: Correct only because every reminder using it REPEATS: the period is the retry, so a tick that fails
+#: is followed by the next one on schedule. Dapr's default is the opposite — a failing callback "will be
+#: retried" until the actor unregisters it or is deleted, so a poison tick pins the actor forever at the
+#: runtime's own pace.
+#:
+#: rask already avoided that, by catching everything inside the callback and logging. That works and
+#: costs something: the failure never reaches daprd, so it is invisible to the sidecar's metrics and to
+#: any dead-letter surface. Declaring the policy says the same thing where an operator can see it.
+_DROP_THE_TICK: Final = ActorReminderFailurePolicy.drop_policy()
 
 
 def _parse[T: BaseModel](partition: str, raw: str, model: type[T]) -> T:
@@ -214,7 +228,7 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         if due_at is not None and now < due_at:
             return due_at
         period = timedelta(seconds=get_notifications_settings().compaction_interval_seconds)
-        await self.register_reminder(COMPACTION_REMINDER, b"", period, period)
+        await self.register_reminder(COMPACTION_REMINDER, b"", period, period, failure_policy=_DROP_THE_TICK)
         return now + period
 
     async def _disarm_compaction(self) -> None:
@@ -520,7 +534,7 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         if await self._digest_pending():
             return {"armed": False, "seconds": seconds}
         period = timedelta(seconds=seconds)
-        await self.register_reminder(DIGEST_REMINDER, b"", period, period)
+        await self.register_reminder(DIGEST_REMINDER, b"", period, period, failure_policy=_DROP_THE_TICK)
         await self._state_manager.set_state(DIGEST_KEY, json.dumps({"pending": True, "seconds": seconds}))
         await self._state_manager.save_state()
         return {"armed": True, "seconds": seconds}

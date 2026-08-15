@@ -37,9 +37,10 @@ import json
 import logging
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Final
 
 from dapr.actor import Actor, ActorInterface, Remindable, actormethod
+from dapr.actor.runtime.failure_policy import ActorReminderFailurePolicy
 
 from annotator.projects.machines import (
     FROZEN_PROJECT_STATES,
@@ -73,6 +74,16 @@ DRAFT_KEY = "draft"
 #: The lease reminder's name. One per actor, re-registered on each claim/save (renewing the lease) and
 #: unregistered the moment the task leaves CLAIMED.
 LEASE_REMINDER = "lease"
+
+
+#: A failed lease-expiry tick is RETRIED, briefly and a bounded number of times.
+#:
+#: NOT `drop_policy()`, and the difference is the whole reason these are chosen per reminder rather than
+#: estate-wide. This reminder is armed with `period=0` — it fires ONCE. Dropping its only tick means the
+#: lease never expires and the task stays CLAIMED forever, which is precisely the stranding the reminder
+#: exists to prevent. Bounded rather than Dapr's unbounded default, so a permanently poisoned tick still
+#: gives up instead of retrying for the life of the actor.
+_RETRY_THE_ONE_SHOT: Final = ActorReminderFailurePolicy.constant_policy(interval=timedelta(seconds=10), max_retries=6)
 
 
 class AnnotationTaskActorInterface(ActorInterface):
@@ -400,7 +411,7 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
 
     async def _arm_lease(self, seconds: int) -> None:
         """(Re-)register the expiry callback. `period=0` = fire once, not a repeating timer."""
-        await self.register_reminder(LEASE_REMINDER, b"", timedelta(seconds=seconds), timedelta(seconds=0))
+        await self.register_reminder(LEASE_REMINDER, b"", timedelta(seconds=seconds), timedelta(seconds=0), failure_policy=_RETRY_THE_ONE_SHOT)
 
     async def _disarm_lease(self) -> None:
         """Unregister on any edge out of CLAIMED. Leaving it armed would expire a task that is
