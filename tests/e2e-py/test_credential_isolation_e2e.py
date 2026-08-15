@@ -92,23 +92,45 @@ def _provision(catalog: str, token: str, project: str, warehouse: str, ns: str, 
 
 
 def _vend(catalog: str, token: str, ident: str, tier: str) -> dict[str, str]:
-    """The credentials the catalog REALLY vends for this caller's table at this tier."""
+    """The vended ``storage_options`` for this caller's table at this tier.
+
+    Returns the INNER block, not ``body["credentials"]`` (diff2 F5). The response is
+    ``{mode, credentials: {storage_options, expires_at_millis}, location, read_version}``, so the
+    outer object carries no key material at all — this test read it for its whole life and would have
+    raised ``KeyError`` on its first real run. It never did, because the suite is env-gated and skips
+    unless a two-tenant deployed stack is configured, which is also why the mismatch survived: a test
+    that never runs cannot fail. The unit pin in ``tests/unit/test_vending.py`` exists so the SHAPE is
+    now checked by something that runs on every commit.
+    """
     r = requests.post(f"{catalog}/v1/table/{ident}/credentials?tier={tier}", headers=_auth(token), timeout=30)
     assert r.status_code == 200, r.text
     body = r.json()
     if body.get("mode") != "direct":
         pytest.skip(f"stack vends {body.get('mode')} — a session policy is only attackable in direct mode")
-    return body["credentials"]
+    credentials = body.get("credentials") or {}
+    options = credentials.get("storage_options")
+    assert options, f"vended credentials carried no storage_options: {credentials!r}"
+    return options
 
 
 def _client(creds: dict[str, str]) -> Any:
-    """A raw S3 client wearing the vended credentials — the catalog is NOT in this path."""
+    """A raw S3 client wearing the vended credentials — the catalog is NOT in this path.
+
+    BARE key names (``access_key_id``, not ``aws_access_key_id``): the vendors emit Lance-style
+    options, because `DescribeTableResponse.storage_options` is passed straight to Lance. The
+    ``aws_``-prefixed names this used are boto3's OWN kwargs — the mistake was reading the client's
+    parameter names back out of the server's payload.
+
+    ``endpoint`` comes from the vended options when present, falling back to the env. The vendor
+    includes it whenever the deployment configures one, and preferring it keeps the attack pointed at
+    the store the catalog actually issued the credential for.
+    """
     return boto3.client(
         "s3",
-        endpoint_url=S3,
-        aws_access_key_id=creds["aws_access_key_id"],
-        aws_secret_access_key=creds["aws_secret_access_key"],
-        aws_session_token=creds.get("aws_session_token"),
+        endpoint_url=creds.get("endpoint") or S3,
+        aws_access_key_id=creds["access_key_id"],
+        aws_secret_access_key=creds["secret_access_key"],
+        aws_session_token=creds.get("session_token"),
         config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
         region_name=creds.get("region") or "us-east-1",
     )

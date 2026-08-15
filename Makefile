@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-rig-up notifications-rig-down audit scan-config scan-secrets scan-image scan-zone-image seed-corpus
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-rig-up notifications-rig-down audit scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
 
 help:
 	@echo "Targets:"
@@ -567,7 +567,7 @@ k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
 # Same chart, same :dev image set, same release name (rask) as k3s — but on a disposable
 # kind cluster, which is what the CI live-proof jobs (e2e-stack / e2e-ray) boot. Toolchain
 # is pinned into .localbin by `make bootstrap` (kind/kubectl/fga; helm + docker from PATH).
-.PHONY: bootstrap kind-up kind-images kind-load kind-deploy kind-down e2e-ci e2e-ray-ci
+.PHONY: bootstrap kind-up kind-images kind-load kind-deploy kind-down e2e-ci e2e-ray-ci e2e-isolation
 
 LOCALBIN     := $(CURDIR)/.localbin
 KIND         := $(LOCALBIN)/kind
@@ -649,6 +649,17 @@ e2e-ci: bootstrap ## Governed kind stack + the 5 live e2e suites (CAS/#2/#3-A/#3
 
 e2e-ray-ci: bootstrap ## Governed ray-ON kind stack + real KubeRay + both Ray suites == CI e2e-ray
 	CLUSTER=$(KIND_CLUSTER)-ray-e2e RELEASE=rask bash scripts/ray_e2e_stack.sh
+
+# The tenant-isolation attack (#74's live half). NOT in `e2e-ci`: it needs TWO tenants' bearer
+# tokens and a vending-enabled stack, neither of which the kind stack provisions today (#84 tracks
+# that wiring). The suite's own docstring cited this target for months while no Makefile defined it
+# (diff2 F5) — so anyone following the docs ran nothing and saw no error.
+#
+# Un-skipping it is the point: with the env unset every test in the file SKIPS, which is why a
+# key-name mismatch in it survived to be found by reading rather than by running.
+e2e-isolation: ## Cross-tenant credential attack vs a deployed vending-enabled stack (needs 2 tenants)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! set LANCE_E2E_CATALOG_URL, LANCE_E2E_TOKEN, LANCE_E2E_TENANT_B_TOKEN, LANCE_E2E_PROJECT_B (and LANCE_E2E_S3)"; exit 1; }
+	uv run pytest tests/e2e-py/test_credential_isolation_e2e.py -m e2e -v
 
 # ---- the local image path (registry + Dagger engine) ------------------------
 # `make dev-registry` once per host (a local registry on :5000, and k3s pointed at it), and

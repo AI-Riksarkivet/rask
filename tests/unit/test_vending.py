@@ -226,3 +226,82 @@ def test_a_read_tier_policy_cannot_write_its_own_table() -> None:
     policy: Any = build_session_policy("tenant-b", "isobns/isobtbl.lance", "read")
     assert not _policy_allows(policy, action="s3:PutObject", bucket="tenant-b", key="isobns/isobtbl.lance/data/x.lance")
     assert not _policy_allows(policy, action="s3:DeleteObject", bucket="tenant-b", key="isobns/isobtbl.lance/data/x.lance")
+
+
+# --------------------------------------------------------------------------- #
+# diff2 F5 — the WIRE CONTRACT between what the vendors emit and what a client reads
+#
+# The tenant-isolation e2e read `body["credentials"]["aws_access_key_id"]` for its entire life:
+# wrong NESTING (key material lives one level down, under `storage_options`) and wrong NAMES (`aws_`
+# prefixes are boto3's own kwargs, never anything the server emits). Its first real run would have
+# raised KeyError. It never ran — the suite is env-gated on a two-tenant deployed stack and skips by
+# default — so a defect in the estate's headline isolation proof was found by reading, not failing.
+#
+# These pins live HERE, in a collected path, precisely because that e2e cannot be relied on to
+# notice. They are the always-running half of the contract.
+# --------------------------------------------------------------------------- #
+
+#: The exact keys a client hands to its object-store driver. Lance-style and BARE, because
+#: `DescribeTableResponse.storage_options` is documented as passed straight to Lance — so the
+#: catalog cannot rename them for boto3's convenience without breaking every Lance reader.
+_REQUIRED_STORAGE_OPTION_KEYS = frozenset({"access_key_id", "secret_access_key", "session_token", "region"})
+
+
+def _fake_creds(**kwargs: Any) -> dict[str, Any]:
+    return {
+        "Credentials": {
+            "AccessKeyId": "AK",
+            "SecretAccessKey": "SK",
+            "SessionToken": "ST",
+            "Expiration": dt.datetime(2030, 1, 1, tzinfo=dt.UTC),
+        }
+    }
+
+
+def _vended_options(vendor_name: str) -> dict[str, str]:
+    if vendor_name == "sts":
+        vendor: Any = StsVendor(role_arn="arn:aws:iam::1:role/r", region="us-east-1", ttl_seconds=900, assume_role=_fake_creds)
+        out = vendor.vend(table_location="s3://bkt/tables/t1", tier="read")
+    else:
+        vendor = WebIdentityVendor(region="us-east-1", endpoint="http://rustfs:9000", assume=_fake_creds)
+        out = vendor.vend(table_location="s3://bkt/tables/t1", tier="read", web_identity_token="the.jwt.tok")
+    assert out is not None
+    return out.storage_options
+
+
+@pytest.mark.parametrize("vendor_name", ["sts", "web_identity"])
+def test_every_vendor_emits_the_same_bare_storage_option_keys(vendor_name: str) -> None:
+    """All credential-issuing vendors agree on ONE key vocabulary.
+
+    Parametrized over the vendors rather than asserted once: `web_identity` is the only RustFS-viable
+    mode while `sts` is the one most of this file drives, so a divergence between them would be
+    invisible to both. A client cannot be expected to sniff which vendor a deployment configured.
+    """
+    options = _vended_options(vendor_name)
+    missing = _REQUIRED_STORAGE_OPTION_KEYS - set(options)
+    assert not missing, f"{vendor_name} stopped emitting {sorted(missing)} — every Lance client reads these by name"
+    # NO `aws_`-prefixed alias, in either direction. The e2e's bug was reading boto3's PARAMETER
+    # names back out of the server's payload; adding an alias here would make that mistake work by
+    # accident, and the next one would be just as invisible.
+    assert not [k for k in options if k.startswith("aws_")], options
+
+
+def test_the_isolation_e2e_reads_the_keys_the_vendors_actually_emit() -> None:
+    """The e2e is env-gated and SKIPS by default, so this is what keeps its client wiring honest.
+
+    It reads the e2e's own source and asserts that every key `_client` pulls out of the vended
+    options is one a vendor emits. Parsing source is a blunt instrument; the alternative is importing
+    a module that hard-requires a deployed stack, and the failure being guarded — a rename applied on
+    one side only — is exactly what a green-by-skipping suite cannot report.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "e2e-py" / "test_credential_isolation_e2e.py"
+    body = src.read_text()
+    client = body[body.index("def _client(") :]
+    client = client[: client.index("\n\n\n")]
+    read = set(re.findall(r"""creds(?:\.get)?\(?\[?["']([a-z_]+)["']\]?\)?""", client))
+    assert read, "could not parse the e2e's credential reads — update this pin rather than deleting it"
+    unknown = read - _REQUIRED_STORAGE_OPTION_KEYS - {"endpoint"}
+    assert not unknown, f"the isolation e2e reads {sorted(unknown)}, which no vendor emits (diff2 F5)"
