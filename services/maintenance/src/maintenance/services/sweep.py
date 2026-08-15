@@ -25,6 +25,7 @@ from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
 from maintenance.core.metrics import record_dataset_swept, record_reclaimed, record_refused, record_run, record_run_started
 from maintenance.services import base_refs, purge
 from maintenance.services.optimize import DatasetResult, compact_one, discover_datasets
+from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
 from service_kit.lakehouse import maintenance_policies, warehouse_records
 from service_kit.lakehouse.objectfs import s3_filesystem
@@ -212,7 +213,12 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
             span.set_attribute("lance.dataset_uri", uri)
             effective_older_than: timedelta | None = older_than
             retain_versions: int | None = None
-            target_rows: int | None = None  # #76 compaction target-size from the policy
+            # #61 per-TIER default, before any policy is read. One row count cannot serve a ~1.8 MB
+            # bronze page-image row and a ~2 KB gold row: the same number is a ~1.8 GB fragment in one
+            # and a few MB in the other. A #50 policy record still overrides it below, so retuning a
+            # tier stays a config change. `None` for a URI whose tier cannot be read — deferring to
+            # Lance beats inventing a number that is then applied silently forever.
+            target_rows: int | None = target_rows_for(uri)
             # The sweep's READ batch — rows are not a unit of memory. Starts at the SETTINGS default
             # (#93) rather than None, so an estate with no policy anywhere is still bounded; a policy
             # that names the field overrides it below, which is the point of per-tier tuning.

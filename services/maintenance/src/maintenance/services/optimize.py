@@ -12,10 +12,11 @@ from typing import Any
 
 import lance
 import pyarrow.fs as pafs
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from maintenance.core.config import shared_lance_session
 from maintenance.services.base_refs import BaseRefs
+from maintenance.services.index_health import inspect_indices
 from service_kit.lakehouse.features import describe_unsupported_flags, manifest_feature_flags, unsupported_features_from_open_error
 
 
@@ -40,6 +41,9 @@ class DatasetResult(BaseModel):
     indices_optimized: int = 0
     old_versions_removed: int = 0
     bytes_removed: int = 0
+    #: #60 — what `optimize_indices()` could not put right on this dataset. Empty on a healthy pass.
+    #: Serialized dicts rather than models so the sweep's summary stays a plain JSON-able report.
+    index_findings: list[dict[str, Any]] = Field(default_factory=list)
     #: True when this pass handed version reclamation to the DATASET (#58) instead of sweeping it.
     #: Distinguishes "reclaimed nothing" from "the writer reclaims this one" — which read identically
     #: on ``old_versions_removed=0`` alone.
@@ -115,6 +119,7 @@ def compact_one(
     compact_threads: int | None = None,
     auto_cleanup_interval_commits: int | None = None,
     protected: BaseRefs | None = None,
+    index_columns: list[str] | None = None,
 ) -> DatasetResult:
     """One ORDERED maintenance pass over one dataset. Never raises — a per-dataset failure is captured
     in ``error`` so one bad dataset can't abort the whole pass.
@@ -227,6 +232,15 @@ def compact_one(
                 # count for a step that did not run is the same dishonesty as a toast built from the
                 # request instead of the response.
                 result.indices_optimized = len([ix for ix in ds.list_indices() if not ix["name"].startswith("__")])
+                # #60 — AFTER the optimize, ask what it did NOT fix. `indices_optimized` counts the
+                # call; these are the states that survive it (rows still unindexed, delta fan-out, a
+                # column with no index at all), each of which degrades queries to a full scan while
+                # this pass reports success. REPORT only: the repair for three of the four is a
+                # rebuild, whose cost belongs to a policy and an operator rather than to a cron tick
+                # that was asked to compact.
+                result.index_findings = [f.model_dump() for f in inspect_indices(ds, expected_columns=index_columns)]
+                if result.index_findings:
+                    log.warning("maintenance_index_findings", extra={"uri": uri, "findings": len(result.index_findings)})
         except Exception as exc:
             log.warning("optimize_indices_skipped", extra={"uri": uri, "error": str(exc)})
         # error_if_tagged_old_versions=False: tagged versions are EXEMPT from GC (they survive until the tag
