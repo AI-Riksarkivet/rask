@@ -61,7 +61,6 @@ def _drive(ctx: _Ctx, payload: dict[str, Any]) -> dict[str, Any]:
     # cast, not a suppression: `_Ctx` implements the slice of DaprWorkflowContext this
     # workflow uses, which is the whole point of driving it by hand.
     gen = stage_run(cast("Any", ctx), payload)
-    sent: Any = None
     try:
         action = gen.send(None)
         while True:

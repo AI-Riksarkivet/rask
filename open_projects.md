@@ -431,7 +431,7 @@ path passes them to a Check. Established by reading `_authorize_transaction`, th
 transaction ops are authorized, which picks between exactly two:
 
 ```python
-relation = "can_describe" if is_read else "can_set_status"   # fga_deps.py:316
+relation = "can_describe" if is_read else "can_set_status"  # fga_deps.py:316
 ```
 
 Two endpoints, two relations. `can_set_property` and `can_cancel` are never the relation in any

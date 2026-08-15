@@ -54,7 +54,7 @@ class _Ctx:
         self.actions.append(getattr(activity, "__name__", str(activity)))
         return _Task()
 
-    def call_child_workflow(self, workflow: Any, *, input: Any = None, instance_id: str | None = None) -> _Task:
+    def call_child_workflow(self, workflow: Any, *, input: Any = None, instance_id: str | None = None) -> _Task:  # noqa: A002
         self.actions.append("child:" + getattr(workflow, "__name__", str(workflow)))
         return _Task()
 

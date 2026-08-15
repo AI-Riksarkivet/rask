@@ -120,7 +120,7 @@ runs `row_count_positive`, `not_null` on the key column, and `blob_resolves` per
 mover consumes it at `transform.py` and a failure becomes:
 
 ```python
-_QUALITY_BLOCKED = {"status": "DROP"}   # transform.py:76
+_QUALITY_BLOCKED = {"status": "DROP"}  # transform.py:76
 ```
 
 with the comment: *"DROP so Dapr doesn't redeliver … no DLQ is configured, so the drop is final — the
