@@ -327,31 +327,82 @@ def test_namespace_create_converges_after_a_failed_grant(moto_client: TestClient
     assert moto_client.post("/v1/namespace/f3ns/create", json={}).status_code == 200
 
 
-def test_undrop_keeps_the_table_recoverable_when_the_grant_fails(moto_client_recoverable: TestClient) -> None:
-    """The nastiest of the three, because the RECOVERY door destroyed the means of recovery.
+def test_undrop_grants_the_undropper_nothing(moto_client_recoverable: TestClient) -> None:
+    """UNDROP IS A PURE RESTORE (owner ruling, diff2 F10 item 4b).
 
-    `trash.clear` ran BEFORE the seed, so a failed grant left the table re-registered but ownerless
-    AND its trash record already deleted — simultaneously unreachable and unrecoverable, with no
-    path back for anyone. The fix is an ordering one: seed first, clear only once everything that can
-    still fail has succeeded. So the assertion that matters is not that undrop failed, it is that a
-    SECOND undrop still works.
+    This door used to `seed_ownership_or_compensate`, making whoever pressed the button an owner. A
+    recoverable drop deliberately KEEPS the table's tuples (#75 — the owner is the one person who
+    needs to undrop it), so the original owner's grants are already live by the time undrop runs: the
+    seed restored nothing and only ADDED the caller. Anna drops a table, Bob undrops it, and the
+    estate silently gained a second owner with no grant ever having been made.
+
+    Asserted at the seam rather than by reading tuples, because this suite runs with FGA off — the
+    question is whether the door REACHES for a grant at all, and a tuple assertion would be vacuous
+    here for the wrong reason.
     """
+    import catalog.api.fga_deps as fga_deps_mod
+
     rows = pa.table({"id": pa.array([1], pa.int64())})
     assert moto_client_recoverable.post("/v1/namespace/f3u/create", json={}).status_code == 200
     assert _create(moto_client_recoverable, "f3u$t", rows).status_code == 200
-    # Trash it (a recoverable drop files the record the undrop below reads).
-    dropped = moto_client_recoverable.post("/v1/table/f3u$t/drop", json={})
-    assert dropped.status_code == 200, dropped.text
+    assert moto_client_recoverable.post("/v1/table/f3u$t/drop", json={}).status_code == 200
 
+    seeded: list[object] = []
     with pytest.MonkeyPatch.context() as mp:
-        _failing_seed_ctx(mp)
-        failed = moto_client_recoverable.post("/v1/table/f3u$t/undrop", json={})
-    assert failed.status_code == 503, failed.text
+        for name in ("seed_ownership", "seed_ownership_or_compensate"):
+            mp.setattr(fga_deps_mod, name, lambda *a, **kw: seeded.append(kw or a))  # noqa: ARG005
+        recovered = moto_client_recoverable.post("/v1/table/f3u$t/undrop", json={})
 
-    # THE POINT: the trash record survived the failed undrop, so recovery is still possible.
-    retried = moto_client_recoverable.post("/v1/table/f3u$t/undrop", json={})
-    assert retried.status_code == 200, retried.text
+    assert recovered.status_code == 200, recovered.text
+    assert seeded == [], "undrop granted ownership to the caller — it is a restore, not a claim"
     assert int(moto_client_recoverable.post("/v1/table/f3u$t/count_rows", json={}).text) == 1
+
+
+def test_undrop_converges_when_a_record_was_left_on_a_live_table(moto_client_recoverable: TestClient) -> None:
+    """The recovery door must not be able to destroy the means of recovery — the same invariant the
+    seed-ordering test used to hold, re-pointed at the failure that still EXISTS.
+
+    With the seed gone, the only step after the re-register is `trash.clear`. A crash in that window
+    leaves a record on a LIVE table, and that is not cosmetic since F6(d): the maintenance sweep
+    honours trash records, so the recovered table is silently excluded from compaction and version GC
+    for as long as the record stands. The obvious retry used to 409 `TableAlreadyExists` here and
+    leave the record forever; the namespace undrop has tolerated this since #96 and the table door
+    did not.
+
+    The crash is simulated at the seam — `trash.clear` raising AFTER the re-register — because the
+    residue cannot be reached through the API: `drop` always deregisters before it files the record,
+    so no sequence of public calls ever produces a record on a live table. A first version of this
+    test tried exactly that and was VACUOUS: it never entered the tolerance branch, and deleting the
+    branch left it green. Caught by the mutation pass, not by review.
+    """
+    import catalog.api.v1.endpoints.tables as tables_mod
+
+    rows = pa.table({"id": pa.array([1], pa.int64())})
+    assert moto_client_recoverable.post("/v1/namespace/f3c/create", json={}).status_code == 200
+    assert _create(moto_client_recoverable, "f3c$t", rows).status_code == 200
+    assert moto_client_recoverable.post("/v1/table/f3c$t/drop", json={}).status_code == 200
+
+    # The crash: the table is re-registered, then the process dies before the record is cleared.
+    # `pytest.raises` rather than a 500 assertion — TestClient re-raises server exceptions by
+    # default, and an exception escaping the handler IS the thing being modelled.
+    with pytest.MonkeyPatch.context() as mp:
+
+        def _die(*_a: object, **_kw: object) -> None:
+            raise OSError("killed before the record was cleared")
+
+        mp.setattr(tables_mod.trash, "clear", _die)
+        with pytest.raises(OSError, match="killed before the record was cleared"):
+            moto_client_recoverable.post("/v1/table/f3c$t/undrop", json={})
+
+    # The residue: the table is LIVE and its trash record still stands, so the sweep would exclude it
+    # from maintenance indefinitely (F6(d)) — which is why the retry has to converge, not 409.
+    assert int(moto_client_recoverable.post("/v1/table/f3c$t/count_rows", json={}).text) == 1
+    assert moto_client_recoverable.get("/v1/table/f3c$t/tasks").json() != []
+
+    retried = moto_client_recoverable.post("/v1/table/f3c$t/undrop", json={})
+    assert retried.status_code == 200, retried.text
+    assert moto_client_recoverable.get("/v1/table/f3c$t/tasks").json() == [], "the record was never cleared"
+    assert int(moto_client_recoverable.post("/v1/table/f3c$t/count_rows", json={}).text) == 1
 
 
 def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: TestClient) -> None:

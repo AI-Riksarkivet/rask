@@ -32,6 +32,7 @@ from lance_namespace import (
     RenameTableResponse,
     RestoreTableRequest,
     RestoreTableResponse,
+    TableAlreadyExistsError,
     TableExistsRequest,
     TableNotFoundError,
 )
@@ -608,25 +609,35 @@ async def undrop_table(
     # absolute URI stays on the record because that is what an operator reading the trash needs.
     location = str(record["location"])
     body = RegisterTableRequest(id=segments, location=location.rstrip("/").rsplit("/", 1)[-1])
-    response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
+    try:
+        response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
+    except TableAlreadyExistsError:
+        # ALREADY RECOVERED — converge instead of refusing. The namespace undrop has tolerated this
+        # since #96 (`undrop_table_already_registered`); the table door did not, and that asymmetry
+        # became a trap the moment the maintenance sweep started honouring trash records (F6(d)): a
+        # crash between this register and the `trash.clear` below leaves a record on a LIVE table, so
+        # the table is silently excluded from compaction and version GC — and the obvious retry used
+        # to 409 here, leaving the record in place forever. Now the retry falls through to the clear
+        # and the table rejoins the sweep.
+        log.info("undrop_table_already_registered", extra={"table": canonical})
+        response = RegisterTableResponse(location=location)
 
-    async def _undo_undrop() -> None:
-        # Deregister, not drop: the bytes are the user's recovered data and the trash record below is
-        # still intact, so detaching returns the table to exactly the recoverable state it was in.
-        await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
-
-    # The seed comes BEFORE the trash record is cleared, and that ordering is the fix (diff2 F3).
-    # It used to be clear-then-seed, which made a failed seed the worst outcome in the whole plane:
-    # the table was re-registered but ownerless (invisible to its owner, undroppable) AND its trash
-    # record — the one thing that made a retry possible — had already been deleted. The recovery path
-    # destroyed the ability to recover. Now a failed seed deregisters the table and leaves the record,
-    # so the caller simply undrops again.
+    # NO SEED — undrop is a PURE RESTORE (owner ruling, diff2 F10 item 4b).
     #
-    # This is the same principle the line below already stated for the register step, carried one step
-    # further: nothing irreversible until every step that can still fail has succeeded.
-    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_undrop)
-    # Clear only AFTER the re-register AND the seed commit — a failure in either must leave the table
-    # recoverable.
+    # This used to call `seed_ownership_or_compensate`, which made the CALLER an owner. The recoverable
+    # drop deliberately keeps the table's tuples (#75 — the owner is the one person who needs to undrop
+    # it), so the original owner's grants are already live when we get here: the seed never restored
+    # anything, it only ADDED whoever pressed the button. Anna drops a table, Bob undrops it, and the
+    # estate silently gained a second owner with no grant ever having been made.
+    #
+    # The deliberate trade: a table that was ALREADY ownerless before the drop stays ownerless after
+    # the undrop. The seed used to paper over that by granting the rescuer, which hid a pre-existing
+    # stranding behind a privilege escalation. Surfacing stranded objects is the reconciler's job
+    # (diff2 F3.3), not this door's.
+    #
+    # With the seed gone, nothing between the register and the clear can fail in a way that needs
+    # compensating — the register is idempotent above, and a failed clear converges on retry — so the
+    # `_undo_undrop` deregister went with it.
     await run_in_threadpool(trash.clear, settings.registry_root, so, canonical)
     await emit_control(
         control,

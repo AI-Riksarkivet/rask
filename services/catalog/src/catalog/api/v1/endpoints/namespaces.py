@@ -428,17 +428,19 @@ async def undrop_namespace(
             skipped += 1
             log.warning("undrop_skipped_declared_only_table", extra={"table": t_id})
         await run_in_threadpool(trash.clear, settings.registry_root, so, t_id)
-    # The recoverable cascade kept every tuple (#75's rule), so the descendants' owners are intact;
-    # seeding the ROOT records the undrop actor the same way the table undrop does.
+    # NO SEED — undrop is a PURE RESTORE (owner ruling, diff2 F10 item 4b), on this door for the same
+    # reason as the table door.
     #
-    # undo=None DELIBERATELY (diff2 F3). Every other create door can undo what it made, but by this
-    # line the loop above has already re-registered N tables and cleared N trash records — a compensating
-    # `drop_namespace` would destroy a cascade the user just recovered, to repair a missing tuple on its
-    # root. Stranded-but-recoverable beats destroyed, and the damage here is genuinely small: the
-    # descendants kept their owners, so only the root's actor record is missing and an estate admin can
-    # re-seed it. Making this convergent means making the per-child loop resumable, which is F3's
-    # structural-reconcile half, not something a compensator can reach.
-    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="namespace", segments=segments, undo=None)
+    # The comment that stood here made the argument against itself: "the recoverable cascade kept every
+    # tuple (#75's rule), so the descendants' owners are intact — seeding the ROOT records the undrop
+    # actor". If every tuple survived, there is nothing to restore; the seed only ADDED whoever pressed
+    # the button, on the root of a whole subtree they may have had no prior claim to.
+    #
+    # It also deletes this door's worst residual. The seed carried `undo=None` deliberately, because by
+    # this line the loop above has re-registered N tables and cleared N records, and a compensating
+    # `drop_namespace` would destroy the cascade the user just recovered in order to repair one tuple.
+    # That was the right call given a seed had to happen at all — and with no seed, the door has no
+    # uncompensatable step left.
     await emit_control(
         control,
         action="namespace_undropped",
