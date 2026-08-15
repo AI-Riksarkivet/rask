@@ -26,6 +26,8 @@ class _Action:
         self.kind = kind
         self.name = name
         self.result = result
+        #: True when the runtime would raise this task's failure into the generator.
+        self.raises = False
 
 
 class _Ctx:
@@ -35,6 +37,8 @@ class _Ctx:
         self.actions: list[str] = []
         self._results = {k: list(v) for k, v in (activity_results or {}).items()}
         self.is_replaying = False
+        #: Activity name whose scheduled task should RAISE, modelling an exhausted retry policy.
+        self.raise_on: str | None = None
         self.instance_id = "wf-test"
         self.current_utc_datetime = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
 
@@ -43,7 +47,9 @@ class _Ctx:
         self.actions.append(f"call_activity({name})")
         queue = self._results.get(name)
         value = queue.pop(0) if queue else None
-        return _Action("activity", name, value)
+        action = _Action("activity", name, value)
+        action.raises = name == self.raise_on
+        return action
 
     def create_timer(self, delay: timedelta) -> _Action:
         self.actions.append(f"create_timer({int(delay.total_seconds())}s)")
@@ -57,9 +63,12 @@ def _drive(ctx: _Ctx, payload: dict[str, Any]) -> dict[str, Any]:
     gen = stage_run(cast("Any", ctx), payload)
     sent: Any = None
     try:
+        action = gen.send(None)
         while True:
-            action = gen.send(sent)
-            sent = action.result
+            if action.raises:
+                action = gen.throw(RuntimeError(f"{action.name} exhausted its retries"))
+                continue
+            action = gen.send(action.result)
     except StopIteration as stop:
         return stop.value or {}
 
@@ -277,3 +286,28 @@ def test_a_lineage_OUTAGE_does_not_fail_the_reporting_activity(monkeypatch: pyte
         cast("Any", None),
         {"spec": _spec(), "outcome": {"submission_id": "sub", "status": "FAILED", "polls": 1, "verdict": "failed"}},
     )
+
+
+def test_a_publish_that_EXHAUSTS_its_retries_still_reports() -> None:
+    """The lost wake-up, and the last silent path in S1.
+
+    Pass 1 acks the trigger, so the ONLY thing that can drive the measure/emit/cascade is this
+    workflow's `publish_stage_ready`. It is called with a retry policy and — until this test — no
+    error boundary: an exhausted publish raised into the workflow, the instance went terminal FAILED,
+    and `report_stage_outcome` never ran. A Ray job that SUCCEEDED, wrote its data, and then could not
+    wake the mover left nothing anywhere. That is the same silence the FAILED-job fix closed, arriving
+    by the other door.
+
+    An activity failure DOES raise into the generator and can be caught (unlike the replay-mismatch
+    error, which is raised outside it) — so the boundary is legitimate here, and Dapr's own guidance
+    is that compensating for a failed activity is what a workflow's try/except is for.
+    """
+    ctx = _Ctx({"submit_stage": ["sub"], "poll_stage": ["SUCCEEDED"]})
+    ctx.raise_on = "publish_stage_ready"
+
+    outcome = _drive(ctx, _spec())
+
+    assert "call_activity(report_stage_outcome)" in ctx.actions, (
+        "the wake-up publish exhausted its retries and NOTHING reported it — the job succeeded, the data landed, and the cascade simply stopped"
+    )
+    assert outcome["verdict"] == "unnotified", "the outcome must name WHY the run did not continue"

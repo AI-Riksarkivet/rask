@@ -113,7 +113,9 @@ class StageJobOutcome(BaseModel):
     submission_id: str
     status: str | None = None
     polls: int = 0
-    #: `succeeded` | `failed` | `abandoned` — the workflow's verdict, which is not the same as Ray's
+    #: `succeeded` | `failed` | `abandoned` | `unnotified` — the workflow's verdict, which is not the
+    #: same as Ray's status. `unnotified` is the odd one: the JOB succeeded and the data landed, but the
+    #: wake-up publish could not be delivered, so the cascade stopped with healthy data behind it.
     #: status: `abandoned` means the ceiling was hit with the job still RUNNING, which is neither a
     #: success nor a job failure and must not be reported as either.
     verdict: str = "failed"
@@ -162,7 +164,24 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     # THE POINT OF THE WHOLE FILE: this runs only on the success branch, and only after a terminal
     # read. The mover's measure/emit/cascade path is downstream of this publish.
     if verdict == "succeeded":
-        yield ctx.call_activity(publish_stage_ready, input={"spec": spec.model_dump(), "outcome": outcome.model_dump()}, retry_policy=ACTIVITY_RETRY)
+        # AN ERROR BOUNDARY, because pass 1 already acked the trigger. This publish is the ONLY thing
+        # that can drive the measure/emit/cascade, so an exhausted retry policy used to raise into the
+        # workflow, take the instance terminal FAILED, and skip the report entirely — a job that
+        # SUCCEEDED and wrote its data, with nothing anywhere saying the cascade stopped.
+        #
+        # An activity failure DOES raise into the generator and is catchable (unlike the replay
+        # mismatch, which is raised outside it), so this is the boundary Dapr's own guidance describes
+        # for compensating a failed activity — not a workaround.
+        try:
+            yield ctx.call_activity(publish_stage_ready, input={"spec": spec.model_dump(), "outcome": outcome.model_dump()}, retry_policy=ACTIVITY_RETRY)
+        except Exception:
+            # `unnotified`, not `failed`: the JOB succeeded and the data is on disk. Reporting this as
+            # a job failure would send an operator to the Ray dashboard for a healthy job. What broke
+            # is the wake-up, and the outcome says so.
+            outcome = outcome.model_copy(update={"verdict": "unnotified"})
+            if not ctx.is_replaying:
+                log.error("medallion_stage_wakeup_lost", extra={"submission_id": outcome.submission_id, "to_uri": spec.to_uri})
+            yield ctx.call_activity(report_stage_outcome, input={"spec": spec.model_dump(), "outcome": outcome.model_dump()}, retry_policy=ACTIVITY_RETRY)
     else:
         yield ctx.call_activity(report_stage_outcome, input={"spec": spec.model_dump(), "outcome": outcome.model_dump()}, retry_policy=ACTIVITY_RETRY)
     return outcome.model_dump()
