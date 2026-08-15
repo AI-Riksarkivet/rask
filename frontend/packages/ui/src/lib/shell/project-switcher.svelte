@@ -48,12 +48,18 @@
 		     to sit at the top. A plain ghost button lost both — a bare glyph, one truncated line, and no
 		     accent — which is why the rail suddenly looked like it was missing something.
 		     `size-8` block + `text-sm leading-tight` stack matches the sidebar-07 header the estate
-		     already uses; collapsed to icon only the block survives, which is the intended silhouette. -->
+		     already uses; collapsed to icon only the block survives, which is the intended silhouette.
+
+		     ICON MODE IS CLAMPED (#111). This is a plain ghost Button, not a `Sidebar.MenuButton`, so it
+		     never inherited that primitive's `group-data-[collapsible=icon]:size-8!/p-2!` — and without
+		     it the 32px `shrink-0` block sat inside a 31px button in a 48px rail, hanging half a pixel
+		     past its own edge while every nav icon below lined up. Measured, not guessed: rail 48,
+		     button 31, block 32. The `!` matters — Button's own size classes would otherwise win. -->
 		{#snippet child({ props })}
 			<Button
 				{...props}
 				variant="ghost"
-				class="text-foreground h-auto w-full min-w-0 justify-start gap-2 px-2 py-1.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+				class="text-foreground h-auto w-full min-w-0 justify-start gap-2 px-2 py-1.5 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!"
 				aria-label="Switch project"
 			>
 				<div
