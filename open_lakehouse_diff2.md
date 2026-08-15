@@ -556,9 +556,14 @@ fail — proving the test can detect the failure it exists for.
   every legitimately-trashed subtree for its whole grace window and blocked `report_is_clean`, and
   with it the purge itself.
 - **(d) LANDED** (`eb5aba26`) — the sweep no longer compacts or version-cleans trashed datasets.
-- **(a) OPEN** — the deregister/trash-write crash window; the adversarial pass found the obvious
-  reversal introduces a NEW unrecoverable state on the cascade path (a byte-less record on a live
-  namespace inside a quarantined warehouse is purged), so it needs the ordering worked through.
+- **(a) LANDED for byte-owning records; the byte-LESS half is DEFERRED with cause.** Both table
+  doors now file the trash record BEFORE detaching, so the crash window leaves a record on a live
+  table (purge refuses it `STILL_REGISTERED`, the retry overwrites, undrop converges) instead of
+  bytes reachable by nothing. NOT reversed for byte-less records — a declared-only table or a
+  namespace row — because the purge's estate test is skipped when there is no location, so a record
+  filed on a still-live object inside a DEACTIVATED warehouse would be revoked and cleared: that
+  trades a recoverable loss for an unrecoverable one. What the remaining window costs there is a
+  DECLARATION the caller can redo, or one namespace manifest row, never data.
 
 **leg (b) REFUTED 2026-08-15 — by EXECUTION, not by reading.** An adversarial pass ran the
 shipped backend (`connect("dir", …)`, pylance 9.0.0 / lance-namespace 0.9.0 — the impl the chart

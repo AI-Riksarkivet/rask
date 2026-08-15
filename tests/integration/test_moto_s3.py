@@ -646,3 +646,54 @@ def test_an_unparseable_deadline_is_not_reported_as_expired(moto_client_recovera
     assert _is_expired("2000-01-01T00:00:00+00:00") is True
     # A naive stamp (records written before the offset was included) is read as UTC, not rejected.
     assert _is_expired("2000-01-01T00:00:00") is True
+
+
+def test_a_crash_mid_drop_leaves_the_table_recoverable_not_unreachable(moto_client_recoverable: TestClient) -> None:
+    """diff2 F6 leg (a) — the drop's crash window must not strand data.
+
+    The order was `deregister → file the trash record`, and a crash between them produced the worst
+    state in the plane: the manifest row gone, no record filed, and the bytes on storage unreachable
+    by everything. `undrop` 404s because it reads the record; the purge never sees it because it
+    enumerates records; and the obvious retry cannot converge either, because `describe_table` 404s
+    once the table is detached — so the drop door can never reach the write again. Only a hand-run
+    `register_table` recovers it.
+
+    Reversed, the same crash leaves a record on a LIVE table: visibly still there, still queryable,
+    and the retry simply completes the drop. That is the property asserted here — not that the crash
+    is prevented, but that what it leaves behind is recoverable by the caller rather than by an
+    operator with shell access.
+    """
+    import catalog.api.v1.endpoints.tables as tables_mod
+
+    rows = pa.table({"id": pa.array([1], pa.int64())})
+    assert moto_client_recoverable.post("/v1/namespace/f6a/create", json={}).status_code == 200
+    assert _create(moto_client_recoverable, "f6a$t", rows).status_code == 200
+
+    # The kill lands on `trash.put`, NOT on the deregister, and that choice is the whole test. Under
+    # the OLD order the put ran SECOND — after a successful deregister — so killing it is exactly the
+    # crash that stranded the table. Killing the deregister instead proves nothing: under the old
+    # order it ran first, so the failure happened before any window opened and both orders looked
+    # identical. (The first version of this test did that and passed against the mutant.)
+    with pytest.MonkeyPatch.context() as mp:
+        real_put = tables_mod.trash.put
+        fired = {"n": 0}
+
+        def _die_once(*a: Any, **kw: Any) -> Any:
+            if fired["n"] == 0:
+                fired["n"] = 1
+                raise OSError("killed at the trash write")
+            return real_put(*a, **kw)
+
+        mp.setattr(tables_mod.trash, "put", _die_once)
+        with pytest.raises(OSError, match="killed at the trash write"):
+            moto_client_recoverable.post("/v1/table/f6a$t/drop", json={})
+
+    # THE POINT: the table is still LIVE and still readable — nothing was stranded.
+    assert int(moto_client_recoverable.post("/v1/table/f6a$t/count_rows", json={}).text) == 1
+    # …and the caller can simply finish the drop. Under the old order this retry was impossible:
+    # `describe_table` would have 404'd on an already-detached table.
+    retried = moto_client_recoverable.post("/v1/table/f6a$t/drop", json={})
+    assert retried.status_code == 200, retried.text
+    # Recoverable, as a graced drop promises.
+    assert moto_client_recoverable.post("/v1/table/f6a$t/undrop", json={}).status_code == 200
+    assert int(moto_client_recoverable.post("/v1/table/f6a$t/count_rows", json={}).text) == 1

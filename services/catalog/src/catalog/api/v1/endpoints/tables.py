@@ -372,7 +372,28 @@ async def drop_table(
     if settings.trash_grace_days > 0 and not purge:
         described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
         if described.location:
-            await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+            # RECORD FIRST, DETACH SECOND (diff2 F6 leg a). This was deregister-then-record, and a
+            # crash in that window produced the worst state in the plane: the manifest row was gone,
+            # no trash record existed, and the bytes sat on storage unreachable by everything.
+            # `undrop` 404s (no record), the purge never sees it (it enumerates records), and the
+            # obvious retry cannot converge either — `describe_table` 404s two lines up, so the door
+            # can never reach the write again. Only a hand-run `register_table` recovers it.
+            #
+            # Reversed, the crash window leaves a record on a LIVE table, which every consumer already
+            # handles: the purge refuses it `STILL_REGISTERED` (`live_ids` is checked before anything
+            # destructive), the drop retry re-describes cleanly and overwrites the same hashed key,
+            # and `undrop` converges on it now that the register tolerates `TableAlreadyExists`. The
+            # residue is bounded by one retry; the old one was permanent.
+            #
+            # The `if described.location` guard is what makes this sound HERE and is why the cascade
+            # path is not reversed with it: a byte-LESS record (a declared-only table, a namespace
+            # row) skips the purge's estate test, so a record filed on a still-live object inside a
+            # DEACTIVATED warehouse would be revoked and cleared. Every record this branch writes owns
+            # bytes, so that case cannot arise.
+            #
+            # Known interaction, deliberate: while the record stands on a live table the maintenance
+            # sweep excludes that table (F6 leg d). Bounded by the same retry, and the alternative is
+            # losing the data outright.
             record = trash.make_record(
                 canonical,
                 location=described.location,
@@ -380,6 +401,7 @@ async def drop_table(
                 grace_days=settings.trash_grace_days,
             )
             await run_in_threadpool(trash.put, settings.registry_root, settings.storage_options(), record)
+            await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
             trashed = True
     if not trashed:
         response: DropTableResponse = await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))

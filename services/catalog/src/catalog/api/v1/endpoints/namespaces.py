@@ -189,7 +189,6 @@ async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: CurrentT
     child_namespaces = sorted((child for resource, child in descendants if resource == "namespace"), key=len, reverse=True)
     for child in tables:
         described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=child))
-        await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=child))
         # A declared-only table has no location; its record carries "" and undrop skips it with a
         # warning — there were no bytes to lose, only a declaration the caller can redo.
         record = trash.make_record(
@@ -198,7 +197,22 @@ async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: CurrentT
             dropped_by=dropped_by,
             grace_days=settings.trash_grace_days,
         )
-        await run_in_threadpool(trash.put, settings.registry_root, so, record)
+        # ORDER SPLIT ON WHETHER THE RECORD OWNS BYTES (diff2 F6 leg a), matching the single-table
+        # door. A byte-owning record goes FIRST: a crash between the deregister and the write used to
+        # leave the bytes unreachable by undrop, by the purge and by any retry (`describe_table` 404s
+        # once detached), and filing first turns that into a record on a live table, which the purge
+        # refuses `STILL_REGISTERED` and the retry overwrites.
+        #
+        # A byte-LESS record keeps the old order, and that is not laziness. The purge's estate test is
+        # skipped for records with no location, so a record filed on a still-LIVE object inside a
+        # deactivated warehouse would be revoked and cleared — trading a recoverable loss for an
+        # unrecoverable one. Here the window costs only a declaration the caller can redo.
+        if described.location:
+            await run_in_threadpool(trash.put, settings.registry_root, so, record)
+            await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=child))
+        else:
+            await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=child))
+            await run_in_threadpool(trash.put, settings.registry_root, so, record)
     # The ROOT's binding, read BEFORE anything is dropped — after the unbind below it is unreadable,
     # and after the purge it is gone for good. `None` for a nested namespace (bindings are keyed by
     # top-level segment) and for an unbound one (single-bucket estates have no binding at all).
