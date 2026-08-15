@@ -69,7 +69,42 @@ The two real fixes, both yours:
 2. **Move Helm to the SQL storage driver** (`HELM_DRIVER=sql`) against the Postgres already running.
    No 1 MiB limit. Smaller change, keeps one chart.
 
-**Option 2 is already PREPPED — one command away.** Done and verified 2026-08-15: the `helm`
+**✅ OPTION 2 IS DONE — the release is `deployed` again (2026-08-15).** `helm history rask` under the
+SQL driver shows revision 1, `Install complete`, and every image survived on its intended tag. Both
+hook jobs that failed revision 34 passed (`72505fef` NATS retention, `5d93e6f3` AGE extension).
+
+**THE ENV VARS ARE NOW LOAD-BEARING.** Every `helm`, `make k3s-up` and CI invocation must carry them,
+or Helm reads the empty Secret backend and concludes nothing is installed:
+
+```bash
+AGEIP=$(kubectl get pod rask-age-0 -o jsonpath='{.status.podIP}')   # ClusterIP is not host-routable; the pod IP is
+export HELM_DRIVER=sql
+export HELM_DRIVER_SQL_CONNECTION_STRING="postgresql://lance@${AGEIP}:5432/helm?sslmode=disable"
+```
+
+The password lives in `~/.pgpass` (mode 600), not the DSN — lib/pq reads it, and a credential does not
+belong on a command line. **The pod IP changes when the AGE pod restarts**, so re-derive it; a stable
+answer wants a Service DNS name reachable from wherever helm runs, which is one reason splitting the
+chart (option 1) is still the better end state.
+
+**READ THE VALUES WITH THE SECRET DRIVER, UPGRADE WITH THE SQL ONE.** Exporting `HELM_DRIVER=sql`
+before `helm get values rask` returns ZERO values, because the old release lives in the Secret backend.
+The chart then refused with *"image.repository must be set … A bare name resolves to Docker Hub and
+will ImagePullBackOff"* — the #135 guard doing exactly its job, and the reason nothing was applied.
+Scope the SQL vars to the `helm upgrade` line alone.
+
+<details><summary>The command that did it</summary>
+
+```bash
+helm get values rask > /tmp/lv.yaml            # SECRET driver — no HELM_DRIVER set
+AGEIP=$(kubectl get pod rask-age-0 -o jsonpath='{.status.podIP}')
+HELM_DRIVER=sql HELM_DRIVER_SQL_CONNECTION_STRING="postgresql://lance@${AGEIP}:5432/helm?sslmode=disable" \
+  helm upgrade --install rask ./chart --take-ownership --wait --wait-for-jobs --timeout 9m \
+  -f /tmp/lv.yaml -f chart/values-live-pins.yaml
+```
+</details>
+
+Historical, kept because the reasoning still applies: the `helm`
 database exists in the AGE Postgres with `search_path=public` and the AGE extension (without the
 extension every `DROP` there fails — see the fix above), a `CREATE TABLE`/`DROP TABLE` round-trip
 passes in it, the pod network is routable from the host so no port-forward is needed, and
