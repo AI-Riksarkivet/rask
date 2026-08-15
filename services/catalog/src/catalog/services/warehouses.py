@@ -24,7 +24,7 @@ import pyarrow.fs as pafs
 from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
 
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
-from service_kit.lakehouse.records import RecordExistsError, create_json
+from service_kit.lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
 
 
 log = logging.getLogger(__name__)
@@ -94,13 +94,19 @@ def _read_json(root_uri: str, storage_options: StorageOptions, key: str) -> dict
         return json.loads(stream.readall().decode("utf-8"))
 
 
+def _warehouse_key(warehouse_id: str) -> str:
+    """The registry key for one warehouse. One definition because three call sites now build it —
+    and a conditional write that targeted a different key from the read would silently do nothing."""
+    return f"{_REGISTRY_PREFIX}/{warehouse_id}.json"
+
+
 def put_warehouse(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
     """Persist a warehouse record at ``_warehouses/<id>.json`` (overwrite — for a record whose EXISTENCE
     is already settled: the sequential idempotent re-create and status/lifecycle updates). The id-MINT
     goes through :func:`create_warehouse_record` instead — overwriting on first create is how the
     F1 takeover race happened. The caller stamps ``created_at`` (kept out of here so unit tests stay
     deterministic)."""
-    _write_json(control_root, storage_options, f"{_REGISTRY_PREFIX}/{record['id']}.json", record)
+    _write_json(control_root, storage_options, _warehouse_key(record["id"]), record)
 
 
 def create_warehouse_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
@@ -110,12 +116,12 @@ def create_warehouse_record(control_root: str, storage_options: StorageOptions, 
     re-reads and re-applies its guards against the WINNER's record (the cross-project takeover
     guard's read may predate the rival's write; this refusal is what closes that window).
     """
-    create_json(control_root, storage_options, f"{_REGISTRY_PREFIX}/{record['id']}.json", record)
+    create_json(control_root, storage_options, _warehouse_key(record["id"]), record)
 
 
 def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, str] | None:
     """The warehouse record, or ``None`` if unregistered."""
-    return _read_json(control_root, storage_options, f"{_REGISTRY_PREFIX}/{warehouse_id}.json")
+    return _read_json(control_root, storage_options, _warehouse_key(warehouse_id))
 
 
 def list_warehouses(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
@@ -199,13 +205,29 @@ def warehouse_status(control_root: str, storage_options: StorageOptions, warehou
 
 def set_warehouse_status(control_root: str, storage_options: StorageOptions, warehouse_id: str, status: str) -> dict[str, str] | None:
     """Flip a warehouse's ``status`` (deactivate/activate) and persist it. Returns the updated record, or
-    ``None`` if the warehouse does not exist. Overwrite-safe like ``put_warehouse`` (idempotent re-runs)."""
-    record = get_warehouse(control_root, storage_options, warehouse_id)
-    if record is None:
+    ``None`` if the warehouse does not exist.
+
+    CONDITIONAL on the record's ETag (diff2 F4), not the plain ``get → mutate → put`` this was. That
+    shape let a QUARANTINE BE SILENTLY LIFTED by interleaving rather than by anyone asking: a GitOps
+    re-POST reads the record (status=active), an operator deactivates, and the re-POST's put lands
+    afterwards carrying the status it read before. Nothing in that sequence is a wrong decision by
+    either writer — the re-POST is stale in a field it only carried forward — which is exactly why a
+    guard on the DECISION cannot catch it and a guard on the WRITE can.
+
+    ``mutate_json`` re-reads and re-applies on a lost race, so a concurrent write to any OTHER field
+    is preserved rather than clobbered, and this flip still wins. That is the right convergence for a
+    field-level toggle: last writer wins on the field they actually touched, nobody wins on a field
+    they merely read.
+    """
+    try:
+        return mutate_json(
+            control_root,
+            storage_options,
+            _warehouse_key(warehouse_id),
+            lambda record: {**record, "status": status},
+        )
+    except RecordMissingError:
         return None
-    record["status"] = status
-    put_warehouse(control_root, storage_options, record)
-    return record
 
 
 # --------------------------------------------------------------------------- #

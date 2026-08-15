@@ -261,7 +261,7 @@ def describe_table(
 
     ``vend_credentials`` (spec 0.9) returns short-lived, table-scoped ``storage_options`` in the response —
     the SPEC'S OWN way for a client to get credentials. We previously ignored the field entirely and offered
-    only a bespoke ``POST /{id}/credentials``, which meant a GENERIC Lance client (including lance-ray in
+    only a bespoke ``POST /{id}/credentials``, which meant a GENERIC Lance client (including medallion-producer in
     REST mode) got no credentials and had no way to discover our endpoint: interop-breaking, and the one
     confirmed reinvention in the 2026-07-14 audit. ``/credentials`` remains as the richer superset (tiers,
     web-identity exchange).
@@ -690,10 +690,32 @@ async def rename_table(
         operation=DROP_TABLE,
         authorization=authorization,
     )
-    # Revoke the SOURCE id's tuples (it no longer names a table) then seed the destination — so no
-    # stale grant survives under the old id and the caller keeps ownership under the new one.
-    await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
+    # SEED THE DESTINATION FIRST, then revoke the source. The order is the fix, and it is a deliberate
+    # choice between two imperfect failure states (owner ruling 2026-08-15, diff2 F3).
+    #
+    # It was revoke-then-seed. The native rename has already committed by this point, so if the seed
+    # then failed the table existed at the NEW id holding no tuples at all, while the OLD id's grants
+    # had just been deleted — no owner anywhere, and `can_drop: owner` (with `owner from parent`
+    # unable to help, since seed writes owner and parent as ONE batch) means literally nobody in the
+    # estate could act on it. Permanently stranded, repairable only by hand-written tuples.
+    #
+    # Seeding first inverts which half is lost: a failed REVOKE leaves a stale grant on the source id,
+    # which no longer names a table. That is a real but narrow risk — it only matters if that exact id
+    # is later reused, and the create path's own `revoke_ownership` already clears stale grants on a
+    # reused id for precisely this reason. Weighed against an object nobody can touch, the estate
+    # prefers the recoverable state: the table always has a live owner who can finish the cleanup.
+    #
+    # The revoke is best-effort for the same reason the compensations are: it is an OpenFGA call, and
+    # if OpenFGA is what is down, failing the whole rename here would strand the caller after a native
+    # mutation that already succeeded. The stale grant is logged, not raised.
     await fga_deps.seed_ownership(client, settings, token, resource="table", segments=new_segments)
+    try:
+        await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
+    except Exception as revoke_exc:
+        log.warning(
+            "rename_source_revoke_failed",
+            extra={"source": fga.canonical_object_id(segments, delimiter=settings.delimiter), "error": str(revoke_exc)},
+        )
     # …then the DESTINATION's (re)attachment at its new location — AFTER its ownership is seeded, so the
     # emit's own ``can_write_data`` check passes on the http transport. Versionless: #23 reconcile back-fills
     # the real on-disk version, which the relocate preserved along with the whole version history.

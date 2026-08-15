@@ -468,9 +468,24 @@ def test_drop_namespace_revokes_tuples(client: TestClient, fake_ns: MagicMock, m
     assert call is not None and call.args[1] == "namespace:db1"
 
 
-def test_rename_table_revokes_source_then_seeds_destination(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """CONTRACT: rename revokes the SOURCE id's tuples and seeds the DEST — and revoke fires BEFORE seed,
-    so no stale grant survives under the old id (``table:db1$users``) while the dest (``db1$u2``) is owned."""
+def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+    """CONTRACT: rename seeds the DEST id's tuples and revokes the SOURCE — and seed fires BEFORE revoke.
+
+    The order was revoke-then-seed, on the reasoning that no stale grant should outlive the old id.
+    Owner ruling 2026-08-15 (diff2 F3) inverted it, because the native rename has ALREADY committed by
+    this point: a seed that then failed left the table at the new id holding no tuples at all while the
+    old id's grants had just been deleted — no owner anywhere, and `can_drop: owner` (with `owner from
+    parent` unable to help, since seed writes owner and parent as one batch) means nobody in the estate
+    could act on it. Permanently stranded.
+
+    Seeding first inverts WHICH half is lost. A failed revoke leaves a stale grant on an id that no
+    longer names a table — narrow, because it only matters if that exact id is reused, and the create
+    path's own revoke already clears stale grants on a reused id. Weighed against an object nobody can
+    touch, the estate takes the recoverable state.
+
+    So this test asserts the ORDER, not merely the set: both orders produce the same two calls, and only
+    the sequence distinguishes "recoverable" from "stranded".
+    """
     # rename is now an in-process relocate (#5b); stub the dataplane seam so the FGA choreography is exercised
     # without a real dataset move (returns the resolved new segments + destination location).
     monkeypatch.setattr(
@@ -500,7 +515,7 @@ def test_rename_table_revokes_source_then_seeds_destination(client: TestClient, 
         headers={"Authorization": "Bearer t"},
     )
     assert resp.status_code == 200
-    assert order == ["revoke:table:db1$users", "grant:db1$u2"]
+    assert order == ["grant:db1$u2", "revoke:table:db1$users"]
 
 
 def test_overwrite_by_owner_revokes_prior_grants_then_seeds(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
