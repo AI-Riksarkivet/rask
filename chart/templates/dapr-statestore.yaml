@@ -75,9 +75,31 @@ auth:
   {{- if include "lance.secretsViaDapr" . }}
   secretStore: {{ .Values.stateStore.secretStore }}
   {{- end }}
-{{- if .Values.stateStore.scopes }}
+{{- /* The MOVERS' app-ids are DERIVED, not listed. S1's stage watcher (`medallion/workflow.py`) runs in
+       `mover.py`, and each mover has its own `daprAppId` from `medallion.movers[]` — there is no
+       `medallion` app-id anywhere in the estate, so a hand-written entry for one is inert. Deriving
+       them also means adding a mover cannot silently produce one that fails to dispatch.
+
+       Gated on `medallion.ray` because that is exactly the condition under which a mover sets
+       MEDALLION_RAY_ENABLED and therefore starts a workflow runtime at all (medallion.yaml:325).
+
+       THE FAILURE THIS PREVENTS IS INVISIBLE FROM THE SIDECAR LOG. Measured live 2026-08-15 on
+       `bronze-to-silver` while its app-id was unscoped — the sidecar logs, in this order:
+
+         "Actor state store not configured - actor hosting disabled, but invocation enabled"
+         "Workflow engine started"
+
+       The second line reads as health and is the one an operator greps for. Dispatch then fails on
+       every delivery. */}}
+{{- $scopes := .Values.stateStore.scopes | default list }}
+{{- if .Values.medallion.ray }}
+{{-   range .Values.medallion.movers }}
+{{-     $scopes = append $scopes .daprAppId }}
+{{-   end }}
+{{- end }}
+{{- if $scopes }}
 scopes:
-{{- range .Values.stateStore.scopes }}
+{{- range $scopes | uniq }}
   - {{ . }}
 {{- end }}
 {{- end }}

@@ -1649,6 +1649,55 @@ def test_the_actor_state_store_is_scoped_to_the_service_whose_whole_state_it_is(
     )
 
 
+def test_every_mover_that_hosts_a_workflow_is_scoped_to_the_actor_state_store() -> None:
+    """The general property the notifications test above only covers one instance of.
+
+    S1 put a Dapr Workflow inside `mover.py`, so with the Ray lane on EVERY mover hosts a workflow —
+    and each has its own `daprAppId` from `medallion.movers[]` (`bronze-to-silver`, `silver-to-gold`,
+    …). There is no `medallion` app-id anywhere in the estate, and a hand-written scope entry for one
+    was inert while looking entirely correct in review.
+
+    THE FAILURE IS INVISIBLE IN THE SIDECAR LOG, which is why this is a test and not a convention.
+    Measured live 2026-08-15 on an unscoped `bronze-to-silver`, in this order:
+
+        "Actor state store not configured - actor hosting disabled, but invocation enabled"
+        "Workflow engine started"
+
+    The second line is the one an operator greps for and it is TRUE — the engine does start. Dispatch
+    then fails on every delivery. After scoping, the first line is gone and the sidecar reports
+    "Connected to placement service" instead.
+
+    Asserted against the RENDERED movers rather than a hardcoded list, so adding a mover to
+    `medallion.movers` cannot produce one that silently fails to dispatch.
+    """
+    docs = _rendered_docs("medallion.ray=true")
+    stores = [
+        doc
+        for doc in docs
+        if doc.get("kind") == "Component"
+        and any(m.get("name") == "actorStateStore" and str(m.get("value")).lower() == "true" for m in (doc["spec"].get("metadata") or []))
+    ]
+    assert len(stores) == 1, f"expected exactly one actor state store, found {[d['metadata']['name'] for d in stores]}"
+    scopes = set(stores[0].get("scopes") or [])
+
+    # Filtered rather than `- {None}`: subtracting the sentinel does not narrow the ELEMENT type, so
+    # the set stays `str | None` and `sorted` has nothing to compare. Narrow at the comprehension.
+    movers = {
+        app_id
+        for doc in docs
+        if doc.get("kind") == "Deployment" and "-to-" in ((doc.get("metadata") or {}).get("name") or "")
+        if (app_id := (doc["spec"]["template"]["metadata"].get("annotations") or {}).get("dapr.io/app-id")) is not None
+    }
+    assert movers, "no movers rendered with medallion.ray=true — the fixture cannot prove anything"
+
+    missing = sorted(movers - scopes)
+    assert not missing, (
+        f"these movers host a workflow but are not scoped to the actor state store: {missing}. "
+        f"Their sidecars will log 'Workflow engine started' and disable actor hosting, so every "
+        f"dispatch fails on a pod that reports itself healthy."
+    )
+
+
 def test_the_kubelet_probes_the_inbox_on_a_path_the_service_actually_serves() -> None:
     """The chart probes a LITERAL; the app derives that path from `RASK_API_PREFIX`. Nothing renders
     the two together, and a mismatch is a CrashLoopBackOff whose cause is in neither file.
