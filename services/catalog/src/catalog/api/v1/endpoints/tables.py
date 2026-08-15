@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Request
@@ -72,6 +73,25 @@ router = APIRouter(prefix="/v1/table", tags=["table"])
 #: How deep the namespace walk goes. The medallion is two levels (namespace + table) and Polaris
 #: allows 16; this bounds a pathological or cyclic tree without pretending to be a real limit.
 _MAX_NAMESPACE_DEPTH = 8
+
+
+def _is_expired(expires_at: str) -> bool:
+    """Has the purge-eligibility deadline passed? Unparseable or absent → NOT expired.
+
+    Failing to "not expired" is the safe direction: this flag only ever adds urgency to a warning,
+    and a malformed timestamp must not make a still-recoverable table read as beyond saving. It
+    gates no behaviour — undrop checks whether the RECORD exists, never this (diff2 F10 item 5).
+    """
+    if not expires_at:
+        return False
+    try:
+        deadline = datetime.fromisoformat(expires_at)
+    except ValueError:
+        log.warning("trash_expiry_unparseable", extra={"expires_at": expires_at})
+        return False
+    if deadline.tzinfo is None:  # records written before the stamp carried an offset
+        deadline = deadline.replace(tzinfo=UTC)
+    return deadline < datetime.now(UTC)
 
 
 def _collect_tables(ns: LanceNamespace, delimiter: str, root_tables: list[str], include_declared: bool, extra_roots: Sequence[str] = ()) -> list[str]:
@@ -527,12 +547,19 @@ async def table_tasks(
     """What is queued for THIS table (#75 brings §2.4). Today that is exactly one thing: a pending
     trash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see
     is not a safety feature — the estate's task surfaces are otherwise all estate-global, so "what is
-    scheduled against my table" was unanswerable. Reader-gated by the router alongside describe."""
+    scheduled against my table" was unanswerable. Reader-gated by the router alongside describe.
+
+    `expires_at` is when the object becomes PURGE-ELIGIBLE, not when recovery stops (diff2 F10 item
+    5). Undrop does not check the clock — it checks whether the record is still there — so a passed
+    deadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as
+    finality would push an owner to give up on data that is still on storage and still recoverable.
+    """
     canonical = fga.canonical_object_id(parse_identifier(id, settings.delimiter), delimiter=settings.delimiter)
     record = await run_in_threadpool(trash.get, settings.registry_root, settings.storage_options(), canonical)
     if record is None:
         return []
-    return [TrashEntry(**{k: str(record.get(k, "")) for k in ("id", "location", "dropped_by", "dropped_at", "expires_at")})]
+    fields = {k: str(record.get(k, "")) for k in ("id", "location", "dropped_by", "dropped_at", "expires_at")}
+    return [TrashEntry(**fields, expired=_is_expired(fields["expires_at"]))]
 
 
 @router.post("/{id}/undrop", response_model_exclude_none=True)
@@ -548,14 +575,32 @@ async def undrop_table(
     id and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into
     the namespace is the same authority as removing it).
 
-    404 when there is no trash record: an expired or never-trashed drop is genuinely unrecoverable,
-    and saying so plainly beats a 200 that recovers nothing."""
+    404 when there is no trash record — a never-trashed or already-PURGED drop is genuinely
+    unrecoverable, and saying so plainly beats a 200 that recovers nothing.
+
+    THE CLOCK DOES NOT GATE THIS, deliberately (diff2 F10 item 5). A record whose `expires_at` has
+    passed but which the purge has not yet collected still undrops, because the bytes are still on
+    storage and refusing would destroy recoverable data on a timestamp alone. The estate already
+    reasons this way one service over — maintenance's own config says "a record that survives is a
+    recovery that still works; a purged one is not" — and this door simply never said so out loud.
+    What was wrong was the DESCRIPTION: the previous docstring called an expired drop "genuinely
+    unrecoverable" alongside a never-trashed one, and `/tasks` reported the deadline as finality.
+    Both now say purge-eligible, which is what it is.
+
+    An expired undrop IS logged: it means the purge is behind, or somebody recovered at the very
+    edge of the window, and an operator should be able to see either.
+    """
     segments = parse_identifier(id, settings.delimiter)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     so = settings.storage_options()
     record = await run_in_threadpool(trash.get, settings.registry_root, so, canonical)
     if record is None:
-        raise TableNotFoundError(f"no recoverable drop for table: {canonical}. The grace period may have expired, or the drop purged its bytes.")
+        raise TableNotFoundError(
+            f"no recoverable drop for table: {canonical}. Either it was never dropped recoverably "
+            "(the grace period was off), or the purge has already reclaimed its bytes."
+        )
+    if _is_expired(str(record.get("expires_at", ""))):
+        log.warning("undrop_past_expiry", extra={"table": canonical, "expires_at": record.get("expires_at")})
     # `register_table` REFUSES an absolute URI ("Location must be a relative path within the root
     # directory") — found by driving the deployed catalog, where undrop 400'd on the very location
     # `describe_table` had just reported. The `dir` backend lays table directories out FLAT under the

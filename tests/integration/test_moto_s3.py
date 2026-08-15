@@ -513,3 +513,85 @@ def test_a_destructive_drop_frees_the_id_immediately(moto_client: TestClient) ->
     assert _create(moto_client, "nobleed$t", rows).status_code == 200
     assert moto_client.post("/v1/table/nobleed$t/drop", json={}).status_code == 200
     assert _create(moto_client, "nobleed$t", rows).status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# diff2 F10 item 5 — the deadline is PURGE-ELIGIBILITY, not the end of recovery
+#
+# `undrop` never compared `expires_at` to the clock; it checks whether the RECORD is still there.
+# That behaviour is right and stays: the bytes are on storage until the purge collects them, so
+# refusing would destroy recoverable data on a timestamp alone — and the maintenance plane already
+# reasons exactly this way ("a record that survives is a recovery that still works; a purged one is
+# not"). What was wrong was the DESCRIPTION: `/tasks` reported the deadline as finality and undrop's
+# 404 called an expired drop "genuinely unrecoverable" alongside a never-trashed one.
+# --------------------------------------------------------------------------- #
+
+
+def _expire_trash_record(moto_endpoint: str, canonical: str) -> None:
+    """Rewrite ONE table's trash deadline into the past — the state a LATE PURGE leaves behind.
+
+    Reaches into the object store rather than a local path: the control root here is the moto bucket.
+    The key comes from `trash._key`, the module's OWN deriver, rather than from listing the prefix:
+    `moto_endpoint` is module-scoped, so earlier tests in this file leave their own records in the
+    bucket and "the only record" is not a thing that exists. Using the real deriver also means a
+    change to the hashing scheme moves this test with it instead of silently mistargeting.
+    """
+    import json
+
+    from service_kit.lakehouse import trash
+
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=moto_endpoint,
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+        region_name="us-east-1",
+    )
+    key = trash._key(canonical)  # already the full `_trash/<kind>-<hash>.json` path
+    record = json.loads(s3.get_object(Bucket=BUCKET, Key=key)["Body"].read())
+    record["expires_at"] = "2000-01-01T00:00:00+00:00"
+    s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(record).encode())
+
+
+def test_an_expired_but_unpurged_drop_still_undrops(moto_client_recoverable: TestClient, moto_endpoint: str) -> None:
+    """The behaviour that must NOT change. Past the deadline, before the purge: the bytes are there,
+    so recovery works. Refusing here would be destroying data by clock."""
+    rows = pa.table({"id": pa.array([1, 2], pa.int64())})
+    assert moto_client_recoverable.post("/v1/namespace/exp/create", json={}).status_code == 200
+    assert _create(moto_client_recoverable, "exp$t", rows).status_code == 200
+    assert moto_client_recoverable.post("/v1/table/exp$t/drop", json={}).status_code == 200
+
+    _expire_trash_record(moto_endpoint, "exp$t")
+
+    # /tasks now SAYS it is expired rather than implying it is gone…
+    tasks = moto_client_recoverable.get("/v1/table/exp$t/tasks").json()
+    assert tasks and tasks[0]["expired"] is True
+
+    # …and the undrop still works, with the rows intact.
+    undropped = moto_client_recoverable.post("/v1/table/exp$t/undrop", json={})
+    assert undropped.status_code == 200, undropped.text
+    assert int(moto_client_recoverable.post("/v1/table/exp$t/count_rows", json={}).text) == 2
+
+
+def test_a_live_deadline_is_not_reported_as_expired(moto_client_recoverable: TestClient) -> None:
+    """The flag must distinguish 'you have a week' from 'go now', or it is noise."""
+    rows = pa.table({"id": pa.array([1], pa.int64())})
+    assert moto_client_recoverable.post("/v1/namespace/live/create", json={}).status_code == 200
+    assert _create(moto_client_recoverable, "live$t", rows).status_code == 200
+    assert moto_client_recoverable.post("/v1/table/live$t/drop", json={}).status_code == 200
+
+    tasks = moto_client_recoverable.get("/v1/table/live$t/tasks").json()
+    assert tasks and tasks[0]["expired"] is False
+    assert tasks[0]["expires_at"]
+
+
+def test_an_unparseable_deadline_is_not_reported_as_expired(moto_client_recoverable: TestClient) -> None:
+    """Fail toward 'still recoverable'. A malformed timestamp must not make a table that is still
+    on storage read as beyond saving — the flag adds urgency, it never withdraws hope."""
+    from catalog.api.v1.endpoints.tables import _is_expired
+
+    assert _is_expired("") is False
+    assert _is_expired("not-a-date") is False
+    assert _is_expired("2000-01-01T00:00:00+00:00") is True
+    # A naive stamp (records written before the offset was included) is read as UTC, not rejected.
+    assert _is_expired("2000-01-01T00:00:00") is True

@@ -748,4 +748,14 @@ class TrashEntry(BaseModel):
     location: str
     dropped_by: str
     dropped_at: str
+    #: When this becomes PURGE-ELIGIBLE — not when recovery stops working (diff2 F10 item 5). The
+    #: purge is what destroys; the clock only makes the object eligible for it. The estate already
+    #: reasons this way in the maintenance plane ("a record that survives is a recovery that still
+    #: works; a purged one is not") — this surface simply never said so, and a deadline read as
+    #: "gone after" when it means "collectable after" is the kind of overstatement that makes an
+    #: owner give up on data that is still there.
     expires_at: str
+    #: True once `expires_at` has passed and the purge has not yet collected it. Undrop still works
+    #: in this state — the bytes are present — but it is living on borrowed time: the next clean
+    #: purge tick may take it. Surfaced so an owner can tell "you have a week" from "go now".
+    expired: bool = False
