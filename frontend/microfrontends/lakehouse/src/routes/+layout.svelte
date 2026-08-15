@@ -118,9 +118,7 @@
 	// — but hide only THOSE groups. Nulling the whole sidebar (what this did while each area had its
 	// own) would now blank catalog, lineage and models too, punishing a user for visiting a URL they
 	// were denied.
-	const zoneNav = $derived(
-		lakehouseSidebar(!data.authEnabled || (me?.estate_admin ?? false), data.activeProject),
-	);
+	const zoneNav = $derived(lakehouseSidebar(!data.authEnabled || (me?.estate_admin ?? false)));
 
 	// The lineage area's Graph and Columns canvases set height:100% and must fill a SIZED flex item
 	// rather than scroll inside an auto-height one; every other area wants the plain scroll wrapper.
