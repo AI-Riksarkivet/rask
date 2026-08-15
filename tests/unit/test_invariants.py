@@ -2510,3 +2510,62 @@ def test_the_ray_image_BAKES_every_job_script_the_medallion_entrypoints_name() -
         f"cascade never completes, with nothing pointing at the image as the cause.\n\n"
         f"Add a COPY of scripts/<name> into /home/ray/jobs/, as .docker/ray-lance.dockerfile already does."
     )
+
+
+def test_stage_run_is_a_MONITOR_and_uses_continue_as_new() -> None:
+    """A poll loop inside one instance grows history without bound; `continue_as_new` resets it.
+
+    Dapr's Monitor pattern is explicit: "Rather than writing infinite while-loops (which is an
+    anti-pattern), Dapr Workflow exposes a continue-as-new API." `stage_run` polls a Ray job, which is
+    exactly that pattern.
+
+    The bounded `for attempt in range(spec.max_polls)` it used was not the literal anti-pattern — but
+    the bound WAS the history bound, and it was set at `MAX_POLLS = 2880` polls x 30 s = 24 hours.
+    Every turn appended a timer and an activity plus their results, so one instance could accumulate
+    ~5,760 history events, all of it replayed from the start on every continuation. The ceiling on how
+    long a stage could take was therefore the ceiling on how much history one instance could carry —
+    two unrelated things welded together.
+
+    With `continue_as_new` the loop can be indefinite because each turn starts with empty history, and
+    `max_polls` goes back to meaning only "how long are we willing to wait".
+
+    THE CARRIED STATE IS THE RISK. `continue_as_new` restarts the workflow immediately and DISCARDS
+    any task started but not awaited, so the submission id and the poll count must ride the new input
+    or the next turn re-submits the job and counts from zero. That is what
+    `test_stage_run_does_not_RESUBMIT_after_continue_as_new` pins.
+    """
+    import ast
+
+    body = (REPO / "services/medallion/src/medallion/workflow.py").read_text(encoding="utf-8")
+    tree = ast.parse(body)
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "stage_run")
+    src = ast.unparse(fn)
+
+    assert "continue_as_new" in src, (
+        "stage_run does not call ctx.continue_as_new. It is a Monitor — it polls an external job on a "
+        "timer — and Dapr's guidance for that pattern is continue-as-new precisely so history does not "
+        "grow with the wait."
+    )
+    loops = [n for n in ast.walk(fn) if isinstance(n, ast.For | ast.While)]
+    assert not loops, (
+        f"stage_run still contains {len(loops)} loop(s). With continue_as_new each instance performs ONE "
+        f"poll and hands the rest to the next turn; a surviving loop means history still accumulates "
+        f"inside a single instance, which is the thing being fixed."
+    )
+
+
+def test_stage_run_does_not_RESUBMIT_after_continue_as_new() -> None:
+    """The submission id must survive the turn, or every poll starts a second Ray job.
+
+    `continue_as_new` gives the next turn a fresh history — which means the next turn has no memory
+    that `submit_stage` already ran. If the spec does not carry the submission id forward, the guard
+    `if not submission_id` is the only thing between this workflow and submitting the same stage job
+    once per poll interval, forever, each one overwriting the same output dataset.
+    """
+    from medallion.workflow import StageJobSpec
+
+    fields = StageJobSpec.model_fields
+    assert "submission_id" in fields, "StageJobSpec cannot carry the submission id across a continue_as_new turn"
+    assert "polls_done" in fields, "StageJobSpec cannot carry the poll count across a turn — the ceiling would never be reached"
+    assert fields["submission_id"].default is None, "submission_id must default to None so the FIRST turn submits"
+    assert fields["polls_done"].default == 0, "polls_done must default to 0"

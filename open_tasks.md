@@ -86,18 +86,24 @@ activity and management rules satisfied, `open_dapr.md` deleted with its 74 cita
   ≈5,760 history events in ONE instance. Bounded, so not the literal anti-pattern; the code names this
   and defers it to S2. Changing a live workflow's action sequence is deploy-coupled — read
   `tests/unit/test_workflow_action_order.py`'s docstring before touching it.
-- **Outbox: DIY vs native — yours.** `service_kit.lakehouse.outbox` is hand-rolled (stage to S3 →
-  publish → drop on ack). Dapr ships a transactional outbox, but it spans *Dapr state + pubsub* and
-  our durable artefact is a Lance dataset on S3, so the DIY version is defensible rather than sloppy.
-  It COULD be outsourced by writing a transactional marker to Dapr state after the Lance write and
-  letting the native outbox guarantee the publish — which would delete the relay.
+- **Outbox: DIY vs native — CLOSED (2026-08-15), see `docs/DECISIONS.md`.** The application-side
+  outbox stays. The proposed escape — write a transactional marker to Dapr state after the Lance write
+  and let the native outbox guarantee the publish — does NOT work: a marker written after the commit
+  leaves the identical crash window, relocating the gap rather than closing it. Dapr's outbox publishes
+  inside a transaction Dapr itself runs, which requires the write to go through its state API, and
+  rask's authoritative writes (Lance via the Lance library, `lineage_events`/AGE via psycopg) do not.
+  The bound underneath: atomicity between object storage and a broker does not exist anywhere, so the
+  goal is no silent loss, not atomicity.
 
-## 4. The cascade's SUCCESS path has never run.
+## 4. ✅ CLOSED — the cascade's success path is witnessed (2026-08-15 20:59).
 
-Only the FAIL path has fired end-to-end (a Ray job that failed produced a FAIL RunEvent in the graph,
-run `035fd388`, deterministic on the trigger token). The cluster has **no bronze data**, so
-`read_upstream` cannot resolve and every drive ends in the failure branch. Seeding a bronze dataset is
-what turns S1's success half from "tested" into "witnessed".
+bronze -> silver -> gold, all three COMPLETE in the lineage graph, driven through `POST /produce`.
+Gold completing is also the proof silver was readable and non-empty, since gold reads it.
+
+It had never run because of TWO stacked image faults, not missing data (`ebb46650`, `faa3e701`):
+the job scripts were not baked into the cluster image (`exit 2`), and once they were, that image is
+the HTR/CUDA one and has no pylance (`exit 1`). `medallion.ray` is OFF again until a Lance-capable
+cluster exists — do not re-enable it against the HTR image.
 
 ---
 
