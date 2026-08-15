@@ -960,7 +960,19 @@ rendered, and the `openfga` skill documents no provenance procedure. That is a p
 10. `_collect_descendants` recurses unbounded (no depth cap) while the listing walk caps at
     `_MAX_NAMESPACE_DEPTH=8` (`tables.py:74` vs `namespaces.py` (agent-read)) — a pathological tree
     is bounded in one walker, a stack overflow in the other. Align the bound.
-11. **Grant PROVENANCE is not recordable** — distinct from the lineage plane, which is healthy.
+11. **RESOLVED 2026-08-15 by DOCUMENTING the sanctioned method (the finding's own option b), and the
+    finding OVERSTATED the difficulty.** The grant door already audits all four coordinates of a
+    grant in one row — `audit.subject` (the GRANTOR), `audit.grantee`, `audit.relation`,
+    `audit.resource` — so a review joins on the grant's own identity and needs no timestamp
+    correlation against the OpenFGA changelog. Written up as
+    `.claude/skills/openfga/references/grant-provenance.md` with the review query, the two
+    uncovered cases (grants implied by a create; hand-written tuples), and why the sidecar-record
+    option was rejected as redundant rather than wrong (retention is the argument that would
+    change it). Pinned by `test_the_grant_audit_row_carries_full_provenance` — a documented
+    procedure resting on field names nothing asserts is one refactor from fiction.
+
+    Original text, kept for the reasoning:
+    **Grant PROVENANCE is not recordable** — distinct from the lineage plane, which is healthy.
     Lineage (dataset derivation: OpenLineage events → AGE) answers "how did this data come to be";
     provenance (attribution/custody: who granted, who acted, under what authority) is scattered
     across #41 audit rows, `TupleOrigin`, and registry `created_by` — and its weakest link is that

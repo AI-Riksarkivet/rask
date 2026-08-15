@@ -9,6 +9,7 @@ propagates (fail-closed), never a silent no-op. Sync via ``asyncio.run`` — no 
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -17,6 +18,7 @@ from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
 from lance_namespace import ServiceUnavailableError, UnsupportedOperationError
 
+from service_kit.governed.audit import AUDIT_LOGGER, FAILURE, SUCCESS, configure_audit
 from service_kit.governed.oidc import IDToken
 
 
@@ -50,6 +52,17 @@ def _run(
     body = access.AccessGrantRequest(user=user, relation=relation)
     resp = asyncio.run(access._access_mutate(cast(access.Request, request), settings, token, fga_type, ident, body, grant=grant))
     return resp, captured
+
+
+class _AuditCapture(logging.Handler):
+    """Collect audit records off the dedicated audit logger (independent of the OTLP root handler)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
 
 
 def test_grantable_relations_are_the_base_rungs_only() -> None:
@@ -131,3 +144,60 @@ def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) ->
     assert ("user:alice", "table:db1$t", "owner") in edges  # grant: subject → obj
     assert ("role:eng#assignee", "table:db1$t", "reader") in edges
     assert ("table:db1$t", "namespace:db1", "parent") in edges  # container: obj → parent
+
+
+# --------------------------------------------------------------------------- #
+# diff2 F10 item 11 — grant PROVENANCE: who gave this grant, not just who has it
+# --------------------------------------------------------------------------- #
+
+
+def test_the_grant_audit_row_carries_full_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An OpenFGA tuple cannot carry its grantor, and `read_changes` cannot attribute an actor — so
+    "who granted this?" is unanswerable from the authz store alone. That is a real OpenFGA limitation
+    nobody has solved inside it; Lakekeeper leans on audit events for exactly the same reason.
+
+    What makes it answerable HERE is that the grant door audits all four coordinates of the grant in
+    one row: the grantor (`audit.subject`), the grantee, the relation, and the object. So a review
+    joins on the grant's OWN IDENTITY — no timestamp-correlating the OpenFGA changelog against the
+    audit stream, which is how diff2 F10 item 11 described the only available method and is harder
+    than what the code actually supports.
+
+    THIS TEST IS WHAT MAKES THE DOCUMENTED PROCEDURE TRUE. The sanctioned review query lives in
+    `.claude/skills/openfga/references/grant-provenance.md`, and a procedure resting on field names
+    that nothing pins is one refactor away from being fiction.
+    """
+    handler = _AuditCapture()
+    logger = logging.getLogger(AUDIT_LOGGER)
+    logger.addHandler(handler)
+    configure_audit(enabled=True)
+    try:
+        _run(monkeypatch, user="bob", relation="writer", grant=True, ident="db1$users")
+    finally:
+        logger.removeHandler(handler)
+
+    rows = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in handler.records if r.__dict__.get("audit.action") == "access_grant"]
+    assert rows, "the grant door emitted no access_grant audit row — provenance is unrecoverable"
+    row = rows[-1]
+    assert row["audit.subject"] == "alice", "the GRANTOR is missing — this is the field the tuple cannot carry"
+    assert row["audit.grantee"] == "user:bob"
+    assert row["audit.relation"] == "writer"
+    assert row["audit.resource"] == "table:db1$users"
+    assert row["audit.outcome"] == SUCCESS
+
+
+def test_a_failed_grant_is_audited_too_so_attempts_are_reviewable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An access review that only sees successes cannot distinguish "never attempted" from "attempted
+    and refused by an outage" — and the second is the one worth asking about."""
+    handler = _AuditCapture()
+    logger = logging.getLogger(AUDIT_LOGGER)
+    logger.addHandler(handler)
+    configure_audit(enabled=True)
+    try:
+        with pytest.raises(ServiceUnavailableError):
+            _run(monkeypatch, user="bob", relation="writer", grant=True, outage=True)
+    finally:
+        logger.removeHandler(handler)
+
+    rows = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in handler.records if r.__dict__.get("audit.action") == "access_grant"]
+    assert rows and rows[-1]["audit.outcome"] == FAILURE
+    assert rows[-1]["audit.subject"] == "alice" and rows[-1]["audit.grantee"] == "user:bob"

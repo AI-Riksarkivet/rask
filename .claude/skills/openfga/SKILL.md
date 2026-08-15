@@ -101,6 +101,11 @@ When a workflow step points to a rule ID, open the matching file in `references/
 | `references/optimize-tuples.md` | Minimize tuple count |
 | `references/optimize-type-restrictions.md` | Type restrictions |
 
+### rask-specific
+| File | Description |
+|------|-------------|
+| `references/grant-provenance.md` | Who GAVE a grant — the audit-join review procedure, and why a tuple cannot answer it |
+
 ### Testing
 | File | Description |
 |------|-------------|
