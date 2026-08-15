@@ -188,7 +188,15 @@
 	</SvelteFlow>
 	<span class="perf mono" title="last layout build">{buildMs}ms</span>
 
-	{#if (store.graph?.columns?.length ?? 0) === 0}
+	{#if !store.settled}
+		<div class="empty"><b>Loading field lineage for {dataset}…</b></div>
+	{:else if !store.online}
+		<div class="empty">
+			<b>Could not read field lineage for {dataset}.</b><br />
+			The lineage service did not answer — this is a read failure, not a statement that the dataset has no
+			column-level edges.
+		</div>
+	{:else if (store.graph?.columns?.length ?? 0) === 0}
 		<div class="empty">
 			<b>No field lineage for {dataset} yet.</b><br />
 			Column-level edges appear when a producing run emits the <code>columnLineage</code> facet.

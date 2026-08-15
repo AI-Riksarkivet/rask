@@ -7,6 +7,14 @@ import type { ColumnGraph, ColumnNeighbors } from '@rask/api/lineage';
  * selection's result). */
 export class ColumnLineageState {
 	graph = $state<ColumnGraph | null>(null);
+	/** True once the FIRST graph load settled, success or failure. Before that the view says
+	 * "loading", never "no field lineage" — the same two-flag shape `LineageState` already ships,
+	 * reused rather than re-invented as a tri-state. */
+	settled = $state(false);
+	/** True when the last graph read actually SUCCEEDED. `fetchColumnGraph` maps timeout / 4xx / 5xx /
+	 * network error to `null`, which is indistinguishable from "this dataset has no column lineage" —
+	 * so without this flag a dead lineage service is reported to the user as an empty result (#147). */
+	online = $state(false);
 	/** The field the user clicked — drives the provenance/impact panel. */
 	selectedColumn = $state<{ dataset: string; field: string } | null>(null);
 	upstream = $state<ColumnNeighbors | null>(null);
@@ -20,7 +28,17 @@ export class ColumnLineageState {
 	async loadGraph(name: string): Promise<void> {
 		const req = ++this.#graphReq;
 		const graph = await fetchColumnGraph(name);
-		if (req === this.#graphReq) this.graph = graph;
+		// Latest-wins: an older in-flight request must not publish over a newer selection's result.
+		if (req !== this.#graphReq) return;
+		// A failed read PRESERVES the last good graph rather than blanking the canvas — the sibling
+		// store's hard-failure guard, applied here for the same reason.
+		if (graph !== null) {
+			this.graph = graph;
+			this.online = true;
+		} else {
+			this.online = false;
+		}
+		this.settled = true;
 	}
 
 	/** Load one FIELD's provenance (upstream) + impact (downstream). Clears FIRST (audit B2): stale
