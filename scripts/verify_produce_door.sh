@@ -25,7 +25,7 @@ fail() { echo "!! FAIL: $*"; exit 1; }
 step "1/7 apply the chart change (medallion OIDC env + web MEDALLION_API)"
 # --reuse-values keeps the live release's config; the one NEW key is set explicitly (a new values key would
 # render EMPTY under --reuse-values — the documented helm gotcha, and here it would blank the admin project).
-helm upgrade "$RELEASE" ./chart --reuse-values --set medallion.produceAdminProject=acme --timeout 200s
+"$(dirname "$0")/helm.sh" upgrade "$RELEASE" ./chart --reuse-values --set medallion.produceAdminProject=acme --timeout 200s
 
 step "2/7 roll the freshly-loaded images (kind same-tag → delete pods, not just rollout)"
 # catalog too: it carries the #68 access-simulator fix (service_kit/governed/fga.py qualify flag) under the same

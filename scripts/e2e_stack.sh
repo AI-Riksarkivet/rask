@@ -102,7 +102,7 @@ step "3/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extra
 # sidecar-injector race below means the app pods that come up in the first wave are recreated anyway, so
 # waiting on them here would only buy a wait we then throw away. The explicit rollout waits are the ones that
 # matter. Do not re-read this as "the deadlock is still there".
-helm upgrade --install "$RELEASE" ./chart --timeout 600s \
+"$(dirname "$0")/helm.sh" upgrade --install "$RELEASE" ./chart --timeout 600s \
   --set auth.enabled=true \
   --set medallion.fgaEnabled=true \
   --set catalog.warehouses.enabled=true \

@@ -2438,15 +2438,23 @@ def test_every_RELEASE_touching_helm_call_goes_through_the_driver_seam() -> None
     """
     RELEASE_SUBCOMMANDS = ("upgrade", "install", "uninstall", "rollback", "history", "list", "status", "get")
 
+    # SCRIPTS TOO, not just the Makefile. The first version read only the Makefile and passed while
+    # `scripts/ray_e2e_stack.sh` called bare `helm upgrade --install` — the CI deploy path, i.e. the
+    # one place a wrong-store install would be least noticed.
+    sources = [MAKEFILE, *sorted((REPO / "scripts").glob("*.sh"))]
+
     offenders: list[str] = []
-    for line_no, line in enumerate(MAKEFILE.read_text(encoding="utf-8").splitlines(), start=1):
-        body = line.split("#", 1)[0]  # a comment mentioning helm is not a call
-        if not body.strip().startswith(("helm ", "@helm ", "-helm ")):
+    for path in sources:
+        if path.name == "helm.sh":  # the seam itself must call helm directly
             continue
-        rest = body.strip().split(None, 1)
-        sub = rest[1].split()[0] if len(rest) > 1 else ""
-        if sub in RELEASE_SUBCOMMANDS:
-            offenders.append(f"Makefile:{line_no}: {body.strip()[:90]}")
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            body = line.split("#", 1)[0]  # a comment mentioning helm is not a call
+            if not body.strip().startswith(("helm ", "@helm ", "-helm ")):
+                continue
+            rest = body.strip().split(None, 1)
+            sub = rest[1].split()[0] if len(rest) > 1 else ""
+            if sub in RELEASE_SUBCOMMANDS:
+                offenders.append(f"{path.relative_to(REPO)}:{line_no}: {body.strip()[:90]}")
 
     assert not offenders, (
         "these Makefile recipes call `helm` DIRECTLY for a release operation, bypassing the driver "
@@ -2457,20 +2465,37 @@ def test_every_RELEASE_touching_helm_call_goes_through_the_driver_seam() -> None
     )
 
 
-def test_the_helm_seam_REQUIRES_the_sql_driver_rather_than_falling_back() -> None:
-    """A seam that silently degrades to the Secret backend is worse than no seam at all.
+def test_the_helm_seam_PICKS_the_store_that_holds_the_release() -> None:
+    """The hazard is "helm succeeds against the wrong store", and BOTH directions are wrong.
 
-    The failure this guards is not "helm errors"; it is "helm succeeds against the wrong store". So the
-    wrapper has to FAIL when it cannot build the DSN, not shrug and let the default driver answer.
+    This gate first demanded the seam `exit 1` whenever it could not build a DSN. That was too strong
+    and would have broken the two cases it never considered:
+
+      * A FRESH INSTALL. `scripts/ray_e2e_stack.sh` installs the chart into an empty kind cluster,
+        where the Postgres the SQL driver needs does not exist yet — because the chart creates it.
+        Requiring the database makes the install that creates the database impossible.
+      * A KIND CLUSTER AFTER INSTALL. It has an AGE pod now, but ITS release lives in the Secret
+        store. "Use SQL whenever AGE exists" would report that release absent.
+
+    So the seam probes whether the SQL store actually HOLDS anything and uses the store that does.
+    Unreachable or empty means this release is not there, and the default driver is authoritative.
+    The pass-through is announced on stderr, because the thing being prevented is a SILENT switch.
     """
     seam = REPO / "scripts/helm.sh"
     assert seam.exists(), "scripts/helm.sh is missing — $(HELM) points at a seam that does not exist"
-    text = seam.read_text(encoding="utf-8")
+    # CODE ONLY. Checking the raw text let a mutation pass: the probe string also appears in the
+    # script's own explanatory comment, so removing the real one left the gate satisfied by prose.
+    code = "\n".join(ln for ln in seam.read_text(encoding="utf-8").splitlines() if not ln.lstrip().startswith("#"))
 
-    assert "HELM_DRIVER" in text and "sql" in text, "the seam does not set HELM_DRIVER=sql"
-    assert "exit 1" in text, (
-        "the seam has no failure path. If it cannot resolve the AGE address it must EXIT, not fall "
-        "through to helm's default Secret driver — a silent wrong-store success is the whole hazard."
+    assert "HELM_DRIVER" in code and "sql" in code, "the seam does not set HELM_DRIVER=sql"
+    assert "helm list -aq" in code, (
+        "the seam does not PROBE the SQL store. Without asking whether it holds a release, any rule it "
+        "uses is a guess — and both obvious guesses ('always SQL', 'SQL whenever AGE exists') break a "
+        "real environment. See this test's docstring."
+    )
+    assert ">&2" in code, (
+        "the seam falls through without announcing it. A silent driver switch is exactly the failure "
+        "this file exists to prevent; passing through must be visible."
     )
 
 

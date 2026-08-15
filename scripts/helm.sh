@@ -35,23 +35,25 @@ fi
 
 # The POD ip, not the Service: the ClusterIP is not routable from the host where helm runs, and it
 # changes on restart, so it is derived per call rather than cached anywhere.
+# THE RULE IS "use the driver that actually HOLDS this release", not "prefer SQL". Anything simpler
+# is wrong for at least one real environment, and both were hit:
+#
+#   * "always require SQL" breaks a FRESH INSTALL and CI. `scripts/ray_e2e_stack.sh` installs the
+#     chart into an empty kind cluster — where the Postgres this driver needs does not exist yet,
+#     because the chart itself creates it. Requiring the database would make the install that creates
+#     the database impossible.
+#   * "use SQL whenever the AGE pod exists" is wrong the other way: a kind cluster gets an AGE pod as
+#     soon as the chart lands, but ITS release lives in the Secret store, and switching mid-stream
+#     would report that release absent.
+#
+# So the probe asks the SQL store whether it holds anything. A store with releases in it is the store
+# in use; an unreachable or empty one means this release is not there and the default driver is right.
 AGE_POD="${RASK_AGE_POD:-rask-age-0}"
 AGE_IP="$(kubectl get pod "$AGE_POD" -o jsonpath='{.status.podIP}' 2>/dev/null || true)"
 
 if [[ -z "$AGE_IP" ]]; then
-  cat >&2 <<EOF
-!! helm release storage is UNREACHABLE — refusing to run '$1'.
-
-   Could not read the IP of pod '$AGE_POD' (KUBECONFIG=$KUBECONFIG).
-
-   This script will NOT fall back to helm's default Secret driver. The rask release lives in
-   Postgres; against the Secret backend helm would report the release as ABSENT and
-   'upgrade --install' would RE-INSTALL over a live estate without erroring.
-
-   Fix the cluster connection, or set HELM_DRIVER_SQL_CONNECTION_STRING yourself if the database
-   is reachable another way.
-EOF
-  exit 1
+  # No Postgres reachable => no SQL-backed release can exist => the Secret driver is authoritative.
+  exec helm "$@"
 fi
 
 # The password rides ~/.pgpass (mode 600), never the DSN — a credential on a command line lands in
@@ -65,6 +67,16 @@ if ! grep -qs "^${AGE_IP}:5432:${AGE_DB}:${AGE_USER}:" "$PGPASS" 2>/dev/null; th
   chmod 600 "$PGPASS"
 fi
 
+DSN="postgresql://${AGE_USER}@${AGE_IP}:5432/${AGE_DB}?sslmode=disable"
+
+# Does the SQL store actually hold a release? `helm list -aq` under the driver answers without needing
+# any knowledge of the schema. Empty (or erroring) means this release is not there — pass through, and
+# say so, because a silent switch in either direction is the failure mode this file exists to prevent.
+if [[ -z "$(HELM_DRIVER=sql HELM_DRIVER_SQL_CONNECTION_STRING="$DSN" helm list -aq 2>/dev/null)" ]]; then
+  echo ">> helm: SQL release store reachable but EMPTY — using the default driver for '$1'." >&2
+  exec helm "$@"
+fi
+
 export HELM_DRIVER=sql
-export HELM_DRIVER_SQL_CONNECTION_STRING="postgresql://${AGE_USER}@${AGE_IP}:5432/${AGE_DB}?sslmode=disable"
+export HELM_DRIVER_SQL_CONNECTION_STRING="$DSN"
 exec helm "$@"

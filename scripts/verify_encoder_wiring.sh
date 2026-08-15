@@ -124,12 +124,12 @@ echo "mode=semantic → 503 $(detail)"
 # Snapshot the operator's own values so the two upgrades below preserve them. NOT --reuse-values:
 # a brand-new key like encoders.* renders EMPTY under --reuse-values, which is exactly how a past
 # run shipped an empty env into a running service.
-helm get values "$RELEASE" -o yaml >"$LIVE_VALUES"
+"$(dirname "$0")/helm.sh" get values "$RELEASE" -o yaml >"$LIVE_VALUES"
 grep -q "^media:" "$LIVE_VALUES" || fail "captured release values look wrong — refusing to upgrade with them"
 
 restore() {
   echo "restoring: encoders unset, stub deleted"
-  helm upgrade "$RELEASE" "$CHART" -f "$LIVE_VALUES" >/dev/null
+  "$(dirname "$0")/helm.sh" upgrade "$RELEASE" "$CHART" -f "$LIVE_VALUES" >/dev/null
   kubectl delete deploy,svc,configmap -l "app.kubernetes.io/component=encoder-stub" --ignore-not-found >/dev/null
   kubectl rollout status "deploy/$RELEASE-search" --timeout=240s >/dev/null
 }
@@ -180,7 +180,7 @@ YAML
 kubectl rollout status "deploy/$STUB" --timeout=180s >/dev/null || fail "stub did not become ready"
 
 trap 'restore; cleanup' EXIT
-helm upgrade "$RELEASE" "$CHART" -f "$LIVE_VALUES" \
+"$(dirname "$0")/helm.sh" upgrade "$RELEASE" "$CHART" -f "$LIVE_VALUES" \
   --set "encoders.embedUrl=http://$STUB:8001" \
   --set "encoders.rerankUrl=http://$STUB:8002" >/dev/null
 kubectl rollout status "deploy/$RELEASE-search" --timeout=300s >/dev/null

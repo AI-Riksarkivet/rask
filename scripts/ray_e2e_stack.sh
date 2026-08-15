@@ -92,7 +92,7 @@ bash scripts/dagger-image.sh --name ray-lance --tag "$RAY_IMG" >/dev/null
 kind load docker-image "$CATALOG_IMG" "$RAY_IMG" --name "$CLUSTER"
 
 step "2/6 deploy the governed Ray-ON stack (auth+fga+compute+ray+quality ON, openbao/observability/web OFF)"
-helm upgrade --install "$RELEASE" ./chart --timeout 600s \
+"$(dirname "$0")/helm.sh" upgrade --install "$RELEASE" ./chart --timeout 600s \
   --set auth.enabled=true \
   --set medallion.fgaEnabled=true \
   --set medallion.compute=true \
