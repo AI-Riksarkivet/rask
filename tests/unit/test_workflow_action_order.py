@@ -128,6 +128,16 @@ def test_the_activity_sequence_matches_the_committed_snapshot() -> None:
             f"  3. Then regenerate: RASK_UPDATE_WORKFLOW_SNAPSHOT=1 uv run pytest {Path(__file__).name}"
         )
 
+    # A body that yields NO actions is either not a workflow or the extractor has gone blind on it —
+    # e.g. its context parameter is named `context` rather than `ctx`, which the receiver-name match
+    # cannot see. Either way it would sit in the snapshot as `[]` and be gated by nothing, forever.
+    empty = sorted(name for name, actions in current.items() if not actions)
+    assert not empty, (
+        f"these gated workflow bodies extracted NO actions: {empty}. Either they are not workflows, or "
+        f"the extractor could not read them (a context parameter not named `ctx` is the usual cause) — "
+        f"in which case they are in the snapshot but protected by nothing."
+    )
+
     stale = set(recorded) - set(current)
     assert not stale, f"these workflow bodies are in the snapshot but no longer exist: {sorted(stale)} — a rename is a replay break"
 
@@ -136,12 +146,34 @@ def test_the_gate_covers_every_registered_workflow() -> None:
     """A workflow registered with the runtime but absent from `WORKFLOW_BODIES` is ungated, and the
     hand-kept list is exactly where that drift happens."""
     registered: set[str] = set()
-    for module, _ in WORKFLOW_BODIES:
+    # EVERY module that defines a workflow, not just the ones already listed — the gate's own stated
+    # purpose is catching drift in the hand-kept list, and a workflow in a NEW module was outside the
+    # scan by construction. Found by the marker every Dapr workflow body must carry.
+    modules = sorted(
+        {str(p.relative_to(REPO)) for p in (REPO / "services").rglob("*.py") if "DaprWorkflowContext" in p.read_text(encoding="utf-8", errors="ignore")}
+    )
+    for module in modules:
         tree = ast.parse((REPO / module).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "WORKFLOWS" for t in node.targets):
-                registered |= {ast.unparse(e) for e in getattr(node.value, "elts", [])}
+            # Assign AND AnnAssign: `WORKFLOWS: Final = (...)` has no `.targets`, so an annotation —
+            # one token, and the idiom this file's own neighbours already use for their constants —
+            # made the whole scan return nothing and the gate pass vacuously.
+            if isinstance(node, ast.Assign | ast.AnnAssign):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if any(getattr(t, "id", "") == "WORKFLOWS" for t in targets):
+                    registered |= {ast.unparse(e) for e in getattr(node.value, "elts", [])}
+            # DECORATOR registration (`@wfr.workflow(name="flow_run")`) — `flows` uses it exclusively
+            # and therefore contributed NOTHING to this gate. A service whose registration style the
+            # scan cannot read is a service the gate silently does not cover.
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                for dec in node.decorator_list:
+                    if "workflow" in ast.unparse(dec) and "activity" not in ast.unparse(dec):
+                        registered.add(node.name)
 
+    assert registered, (
+        "the registration scan found NO workflows at all — it has gone blind (an annotation, a rename, "
+        "a new registration style) and would pass vacuously forever. This assertion is what stops that."
+    )
     gated = {function for _, function in WORKFLOW_BODIES}
     missing = registered - gated
     assert not missing, f"registered with the runtime but not gated: {sorted(missing)} — add them to WORKFLOW_BODIES"

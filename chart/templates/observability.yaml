@@ -65,6 +65,20 @@ spec:
 {{- with .Values.dapr.workflowRetention }}
 {{- if .enabled }}
   workflow:
+    {{- /* A FLOOR, because the failure mode is silent and total. `completed: "0s"` is a valid duration
+           that renders, applies, and purges every workflow instance the moment it terminates — the
+           history is gone before anyone can read it, and nothing reports that. A typo in a values file
+           should not be able to do that, so anything under an hour is REFUSED at render rather than
+           discovered later by its absence. Raise the floor deliberately if a shorter window is ever
+           genuinely wanted. */}}
+    {{- range $k, $v := (dict "completed" .completed "failed" .failed "terminated" .terminated) }}
+    {{- if not (regexMatch "^([1-9][0-9]*)(h|m)$" (toString $v)) }}
+    {{- fail (printf "dapr.workflowRetention.%s = %q — must be a positive duration in h or m. A zero or malformed value silently purges workflow history the instant an instance terminates." $k $v) }}
+    {{- end }}
+    {{- if and (hasSuffix "m" (toString $v)) (lt (int (trimSuffix "m" (toString $v))) 60) }}
+    {{- fail (printf "dapr.workflowRetention.%s = %q is under an hour. Workflow history is the only record of what a run did; raise the floor here deliberately if that is genuinely wanted." $k $v) }}
+    {{- end }}
+    {{- end }}
     stateRetentionPolicy:
       completed: {{ .completed | quote }}
       failed: {{ .failed | quote }}

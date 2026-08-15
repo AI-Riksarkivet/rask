@@ -205,7 +205,15 @@ dapr.io/max-body-size: {{ . | quote }}
 {{- end }}
 dapr.io/app-token-secret: {{ $root.Release.Name }}-dapr-app-token
 {{- include "lance.daprSidecarResources" $root | nindent 0 }}
+{{- /* DANGLING-REFERENCE GUARD. The `lance-tracing` Configuration renders inside
+       `{{- if .Values.dapr.enabled }}` (observability.yaml:18), while this annotation used to be
+       emitted on `dapr.sidecars` alone. Measured with `dapr.enabled=false --set dapr.sidecars=true`:
+       14 pods annotated, 0 Configurations rendered — every sidecar referencing an object that does
+       not exist. observability.yaml's own comment says the guard it removed was "against a DANGLING
+       dapr.io/config reference"; this is that guard, put back on the side that can see both. */}}
+{{- if $root.Values.dapr.enabled }}
 dapr.io/config: "lance-tracing"
+{{- end }}
 {{- end }}
 {{- end -}}
 

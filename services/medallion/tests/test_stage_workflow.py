@@ -11,6 +11,7 @@ a test that pins the sequence pins the thing the runtime cares about.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -198,3 +199,81 @@ def test_every_activity_is_registered() -> None:
 
     assert set(WORKFLOWS) == {stage_run}
     assert {submit_stage, publish_stage_ready, report_stage_outcome} <= set(ACTIVITIES)
+
+
+# --------------------------------------------------------------------------- #
+# A failed job must reach the GRAPH, not just the log
+# --------------------------------------------------------------------------- #
+
+
+def test_a_TERMINAL_BAD_job_emits_a_lineage_FAIL(monkeypatch: pytest.MonkeyPatch) -> None:
+    """S1 REGRESSED failure visibility and this is the fix.
+
+    Before S1 the ray branch submitted and measured in one pass, so a failed job made `measure_stage`
+    raise, the handler's `except` emitted a FAIL RunEvent with an errorMessage facet, and the trigger
+    RETRYd. After S1, pass 1 acks SUCCESS the moment the watcher is dispatched — so a job that then
+    FAILS produced a log line and NOTHING ELSE. No FAIL in the graph, no failed feed row, nothing for
+    the notifications plane to target, and the run simply never appears to end.
+
+    `report_stage_outcome`'s own docstring claimed "the record is the log line and the counter". There
+    was no counter either.
+
+    The emit is best-effort and suppressed, exactly like the handler's: a lineage outage must not turn
+    a reported failure into a retried activity, because the ONE thing worse than a silent failure here
+    is a workflow that cannot finish reporting one.
+    """
+    from medallion.workflow import report_stage_outcome
+
+    published: list[dict[str, Any]] = []
+
+    def _capture(event: dict[str, Any], _spec: Any) -> None:
+        published.append(event)
+
+    monkeypatch.setattr("medallion.workflow._publish_fail_event", _capture)
+
+    report_stage_outcome(
+        cast("Any", None),
+        {
+            "spec": _spec(),
+            "outcome": {"submission_id": "ray-silver-tok-1-abc", "status": "FAILED", "polls": 3, "verdict": "failed"},
+        },
+    )
+
+    assert published, "a FAILED Ray job emitted no lineage event — the failure exists only in a log line"
+    event = published[0]
+    assert event["eventType"] == "FAIL"
+    assert "FAILED" in json.dumps(event), "the FAIL must name the Ray status that caused it"
+
+
+def test_an_ABANDONED_watch_also_reaches_the_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ceiling case. A job still RUNNING when the watch gives up is not a job failure — but it is
+    equally invisible, and an operator needs to see that the estate stopped watching something."""
+    from medallion.workflow import report_stage_outcome
+
+    published: list[dict[str, Any]] = []
+    monkeypatch.setattr("medallion.workflow._publish_fail_event", lambda e, _s: published.append(e))
+
+    report_stage_outcome(
+        cast("Any", None),
+        {"spec": _spec(), "outcome": {"submission_id": "sub", "status": "RUNNING", "polls": 2880, "verdict": "abandoned"}},
+    )
+
+    assert published, "an abandoned watch reported nothing to the graph"
+    assert "abandoned" in json.dumps(published[0]).lower()
+
+
+def test_a_lineage_OUTAGE_does_not_fail_the_reporting_activity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Best-effort, and this is the reason. An activity that raises is retried and can end FAILED, so
+    a lineage outage would leave the workflow unable to finish reporting a failure — strictly worse
+    than the silent log this replaces."""
+    from medallion.workflow import report_stage_outcome
+
+    def _boom(_e: Any, _s: Any) -> None:
+        raise RuntimeError("lineage is down")
+
+    monkeypatch.setattr("medallion.workflow._publish_fail_event", _boom)
+
+    report_stage_outcome(
+        cast("Any", None),
+        {"spec": _spec(), "outcome": {"submission_id": "sub", "status": "FAILED", "polls": 1, "verdict": "failed"}},
+    )

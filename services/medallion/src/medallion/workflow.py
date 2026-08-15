@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import suppress
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
 
@@ -267,6 +268,24 @@ def report_stage_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) 
     """
     outcome = StageJobOutcome.model_validate(payload["outcome"])
     spec = StageJobSpec.model_validate(payload["spec"])
+
+    # THE FAILURE REACHES THE GRAPH, not just this log line. S1 regressed that: before it, a failed job
+    # made `measure_stage` raise and the handler's except emitted a FAIL RunEvent with an errorMessage
+    # facet. After S1, pass 1 acks the moment the watcher is dispatched, so a job that then FAILS left
+    # nothing anywhere — no FAIL in the graph, no failed feed row, nothing the notifications plane can
+    # target, and a run that simply never appears to end.
+    #
+    # Best-effort and suppressed, matching the handler's own FAIL emit (I8): an activity that RAISES is
+    # retried and can end FAILED, so a lineage outage would leave the workflow unable to finish
+    # reporting a failure — strictly worse than the silence this replaces.
+    reason = (
+        f"the Ray stage job {outcome.submission_id} ended {outcome.status or 'UNKNOWN'} after {outcome.polls} poll(s)"
+        if outcome.verdict == "failed"
+        else f"the watch was abandoned after {outcome.polls} poll(s) with the job still {outcome.status or 'UNKNOWN'}"
+    )
+    with suppress(Exception):
+        _publish_fail_event(_build_stage_fail_event(spec, outcome, reason), spec)
+
     log.error(
         "medallion_stage_job_not_completed",
         extra={
@@ -278,6 +297,61 @@ def report_stage_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) 
             "to_uri": spec.to_uri,
         },
     )
+
+
+def _build_stage_fail_event(spec: StageJobSpec, outcome: StageJobOutcome, reason: str) -> dict[str, Any]:
+    """A FAIL RunEvent for a stage whose Ray job did not complete.
+
+    Same shape the handler's own failure path builds (`transform.py`): a bare output (the WROTE edge,
+    no version — nothing was written) plus the errorMessage facet. Deterministic on the trigger's
+    token, so a redelivered trigger MERGEs onto the same run rather than forking a second failure.
+    """
+    from medallion.core.config import get_settings
+    from medallion.schemas.events import build_run_event
+
+    settings = get_settings()
+    trigger = spec.trigger or {}
+    return build_run_event(
+        operation=settings.operation,
+        author=settings.author,
+        job_namespace=settings.job_namespace,
+        inputs=[(settings.from_namespace, settings.from_dataset)],
+        output_namespace=settings.to_namespace,
+        output_name=settings.to_dataset,
+        token=spec.token or trigger.get("token"),
+        project=trigger.get("project") or None,
+        event_type="FAIL",
+        error_message=f"{reason} ({outcome.verdict})",
+    )
+
+
+def _publish_fail_event(event: dict[str, Any], spec: StageJobSpec) -> None:
+    """Publish the FAIL through the lineage outbox — the same durability the handler's emit has.
+
+    Split from the builder so a test can substitute it: the interesting assertion is WHAT reaches the
+    graph, and standing up an outbox to observe that would test the outbox instead.
+    """
+    from dapr.aio.clients import DaprClient
+
+    from medallion.core.config import get_settings
+    from service_kit.lakehouse import outbox
+
+    settings = get_settings()
+
+    async def _send() -> None:
+        async with DaprClient() as client:
+            await outbox.publish_lineage_with_outbox(
+                client,
+                outbox_uri=settings.lineage_outbox_uri,
+                storage_options=settings.storage_options(),
+                run_id=event["run"]["runId"],
+                event_json=json.dumps(event),
+                pubsub_name=settings.pubsub,
+                topic_name=settings.lineage_topic,
+                timeout_seconds=settings.publish_timeout_seconds,
+            )
+
+    _run_async(_send())
 
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
