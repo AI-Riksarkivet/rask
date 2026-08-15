@@ -70,6 +70,41 @@ still needs to ride the next full `helm upgrade` like every other chart change b
 
 ---
 
+## ✅ The four queued Dapr-audit items — ONE was real. CLOSED 2026-08-15 in `0bbcc035`.
+
+Verified before fixing, and three of the four did not survive it — the same ratio as #8. Recorded so
+nobody re-opens them from the old notes.
+
+**REAL, and fixed.** `flow_run_workflow` wrote an unbounded history. `MAX_PAYLOAD_CHARS` caps ONE
+payload at 256 KiB and documents the amplification correctly, but `FlowGraph.nodes`/`.edges` carried
+no length bound, so the ceiling on a run's history was the ceiling on a drawing. Two bounds added at
+validate time (→ 422 naming the node): `MAX_NODE_FAN_IN` = 32 and `MAX_GRAPH_NODES` = 256. The fan-in
+one needs only TWO nodes to reach, because `upstreams` appends per EDGE and duplicate edges are
+tolerated by design — one upstream dragged N times puts N payloads in one `NodeJob` while presenting a
+single source. Verified live on daprd 1.18.1: `--max-body-size=32Mi` is the only size flag (1.18
+unified HTTP and gRPC; there is no `max-grpc-message-size`), so 128 upstreams sits exactly on the
+limit and JSON escaping puts the true cliff lower and content-dependent. Both mutation-tested.
+
+**FALSE POSITIVE — `_EVENTS: deque` (DWF-ACT-007).** Every reader of `recorded_events()` is a test
+(`test_run_chain`, `test_replay_hygiene`, `test_run_status`); no production path reads it. It is a
+`maxlen=256` in-process debugging mirror, exactly as its comment says, and explicitly not the source
+of truth for run status. Changing it would be churn.
+
+**FALSE POSITIVE — `time.sleep` in `fetch.py` (DWF-ACT-006).** Every blocking fetch is dispatched
+through `asyncio.to_thread` (`fetch.py:59-63`), so the sleep runs on a thread-pool thread and blocks
+neither the event loop nor a workflow worker. Bounded too: `HTTP_ATTEMPTS=3`, `HTTP_BASE_DELAY=1.0`
+→ ~3 s worst case.
+
+**FALSE POSITIVE — DWF-MGT-008/009.** All three workflow services already satisfy both. Starts return
+the id (`flows` → `RunState.run_id`; `ingest` → `IngestAccepted.run_id` plus a `Location` header);
+statuses 404 on a genuinely missing instance (`flows` `NotFoundError`, `ingest` `HTTPException(404)`)
+— and ingest first rebuilds the record from the workflow input, so a pod restart does not produce a
+false 404. `medallion` has no management surface at all because `stage_run` is dispatched from its
+pub/sub handler, so the rules do not apply; whether an operator should be able to inspect or terminate
+a stuck stage watcher without going to the sidecar directly is a DESIGN question, not this defect.
+
+---
+
 ## The five — four CLOSED 2026-08-15, one still yours
 
 | # | Task | State |
