@@ -71,10 +71,25 @@
 
 <div class="mx-auto w-full max-w-5xl px-5 pt-14 pb-10">
 	{#if !project}
-		<!-- No cookie, no pretending. The lakehouse is scoped to a project by CONTEXT rather than by
-		     URL, so with none open there is no hierarchy to draw and no warehouse set to summarise —
-		     saying so and pointing at the estate's project list is the honest landing. The link leaves
-		     this zone for the catch-all's `/projects`, so it MUST hard-navigate. -->
+		<!-- No cookie, no pretending — but the scope claimed here is THIS PAGE's, never the zone's.
+
+		     It read "Every lakehouse surface is scoped to the project you are standing in — warehouses,
+		     namespaces and tables all hang beneath one", and that was false. Checked in the code rather
+		     than assumed: `fetchTables` calls `/v1/table`, `fetchNamespaceTables` calls
+		     `/v1/namespace/<ns>/table/list`, the lineage remotes name no project at all, and
+		     `catalogJSON` ($lib/server/doors.ts) forwards the session bearer and NOTHING else — no
+		     project header, no project query. Those surfaces are estate-wide reads filtered by the
+		     caller's own FGA grants, and they render fine with no project open. The navbar's Lakehouse
+		     trigger points straight at one of them.
+
+		     The sentence cost something real: it was read as a specification, and the rail was changed to
+		     disable every project-scoped entry — greying out working pages and the one-click path to
+		     tables. That was reverted; the sentence was the thing that was wrong.
+
+		     What IS per-project is this overview: the hierarchy, and the warehouses whose `project` field
+		     claims this one (`mine`, below). So the page now says that about itself, and still points at
+		     the estate's project list. The link leaves this zone for the catch-all's `/projects`, so it
+		     MUST hard-navigate. -->
 		<header class="mb-4 flex items-center gap-2">
 			<FolderKanban size={15} class="text-muted-foreground" />
 			<h1 class="text-xl font-medium">Lakehouse</h1>
@@ -82,8 +97,9 @@
 		<div class="bg-card rounded-lg border px-5 py-8">
 			<p class="mb-1 text-sm font-medium">No active project.</p>
 			<p class="text-muted-foreground max-w-[62ch] text-sm">
-				Every lakehouse surface is scoped to the project you are standing in — warehouses, namespaces
-				and tables all hang beneath one. Open a project and this page becomes its overview.
+				This overview is per project — a project's hierarchy, and the warehouses claiming it. Open one
+				and this page becomes its summary. The rest of the zone does not need one: Catalog and Lineage
+				list every table, namespace and run your grants allow, across the estate.
 			</p>
 			<p class="mt-4 text-sm">
 				<a class="underline underline-offset-4" href="/projects" data-sveltekit-reload>
