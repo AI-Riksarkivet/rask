@@ -384,16 +384,26 @@ async def _revoke(fga_client: Any, *, kind: str, obj_id: str, fga_enabled: bool)
     return await fga.revoke_object_tuples(fga_client, f"{kind}:{obj_id}", actor=ACTOR, origin="lifecycle_delete")
 
 
-#: The control-plane vocabulary for a purge.
+#: The control-plane vocabulary for a purge — its OWN verbs since diff2 F10 item 6.
 #:
-#: DELIBERATE REUSE of the existing drop actions rather than new ``table_purged`` / ``namespace_purged``
-#: members. ``ControlAction`` is a wire contract across three files — the Literal, ``docs/catalog-openapi.json``
-#: and ``frontend/packages/api/src/generated/catalog.ts`` — and adding a member without regenerating all
-#: three leaves the TS client unable to NAME an event the backend publishes. The regen could not be done
-#: in this change, so the purge speaks the vocabulary that already exists: the record's `reason` in
-#: `extra` is what distinguishes "the grace period ran out" from the original drop, and a consumer that
-#: re-reads state on either one is correct in both cases (an event is a refresh hint, never data).
-_PURGE_ACTION: dict[str, ControlAction] = {"table": "table_dropped", "namespace": "namespace_dropped"}
+#: It reused the drop actions, for a stated reason that has now been discharged rather than overruled:
+#: ``ControlAction`` is a wire contract across three files (the Literal, ``docs/catalog-openapi.json``,
+#: ``frontend/packages/api/src/generated/catalog.ts``), adding a member without regenerating all three
+#: leaves the TS client unable to NAME an event the backend publishes, and "the regen could not be done
+#: in this change". It has been done (``make openapi`` + ``bun run gen:types:catalog``, with
+#: ``make openapi-check`` green), so the reuse no longer buys anything.
+#:
+#: WHY THE REUSE WAS WORTH UNDOING. The old argument — a consumer that re-reads state on either action
+#: is correct either way, because an event is a refresh hint and never data — is true and is not the
+#: whole job. These events are also the estate's governance FEED, read by humans at
+#: ``/lakehouse/admin/events``, and there the two facts are not interchangeable: "someone decided to
+#: remove this" and "the grace period ran out and the sweep collected it" differ in cause, in
+#: appealability, and in finality (a purge is the last event an object ever emits). The distinguishing
+#: `reason` lived in ``extra``, which that feed does not read — so a reclamation rendered as a person's
+#: deletion, with ``ACTOR`` (a service identity) in the actor column.
+#:
+#: ``extra.reason`` is unchanged, so a consumer keying on it keeps working; this is purely additive.
+_PURGE_ACTION: dict[str, ControlAction] = {"table": "table_purged", "namespace": "namespace_purged"}
 
 
 async def _purge_one(
@@ -470,7 +480,7 @@ async def _purge_one(
     object_type: ControlObjectType = "namespace" if kind == "namespace" else "table"
     await emit_control(
         control,
-        action=_PURGE_ACTION.get(kind, "table_dropped"),
+        action=_PURGE_ACTION.get(kind, "table_purged"),
         object_type=object_type,
         object_id=f"{kind}:{obj_id}",
         actor=ACTOR,

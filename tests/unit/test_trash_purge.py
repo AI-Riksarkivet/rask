@@ -605,9 +605,16 @@ def test_the_purge_is_capped_per_tick_oldest_first(tmp_path: Path) -> None:
 def test_one_control_event_per_purged_record(tmp_path: Path) -> None:
     """A reclamation is a governance change, so it lands on the control stream — one event per record.
 
+    The verbs are the PURGE's own — `table_purged` / `namespace_purged`, not the drop actions (diff2
+    F10 item 6). Reusing `table_dropped` made an automated reclamation indistinguishable from a person
+    deleting the table unless a consumer read `extra.reason`, and the console's governance feed does
+    not: it rendered a purge as a deletion with a service identity in the actor column. Two different
+    facts — "someone decided to remove this" and "the grace period ran out" — differ in cause, in
+    appealability, and in finality, so they get two names.
+
     ``extra`` stays a pointer payload (claim-check): the reason, the deadline, the size. ``reason`` is
-    what distinguishes the purge from the original drop, since the purge deliberately reuses the existing
-    drop actions rather than adding wire-contract members it cannot regenerate the TS client for.
+    UNCHANGED and still says `trash_expired`, so a consumer keying on it keeps working — the verbs are
+    purely additive.
     """
     estate = _Estate(tmp_path)
     canonical, _ = estate.drop_recoverably("team", "orders")
@@ -618,8 +625,8 @@ def test_one_control_event_per_purged_record(tmp_path: Path) -> None:
 
     assert len(out.purged) == 2
     assert {(e.action, e.object_type, e.object_id) for e in control.events} == {
-        ("table_dropped", "table", f"table:{canonical}"),
-        ("namespace_dropped", "namespace", "namespace:archive"),
+        ("table_purged", "table", f"table:{canonical}"),
+        ("namespace_purged", "namespace", "namespace:archive"),
     }
     assert all(e.actor == "service:maintenance" for e in control.events)
     assert all(e.extra["reason"] == "trash_expired" for e in control.events)

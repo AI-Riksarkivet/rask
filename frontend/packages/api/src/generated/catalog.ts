@@ -4297,7 +4297,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_published";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -7688,7 +7688,7 @@ export interface components {
          * VendedCredentials
          * @description Scoped storage credentials for one table at one tier.
          *
-         *     ``storage_options`` is consumed directly by pylance / medallion-producer /
+         *     ``storage_options`` is consumed directly by pylance / lance-ray /
          *     object_store. ``expires_at_millis`` is when the client must refresh
          *     (``None`` for long-lived static keys).
          */

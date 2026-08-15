@@ -63,6 +63,17 @@ ControlAction = Literal[
     "table_undropped",
     # #96 the recoverable CASCADE: recovering a whole subtree is one governance event on its root.
     "namespace_undropped",
+    # diff2 F10 item 6 — the EXPIRY PURGE has its own verbs. It reused `table_dropped` /
+    # `namespace_dropped` with `extra.reason="trash_expired"`, which made an automated reclamation
+    # indistinguishable from a person deleting the table unless a consumer thought to read `extra` —
+    # and the console's feed does not. Two different facts were arriving under one name: "someone
+    # decided to remove this" and "the grace period ran out and the sweep collected it". The second
+    # has no actor (the emitter stamps `None`), is not appealable, and is the LAST event an object
+    # ever produces, so conflating them mis-reports both the cause and the finality.
+    #
+    # Additive: `extra.reason` stays, so a consumer keying on it keeps working.
+    "table_purged",
+    "namespace_purged",
     # § D2 D-R2: the tag is the truth, this event is only the NOTIFICATION. A publication moves the
     # `published` ref, so it belongs to the same family as the other ref-plane mutations here — and a
     # consumer that misses it loses nothing, because the tag still answers "what is ready?".

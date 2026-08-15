@@ -2687,6 +2687,8 @@
               "namespace_unprotected",
               "table_undropped",
               "namespace_undropped",
+              "table_purged",
+              "namespace_purged",
               "table_published"
             ],
             "title": "Action",
@@ -10379,7 +10381,7 @@
         "type": "object"
       },
       "VendedCredentials": {
-        "description": "Scoped storage credentials for one table at one tier.\n\n``storage_options`` is consumed directly by pylance / medallion-producer /\nobject_store. ``expires_at_millis`` is when the client must refresh\n(``None`` for long-lived static keys).",
+        "description": "Scoped storage credentials for one table at one tier.\n\n``storage_options`` is consumed directly by pylance / lance-ray /\nobject_store. ``expires_at_millis`` is when the client must refresh\n(``None`` for long-lived static keys).",
         "properties": {
           "expires_at_millis": {
             "anyOf": [
