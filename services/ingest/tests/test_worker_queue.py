@@ -11,6 +11,7 @@ set RASK_NATS_URL.
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import uuid
@@ -18,11 +19,12 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import lance
+import nats
 import pyarrow as pa
 import pytest
 import pytest_asyncio
 from ingest.lander import create_empty
-from ingest.queue import STREAM, UnitTask, WorkQueue, unit_subject
+from ingest.queue import DLQ_SUBJECT, STREAM, UnitTask, WorkQueue, unit_subject
 from ingest.runtime import BRONZE_SCHEMA, _rows_in
 from ingest.worker import Worker, units_to_table
 
@@ -65,6 +67,14 @@ class _StubFetcher:
 async def queue() -> WorkQueue:
     q = await WorkQueue.connect(NATS_URL)
     await q.ensure_stream()
+    # ASK FOR THE DLQ, do not inherit it. The poison-park test below publishes to `dlq.ingest.tasks`,
+    # which `ensure_stream` does not cover — it creates INGEST (`ingest.>`) only. That test passed for
+    # as long as it did because the dev cluster's chart Job had already created `dlq.>` for the whole
+    # estate, so the suite was reading state it never requested and never asserted. Against a bare
+    # broker it failed at once with `NoStreamResponseError` (reproduced 2026-08-15 on a clean NATS
+    # brought up as a Dagger service). A test whose outcome depends on who else ran first is not
+    # testing what it says it tests.
+    await q.ensure_dlq_stream()
     return q
 
 
@@ -127,7 +137,48 @@ async def test_a_corrupt_unit_parks_and_does_not_poison_the_run(queue: WorkQueue
     # unit must leave NO trace in the data, and with batching the two survivors share one fragment,
     # so a fragment count can no longer tell a parked unit from a written one.
     assert _rows_in(outcome.fragments) == 2, "the corrupt unit contributed a ROW — parking did not refuse the write"
+
+    # AND THE PARKED UNIT IS ON THE DLQ. Everything above proves the run survived the poison; none of
+    # it proved the unit was PARKED, which is the other half of the docstring's claim and the whole
+    # point of `park_poison` — "so it is visible rather than merely gone". Replacing the DLQ publish
+    # with `pass` left every assertion above green.
+    parked = await _parked_units_for(run)
+    assert [p["task"]["key"] for p in parked] == ["iiif://v/1"], (
+        f"the DLQ holds {[p['task']['key'] for p in parked]} for this run — the refused unit must be there, and nothing else may be"
+    )
+    assert parked[0]["reason"], "a parked unit carries no reason — it is gone, not visible"
     await queue.close()
+
+
+async def _parked_units_for(run_id: str) -> list[dict]:
+    """Every parked unit belonging to ONE run, read back off `dlq.ingest.tasks`.
+
+    Filtered by `run_id` on purpose. The DLQ is a `limits`-retention stream shared by the whole estate
+    — Dapr parks every app's dead letters on `dlq.>` — so it also holds other services' messages and
+    every earlier run of this suite. Asserting on its raw contents would be the same borrowed-state
+    mistake this test was just fixed for, one level down.
+
+    Opens its OWN connection rather than borrowing the fixture's `WorkQueue`: the queue exposes no
+    JetStream handle, and reaching into `_js` from a test would couple the assertion to a private
+    attribute for no gain.
+    """
+    out: list[dict] = []
+    nc = await nats.connect(NATS_URL)
+    try:
+        sub = await nc.jetstream().pull_subscribe(DLQ_SUBJECT)
+        while True:
+            try:
+                msgs = await sub.fetch(batch=64, timeout=1)
+            except TimeoutError:
+                break  # drained — the terminating condition, not a failure
+            for msg in msgs:
+                payload = json.loads(msg.data)
+                if payload.get("task", {}).get("run_id") == run_id:
+                    out.append(payload)
+                await msg.ack()
+    finally:
+        await nc.close()
+    return out
 
 
 @pytest.mark.asyncio

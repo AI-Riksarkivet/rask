@@ -284,6 +284,11 @@ async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
     queue = await WorkQueue.connect(nats_url())
     try:
         await queue.ensure_stream()
+        # Only the DRAIN path needs this, which is why it is here and not beside the publish-side
+        # `ensure_stream` above: `park_poison` fires from the worker, awaits before its `msg.ack()`,
+        # and is unwrapped — so a missing DLQ stream turns the one mechanism that stops a poison unit
+        # from stalling a run INTO the stall.
+        await queue.ensure_dlq_stream()
         # The RUN's sizing, resolved at accept and carried on the chunk — never re-read from env here.
         # Re-reading would let a rolling restart change fragment size under a live fan-out, so two
         # chunks of one run could write different layouts and the operator would have no record of

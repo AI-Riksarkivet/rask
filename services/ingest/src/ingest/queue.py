@@ -48,6 +48,13 @@ STREAM = "INGEST"
 SUBJECT_ROOT = "ingest"
 DLQ_SUBJECT = "dlq.ingest.tasks"
 
+#: The stream that carries `DLQ_SUBJECT`. Estate-wide and NOT this plane's own — Dapr's resiliency
+#: parks every app's dead letters on `dlq.>` — so its config belongs to the chart's nats-stream-job
+#: and is mirrored, never invented, here. Named rather than derived: this was
+#: `DLQ_SUBJECT.split(".")[0].upper()`, which silently renames the stream if the subject is ever
+#: re-rooted.
+DLQ_STREAM = "DLQ"
+
 # One unit may hold the ack this long before JetStream assumes the worker died. Generous because a
 # unit is an HTTP fetch of a multi-MB page image from a rate-limited external endpoint; too short and
 # a slow-but-alive worker has its work redelivered underneath it, which duplicates fetches against
@@ -159,6 +166,40 @@ class WorkQueue:
             # the thing actually worth saying is what the existing stream IS, which the next line says.
             logger.debug("%s already exists; not reconciled by add_stream", STREAM, exc_info=True)
             await self._warn_if_retention_disagrees()
+
+    async def ensure_dlq_stream(self) -> None:
+        """Create the estate's DLQ stream if the chart's provisioning Job has not yet.
+
+        `park_poison` publishes to `dlq.ingest.tasks`, and NOTHING in this plane provisioned the
+        stream that carries it — `ensure_stream` covers only INGEST (`ingest.>`). Where the chart's
+        Job had run, the park worked on BORROWED state; anywhere else it raised
+        `NoStreamResponseError` from the very first poison unit. Reproduced against a bare broker.
+
+        That is not merely a test problem. `park_poison` is awaited BEFORE `msg.ack()` in both of the
+        worker's parking paths, and it is not wrapped — so on a stream-less broker the raise means
+        the unit is never acked, the drain dies, and the chunk that was supposed to "complete WITH
+        ERRORS rather than hang" hangs. The one path written to stop a poison unit from stalling a
+        run was itself the stall.
+
+        CONFIG IS MIRRORED FROM THE CHART, NOT CHOSEN HERE, and the match is load-bearing. This
+        stream is estate-wide (Dapr's resiliency parks every app's dead letters on `dlq.>`), and
+        `chart/templates/nats-stream-job.yaml` asserts `retention=limits` on it, printing "A stream
+        is never re-created once it exists, so this cannot self-heal" and exiting 1 on a mismatch.
+        Creating it here with WORK_QUEUE — the retention this plane's OWN stream uses — would
+        therefore break the estate's entire stream provisioning, for every app, the next time that
+        Job ran. Keep these two definitions identical.
+        """
+        try:
+            await self._js.add_stream(
+                jsapi.StreamConfig(
+                    name=DLQ_STREAM,
+                    subjects=["dlq.>"],
+                    retention=jsapi.RetentionPolicy.LIMITS,
+                )
+            )
+        except Exception:
+            # Already exists — the normal in-cluster path, where the chart's Job got there first.
+            logger.debug("%s already exists; not reconciled by add_stream", DLQ_STREAM, exc_info=True)
 
     async def _warn_if_retention_disagrees(self) -> None:
         """Say so, loudly, when the LIVE stream is not the stream this plane is written against.
@@ -397,11 +438,20 @@ async def inspect_queue(url: str, timeout: float = 3.0) -> QueueSnapshot:
             # and a half hours while every liveness probe stayed green.
             logger.warning("the %s stream does not exist — publishes will fail until it is provisioned", STREAM)
         try:
-            await js.stream_info(DLQ_SUBJECT.split(".")[0].upper())
+            await js.stream_info(DLQ_STREAM)
             out["dlq_present"] = True
         except Exception:
             out["dlq_present"] = False
-            logger.warning("the DLQ stream does not exist — parked poison units are DROPPED, not parked")
+            # NOT "dropped". Measured against a bare broker: `park_poison` awaits `js.publish`, which
+            # raises `NoStreamResponseError` when no stream carries the subject — and the worker awaits
+            # it BEFORE `msg.ack()`, unwrapped. So the unit is not silently lost; the DRAIN DIES on it,
+            # which is the louder and more expensive failure. Saying "dropped" sent a reader looking
+            # for missing records when the symptom is a chunk that never completes.
+            logger.warning(
+                "the %s stream does not exist — a poison unit will RAISE in park_poison and kill the "
+                "drain before its ack, hanging the chunk it was meant to let finish",
+                DLQ_STREAM,
+            )
         return out
     finally:
         if nc is not None:
