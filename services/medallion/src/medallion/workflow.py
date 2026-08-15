@@ -105,6 +105,13 @@ class StageJobSpec(BaseModel):
     trigger: dict[str, Any] = Field(default_factory=dict)
     poll_interval_seconds: int = POLL_INTERVAL_SECONDS
     max_polls: int = MAX_POLLS
+    #: CARRIED ACROSS `continue_as_new`, and load-bearing for it. Each turn starts with EMPTY history,
+    #: so a turn has no memory that `submit_stage` already ran — without these two fields the next turn
+    #: would submit the same stage job again (once per poll interval, forever, each overwriting the same
+    #: output dataset) and would never reach the ceiling because the count restarted at zero.
+    #: `None`/`0` mean "first turn": submit, then count from there.
+    submission_id: str | None = None
+    polls_done: int = 0
 
 
 class StageJobOutcome(BaseModel):
@@ -134,39 +141,47 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     # the instance terminal FAILED with no report: nothing watching a job that may or may not have
     # been submitted, the trigger already acked in pass 1, and the only record a Dapr instance in a
     # FAILED state nobody queries.
-    try:
-        submission_id: str = yield ctx.call_activity(submit_stage, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
-    except Exception:
-        if not ctx.is_replaying:
-            log.error("medallion_stage_submit_failed", extra={"stage": spec.stage, "to_uri": spec.to_uri})
-        failed = StageJobOutcome(submission_id="", status=None, polls=0, verdict="failed")
-        yield ctx.call_activity(report_stage_outcome, input={"spec": spec.model_dump(), "outcome": failed.model_dump()}, retry_policy=ACTIVITY_RETRY)
-        return failed.model_dump()
-
-    status: str | None = None
-    polls = 0
-    # BOUNDED, not `while True` (DWF-DET-013). The bound is the history bound; S2 replaces it with
-    # `continue_as_new`, at which point the loop can be indefinite because history resets each turn.
-    for attempt in range(spec.max_polls):
-        # The timer comes FIRST. Polling before it would ask the dashboard about a submission it has
-        # very likely not registered yet, spending an activity and a history entry to learn nothing —
-        # and `job_status` answers None for an unknown id precisely so that race is not fatal.
-        yield ctx.create_timer(timedelta(seconds=spec.poll_interval_seconds))
-        # An exhausted poll means the dashboard stayed unreachable across the whole retry policy. The
-        # JOB may be running perfectly, so this is a LOST WATCH, not a job failure — reporting `failed`
-        # would send an operator hunting a healthy job. Break to the abandoned path below, whose
-        # vocabulary already means exactly "we stopped watching, the job may still land".
+    # FIRST TURN ONLY. After a `continue_as_new` the spec carries the id, and re-submitting would start
+    # a second Ray job writing the same output dataset.
+    submission_id: str | None = spec.submission_id
+    if submission_id is None:
         try:
-            status = yield ctx.call_activity(poll_stage, input={"submission_id": submission_id}, retry_policy=ACTIVITY_RETRY)
+            submission_id = yield ctx.call_activity(submit_stage, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
         except Exception:
             if not ctx.is_replaying:
-                log.error("medallion_stage_watch_lost", extra={"submission_id": submission_id, "polls": attempt})
-            status = None
-            polls = attempt
-            break
-        polls = attempt + 1
-        if _is_terminal(status):
-            break
+                log.error("medallion_stage_submit_failed", extra={"stage": spec.stage, "to_uri": spec.to_uri})
+            failed = StageJobOutcome(submission_id="", status=None, polls=0, verdict="failed")
+            yield ctx.call_activity(report_stage_outcome, input={"spec": spec.model_dump(), "outcome": failed.model_dump()}, retry_policy=ACTIVITY_RETRY)
+            return failed.model_dump()
+
+    # ONE poll per turn — the Monitor pattern. The loop this replaces was bounded, so it was never the
+    # literal `while True` anti-pattern, but its bound WAS the history bound: 2880 polls x 30 s meant
+    # one instance could carry ~5,760 events, replayed from the start on every continuation. Now each
+    # turn begins with empty history and `max_polls` means only "how long are we willing to wait".
+    #
+    # The timer still comes FIRST. Polling before it would ask the dashboard about a submission it has
+    # very likely not registered yet, spending an activity and a history entry to learn nothing — and
+    # `job_status` answers None for an unknown id precisely so that race is not fatal.
+    status: str | None = None
+    polls = spec.polls_done
+    yield ctx.create_timer(timedelta(seconds=spec.poll_interval_seconds))
+    # An exhausted poll means the dashboard stayed unreachable across the whole retry policy. The JOB
+    # may be running perfectly, so this is a LOST WATCH, not a job failure — reporting `failed` would
+    # send an operator hunting a healthy job. Fall through to the abandoned path below, whose
+    # vocabulary already means exactly "we stopped watching, the job may still land".
+    try:
+        status = yield ctx.call_activity(poll_stage, input={"submission_id": submission_id}, retry_policy=ACTIVITY_RETRY)
+        polls = spec.polls_done + 1
+    except Exception:
+        if not ctx.is_replaying:
+            log.error("medallion_stage_watch_lost", extra={"submission_id": submission_id, "polls": polls})
+        status = None
+
+    # STILL RUNNING and budget left: hand the rest to a fresh turn. Everything above is awaited, which
+    # matters — `continue_as_new` restarts immediately and DISCARDS any task started but not awaited.
+    if not _is_terminal(status) and status is not None and polls < spec.max_polls:
+        ctx.continue_as_new(spec.model_copy(update={"submission_id": submission_id, "polls_done": polls}).model_dump())
+        return {}
 
     if not _is_terminal(status):
         # The ceiling, with the job still running. Distinct from a failure ON PURPOSE: reporting a

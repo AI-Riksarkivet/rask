@@ -78,7 +78,13 @@ def _actions(module: str, function: str) -> list[str]:
         if not isinstance(node, ast.Call):
             continue
         call = ast.unparse(node.func)
-        if call.endswith(("ctx.call_activity", "ctx.call_child_workflow", "ctx.create_timer", "ctx.wait_for_external_event")):
+        # `continue_as_new` is here for a reason the others are not: it does not consume a history
+        # position, it ENDS the history and starts a fresh one. It was added 2026-08-15 after
+        # `stage_run` was converted from a bounded poll loop to the Monitor pattern and this snapshot
+        # did not move — the restructure kept every call_activity/create_timer in the same source
+        # order, so the most replay-significant change possible was invisible to the gate that exists
+        # to make replay-significant changes visible.
+        if call.endswith(("ctx.call_activity", "ctx.call_child_workflow", "ctx.create_timer", "ctx.wait_for_external_event", "ctx.continue_as_new")):
             verb = call.rsplit(".", 1)[-1]
             # The activity NAME matters as much as the count: swapping two same-arity activities keeps
             # the length identical and still diverges on replay.

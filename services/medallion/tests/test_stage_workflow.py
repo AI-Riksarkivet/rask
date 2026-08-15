@@ -41,6 +41,8 @@ class _Ctx:
         self.raise_on: str | None = None
         self.instance_id = "wf-test"
         self.current_utc_datetime = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+        #: Set by `continue_as_new`; None means the workflow ended inside this turn.
+        self.continued: Any = None
 
     def call_activity(self, activity: Any, *, input: Any = None, retry_policy: Any = None) -> _Action:  # noqa: A002
         name = getattr(activity, "__name__", str(activity))
@@ -55,21 +57,51 @@ class _Ctx:
         self.actions.append(f"create_timer({int(delay.total_seconds())}s)")
         return _Action("timer")
 
+    def continue_as_new(self, new_input: Any, *, save_events: bool = False) -> None:
+        """Record the turn boundary AND the input it carries.
+
+        The carried input is the whole risk of the pattern: a fresh turn has empty history, so if the
+        submission id or the poll count did not ride along, the next turn re-submits the Ray job and
+        counts from zero. `_drive` below feeds this straight back in, which is what makes the multi-turn
+        tests exercise the real hand-off rather than a single turn in isolation.
+        """
+        self.actions.append("continue_as_new")
+        self.continued = new_input
+
 
 def _drive(ctx: _Ctx, payload: dict[str, Any]) -> dict[str, Any]:
-    """Run the generator to completion, feeding each yielded action's scripted result back in."""
+    """Run the workflow to completion ACROSS `continue_as_new` turns.
+
+    A turn is a fresh generator over the input the previous turn handed forward — which is exactly what
+    the runtime does, and why this is driven as a loop rather than one generator. The `ctx` is REUSED so
+    `ctx.actions` accumulates the whole run: a single turn would prove almost nothing now that one turn
+    performs one poll.
+
+    Feeding `ctx.continued` back in is what makes these tests exercise the hand-off. If the workflow
+    ever stopped carrying the submission id, the next turn would re-enter the submit branch and the
+    action list would show a second `submit_stage` — visible here, invisible in a single-turn drive.
+    """
     # cast, not a suppression: `_Ctx` implements the slice of DaprWorkflowContext this
     # workflow uses, which is the whole point of driving it by hand.
-    gen = stage_run(cast("Any", ctx), payload)
-    try:
-        action = gen.send(None)
-        while True:
-            if action.raises:
-                action = gen.throw(RuntimeError(f"{action.name} exhausted its retries"))
-                continue
-            action = gen.send(action.result)
-    except StopIteration as stop:
-        return stop.value or {}
+    current = payload
+    result: dict[str, Any] = {}
+    # Bounded so a broken hand-off fails the test instead of hanging the suite.
+    for _ in range(200):
+        ctx.continued = None
+        gen = stage_run(cast("Any", ctx), current)
+        try:
+            action = gen.send(None)
+            while True:
+                if action.raises:
+                    action = gen.throw(RuntimeError(f"{action.name} exhausted its retries"))
+                    continue
+                action = gen.send(action.result)
+        except StopIteration as stop:
+            result = stop.value or {}
+        if ctx.continued is None:
+            return result
+        current = ctx.continued
+    raise AssertionError("continue_as_new never converged — the workflow handed forward 200 times")
 
 
 def _spec(**over: Any) -> dict[str, Any]:
@@ -96,16 +128,22 @@ def test_the_publish_happens_ONLY_AFTER_a_terminal_read() -> None:
 
     _drive(ctx, _spec())
 
+    # ONE poll per turn now, with `continue_as_new` marking each boundary. The submit appears EXACTLY
+    # once across all three turns — a second one would mean the submission id stopped riding the
+    # carried input and every poll interval was starting a fresh Ray job over the same output.
     assert ctx.actions == [
         "call_activity(submit_stage)",
         "create_timer(30s)",
-        "call_activity(poll_stage)",
+        "call_activity(poll_stage)",  # PENDING
+        "continue_as_new",
         "create_timer(30s)",
-        "call_activity(poll_stage)",
+        "call_activity(poll_stage)",  # RUNNING
+        "continue_as_new",
         "create_timer(30s)",
-        "call_activity(poll_stage)",
+        "call_activity(poll_stage)",  # SUCCEEDED -> terminal, so no further turn
         "call_activity(publish_stage_ready)",
     ]
+    assert ctx.actions.count("call_activity(submit_stage)") == 1, "the job was submitted more than once across turns"
     publish_at = ctx.actions.index("call_activity(publish_stage_ready)")
     last_poll = len(ctx.actions) - 1 - ctx.actions[::-1].index("call_activity(poll_stage)")
     assert publish_at > last_poll, "the mover was woken before the job's terminal state was read"
