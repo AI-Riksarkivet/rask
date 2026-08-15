@@ -319,3 +319,41 @@ design does not do.)
    scoped app either way. S3 adds `promotionReviewBand` and the quality-gate wiring, which is already
    a chart change plus a mover restart. Doing both in one window costs one rollout instead of two,
    and there is no ordering dependency between them.
+
+---
+
+## 10. DECIDED — the two cascade heads are distinct events, and both must fire
+
+Raised as a defect ("a table emitting both signals cascades twice") and closed as **correct behaviour**
+after reading what the two heads actually publish. Recorded here rather than in the plan doc that raised
+it, because medallion owns this and that doc is scheduled for deletion.
+
+**The claim.** `/bronze-arrival` (`ingest_trigger.py`) and `/publication-arrival`
+(`publication_trigger.py`) both publish `medallion.bronze`, and they derive the correlation token from
+different sources — `ingest_trigger.py:112` from the bronze-write run's `lance.token` facet,
+`publication_trigger.py:103` from the control event's `event_id`. Different tokens produce different
+`stage_submission_id`, hence different workflow `instance_id`, so the deterministic-instance dedupe in
+`transform.py` never engages between them. Both cascades run.
+
+**Why that is right.** The two triggers do not describe the same work:
+
+| | `/bronze-arrival` | `/publication-arrival` |
+| --- | --- | --- |
+| fires on | a bronze WRITE reaching COMPLETE | a table being PUBLISHED (`table_published`) |
+| `dataset` | the dataset actually written — the events lane's `bronze_dataset`, project-qualified | `bronze$<table>` — the published table |
+| range | none; the arrival IS the unit | carries `from_version` / `to_version` (D-R3) |
+
+A version RANGE is a concept the ingest head does not have, and the datasets differ. Unifying the token
+would therefore do the opposite of fixing something: it would collide two legitimate cascades onto one
+`instance_id`, and Dapr would answer the second `schedule_new_workflow` as a duplicate — silently
+dropping one of two pieces of work that must both happen. It would also conflate two distinct cascades
+in tracing, which is what the token exists to keep apart.
+
+**Explicitly NOT the fix: token de-duplication at the movers.** An adversarial review found that key is
+not unique per legitimate message on the mover's own topic — deploying it halts every distributed
+cascade, because the mover deliberately receives more than one message per token.
+
+**What would change this.** If a future head publishes a trigger whose `dataset` AND range are identical
+to another's, that IS a duplicate and the instance_id will correctly dedupe it. The property to preserve
+is that the token distinguishes *events*, while `stage_submission_id` distinguishes *work* — they are
+different questions and must not be merged.
