@@ -13,9 +13,24 @@
  * a `lance-ns` path that no longer exists. So the plane's central claim was witnessed and then became
  * unreproducible. A claim nobody can re-run is a claim that silently rots.
  *
- * STATUS: DRIVEN GREEN against local k3s on 2026-08-15 — all six checks, exit 0. Nothing runs it
+ * STATUS: DRIVEN GREEN against local k3s on 2026-08-15 — all nine checks, exit 0. Nothing runs it
  * automatically, so a green CI is still not evidence it passed: say "driven" only after you have
  * watched the output yourself.
+ *
+ * IT SEEDS ITS OWN GRANTS (see FGA_API_URL). The first green run was green partly because tuples had
+ * been written by hand that afternoon; they lived in no file, so a fresh estate would have failed the
+ * run and the next reader would have re-diagnosed a working plane.
+ *
+ * IT COVERS TWO OF THE THREE TARGETING SOURCES. Authorship and project WATCH are both driven here.
+ * The third — governance events naming a subject in `extra.subject` — arrives on the catalog's
+ * control topic rather than through lineage, so it needs a grant written through the catalog's own
+ * door to produce one; it is NOT covered, and saying so is the point.
+ *
+ * ADDING THE WATCH CASE IMMEDIATELY FOUND A REAL DEFECT, which is the argument for driving all of
+ * them: `reconcile()` accepted `watchers` and `push`, the cron route passed both, and the call to
+ * `ingest_run_event` forwarded NEITHER. So on the feed lane — the only lane ingest, Ray TRAIN and
+ * every external OpenLineage producer ever reach — no project watcher was resolved and no email or
+ * Slack was sent, while the tick logged `lineage_feed_reconciled` and the author's row landed.
  *
  * FOUR DEPLOYMENT FACTS IT FOUND, none of which any unit test could have:
  *   1. `notifications` must hold FGA grants of its OWN. The feed is governed, so a deployment that
