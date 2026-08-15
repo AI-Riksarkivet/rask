@@ -91,7 +91,7 @@ class BaseRefs(BaseModel):
         return None
 
 
-def _normalise(uri: str) -> str:
+def normalise(uri: str) -> str:
     """Compare paths, not spellings: drop the scheme and any trailing slash.
 
     A manifest states ``/bucket/ns/t.lance`` where the caller holds ``s3://bucket/ns/t.lance``. Left
@@ -106,6 +106,14 @@ def _normalise(uri: str) -> str:
     """
     without_scheme = uri.split("://", 1)[-1]
     return without_scheme.strip("/")
+
+
+#: PUBLIC as of the F6(d) trash exclusion — the sweep must compare a trash record's `location` against
+#: a discovered dataset URI, and the estate gets exactly ONE comparator for "two spellings of one path".
+#: Re-implementing the compare at the call site is how a guard silently never matches, which this
+#: function's own docstring names as the failure mode indistinguishable from having no guard at all.
+#: The private alias stays so the in-module call sites read unchanged.
+_normalise = normalise
 
 
 def protected_roots(dataset_uris: Iterable[str], storage_options: StorageOptions | None = None) -> BaseRefs:

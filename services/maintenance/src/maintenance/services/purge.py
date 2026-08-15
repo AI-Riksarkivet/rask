@@ -167,7 +167,20 @@ def due_records(control_root: str, storage_options: StorageOptions) -> list[dict
     every failing dataset eventually gets an event, while here the over-cap remainder is drained on the
     next tick anyway and a stable order makes a capped run reproducible.
     """
-    return sorted(trash.expired(trash.list_all(control_root, storage_options)), key=lambda r: str(r.get("expires_at") or ""))
+    return due_from(trash.list_all(control_root, storage_options))
+
+
+def due_from(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """:func:`due_records` without the read — the expiry rule applied to records already in hand.
+
+    Split out for F6(d): the sweep now reads the trash index ONCE and derives two sets from it (the
+    datasets it must not rewrite, and this report-only due list). Before the split it called
+    `due_records`, which re-listed the whole index — a second full read per tick for a log line.
+
+    The rule itself is unchanged and stays in ONE place on purpose: the set that gets reported and the
+    set that gets deleted can never be two different answers.
+    """
+    return sorted(trash.expired(records), key=lambda r: str(r.get("expires_at") or ""))
 
 
 def report_is_clean(report: ReconcileReport) -> str | None:

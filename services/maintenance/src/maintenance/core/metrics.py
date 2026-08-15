@@ -39,6 +39,19 @@ _refused = _meter.create_counter(
 )
 
 
+#: F6(d) — datasets left alone because they are IN THE TRASH: dropped with a grace window, recoverable,
+#: and therefore frozen. Its own series rather than a fold into `_refused` because the two answer
+#: different questions: refused is "this dataset's LAYOUT defeats us", this is "this dataset's
+#: GOVERNANCE state forbids us". A step change here without a matching drop count is the signal that the
+#: exclusion is keyed wrong — the failure mode where a control-root misconfiguration quietly stops the
+#: estate being maintained while every tick still reports zero errors.
+_trashed_skipped = _meter.create_counter(
+    "compaction.datasets.trashed_skipped",
+    unit="{dataset}",
+    description="Discovered datasets the maintenance pass left untouched because a trash record covers them.",
+)
+
+
 #: #79 reclamation. Separate series from the compaction counters above because they answer a different
 #: question: those say how much history was folded away, these say how many DROPPED objects had their
 #: bytes destroyed — the only irreversible thing this service does.
@@ -113,6 +126,17 @@ def record_reclaimed(fragments_removed: int, versions_removed: int, indices_opti
     _fragments_removed.add(fragments_removed)
     _versions_removed.add(versions_removed)
     _indices_optimized.add(indices_optimized)
+
+
+def record_trashed_skipped(datasets: int) -> None:
+    """Record how many discovered datasets this tick left alone because they are IN THE TRASH (F6(d)).
+
+    Always emits, including zero, for `record_refused`'s reason applied one rung out: this exclusion is
+    keyed on a registry read, so a control-root misconfiguration or a bug in the path comparison could
+    start excluding the whole estate — and a sweep that maintains nothing while reporting no errors is
+    indistinguishable from a clean one without a series to look at.
+    """
+    _trashed_skipped.add(datasets)
 
 
 def record_refused(datasets: int) -> None:

@@ -40,6 +40,16 @@ class DatasetResult(BaseModel):
     #: "something failed" (nothing failed; we declined, before touching a byte). Folding a refusal
     #: into either is what made a shallow clone's silent full materialization invisible.
     refused: str | None = None
+    #: #F6(d) — this dataset is in the TRASH: dropped with a grace window, recoverable until it expires,
+    #: and therefore frozen. Names the record id and its deadline so a record stuck long past its
+    #: deadline (one the purge keeps refusing) is visible as a permanent exclusion rather than a
+    #: transient one.
+    #:
+    #: Its own field for the reason `refused` has one, one rung further out. `skipped` is "not this
+    #: tick" and would inflate the policy-cadence reading for something that lasts until undrop or
+    #: purge; `refused` is about the dataset's LAYOUT (a flag this pass cannot rewrite); this is about
+    #: its GOVERNANCE state — we can maintain it perfectly well and must not.
+    trashed: str | None = None
     fragments_removed: int = 0
     fragments_added: int = 0
     indices_optimized: int = 0

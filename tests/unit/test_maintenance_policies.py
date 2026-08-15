@@ -234,6 +234,16 @@ def _settings(tmp_path: Path) -> MaintenanceSettings:
             "s3_access_key_id": "x",
             "s3_secret_access_key": "x",
             "policy_root": str(tmp_path),
+            # CONTROL root too, not just the policy root. These tests drive the REAL `run_sweep`, and
+            # since F6(d) the sweep reads the trash index from the control root to decide which
+            # datasets it may rewrite — so an unset control root pointed at the shipped default
+            # (`s3://lance-catalog`), a bucket no unit test has. It used to pass only because that
+            # read was swallowed; now it aborts the tick, as the policy registry already did, because
+            # both are protective surfaces and sweeping without them rewrites data an owner kept.
+            #
+            # The right fix is the hermetic root, not a softer posture: a unit test that reaches for a
+            # real bucket is the defect, and it was invisible while the failure was swallowed.
+            "control_root": str(tmp_path),
         }
     )
 

@@ -22,12 +22,19 @@ from opentelemetry.trace import StatusCode
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
-from maintenance.core.metrics import record_dataset_swept, record_reclaimed, record_refused, record_run, record_run_started
+from maintenance.core.metrics import (
+    record_dataset_swept,
+    record_reclaimed,
+    record_refused,
+    record_run,
+    record_run_started,
+    record_trashed_skipped,
+)
 from maintenance.services import base_refs, purge
 from maintenance.services.optimize import DatasetResult, compact_one, discover_datasets
 from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
-from service_kit.lakehouse import maintenance_policies, warehouse_records
+from service_kit.lakehouse import maintenance_policies, trash, warehouse_records
 from service_kit.lakehouse.objectfs import s3_filesystem
 
 
@@ -163,22 +170,47 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     # tick instead, because its gate is that tick's drift report: a reclaimer earns its delete permission
     # by first proving the report runs clean, and the sweep does not produce that report. So the sweep
     # keeps naming which recoverable drops are past their deadline and keeps deleting NOTHING.
+    # ONE read of the trash index per tick, TWO consumers (F6(d)). The CONTROL root, not the policy
+    # root: the catalog writes `_trash/` under its registry root (LANCE_CONTROL_ROOT). These default to
+    # the same bucket, so a mismatch is invisible.
+    #
+    # THE POSTURE CHANGED HERE, deliberately. This block used to be except-wrapped with "the trash
+    # report must never abort a maintenance tick" — correct while the only consumer was a log line. It
+    # is not correct now that the same read decides WHICH DATASETS THIS TICK MAY REWRITE. An unreadable
+    # trash index would silently restore the exact defect this exclusion exists to close: the sweep
+    # compacting and version-cleaning datasets an owner was told are frozen and recoverable.
+    #
+    # So it follows the policy registry's rule verbatim (`compaction_policies_unreadable_tick_aborted`,
+    # ~40 lines above, audit 2026-07-16): a PROTECTIVE registry we cannot read at all ABORTS the tick,
+    # failing toward not-rewriting. The trash index is exactly that — an owner's explicit "keep this"
+    # — and the alternative fails toward destroying it. The next cron fire retries; one unparseable
+    # record inside a readable index is already skipped-with-warning by `trash.list_all`, not fatal.
     try:
-        # The CONTROL root, not the policy root: the catalog writes `_trash/` under its registry root
-        # (LANCE_CONTROL_ROOT). These default to the same bucket, so the mismatch was invisible — and
-        # would have stayed invisible, because list_all uses allow_not_found=True and this whole block
-        # is except-wrapped: a wrong root reports zero due records forever rather than failing.
-        #
-        # Selection goes through `purge.due_records` so ONE rule decides what "expired" means: the set
-        # this logs and the set the purge deletes cannot be two different answers.
-        due = purge.due_records(settings.resolved_control_root, options)
-        if due:
-            log.info(
-                "trash_expiry_due_report_only",
-                extra={"count": len(due), "ids": [str(r.get("id")) for r in due][:20]},
-            )
-    except Exception as exc:  # noqa: BLE001 — the trash report must never abort a maintenance tick
-        log.warning("trash_expiry_report_failed", extra={"error": str(exc)})
+        trash_records = trash.list_all(settings.resolved_control_root, options)
+    except Exception:
+        log.error("compaction_trash_index_unreadable_tick_aborted")
+        raise
+    # EVERY record, not just the expired ones. An expired-but-unpurged record is still frozen data:
+    # `undrop` deliberately does not consult the clock, so a passed deadline is not permission to
+    # rewrite — it only means the purge is entitled to reclaim it, and until it has, the bytes stand.
+    #
+    # Guarded against the empty location: a trashed NAMESPACE record and a declared-only table both
+    # carry `location=""`, and `normalise("")` is `""`, which is a prefix of everything.
+    trashed_by_path: dict[str, str] = {}
+    for record in trash_records:
+        location = str(record.get("location") or "")
+        if not location:
+            continue
+        trashed_by_path[base_refs.normalise(location)] = f"in trash as {record.get('id') or '?'} (expires_at={record.get('expires_at') or '?'})"
+    # Selection goes through `purge.due_records` so ONE rule decides what "expired" means: the set this
+    # logs and the set the purge deletes cannot be two different answers. Fed from the records already
+    # in hand — a second `list_all` here would double the index read for nothing.
+    due = purge.due_from(trash_records)
+    if due:
+        log.info(
+            "trash_expiry_due_report_only",
+            extra={"count": len(due), "ids": [str(r.get("id")) for r in due][:20]},
+        )
     # #128d/#114 THE PRE-PASS — over every discovered dataset in EVERY bucket, before a single one is
     # compacted. It has to be whole-estate and it has to be first: a shallow clone in bucket B is the
     # only thing that knows bucket A's dataset must not be touched, so a per-bucket or per-dataset
@@ -201,6 +233,37 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
         )
     results: list[DatasetResult] = []
     now = datetime.now(UTC)
+    # F6(d) THE TRASH EXCLUSION, and its POSITION is the load-bearing part.
+    #
+    # A recoverable drop deregisters the table's `__manifest` row and files a trash record. It moves no
+    # byte: the dataset directory keeps its `_versions/` child, which is the ONLY thing
+    # `discover_datasets` consults to decide "this is a Lance dataset". So a dropped table was
+    # rediscovered on the very next tick, indistinguishable from a live one, and compacted +
+    # index-remapped + `cleanup_old_versions`'d every 30 minutes for its whole grace window — silently
+    # rewriting the history the window promises, and counting it as a successful maintenance pass.
+    #
+    # AFTER `base_refs.protected_roots` (above) and BEFORE the loop, never inside `discover_datasets`:
+    #
+    #  * The pre-pass must keep the FULL discovered list. A trashed shallow CLONE's manifest base_paths
+    #    are the only evidence protecting its LIVE source from compaction (#114/#128d). Filtering
+    #    before the pre-pass would re-open that data-loss defect from the trash side.
+    #  * `discover_datasets` has three other callers — the orphan scan (`reconcile.py`), the purge's
+    #    `_estate_base_refs`, and this sweep. Excluding there would be a silent coverage reduction in
+    #    the first and would remove the same protection evidence from the second.
+    skipped_trashed = [(uri, trashed_by_path[base_refs.normalise(uri)]) for uri in uris if base_refs.normalise(uri) in trashed_by_path]
+    if skipped_trashed:
+        uris = [uri for uri in uris if base_refs.normalise(uri) not in trashed_by_path]
+        # COUNTED, never silently dropped — a tick that maintains 40 of 42 datasets has to say what
+        # happened to the other two, and at cron frequency with nobody watching, a bare count is not
+        # actionable. Each result carries the record id and its deadline, so an exclusion that has
+        # outlived its deadline (a record the purge keeps refusing) reads as permanent rather than
+        # transient.
+        results.extend(DatasetResult(uri=uri, trashed=reason) for uri, reason in skipped_trashed)
+        log.info(
+            "maintenance_trashed_excluded",
+            extra={"count": len(skipped_trashed), "datasets": [uri for uri, _ in skipped_trashed][:20]},
+        )
+    record_trashed_skipped(len(skipped_trashed))
     # The FAIL-emit cap's own argument (top of this module), applied to the sweep it lives in: the
     # discovery listing order is deterministic across ticks, so a pass that consistently dies at
     # dataset N never maintained anything after N — silently, forever (open_dapr.md §2.19). Shuffling
@@ -390,6 +453,13 @@ def summarize(results: list[DatasetResult]) -> dict[str, Any]:
         # sets it while this summary still reported a clean sweep.
         "refused": sum(1 for r in results if r.refused),
         "refusals": {r.uri: r.refused for r in results if r.refused},
+        # F6(d) — its own line for the same reason `refused` has one. These datasets were discovered,
+        # were maintainable, and were deliberately left alone because they are in the trash: dropped
+        # with a grace window and therefore frozen until undrop or purge. Naming them (not just
+        # counting) is what makes a stuck record — one whose deadline has passed and which the purge
+        # keeps refusing — visible as a PERMANENT exclusion rather than a transient one.
+        "trashed": sum(1 for r in results if r.trashed),
+        "trashed_datasets": {r.uri: r.trashed for r in results if r.trashed},
         "fragments_removed": sum(r.fragments_removed for r in results),
         "indices_optimized": sum(r.indices_optimized for r in results),
         "versions_removed": sum(r.old_versions_removed for r in results),

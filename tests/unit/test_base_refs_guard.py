@@ -185,7 +185,18 @@ def _sweep_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, uris: list[s
     from maintenance.services import sweep as sweep_mod
     from maintenance.services.optimize import Discovery
 
-    settings = MaintenanceSettings.model_validate({"s3_endpoint": "", "s3_access_key_id": "x", "s3_secret_access_key": "x", "policy_root": str(tmp_path)})
+    # `control_root` as well as `policy_root`: since F6(d) the real sweep reads the trash index from
+    # the control root to decide which datasets it may rewrite, and an unset root points at the
+    # shipped default bucket no unit test has. A protective registry it cannot read aborts the tick.
+    settings = MaintenanceSettings.model_validate(
+        {
+            "s3_endpoint": "",
+            "s3_access_key_id": "x",
+            "s3_secret_access_key": "x",
+            "policy_root": str(tmp_path),
+            "control_root": str(tmp_path),
+        }
+    )
     monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
     monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket: Discovery(uris=list(uris)))
     return sweep_mod.run_sweep(settings)
