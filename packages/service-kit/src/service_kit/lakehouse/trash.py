@@ -46,7 +46,14 @@ def _key(canonical_id: str, kind: str = "table") -> str:
 
 
 def make_record(
-    canonical_id: str, *, location: str, dropped_by: str | None, grace_days: int, now: datetime | None = None, kind: str = "table"
+    canonical_id: str,
+    *,
+    location: str,
+    dropped_by: str | None,
+    grace_days: int,
+    now: datetime | None = None,
+    kind: str = "table",
+    binding: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """The trash record. ``expires_at`` is stamped HERE — at drop time — so a later change to the
     estate's grace period cannot retroactively shorten a window someone is still inside.
@@ -54,9 +61,24 @@ def make_record(
     ``kind`` distinguishes tables from namespaces (#96 — a recoverable CASCADE trashes both). A
     namespace is a ``__manifest`` row with no bytes of its own, so its ``location`` is ``""``; the
     record's job is to let undrop know the row (and which subtree) to rebuild.
+
+    ``binding`` is ``{"warehouse_id": …, "root_uri": …}`` and is set on exactly one record: the ROOT
+    namespace record of a recoverable cascade over a TOP-LEVEL namespace (diff2 F6 leg c). The
+    warehouse binding is what routes that subtree to its own bucket, and the drop now REMOVES it —
+    so this field is the only surviving copy of where the subtree lived, and undrop re-binds from it.
+
+    Why the binding moved onto the record at all: it used to be KEPT on a recoverable drop so undrop
+    could still route, which meant it OUTLIVED the namespace, and when the grace window expired the
+    purge reclaimed the bytes and left the binding behind forever. Nothing could see the leak either
+    — the reconciler's `dangling_bindings` keys on a MISSING WAREHOUSE record, and the warehouse is
+    still there. Recording it here and unbinding at drop removes the leak class rather than adding a
+    second reclaimer that has to remember to fire.
+
+    Absent on every other record, and absent on records written before this landed — read it with
+    `.get("binding")` and treat absence as "there was never a binding to restore".
     """
     at = now or datetime.now(UTC)
-    return {
+    record: dict[str, Any] = {
         "kind": kind,
         "id": canonical_id,
         "location": location,
@@ -64,6 +86,9 @@ def make_record(
         "dropped_at": at.isoformat(),
         "expires_at": (at + timedelta(days=grace_days)).isoformat(),
     }
+    if binding:
+        record["binding"] = dict(binding)
+    return record
 
 
 def put(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:

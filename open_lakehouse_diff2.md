@@ -546,7 +546,21 @@ fail — proving the test can detect the failure it exists for.
 
 ### F6 (P1) — Trash-plane incoherences: silent orphan window, doors that disagree, a leaked binding, and the sweep rewriting frozen data
 
-**STATUS: leg (b) REFUTED 2026-08-15 — by EXECUTION, not by reading.** An adversarial pass ran the
+**STATUS 2026-08-15 — (b) REFUTED, (c) + (d) LANDED, (a) OPEN.**
+- **(c) LANDED** — the binding no longer outlives its namespace. Owner ruling: never leak, unbind at
+  drop. The root trash record carries `{warehouse_id, root_uri}`; undrop re-binds from it, gated on
+  the warehouse's deactivation status, and re-derives its connection from the restored root (a
+  `NamespaceDep` resolved before the handler body has already fallen back to the shared root, so
+  rebuilding through it would silently re-create the subtree in the WRONG bucket). The rejected
+  alternative — purge-side unbind + an `orphaned_bindings` reconciler category — would have fired on
+  every legitimately-trashed subtree for its whole grace window and blocked `report_is_clean`, and
+  with it the purge itself.
+- **(d) LANDED** (`eb5aba26`) — the sweep no longer compacts or version-cleans trashed datasets.
+- **(a) OPEN** — the deregister/trash-write crash window; the adversarial pass found the obvious
+  reversal introduces a NEW unrecoverable state on the cascade path (a byte-less record on a live
+  namespace inside a quarantined warehouse is purged), so it needs the ordering worked through.
+
+**leg (b) REFUTED 2026-08-15 — by EXECUTION, not by reading.** An adversarial pass ran the
 shipped backend (`connect("dir", …)`, pylance 9.0.0 / lance-namespace 0.9.0 — the impl the chart
 sets) instead of reasoning from the source text, and (b)'s premise does not hold: `declare_table`
 RETURNS a location and creates the directory, and `describe_table` with neither `with_table_uri` nor

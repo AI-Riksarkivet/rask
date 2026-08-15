@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from contextlib import suppress
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     CreateNamespaceRequest,
@@ -25,13 +25,15 @@ from lance_namespace import (
     ListTablesResponse,
     NamespaceExistsRequest,
     NamespaceNotFoundError,
+    PermissionDeniedError,
     RegisterTableRequest,
+    ServiceUnavailableError,
     TableAlreadyExistsError,
     TableNotFoundError,
 )
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
+from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep, _namespace_for_root
 from catalog.api.security import CurrentToken
 
 # `_MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
@@ -197,6 +199,14 @@ async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: CurrentT
             grace_days=settings.trash_grace_days,
         )
         await run_in_threadpool(trash.put, settings.registry_root, so, record)
+    # The ROOT's binding, read BEFORE anything is dropped — after the unbind below it is unreadable,
+    # and after the purge it is gone for good. `None` for a nested namespace (bindings are keyed by
+    # top-level segment) and for an unbound one (single-bucket estates have no binding at all).
+    binding: dict[str, str] | None = None
+    if len(segments) == 1:
+        live = await run_in_threadpool(warehouses.binding_for_namespace, settings.registry_root, so, segments[0])
+        if live:
+            binding = {"warehouse_id": str(live["warehouse_id"]), "root_uri": str(live["root_uri"])}
     for child in [*child_namespaces, segments]:
         await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=child))
         record = trash.make_record(
@@ -205,8 +215,26 @@ async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: CurrentT
             dropped_by=dropped_by,
             grace_days=settings.trash_grace_days,
             kind="namespace",
+            # Only the ROOT carries it — `child is segments` is identity on the same list object, and
+            # the root is the last iteration by construction.
+            binding=binding if child is segments else None,
         )
         await run_in_threadpool(trash.put, settings.registry_root, so, record)
+    # UNBIND LAST, and only once the root's record — carrying the binding — is durably written
+    # (diff2 F6 leg c). Order is the whole safety argument:
+    #
+    #   * before the loop, a mid-loop crash would leave the surviving children unroutable, because
+    #     `NamespaceDep` resolves through this very binding;
+    #   * after the record, a crash between the two leaves a binding whose namespace is gone — which
+    #     is exactly the old leak, but now bounded by one retry instead of forever, and `undrop`
+    #     re-binds to the same values so it converges either way.
+    #
+    # The alternative shape — keep the binding and have the PURGE remove it — was rejected: it puts a
+    # registry write in the reclaimer (which owns no write path to it and may not import the
+    # catalog's), and it needs a reconciler category that would fire on every legitimately-trashed
+    # subtree for its whole grace window, blocking `report_is_clean` and with it the purge itself.
+    if binding is not None:
+        await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, segments[0])
 
 
 async def _destroy_subtree(ns: LanceNamespace, segments: list[str], descendants: list[tuple[str, list[str]]]) -> None:
@@ -371,6 +399,7 @@ async def namespace_tasks(
 @router.post("/{id}/undrop", response_model_exclude_none=True)
 async def undrop_namespace(
     id: str,
+    request: Request,
     ns: NamespaceDep,
     settings: SettingsDep,
     token: CurrentToken,
@@ -396,6 +425,50 @@ async def undrop_namespace(
     record = await run_in_threadpool(trash.get, settings.registry_root, so, canonical, kind="namespace")
     if record is None:
         raise NamespaceNotFoundError(f"no recoverable drop for namespace: {canonical}. The grace period may have expired, or the drop purged its subtree.")
+    # RE-BIND FIRST, and re-resolve the connection from the restored root (diff2 F6 leg c).
+    #
+    # The drop unbound this top-level namespace, so `NamespaceDep` — which resolves BEFORE this
+    # handler body runs — has already fallen back to the estate's default root. Rebuilding through it
+    # would re-create the whole subtree in the WRONG BUCKET: a silent tenant-isolation break, not an
+    # error. So the binding is restored from the record and the connection re-derived from it.
+    #
+    # `bind_namespace` is write-once at the store: identical `{warehouse_id, root_uri}` is idempotent
+    # (the retry path), a DIFFERENT binding raises `NamespaceAlreadyExistsError` (409). That refusal
+    # is correct and deliberate — if the id was re-bound to another warehouse during the grace window,
+    # routing this subtree there would hand one tenant another's bucket, and failing loudly is the
+    # only safe answer. A record with no `binding` (a nested undrop, an unbound estate, or a record
+    # written before this landed) keeps the dependency's connection untouched.
+    bound = record.get("binding") or None
+    if bound:
+        warehouse_id = str(bound["warehouse_id"])
+        # THE DEACTIVATION GATE, and it is not optional — `test_no_warehouse_bucket_access_bypasses_the
+        # _deactivation_gate` refuses any module that reaches a warehouse bucket through
+        # `_namespace_for_root` without one, and it caught this exact bypass when the re-resolve first
+        # landed. `get_namespace` gates every ordinary request this way; re-deriving the connection here
+        # steps around that dependency, so the check has to come with it.
+        #
+        # Deactivation is offboarding step one, so recovering a subtree INTO a quarantined warehouse is
+        # precisely what it exists to stop. Fail-closed on both failure kinds, symmetric with
+        # `dependencies.py`: an unreadable registry is 503, and a MISSING warehouse record (clean
+        # `None`) is not-active → 403, never silently allowed.
+        try:
+            status = await run_in_threadpool(warehouses.warehouse_status, settings.registry_root, so, warehouse_id)
+        except Exception as exc:
+            log.warning("warehouse_status_lookup_failed", extra={"top_ns": segments[0], "warehouse_id": warehouse_id, "error": str(exc)})
+            raise ServiceUnavailableError(f"warehouse status lookup failed for {warehouse_id!r}") from exc
+        if status != "active":
+            raise PermissionDeniedError(
+                f"warehouse {warehouse_id!r} is deactivated (quarantined); namespace {segments[0]!r} cannot be recovered into it until it is reactivated"
+            )
+        await run_in_threadpool(
+            warehouses.bind_namespace,
+            settings.registry_root,
+            so,
+            segments[0],
+            warehouse_id,
+            str(bound["root_uri"]),
+        )
+        ns = _namespace_for_root(request, settings, str(bound["root_uri"]))
     everything = await run_in_threadpool(trash.list_all, settings.registry_root, so)
     prefix = canonical + settings.delimiter
     subtree = [r for r in everything if str(r.get("id")) == canonical or str(r.get("id", "")).startswith(prefix)]
