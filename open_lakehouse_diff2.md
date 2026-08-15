@@ -776,8 +776,36 @@ Relevant for the archives estate beyond models: EAD files, IIIF sidecars.
 
 ### F10 (P2) — Smaller confirmed drift/hygiene items (one line each, all need re-verify at fix time)
 
-**STATUS: items 1–10 CONFIRMED, item 11 REFUTED (2026-08-15).** Items 1–10 were re-verified by hand
-and hold as drift/hygiene facts (line numbers drifted; mechanisms are where stated).
+**STATUS: items 1–10 CONFIRMED, item 11 REFUTED (2026-08-15). Items 2, 7, 8, 9, 10 LANDED
+(`3357f7dd`); items 1, 3, 4, 5, 6 OPEN AND WAITING ON A DECISION.** Items 1–10 were re-verified by
+hand and hold as drift/hygiene facts (line numbers drifted; mechanisms are where stated).
+
+LANDED — the five that are defects rather than opinions:
+- **10** depth-capped `_collect_descendants`, importing the constant rather than copying it (the whole
+  finding is two walkers disagreeing about one tree).
+- **8** `truncated` on `/access/list`, per relation plus a roll-up.
+- **9** a model-contract tripwire enumerating every object-as-user shape with the reason it does not
+  dangle; exactly one is a genuine residual (`annotation_project#tenant@project`). Verified
+  non-vacuous by injecting a shape.
+- **7** corrected the single-flight comment: `compactionReplicas` exists nowhere; the lock is safe by
+  accident of `maintenance.yaml:47`'s hardcoded `replicas: 1`.
+- **2** the nine-vs-ten type count.
+
+STILL OPEN — each is a BEHAVIOUR change, and each needs a call rather than a patch:
+- **1 (two project-id regexes)** — they are not merely duplicated, they DISAGREE: `CONTROL_ID_RE` is
+  lowercase 3–63, `PROJECT_PATTERN` allows uppercase and 1–64. Unifying changes which project ids are
+  accepted, so the question is which rule wins and what happens to existing ids that only satisfy the
+  looser one. Not a de-duplication.
+- **3 (binding-cache TTL)** — adds re-reads on a hot path; the corrected consequence is narrow
+  (persistent 403s on a re-bound namespace until restart), so the TTL is a cost/benefit call.
+- **4 (trash-window privilege bleed)** — SECURITY-relevant: a same-id re-create during the grace
+  window inherits the old table's tuples, and undrop seeds the UNDROPPER as owner (an implicit
+  ownership transfer). The doc's cheapest option — refuse a same-id create while a live trash record
+  exists — changes what `create` does. Worth doing; needs the ruling.
+- **5 (undrop ignores expiry)** — decide whether the `/tasks` deadline means "gone" or
+  "purge-eligible". Today it overstates finality either way.
+- **6 (purge reuses `table_dropped`)** — needs the wire-contract regen (`make openapi` +
+  `gen:types:catalog` + `test_openapi_contract`), so it touches generated clients.
 
 **Item 11 — "grant PROVENANCE is not recordable" — is FALSE, and the design it asks for already
 exists.** `_audit_tuples` (`packages/service-kit/src/service_kit/governed/fga.py`) emits one audit row
