@@ -44,9 +44,17 @@ data:
   20-openfga.sql: |
     -- Quoted identifier (same reason as the index names above) so a hyphenated openfgaDb can't break initdb.
     CREATE DATABASE "{{ .Values.age.openfgaDb }}";
-    -- Keep the openfga db off AGE's ag_catalog search path (it has no AGE) so openfga migrations resolve
-    -- objects in public, not a non-existent ag_catalog schema.
+    -- Keep the openfga db off AGE's ag_catalog search path so openfga's own objects resolve in public.
     ALTER DATABASE "{{ .Values.age.openfgaDb }}" SET search_path = public;
+    -- ...AND the schema must EXIST, which the line above does not give it. `shared_preload_libraries = age`
+    -- loads AGE into EVERY backend in the cluster and its hook dereferences ag_catalog, so in a database
+    -- without the extension every DROP fails with `schema "ag_catalog" does not exist` (SQLSTATE 3F000) —
+    -- measured 2026-08-15: CREATE TABLE succeeded and DROP TABLE failed here and in the Dapr state db,
+    -- while the same round-trip passed in the lineage db, the only one that had the extension.
+    -- That is what wedged OpenFGA at schema v5 (migration 006 drops an index) and failed every upgrade.
+    -- Removing age from shared_preload_libraries is not an option; AGE requires it.
+    \c "{{ .Values.age.openfgaDb }}"
+    CREATE EXTENSION IF NOT EXISTS age;
   30-daprstate.sql: |
     -- The Dapr state store's own database: operational state (annotation tasks, notification inboxes,
     -- actor and workflow state) that Lance must not hold — a per-task state flip would be a dataset
@@ -57,6 +65,11 @@ data:
     -- lineage store. Same isolation argument as openfga's.
     CREATE DATABASE "{{ .Values.age.stateDb }}";
     ALTER DATABASE "{{ .Values.age.stateDb }}" SET search_path = public;
+    -- Same ag_catalog-must-exist rule as openfga above, and it matters MORE here: Dapr migrates this
+    -- schema itself, so a future Dapr version whose migration drops anything would fail against the
+    -- store holding actor state and workflow history.
+    \c "{{ .Values.age.stateDb }}"
+    CREATE EXTENSION IF NOT EXISTS age;
 ---
 apiVersion: v1
 kind: Service

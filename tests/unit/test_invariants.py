@@ -2199,3 +2199,46 @@ def test_every_assert_retention_EXPECTS_a_string_nats_can_actually_emit() -> Non
             f"`nats stream info --json`, so a value outside that set mismatches unconditionally, the Job "
             f"exits 1, and `helm upgrade --wait-for-jobs` fails the whole release."
         )
+
+
+def test_every_database_the_age_chart_creates_ALSO_gets_the_age_EXTENSION() -> None:
+    """`shared_preload_libraries = age` loads AGE into EVERY backend in the cluster, and its hook
+    resolves `ag_catalog`. In a database where the extension was never created that schema does not
+    exist, so **every DROP fails** — `ERROR: schema "ag_catalog" does not exist (SQLSTATE 3F000)`.
+
+    MEASURED 2026-08-15 on the live estate. `CREATE TABLE` succeeded and `DROP TABLE` failed in both
+    `openfga` and `daprstate`; the same round-trip passed in `lineage`, the one database that has the
+    extension. `SHOW search_path` was `public` in all three, so this is NOT name resolution.
+
+    WHAT IT BROKE. OpenFGA's migration 006 does `DROP INDEX CONCURRENTLY IF EXISTS
+    idx_reverse_lookup_user`, so the store sat at schema version 5 and the migrate hook failed on
+    EVERY `helm upgrade` — which is what failed release revision 34. The same trap is armed under
+    Dapr's `daprstate`, which holds actor state and workflow history and whose schema Dapr migrates
+    itself.
+
+    THE PREVIOUS FIX TREATED THE SYMPTOM. `ALTER DATABASE ... SET search_path = public` is in the
+    chart with the comment "so openfga migrations resolve objects in public, not a non-existent
+    ag_catalog schema". Right symptom, wrong mechanism: the hook needs the schema to EXIST, not to be
+    on the path. Keep both — the search_path line is still correct for its own reason.
+
+    Removing `age` from `shared_preload_libraries` is not an option; AGE requires it.
+    """
+    text = (REPO / "chart/templates/age-postgres.yaml").read_text(encoding="utf-8")
+
+    # The initdb scripts are ConfigMap keys run alphabetically by the postgres entrypoint.
+    scripts = re.findall(r"^  (\d+-[\w.-]+\.sql): \|\n((?:^(?:    .*)?\n)+)", text, re.MULTILINE)
+    assert scripts, "no initdb scripts found in the AGE ConfigMap — this gate would pass vacuously"
+
+    creators = [(name, body) for name, body in scripts if "CREATE DATABASE" in body]
+    assert creators, "no script creates a database — the chart changed shape and this gate no longer protects it"
+
+    for name, body in creators:
+        assert "CREATE EXTENSION IF NOT EXISTS age" in body, (
+            f"{name} creates a database but never installs the AGE extension in it.\n\n"
+            f"`shared_preload_libraries = age` loads AGE into every backend cluster-wide, and its hook "
+            f"dereferences `ag_catalog`. Without the extension that schema does not exist in the new "
+            f"database and EVERY DROP fails with SQLSTATE 3F000 — which is how OpenFGA's migration 006 "
+            f"wedged at schema v5 and failed the release upgrade.\n\n"
+            f"Add, after the CREATE DATABASE, a `\\c` into the new database followed by "
+            f"`CREATE EXTENSION IF NOT EXISTS age;`."
+        )
