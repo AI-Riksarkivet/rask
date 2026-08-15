@@ -261,6 +261,13 @@ rask is the only one of the four whose id-minting is check-then-act.
 
 ### F2 (P0) — Time-boxed grants are dead on the enforcement path: `_require` never passes `context`, and a conditional tuple without context is a DENY
 
+**STATUS: LANDED 2026-08-15 (`b58eff4f`).** `service_kit.governed.fga.condition_context()` supplies the
+clock by default, and all four read wrappers (`_require`/`check`, `batch_check`, `list_objects`,
+`list_users`) now take an optional `context` and forward it. `model.fga.yaml` gained a direct
+TABLE-rung conditional test — the one genuine gap; the namespace-rung and cascade cases already
+existed, and an earlier claim here that the model had NO condition tests was wrong (a truncated grep,
+corrected in the commit body rather than quietly restated).
+
 **Evidence.**
 - `services/catalog/src/catalog/api/fga_deps.py:274-285` (verified): `_require` calls
   `await fga.check(client, user=user, relation=relation, obj=obj)` — no `context` kwarg. Same for
@@ -314,6 +321,44 @@ the model-edit gate in §5.5 (no `fga` CLI in-sandbox) applies to that route.
 ---
 
 ### F3 (P0) — Three partial-failure states are not retry-convergent, and the reconciler is forbidden (by test) from repairing them
+
+**STATUS: RE-VERIFIED + PARTIALLY LANDED 2026-08-15 (`8c947640`).** A re-verification pass confirmed
+every claim below against current code, then an adversarial pass tried to refute it and failed — it
+drove the shipped `dir` backend directly and reproduced the non-convergence rather than reasoning
+from source. THREE THINGS ARE WORSE than this section says, and they are the reason the fix went
+wider than fix-option 1:
+
+- **The count.** TEN doors call `seed_ownership`; exactly ONE had any compensation. This section named
+  three unguarded doors; there were eight.
+- **A stranded object is undroppable by EVERYONE, not just its creator.** `can_drop: owner`, and
+  `owner from parent` cannot rescue it because the seed writes the owner grant and the parent edge in
+  ONE batch (`fga.py` `grant_on_create`) — with neither written there is no inheritance path for any
+  admin either. "Its creator cannot drop it" understates it.
+- **The one existing compensation was INERT in the exact scenario it existed for.** Its revoke and its
+  native drop sat in a single try block, and `revoke_ownership` → `read_object_tuples` is an OpenFGA
+  call, so against a down OpenFGA the revoke raised and the drop — which needs no FGA — never ran.
+  Worse than absent: the code read as covered.
+
+LANDED: `fga_deps.seed_ownership_or_compensate` (revoke and undo are now INDEPENDENT best-effort
+steps) wired into five doors with the undo each one actually needs — `drop` for `declare_table`, the
+Arrow create and `create_namespace`; **`deregister`** for `register_table` and `undrop_table`, whose
+bytes pre-existed and are not ours to destroy. `undrop` also gets an ordering fix: `trash.clear` ran
+BEFORE the seed, so a failed grant left the table re-registered-but-ownerless AND its trash record
+deleted — the recovery door destroying the means of recovery. Four retry-convergence tests
+(`tests/integration/test_moto_s3.py`), one per fixed door.
+
+NOT LANDED, and none of it is silent: `rename` (revokes the SOURCE before seeding the DESTINATION —
+reordering trades "stranded" for "stale grant on a dead id", a decision not a cleanup);
+`batch_commit_tables` (a LOOP of seeds — partial failure needs batch-level convergence);
+the warehouse-scoped namespace create's bind step (state 3, untouched); fix-option 2, the
+write-capable structural reconcile. Two doors carry `undo=None` DELIBERATELY, documented at the site:
+`undrop_namespace` (compensating would destroy a cascade the user just recovered) and
+`create_materialized_view` (this backend exposes no `drop_materialized_view` at all).
+
+Also confirmed by the pass and worth recording: **the reconciler cannot even DETECT states 1 and 3** —
+`CATEGORIES` (`reconcile.py`) has no "governed object with zero tuples" detector, and
+`unbound_namespaces` scans only the shared default root, so a namespace stranded in a warehouse's own
+bucket is invisible to it.
 
 **Evidence.**
 - Create-orphan: table create runs native write THEN `seed_ownership`
@@ -455,6 +500,23 @@ fail — proving the test can detect the failure it exists for.
 
 ### F6 (P1) — Trash-plane incoherences: silent orphan window, doors that disagree, a leaked binding, and the sweep rewriting frozen data
 
+**STATUS: leg (b) REFUTED 2026-08-15 — by EXECUTION, not by reading.** An adversarial pass ran the
+shipped backend (`connect("dir", …)`, pylance 9.0.0 / lance-namespace 0.9.0 — the impl the chart
+sets) instead of reasoning from the source text, and (b)'s premise does not hold: `declare_table`
+RETURNS a location and creates the directory, and `describe_table` with neither `with_table_uri` nor
+`check_declared` — exactly the call the drop door makes — returns that same non-empty `location` for a
+declared-only table (`location` is unconditional; only `is_only_declared` needs `check_declared=True`).
+So `described.location` is TRUTHY, the single-table door takes the RECOVERABLE branch, never reaches
+the destructive `drop_table`, and never revokes the tuples. **The two doors AGREE.** The catalog's own
+declare door already proved this without any probe — it logs `response.location` and passes it to
+lineage as `source_uri`.
+
+The corollary runs OPPOSITE to what this section claims: `described.location or ""` and the
+`undrop_skipped_declared_only_table` warning are DEAD defensive branches that never fire on the
+shipped backend, not evidence of a live disagreement. Legs (a), (c) and (d) were not refuted — but
+(d)'s stated consequence and production-posture claims were also measured and found overstated;
+re-derive them before acting.
+
 Four related defects; can be one work item.
 
 **(a) Crash window leaves a table invisible to BOTH undrop and purge.**
@@ -568,6 +630,31 @@ the same decision and must be made together.
 
 ### F8 (P2) — Spec-conformance corrections
 
+**STATUS: REFUTED 2026-08-15 — do NOT act on this section.** All three line-level citations are
+literally accurate and none of the three is a live defect; the first "fix" would be a regression.
+
+(a) **`ErrorCode.UNSUPPORTED: 501` is correct as shipped.** The spec's only NORMATIVE, machine-readable
+error identity is the required `ErrorResponse.code` field (0 = Unsupported), which rask emits. The
+official generated client resolves 501 through its `'5XX': "ErrorResponse"` wildcard into the same
+type and the same `ApiException` a 406 would produce, and the `lance_namespace` SDK maps errors only
+via `from_error_code` — **no client can tell the difference.** 406 is declared on 4 of the spec's 54
+operations. rask raises UNSUPPORTED overwhelmingly for "this deployment has the feature off" (8 sites),
+for which 501 Not Implemented is RFC 9110-correct and 406 Not Acceptable (content negotiation) is
+simply the wrong code. The 501 is pinned by `tests/unit/test_ns_errors_contract.py`, load-bearing for
+the `_UNREDACTED_5XX` detail policy and the info-vs-exception log split, and consumed by the shipped
+UI (`grants-panel.svelte` renders the auth-off message on 501). Adopting 406 regresses the panel and
+silences the log for zero client-visible gain.
+
+(b) Every item is a contradiction INSIDE vendored upstream docs (`lance_docs/ns_catalog/`). No rask
+code or behaviour is involved and rask already follows the machine-readable spec in all six cases.
+Report upstream; do not edit the vendored copy.
+
+(c) `describe?vend_credentials=true` vends nothing in ANY shipped configuration — the chart default
+`vending.mode: mode_b` makes `vend()` return `None`, and the RustFS-native `web_identity` vendor also
+returns `None` without a caller token, which describe never passes. It is also not unaudited: the
+router-level `authorize` guard writes an audit row at the same `reader` rung. The residue is a
+cosmetic missing label on a path that issues no credentials, not a governance hole.
+
 **(a) `Unsupported` must map to 406, not 501.**
 Evidence: `packages/service-kit/src/service_kit/lakehouse/ns_errors.py:25` (verified):
 `ErrorCode.UNSUPPORTED: 501`, docstring calls it "a spec-correct 501".
@@ -657,6 +744,27 @@ Relevant for the archives estate beyond models: EAD files, IIIF sidecars.
 ---
 
 ### F10 (P2) — Smaller confirmed drift/hygiene items (one line each, all need re-verify at fix time)
+
+**STATUS: items 1–10 CONFIRMED, item 11 REFUTED (2026-08-15).** Items 1–10 were re-verified by hand
+and hold as drift/hygiene facts (line numbers drifted; mechanisms are where stated).
+
+**Item 11 — "grant PROVENANCE is not recordable" — is FALSE, and the design it asks for already
+exists.** `_audit_tuples` (`packages/service-kit/src/service_kit/governed/fga.py`) emits one audit row
+PER TUPLE on every write AND delete, carrying `subject` (the granting actor), `resource`, `grantee`,
+`relation` and a `TupleOrigin` from an eight-member taxonomy (create / grant_api / project_create /
+warehouse_create / lifecycle_delete / …). That is exactly the `granted_by` sidecar this item proposes
+as its own fix, with wider coverage than the `/access/grant` door it names. Coverage is STRUCTURAL,
+not conventional: `actor` is a required keyword on every write helper, so a new write site cannot
+compile without naming one, and it fires on the duplicate-write path too (so re-running a seed cannot
+silently erase provenance). Every call site passes the real principal. The rows are queryable through
+the shipped estate-admin `/settings/audit` surface, so "who gave this grant" is a direct
+(resource, relation, grantee) lookup — **the stated consequence, that it needs correlating the
+OpenFGA changelog against the audit stream by timestamp, is wrong.**
+
+The original evidence missed it by grepping for `granted_by`/`grantor`; the fields are named
+`subject`/`grantee`/`relation`/`origin`. The GENUINE residual is much narrower: the audit VIEW projects
+only `action`/`outcome`/`subject`/`resource`, so `grantee`/`relation`/`origin` are stored but not
+rendered, and the `openfga` skill documents no provenance procedure. That is a projection + docs gap.
 
 1. Two project-id regexes: `CONTROL_ID_RE` (`catalog/core/identifiers.py:32-33`, lowercase 3-63,
    `\Z`-anchored) vs `PROJECT_PATTERN` (`service_kit/lakehouse/warehouse_registry.py:37`,
