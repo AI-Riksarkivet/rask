@@ -133,7 +133,11 @@ spec:
               for stream in LINEAGE MEDALLION TRAINING DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
                 assert_retention "$stream" limits
               done
-              assert_retention INGEST work
+              # `workqueue`, NOT `work`: this is compared against the value nats-server SERIALIZES into
+              # `stream info --json`, whose vocabulary is limits|interest|workqueue. `work` mismatched
+              # unconditionally, so once INGEST existed the Job exited 1 on every run and took the whole
+              # `helm upgrade --wait-for-jobs` down with it (revision 34, 2026-08-15).
+              assert_retention INGEST workqueue
 
               add_if_missing LINEAGE "lineage.events.>"
               add_if_missing MEDALLION "medallion.>"

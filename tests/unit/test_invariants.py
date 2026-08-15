@@ -2158,3 +2158,44 @@ def test_the_app_log_filter_discriminates_by_SOURCE_not_by_POD() -> None:
             f"file-tailed duplicate — deleting the entire application log tier while the pipeline reports "
             f"healthy. Key on `log.file.path`, which only the filelog receiver sets."
         )
+
+
+def test_every_assert_retention_EXPECTS_a_string_nats_can_actually_emit() -> None:
+    """The retention guard could never pass, and it blocks every `helm upgrade` of this chart.
+
+    `assert_retention` reads the live value out of `nats stream info --json` with
+    `sed -n 's/.*"retention":[ ]*"\\([a-z]*\\)".*/\\1/p'`, so `got` is whatever nats-server
+    SERIALIZES — one of exactly `limits`, `interest`, `workqueue`. The INGEST call asked for `work`,
+    which is not in that vocabulary, so `[ "$got" != "$want" ]` was true on every run once the stream
+    existed. The Job then `exit 1`s, and with `--wait-for-jobs` the whole release upgrade fails.
+
+    MEASURED 2026-08-15: revision 34 failed `context deadline exceeded` with
+    `rask-nats-stream-r34` in CrashLoopBackOff, printing
+    `!! STREAM INGEST HAS retention=workqueue, THE CHART INTENDS work.` — a stream that is correct
+    (the chart creates it with `add_workqueue_if_missing`) being reported as drift by a guard whose
+    expectation was a typo.
+
+    `test_the_INGEST_stream_has_ONE_definition_and_the_chart_agrees_with_the_code` did not catch it
+    because it checks the CREATION path's `--retention`, never the ASSERTION path's expected value.
+    The two are separate strings and only one was pinned.
+    """
+    import re
+
+    job = (REPO / "chart/templates/nats-stream-job.yaml").read_text(encoding="utf-8")
+
+    # The vocabulary nats-server emits for `retention` in `stream info --json`. Anything else can only
+    # ever mismatch, because the guard compares against this serialized form.
+    NATS_RETENTIONS = {"limits", "interest", "workqueue"}
+
+    calls = re.findall(r"^\s*assert_retention\s+(\S+)\s+(\S+)\s*$", job, re.MULTILINE)
+    assert calls, "no `assert_retention` calls found — the guard was renamed or removed, and this gate now protects nothing"
+
+    for stream, want in calls:
+        assert want in NATS_RETENTIONS, (
+            f"`assert_retention {stream} {want}` expects a retention nats-server never emits.\n"
+            f"  got-side vocabulary: {sorted(NATS_RETENTIONS)}\n"
+            f"  expected-side value: {want!r}\n\n"
+            f"The comparison is `[ \"$got\" != \"$want\" ]` against the value parsed out of "
+            f"`nats stream info --json`, so a value outside that set mismatches unconditionally, the Job "
+            f"exits 1, and `helm upgrade --wait-for-jobs` fails the whole release."
+        )

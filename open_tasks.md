@@ -26,20 +26,6 @@ all four read wrappers); the catalog call-site half (`_require` passes no contex
 
 ---
 
-## #4 — the promotion review band. Yours; the only one I cannot decide.
-
-Three of the four "owner input needed" questions in `open_medallion_workflow.md` were answerable from
-precedent and are answered there. This one is not: how far a row-count delta may drift before a human
-is asked is an ARCHIVAL policy call, not an engineering one.
-
-Proposed default **±25%**, plus "first promotion of this dataset" (the case where nobody has ever
-looked — firing once per dataset rather than per run). It is a values knob either way, so tightening
-it later is a config change, not a deploy.
-
-Nothing is blocked on it: S1 shipped without the quality gate, which is S3.
-
----
-
 ## The helm window. Yours, because it replaces every running image.
 
 Chart changes are committed and render correctly but are NOT in the release. `make k3s-up` owns it —
@@ -58,9 +44,16 @@ a hand `helm upgrade` with different values replaces every deployed image with t
 
 ---
 
-## Open question, not a defect: medallion has no workflow management surface.
+## Medallion — owned by `open_medallion_workflow.md`, not restated here
 
-`stage_run` is dispatched from the pub/sub handler, so the Dapr management rules (DWF-MGT-008/009) do
-not apply — but an operator also cannot inspect or terminate a stuck stage watcher without talking to
-the sidecar directly, which is what driving it by hand required. Whether that surface should exist is
-a design call, not a bug.
+Two items were listed here as open and were WRONG, because they were second statements of things that
+doc already owns and had already settled. This is what the index rule is for; read the owner first.
+
+- The promotion review band is **DECIDED** (±25%, plus first-promotion-of-a-dataset) — §9 item 1.
+- The workflow management surface is **DESIGNED**, not an open question:
+  `POST /api/medallion/promotions/{id}/decision`, FGA-gated on `can_promote`, mounted inside
+  `RASK_API_PREFIX`. Unbuilt because it is S3.
+
+That doc also owns the constraint that an activity payload must fit **4 MiB** — the workflow worker's
+own gRPC channel, not daprd's `--max-body-size`. Deriving that number independently instead of reading
+it there shipped a flows bound at 4x the real ceiling (`f95be037` corrects `0bbcc035`).
