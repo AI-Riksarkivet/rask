@@ -33,6 +33,7 @@ from lance_namespace import PermissionDeniedError
 from lineage.api.fga_deps import enforce_output_authz, is_external_source
 from lineage.core.config import LineageSettings
 from lineage.models import Dataset, Job, Run, RunEvent
+from lineage.schemas import EventRecord
 
 
 GOVERNED = "bind86-bronze$pages"
@@ -202,3 +203,55 @@ def test_the_discriminator_is_the_URI_SCHEME_not_a_name_list(namespace: str, ext
     store URI, a governed table by its catalog namespace — a bare identifier. Pinned as a table so a
     future source kind (a new `xyz://`) is covered without an edit, which a hardcoded list would not be."""
     assert is_external_source(namespace) is external
+
+
+# --- THE READ-PATH TWIN --------------------------------------------------------------------------
+#
+# Everything above is the WRITE path: `enforce_output_authz` exempts an external input, because R23
+# says raw is the external world and no tuple could ever be written for it.
+#
+# The READ path never got the same treatment, and it cannot apply the rule as written: `consumer.py`
+# persists `[d.name for d in event.inputs]` — the NAMESPACE is discarded — so by the time `GET /events`
+# governs a row it has only bare names, and `is_external_source` needs the namespace. Every event with
+# an external input is therefore governed against `table:<bare name>`, which nobody holds a grant on,
+# and the whole row is hidden from EVERY caller. Not just from notifications: the lakehouse events
+# board reads the same feed.
+#
+# The namespace is not actually lost — the full event payload is stored alongside, and
+# `_column_lineage_datasets` already reads it for exactly this kind of question.
+
+
+def _record(*, inputs: list[str], outputs: list[str], event: dict) -> EventRecord:
+    """A real `EventRecord`, not a stand-in — `_governed_datasets` takes the type the repository yields,
+    and a duck-typed double would only prove the helper works on a shape production never sends."""
+    return EventRecord(seq=1, inputs=inputs, outputs=outputs, event=event)
+
+
+def test_the_read_path_can_recover_the_namespace_the_columns_dropped() -> None:
+    """The fix's precondition, stated as a test: the payload still knows what the columns forgot."""
+    from lineage.api.v1.endpoints.runs import _governed_datasets
+
+    payload = _event(
+        inputs=[_dataset("s3://lake/batch", "img.png")],
+        outputs=[_dataset("bronze", "bronze-media$objects")],
+    ).model_dump(by_alias=True)
+    # `inputs` is what consumer.py persists: the bare NAME, namespace discarded.
+    record = _record(inputs=["img.png"], outputs=["bronze-media$objects"], event=payload)
+
+    governed_on = _governed_datasets(record)
+
+    assert "img.png" not in governed_on, "the external source is still being authorized, so every event naming one stays hidden"
+    assert "bronze-media$objects" in governed_on, "outputs are never exempted"
+
+
+def test_a_summary_row_keeps_todays_behaviour() -> None:
+    """`summary=true` drops the payload at the SQL layer, so the namespace genuinely is not there.
+
+    Governing on the bare names is then the only option, and it is what happens today — so this fix
+    must not change that path, only the one where the information exists.
+    """
+    from lineage.api.v1.endpoints.runs import _governed_datasets
+
+    record = _record(inputs=["img.png"], outputs=["bronze-media$objects"], event={})
+
+    assert _governed_datasets(record) == {"img.png", "bronze-media$objects"}

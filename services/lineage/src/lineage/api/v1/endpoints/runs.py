@@ -13,8 +13,9 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 
 from lineage.api.dependencies import RepositoryDep, SettingsDep
-from lineage.api.fga_deps import FilterDep, governed
+from lineage.api.fga_deps import FilterDep, governed, is_external_source
 from lineage.schemas import Events, RunInputs, Runs
+from lineage.services.repository import EventRecord
 
 
 router = APIRouter(tags=["query"])
@@ -78,6 +79,40 @@ async def get_run_inputs(run_id: str, repository: RepositoryDep, datasets: Filte
     return result
 
 
+def _governed_datasets(record: EventRecord) -> set[str]:
+    """Which datasets a feed row must be authorized against — EXTERNAL INPUTS EXCLUDED.
+
+    The read-path twin of `enforce_output_authz`'s exemption, and it was missing. R23: raw is the
+    external world, never a governed tier, so an external source has no `table:` object and no tuple
+    that could ever be written for it. The write path already skips those inputs; the read path
+    authorized them anyway, so every event naming one was hidden from EVERY caller — the lakehouse
+    events board as much as the notifications reconciler.
+
+    It could not apply the rule as written, because `consumer.py` persists `[d.name for d in
+    event.inputs]` and the NAMESPACE — the whole discriminator — is dropped. The namespace is not lost
+    though: the full payload is stored beside those columns, and `_column_lineage_datasets` already
+    reads it for the same class of question. So the exemption is recovered from the payload when it is
+    there.
+
+    When it is NOT there — `summary=true` drops the payload at the SQL layer — the bare names are all
+    that exist and governing on them is the only option. That is today's behaviour and this leaves it
+    alone: the fix applies exactly where the information survives.
+
+    OUTPUTS are never exempted, on the read path as on the write path. Writing is the direction that
+    mutates the estate, and an output naming an external namespace is a producer claiming to have
+    written the outside world.
+    """
+    outputs = set(record.outputs)
+    payload = getattr(record, "event", None) or {}
+    raw_inputs = payload.get("inputs") if isinstance(payload, dict) else None
+    if not isinstance(raw_inputs, list) or not raw_inputs:
+        return set(record.inputs) | outputs | _column_lineage_datasets(record.event)
+    governed_inputs = {
+        str(d.get("name")) for d in raw_inputs if isinstance(d, dict) and d.get("name") and not is_external_source(str(d.get("namespace") or ""))
+    }
+    return governed_inputs | outputs | _column_lineage_datasets(record.event)
+
+
 @router.get("/events")
 async def get_events(
     repository: RepositoryDep,
@@ -116,7 +151,7 @@ async def get_events(
         datasets,
         settings.fga_enabled,
         records,
-        lambda r: set(r.inputs) | set(r.outputs) | _column_lineage_datasets(r.event),
+        _governed_datasets,
     )
     returned = visible[:limit]
     if len(returned) == limit and returned:
