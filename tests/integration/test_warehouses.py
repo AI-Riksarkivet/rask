@@ -358,3 +358,140 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
     surviving = wh_svc.get_warehouse(root, {}, "wh-conv")
     assert surviving is not None, "the loser's rebuild must not have DELETED the record it lost the race for"
     assert surviving["status"] == "deactivated"
+
+
+# --------------------------------------------------------------------------- #
+# diff2 F3 state 3 — the warehouse-scoped namespace create, the last of the three
+#
+# The namespace lands natively, the binding is written, then FGA is seeded. A failed seed left the
+# namespace created-and-bound but owned by NOBODY, and the plain retry 409'd at native
+# `NamespaceAlreadyExists` — so the only converging path was passing `adopt_existing=true`, a
+# bytes-first MIGRATION flag pressed into service as an undocumented repair for a fault the caller
+# neither caused nor could diagnose.
+#
+# The backend is FAKED here, deliberately. This suite has no object store, and the real
+# `_namespace_for_root` dials the warehouse's own bucket (`s3://<bucket>` → minio:9000). A fake also
+# makes the assertion sharper than a state check could: the question is whether the compensating
+# `drop_namespace` was ISSUED, and the fake answers it directly. `native.call` is plain `getattr`
+# dispatch, so any object with the right method names is a valid backend.
+# --------------------------------------------------------------------------- #
+
+
+_BEARER = {"Authorization": "Bearer t"}
+
+
+class _FakeNamespace:
+    """Records the calls the endpoint makes, and can be told to already hold a namespace."""
+
+    def __init__(self, existing: set[str] | None = None) -> None:
+        self.existing = existing or set()
+        self.calls: list[str] = []
+
+    def create_namespace(self, req: Any) -> Any:
+        from lance_namespace import CreateNamespaceResponse, NamespaceAlreadyExistsError
+
+        name = "$".join(req.id)
+        self.calls.append(f"create:{name}")
+        if name in self.existing:
+            raise NamespaceAlreadyExistsError(f"exists: {name}")
+        self.existing.add(name)
+        return CreateNamespaceResponse()
+
+    def drop_namespace(self, req: Any) -> Any:
+        from lance_namespace import DropNamespaceResponse
+
+        name = "$".join(req.id)
+        self.calls.append(f"drop:{name}")
+        self.existing.discard(name)
+        return DropNamespaceResponse()
+
+
+async def _failing_grant(*_a: object, **_kw: object) -> None:
+    from lance_namespace import ServiceUnavailableError
+
+    raise ServiceUnavailableError("fga down mid-create")
+
+
+def _wh_with_fake_backend(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch, wid: str, existing: set[str] | None = None) -> _FakeNamespace:
+    """A warehouse + an FGA-ON stack whose backend is the fake above.
+
+    FGA must be ON or there is nothing to fail: `seed_ownership` no-ops when it is off, so the whole
+    compensation path is unreachable and the endpoint would answer 200 — which is exactly how the
+    first draft of these tests passed while asserting nothing. The registry is seeded DIRECTLY for
+    the same reason the suite's other FGA-ON tests do it: the estate gate on POST /v1/projects would
+    interfere, and project existence is not the layer under test.
+    """
+    import catalog.api.v1.endpoints.warehouses as wh_ep
+
+    fake = _FakeNamespace(existing)
+    monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
+    monkeypatch.setattr(wh_ep, "_namespace_for_root", lambda request, settings, root_uri: fake)
+    s = _settings(tmp_path, fga=True)
+    client.app.dependency_overrides[get_settings] = lambda: s
+    proj_svc.put_project(f"file://{tmp_path}", {}, {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
+    wh_svc.put_warehouse(
+        s.registry_root,
+        s.storage_options(),
+        {"id": wid, "bucket": wid, "root_uri": f"s3://{wid}", "project": "acme", "status": "active"},
+    )
+    verifier = MagicMock()
+    verifier.verify.return_value = IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    client.app.state.oidc = verifier
+    fga_client = MagicMock()
+    fga_client.close = AsyncMock()
+    # `write` is AWAITED by grant_on_create, and the convergence test's retry reaches the real one —
+    # a plain MagicMock returns a Mock, which `await` rejects. AsyncMock is what makes the SUCCESS
+    # path drivable here, not just the failure path.
+    fga_client.write = AsyncMock()
+    client.app.state.fga = fga_client
+
+    async def allow(_c: object, **_kw: object) -> bool:
+        return True
+
+    monkeypatch.setattr(fga_module, "check", allow)
+    return fake
+
+
+def test_warehouse_namespace_create_converges_after_a_failed_grant(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed seed must leave NOTHING behind — no namespace, no binding — so the ordinary retry
+    succeeds instead of needing a migration flag."""
+    fake = _wh_with_fake_backend(client, tmp_path, monkeypatch, "wh-f3")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(fga_module, "grant_on_create", _failing_grant)
+        failed = client.post("/v1/warehouses/wh-f3/namespaces", json={"namespace": "f3ns"}, headers=_BEARER)
+    assert failed.status_code == 503, failed.text
+
+    # The compensating drop was ISSUED, and the namespace is gone from the backend.
+    assert fake.calls == ["create:f3ns", "drop:f3ns"], fake.calls
+    assert "f3ns" not in fake.existing
+    # The binding went with it: a binding naming a namespace that no longer exists is drift the
+    # reconciler would later report as a mystery.
+    assert wh_svc.binding_for_namespace(f"file://{tmp_path}", {}, "f3ns") is None
+
+    # …and the PLAIN retry converges, with no `adopt_existing` anywhere near it.
+    retried = client.post("/v1/warehouses/wh-f3/namespaces", json={"namespace": "f3ns"}, headers=_BEARER)
+    assert retried.status_code == 200, retried.text
+    binding = wh_svc.binding_for_namespace(f"file://{tmp_path}", {}, "f3ns")
+    assert binding is not None and binding["warehouse_id"] == "wh-f3"
+
+
+def test_adopted_namespace_is_never_compensated_away(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE CARVE-OUT, and the one that would cost real data if it were wrong.
+
+    `adopt_existing=true` is the bytes-first migration converging: the datasets were copied into the
+    bucket FIRST and this call only attaches governance. So a failed seed must NOT drop the
+    namespace — that would delete the very data the migration was moving, to repair a missing tuple,
+    in response to a transient FGA blip. Same distinction the Arrow create door draws with
+    `_compensation_allowed` for ExistOk: never compensate away something this request did not create.
+    """
+    fake = _wh_with_fake_backend(client, tmp_path, monkeypatch, "wh-adopt", existing={"migrated"})
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(fga_module, "grant_on_create", _failing_grant)
+        failed = client.post("/v1/warehouses/wh-adopt/namespaces", json={"namespace": "migrated", "adopt_existing": True}, headers=_BEARER)
+    assert failed.status_code == 503, failed.text
+
+    # NO drop was issued, and the pre-existing namespace survived.
+    assert "drop:migrated" not in fake.calls, "an adopted namespace was compensated away — migrated data is at risk"
+    assert "migrated" in fake.existing

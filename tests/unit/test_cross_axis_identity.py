@@ -88,7 +88,11 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
     granted: dict[str, Any] = {}
     stamped: dict[str, Any] = {}
 
-    async def _seed(_client: object, _settings: object, _token: object, *, resource: str, segments: list[str]) -> None:
+    # `**_kw` on purpose: this fake stands in for `seed_ownership`, which the compensating seam calls
+    # with whatever keywords it grows (it forwards `parent_object` since diff2 F3). This test is about
+    # the RESOURCE and SEGMENTS axes agreeing — pinning the rest of the signature here only makes an
+    # unrelated change to the seam look like an identity regression.
+    async def _seed(_client: object, _settings: object, _token: object, *, resource: str, segments: list[str], **_kw: object) -> None:
         granted["resource"] = resource
         granted["segments"] = segments
 
