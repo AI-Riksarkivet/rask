@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
@@ -17,6 +19,7 @@ from lance_namespace import (
     DescribeTableVersionResponse,
     ListTableVersionsRequest,
     ListTableVersionsResponse,
+    ServiceUnavailableError,
 )
 
 from catalog.api import fga_deps
@@ -30,11 +33,14 @@ from catalog.api.dependencies import (
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, native
+from service_kit.governed import fga
 
 
 # The native dir backend implements create / describe / batch-delete versions, but its bindings are typed
 # ``request: dict`` (not the pydantic model) — ``native.call`` marshals the request to a dict for those, so
 # these delegate directly and return real results instead of the marshalling-bug 501 they surfaced before.
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/v1/table", tags=["version"])
 
 
@@ -120,11 +126,48 @@ async def batch_commit_tables(
         [getattr(getattr(op, "declare_table", None), "id", None) for op in (body.operations or [])],
     )
     response: BatchCommitTablesResponse = await run_in_threadpool(native.call, ns, "batch_commit_tables", body)
+    # The native batch is ATOMIC — every declared table exists once that call returns — but the seeds
+    # are not part of it, and they cannot be: OpenFGA is a different store with no shared transaction.
+    #
+    # This loop used to `seed_ownership` and abandon the rest on the FIRST failure (diff2 F3.1). An
+    # OpenFGA blip partway through a 12-table batch therefore left tables 5-12 committed on storage
+    # with no `owner` grant and no `parent` edge — and because `grant_on_create` writes both in one
+    # batch, `owner from parent` cannot rescue them either. They are invisible to every list (per-item
+    # filtering) and undroppable by every caller including an estate admin. The endpoint 5xx'd naming
+    # none of them.
+    #
+    # Two changes here, neither of which needs a convergence ruling:
+    #
+    #  * KEEP GOING. The seeds are independent, so stopping at the first failure strands every table
+    #    after it as well. Continuing minimises the stranded set instead of maximising it.
+    #  * NAME WHAT IS STRANDED. The error now lists exactly which tables landed without ownership, so
+    #    an operator can repair them through the estate-admin editor instead of discovering the state
+    #    when a bucket-vs-catalog byte count disagrees months later.
+    #
+    # WHAT IS STILL OPEN, deliberately: the batch does not CONVERGE. A retry re-runs the native batch,
+    # which fails `TableAlreadyExists` and never reaches the seeds again. Fixing that is a design
+    # decision — pre-flight the seeds, seed-then-commit (which trades this failure for tuples on
+    # tables that may not exist), or an idempotent re-seed keyed on the declared ids — and it is
+    # recorded rather than guessed at.
+    stranded: list[str] = []
+    first_error: Exception | None = None
     for operation in body.operations or []:
         declare = getattr(operation, "declare_table", None)
         segments = getattr(declare, "id", None) if declare is not None else None
-        if segments:
+        if not segments:
+            continue
+        try:
             await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments)
+        except Exception as exc:  # noqa: BLE001 — every remaining seed still gets its chance
+            stranded.append(fga.canonical_object_id(segments, delimiter=settings.delimiter))
+            first_error = first_error or exc
+            log.warning("batch_commit_seed_failed", extra={"table": segments, "error": str(exc)})
+    if stranded:
+        raise ServiceUnavailableError(
+            f"batch committed, but {len(stranded)} table(s) landed WITHOUT ownership and are "
+            f"unreachable until an estate admin grants it: {', '.join(stranded)}. "
+            f"Retrying this batch will not repair them — the tables already exist. Cause: {first_error}"
+        )
     return response
 
 
