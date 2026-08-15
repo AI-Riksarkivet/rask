@@ -26,7 +26,48 @@ all four read wrappers); the catalog call-site half (`_require` passes no contex
 
 ---
 
-## The helm window. Yours, because it replaces every running image.
+## BLOCKER — the release can no longer be upgraded AT ALL. Yours to decide.
+
+`helm upgrade` now fails before it applies anything:
+
+```
+Error: UPGRADE FAILED: update: failed to update: Secret "sh.helm.release.v1.rask.v35"
+is invalid: data: Too long: may not be more than 1048576 bytes
+```
+
+This is not about the manifest. Helm embeds the WHOLE CHART in every revision, and ~880 KB of
+`chart/charts/*.tgz` is ALREADY-COMPRESSED subchart archives that gzip cannot shrink further.
+Measured 2026-08-15:
+
+| part | size |
+| --- | --- |
+| vendored subchart archives (10 of them) | ~880 KB, incompressible |
+| rendered manifest, gzipped | 262 KB |
+| **release secret, v34 / v35** | **1,046.9 KB / 1,048.5 KB** vs a 1,024 KB hard limit |
+
+It has been creeping up for months — v28 was 964 KB — and v35 crossed the line. Every revision
+since v28 was one small edit away from this. It blocks `make k3s-up` and CI, not just this session.
+
+**Do not "fix" it by trimming comments** (worth only ~39 KB gzipped) **or by disabling Kueue.**
+Kueue is idle today — 0 workloads, and the only `queue-name` reference in the repo is a comment in
+`values.yaml` — so `kueue.enabled=false` would buy 184 KB with no functional loss TODAY. It is still
+deleting an operator that was installed on purpose, to dodge a storage limit, at the wrong layer.
+
+The two real fixes, both yours:
+
+1. **Split the chart** — infra (operators + CRDs, installed rarely) from app (upgraded constantly).
+   This matches how the estate actually operates and is the architecturally correct answer.
+2. **Move Helm to the SQL storage driver** (`HELM_DRIVER=sql`) against the Postgres already running.
+   No 1 MiB limit. Smaller change, keeps one chart.
+
+Interim state, verified: revision 35 was left `pending-upgrade`, which refuses every later upgrade;
+its release secret was deleted so 34 is latest again. **Workloads are correct and healthy regardless**
+— every service is on its intended image and 0 pods are outside Running/Completed. What is stale is
+the RELEASE RECORD, not the estate.
+
+---
+
+## The chart changes still waiting on that window
 
 Chart changes are committed and render correctly but are NOT in the release. `make k3s-up` owns it —
 a hand `helm upgrade` with different values replaces every deployed image with the chart default.
