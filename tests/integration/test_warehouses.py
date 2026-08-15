@@ -320,12 +320,27 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
             return None
         return real_get(root, so, wid)  # the post-conflict re-read sees the truth
 
+    # F4 moved the post-conflict re-read OUT of `get_warehouse` and INTO the conditional write
+    # (`upsert_warehouse` → `mutate_json` → `read_json`), so counting `get_warehouse` calls stopped
+    # measuring anything. Count where the work actually happens now; the property under test —
+    # "the store, not the guard, refused" — is unchanged.
+    from service_kit.lakehouse import records as rec
+
+    real_read_json = rec.read_json
+    conditional_reads = {"n": 0}
+
+    def counting_read_json(root: str, so: dict[str, str], key: str) -> Any:
+        conditional_reads["n"] += 1
+        return real_read_json(root, so, key)
+
     monkeypatch.setattr(wh_svc, "get_warehouse", racy_get)
+    monkeypatch.setattr(rec, "read_json", counting_read_json)
     # evil names a DIFFERENT bucket so the (unblinded) bucket-claim scan cannot catch this — the
     # id-mint conditional create is the only remaining defense, which is the point of the test.
     r = client.post("/v1/warehouses", json={"id": "wh-race", "project": "evil", "bucket": "evil-bkt"})
     assert r.status_code == 409, r.text
-    assert reads["n"] >= 2  # the conflict forced a re-read — the store, not the guard, refused
+    assert conditional_reads["n"] >= 1, "the conditional write never re-read — the guard refused, not the store"
+    assert reads["n"] == 1, "the guard read more than once; the blinding no longer models the race"
     monkeypatch.setattr(wh_svc, "get_warehouse", real_get)
     assert wh_svc.get_warehouse(f"file://{tmp_path}", {}, "wh-race")["project"] == "acme"  # type: ignore[index]
 

@@ -67,7 +67,7 @@ from catalog.schemas import (
 from catalog.services import native, warehouses
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
-from service_kit.lakehouse.records import RecordExistsError
+from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
 
 
 log = logging.getLogger(__name__)
@@ -207,6 +207,33 @@ async def create_warehouse(
         protected = "true"
     if protected:
         record["protected"] = protected
+
+    # BOTH re-create paths go through the CONDITIONAL upsert (diff2 F4). They used to end in an
+    # unconditional `put_warehouse` of a record assembled from a read taken at the top of this handler —
+    # before the guards above and before `provision_bucket`, a network round trip. A deactivate landing
+    # anywhere in that window was overwritten by the status this request carried forward, lifting a
+    # quarantine with no `/activate` and no audit signal. The merge now happens inside the write,
+    # against the record as it actually stands, so a concurrent lifecycle change survives.
+    async def _converge() -> dict[str, str]:
+        try:
+            return await run_in_threadpool(
+                warehouses.upsert_warehouse,
+                settings.registry_root,
+                so,
+                record,
+                serving=body.serving,
+                protect=bool(body.protected),
+            )
+        except warehouses.WarehouseProjectConflict:
+            # The pre-flight guard above already refuses this for the ordinary case; reaching it here
+            # means the record moved projects mid-request, and the answer is the same either way.
+            raise NamespaceAlreadyExistsError(f"warehouse {warehouse_id!r} is already registered to another project") from None
+        except RecordMissingError:
+            # Raced a concurrent delete: retryable, never a blind re-create — code 14 → 409 so the
+            # caller retries into a clean create. (Previously only the lost-mint-race branch noticed
+            # this; the sequential path would have re-created the record the operator just deleted.)
+            raise ConcurrentModificationError(f"warehouse {warehouse_id!r} write raced a concurrent delete; retry") from None
+
     if existing is None:
         # The id-MINT is conditional (F1): the takeover guard above read the registry BEFORE deciding,
         # and a rival create landing between that read and this write used to win silently — the store
@@ -214,26 +241,9 @@ async def create_warehouse(
         try:
             await run_in_threadpool(warehouses.create_warehouse_record, settings.registry_root, so, record)
         except RecordExistsError:
-            # Lost the mint race. Re-read and re-apply the takeover guard against the WINNER.
-            fresh = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
-            if fresh is None:
-                # won-then-vanished (raced a concurrent delete): retryable, never a blind overwrite —
-                # code 14 → 409 so the caller retries into a clean create.
-                raise ConcurrentModificationError(f"warehouse {warehouse_id!r} create raced a concurrent delete; retry") from None
-            if fresh.get("project") != project:
-                raise NamespaceAlreadyExistsError(f"warehouse {warehouse_id!r} is already registered to another project") from None
-            # Same-project concurrent create: converge on the winner's mutable lifecycle fields — the
-            # same carry-forward the sequential idempotent path applies (incl. the quarantine rule:
-            # a re-create must never resurrect a deactivated warehouse).
-            record["status"] = fresh.get("status", "active")
-            record["created_at"] = fresh.get("created_at") or record["created_at"]
-            if fresh.get("serving") and not record.get("serving"):
-                record["serving"] = fresh["serving"]
-            if fresh.get("protected") and not record.get("protected"):
-                record["protected"] = fresh["protected"]
-            await run_in_threadpool(warehouses.put_warehouse, settings.registry_root, so, record)
+            record = await _converge()  # lost the mint race — converge on the WINNER, conditionally
     else:
-        await run_in_threadpool(warehouses.put_warehouse, settings.registry_root, so, record)
+        record = await _converge()
     await fga_deps.seed_warehouse(client, settings, token, warehouse_id=warehouse_id, project=project)
     log.info("warehouse_created", extra={"warehouse": warehouse_id, "bucket": bucket, "project": project})
     actor = f"user:{token.sub}" if token else None

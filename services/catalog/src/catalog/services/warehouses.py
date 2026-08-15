@@ -101,12 +101,89 @@ def _warehouse_key(warehouse_id: str) -> str:
 
 
 def put_warehouse(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
-    """Persist a warehouse record at ``_warehouses/<id>.json`` (overwrite — for a record whose EXISTENCE
-    is already settled: the sequential idempotent re-create and status/lifecycle updates). The id-MINT
-    goes through :func:`create_warehouse_record` instead — overwriting on first create is how the
-    F1 takeover race happened. The caller stamps ``created_at`` (kept out of here so unit tests stay
-    deterministic)."""
+    """Unconditionally overwrite ``_warehouses/<id>.json``. **A SEEDING primitive — no production caller.**
+
+    It had two, and both were the diff2 F4 defect: an unconditional put of a record assembled from an
+    earlier read silently discards whatever landed in between, which is how a quarantine could be
+    lifted without anyone calling ``/activate``. Those paths now go through :func:`upsert_warehouse`
+    (idempotent re-create) and :func:`set_warehouse_status` (lifecycle flip), both conditional on the
+    record's ETag. The id-MINT goes through :func:`create_warehouse_record`, conditional on absence (F1).
+
+    What is left is fixture setup — ~25 test sites that need a record to EXIST and have no concurrency
+    to lose to. Kept for them, and pinned by ``tests/unit/test_registry_writes_are_conditional.py``:
+    if this appears in a production path again, that test names it. Do not reach for it in service or
+    endpoint code; there is a conditional door for every real mutation.
+
+    The caller stamps ``created_at`` (kept out of here so unit tests stay deterministic).
+    """
     _write_json(control_root, storage_options, _warehouse_key(record["id"]), record)
+
+
+#: The fields an idempotent re-create OWNS. Everything else on the live record belongs to the
+#: record's own lifecycle and is carried forward from the record AS IT STANDS AT WRITE TIME — not as
+#: the caller read it, which is the whole of diff2 F4.
+_CALLER_OWNED = frozenset({"id", "bucket", "root_uri", "project"})
+
+
+class WarehouseProjectConflict(Exception):
+    """The live record belongs to a different project than the caller named.
+
+    Its own type because it is raised from INSIDE the conditional write, where the check and the
+    write can no longer be separated by an interleaving. The endpoint's pre-flight guard still runs
+    (it produces the better error, earlier, for the ordinary case); this is the one that cannot be
+    raced.
+    """
+
+
+def upsert_warehouse(
+    control_root: str,
+    storage_options: StorageOptions,
+    record: dict[str, str],
+    *,
+    serving: str | None = None,
+    protect: bool = False,
+) -> dict[str, str]:
+    """Idempotent re-create of an EXISTING warehouse, CONDITIONAL on the record's ETag (diff2 F4).
+
+    THE BUG THIS CLOSES. The re-create used to build a whole record from a read taken at the top of
+    the handler, then `put_warehouse` it unconditionally. Between those two points sit the project
+    guard, the reserved-bucket guard, the bucket-claim scan AND `provision_bucket` — a network round
+    trip. Anything landing in that window was overwritten by a record that carried the pre-window
+    values forward:
+
+        t0  GitOps re-POST of `acme-wh` reads the record        status=active
+        t1  operator POSTs /v1/warehouses/acme-wh/deactivate    status=deactivated
+        t2  the re-POST's put lands                             status=active
+
+    The quarantine is lifted with no `/activate` call and no audit signal. Note that `set_warehouse_status`
+    being conditional does NOT help: the stale writer is the re-POST, and it is writing a field it
+    never meant to change. A guard on the DECISION cannot catch that; only a guard on the WRITE can.
+
+    So the merge happens INSIDE the conditional write, against the record as it actually is:
+    `_CALLER_OWNED` fields come from the caller, every other field is carried from live, and
+    `serving`/`protect` are honoured as REQUESTS (they may arm, never disarm — same rule the
+    sequential path always had). `mutate_json` re-reads and re-applies on a lost race, so a
+    concurrent deactivate is preserved instead of clobbered.
+
+    Raises :class:`WarehouseProjectConflict` if the live record moved to another project, and
+    ``RecordMissingError`` if it vanished (a concurrent delete — retryable, never a blind create).
+    """
+    project = record["project"]
+
+    def merge(live: dict[str, str]) -> dict[str, str]:
+        if live.get("project") != project:
+            raise WarehouseProjectConflict(f"warehouse {record['id']!r} is registered to another project")
+        merged = {**live, **{k: v for k, v in record.items() if k in _CALLER_OWNED}}
+        # A record written before the lifecycle feature has no status, and absent means live.
+        merged.setdefault("status", "active")
+        merged["created_at"] = live.get("created_at") or record.get("created_at", "")
+        if serving:
+            merged["serving"] = serving
+        if protect:
+            merged["protected"] = "true"
+        return merged
+
+    return mutate_json(control_root, storage_options, _warehouse_key(record["id"]), merge)
 
 
 def create_warehouse_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:

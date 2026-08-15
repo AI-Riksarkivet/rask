@@ -439,6 +439,21 @@ reconciled" becomes true (points at the new repair mode) or is reworded.
 
 ### F4 (P1) — No lost-update detection on registry read-modify-write: a quarantine can be silently lifted
 
+**STATUS: LANDED 2026-08-15.** Both re-create paths (sequential idempotent + lost-mint-race) now go
+through `warehouses.upsert_warehouse`, conditional on the record's ETag via `mutate_json`; the merge
+of carried-forward fields happens INSIDE the write, against the record as it actually stands.
+`set_warehouse_status` was already conditional — which did not help, because the stale writer is the
+re-POST, not the flip. `put_warehouse` is now a seeding primitive with zero production callers,
+pinned by a structural test. The project-takeover guard also runs inside the write, where it cannot
+be raced, and a vanished record raises rather than being silently re-created (previously only the
+lost-race branch noticed; the sequential path would have resurrected a just-deleted warehouse).
+
+Acceptance criteria met: `tests/unit/test_registry_writes_are_conditional.py` injects the operator's
+deactivate AT THE READ→WRITE SEAM (patching `_replace_json`), final status is `deactivated`. The
+first version of that test landed the deactivate merely *before* the call and passed against the
+pre-fix shape too — a sequential test cannot distinguish a conditional write from an unconditional
+one. Mutation-tested against the exact pre-fix shape: reds. Full suite 2860 passed.
+
 **Evidence.** `services/catalog/src/catalog/services/warehouses.py:177-186` (verified):
 `set_warehouse_status` = `get_warehouse` → mutate dict → `put_warehouse` (unconditional). The
 idempotent re-create path (`endpoints/warehouses.py:181-187` (verified)) carries `status` forward
