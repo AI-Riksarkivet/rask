@@ -86,10 +86,11 @@ class _Plane:
 class _MemoryCursor:
     """The cursor store's contract in memory — the walk's tests are about the walk."""
 
-    def __init__(self, seq: int | None = None, *, resume_from: int | None = None, pending_high: int | None = None) -> None:
+    def __init__(self, seq: int | None = None, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None) -> None:
         self.seq = seq
         self.resume_from = resume_from
         self.pending_high = pending_high
+        self.floor = floor
         self.writes: list[int] = []
         #: Every write in full, so a test can assert on the PARKED state an interrupted walk leaves.
         self.records: list[tuple[int, int | None, int | None]] = []
@@ -97,18 +98,21 @@ class _MemoryCursor:
     async def get(self) -> LineageCursor | None:
         if self.seq is None:
             return None
-        return LineageCursor(seq=self.seq, updated_at=datetime.now(UTC), resume_from=self.resume_from, pending_high=self.pending_high)
+        return LineageCursor(seq=self.seq, updated_at=datetime.now(UTC), resume_from=self.resume_from, pending_high=self.pending_high, floor=self.floor)
 
-    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None) -> None:
+    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None) -> None:
         self.seq = seq
         self.resume_from = resume_from
         self.pending_high = pending_high
+        self.floor = floor
         self.writes.append(seq)
         self.records.append((seq, resume_from, pending_high))
 
 
-def _store(seq: int | None = None, *, resume_from: int | None = None, pending_high: int | None = None) -> tuple[LineageCursorStore, _MemoryCursor]:
-    memory = _MemoryCursor(seq, resume_from=resume_from, pending_high=pending_high)
+def _store(
+    seq: int | None = None, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None
+) -> tuple[LineageCursorStore, _MemoryCursor]:
+    memory = _MemoryCursor(seq, resume_from=resume_from, pending_high=pending_high, floor=floor)
     return cast(LineageCursorStore, memory), memory
 
 
@@ -602,37 +606,75 @@ async def test_the_feed_lane_pushes_channels_for_a_row_it_actually_wrote() -> No
     assert pushed == ["alice"], "no channel push on the feed lane — every HTTP-emitted run is silent on email/Slack"
 
 
-# --- KNOWN GAP: the mark can step over a row that had not COMMITTED yet -------------------------
+# --- the mark must not step over a row that had not COMMITTED yet -------------------------------
 #
 # `seq` is a `bigserial` (lineage repository.py:135) allocated at INSERT, and lineage's pool runs
 # autocommit (core/age.py:33), so events commit independently and NOT necessarily in seq order. Two
 # producers interleave: writer A takes 1000 and is still inserting when writer B takes 1001 and
 # commits. A tick reading at that instant sees 1001 and not 1000, sets the mark to 1001, and every
-# later tick filters `seq > stored.seq` — so 1000 sits below the mark forever and its author and
-# watchers are never told. No gap log fires, because the page was not truncated.
+# later tick filters it out — 1000 sits below the mark forever, its author and watchers never told,
+# with no gap log, because the page was not truncated.
 #
-# XFAIL RATHER THAN FIXED, and the reason is worth recording: the obvious fix — trail the mark by a
-# bounded overlap and re-offer the last few rows — is SAFE on its face (delivery is idempotent on the
-# notification's natural key, and `dismiss` marks a pointer rather than deleting it, so a re-offer
-# cannot resurrect a dismissal) and still WRONG here. The first-ever tick primes the cursor to the
-# newest row and deliberately notifies nobody; an overlap would then reach BELOW that primed mark on
-# the very next tick and deliver the backlog it had just promised to skip — replaying the retained
-# feed into everyone's inbox on deployment day, which is the exact failure priming exists to prevent.
-#
-# Closing it properly needs a floor the overlap may not cross (the seq the cursor was primed at), or a
-# commit-ordered column the feed does not currently have. Both are design decisions, not edits.
+# The mark therefore trails by `FEED_OVERLAP`, CLAMPED to the cursor's `floor`. Both halves are
+# load-bearing and the second is the one that is easy to miss: an unclamped overlap reaches below the
+# mark a first-ever prime just set and delivers the backlog priming exists to skip.
 
 
-@pytest.mark.xfail(reason="known gap: bigserial commit order — see the note above; fixing it needs a primed-at floor", strict=True)
 @pytest.mark.asyncio
 @respx.mock
 async def test_a_row_that_committed_late_below_the_mark_is_still_delivered() -> None:
-    # The mark is at 1001; row 1000 only became visible afterwards.
+    # Mark at 1001 with a floor well below it; row 1000 only became visible afterwards.
     respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(1001), _event(1000)], "next_cursor": 999}))
     plane = _Plane()
-    store, _ = _store(1001)
+    store, _ = _store(1001, floor=500)
 
     await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
 
     delivered = sorted(row["notification_id"] for row in plane.boxes.get("alice", []))
     assert "run-1000@FAIL" in delivered, "the late-committing row was stepped over and is lost forever"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_overlap_never_reaches_below_the_floor_a_prime_set() -> None:
+    """The regression the first attempt at this fix shipped, caught by its own tests.
+
+    A fresh deployment primes to the newest row and notifies nobody. If the overlap then reaches under
+    that mark, the next tick delivers the retained backlog to everyone — the exact failure priming
+    exists to prevent, arriving one tick later.
+    """
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(1002), _event(1001), _event(1000)], "next_cursor": 999}))
+    plane = _Plane()
+    store, _ = _store(1001, floor=1001)  # primed here: everything at or below 1001 is skipped backlog
+
+    await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
+
+    delivered = sorted(row["notification_id"] for row in plane.boxes.get("alice", []))
+    assert delivered == ["run-1002@FAIL"], f"the overlap reached into primed-away backlog: {delivered}"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_first_ever_prime_records_the_floor_it_skipped_to() -> None:
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9), _event(8)], "next_cursor": 8}))
+    store, memory = _store(None)
+
+    await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=_Plane().open, max_pages=5, budget_seconds=10)
+
+    assert memory.seq == 9
+    assert memory.floor == 9, "priming skipped the backlog without recording where, so the overlap can reach it"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_cursor_from_before_the_floor_existed_adopts_its_own_mark() -> None:
+    """Migration: `floor=None` must not be read as "no floor" — that is the unclamped bug."""
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(1002), _event(1000)], "next_cursor": 999}))
+    plane = _Plane()
+    store, memory = _store(1001)  # no floor: an S1-era record
+
+    await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
+
+    delivered = sorted(row["notification_id"] for row in plane.boxes.get("alice", []))
+    assert delivered == ["run-1002@FAIL"], f"an old cursor let the overlap reach below its mark: {delivered}"
+    assert memory.floor == 1001, "the adopted floor was not persisted, so the next pass is unprotected again"

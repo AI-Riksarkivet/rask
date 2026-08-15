@@ -54,6 +54,23 @@ CURSOR_KEY: Final = "notifications-lineage-cursor"
 _RETRY_ATTEMPTS: Final = 4
 _RETRY_BUDGET_SECONDS: Final = 30.0
 
+#: How far below the mark the walk re-offers rows, in feed seqs.
+#:
+#: `seq` is a `bigserial` allocated at INSERT while lineage commits autocommit per event, so commit
+#: order is NOT seq order: writer A can hold 1000 while writer B takes 1001 and commits first. A tick
+#: reading in that window sees 1001 and not 1000, and a mark set to 1001 puts row 1000 permanently
+#: below the filter — its author and watchers never told, with no gap log, because the page was not
+#: truncated. Re-offering a bounded window closes it.
+#:
+#: Free by construction, and only because two other properties hold: delivery is idempotent on the
+#: notification's natural key, so a re-offer is a counted duplicate rather than a second
+#: notification; and `dismiss` MARKS a pointer rather than deleting it, so a re-offered dismissal
+#: stays dismissed.
+#:
+#: A CONSTANT, not a setting: it describes how lineage writes, not how anyone deploys, so there is no
+#: correct per-cluster value to tune.
+FEED_OVERLAP: Final = 64
+
 
 class LineageCursorUnreadable(ServiceUnavailableError):
     """The stored cursor exists but cannot be read — never reported as absent.
@@ -101,6 +118,19 @@ class LineageCursor(BaseModel):
     resume_from: int | None = Field(default=None, ge=0)
     #: The newest row the interrupted walk had reached; becomes `seq` when it completes.
     pending_high: int | None = Field(default=None, ge=0)
+    #: The seq `FEED_OVERLAP` may never reach below — the rows this deployment deliberately SKIPPED.
+    #:
+    #: Without it the overlap is not merely imprecise, it is wrong in the one direction that matters.
+    #: A first-ever tick primes the mark to the newest row and notifies nobody, on purpose: replaying
+    #: the retained feed into everyone's inbox on deployment day is the failure `deliverPolicy: new`
+    #: prevents on the bus. An unclamped overlap reaches BELOW that primed mark on the very next tick
+    #: and delivers exactly the backlog priming had just promised to skip. (Built, observed breaking
+    #: four tests for precisely this reason, and reverted before it shipped.)
+    #:
+    #: `None` on a cursor written before this field existed. That case adopts the CURRENT mark as the
+    #: floor rather than guessing what an older deployment skipped — one pass with no overlap, and
+    #: every pass after it protected.
+    floor: int | None = Field(default=None, ge=0)
 
 
 class FeedRecord(BaseModel):
@@ -254,7 +284,7 @@ class LineageCursorStore:
             log.exception("lineage_cursor_unreadable")
             raise LineageCursorUnreadable("the stored lineage feed cursor no longer fits its schema") from exc
 
-    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None) -> None:
+    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None) -> None:
         """Move the mark. Last write wins — one writer, no contender to race.
 
         Called with `resume_from`/`pending_high` to PARK an interrupted walk (the mark itself does not
@@ -262,7 +292,7 @@ class LineageCursorStore:
         a completed one — which also clears any parked state, so a walk that finishes leaves nothing
         behind for the next tick to resume from.
         """
-        cursor = LineageCursor(seq=seq, updated_at=datetime.now(UTC), resume_from=resume_from, pending_high=pending_high)
+        cursor = LineageCursor(seq=seq, updated_at=datetime.now(UTC), resume_from=resume_from, pending_high=pending_high, floor=floor)
         try:
             response = await self._client.post(
                 self._base,
@@ -320,9 +350,18 @@ async def reconcile(
             # top of the WHOLE multi-tick walk, not the top of whichever tick happened to finish it.
             after = stored.resume_from
             high = stored.pending_high if stored.pending_high is not None else stored.seq
+            # THE MARK TRAILS BY `FEED_OVERLAP`, CLAMPED TO THE FLOOR. See both constants: the trail
+            # closes lineage's commit-order window (a row still mid-INSERT when a tick read is
+            # otherwise below the mark forever), and the clamp keeps it from reaching into the backlog
+            # a first-ever prime deliberately skipped.
+            #
+            # `floor is None` is a cursor written before the field existed: adopt the current mark, so
+            # this pass behaves exactly as it always did and the floor is recorded on the way out.
+            settled_floor = stored.floor if stored.floor is not None else stored.seq
+            walk_floor = max(stored.seq - FEED_OVERLAP, settled_floor)
             for _ in range(max_pages):
                 page = await client.page(after=after)
-                fresh = [record for record in page.events if record.seq > stored.seq]
+                fresh = [record for record in page.events if record.seq > walk_floor]
                 for record in fresh:
                     scanned += 1
                     high = max(high, record.seq)
@@ -366,7 +405,7 @@ async def reconcile(
         # a budget too small for a SINGLE page parks nothing and stalls honestly, which is a
         # `feed_page_limit`/`reconcile_budget_seconds` misconfiguration and reads as one.
         if stored is not None and not retried and after is not None:
-            await store.set(stored.seq, resume_from=after, pending_high=high)
+            await store.set(stored.seq, resume_from=after, pending_high=high, floor=settled_floor)
             log.warning("lineage_feed_walk_parked", extra={"resume_from": after, "pending_high": high, "scanned": scanned})
         raise LineageFeedBudgetExceeded(f"the lineage feed reconcile pass exceeded its {budget_seconds}s budget") from exc
 
@@ -380,7 +419,10 @@ async def reconcile(
     if not retried:
         # No `resume_from`/`pending_high`: a completed walk settles the mark AND clears whatever an
         # earlier interrupted pass parked, so the next tick starts from the top again.
-        await store.set(high)
+        # The floor rides along on every settle: a completed walk clears `resume_from`/
+        # `pending_high`, but the backlog this deployment skipped is not something a later pass may
+        # forget — dropping it here would re-open the overlap onto that backlog on the very next tick.
+        await store.set(high, floor=settled_floor)
     # The cursor REPORTED is the one now in effect, not the highest row seen: a tick that hit a
     # transient failure leaves the mark where it was, and a result claiming otherwise would make the
     # log say the walk had made progress it deliberately did not make.
@@ -395,6 +437,8 @@ async def _prime(client: LineageFeedClient, store: LineageCursorStore) -> Reconc
     # `max` rather than `events[0]`: the server orders newest-first, and reading the mark off a
     # position would make this silently wrong the day that ordering is ever revisited.
     newest = max(record.seq for record in page.events)
-    await store.set(newest)
+    # The mark AND the floor: everything at or below `newest` is backlog this deployment chose not to
+    # replay, so the overlap must never reach back into it. Recorded here, where the decision is made.
+    await store.set(newest, floor=newest)
     log.info("lineage_feed_cursor_primed", extra={"cursor": newest})
     return ReconcileResult(cursor=newest, primed=True)

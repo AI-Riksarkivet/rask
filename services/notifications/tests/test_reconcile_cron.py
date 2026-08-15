@@ -89,7 +89,7 @@ class _FakeCursor:
     async def get(self) -> LineageCursor | None:
         return self.stored
 
-    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None) -> None:
+    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None) -> None:
         # Mirrors the real signature so a fake cannot silently diverge from the store it stands in for.
         self.writes.append(seq)
         self.parked.append((resume_from, pending_high))
