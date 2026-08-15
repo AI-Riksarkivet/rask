@@ -22,7 +22,22 @@ from opentelemetry import metrics
 class Lane(StrEnum):
     """Which ingress an event arrived on. Two, because the bus provably does not carry every producer:
     the ingest service emits lineage over HTTP only, as do Ray TRAIN and any external OpenLineage
-    producer, and those lanes reach lineage's durable feed without ever touching the topic."""
+    producer, and those lanes reach lineage's durable feed without ever touching the topic.
+
+    HOW TO RETIRE A LANE, since "keep both" would otherwise be permanent by default. `record_ingress`
+    already answers it and no second instrument is needed: `_event_outcome` reports DELIVERED only when
+    THIS lane actually wrote a row, and DUPLICATE when every recipient already had it — that is, when
+    the other lane got there first. So the query is:
+
+        sum(ingress{lane="X", outcome="delivered"}) == 0
+
+    over a window that INCLUDES a lineage restart, because a lane's whole value may be the case the
+    other one misses. Retire on that evidence and nothing else.
+
+    Do not add a separate first-seen attribute for this: it would duplicate the series above, which is
+    the multiplication `record_recipient` refuses for the same reason. The delivered/duplicate
+    distinction is what makes the query work, so it is pinned by
+    `test_ingress_dedupe.py::test_the_lane_that_wrote_the_row_is_the_one_counted_as_delivered`."""
 
     BUS = "bus"
     FEED = "feed"

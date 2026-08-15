@@ -200,3 +200,57 @@ async def test_the_feed_reaching_it_first_is_the_same_story(plane: _Plane) -> No
 
     assert await _bus_delivery(plane) == DAPR_SUCCESS
     assert len(plane.boxes["alice"]) == 1
+
+
+# --- WHICH LANE WON: the evidence a lane can ever be retired on -----------------------------------
+#
+# The doctrine that came out of the atomicity audit is "keep both lanes, and retire one only on
+# evidence that it never wins". That evidence needs no new instrument — `record_ingress(lane, outcome)`
+# already carries it, because `_event_outcome` reports DELIVERED only when THIS lane actually wrote a
+# row and DUPLICATE when every recipient already had it, i.e. when the other lane got there first.
+#
+# So the retirement query is `sum(ingress{lane=X, outcome=delivered}) == 0` over a window. Adding a
+# separate first-seen attribute would duplicate that series, which `metrics.py` explicitly warns
+# against ("crossing them would multiply the series for a distinction the event counter already
+# carries").
+#
+# What was missing is that NOTHING PINNED IT. The semantics is load-bearing for a decision about
+# deleting a delivery lane, and a refactor of `_event_outcome`'s ordering would have changed it
+# silently. These two tests are that pin.
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_lane_that_wrote_the_row_is_the_one_counted_as_delivered(plane: _Plane, monkeypatch: pytest.MonkeyPatch) -> None:
+    from notifications.api import metrics as metrics_module
+
+    seen: list[tuple[str, str]] = []
+    monkeypatch.setattr(metrics_module, "record_ingress", lambda lane, outcome: seen.append((lane.value, outcome.value)))
+    import notifications.api.ingest as ingest_module
+
+    monkeypatch.setattr(ingest_module, "record_ingress", lambda lane, outcome: seen.append((lane.value, outcome.value)))
+
+    await _bus_delivery(plane)
+    await _feed_tick(plane, seq=12, cursor=11)
+
+    assert seen[0] == ("bus", "delivered"), f"the winning lane was not counted as delivered: {seen}"
+    assert seen[1] == ("feed", "duplicate"), (
+        f"the losing lane was not counted as a duplicate, so 'which lane wins' cannot be read off the "
+        f"metric and no lane can ever be retired on evidence: {seen}"
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_same_holds_when_the_feed_wins(plane: _Plane, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Order must not matter — which door sees a run first is a property of the PRODUCER."""
+    import notifications.api.ingest as ingest_module
+
+    seen: list[tuple[str, str]] = []
+    monkeypatch.setattr(ingest_module, "record_ingress", lambda lane, outcome: seen.append((lane.value, outcome.value)))
+
+    await _feed_tick(plane, seq=12, cursor=11)
+    await _bus_delivery(plane)
+
+    assert seen[0] == ("feed", "delivered")
+    assert seen[1] == ("bus", "duplicate")
