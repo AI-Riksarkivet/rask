@@ -62,7 +62,7 @@ On each delivery a mover (`services/medallion/services/transform.py: handle_stag
 
 1. (compute on) runs the **fake-Ray compute** — reads its upstream Lance dataset, applies a stage transform,
    writes the downstream dataset (`read → transform → write → version`), measuring exact rows + on-disk
-   bytes. This is the **medallion-producer seam** — the identical contract a distributed Ray Data job fills (§7).
+   bytes. This is the **lance-ray seam** — the identical contract a distributed Ray Data job fills (§7).
 2. runs the two **promotion gates** (§3);
 3. emits the transform's OpenLineage `RunEvent` (`inputs=[upstream]`, `outputs=[downstream]` → the
    `DERIVED_FROM` edge), carrying the version + `outputStatistics` (+ `dataQualityAssertions` when the
@@ -131,7 +131,7 @@ bronze/silver are **transient** (re-derivable; their old versions are GC'd), gol
 
 What lands when this merges into the sibling `rask` repo (see [`RASK-INTEGRATION.md`](RASK-INTEGRATION.md)):
 
-- **Distributed compute:** the in-process fake-Ray compute (`compute.py`) is replaced by a real **medallion-producer**
+- **Distributed compute:** the in-process fake-Ray compute (`compute.py`) is replaced by a real **lance-ray**
   Ray Data job on rask's **KubeRay** cluster — the *same* `read → transform → write → version` contract, just
   distributed. Nothing else in the flow changes.
 - **Auto-instrumented lineage (GOAL 3):** instead of the mover hand-building the `RunEvent`, the medallion-producer

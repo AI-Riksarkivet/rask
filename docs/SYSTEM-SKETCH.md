@@ -30,7 +30,7 @@
               OpenFGA ◀─can_*?──┘               │ CredentialVendor: ModeB today)
               (Postgres)                        ▼
                                        object store  (MinIO / S3-compatible)   ── DATA PLANE ──
-                                          ▲  compute (medallion-producer / pylance) moves bytes
+                                          ▲  compute (lance-ray / pylance) moves bytes
                                           │  (Mode B: via catalog endpoints today)
    compute/ETL jobs ──OpenLineage──▶  ┌──┴──────────────────────────┐
    (emit run events)                  │  LINEAGE  (provenance plane) │  ── separate service ──
@@ -79,7 +79,7 @@ emit an OpenLineage event. Layers are **separate Lance tables** (namespaces); pr
 | Maintenance read-only | 503+Retry-After middleware (`services/catalog/api/maintenance.py`) | ✅ built (default off) |
 | Lineage service | OpenLineage ingest → AGE graph (`services/lineage/`) | ✅ built, deployed (`chart/`), in-service authz gate (default off) |
 | OpenBao SecretStore | secrets out of env | ✅ built + deployed (two-tier; app services fail-closed on it) |
-| medallion movers + medallion-producer producer | the medallion movement (promotion) + compaction | ✅ built & deployed — event-driven Dapr movers; distributed medallion-producer (Ray Data) is the rask future ([`FLOW.md`](FLOW.md)) |
+| medallion movers + medallion-producer producer | the medallion movement (promotion) + compaction | ✅ built & deployed — event-driven Dapr movers; distributed lance-ray (Ray Data) is the rask future ([`FLOW.md`](FLOW.md)) |
 | Governance P1 | `project` type + 3-axis (teams×projects×layers) | 🔶 planned |
 | OTel / NATS / Dapr | observability / events / durable workflows | ✅ built & deployed (OTLP→GreptimeDB; Dapr pub/sub over NATS JetStream; Dapr **Workflow** still deferred) |
 
@@ -177,7 +177,7 @@ _The three sections below are the **cited Lakekeeper study output** (study `wfb2
 | 19 | **Lightweight RequestMetadata for audit** (request_id + actor + privilege_source) | OBSERVABILITY/EVENTS | Absent. | Start minimal (covered by #3); add `privilege_source` only when GOVERNANCE_P1 introduces admin-only ops. Do NOT build Lakekeeper's heavyweight struct (request_metadata.rs:92-170). | P2 | M |
 | — | **Fail-closed authz on OpenFGA outage (503, never silent-allow)** | AUTHZ | **DONE & CORRECT** — `_FAIL_CLOSED` + `_TRANSIENT_NETWORK` → `ServiceUnavailableError`→503, all paths via `_retrying()` (fga.py:76-82,300-302,330-332,360-362,400-405). | Status GOOD. Maintain: every new read/write authz path must go through `_retrying()` + fail-closed. No work. | P2 | S |
 | — | **Maintenance read-only mode (503 + Retry-After)** | MAINTENANCE | **DONE & WIRED** — maintenance.py:24-53 mirrors Lakekeeper maintenance.rs:40-70; wired at main.py:75; config.py:87; tests present. | Status COMPLETE. No work. (Pairs well with #9/#11 migration windows.) | P2 | S |
-| SKIP | **`Location` newtype hardening / max-length / scheme validation** | CREDENTIAL_VENDING | `split_s3_location` = urlsplit wrapper (vending.py:61-71). | **SKIP** — premature for a small Python service with internal clients (LanceDB SDK/medallion-producer/Iceberg). Lakekeeper's newtype (io/location.rs) defends untrusted multi-tenant input we don't have. Revisit only if a public API appears. | SKIP | L |
+| SKIP | **`Location` newtype hardening / max-length / scheme validation** | CREDENTIAL_VENDING | `split_s3_location` = urlsplit wrapper (vending.py:61-71). | **SKIP** — premature for a small Python service with internal clients (LanceDB SDK/lance-ray/Iceberg). Lakekeeper's newtype (io/location.rs) defends untrusted multi-tenant input we don't have. Revisit only if a public API appears. | SKIP | L |
 | SKIP | **Postgres session advisory locks for maintenance mutex** | MAINTENANCE / LANCE_RAY_JOBS | No DB, no multi-worker job fleet. | **SKIP** — `asyncio.Lock` suffices for single-pod jobs. Postgres advisory locks (advisory_lock.rs:1-80) earn their keep only with multiple job workers / a real queue. | SKIP | S |
 | SKIP | **Type graph `user_of`/`usersets` for list_objects/list_users** | AUTHZ | No list_objects endpoints beyond check/batch_check (fga_deps.py). | **SKIP for now** — defer until a Lance list API actually needs FGA-gated enumeration (models.rs:1-46). | SKIP | M |
 | SKIP | **Instance-admin / PrivilegeSource bypass tiers** | AUTHZ / GOVERNANCE_P1 | Absent. | **SKIP** until admin-only ops exist (no in-process bypass, no warehouse mgmt today). Revisit in GOVERNANCE_P1 (request_metadata.rs:68-87,174-191). | SKIP | M |
@@ -260,7 +260,7 @@ Our `CredentialVendor` protocol (`services/catalog/core/vending.py`) already mir
 
 ### Deliberate non-adoptions (and why)
 
-- **`Location` newtype hardening / max-length / scheme validation** (`io/location.rs`). Premature for a Python service whose clients are internal (LanceDB SDK / medallion-producer / Iceberg). `urlsplit` (`split_s3_location`) suffices. Revisit only if we expose a public, untrusted API.
+- **`Location` newtype hardening / max-length / scheme validation** (`io/location.rs`). Premature for a Python service whose clients are internal (LanceDB SDK / lance-ray / Iceberg). `urlsplit` (`split_s3_location`) suffices. Revisit only if we expose a public, untrusted API.
 - **Postgres session advisory locks** (`advisory_lock.rs`). We have no DB and no multi-worker job fleet; `asyncio.Lock` covers single-pod coordination. Adopt only with a real job queue or multiple workers.
 - **Heavyweight `RequestMetadata` + `PrivilegeSource`/instance-admin bypass tiers** (`request_metadata.rs`). We have no in-process privilege escalation and no admin-only ops yet. Keep request context minimal (request_id + actor); revisit privilege tiers in GOVERNANCE_P1.
 - **Type-graph `user_of`/`usersets` for `list_objects`/`list_users`** (`models.rs`). No Lance list API needs FGA-gated enumeration today. Defer until one does.

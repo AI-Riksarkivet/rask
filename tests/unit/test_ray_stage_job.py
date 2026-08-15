@@ -12,7 +12,7 @@ side without the other fails here. It also confirms *why* the inline exists is r
 medallion-producer strips blob-v2 typing on read at every version we have pinned — 0.4.2 (verified live 2026-07-13)
 and 0.5.0, whose datasource says so in the source: "Blob v2 extension columns are exposed as plain
 LargeBinary bytes" (R27, 2026-07-28). The Ray path must therefore re-wrap via
-pylance), and the deriver is our business logic, never something medallion-producer provides.
+pylance), and the deriver is our business logic, never something lance-ray provides.
 
 Loaded via ``spec_from_file_location`` (the script isn't an importable package); lance_ray is imported
 lazily inside ``main`` so the module — hence these primitives — loads cleanly in the unit venv.

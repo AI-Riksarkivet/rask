@@ -2,7 +2,7 @@
 
 The catalog authenticates (OIDC) and authorizes (OpenFGA), then a
 :class:`CredentialVendor` turns *(table object-store location, access tier)* into
-the ``storage_options`` a client (LanceDB SDK / medallion-producer / pylance) uses to reach
+the ``storage_options`` a client (LanceDB SDK / lance-ray / pylance) uses to reach
 object storage directly. The target is **S3-compatible** storage — RustFS (this project's default store),
 MinIO, AWS S3, Ceph RGW, GCS via S3 interop. The design is
 **vending-first**; each deployment picks the strongest plug it wants:
@@ -42,7 +42,7 @@ VendingMode = Literal["mode_b", "static", "sts", "web_identity"]
 class VendedCredentials(BaseModel):
     """Scoped storage credentials for one table at one tier.
 
-    ``storage_options`` is consumed directly by pylance / medallion-producer /
+    ``storage_options`` is consumed directly by pylance / lance-ray /
     object_store. ``expires_at_millis`` is when the client must refresh
     (``None`` for long-lived static keys).
     """

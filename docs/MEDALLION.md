@@ -61,8 +61,8 @@ would flag them `missing_on_storage`). **On** (`--set medallion.compute=true`): 
 REAL in-process Lance write: `medallion-producer` seeds `bronze$events`, then each mover reads its upstream Lance
 dataset, stamps a `stage` provenance column, and writes the downstream dataset — so the whole loop produces
 **actual versioned data** and the emitted OpenLineage carries the **real** Lance version (not a hardcoded
-`1`). This is the **medallion-producer seam**: the exact `read → transform → write → version` contract a
-distributed Ray Data job (`medallion-producer` on rask's KubeRay) swaps into in production; in-process here so the
+`1`). This is the **lance-ray seam**: the exact `read → transform → write → version` contract a
+distributed Ray Data job (`lance-ray` on rask's KubeRay) swaps into in production; in-process here so the
 loop is end-to-end testable without a Ray cluster (`tests/unit/test_medallion_cascade.py` runs the full
 bronze→gold cascade and asserts both the data and the `DERIVED_FROM` chain).
 

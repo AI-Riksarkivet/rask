@@ -394,7 +394,7 @@ def _run_stage(from_uri: str, to_uri: str, stage: str, so: dict[str, str], *, li
         # R27 CORRECTION (2026-07-28): the reason this branch used to give — "lance_ray's distributed read
         # does not surface the reserved _rowid metacolumn" — is FALSE and was never measured.
         # `lr.read_lance(uri, scanner_options={"with_row_id": True})` yields keys ['_rowid', …] (verified at
-        # medallion-producer 0.4.2 AND 0.5.0), and 0.5.0 additionally exposes `with_metadata=True` for
+        # lance-ray 0.4.2 AND 0.5.0), and 0.5.0 additionally exposes `with_metadata=True` for
         # `_rowaddr`/`_fragid`. So the head CAN distribute: read with with_row_id, stamp, and write with
         # `lr.write_lance(..., enable_stable_row_ids=True)` (a 0.5.0 parameter — see the image pins).
         # Left as a driver-side write deliberately: the change is a live-cluster behaviour change to the
