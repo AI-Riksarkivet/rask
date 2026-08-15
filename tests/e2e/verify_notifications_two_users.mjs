@@ -13,10 +13,23 @@
  * a `lance-ns` path that no longer exists. So the plane's central claim was witnessed and then became
  * unreproducible. A claim nobody can re-run is a claim that silently rots.
  *
- * STATUS: AUTHORED, NOT YET DRIVEN. The cluster it targets does not currently host
- * `rask-notifications` (helm release rev 33 predates the service), so this has never been executed.
- * Do not read a green CI as evidence it passed — nothing runs it automatically. Say "driven" only
- * after you have watched the output.
+ * STATUS: DRIVEN GREEN against local k3s on 2026-08-15 — all six checks, exit 0. Nothing runs it
+ * automatically, so a green CI is still not evidence it passed: say "driven" only after you have
+ * watched the output yourself.
+ *
+ * FOUR DEPLOYMENT FACTS IT FOUND, none of which any unit test could have:
+ *   1. `notifications` must hold FGA grants of its OWN. The feed is governed, so a deployment that
+ *      forgets them gets a reconciler that ticks cleanly, logs `lineage_feed_reconciled`, and
+ *      reconciles nothing — measured here as `GET /events` returning 0 rows for `notifications`
+ *      while `service-ingest` saw 80.
+ *   2. Its `*_OIDC_ISSUER` must be the PUBLIC issuer (`http://localhost:8080/dex`) with discovery
+ *      pointed in-cluster — the split-horizon every other governed service uses. Both set to the
+ *      in-cluster URL yields `OIDC discovery issuer mismatch` and a permanently 401'd inbox.
+ *   3. The output table needs a real grant. `table:bronze$events` had zero tuples, so every emit
+ *      403'd on `can_write_data` — and an orphaned table (no `parent` edge) is reachable ONLY by a
+ *      direct grant, since `reader from parent` has no parent to walk.
+ *   4. The first reconciler tick primes the cursor and notifies nobody, by design. A run emitted
+ *      before that tick is never delivered, which looks exactly like a broken plane.
  *
  * PREREQUISITES
  *   - `rask-notifications` deployed WITH a Dapr sidecar, and `notifications` present in
@@ -47,10 +60,29 @@ import { chromium } from '@playwright/test';
 //   kubectl port-forward -n kube-system svc/traefik 8080:80
 const ORIGIN = process.env.ORIGIN ?? 'http://localhost:8080';
 const SHOT = process.env.SHOT_DIR ?? '/tmp/rask-notifications-drive';
-// Lineage is addressed DIRECTLY (see emitRun) — the gateway cannot carry a service token.
+// Lineage is addressed DIRECTLY (see emitRun) — the gateway fronts it, but the door this drive needs
+// is the ingest door and nothing here depends on the gateway's routing.
 const LINEAGE_URL = process.env.LINEAGE_URL ?? 'http://localhost:8001';
-const APP_TOKEN = process.env.APP_API_TOKEN ?? '';
-const SERVICE_IDENTITY = process.env.LINEAGE_SERVICE_IDENTITY ?? 'service-web';
+// THE RUN MUST BE EMITTED AS THE USER, NOT AS A SERVICE, AND THAT IS NOT A DETAIL OF THIS HARNESS.
+//
+// The first version of this drive posted with `dapr-api-token` + `x-lance-service-identity:
+// service-web` and put the intended author in the body as `run.facets.author.sub = 'alice'`. Lineage
+// accepted it — HTTP 201, every time — and alice's badge never moved, which reads exactly like a
+// broken notification plane. It is the opposite: `enforce_author` (services/lineage/api/fga_deps.py)
+// OVERWRITES the claimed facet with the verified token subject, precisely so a producer cannot put a
+// row in a named person's inbox. So the events landed authored by `service-web`, were delivered to
+// `service-web`, and the drive spent three runs measuring a forgery guard doing its job.
+//
+// Two consequences, both load-bearing:
+//   · The emitter must hold the USER's own token. Dex is `enablePasswordDB: true` with
+//     `passwordConnector: local`, so the password grant mints one — the same mechanism the annotator's
+//     publish saga already uses (services/annotator/projects/lakehouse.py), not a test-only backdoor.
+//   · The author subject is DEX's `sub` (`CiQwOGE4…`), never the string `alice`. That is also the
+//     InboxActor's id, which is why the two must come from one place: the token.
+const TOKEN_URL = process.env.TOKEN_URL ?? `${ORIGIN}/dex/token`;
+const CLIENT_ID = process.env.OIDC_CLIENT_ID ?? 'lance-catalog';
+const CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET ?? 'lance-catalog-secret';
+const PASSWORD = process.env.DEX_PASSWORD ?? 'password';
 // The output the emitting identity must hold `can_write_data` on (model.fga: `can_write_data: writer`).
 const OUTPUT = process.env.DRIVE_OUTPUT ?? 'bronze$events';
 /** How long to let the bell's live query settle after a reload. */
@@ -127,20 +159,45 @@ async function badge(page) {
  *
  * So the drive talks to lineage on LINEAGE_URL with the pair the door wants.
  */
-async function emitRun({ runId, state, authorSub, outputName = OUTPUT }) {
-	const res = await fetch(`${LINEAGE_URL}/api/v1/lineage`, {
+/** Mint `email`'s own OIDC token from Dex via the password grant.
+ *
+ *  `id_token` first, `access_token` as the fallback — the same order and the same request shape the
+ *  annotator's publish identity uses, so this exercises a path the estate already depends on. */
+async function mintToken(email) {
+	const body = new URLSearchParams({
+		grant_type: 'password',
+		username: email,
+		password: PASSWORD,
+		scope: 'openid profile email',
+	});
+	const res = await fetch(TOKEN_URL, {
 		method: 'POST',
 		headers: {
-			'content-type': 'application/json',
-			'dapr-api-token': APP_TOKEN,
-			'x-lance-service-identity': SERVICE_IDENTITY,
+			'content-type': 'application/x-www-form-urlencoded',
+			authorization: `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`,
 		},
+		body,
+	});
+	if (!res.ok) throw new Error(`dex refused ${email}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+	const json = await res.json();
+	const token = json.id_token ?? json.access_token;
+	if (!token) throw new Error(`dex returned neither id_token nor access_token for ${email}`);
+	return token;
+}
+
+/** Emit one run event AS the token's holder. The author facet is deliberately NOT sent: whatever it
+ *  said would be overwritten by `enforce_author`, and sending one invites the reader to believe it
+ *  had an effect. */
+async function emitRun({ runId, state, token, outputName = OUTPUT }) {
+	const res = await fetch(`${LINEAGE_URL}/api/v1/lineage`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
 		body: JSON.stringify({
 			eventType: state,
 			eventTime: new Date().toISOString(),
 			producer: 'rask://verify_notifications_two_users',
 			job: { namespace: 'rask-drive', name: `drive_${runId}` },
-			run: { runId, facets: { author: { name: authorSub, sub: authorSub } } },
+			run: { runId },
 			outputs: [{ namespace: outputName.split('$')[0], name: outputName }],
 		}),
 	});
@@ -152,12 +209,16 @@ console.log(`\n▸ two-user notification drive against ${ORIGIN}\n`);
 const alice = await signIn('alice@example.com');
 const bob = await signIn('bob@example.com');
 
+// Their OWN tokens, minted from the same IdP the browser session came from — see the emitRun note.
+const aliceToken = await mintToken('alice@example.com');
+const bobToken = await mintToken('bob@example.com');
+
 const before = { alice: await badge(alice.page), bob: await badge(bob.page) };
 console.log(`   baseline: alice=${before.alice} bob=${before.bob}`);
 
 // ── alice's run FAILS ────────────────────────────────────────────────────────────────────────────
 const runId = `drive-alice-${Date.now()}`;
-const emitted = await emitRun({ runId, state: 'FAIL', authorSub: 'alice' });
+const emitted = await emitRun({ runId, state: 'FAIL', token: aliceToken });
 check('lineage accepted the FAIL event', emitted.status < 400, `HTTP ${emitted.status} ${emitted.body.slice(0, 160)}`);
 
 // The bus hop plus the fan-out is not instant; poll rather than sleep once and hope.
@@ -175,7 +236,7 @@ await bob.page.screenshot({ path: `${SHOT}/bob-after-fail.png` }).catch(() => {}
 
 // ── the reverse, because one direction proves only that SOMETHING moved ──────────────────────────
 const bobRun = `drive-bob-${Date.now()}`;
-await emitRun({ runId: bobRun, state: 'COMPLETE', authorSub: 'bob' });
+await emitRun({ runId: bobRun, state: 'COMPLETE', token: bobToken });
 const reverse = await until(
 	async () => ({ alice: await badge(alice.page), bob: await badge(bob.page) }),
 	(v) => v.bob > after.bob,
