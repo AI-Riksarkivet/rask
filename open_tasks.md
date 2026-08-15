@@ -49,15 +49,41 @@ exists with `curl -s http://localhost:5000/v2/rest-catalog/tags/list` before dep
 
 ---
 
-## The five
+## The five — four CLOSED 2026-08-15, one still yours
 
-| # | Task | Owner | Source of truth |
-|---|---|---|---|
-| 4 | `promotionReviewBand` value + Q6 scheduling | **you** | `open_medallion_workflow.md` §9 |
-| 6 | #128a — the orphan scan is production-dark | me | `open_table_maintenance.md` |
-| 7 | #128d + #114 — `base_paths` pre-pass, as ONE change | me | `open_table_maintenance.md` |
-| 8 | verify-first: three maintenance claims already drifted | me | `open_table_maintenance.md` |
-| 9 | #60 + #61 — `optimize_indices` gaps, per-tier fragment sizing | me | `open_table_maintenance.md` |
+| # | Task | State |
+|---|---|---|
+| 4 | `promotionReviewBand` value + Q6 scheduling | **OPEN — yours.** See below |
+| 6 | #128a — the orphan scan is production-dark | ✅ `81af086f` |
+| 7 | #128d + #114 — `base_paths` pre-pass, as ONE change | ✅ `81af086f` + `ccd296e3` |
+| 8 | verify-first: three maintenance claims already drifted | ✅ verified; **two were wrong** |
+| 9 | #60 + #61 — `optimize_indices` gaps, per-tier fragment sizing | ✅ `633ce5b7` |
+
+Verified together: `4260 passed, 0 failed` with NATS reachable; ruff + `ty` clean.
+
+**What #8 actually found, and it is why it ran first.** Two of the four claims did not survive
+checking. `bytes_removed` hedged "possibly the Lance stats object" — it resolves AGAINST itself:
+`DatasetResult.bytes_removed` is **write-only**, read by nothing. And the "#148 blocks every image
+build" banner that headed this file was already fixed; a verifier rebuilt the image closure with
+`--no-editable` and the gate passed 236 modules, `EXIT=0`.
+
+**Three corrections to the issues themselves**, each measured rather than read:
+
+- **#114 is not compaction-triggered.** `compact_files` ADDS the merged file and deletes nothing
+  (4 → 5 files, clone still opens); `cleanup_old_versions` removes the originals (→ 1) and the clone
+  fails `ArrowInvalid` **in a fresh process**. A guard placed where the title points is walked
+  straight past, so the refusal sits in front of the whole compact→optimize→cleanup pass.
+- **The #128d/#114 guard shipped DEAD.** `protected_roots` was defined, documented, tested — and
+  called from nowhere. The sweep passed no `protected=`, the purge never built the refs. Every test
+  passed because every test called it directly. Fixed in `ccd296e3` with an integration test that
+  drives the real `run_sweep`.
+- **Delta proliferation does not happen on pylance 9.0.0.** Measured over four append+optimize
+  cycles: `num_indices` never leaves 1, the single delta absorbs the rows — it MERGES. The #60 check
+  stays as a guard against a behaviour change and the test says so rather than faking a reproduction.
+
+**#61's numbers are DEFAULTS, not tuning** — bronze 512 / silver 262144 / gold 524288 rows, derived
+from the chart's working row widths (~1.8 MB bronze page images vs ~2 KB elsewhere), not from a
+profile of production data. A #50 policy record still wins, so retuning is a config change.
 
 ---
 
