@@ -22,7 +22,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Toolchain rules
 
-- **DAGGER BUILDS EVERY IMAGE. NOT DOCKER. This is not negotiable.** Local and CI both reach
+- **NEVER EVER USE DOCKER. ALWAYS USE DAGGER, WHEREVER DAGGER CAN DO IT. This is not negotiable.**
+  Not `docker build`, not `docker buildx`, not `docker run`, not `docker compose` — no docker
+  command, for any purpose, including throwaway containers you intend to delete. If you are about to
+  reach for docker, the answer is a Dagger equivalent; if you think you have found an exception, you
+  have not.
+  **DAGGER BUILDS EVERY IMAGE. NOT DOCKER.** Local and CI both reach
   BuildKit through `dagger call` against `.dagger/images.go` — `dagger call image --name=<stem>` for
   anything in `.docker/`, `dagger call zone-image --zone=<zone>` for a micro-frontend. **`docker build`
   and `docker buildx build` must not appear** in the `Makefile`, `scripts/` or `.github/workflows/`;
@@ -32,6 +37,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   **Do not add a docker fallback switch.** An escape hatch was added once and rejected outright; it is
   gone. "Leave it on docker for now" is not an available answer — if a tool cannot work with a
   Dagger-built image, solve it or drop the tool.
+  **NEVER DOCKER, FULL STOP — the rule is not limited to builds.** This bullet used to name only
+  `docker build`/`buildx`, and that scoping was read (2026-08-15) as licence to `docker run` a
+  throwaway NATS for a test repro. It is not. **Any** container — ephemeral brokers, one-off
+  fixtures, ad-hoc debugging — goes through Dagger, and there is no "it is only temporary" or "I am
+  not building anything" exemption. No module is needed for an ad-hoc service:
+  `dagger core container from --address=<img> with-exposed-port --port=<p> with-default-args
+  --args=<cmd> as-service up --ports=<host>:<p>`.
 - **JS/TS uses Bun exclusively.** Use `bun` / `bunx`. `npm`, `npx`, `pnpm`, `pnpx` are not on PATH and MCP install commands assume `bunx`.
 - **The JS/TS plane lives in `frontend/`** — its own bun + Turborepo workspace root (its own `package.json`, `bun.lock`, `turbo.json`). Every bun/turbo call is **scoped to it**: `bun --cwd=frontend run <task>`, `bunx turbo --cwd=frontend run <task>`. Use the `--cwd=` form — `bun --cwd <path>` with a space silently no-ops.
 - **JS/TS lint + format is oxlint + oxfmt**, not ESLint/Prettier (both deleted). Svelte support comes from `@rsvelte/oxlint-plugin` (lint) and `@rsvelte/fmt` (format); configs live at `frontend/.oxlintrc.json` and `frontend/.oxfmtrc.json`. `lint` / `fmt` / `fmt:check` are **per-package turbo tasks**, run from `frontend/`.
