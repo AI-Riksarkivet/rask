@@ -1,6 +1,6 @@
 """Channels — the push that leaves the estate, and the ledger that keeps it from leaving twice."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast, override
 
 import pytest
@@ -12,7 +12,7 @@ from notifications.api import prefs as prefs_module
 from notifications.api.channels import EMAIL, SLACK, deliver_to_channels, make_push, render
 from notifications.api.fanout import InboxOpener
 from notifications.config import get_notifications_settings
-from notifications.inbox_actor import InboxActor
+from notifications.inbox_actor import DIGEST_REMINDER, InboxActor
 from notifications.models import InboxPointer, NotificationReason
 from notifications.proxies import inbox_actor_id
 
@@ -598,3 +598,70 @@ class TestDigestDrain:
 
         assert inbox.armed == []
         assert len(email.sends) == 1
+
+
+# --- the digest window fires ONCE ----------------------------------------------------------------
+#
+# It was armed as a REPEATING reminder and unregistered on drain. Two costs. The unregister can fail —
+# silently, into `inbox_digest_disarm_failed` — after which the reminder keeps firing on a window that
+# is already drained, once per period, forever. And the disarm is a second call that must succeed for
+# the first to have been correct, which is a state machine a one-shot does not need at all.
+#
+# Dapr has the primitive: a reminder with `period=0` fires once and the runtime removes it. The
+# estate's own annotator lease reminder documents exactly that — "`period=0` = fire once, not a
+# repeating timer" — so this applies a pattern already proven here rather than inventing one.
+
+
+class _DigestActor(_RealActor):
+    """`_RealActor` plus what a reminder assertion needs: the PERIOD, and a refusable disarm."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.armed: list[tuple[str, float, float]] = []
+        self.disarmed: list[str] = []
+        self.unregister_error: Exception | None = None
+
+    @override
+    async def register_reminder(self, name: str, state: bytes, due_time: Any, period: Any = None, ttl: Any = None, failure_policy: Any = None) -> None:
+        self.armed.append((name, due_time.total_seconds(), (period or timedelta(0)).total_seconds()))
+
+    @override
+    async def unregister_reminder(self, name: str) -> None:
+        self.disarmed.append(name)
+        if self.unregister_error is not None:
+            raise self.unregister_error
+
+
+class TestDigestIsAOneShot:
+    @pytest.mark.asyncio
+    async def test_the_window_is_armed_to_fire_once(self) -> None:
+        actor = _DigestActor()
+
+        await actor.arm_digest({"seconds": 60})
+
+        name, due, period = actor.armed[-1]
+        assert name == DIGEST_REMINDER
+        assert due == 60.0
+        assert period == 0.0, (
+            "a REPEATING digest must be unregistered on drain, and a failed unregister leaves it "
+            "firing on an empty window forever. `period=0` fires once and the runtime removes it."
+        )
+
+    @pytest.mark.asyncio
+    async def test_draining_no_longer_depends_on_a_disarm_at_all(self) -> None:
+        """The failure mode the one-shot removes, asserted as the CALL rather than the outcome.
+
+        Asserting "the reminder is gone afterwards" would be asserting DAPR's behaviour, which this
+        double does not simulate — the runtime is what removes a fired one-shot. What this file can
+        prove is the property that made the outcome uncertain in the first place: draining used to
+        require a SECOND call to succeed, and now makes none.
+        """
+        actor = _DigestActor()
+        await actor.arm_digest({"seconds": 60})
+
+        await actor.drain_digest()
+
+        assert actor.disarmed == [], (
+            "draining still calls unregister_reminder, so a refused disarm leaves the window firing "
+            f"on an empty inbox once per period, forever: {actor.disarmed}"
+        )

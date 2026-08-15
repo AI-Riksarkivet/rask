@@ -533,8 +533,12 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         seconds = int(payload["seconds"])
         if await self._digest_pending():
             return {"armed": False, "seconds": seconds}
-        period = timedelta(seconds=seconds)
-        await self.register_reminder(DIGEST_REMINDER, b"", period, period, failure_policy=_DROP_THE_TICK)
+        # ONE-SHOT: `period=0` fires once and the runtime removes it. A repeating reminder had to be
+        # unregistered on drain, and that disarm could be refused — silently, into
+        # `inbox_digest_disarm_failed` — after which it fired on an already-drained window once per
+        # period, forever. A window that closes itself needs no second call to have been correct.
+        # (The annotator's lease reminder documents the same primitive: "`period=0` = fire once".)
+        await self.register_reminder(DIGEST_REMINDER, b"", timedelta(seconds=seconds), timedelta(0), failure_policy=_DROP_THE_TICK)
         await self._state_manager.set_state(DIGEST_KEY, json.dumps({"pending": True, "seconds": seconds}))
         await self._state_manager.save_state()
         return {"armed": True, "seconds": seconds}
@@ -556,10 +560,6 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         rows = await self._read_rows()
         await self._state_manager.set_state(DIGEST_KEY, json.dumps({"pending": False}))
         await self._state_manager.save_state()
-        try:
-            await self.unregister_reminder(DIGEST_REMINDER)
-        except Exception:
-            logger.exception("inbox_digest_disarm_failed")
         if rows is None:
             return {"pointers": [], "total": 0}
         due = [p.model_dump(mode="json") for p in rows.pointers if not p.seen and not p.dismissed and not p.sent]
