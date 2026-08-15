@@ -808,6 +808,7 @@ async def seed_ownership(
     *,
     resource: str,
     segments: list[str],
+    parent_object: str | None = None,
 ) -> None:
     """Grant the creator ``owner`` + the ``parent`` edge on a just-created object.
 
@@ -816,6 +817,12 @@ async def seed_ownership(
     post-create seed policy lives (previously copy-pasted across four endpoint modules).
     Ids come from ``fga`` so this grant and the later :func:`authorize` check agree
     byte-for-byte.
+
+    ``parent_object`` overrides the derived parent for the one door whose hierarchy is not
+    positional: a warehouse-scoped namespace hangs off ``warehouse:<id>``, not off the shared
+    catalog root its segments would imply. That door open-coded its own ``grant_on_create`` for
+    exactly this reason, which also left it outside every compensation this module grew — so the
+    override exists to pull it back in rather than to make the parent generally configurable.
     """
     if not (settings.fga_enabled and token is not None and client is not None):
         return
@@ -826,7 +833,7 @@ async def seed_ownership(
         obj_id=fga.canonical_object_id(segments, delimiter=settings.delimiter),
         actor=token.sub,
         origin="create",
-        parent_object=fga.parent_object(resource, segments, delimiter=settings.delimiter, root_object=settings.fga_root_object),
+        parent_object=parent_object or fga.parent_object(resource, segments, delimiter=settings.delimiter, root_object=settings.fga_root_object),
     )
 
 
@@ -872,6 +879,7 @@ async def seed_ownership_or_compensate(
     resource: str,
     segments: list[str],
     undo: Callable[[], Awaitable[None]] | None,
+    parent_object: str | None = None,
 ) -> None:
     """:func:`seed_ownership`, but UNDO the native create when the grant fails (diff2 F3).
 
@@ -905,7 +913,7 @@ async def seed_ownership_or_compensate(
     what the caller is told.
     """
     try:
-        await seed_ownership(client, settings, token, resource=resource, segments=segments)
+        await seed_ownership(client, settings, token, resource=resource, segments=segments, parent_object=parent_object)
     except Exception:
         if undo is not None:
             obj = fga.canonical_object_id(segments, delimiter=settings.delimiter)

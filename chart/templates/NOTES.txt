@@ -26,7 +26,7 @@ Services (ClusterIP):
 {{- end }}
 {{- with .Values.medallion }}
 {{- if .enabled }}
-  - lance-ray: {{ include "rask.fullname" $root }}-lance-ray:{{ .port }} (medallion producer + movers)
+  - medallion-producer: {{ include "rask.fullname" $root }}-medallion-producer:{{ .port }} (medallion producer + movers)
 {{- end }}
 {{- end }}
 {{- with .Values.explorer }}

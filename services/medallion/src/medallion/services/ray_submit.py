@@ -180,7 +180,7 @@ async def submit_train_job(
                 # Forward this pod's own OTLP config so the training job's metrics land in the same
                 # GreptimeDB the services use (#18 experiment tracking → Perses). Empty (observability
                 # off) → the job's emit_metrics is a no-op. The service name is the trainer's identity so
-                # the metrics attribute to the trainer, not the submitting lance-ray pod.
+                # the metrics attribute to the trainer, not the submitting medallion-producer pod.
                 "OTEL_EXPORTER_OTLP_ENDPOINT": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
                 "OTEL_EXPORTER_OTLP_PROTOCOL": os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", ""),
                 "OTEL_EXPORTER_OTLP_HEADERS": os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", ""),

@@ -9,10 +9,10 @@ Inlining is only safe if it CANNOT DRIFT from the in-process path — otherwise 
 different thumbnail/embedding depending on whether the stage ran on Ray or in-process. This test pins the
 inlined mirrors byte-for-byte against the authoritative ``services`` implementations, so any change to one
 side without the other fails here. It also confirms *why* the inline exists is real, not assumed:
-lance-ray strips blob-v2 typing on read at every version we have pinned — 0.4.2 (verified live 2026-07-13)
+medallion-producer strips blob-v2 typing on read at every version we have pinned — 0.4.2 (verified live 2026-07-13)
 and 0.5.0, whose datasource says so in the source: "Blob v2 extension columns are exposed as plain
 LargeBinary bytes" (R27, 2026-07-28). The Ray path must therefore re-wrap via
-pylance), and the deriver is our business logic, never something lance-ray provides.
+pylance), and the deriver is our business logic, never something medallion-producer provides.
 
 Loaded via ``spec_from_file_location`` (the script isn't an importable package); lance_ray is imported
 lazily inside ``main`` so the module — hence these primitives — loads cleanly in the unit venv.

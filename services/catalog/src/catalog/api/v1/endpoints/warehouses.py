@@ -484,6 +484,7 @@ async def create_warehouse_namespace(
 
     ns_conn = _namespace_for_root(request, settings, root_uri)
     req = CreateNamespaceRequest(id=segments)
+    adopted = False
     try:
         response: CreateNamespaceResponse = await run_in_threadpool(native.call, ns_conn, "create_namespace", req)
     except NamespaceAlreadyExistsError:
@@ -496,6 +497,7 @@ async def create_warehouse_namespace(
             raise
         log.info("adopting existing namespace %s at warehouse %s (bytes-first migration)", ns_name, warehouse_id)
         response = CreateNamespaceResponse()
+        adopted = True
     # Persist + cache the binding BEFORE returning, so the very next table-create routes to this bucket.
     await run_in_threadpool(
         warehouses.bind_namespace,
@@ -506,18 +508,38 @@ async def create_warehouse_namespace(
         root_uri,
     )
     request.app.state.warehouse_binding_cache[ns_name] = {"warehouse_id": warehouse_id, "root_uri": root_uri}
+
+    async def _undo_create() -> None:
+        # Drop the namespace this request made, and drop the binding with it — a binding pointing at
+        # a namespace that no longer exists is drift the reconciler would later report as a mystery.
+        # The cache entry goes too, or this replica keeps routing a name it just deleted.
+        await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=segments))
+        await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, settings.storage_options(), ns_name)
+        request.app.state.warehouse_binding_cache.pop(ns_name, None)
+
     # Seed FGA: owner on the namespace + parent edge to the WAREHOUSE (not the shared root), so the
     # concentric cascade project → warehouse → namespace → table reaches the tables created here.
-    if settings.fga_enabled and token is not None and client is not None:
-        await fga.grant_on_create(
-            client,
-            user_sub=token.sub,
-            resource="namespace",
-            obj_id=fga.canonical_object_id(segments, delimiter=settings.delimiter),
-            actor=token.sub,
-            origin="create",
-            parent_object=f"warehouse:{warehouse_id}",
-        )
+    #
+    # This is F3's third partial-failure state (diff2), and the LAST of the three to be closed. A
+    # failed grant left the namespace natively created, bound, and owned by nobody; the plain retry
+    # 409'd at native `NamespaceAlreadyExists`, so the only converging path was passing
+    # `adopt_existing=true` — a bytes-first MIGRATION flag doing undocumented double duty as a repair
+    # for a fault the caller did not cause and could not diagnose. Now the failure cleans up after
+    # itself and an ordinary retry works.
+    #
+    # `undo=None` WHEN ADOPTED, and this is the same distinction the Arrow create door draws with
+    # `_compensation_allowed`: an adopted namespace holds datasets that existed before this request
+    # and were copied in by a migration. Dropping those to repair a missing tuple would turn a
+    # transient FGA blip into the loss of the very data the migration was moving.
+    await fga_deps.seed_ownership_or_compensate(
+        client,
+        settings,
+        token,
+        resource="namespace",
+        segments=segments,
+        parent_object=f"warehouse:{warehouse_id}",
+        undo=None if adopted else _undo_create,
+    )
     log.info("warehouse_namespace_created", extra={"warehouse": warehouse_id, "namespace": ns_name})
     await emit_control(
         control,

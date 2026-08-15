@@ -6,7 +6,7 @@ bronze → silver → gold flow and either writes them to ``sample_events.json``
 them to a running lineage service at the OpenLineage default path ``/api/v1/lineage``.
 
 The service never imports this module — producers and consumers stay decoupled, exactly
-as a real job (lance-ray / an ingest job) would emit to us over HTTP. ``openlineage-python``
+as a real job (medallion-producer / an ingest job) would emit to us over HTTP. ``openlineage-python``
 is a dev/demo dependency for that reason.
 
 Run::

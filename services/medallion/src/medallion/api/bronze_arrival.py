@@ -1,4 +1,4 @@
-"""lance-ray's Dapr pub/sub subscription route (``/bronze-arrival``) — the event-driven cascade head.
+"""medallion-producer's Dapr pub/sub subscription route (``/bronze-arrival``) — the event-driven cascade head.
 
 The :class:`DaprApp` wrapper serves ``GET /dapr/subscribe`` (read by the sidecar at startup) and routes
 deliveries of the shared lineage topic to :func:`handle_bronze_arrival`, which fires the cascade only for a

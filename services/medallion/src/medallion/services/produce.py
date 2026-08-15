@@ -1,8 +1,8 @@
-"""The lance-ray producer's ingest business logic — the dummy BRONZE writer at the head of the pipeline.
+"""The medallion-producer producer's ingest business logic — the dummy BRONZE writer at the head of the pipeline.
 
 :func:`produce` (with ``compute_enabled``) seeds a real ``bronze$events`` Lance dataset (R23: bronze is
 the first governed tier — there is no raw dataset), then emits ONE OpenLineage event announcing that
-write. It does NOT itself trigger the cascade — lance-ray's own ``/bronze-arrival`` subscription
+write. It does NOT itself trigger the cascade — medallion-producer's own ``/bronze-arrival`` subscription
 (:mod:`medallion.services.ingest_trigger`) reacts to that bronze-write event and publishes the
 ``medallion.bronze`` trigger, so the pipeline is driven by the bronze-arrival EVENT, not this call
 (GOAL 4 B2). In production this is a real Ray Data job; here it is a dummy emitter, which is all the
@@ -36,9 +36,9 @@ tracer = trace.get_tracer(__name__)
 async def produce(dapr: DaprClient, settings: MedallionSettings, *, token: str | None = None, project: str = "") -> dict[str, str]:
     """Ingest the bronze dataset and emit its write event (the event-driven cascade head).
 
-    With ``compute_enabled`` it FIRST seeds a real ``bronze$events`` Lance dataset (the fake lance-ray
+    With ``compute_enabled`` it FIRST seeds a real ``bronze$events`` Lance dataset (the fake medallion-producer
     ingest) so the emitted lineage carries the real version; off → a dummy emit (version 1). It then emits
-    ONE OpenLineage event for ``bronze$events``. It does NOT publish ``medallion.bronze`` — lance-ray's
+    ONE OpenLineage event for ``bronze$events``. It does NOT publish ``medallion.bronze`` — medallion-producer's
     ``/bronze-arrival`` subscription reacts to this bronze-write event and fires the trigger, so the
     cascade is event-driven.
     Best-effort: a sidecar/broker outage logs + still returns (the catalog-style contract).
@@ -96,7 +96,7 @@ async def produce(dapr: DaprClient, settings: MedallionSettings, *, token: str |
         synthetic=result is None,
     )
     try:
-        # The cascade HEAD is this bronze-write lineage event: lance-ray's own /bronze-arrival subscription
+        # The cascade HEAD is this bronze-write lineage event: medallion-producer's own /bronze-arrival subscription
         # reacts to it and publishes the medallion.bronze trigger, so the pipeline is driven by the arrival
         # EVENT, not by this call directly (event-driven head — the trigger publish moved to
         # ingest_trigger.py). Stage-then-publish-then-drop through the outbox (#4), same as every mover in

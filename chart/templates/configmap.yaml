@@ -88,7 +88,7 @@ data:
   # now Python middleware). ONE source: the lance.lineageSidecarOnlyRoutes helper.
   RASK_LINEAGE_SIDECAR_ONLY_ROUTES: {{ include "lance.lineageSidecarOnlyRoutes" . | quote }}
   {{- if .Values.medallion.enabled }}
-  RASK_MEDALLION_API_URL: {{ printf "http://%s-lance-ray:%v" (include "lance.fullname" .) .Values.medallion.port | quote }}
+  RASK_MEDALLION_API_URL: {{ printf "http://%s-medallion-producer:%v" (include "lance.fullname" .) .Values.medallion.port | quote }}
   {{- end }}
   {{- if .Values.explorer.enabled }}
   RASK_EXPLORER_VIEWER_URL: {{ printf "http://%s-viewer:%v" (include "lance.fullname" .) .Values.explorer.services.viewer.port | quote }}

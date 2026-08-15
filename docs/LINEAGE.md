@@ -201,7 +201,7 @@ first two ride the same `WROTE` edge as `version`/`schema`; the third rides the 
 - **`sourceCodeLocation`** (GOAL 3, job facet) — **where the job's code lives** (`type=git`, repo url, path,
   branch). A here-dummy the medallion emitter asserts from the known `services/medallion` git location;
   stored on the `(:Job)` node as `source_location`. This is the declared dummy of what rask's runner will
-  auto-derive (its git repo + pipeline path) once lance-ray OpenLineage lands. *(Also in GOAL 3: `insert`
+  auto-derive (its git repo + pipeline path) once medallion-producer OpenLineage lands. *(Also in GOAL 3: `insert`
   now stamps the real Lance version on its `WROTE` edge — it used to emit versionless.)*
 
 Because `record_event` stores the **full** event JSON in the durable `event` column, every facet is also
@@ -209,7 +209,7 @@ visible verbatim in the `GET /events` feed — the graph promotes the headline f
 
 > **GOAL 3-real** (at rask) is to stop *declaring* these (incl. the `sourceCodeLocation` dummy above) and
 > have them emitted **automatically** by the distributed compute — the
-> [lance-ray OpenLineage integration](RASK-INTEGRATION.md) on KubeRay — the true auto-instrumented,
+> [medallion-producer OpenLineage integration](RASK-INTEGRATION.md) on KubeRay — the true auto-instrumented,
 > Marquez-grade path that supersedes the here-dummies.
 
 ## Closing the loop: gold embeds its lineage as JSONB (demo driver only)

@@ -219,7 +219,7 @@ def compact_one(
         # Keep secondary indices (vector ANN / scalar / FTS) covering the new fragments. WITHOUT this a
         # freshly-written row isn't in the index → vector/filter queries either miss it or fall back to a
         # flat scan. Index optimize is a maintenance op exactly like compaction (Lance does it distributed
-        # via lance-ray; here single-process). Idempotent. Own guard so a no-index dataset can't fail it.
+        # via medallion-producer; here single-process). Idempotent. Own guard so a no-index dataset can't fail it.
         if not optimize_indices_enabled:
             # A policy may skip a STEP; it may not reorder them. Skipping index optimization after a
             # compaction leaves the new fragments unindexed until the next enabled pass — queries fall

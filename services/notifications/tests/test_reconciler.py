@@ -531,3 +531,72 @@ async def test_a_retried_row_parks_nothing(monkeypatch: pytest.MonkeyPatch) -> N
         await reconcile(client=_feed_client(page_limit=2), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=20, budget_seconds=0.1)
 
     assert memory.records == [], "a RETRY row was parked past — the next tick would skip the failure"
+
+
+# --- the feed lane must carry the SAME targeting the bus lane does ------------------------------
+#
+# The reconciler exists because a whole class of producer never reaches the bus: ingest, Ray TRAIN and
+# every external OpenLineage producer emit over HTTP only. So anything the feed lane drops is dropped
+# for exactly those runs — silently, because the pass still reports success.
+#
+# `reconcile()` took `watchers` and `push`, the cron passed both, and the call to `ingest_run_event`
+# forwarded neither. Found by driving watch targeting end to end against a live cluster (the badge of
+# a watcher who was not the author never moved); no unit test covered it because every existing test
+# calls `reconcile()` without either argument, which is indistinguishable from the bug.
+
+
+def _watched_event(seq: int, *, project: str, author: str = "bob") -> dict[str, Any]:
+    """A run carrying its TENANT — the `lance` facet `project_id()` reads to find watchers."""
+    event = _event(seq, author=author)
+    event["event"]["run"]["facets"]["lance"] = {"project": project}
+    return event
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_feed_lane_tells_a_project_watcher_not_only_the_author() -> None:
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_watched_event(9, project="p1")], "next_cursor": 8}))
+    plane = _Plane()
+    store, _ = _store(8)
+
+    async def watchers_of(project: str) -> list[str]:
+        return ["carol"] if project == "p1" else []
+
+    await reconcile(
+        client=_feed_client(),
+        store=store,
+        visibility=OPEN,
+        open_inbox=plane.open,
+        watchers=watchers_of,
+        max_pages=5,
+        budget_seconds=10,
+    )
+
+    assert "bob" in plane.boxes, "the author must still be told"
+    assert "carol" in plane.boxes, "the project's watcher was never told — the feed lane dropped `watchers`"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_feed_lane_pushes_channels_for_a_row_it_actually_wrote() -> None:
+    """Email/Slack for HTTP-emitted runs. `fan_out` only pushes for a row it really wrote, so a
+    re-walk cannot produce a second email — the catch-up lane needs no exemption of its own."""
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9)], "next_cursor": 8}))
+    plane = _Plane()
+    store, _ = _store(8)
+    pushed: list[str] = []
+
+    async def push(subject: str, payload: dict[str, Any]) -> None:
+        pushed.append(subject)
+
+    await reconcile(
+        client=_feed_client(),
+        store=store,
+        visibility=OPEN,
+        open_inbox=plane.open,
+        push=push,
+        max_pages=5,
+        budget_seconds=10,
+    )
+
+    assert pushed == ["alice"], "no channel push on the feed lane — every HTTP-emitted run is silent on email/Slack"

@@ -139,7 +139,7 @@ class Dataset(BaseModel):
     def statistics(self) -> tuple[int | None, int | None] | None:
         """Observed ``(row_count, size_bytes)`` from the standard ``outputStatistics`` facet, else ``None``.
 
-        Present only on a real measured write (the medallion fake-Ray / lance-ray compute reads the exact
+        Present only on a real measured write (the medallion fake-Ray / medallion-producer compute reads the exact
         rows + on-disk bytes it produced); a dummy emit or an input dataset omits the facet. These are the
         runtime-measured numbers that move our lineage from producer-declared toward Marquez-grade. Both
         fields are optional in the spec, so a partial facet (only one present) reports ``None`` for the
@@ -219,7 +219,7 @@ class Job(BaseModel):
         path?, branch?, …}``.
 
         A here-dummy from the medallion emitter today (the ``services/medallion`` git location); rask's
-        runner will auto-derive it (its git repo + pipeline path) when lance-ray OpenLineage lands. ``None``
+        runner will auto-derive it (its git repo + pipeline path) when medallion-producer OpenLineage lands. ``None``
         when the event carries no such facet. ``type`` + ``url`` are required; other string keys pass through.
         """
         facet = (self.facets or {}).get("sourceCodeLocation")

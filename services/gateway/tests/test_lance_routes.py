@@ -57,8 +57,8 @@ def test_lance_rows_present_and_ordered(gw) -> None:
         ("/api/catalog/v1/namespace", "catalog", "http://127.0.0.1:2333/v1/namespace"),
         ("/api/lineage/runs", "lineage", "http://127.0.0.1:8000/runs"),
         # the medallion producer serves /produce + /train at root (strip /api only)
-        ("/api/produce", "lance-ray", "http://127.0.0.1:8002/produce"),
-        ("/api/train", "lance-ray", "http://127.0.0.1:8002/train"),
+        ("/api/produce", "medallion-producer", "http://127.0.0.1:8002/produce"),
+        ("/api/train", "medallion-producer", "http://127.0.0.1:8002/train"),
         # the media trio serves /api/... internally — /media is dropped, /api kept
         ("/api/explorer/transcripts", "viewer", "http://127.0.0.1:8101/api/transcripts"),
         ("/api/explorer/search", "search", "http://127.0.0.1:8102/api/search"),

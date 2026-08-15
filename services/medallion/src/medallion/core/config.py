@@ -29,7 +29,7 @@ from service_kit.lakehouse.warehouse_registry import project_namespace as projec
 
 
 class MedallionSettings(BaseSettings):
-    """Config for one medallion service (a mover stage, or the lance-ray producer)."""
+    """Config for one medallion service (a mover stage, or the medallion-producer producer)."""
 
     model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
 
@@ -144,7 +144,7 @@ class MedallionSettings(BaseSettings):
         """
         return f"namespace:{to_namespace or self.to_namespace}"
 
-    # --- Fake-Ray in-process compute (the lance-ray SEAM) — OFF by default (movers stay dummy-emitters).
+    # --- Fake-Ray in-process compute (the medallion-producer SEAM) — OFF by default (movers stay dummy-emitters).
     # When on, each stage does a REAL Lance write: the producer seeds bronze$events; each mover reads its
     # upstream Lance dataset, applies a stage transform, and writes the downstream one — so the emitted
     # lineage carries the REAL version and the whole event-driven loop produces actual versioned data, not
@@ -262,7 +262,7 @@ class MedallionSettings(BaseSettings):
             )
         return self
 
-    # --- producer (lance-ray) config — the BRONZE ingest head (R23: writes the first governed tier
+    # --- producer (medallion-producer) config — the BRONZE ingest head (R23: writes the first governed tier
     # directly; raw is the external world it harvests FROM) --------------------------------------
     bronze_dataset: str = Field(default="bronze$events", alias="MEDALLION_BRONZE_DATASET")
     bronze_namespace: str = Field(default="bronze", alias="MEDALLION_BRONZE_NAMESPACE")

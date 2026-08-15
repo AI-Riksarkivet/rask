@@ -2,7 +2,7 @@
 # Seed the medallion service-identity grants into OpenFGA, so the FGA-enforced movers
 # (chart value medallion.fgaEnabled=true) are authorized to produce their target stage (R23: the
 # governed tiers are bronze/silver/gold — raw is the external world and owns no namespace):
-#   - the bronze ingest head (lance-ray, the producer) + the bronze→silver / media movers get `writer`
+#   - the bronze ingest head (medallion-producer, the producer) + the bronze→silver / media movers get `writer`
 #     on the warehouse (→ can_create_table)
 #   - the silver→gold mover gets `validator` on the gold namespace (→ can_promote)
 # Revoke the last grant (`fga tuple delete ... validator namespace:gold`) to SEE the enforcement: the
@@ -82,9 +82,9 @@ link namespace:gold 'table:gold$catalog'
 link namespace:bronze-media 'table:bronze-media$objects'
 link namespace:silver-media 'table:silver-media$features'
 # writers → can_create_table on their stage; the promoter mover → can_promote on gold. The bronze
-# ingest head writes as the PRODUCER's identity (lance-ray) — the retired raw→bronze mover's writer
+# ingest head writes as the PRODUCER's identity (medallion-producer) — the retired raw→bronze mover's writer
 # rung moved here with the collapse (R23).
-w user:service-lance-ray writer "$WAREHOUSE"
+w user:service-medallion-producer writer "$WAREHOUSE"
 # The INGEST plane writes bronze too, and it was never seeded. `services/ingest` is the P7a
 # acquisition head — it creates the bronze table and commits the fragments — so it needs the same rung
 # the producer has. Without it every run reached the catalog fully AUTHENTICATED and was refused on
@@ -135,7 +135,7 @@ if [ -n "$PROJECT" ]; then
   for ns in bronze silver gold; do
     link "warehouse:$ZONE_WH" "namespace:$PROJECT-$ns"
   done
-  w user:service-lance-ray writer "namespace:$PROJECT-bronze"
+  w user:service-medallion-producer writer "namespace:$PROJECT-bronze"
   w user:service-ingest writer "namespace:$PROJECT-bronze"
   w user:service-bronze-to-silver writer "namespace:$PROJECT-silver"
   w user:service-silver-to-gold validator "namespace:$PROJECT-gold"

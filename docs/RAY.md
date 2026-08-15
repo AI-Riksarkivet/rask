@@ -14,7 +14,7 @@ kind + `ray job submit`, proving Lance's distributed capabilities against RustFS
 
 | Piece | File |
 | ----- | ---- |
-| Thin CPU Ray image (`rayproject/ray:2.56.1-py312-cpu` + `lance-ray==0.5.0` + `pylance==9.0.0`) | `.docker/ray-lance.dockerfile` |
+| Thin CPU Ray image (`rayproject/ray:2.56.1-py312-cpu` + `medallion-producer==0.5.0` + `pylance==9.0.0`) | `.docker/ray-lance.dockerfile` |
 | A real Ray head (GCS 6379, dashboard/job API 8265) + Service, single node | `deploy/ray-lance-demo.yaml` |
 | The submitted job — a genuine distributed Lance pipeline | `scripts/ray_lance_job.py` |
 | One-shot driver | `make ray-demo` (and `make ray-demo-clean`) |
@@ -55,14 +55,14 @@ RAY-LANCE ALL OK
 ## Verified lance_ray ↔ pylance version findings (grounded in reality, not just docs)
 
 > **Re-measured 2026-07-28 under the R27 Ray-plane audit, after the image pins moved from
-> `lance-ray 0.4.2` / `pylance 8.0.0` / `pyarrow 19.0.1` to the fleet's `0.5.0` / `9.0.0` / `24.0.0`.**
+> `medallion-producer 0.4.2` / `pylance 8.0.0` / `pyarrow 19.0.1` to the fleet's `0.5.0` / `9.0.0` / `24.0.0`.**
 > The pins moved because a `pylance 8.0.0` reader **cannot read the blob-v2 datasets the fleet writes**
 > — the full matrix is in [`architecture/lance-blob-v2-findings.md`](architecture/lance-blob-v2-findings.md).
 > Findings 1–4 below are kept with their outcome at each version, because two of the three "verified"
 > claims that were acted on turned out to be right for the wrong reason.
 
 1. **Ray Data's built-in `write_lance` datasink** calls `write_fragments(storage_options_provider=…)`, a kwarg
-   pylance 8.0.0 lacks → use the **`lance-ray` package** (`lance_ray.write_lance`), which is version-matched.
+   pylance 8.0.0 lacks → use the **`medallion-producer` package** (`lance_ray.write_lance`), which is version-matched.
    Still the rule: the packaged integration is the supported seam.
 2. **lance_ray's DISTRIBUTED scalar index build fails at 0.4.2 + pylance 8.0.0 — but not for the recorded
    reason.** The old note said pylance 8.0.0 "exposes neither" of `create_index_uncommitted(index_type=,

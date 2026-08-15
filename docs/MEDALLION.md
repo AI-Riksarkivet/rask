@@ -6,11 +6,11 @@ implemented as **event-driven microservices** on Dapr pub/sub (over NATS JetStre
 ingest cascades the whole chain, each hop emits OpenLineage (so the graph grows the DAG), and Dapr
 propagates the trace context so the whole cascade is **one distributed trace**.
 
-## Is `lance-ray` the head of the pipeline? — Yes, and it's event-driven.
+## Is `medallion-producer` the head of the pipeline? — Yes, and it's event-driven.
 
-`lance-ray` is the **head of the pipeline** (a dummy Ray ingest job) — the **bronze ingest head**. It is
+`medallion-producer` is the **head of the pipeline** (a dummy Ray ingest job) — the **bronze ingest head**. It is
 NOT poked by a manual RPC: `POST /produce` (with compute) seeds `bronze$events` (stage-stamped at ingest)
-and emits ONE OpenLineage event *announcing that write*. `lance-ray` also **subscribes** to the shared
+and emits ONE OpenLineage event *announcing that write*. `medallion-producer` also **subscribes** to the shared
 lineage topic (`/bronze-arrival`) and — only for a write to the bronze dataset — publishes the first
 trigger `medallion.bronze`. So the cascade is driven by the **arrival of external raw INTO bronze**, not
 the call; any bronze ingester (this dummy, the IIIF head, or the catalog) that emits a bronze-write event
@@ -18,7 +18,7 @@ drives it. Loop-guarded: the movers' own silver/gold events on that same topic a
 can't self-trigger. `bronze→silver` subscribes to `medallion.bronze` and derives silver:
 
 ```
-   POST /produce ─▶ lance-ray ──emits bronze$events write event──▶ lineage.events.v1 ─▶ (lineage svc → AGE)
+   POST /produce ─▶ medallion-producer ──emits bronze$events write event──▶ lineage.events.v1 ─▶ (lineage svc → AGE)
  (any bronze ingester)  ▲                                              │
                         └───────── /bronze-arrival subscription ◀──────┘   (reacts ONLY to a BRONZE write)
                                     publishes medallion.bronze  (the FIRST trigger)
@@ -35,7 +35,7 @@ can't self-trigger. `bronze→silver` subscribes to `medallion.bronze` and deriv
    resulting lineage DAG:   bronze$events ─▶ silver$features ─▶ gold$catalog
 ```
 
-`lance-ray` produces bronze **directly** (R23 collapsed the old raw→bronze mover into the ingest head —
+`medallion-producer` produces bronze **directly** (R23 collapsed the old raw→bronze mover into the ingest head —
 its stage stamp lands at ingest; `source_rowid` roots at bronze, minted by the first derive); its
 `/bronze-arrival` subscription then *triggers* the `bronze→silver` mover. Because the head is a
 subscriber like every other stage, the pipeline is event-driven end to end — nothing polls or waits on a
@@ -45,7 +45,7 @@ timer (GOAL 4 B2).
 > `enforce_author` — a caller could trigger cascades and forge medallion provenance), so its gateway
 > route is values-gated: `medallion.producer.expose` (on for the dev demo, **off in `values-prod.yaml`**).
 > That closes the **external/edge** path — from the gateway, the prod head fires only from real
-> bronze ingests via `/bronze-arrival`. It does **not** close the in-cluster path: the lance-ray pod
+> bronze ingests via `/bronze-arrival`. It does **not** close the in-cluster path: the medallion-producer pod
 > still serves the unauthenticated `/produce` on its ClusterIP, and this route is *not* sidecar-delivered
 > so it skips `require_dapr_token`; no NetworkPolicy ships either. So an in-cluster workload can still
 > reach it. Hardening that (a NetworkPolicy, or a token/authz on `/produce`) is tracked in
@@ -58,11 +58,11 @@ Off: the producer + movers are pure **emitters** — they grow the lineage DAG b
 event-driven *choreography* demo needs), so the graph asserts datasets that aren't on disk (`#23` reconcile
 would flag them `missing_on_storage`). **On** (`--set medallion.compute=true`): each stage runs the
 **fake-Ray compute** (`services/medallion/services/compute.py`) — a
-REAL in-process Lance write: `lance-ray` seeds `bronze$events`, then each mover reads its upstream Lance
+REAL in-process Lance write: `medallion-producer` seeds `bronze$events`, then each mover reads its upstream Lance
 dataset, stamps a `stage` provenance column, and writes the downstream dataset — so the whole loop produces
 **actual versioned data** and the emitted OpenLineage carries the **real** Lance version (not a hardcoded
-`1`). This is the **lance-ray seam**: the exact `read → transform → write → version` contract a
-distributed Ray Data job (`lance-ray` on rask's KubeRay) swaps into in production; in-process here so the
+`1`). This is the **medallion-producer seam**: the exact `read → transform → write → version` contract a
+distributed Ray Data job (`medallion-producer` on rask's KubeRay) swaps into in production; in-process here so the
 loop is end-to-end testable without a Ray cluster (`tests/unit/test_medallion_cascade.py` runs the full
 bronze→gold cascade and asserts both the data and the `DERIVED_FROM` chain).
 
@@ -81,17 +81,17 @@ bronze→gold cascade and asserts both the data and the `DERIVED_FROM` chain).
 
 | Service | App-id | Module | Subscribes | Publishes |
 | ------- | ------ | ------ | ---------- | --------- |
-| **lance-ray** (producer) | `lance-ray` | `medallion.producer:app` | `lineage.events.v1` (bronze filter, `/bronze-arrival`) + `POST /produce` | bronze-write lineage → then `medallion.bronze` on a bronze arrival |
+| **medallion-producer** (producer) | `medallion-producer` | `medallion.producer:app` | `lineage.events.v1` (bronze filter, `/bronze-arrival`) + `POST /produce` | bronze-write lineage → then `medallion.bronze` on a bronze arrival |
 | **bronze→silver** | `bronze-to-silver` | `medallion.mover:app` | `medallion.bronze` | `medallion.silver` + lineage |
 | **silver→gold** | `silver-to-gold` | `medallion.mover:app` | `medallion.silver` | — (terminal) + lineage |
-| **lance-ray** (media head) | `lance-ray` | `medallion.producer:app` | `POST /ingest-media` | bronze-media write lineage + `medallion.media` |
+| **medallion-producer** (media head) | `medallion-producer` | `medallion.producer:app` | `POST /ingest-media` | bronze-media write lineage + `medallion.media` |
 | **media→silver** (media lane) | `media-to-silver` | `medallion.mover:app` | `medallion.media` | — (terminal) + lineage |
 
 The 3 movers are the **same module**, differing only by `MEDALLION_*` env (from/to dataset, sub/pub
 topic, operation, author) — see `chart/values.yaml` `medallion.movers`. Triggers ride a dedicated
 `MEDALLION` JetStream stream (`medallion.>`); the OpenLineage events ride the existing `LINEAGE` stream.
 
-**The MEDIA lane (multimodal §9).** `POST /ingest-media` on lance-ray (token-guarded like `/produce`;
+**The MEDIA lane (multimodal §9).** `POST /ingest-media` on medallion-producer (token-guarded like `/produce`;
 compute-on only — 409 otherwise) lands external media as a bronze **blob-v2** table at format 2.2
 (`bronze-media$objects`, one lineage input per source URI) and publishes `medallion.media`; the
 `media-to-silver` mover — the SAME generic mover binary, zero media config — carries the blob forward
@@ -101,7 +101,7 @@ no-op), writing `silver-media$features`. Undecodable-after-probe payloads are de
 the run FAILs in lineage and the trigger is DROPPED (the quality-gate contract), never retried.
 Live-regression-guarded by `make e2e-media` (part of the `make e2e` umbrella; skips on compute-off
 stacks). Governed mode needs the media grants — `scripts/seed_medallion_fga.sh` seeds them. Ray note:
-lance-ray 0.4.2 reads blob BYTES correctly (its datasource reconstructs them via `take_blobs`), but
+medallion-producer 0.4.2 reads blob BYTES correctly (its datasource reconstructs them via `take_blobs`), but
 exposes blob-v2 columns as plain LargeBinary — so until the stage job re-attaches `blob_field` on
 write and ships the deriver (+Pillow) in the ray image, blob upstreams take the in-process path.
 Consumers with NO storage credentials (browser, notebook) fetch the blob bytes back through the
@@ -112,7 +112,7 @@ governed at reader-tier `can_read_data` — see `docs/DECISIONS.md` "FEATURE-GAP
 it is guarded by `require_dapr_token` (the shared `APP_API_TOKEN`): **no-op in dev** (unset token — `make
 medallion` works), **enforced in prod** so an in-cluster workload can't forge the cascade head. The
 network-isolation layer is a gated `NetworkPolicy` (`networkPolicy.enabled`, needs a policy-enforcing CNI)
-restricting ingress to `lance-ray` to in-release pods — defense-in-depth, the same shape KubeRay's token
+restricting ingress to `medallion-producer` to in-release pods — defense-in-depth, the same shape KubeRay's token
 auth prescribes (network isolation primary + token secondary).
 
 ## Per-tenant zones (#84) — enabling a project's own cascade
@@ -198,7 +198,7 @@ against an in-memory fake filesystem (`tests/unit/test_ingest_seam.py`), with th
 ## Run it
 
 ```bash
-make medallion        # fire lance-ray /produce, then print gold's provenance (the cascade result)
+make medallion        # fire medallion-producer /produce, then print gold's provenance (the cascade result)
 make e2e-medallion    # the automated regression test: produce → assert gold derives from bronze end-to-end
 ```
 
@@ -206,7 +206,7 @@ make e2e-medallion    # the automated regression test: produce → assert gold d
 
 - **Lineage DAG** (Apache AGE): `bronze$events → silver$features → gold$catalog`. Query
   `GET /datasets/gold$catalog/upstream` — gold transitively derives from the upstream stages.
-- **One distributed trace** (GreptimeDB `opentelemetry_traces`): a single `trace_id` spans `lance-ray`,
+- **One distributed trace** (GreptimeDB `opentelemetry_traces`): a single `trace_id` spans `medallion-producer`,
   `bronze-to-silver`, `silver-to-gold`, **and** `lineage` — the event followed across
   every Dapr hop (the gRPC publish injects `traceparent`; each subscriber continues the trace).
 - **Metrics** (PromQL): `medallion_stage_transitions_total{lance_medallion_transition}` counts each hop

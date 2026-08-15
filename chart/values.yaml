@@ -92,7 +92,7 @@ services:
   # `compute` image name is this service's.)
   # The ingest plane (open_ingest.md Phase 1): pre-bronze acquisition — control API + workers +
   # the lander. frontDoor because the gateway routes /api/ingest to this app-id; a bare app-id,
-  # NOT the legacy `lance-ray` shape the medallion still carries (audit m1).
+  # NOT the legacy `medallion-producer` shape the medallion still carries (audit m1).
   ingest:
     module: "ingest:create_app"
     port: 8830
@@ -768,7 +768,7 @@ pubsub:
   controlName: catalog-control-pubsub
 
 # --- Event-driven medallion pipeline (bronze → silver → gold; R23 — raw is the EXTERNAL world) -----
-# lance-ray (dummy producer) is the HEAD: it ingests external raw straight into BRONZE (POST /produce
+# medallion-producer (dummy producer) is the HEAD: it ingests external raw straight into BRONZE (POST /produce
 # seeds bronze$events; /ingest-iiif harvests bronze$pages) and emits the bronze lineage; its OWN
 # /bronze-arrival subscription publishes the first trigger (medallion.bronze). Each mover subscribes to
 # its upstream stage's trigger, emits the transform's lineage (the DERIVED_FROM edge), and publishes the
@@ -814,7 +814,7 @@ medallion:
   # Replica counts — each mover's own pubsub component carries queueGroupName=<app-id>, so its replicas
   # form a competing-consumer group (single delivery per trigger; without the queue group every replica
   # would process EVERY trigger — up to 8× at gold with 2 replicas per stage). Movers are idempotent on
-  # top (MERGE on run_id). lance-ray is a subscriber too (/bronze-arrival). All stateless.
+  # top (MERGE on run_id). medallion-producer is a subscriber too (/bronze-arrival). All stateless.
   producerReplicas: 1
   moverReplicas: 1
   # When true, every stage does a REAL in-process Lance read->transform->write (the fake-Ray compute) so the
@@ -863,7 +863,7 @@ medallion:
   quality: false
   qualityKeyColumn: id
   # Ray TRAIN head (#115): values-wired passthrough for the /train head + the submit-and-ack trainer
-  # consumer (both live in the lance-ray app). Defaults mirror services/medallion/core/config.py so a
+  # consumer (both live in the medallion-producer app). Defaults mirror services/medallion/core/config.py so a
   # deployment can retarget topic/entrypoint/identity/registry namespace without an image rebuild.
   # lineageUrl empty = release-derived (http://<release>-lineage:<port>) — set it only to point the
   # training job's self-emitted RunEvents elsewhere ("" in the CODE default disables emission; the chart
@@ -875,7 +875,7 @@ medallion:
     modelsNamespace: models
     lineageUrl: ""
   producer:
-    daprAppId: lance-ray
+    daprAppId: medallion-producer
     # Expose POST /produce through the gateway (the DEMO entry point for the cascade). It carries no
     # auth — a caller could trigger cascades / forge medallion provenance — so values-prod sets it false;
     # the EDGE head then fires only from real bronze ingests via /bronze-arrival. NB this gates only the
@@ -906,7 +906,7 @@ medallion:
     # promotion that dropped/renamed a declared column is BLOCKED (the breaking-change detector).
     - { name: bronze-to-silver, daprAppId: bronze-to-silver, fromNamespace: bronze, fromDataset: bronze$events, toNamespace: silver, toDataset: silver$features, operation: embed_features, author: data_eng, subTopic: medallion.bronze, pubTopic: medallion.silver, requiredAction: can_create_table, serviceIdentity: "service-bronze-to-silver", requiredColumns: "id" }
     - { name: silver-to-gold, daprAppId: silver-to-gold, fromNamespace: silver, fromDataset: silver$features, toNamespace: gold, toDataset: gold$catalog, operation: aggregate_gold, author: analyst, subTopic: medallion.silver, pubTopic: "", requiredAction: can_promote, serviceIdentity: "service-silver-to-gold", requiredColumns: "id" }
-    # The MEDIA lane (multimodal §9): POST /ingest-media on lance-ray lands bronze-media blobs and
+    # The MEDIA lane (multimodal §9): POST /ingest-media on medallion-producer lands bronze-media blobs and
     # publishes medallion.media; this mover's generic compute then derives what the blob CONTENT
     # supports (image → inline thumbnail + embedding; unrecognised media carries through untouched —
     # no media config anywhere, the same binary as every mover). Terminal (pubTopic ""). Own
@@ -1156,7 +1156,7 @@ stateStore:
     # Adding an app-id while it has no pod is the single safe case and this is it — nothing regresses
     # on the other four, they simply do not observe the change — but the notifications pod itself must
     # come up AFTER the component carrying this scope exists. open_notifications.md §11 q4 holds the
-    # window open for its other passengers (the lance-ray rename, the Dapr Configuration/ActorStateTTL
+    # window open for its other passengers (the medallion-producer rename, the Dapr Configuration/ActorStateTTL
     # decision, the state.postgresql v1→v2 move); ride them together or not at all.
     - notifications
     # ── S1's stage watcher is NOT listed here, and that is deliberate. ──────────────────────────────

@@ -1,4 +1,4 @@
-"""lance-ray — the dummy Ray ingest job that is the HEAD of the medallion pipeline (FastAPI entry).
+"""medallion-producer — the dummy Ray ingest job that is the HEAD of the medallion pipeline (FastAPI entry).
 
 Event-driven head (GOAL 4 B2, reshaped by R23 — bronze is the FIRST governed tier; raw is the external
 world): ``POST /produce`` (with ``compute_enabled``) seeds a real ``bronze$events`` Lance dataset and
@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 _docs = get_settings().docs_enabled  # gate /docs + /openapi.json (off in prod), like the catalog
 app = FastAPI(
-    title="lance-ray (medallion producer)",
+    title="medallion-producer (medallion producer)",
     version="0.1.0",
     lifespan=lifespan,
     docs_url="/docs" if _docs else None,

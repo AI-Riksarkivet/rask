@@ -1,13 +1,13 @@
-"""End-to-end test for the event-driven medallion cascade (lance-ray → 2 movers → lineage DAG).
+"""End-to-end test for the event-driven medallion cascade (medallion-producer → 2 movers → lineage DAG).
 
-ONE call to lance-ray's ``/produce`` must cascade the whole pipeline — bronze → silver → gold (R23:
+ONE call to medallion-producer's ``/produce`` must cascade the whole pipeline — bronze → silver → gold (R23:
 the producer ingests straight into bronze; raw is the external world) — purely through Dapr pub/sub,
 and the lineage graph must end up showing gold transitively derived from bronze. This is the
 regression guard for "the medallion services are wired and the triggers chain".
 
-Run (port-forward lance-ray + lineage to distinct local ports first), or `make e2e-medallion`:
+Run (port-forward medallion-producer + lineage to distinct local ports first), or `make e2e-medallion`:
 
-    kubectl port-forward svc/lance-ns-lance-ray 8002:8000 &
+    kubectl port-forward svc/lance-ns-medallion-producer 8002:8000 &
     kubectl port-forward svc/lance-ns-lineage   8000:8000 &
     LANCE_E2E_LANCERAY_URL=http://localhost:8002 LANCE_E2E_LINEAGE_URL=http://localhost:8000 \
     uv run pytest tests/e2e-py/test_medallion_e2e.py -v
@@ -40,7 +40,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.medallion]
 def urls() -> tuple[str, str]:
     if not (LANCERAY and LINEAGE):
         pytest.skip("set LANCE_E2E_LANCERAY_URL and LANCE_E2E_LINEAGE_URL (see module docstring)")
-    for name, url in (("lance-ray", LANCERAY), ("lineage", LINEAGE)):
+    for name, url in (("medallion-producer", LANCERAY), ("lineage", LINEAGE)):
         try:
             requests.get(f"{url.rstrip('/')}/livez", timeout=5).raise_for_status()
         except Exception:

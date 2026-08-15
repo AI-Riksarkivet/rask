@@ -23,14 +23,14 @@
                                │                        │
    clients ──Bearer JWT──▶  ┌──┴─────────────────────────────────┐
    (LanceDB SDK,            │  CATALOG  (control plane, FastAPI)  │
-    lance-ray, apps)        │  authn → authz → locate → record   │
+    medallion-producer, apps)        │  authn → authz → locate → record   │
                             │  never moves data                  │
                             └───┬───────────────┬────────────────┘
                                 │               │ describe_table → location (+creds via
               OpenFGA ◀─can_*?──┘               │ CredentialVendor: ModeB today)
               (Postgres)                        ▼
                                        object store  (MinIO / S3-compatible)   ── DATA PLANE ──
-                                          ▲  compute (lance-ray / pylance) moves bytes
+                                          ▲  compute (medallion-producer / pylance) moves bytes
                                           │  (Mode B: via catalog endpoints today)
    compute/ETL jobs ──OpenLineage──▶  ┌──┴──────────────────────────┐
    (emit run events)                  │  LINEAGE  (provenance plane) │  ── separate service ──
@@ -48,7 +48,7 @@
 | **how / from where / by whom** | OpenLineage → Apache AGE graph | dataset node `name` = `table:<id>` |
 
 **Medallion flow (target, end-to-end):**
-`ingest → bronze`, then `promote bronze→silver→gold` as lance-ray jobs. Each hop:
+`ingest → bronze`, then `promote bronze→silver→gold` as medallion-producer jobs. Each hop:
 authz on the catalog → creds via the vendor (Mode B today) → bytes moved by the engine →
 emit an OpenLineage event. Layers are **separate Lance tables** (namespaces); promotion is a
 **compute client**, never a catalog endpoint.
@@ -56,7 +56,7 @@ emit an OpenLineage event. Layers are **separate Lance tables** (namespaces); pr
 > ### ⚠️ Audit-verified corrections (`w8u4rc2tg`, 2026-06-24)
 > A grounded re-audit of the real code (full citations in §6 / [`docs/DECISIONS.md`](DECISIONS.md)) refined three things:
 > - **Secret responsibility (least-privilege).** Only the **catalog** and **lineage svc** consume
->   OpenBao. Compute jobs (**lance-ray**) never read it — they get short-TTL scoped creds *from the
+>   OpenBao. Compute jobs (**medallion-producer**) never read it — they get short-TTL scoped creds *from the
 >   catalog* and authenticate with **workload identity** (KubeRay SA / OIDC token). The sketch showing
 >   only the catalog on OpenBao is intentional, not a missing wire.
 > - **Storage = S3-compatible (HCP dropped).** Target is **MinIO** (default test backend) + AWS S3,
@@ -79,7 +79,7 @@ emit an OpenLineage event. Layers are **separate Lance tables** (namespaces); pr
 | Maintenance read-only | 503+Retry-After middleware (`services/catalog/api/maintenance.py`) | ✅ built (default off) |
 | Lineage service | OpenLineage ingest → AGE graph (`services/lineage/`) | ✅ built, deployed (`chart/`), in-service authz gate (default off) |
 | OpenBao SecretStore | secrets out of env | ✅ built + deployed (two-tier; app services fail-closed on it) |
-| medallion movers + lance-ray producer | the medallion movement (promotion) + compaction | ✅ built & deployed — event-driven Dapr movers; distributed lance-ray (Ray Data) is the rask future ([`FLOW.md`](FLOW.md)) |
+| medallion movers + medallion-producer producer | the medallion movement (promotion) + compaction | ✅ built & deployed — event-driven Dapr movers; distributed medallion-producer (Ray Data) is the rask future ([`FLOW.md`](FLOW.md)) |
 | Governance P1 | `project` type + 3-axis (teams×projects×layers) | 🔶 planned |
 | OTel / NATS / Dapr | observability / events / durable workflows | ✅ built & deployed (OTLP→GreptimeDB; Dapr pub/sub over NATS JetStream; Dapr **Workflow** still deferred) |
 
@@ -160,7 +160,7 @@ _The three sections below are the **cited Lakekeeper study output** (study `wfb2
 | 2 | **Always-present `expires_at_millis` + separate `credentials` vs `config`** in vended/load-table response | CREDENTIAL_VENDING | `VendedCredentials` mixes everything into `storage_options`; `expires_at_millis` optional (vending.py:36-45). | Mirror Lakekeeper `TableConfig` (s3.rs:499,568,599): add a `config` dict beside `storage_options`; require `expires_at_millis` whenever an expiring token is vended (STS). Keep null/absent for Mode B and static. | **P0** | M |
 | 3 | **Trace-ID + actor propagation on every request** (UUID request_id + OIDC sub) | OBSERVABILITY/EVENTS | Absent — no request_id, no actor threaded to a context. OIDC token verified but not propagated. | Add a tiny middleware/dependency generating `request_id` (UUID) and capturing actor (OIDC sub); store on request scope. This is the cheap precondition for events, audit, and lineage correlation. | **P0** | S |
 | 4 | **Emit only table/namespace mutation events** (NOT warehouse/role/multi-format) | OBSERVABILITY/EVENTS / GOVERNANCE_P1 | Absent. | Deliberately scope events to create/drop/rename of namespace/table. Add project_* events only when GOVERNANCE_P1 lands. (Avoids Lakekeeper's role/warehouse event sprawl — publisher.rs:223-251.) | **P0** | S |
-| 5 | **lance-ray promotion + compaction jobs** with idempotency keys | LANCE_RAY_JOBS | Absent — no background-job framework; promotions vulnerable to duplicate work on retry. | Build the promotion (bronze→silver→gold) + compaction jobs as catalog *clients*. Add `Idempotency-Key` handling for the write ops (Lakekeeper idempotency.rs check-on-read + insert-at-commit); use in-memory/Redis for dev, no Postgres advisory lock yet. | **P1** | M |
+| 5 | **medallion-producer promotion + compaction jobs** with idempotency keys | LANCE_RAY_JOBS | Absent — no background-job framework; promotions vulnerable to duplicate work on retry. | Build the promotion (bronze→silver→gold) + compaction jobs as catalog *clients*. Add `Idempotency-Key` handling for the write ops (Lakekeeper idempotency.rs check-on-read + insert-at-commit); use in-memory/Redis for dev, no Postgres advisory lock yet. | **P1** | M |
 | 6 | **Pluggable OpenBao SecretStore** (KV v2) with background token refresh | SECRETS | S3 master creds + OIDC config are env-only (config.py:34-35,42-44). No vault, no refresh. | Add a `SecretStore` protocol (shape it like `CredentialVendor`): `OpenBaoKV2Backend` (hvac, Vault-API/KV-v2 compatible) + `EnvBackend` fallback. Instantiate in `main.py` lifespan; static-vendor keys and OIDC client secret read via SecretStore. Include a daemon refresh task (Lakekeeper login_task lib.rs:174-196). | **P1** | M |
 | 7 | **NATS JetStream event backbone** (Dapr pub/sub) | EVENTS / LINEAGE | ✅ Built & deployed — Dapr pub/sub over NATS JetStream carries the medallion triggers + the OpenLineage events; the movers emit OpenLineage that the lineage service ingests. See [`FLOW.md`](FLOW.md). | The catalog publishes structural lineage; the medallion movers emit OpenLineage transform events; they meet at shared `table:<id>` identity. | done | — |
 | 8 | **Routes-vs-spec conformance test** (parse spec.yaml, diff against implemented routes) | CONFORMANCE | Absent — the CI e2e suites exercise ops live but nothing diffs implemented routes against `spec.yaml`, so spec drift can deploy silently (the old manual `smoke_test.py` coverage-matrix was superseded by the e2e suites and removed). | Add `test_endpoint_completeness()` parsing spec.yaml `(method, path)` pairs vs FastAPI routes; fail on drift (Lakekeeper endpoints.rs:413). Cheap CI gate. | **P1** | S |
@@ -177,7 +177,7 @@ _The three sections below are the **cited Lakekeeper study output** (study `wfb2
 | 19 | **Lightweight RequestMetadata for audit** (request_id + actor + privilege_source) | OBSERVABILITY/EVENTS | Absent. | Start minimal (covered by #3); add `privilege_source` only when GOVERNANCE_P1 introduces admin-only ops. Do NOT build Lakekeeper's heavyweight struct (request_metadata.rs:92-170). | P2 | M |
 | — | **Fail-closed authz on OpenFGA outage (503, never silent-allow)** | AUTHZ | **DONE & CORRECT** — `_FAIL_CLOSED` + `_TRANSIENT_NETWORK` → `ServiceUnavailableError`→503, all paths via `_retrying()` (fga.py:76-82,300-302,330-332,360-362,400-405). | Status GOOD. Maintain: every new read/write authz path must go through `_retrying()` + fail-closed. No work. | P2 | S |
 | — | **Maintenance read-only mode (503 + Retry-After)** | MAINTENANCE | **DONE & WIRED** — maintenance.py:24-53 mirrors Lakekeeper maintenance.rs:40-70; wired at main.py:75; config.py:87; tests present. | Status COMPLETE. No work. (Pairs well with #9/#11 migration windows.) | P2 | S |
-| SKIP | **`Location` newtype hardening / max-length / scheme validation** | CREDENTIAL_VENDING | `split_s3_location` = urlsplit wrapper (vending.py:61-71). | **SKIP** — premature for a small Python service with internal clients (LanceDB SDK/lance-ray/Iceberg). Lakekeeper's newtype (io/location.rs) defends untrusted multi-tenant input we don't have. Revisit only if a public API appears. | SKIP | L |
+| SKIP | **`Location` newtype hardening / max-length / scheme validation** | CREDENTIAL_VENDING | `split_s3_location` = urlsplit wrapper (vending.py:61-71). | **SKIP** — premature for a small Python service with internal clients (LanceDB SDK/medallion-producer/Iceberg). Lakekeeper's newtype (io/location.rs) defends untrusted multi-tenant input we don't have. Revisit only if a public API appears. | SKIP | L |
 | SKIP | **Postgres session advisory locks for maintenance mutex** | MAINTENANCE / LANCE_RAY_JOBS | No DB, no multi-worker job fleet. | **SKIP** — `asyncio.Lock` suffices for single-pod jobs. Postgres advisory locks (advisory_lock.rs:1-80) earn their keep only with multiple job workers / a real queue. | SKIP | S |
 | SKIP | **Type graph `user_of`/`usersets` for list_objects/list_users** | AUTHZ | No list_objects endpoints beyond check/batch_check (fga_deps.py). | **SKIP for now** — defer until a Lance list API actually needs FGA-gated enumeration (models.rs:1-46). | SKIP | M |
 | SKIP | **Instance-admin / PrivilegeSource bypass tiers** | AUTHZ / GOVERNANCE_P1 | Absent. | **SKIP** until admin-only ops exist (no in-process bypass, no warehouse mgmt today). Revisit in GOVERNANCE_P1 (request_metadata.rs:68-87,174-191). | SKIP | M |
@@ -197,7 +197,7 @@ _The three sections below are the **cited Lakekeeper study output** (study `wfb2
 - **First step:** Wire `describe_table?vend_credentials=true` → pick the vendor by `LANCE_VENDING_MODE`; for `sts`, point boto3's STS client at `LANCE_S3_STS_ENDPOINT` and call `AssumeRole(LANCE_S3_ASSUME_ROLE_ARN, Policy=<session policy>)`. Source the base/role credential from OpenBao (threads into #3).
 - **Threads with:** OpenBao supplies the base/role credential. The expiring-credential machinery (refresh window, `expires_at_millis`) lives on the STS branch (#13/#14).
 
-### 2. lance-ray promotion + compaction jobs with idempotency keys
+### 2. medallion-producer promotion + compaction jobs with idempotency keys
 - **What:** Build the bronze→silver→gold promotion job and compaction job as **clients of the catalog**, and add `Idempotency-Key` handling on their write ops (check-on-read fast path + insert-at-commit), mirroring Lakekeeper's idempotency module.
 - **Why now:** These jobs are the reason the catalog exists, and retries on a long promotion will otherwise duplicate work / double-commit. This is also the natural emitter of OpenLineage events later — but the catalog must *not* emit them.
 - **First step:** Stand up the promotion job skeleton + an `Idempotency-Key` extractor; back it with an in-memory/Redis store for dev (no Postgres advisory lock — `asyncio.Lock` is enough at single-pod scale; explicitly SKIP Lakekeeper's pg advisory locks).
@@ -256,11 +256,11 @@ Our `CredentialVendor` protocol (`services/catalog/core/vending.py`) already mir
 - **Trace-ID + actor propagation** (UUID `request_id` + OIDC subject) on every request — the cheap precondition for events, audit, and lineage correlation (Lakekeeper `RequestMetadata`, kept *lightweight*).
 - **CloudEvents dispatch for mutations.** A lightweight async-callback `EventDispatcher` that emits **table/namespace** create/drop/rename events *after commit* to an opt-in NATS JetStream backend (off unless `LANCE_EVENTS_ENABLED`). Pattern from Lakekeeper's `service/events/{dispatch,publisher}.rs`, minus the trait hierarchy.
 - **Pluggable OpenBao SecretStore (KV v2)** with a background token-refresh daemon, shaped like our `CredentialVendor`, replacing env-only secrets (Lakekeeper `lakekeeper-secrets-kv2/src/lib.rs` `SecretStore` + `login_task`/`refresh_login`).
-- **Idempotency keys on job write ops** (check-on-read + insert-at-commit) so retried lance-ray promotions/compactions don't double-commit (Lakekeeper `idempotency.rs`), backed by in-memory/Redis at our scale.
+- **Idempotency keys on job write ops** (check-on-read + insert-at-commit) so retried medallion-producer promotions/compactions don't double-commit (Lakekeeper `idempotency.rs`), backed by in-memory/Redis at our scale.
 
 ### Deliberate non-adoptions (and why)
 
-- **`Location` newtype hardening / max-length / scheme validation** (`io/location.rs`). Premature for a Python service whose clients are internal (LanceDB SDK / lance-ray / Iceberg). `urlsplit` (`split_s3_location`) suffices. Revisit only if we expose a public, untrusted API.
+- **`Location` newtype hardening / max-length / scheme validation** (`io/location.rs`). Premature for a Python service whose clients are internal (LanceDB SDK / medallion-producer / Iceberg). `urlsplit` (`split_s3_location`) suffices. Revisit only if we expose a public, untrusted API.
 - **Postgres session advisory locks** (`advisory_lock.rs`). We have no DB and no multi-worker job fleet; `asyncio.Lock` covers single-pod coordination. Adopt only with a real job queue or multiple workers.
 - **Heavyweight `RequestMetadata` + `PrivilegeSource`/instance-admin bypass tiers** (`request_metadata.rs`). We have no in-process privilege escalation and no admin-only ops yet. Keep request context minimal (request_id + actor); revisit privilege tiers in GOVERNANCE_P1.
 - **Type-graph `user_of`/`usersets` for `list_objects`/`list_users`** (`models.rs`). No Lance list API needs FGA-gated enumeration today. Defer until one does.

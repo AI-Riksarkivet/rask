@@ -66,7 +66,7 @@ def test_invalid_tier_is_rejected(client: TestClient, fake_ns: MagicMock) -> Non
 
 # --------------------------------------------------------------------------------------------------
 # The SPEC's own credential path: DescribeTable(vend_credentials=true) -> response.storage_options.
-# We previously DROPPED this field, so a generic Lance client (incl. lance-ray in REST mode) got no
+# We previously DROPPED this field, so a generic Lance client (incl. medallion-producer in REST mode) got no
 # credentials and had no way to discover our bespoke /credentials endpoint. The one confirmed
 # reinvention in the 2026-07-14 audit — interop-breaking.
 # --------------------------------------------------------------------------------------------------

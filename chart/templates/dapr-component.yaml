@@ -149,7 +149,7 @@ scopes:
 {{- /* One component PER SUBSCRIBER app-id (see the lance.subPubsub helper): queueGroupName makes that
      app's replicas a competing-consumer group (single delivery per app — without it every replica gets
      EVERY message: jetstream only sets a DeliverGroup when queueGroupName is non-empty), and it CANNOT
-     live on one shared component because lineage and lance-ray both consume lineage.events.v1 — one
+     live on one shared component because lineage and medallion-producer both consume lineage.events.v1 — one
      shared queue group would split those messages across the two apps. deliverPolicy differs on
      purpose: `all` for lineage (a restart replays the retained stream into the idempotent MERGE ingest —
      that replay IS the outage-durability story), `new` for the cascade head + movers (a replayed

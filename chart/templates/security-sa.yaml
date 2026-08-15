@@ -7,7 +7,7 @@
 # identities with zero API grants. NOTE: the snapshot CronJob and the Dapr dashboard pods deliberately
 # do NOT take one of these — they keep their purpose-built RBAC-bound SAs unconditionally (those pods
 # legitimately need the k8s API; a zero-grant swap would silently break them — audit 2026-07-24).
-{{- $components := list "catalog" "lineage" "web" "gateway" "maintenance" "lance-ray" "rustfs" "age" "openbao" "dex" "dapr-dashboard" "jobs" "viewer" "search" "annotator" "assist" }}
+{{- $components := list "catalog" "lineage" "web" "gateway" "maintenance" "medallion-producer" "rustfs" "age" "openbao" "dex" "dapr-dashboard" "jobs" "viewer" "search" "annotator" "assist" }}
 {{- range $c := $components }}
 ---
 apiVersion: v1

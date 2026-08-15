@@ -10,7 +10,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 
 - **Services** (FastAPI): `catalog` (REST catalog + model registry), `lineage` (OpenLineage → Apache AGE
   graph), the medallion **movers** (`bronze-to-silver`, `silver-to-gold`, `media-to-silver`),
-  `lance-ray` (the `/produce` + `/train` head), `compaction`, `gateway`, `web`.
+  `medallion-producer` (the `/produce` + `/train` head), `compaction`, `gateway`, `web`.
 - **Stores**: `age-postgres` (the lineage graph **AND** OpenFGA's datastore — one pod, dual-purpose),
   `rustfs` (the Lance object store — all medallion + registry data), `openfga` (authz), `openbao` (secrets,
   prod = sealed file backend), `greptimedb` (metrics), `dex` (OIDC).

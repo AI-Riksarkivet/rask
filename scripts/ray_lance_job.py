@@ -1,4 +1,4 @@
-"""A real (dummy-payload) Ray Data job proving the full lance-ray capability set against RustFS.
+"""A real (dummy-payload) Ray Data job proving the full medallion-producer capability set against RustFS.
 
 Submitted to a real Ray cluster via ``ray job submit`` (see ``make ray-demo``) — the production-shape
 replacement for the in-process fake-Ray compute. In one run it exercises, each as a genuine distributed Ray
@@ -55,7 +55,7 @@ def main() -> None:
     #    empty table of the output schema) and then distributed-APPEND the Ray fragments into it —
     #    stable-row-ids is a dataset-level property, so the appended rows inherit it. min<max rows-per-file
     #    forces 4 files → 4 fragments written in parallel by Ray workers, committed once.
-    #    R27 note: `write_lance` gained its OWN `enable_stable_row_ids` in lance-ray 0.5.0 (it genuinely had
+    #    R27 note: `write_lance` gained its OWN `enable_stable_row_ids` in medallion-producer 0.5.0 (it genuinely had
     #    none at the 0.4.2 the image used to pin — verified by signature), so with the bumped pins this
     #    create-then-append dance collapses into a single `mode="create"` write. Kept as-is until a cluster
     #    run confirms the one-call form on the real head; the dance is correct at BOTH versions.
@@ -103,7 +103,7 @@ def main() -> None:
     #   RuntimeError: Index building failed: BTREE distributed indexing uses
     #   create_index_uncommitted(..., index_type="BTREE", fragment_ids=...)
     # so the CONCLUSION (fall back) was right at those pins and the stated reason was not. The image pins
-    # have since moved to pylance 9.0.0 + lance-ray 0.5.0, which this job is the vehicle for proving: try
+    # have since moved to pylance 9.0.0 + medallion-producer 0.5.0, which this job is the vehicle for proving: try
     # the distributed path, print WHICH path produced the index, and fall back rather than fail the demo.
     # `distributed` in the output line is the evidence — if it reads True the version-alignment follow-up
     # this note used to defer is closed, and the fallback can go.

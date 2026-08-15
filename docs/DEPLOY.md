@@ -24,7 +24,7 @@ into `.localbin/` (gitignored).
 | **catalog** | app (FastAPI) + daprd sidecar | **producer** — creates Lance tables on S3; publishes OpenLineage events via Dapr |
 | **lineage** | app (FastAPI) + daprd sidecar | **consumer** — Dapr subscription ingests events into Apache AGE; serves the lineage API |
 | **frontend zones** | 4 apps (SvelteKit SSR) | the UI as rask-style micro-frontend **zones** — `home` (catch-all `/`, owns `/auth/*`) + `lakehouse` (`/lakehouse`) + `media` (`/media`) + `annotator` (`/annotator`). `lakehouse` is one app hosting four AREAS at `/lakehouse/{data,lineage,models,admin}`: they were four separate zones over one backend plane and one shared client, paying four SSR servers and a hard reload per hop for no independent-deploy payoff. `annotator` stays separate from `media` despite sharing its plane, purely to keep its Pixi + OpenCV bundle out of a searcher's. One parametrized `frontend.dockerfile` (`lance-<zone>:tag`, per-zone tag override on `frontend.apps`); the **Ingress** path-routes each zone (`ingress.yaml`); every zone shares one env seam (`lance.frontendEnv`) + reads one origin-wide OIDC session cookie. The admin AREA serves the ops pages `/lakehouse/admin/{audit,dlq,events,streams,tenants,access}` behind a fail-closed estate-admin gate; the data area carries the namespace + table **lifecycle** surfaces. | the UI as rask-style micro-frontend **zones** — `home` (catch-all `/`) + `data` (`/data`) + `lineage` (`/lineage`) + `models` (`/models`) + `admin` (`/admin`). One parametrized `frontend.dockerfile` (`lance-<zone>:tag`); the **Ingress** path-routes each zone (`ingress.yaml`); every zone shares one env seam (`lance.frontendEnv`) + reads one origin-wide OIDC session cookie (the `home` zone owns `/auth/*`). Replaces the retired single `web` pod. The admin zone additionally serves the ops pages `/admin/{audit,dlq,events,streams,tenants}` — the estate-wide ones (events feed, JetStream panel, tenant admin) gate on the `auth.bootstrapAdmin` estate-admin grant — and the data zone carries the namespace + table **lifecycle** surfaces (`/data/{namespaces,tables,warehouses}`: declare/create, drop/deregister/restore, rename, grants). |
-| **medallion** | 4 apps + sidecars | event-driven pipeline: `lance-ray` producer + raw→bronze→silver→gold movers (see [MEDALLION.md](MEDALLION.md)) |
+| **medallion** | 4 apps + sidecars | event-driven pipeline: `medallion-producer` producer + raw→bronze→silver→gold movers (see [MEDALLION.md](MEDALLION.md)) |
 | **compaction** | app + sidecar | compaction/GC service triggered by a Dapr **cron binding** (`bindings.cron`) — compacts Lance fragments + GCs old versions |
 | **gateway** | nginx + sidecar | **backend** clean-URL edge that routes API traffic via **Dapr service invocation** (`/v1.0/invoke/...`): `/lineage/`,`/catalog/`,`/produce` (values-gated: `medallion.producer.expose`, off in prod — it's the unauthenticated demo entry),`/perses/`,`/greptime/`. Reached by a port-forward to its Service (`make dashboards`); it is **out of the frontend path** now (the zones' BFF proxies reach the backend directly, and the Ingress routes the zones). Dapr-delivered routes (lineage ingest + the reconcile cron binding) are **403-blocked** from one source (`lance.lineageSidecarOnlyRoutes`) — the sidecar is their only legitimate caller |
 | **Dapr** | subchart | control plane + sidecar injection + pub/sub + secret-store + tracing config |
@@ -156,7 +156,7 @@ Ingress controller. These steps mutate the cluster — run them yourself (or `!`
    --set frontend.oidc.publicIssuer=http://lance-ns-dex:5556/dex \
    --set frontend.oidc.publicOrigin=http://localhost:8090 \
    --set frontend.oidc.sessionSecret=$(head -c48 /dev/urandom | base64 | tr -d '/+=' | head -c48)
-!kubectl rollout restart deploy/lance-ns-dex deploy/lance-ns-lance-ray
+!kubectl rollout restart deploy/lance-ns-dex deploy/lance-ns-medallion-producer
 
 # 4. drive the cross-zone login + authz (the script does its own ingress/dex/openfga port-forwards +
 #    seeds alice=admin project:acme, then runs the headless browser through the ingress origin)
@@ -228,7 +228,7 @@ catalog/lineage.
 ✅ Verified: the event-driven catalog→lineage flow, all components healthy (`helm STATUS: deployed`),
 Dapr sidecar injection, the full 3-signal observability (`make e2e-obs` green — AGE data + PromQL metric
 + distributed trace + logs in GreptimeDB), `make k3s-up` brings the whole stack up green.
-✅ Verified: the event-driven **medallion** cascade — one `lance-ray` `/produce` cascades
+✅ Verified: the event-driven **medallion** cascade — one `medallion-producer` `/produce` cascades
 raw→bronze→silver→gold via Dapr pub/sub, building the lineage DAG, as **one distributed trace** across
 all 5 services, with the `medallion_stage_transitions_total` metric in PromQL (`make e2e-medallion`).
 ✅ Verified: the **compaction/GC** service — a Dapr `bindings.cron` component POSTs `/compaction-cron`

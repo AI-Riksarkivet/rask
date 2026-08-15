@@ -42,7 +42,7 @@ Lakekeeper, but for Lance (multimodal: vectors + blobs + columns)."
                 CONTROL PLANE                          DATA PLANE
         (this service — decides + locates)     (engines — move the bytes)
    ┌─────────────────────────────────────┐   ┌──────────────────────────────┐
-   │  FastAPI REST catalog                │   │  lance-ray / pylance / a job │
+   │  FastAPI REST catalog                │   │  medallion-producer / pylance / a job │
    │  - namespaces & tables CRUD          │   │  - read_lance / write_lance  │
    │  - describe -> location + creds      │──▶│  - add_columns (ETL)    │
    │  - OIDC authn + OpenFGA authz        │   │  - compaction / vector search│
@@ -84,7 +84,7 @@ A client opens a table, then calls `POST /v1/table/{id}/credentials?tier=read|wr
   not just at the API.
 - **Short-lived.** Tokens expire in minutes (`expires_at_millis`); a leaked one has a small,
   bounded blast radius instead of being a standing key.
-- **No durable secrets on compute.** lance-ray / jobs never hold long-lived storage keys — they
+- **No durable secrets on compute.** medallion-producer / jobs never hold long-lived storage keys — they
   get a fresh scoped token per table and authenticate to the catalog with **workload identity**.
 - **Direct I/O, no proxy bottleneck.** Bytes flow client ↔ storage (not through the catalog), so
   the catalog stays a thin control plane while large **multimodal** reads/writes scale on the engine.
@@ -97,7 +97,7 @@ A client opens a table, then calls `POST /v1/table/{id}/credentials?tier=read|wr
 
 ```mermaid
 flowchart LR
-  C[Client / lance-ray / curl] -->|Bearer token| API[FastAPI catalog]
+  C[Client / medallion-producer / curl] -->|Bearer token| API[FastAPI catalog]
   API -->|verify JWT via JWKS| DEX[(OIDC IdP — Dex in dev)]
   API -->|check can_* / write tuples| FGA[(OpenFGA)]
   FGA --> PG[(OpenFGA datastore — Postgres or SQLite)]
@@ -230,14 +230,14 @@ flowchart LR
   EVT[events] -->|NATS JetStream| ING[ingest job]
   IMG[images] --> ING
   ING -->|write_lance append, via catalog| B[bronze tables — raw, append-only]
-  B -->|read version-range = Change Data Feed| ETL1[lance-ray ETL]
+  B -->|read version-range = Change Data Feed| ETL1[medallion-producer ETL]
   ETL1 -->|append + add_columns| S[silver tables — cleaned + features]
-  S --> ETL2[lance-ray aggregate] --> G[gold tables — curated, read-mostly]
+  S --> ETL2[medallion-producer aggregate] --> G[gold tables — curated, read-mostly]
   ROLES[per-layer OpenFGA roles] -. gate .- B & S & G
 ```
 
 - **Bronze** = raw (images/events) appended as-is. Lance is blob/vector-native.
-- **Silver** = cleaned + enriched via `lance-ray` (`write_lance(mode="append")`,
+- **Silver** = cleaned + enriched via `medallion-producer` (`write_lance(mode="append")`,
   `add_columns` for distributed backfill like embeddings). Read only the **new
   bronze versions** since last run — Lance's version history *is* the Change Data Feed.
 - **Gold** = curated/aggregated, analysts get reader.
@@ -263,7 +263,7 @@ event-driven medallion movers (see §7, [`FLOW.md`](FLOW.md)).
 | Resilience (retry + fail-closed incl. transport errors; one retry layer; bounded) | ✅ done |
 | Medallion model + tests (bronze/silver/gold + persona roles) | ✅ done (model + `model.fga.yaml`) |
 | **Promotion pipeline** (bronze→silver→gold; event-driven Dapr movers + opt-in authz + quality gates) | ✅ built & tested — see [`FLOW.md`](FLOW.md), [`MEDALLION.md`](MEDALLION.md) |
-| Distributed promotion at scale (real lance-ray Ray Data job on KubeRay) | 🔶 rask integration — the in-process fake-Ray compute fills the same contract today ([`FLOW.md` §7](FLOW.md#7-future--the-distributed-variants)) |
+| Distributed promotion at scale (real medallion-producer Ray Data job on KubeRay) | 🔶 rask integration — the in-process fake-Ray compute fills the same contract today ([`FLOW.md` §7](FLOW.md#7-future--the-distributed-variants)) |
 | `project` type + 3-axis governance (teams × projects × layers) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested; app-side auto-seed of the full hierarchy is partial (see `DEPLOY.md`) |
 | Orchestration (cron → NATS → Dapr) | ✅ Dapr cron binding (compaction) + NATS/Dapr pub-sub built & deployed; Dapr **Workflow** still deferred |
 | Lineage (OpenLineage ingest + graph queries over Apache AGE; producer-side emitter) | ✅ service built & deployed; read-side authz implemented + SvelteKit UI (see §9, `docs/LINEAGE.md`) |

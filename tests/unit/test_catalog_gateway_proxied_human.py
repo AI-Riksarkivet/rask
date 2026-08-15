@@ -237,7 +237,7 @@ def test_catalog_authenticate_passes_the_resolver_so_the_privileged_door_opens(m
         None,
         dapr_api_token="trainer-own",
         x_lance_service_identity="service-trainer",
-        dapr_caller_app_id="lance-ray",
+        dapr_caller_app_id="medallion-producer",
     )
     assert admitted is not None and admitted.sub == "service-trainer"
     assert admitted.iss == "rask://service-door"
@@ -251,6 +251,6 @@ def test_catalog_authenticate_passes_the_resolver_so_the_privileged_door_opens(m
             None,
             dapr_api_token="shared-token",
             x_lance_service_identity="service-trainer",
-            dapr_caller_app_id="lance-ray",
+            dapr_caller_app_id="medallion-producer",
         )
     dapr_auth._secret_bundle.cache_clear()

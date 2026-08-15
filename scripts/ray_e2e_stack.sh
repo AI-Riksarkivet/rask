@@ -35,8 +35,8 @@ cleanup() {
     done
     # Cascade state: on a fixture timeout the movers stay Running (so the loop above misses them), yet the
     # cascade may have stalled at a Ray stage job. Dump the ignition + stage-submit trail + head job list.
-    echo "--- cascade trail (lance-ray ignition + movers' ray stage jobs) ---"
-    for c in lance-ray bronze-to-silver silver-to-gold; do
+    echo "--- cascade trail (medallion-producer ignition + movers' ray stage jobs) ---"
+    for c in medallion-producer bronze-to-silver silver-to-gold; do
       echo "  [$c]"
       kubectl logs -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$c" \
         --all-containers --tail=60 2>/dev/null \
@@ -105,14 +105,14 @@ helm upgrade --install "$RELEASE" ./chart --timeout 600s \
   --set frontend.enabled=false
 # Dapr sidecar-injector race + fresh-cluster recreate (see e2e_stack.sh for the full rationale).
 kubectl rollout status deploy/dapr-sidecar-injector --timeout=300s
-for d in catalog lineage lance-ray bronze-to-silver silver-to-gold media-to-silver gateway; do
+for d in catalog lineage medallion-producer bronze-to-silver silver-to-gold media-to-silver gateway; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true
 done
 kubectl rollout status deploy/"$RELEASE"-openfga --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-catalog --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-lineage --timeout=300s
-kubectl rollout status deploy/"$RELEASE"-lance-ray --timeout=300s
+kubectl rollout status deploy/"$RELEASE"-medallion-producer --timeout=300s
 RUNNING_ID="$(kubectl get pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=catalog" \
   -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="catalog")].imageID}')"
 assert_fresh "$CATALOG_IMG" "$RUNNING_ID"
@@ -125,7 +125,7 @@ RAY_RUNNING="$(kubectl get pods -l app=ray-lance-head -o jsonpath='{.items[0].st
 assert_fresh "$RAY_IMG" "$RAY_RUNNING"
 
 step "4/6 port-forward the services the suites talk to"
-kubectl port-forward "svc/$RELEASE-lance-ray" 8002:8000 >/tmp/pf-ray.log 2>&1 & PF_PIDS+=($!)
+kubectl port-forward "svc/$RELEASE-medallion-producer" 8002:8000 >/tmp/pf-ray.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-catalog"   2333:2333 >/tmp/pf-cat.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-lineage"   8000:8000 >/tmp/pf-lin.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-dex"       5556:5556 >/tmp/pf-dex.log 2>&1 & PF_PIDS+=($!)

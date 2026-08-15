@@ -77,7 +77,7 @@ def _seed_store(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str]) -> None
     monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: bundle)
 
 
-def _authenticate(settings: Any, *, token: str | None, identity: str | None, caller: str | None = "lance-ray") -> IDToken | None:
+def _authenticate(settings: Any, *, token: str | None, identity: str | None, caller: str | None = "medallion-producer") -> IDToken | None:
     return security.authenticate(
         _request(),
         settings,

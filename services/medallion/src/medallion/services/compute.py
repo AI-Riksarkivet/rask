@@ -1,4 +1,4 @@
-"""The fake-Ray in-process Lance compute for the medallion cascade (the lance-ray seam, #25 / P1 #6).
+"""The fake-Ray in-process Lance compute for the medallion cascade (the medallion-producer seam, #25 / P1 #6).
 
 Default OFF (``MEDALLION_COMPUTE_ENABLED``): the movers/producer stay dummy-emitters (lineage, no data).
 When on, each stage does a **real** Lance write — the producer seeds ``bronze$events`` (the first governed
@@ -7,7 +7,7 @@ downstream one — so the emitted lineage carries the **real** Lance version and
 produces actual versioned data, not just provenance.
 
 This is the **same** ``read → transform → write → version`` contract a distributed Ray Data job
-(``lance-ray`` on rask's KubeRay) fills in production; here it runs **in-process** so the cascade is
+(``medallion-producer`` on rask's KubeRay) fills in production; here it runs **in-process** so the cascade is
 end-to-end testable without a Ray cluster. The compute operates on LANCE TYPES only: every stage carries
 rows forward — tabular columns as tabular, vectors as vectors, blob columns of any media kind
 re-materialised safely — and stamps a ``stage`` provenance column; what a stage derives from blob
@@ -162,7 +162,7 @@ def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str]) -
 
 
 def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8) -> WriteResult:
-    """Seed a small synthetic ``bronze$events`` dataset — the fake lance-ray ingest at the head of the
+    """Seed a small synthetic ``bronze$events`` dataset — the fake medallion-producer ingest at the head of the
     cascade (R23: the producer writes the first governed tier directly; there is no raw dataset).
 
     Carries the ``stage`` stamp the retired raw→bronze mover used to apply (merged into the bronze ingest

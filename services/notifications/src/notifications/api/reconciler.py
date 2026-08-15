@@ -326,11 +326,20 @@ async def reconcile(
                 for record in fresh:
                     scanned += 1
                     high = max(high, record.seq)
+                    # `watchers` and `push` are forwarded, and both were once dropped right here while
+                    # the signature above accepted them and the cron route dutifully passed them. The
+                    # cost fell entirely on this lane, which is the lane that matters most for it: the
+                    # bus never sees ingest, Ray TRAIN or any external OpenLineage producer, so for
+                    # every one of those runs project watchers were never resolved and no email or
+                    # Slack was ever sent — while the pass logged `lineage_feed_reconciled` and the
+                    # author's inbox row landed, making it look like the plane worked.
                     status = await ingest_run_event(
                         record.event,
                         lane=Lane.FEED,
                         visibility=visibility,
                         open_inbox=open_inbox,
+                        watchers=watchers,
+                        push=push,
                         event_seq=record.seq,
                     )
                     if status == DAPR_RETRY:

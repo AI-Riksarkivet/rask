@@ -125,7 +125,7 @@ kubectl rollout status deploy/dapr-sidecar-injector --timeout=300s
 # freshly-scheduled pod, and delete forces that reschedule to pull the just-loaded digest from the node
 # cache (IfNotPresent) — the kind same-tag staleness fix (memory: kind-same-tag-image-gotcha). On a fresh
 # cluster this is simply the sidecar-injection recreate.
-for d in catalog lineage lance-ray bronze-to-silver silver-to-gold media-to-silver gateway; do
+for d in catalog lineage medallion-producer bronze-to-silver silver-to-gold media-to-silver gateway; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true
 done
@@ -136,7 +136,7 @@ done
 kubectl rollout status deploy/"$RELEASE"-openfga --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-catalog --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-lineage --timeout=300s
-kubectl rollout status deploy/"$RELEASE"-lance-ray --timeout=300s
+kubectl rollout status deploy/"$RELEASE"-medallion-producer --timeout=300s
 
 # The pod that actually came up must be running the image we just loaded — the definitive proof the whole
 # suite tests fresh code, not a stale same-tag image (the failure mode this guard exists for). NOTE: a

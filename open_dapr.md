@@ -1699,9 +1699,36 @@ Three of the first draft's seven are now answered and have been struck.
      and does not cover the Ray head at all.
    * The real constraint is the one `values.yaml:1026` already documents: an OFF-cluster Ray needs a
      `networkPolicy.extraEgress` entry, like the externalized S3/NATS/OTLP endpoints.
-6. **Is `app-id: lance-ray` worth renaming now, or does it ride the next state-store change?**
-   The rename touches component scopes, DLQ topics, resiliency targets and the scope list, and
-   the state store cannot hot-reload — so it is one coordinated rollout either way.
+6. ~~**Is `app-id: lance-ray` worth renaming now, or does it ride the next state-store change?**~~
+   **ANSWERED 2026-08-15 — IT RIDES. Safe to do, not worth doing alone.** The question was
+   scheduling, and the blast radius is now measured rather than estimated.
+
+   **What actually carries the name** (read off the live deployment, not the chart):
+
+   ```
+   MEDALLION_PUBSUB         = lineage-pubsub-lance-ray          <- a Dapr Component NAME
+   MEDALLION_CONTROL_PUBSUB = catalog-control-pubsub-lance-ray  <- a Dapr Component NAME
+   MEDALLION_DLQ_TOPIC      = dlq.lance-ray
+   ```
+
+   and inside the first component: `durableName=lance-ray-durable`, `queueGroupName=lance-ray`.
+
+   So a rename creates NEW JetStream durables. Anything unacked on the old ones, and anything parked
+   in `dlq.lance-ray`, is STRANDED — still in the stream, no longer delivered to the app that would
+   handle it. That is the real cost, and it is a drain, not a data loss.
+
+   **The catastrophic class does NOT apply, and that is the finding.** Actor and workflow type names
+   embed the app-id (`dapr.internal.default.ingest.workflow`), so renaming a workflow HOST orphans its
+   in-flight instances in the state store. `lance-ray` is neither: `producer.py` registers no
+   `WorkflowRuntime`, and the app-id is absent from `lance-statestore`'s scopes. It holds no actor
+   state at all. That is the difference between "drain first" and "cannot safely be done".
+
+   **Therefore: ride it with S3.** A full restart of every scoped app is required either way (the
+   state store cannot hot-reload), and S3 already brings a chart change plus a mover restart. One
+   window instead of two, no ordering dependency, and the drain happens once. Doing it alone buys a
+   better name and spends a whole coordinated rollout on it.
+
+   Precondition when it lands: drain or accept the old durables and `dlq.lance-ray` before cutover.
 7. ~~**Purge policy for workflow history.**~~ **RULE DECIDED — BUT NOT LIVE, and the deadline this
    item set has now passed.** The rule is in the chart: `dapr.workflowRetention` enabled,
    `completed: 168h` / `failed: 720h` / `terminated: 720h`, rendered as `stateRetentionPolicy` on the

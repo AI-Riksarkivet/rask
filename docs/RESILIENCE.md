@@ -140,7 +140,7 @@ handler; the ~8.5 min total window covers a realistic dependency blip).
    while the pods stay **Ready** and **nothing is delivered** (a silent outage — the probes are
    process-level, not delivery-level). Concrete trigger: the resiliency+DLQ default-ON change
    (maxDeliver 5→3, backOff `30s,60s,120s,300s` → `720s,720s`) — durables created 2026-07-06 under
-   the old config blocked all 4 movers + lance-ray after the image roll. It **self-heals**:
+   the old config blocked all 4 movers + medallion-producer after the image roll. It **self-heals**:
    JetStream reaps the old unbound durables at their `inactive_threshold` (~20–25 min observed —
    rollout 06:53–07:00 UTC → reaped + recreated 07:19–07:20), the sidecars recreate them with the
    new config, and delivery resumes with **no manual intervention**. *Fast cutover (operators):*

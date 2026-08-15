@@ -76,7 +76,7 @@ def _tuples(store_model: tuple[str, str], *, writes: list[dict] | None = None, d
 def stack() -> tuple[str, str, str]:
     if not (LANCERAY and CATALOG and LINEAGE and FGA and DAPR_TOKEN):
         pytest.skip("set LANCE_E2E_LANCERAY_URL / CATALOG / LINEAGE / FGA / DAPR_TOKEN")
-    for name, url in (("lance-ray", LANCERAY), ("catalog", CATALOG), ("lineage", LINEAGE)):
+    for name, url in (("medallion-producer", LANCERAY), ("catalog", CATALOG), ("lineage", LINEAGE)):
         try:
             probe = "readyz" if name == "catalog" else "livez"
             requests.get(f"{url.rstrip('/')}/{probe}", timeout=5).raise_for_status()

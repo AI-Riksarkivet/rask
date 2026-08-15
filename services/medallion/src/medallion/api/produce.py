@@ -1,4 +1,4 @@
-"""The lance-ray producer's ``POST /produce`` route — thin wrapper over the produce service."""
+"""The medallion-producer producer's ``POST /produce`` route — thin wrapper over the produce service."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ async def produce(
 ) -> dict[str, str] | JSONResponse:
     """Ingest (dummy) the bronze dataset and emit its write event — the event-driven cascade head.
 
-    Seeds ``bronze$events`` (with compute) and emits ONE OpenLineage event for it; lance-ray's
+    Seeds ``bronze$events`` (with compute) and emits ONE OpenLineage event for it; medallion-producer's
     ``/bronze-arrival`` subscription reacts to that event and publishes the ``medallion.bronze`` trigger,
     so the cascade is driven by the arrival event, not this call. The bronze-write emit is therefore the
     **cascade head** — if it is dropped, the entire bronze→silver→gold run silently never happens. So a
@@ -48,7 +48,7 @@ async def produce(
 
     Guarded by ``require_dapr_token`` (the shared app-api-token) so an in-cluster workload can't forge the
     cascade head: /produce is a direct operator trigger (not sidecar-delivered), and without this any pod that
-    could reach ``lance-ray:8000`` could drive the pipeline / fabricate medallion provenance. No-op in dev
+    could reach ``medallion-producer:8000`` could drive the pipeline / fabricate medallion provenance. No-op in dev
     (unset token); enforced once APP_API_TOKEN is set. A NetworkPolicy (chart) is the network-isolation layer.
 
     ``Idempotency-Key`` (optional) is the retry pairing this route's own 503+Retry-After contract demands:

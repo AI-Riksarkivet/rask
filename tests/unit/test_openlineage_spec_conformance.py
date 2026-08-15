@@ -144,7 +144,7 @@ def test_medallion_run_event_conforms() -> None:
     event = medallion_events.build_run_event(
         operation="promote_bronze_to_silver",
         author="alice",
-        job_namespace="lance-ray",
+        job_namespace="medallion-producer",
         inputs=[("alpha$bronze", "alpha$bronze$images")],
         output_namespace="alpha$silver",
         output_name="alpha$silver$features",
@@ -165,7 +165,7 @@ def test_medallion_fail_event_conforms() -> None:
     event = medallion_events.build_run_event(
         operation="promote_bronze_to_silver",
         author="alice",
-        job_namespace="lance-ray",
+        job_namespace="medallion-producer",
         inputs=[("alpha$bronze", "alpha$bronze$images")],
         output_namespace="alpha$silver",
         output_name="alpha$silver$features",

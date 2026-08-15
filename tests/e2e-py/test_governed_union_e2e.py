@@ -83,7 +83,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.governed_union]
 def stack() -> tuple[str, str]:
     if not (LANCERAY and LINEAGE and FGA):
         pytest.skip("set LANCE_E2E_LANCERAY_URL / LANCE_E2E_LINEAGE_URL / LANCE_E2E_FGA (see docstring)")
-    for name, url in (("lance-ray", LANCERAY), ("lineage", LINEAGE)):
+    for name, url in (("medallion-producer", LANCERAY), ("lineage", LINEAGE)):
         try:
             requests.get(f"{url.rstrip('/')}/livez", timeout=5).raise_for_status()
         except Exception:

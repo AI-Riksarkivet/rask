@@ -156,7 +156,7 @@ class Settings(BaseSettings):
     # enqueue for bulk/auto-labeling over a read-plane selection). Unset ⇒ a deterministic
     # in-repo mock so the submit/poll round-trip is wired + testable (drop-in for the real
     # submitter, like the assist + catalog transports). We only enqueue — the deriver runs
-    # in lance-ns (lance-ray + the catalog mover), never in this process.
+    # in lance-ns (medallion-producer + the catalog mover), never in this process.
     jobs_url: str | None = Field(default=None, alias="MEDIA_JOBS_URL")
 
     @field_validator("read_backend", "write_backend")

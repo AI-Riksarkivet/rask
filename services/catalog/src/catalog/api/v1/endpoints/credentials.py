@@ -2,7 +2,7 @@
 
 Track B: instead of every byte flowing through the catalog (Mode B, the server-mediated Arrow-IPC path),
 an authorized caller can request short-TTL, per-table, tier-scoped credentials and read/write the Lance
-data on object storage itself (LanceDB SDK / lance-ray / pylance). The vendor plug is chosen at boot
+data on object storage itself (LanceDB SDK / medallion-producer / pylance). The vendor plug is chosen at boot
 (``LANCE_VENDING_MODE``): ``sts`` (AssumeRole + a per-table session policy — the recommended path),
 ``static`` (per-bucket keys), or ``mode_b`` (vends nothing → the client uses the data endpoints).
 

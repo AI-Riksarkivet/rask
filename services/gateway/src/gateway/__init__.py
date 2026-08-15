@@ -114,17 +114,17 @@ def _routes() -> list[Route]:
     compute = ("compute", os.environ.get("RASK_COMPUTE_URL", "http://127.0.0.1:8804"))
     controlplane = ("controlplane", os.environ.get("RASK_CONTROLPLANE_URL", "http://127.0.0.1:8820"))
     # lance-plane upstreams (P1 gateway fold). Localhost defaults follow the lance
-    # dev conventions: catalog 2333, lineage 8000, the lance-ray producer 8002 (the
+    # dev conventions: catalog 2333, lineage 8000, the medallion-producer producer 8002 (the
     # port-forward the verify/e2e scripts use — its in-cluster port 8000 collides
     # with lineage on one host), explorer trio 8101/8102/8103 (chart explorer.services).
     catalog = ("catalog", os.environ.get("RASK_CATALOG_API_URL", "http://127.0.0.1:2333"))
     lineage = ("lineage", os.environ.get("RASK_LINEAGE_API_URL", "http://127.0.0.1:8000"))
-    medallion = ("lance-ray", os.environ.get("RASK_MEDALLION_API_URL", "http://127.0.0.1:8002"))
+    medallion = ("medallion-producer", os.environ.get("RASK_MEDALLION_API_URL", "http://127.0.0.1:8002"))
     viewer = ("viewer", os.environ.get("RASK_EXPLORER_VIEWER_URL", "http://127.0.0.1:8101"))
     explorer_search = ("search", os.environ.get("RASK_EXPLORER_SEARCH_URL", "http://127.0.0.1:8102"))
     annotator = ("annotator", os.environ.get("RASK_EXPLORER_ANNOTATOR_URL", "http://127.0.0.1:8103"))
     # The ingest plane (open_ingest.md Phase 1) — a BARE app-id, deliberately: the medallion row
-    # below points at `lance-ray`, a legacy app-id that no longer names anything about the service
+    # below points at `medallion-producer`, a legacy app-id that no longer names anything about the service
     # it reaches (audit m1). A new row does not inherit that mistake.
     ingest = ("ingest", os.environ.get("RASK_INGEST_URL", "http://127.0.0.1:8830"))
     # The studio flow-builder's server half (open_studio_flows.md "Backend"): the node catalog, graph

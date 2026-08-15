@@ -79,6 +79,34 @@ const LINEAGE_URL = process.env.LINEAGE_URL ?? 'http://localhost:8001';
 //     publish saga already uses (services/annotator/projects/lakehouse.py), not a test-only backdoor.
 //   · The author subject is DEX's `sub` (`CiQwOGE4…`), never the string `alice`. That is also the
 //     InboxActor's id, which is why the two must come from one place: the token.
+// THE DRIVE SEEDS ITS OWN GRANTS, and that is the difference between a test and an anecdote.
+//
+// The first green run of this drive was green partly because three tuples had been written into the
+// cluster BY HAND that afternoon. They lived in no file, so the run was not reproducible: a fresh
+// estate would have failed it, and the next person would have re-diagnosed a plane that was working.
+// The drive's own header already warns that "a claim nobody can re-run is a claim that silently rots"
+// — it was true of the drive itself.
+//
+// The chart's bootstrap grant does NOT cover this. It grants the notifications principal `reader` on
+// `warehouse:lance_catalog`, which reaches everything BENEATH that warehouse — and the drive's output
+// is `table:bronze$events`, an orphan with no `parent` edge, so `reader from parent` has nothing to
+// walk. A synthetic dataset a producer names in a lineage event is not a catalog table and never gets
+// one. Hence a direct grant, written here, every run.
+//
+// Roles, never `can_*`: `can_write_data` and `can_be_notified` are derived relations and OpenFGA
+// refuses a direct assignment to them. Granting `writer`/`reader` is what makes the derived checks
+// answer true, and it is what the estate's own model prescribes.
+// `/api` on the SAME origin: the ingress routes it to rask-gateway:8888, which path-routes
+// `/api/notifications` onward. Not a separate host — the zone's own bell reaches the inbox this way,
+// so driving the watch door here exercises the path a browser actually uses.
+const GATEWAY_URL = process.env.GATEWAY_URL ?? ORIGIN;
+const FGA_API_URL = process.env.FGA_API_URL ?? 'http://localhost:18099';
+const FGA_STORE_NAME = process.env.FGA_STORE_NAME ?? 'lance-catalog';
+/** The notifications service's OWN principal — the reconciler reads lineage's governed feed as this,
+ *  so it needs its own grant. Matches `RASK_LINEAGE_SERVICE_IDENTITY` / the chart's default. */
+const SERVICE_SUBJECT = process.env.NOTIFICATIONS_SUBJECT ?? 'notifications';
+/** The project used to prove WATCH targeting — created as tuples only; no catalog row is needed. */
+const WATCH_PROJECT = process.env.WATCH_PROJECT ?? 'drive-watch-project';
 const TOKEN_URL = process.env.TOKEN_URL ?? `${ORIGIN}/dex/token`;
 const CLIENT_ID = process.env.OIDC_CLIENT_ID ?? 'lance-catalog';
 const CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET ?? 'lance-catalog-secret';
@@ -185,10 +213,59 @@ async function mintToken(email) {
 	return token;
 }
 
+/** The `sub` inside a Dex token — the ONLY correct spelling of a person here.
+ *
+ *  Dex's subject is an opaque `CiQwOGE4…` string, not "alice". It is simultaneously the FGA principal
+ *  (`user:<sub>`), the InboxActor's id, and what `enforce_author` stamps on the run — so all three
+ *  must come from one place, and that place is the token. An earlier version of this drive passed the
+ *  literal string 'alice' and addressed an inbox nobody owns. */
+function subjectOf(token) {
+	const part = token.split('.')[1];
+	const json = Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+	const sub = JSON.parse(json).sub;
+	if (!sub) throw new Error('token carries no sub');
+	return sub;
+}
+
+/** Resolve the estate's store by NAME, newest-wins — the same tie-break `fga.provision` uses.
+ *
+ *  Paginated deliberately: a single-page read is how this session concluded a store was "phantom"
+ *  when the listing simply had not been walked (it was in fact a stale port-forward, but the
+ *  single-page read is what made the wrong answer look complete). */
+async function fgaStoreId() {
+	let token;
+	do {
+		const url = `${FGA_API_URL}/stores?page_size=50${token ? `&continuation_token=${token}` : ''}`;
+		const res = await fetch(url);
+		if (!res.ok) throw new Error(`openfga /stores: HTTP ${res.status}`);
+		const body = await res.json();
+		const hit = (body.stores ?? []).filter((s) => s.name === FGA_STORE_NAME);
+		if (hit.length) return hit.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).pop().id;
+		token = body.continuation_token || null;
+	} while (token);
+	throw new Error(`no OpenFGA store named ${FGA_STORE_NAME} at ${FGA_API_URL}`);
+}
+
+/** Write `tuples` idempotently. A duplicate is success — the estate may already be seeded, and a
+ *  drive that fails on "already granted" would be unrunnable twice in a row. */
+async function seedGrants(storeId, tuples) {
+	for (const key of tuples) {
+		const res = await fetch(`${FGA_API_URL}/stores/${storeId}/write`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ writes: { tuple_keys: [key] } }),
+		});
+		if (res.ok) continue;
+		const text = await res.text();
+		if (res.status === 400 && text.includes('already exists')) continue;
+		throw new Error(`grant ${key.user} ${key.relation} ${key.object} failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+	}
+}
+
 /** Emit one run event AS the token's holder. The author facet is deliberately NOT sent: whatever it
  *  said would be overwritten by `enforce_author`, and sending one invites the reader to believe it
  *  had an effect. */
-async function emitRun({ runId, state, token, outputName = OUTPUT }) {
+async function emitRun({ runId, state, token, outputName = OUTPUT, project }) {
 	const res = await fetch(`${LINEAGE_URL}/api/v1/lineage`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
@@ -197,9 +274,25 @@ async function emitRun({ runId, state, token, outputName = OUTPUT }) {
 			eventTime: new Date().toISOString(),
 			producer: 'rask://verify_notifications_two_users',
 			job: { namespace: 'rask-drive', name: `drive_${runId}` },
-			run: { runId },
+			// The TENANT rides the `lance` run facet — the same bag `run_id` uses, and what
+			// `project_id()` reads to find a run's watchers. Omitted entirely for the authorship
+			// cases, so those keep proving v1's behaviour rather than quietly exercising v2.
+			run: project ? { runId, facets: { lance: { project } } } : { runId },
 			outputs: [{ namespace: outputName.split('$')[0], name: outputName }],
 		}),
+	});
+	return { status: res.status, body: await res.text().catch(() => '') };
+}
+
+/** Register a watch AS the subject, through the estate's own door.
+ *
+ *  Deliberately the real HTTP route rather than a tuple write: the door is `project#member`-gated,
+ *  so driving it proves the gate admits a member — a seeded actor-state row would prove nothing
+ *  about authorization and would skip the very check v2 rests on. */
+async function watchProject(token, project) {
+	const res = await fetch(`${GATEWAY_URL}/api/notifications/watches/${encodeURIComponent(project)}`, {
+		method: 'PUT',
+		headers: { authorization: `Bearer ${token}` },
 	});
 	return { status: res.status, body: await res.text().catch(() => '') };
 }
@@ -212,6 +305,23 @@ const bob = await signIn('bob@example.com');
 // Their OWN tokens, minted from the same IdP the browser session came from — see the emitRun note.
 const aliceToken = await mintToken('alice@example.com');
 const bobToken = await mintToken('bob@example.com');
+const aliceSub = subjectOf(aliceToken);
+const bobSub = subjectOf(bobToken);
+
+// ── seed, every run ──────────────────────────────────────────────────────────────────────────────
+// Four grants, each present because a specific check cannot pass without it:
+//   · alice/bob `writer` on the output — `enforce_output_authz` refuses the emit otherwise (403).
+//   · notifications `reader` on the output — the feed is GOVERNED, so without it the reconciler
+//     walks a page it cannot see and delivers nothing, cleanly and silently.
+//   · alice `member` of the watch project — the watch door is `project#member`-gated.
+const storeId = await fgaStoreId();
+await seedGrants(storeId, [
+	{ user: `user:${aliceSub}`, relation: 'writer', object: `table:${OUTPUT}` },
+	{ user: `user:${bobSub}`, relation: 'writer', object: `table:${OUTPUT}` },
+	{ user: `user:${SERVICE_SUBJECT}`, relation: 'reader', object: `table:${OUTPUT}` },
+	{ user: `user:${aliceSub}`, relation: 'member', object: `project:${WATCH_PROJECT}` },
+]);
+console.log(`   seeded 4 grants in store ${storeId}`);
 
 const before = { alice: await badge(alice.page), bob: await badge(bob.page) };
 console.log(`   baseline: alice=${before.alice} bob=${before.bob}`);
@@ -245,6 +355,32 @@ console.log(`   after bob's COMPLETE: alice=${reverse.alice} bob=${reverse.bob}`
 check('bob was told about his own completed run', reverse.bob > after.bob, `${after.bob} → ${reverse.bob}`);
 check("alice was NOT told about bob's run", reverse.alice === after.alice, `${after.alice} → ${reverse.alice}`);
 
+// ── v2 targeting: a WATCHER is told about someone else's run ─────────────────────────────────────
+// The second of the plane's targeting sources, and until now the untested one. Everything above
+// proves authorship, which needs no registry and no permission — you may always be told about your
+// own run. A watch is the opposite shape: an explicit, `project#member`-gated opt-in that puts a run
+// in the inbox of somebody who did NOT run it. Nothing in the authorship path exercises the watch
+// registry, the membership gate, or the WATCH delivery reason.
+const watched = await watchProject(aliceToken, WATCH_PROJECT);
+check('alice could register a watch (project#member gate admits a member)', watched.status < 400, `HTTP ${watched.status} ${watched.body.slice(0, 120)}`);
+
+const beforeWatch = { alice: await badge(alice.page), bob: await badge(bob.page) };
+const watchRun = `drive-watch-${Date.now()}`;
+// BOB runs it, carrying the project alice watches. Alice is not the author, so if her badge moves it
+// moved for exactly one reason.
+const watchEmit = await emitRun({ runId: watchRun, state: 'FAIL', token: bobToken, project: WATCH_PROJECT });
+check('lineage accepted the watched-project run', watchEmit.status < 400, `HTTP ${watchEmit.status} ${watchEmit.body.slice(0, 120)}`);
+
+const afterWatch = await until(
+	async () => ({ alice: await badge(alice.page), bob: await badge(bob.page) }),
+	(v) => v.alice > beforeWatch.alice,
+);
+console.log(`   after bob's run in alice's watched project: alice=${afterWatch.alice} bob=${afterWatch.bob}`);
+check("alice was told about a run she did NOT author, because she watches its project", afterWatch.alice > beforeWatch.alice, `${beforeWatch.alice} → ${afterWatch.alice}`);
+check('bob was still told too — he authored it', afterWatch.bob > beforeWatch.bob, `${beforeWatch.bob} → ${afterWatch.bob}`);
+
+await alice.page.screenshot({ path: `${SHOT}/alice-after-watch.png` }).catch(() => {});
+
 // ── B2: read state is DURABLE, not per-tab ───────────────────────────────────────────────────────
 // The acceptance `OPEN-WORK.md` B2 named. Opening and closing the panel marks the rendered rows read;
 // a FRESH BROWSER CONTEXT is what separates "persisted per subject" from "remembered in this tab".
@@ -258,8 +394,12 @@ const fresh = await signIn('alice@example.com');
 const freshBadge = await badge(fresh.page);
 check('alice’s read state survived a FRESH browser context', freshBadge === 0, `fresh badge = ${freshBadge}`);
 
+// Against `afterWatch`, not `reverse`: the watch section moved bob's badge too (he authored that
+// run), so comparing to the pre-watch figure would fail for a reason that has nothing to do with
+// read state. The claim is "alice's read did not change BOB's count", so the baseline has to be
+// bob's count at the moment alice read.
 const bobStill = await badge(bob.page);
-check('marking alice read did not touch bob', bobStill === reverse.bob, `bob = ${bobStill}`);
+check('marking alice read did not touch bob', bobStill === afterWatch.bob, `bob = ${bobStill}, expected ${afterWatch.bob}`);
 
 await browser.close();
 console.log(`\n${failures === 0 ? '✅ all checks passed' : `❌ ${failures} check(s) failed`}\n`);

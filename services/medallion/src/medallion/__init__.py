@@ -1,7 +1,7 @@
-"""Event-driven medallion pipeline — a ``lance-ray`` producer + 3 stage movers.
+"""Event-driven medallion pipeline — a ``medallion-producer`` producer + 3 stage movers.
 
 The medallion lakehouse pattern (bronze → silver → gold; R23 — raw is the external world, not a tier) as
-**event-driven microservices** on Dapr pub/sub. ``lance-ray`` is the **head of the pipeline**: it ingests
+**event-driven microservices** on Dapr pub/sub. ``medallion-producer`` is the **head of the pipeline**: it ingests
 external raw straight into the ``bronze$events`` / ``bronze$pages`` datasets and its ``/bronze-arrival``
 subscription publishes the first trigger (``medallion.bronze``). Each mover subscribes to its upstream stage's trigger,
 emits a standard OpenLineage transform event (so the lineage graph grows the ``DERIVED_FROM`` edge), and

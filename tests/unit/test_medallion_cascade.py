@@ -60,7 +60,7 @@ def test_cascade_produces_real_data_and_a_correct_lineage_chain(tmp_path: Any) -
     uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver", "gold")}
     dapr = _FakeDapr()
 
-    # Head of the pipeline: lance-ray seeds bronze$events DIRECTLY (real Lance write — R23).
+    # Head of the pipeline: medallion-producer seeds bronze$events DIRECTLY (real Lance write — R23).
     producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uris["bronze"]})
     asyncio.run(produce(cast(DaprClient, dapr), producer))
     bronze_tbl = lance.dataset(uris["bronze"]).to_table()

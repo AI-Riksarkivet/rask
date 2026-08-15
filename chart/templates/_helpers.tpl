@@ -350,7 +350,7 @@ shared origin-wide session cookie (home additionally exchanges the code). Emit u
 - { name: LINEAGE_API, value: "http://{{ include "lance.fullname" . }}-lineage:{{ .Values.services.lineage.port }}" }
 - { name: CATALOG_API, value: "http://{{ include "lance.fullname" . }}-catalog:{{ .Values.services.catalog.port }}" }
 {{- if .Values.medallion.enabled }}
-- { name: MEDALLION_API, value: "http://{{ include "lance.fullname" . }}-lance-ray:{{ .Values.medallion.port }}" }
+- { name: MEDALLION_API, value: "http://{{ include "lance.fullname" . }}-medallion-producer:{{ .Values.medallion.port }}" }
 {{- end }}
 - { name: GREPTIME_API, value: "http://{{ include "lance.greptimeHost" . }}:{{ (hasKey .Values.observability "greptimePort") | ternary .Values.observability.greptimePort 4000 }}" }
 {{- if .Values.nats.enabled }}
@@ -383,7 +383,7 @@ on its own component, so its group must be live on the DLQ stream whenever resil
 {{- $expected = append $expected (printf "TRAINING:%s" .Values.medallion.producer.daprAppId) }}
 {{- if .Values.dapr.resiliency.enabled }}
 {{/* DLQ parking subscriptions (medallion.yaml MEDALLION_DLQ_TOPIC, same resiliency gate): the producer
-parks on dlq.lance-ray, each mover on dlq.<subTopic> — all queue-grouped by app-id on the DLQ stream. */}}
+parks on dlq.medallion-producer, each mover on dlq.<subTopic> — all queue-grouped by app-id on the DLQ stream. */}}
 {{- $expected = append $expected (printf "DLQ:%s" .Values.medallion.producer.daprAppId) }}
 {{- range .Values.medallion.movers }}
 {{- $expected = append $expected (printf "DLQ:%s" .daprAppId) }}
@@ -512,7 +512,7 @@ operator path) — otherwise externalize silently emits nothing. Non-empty strin
 
 {{/* The per-SUBSCRIBER pubsub component name (call: include "lance.subPubsub" (list $root <appId>)).
 Each subscriber app-id gets its OWN pubsub.jetstream component carrying its queueGroupName — one shared
-component cannot: lineage AND lance-ray both consume lineage.events.v1, so a single queue group would
+component cannot: lineage AND medallion-producer both consume lineage.events.v1, so a single queue group would
 SPLIT those messages across the two apps instead of duplicating per app / competing per replica. The
 component (dapr-component.yaml) and the app's *_PUBSUB env must agree on this name — hence one helper. */}}
 {{- define "lance.subPubsub" -}}

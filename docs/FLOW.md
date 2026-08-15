@@ -15,7 +15,7 @@ are design sketches, **not** the current mechanism.
 
 ```
             POST /produce                    medallion.bronze          medallion.silver
- (you/cron) ───────────▶ lance-ray ──pub────────────▶ bronze→silver ──pub────────▶ silver→gold
+ (you/cron) ───────────▶ medallion-producer ──pub────────────▶ bronze→silver ──pub────────▶ silver→gold
                          (producer)                    (mover)                     (mover, terminal)
                             │ ingest bronze$events        │ transform                 │ transform
                             │ + emit lineage              │ + emit + GATE             │ + emit + GATE
@@ -26,17 +26,17 @@ are design sketches, **not** the current mechanism.
    compaction cron ──every N──▶ discover every dataset ─▶ compact + GC old versions ─▶ emit maintenance lineage
 ```
 
-## 1. Ingest — the `lance-ray` producer registers the run and fires the cascade head
+## 1. Ingest — the `medallion-producer` producer registers the run and fires the cascade head
 
-`lance-ray` is the **head** (a dummy Ray ingest job; `services/medallion/producer.py`, deployed as the
-`lance-ns-lance-ray` pod running `medallion.producer:app`) — the **bronze ingest head** (R23: raw is the
+`medallion-producer` is the **head** (a dummy Ray ingest job; `services/medallion/producer.py`, deployed as the
+`lance-ns-medallion-producer` pod running `medallion.producer:app`) — the **bronze ingest head** (R23: raw is the
 external world; bronze is the first governed tier, written directly). On **`POST /produce`** it:
 
 1. (compute on) seeds a real `bronze$events` Lance dataset (stage-stamped at ingest) — the fake-Ray ingest;
 2. emits an OpenLineage `RunEvent` for `bronze$events` (external sources ride the IIIF/S3 heads' inputs;
    the dummy seed has none).
 
-It does **not** itself publish `medallion.bronze`. `lance-ray` also *subscribes* to the lineage topic
+It does **not** itself publish `medallion.bronze`. `medallion-producer` also *subscribes* to the lineage topic
 (`/bronze-arrival`) and — only for a bronze-dataset write — publishes the first trigger
 `medallion.bronze`. So the cascade is driven by the **arrival of external raw INTO bronze**, not the call
 (GOAL 4 B2); any bronze ingester (this dummy, the IIIF head, or the catalog) that emits a bronze-write
@@ -62,7 +62,7 @@ On each delivery a mover (`services/medallion/services/transform.py: handle_stag
 
 1. (compute on) runs the **fake-Ray compute** — reads its upstream Lance dataset, applies a stage transform,
    writes the downstream dataset (`read → transform → write → version`), measuring exact rows + on-disk
-   bytes. This is the **lance-ray seam** — the identical contract a distributed Ray Data job fills (§7).
+   bytes. This is the **medallion-producer seam** — the identical contract a distributed Ray Data job fills (§7).
 2. runs the two **promotion gates** (§3);
 3. emits the transform's OpenLineage `RunEvent` (`inputs=[upstream]`, `outputs=[downstream]` → the
    `DERIVED_FROM` edge), carrying the version + `outputStatistics` (+ `dataQualityAssertions` when the
@@ -131,10 +131,10 @@ bronze/silver are **transient** (re-derivable; their old versions are GC'd), gol
 
 What lands when this merges into the sibling `rask` repo (see [`RASK-INTEGRATION.md`](RASK-INTEGRATION.md)):
 
-- **Distributed compute:** the in-process fake-Ray compute (`compute.py`) is replaced by a real **lance-ray**
+- **Distributed compute:** the in-process fake-Ray compute (`compute.py`) is replaced by a real **medallion-producer**
   Ray Data job on rask's **KubeRay** cluster — the *same* `read → transform → write → version` contract, just
   distributed. Nothing else in the flow changes.
-- **Auto-instrumented lineage (GOAL 3):** instead of the mover hand-building the `RunEvent`, the lance-ray
+- **Auto-instrumented lineage (GOAL 3):** instead of the mover hand-building the `RunEvent`, the medallion-producer
   OpenLineage integration emits the `outputStatistics`/`dataQualityAssertions` facets **automatically** from
   the runtime — true Marquez-grade auto-lineage.
 - **Other sketches:** [`event-driven-pipeline.md`](event-driven-pipeline.md) and

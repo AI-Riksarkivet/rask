@@ -1,4 +1,4 @@
-"""Unit tests for the event-driven medallion movers + lance-ray producer.
+"""Unit tests for the event-driven medallion movers + medallion-producer producer.
 
 Infra-free: no sidecar, no broker. A fake Dapr client records publishes; we pin the contract each
 service must honor — the mover emits the transform's lineage (inputs→outputs) AND the next stage's
@@ -311,7 +311,7 @@ def test_medallion_apps_build_their_openapi() -> None:
 
     A route whose return annotation isn't a valid Pydantic response model (e.g. ``dict | JSONResponse``)
     passes every service-level test but crashes the app at startup/`openapi()` — this pins that the
-    producer + mover apps actually stand up. (Caught live when /produce's RFC-9457 union broke lance-ray.)"""
+    producer + mover apps actually stand up. (Caught live when /produce's RFC-9457 union broke medallion-producer.)"""
     import medallion.mover as mover_app
     import medallion.producer as producer_app
 

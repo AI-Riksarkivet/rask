@@ -1,6 +1,6 @@
 """The event-driven cascade head — react to a 'bronze batch written' lineage event by firing the pipeline.
 
-lance-ray subscribes to the shared lineage topic (the same events the catalog + producer already emit on a
+medallion-producer subscribes to the shared lineage topic (the same events the catalog + producer already emit on a
 write) and, **only** for a write to the bronze namespace/dataset (R23: bronze is the FIRST governed tier —
 raw is the external world the producer harvests from), publishes the bronze stage trigger
 (``medallion.bronze``) that the bronze->silver movers consume. So the cascade HEAD is driven by the

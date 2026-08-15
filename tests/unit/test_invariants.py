@@ -272,7 +272,7 @@ def test_every_first_party_deployment_is_hardened() -> None:
     rendered = _helm_template()
 
     first_party = (
-        "gateway", "catalog", "lineage", "compaction", "lance-ray",
+        "gateway", "catalog", "lineage", "compaction", "medallion-producer",
         "bronze-to-silver", "silver-to-gold", "media-to-silver", "web",
         "notifications",
     )  # fmt: skip

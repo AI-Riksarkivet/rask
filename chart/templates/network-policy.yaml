@@ -110,7 +110,7 @@ spec:
 ---
 # (3b) openbao:8200 — THE crown jewel (the audit's headline: "reachable by any pod"). Only the
 # secret-consuming app pods' daprd sidecars may connect: catalog, lineage, compaction, the
-# medallion producer (lance-ray), every mover, and (DAPRIFY 2026-07-27) the state-store-scoped
+# medallion producer (medallion-producer), every mover, and (DAPRIFY 2026-07-27) the state-store-scoped
 # apps — their daprd resolves the state store's connectionString through the lance-secrets
 # component at boot (dapr-component.yaml derives the secret-store scope from stateStore.scopes the
 # same way), so blocking them here wedges the sidecar on component init. The newly-sidecared fleet/
@@ -135,7 +135,7 @@ spec:
                 {{- /* stateStore.scopes is APPENDED + uniq'd (app-id == component label for these
                      pods — media.yaml keys them identically), so this list and the secret-store
                      component's scope (dapr-component.yaml) cannot drift. */}}
-                {{- $openbaoClients := list "catalog" "lineage" "compaction" "lance-ray" }}
+                {{- $openbaoClients := list "catalog" "lineage" "compaction" "medallion-producer" }}
                 {{- range .Values.medallion.movers }}
                 {{- $openbaoClients = append $openbaoClients .name }}
                 {{- end }}
@@ -214,7 +214,7 @@ spec:
                   - catalog
                   - lineage
                   - compaction
-                  - lance-ray
+                  - medallion-producer
                   - rustfs-backup
                   - backup-pg # the pg-backup CronJob uploads its dumps to the lakehouse (_backups/pg/)
                   - rustfs-mkbucket # the bucket-provisioning hook Job — blocked, no install ever gets buckets
@@ -302,7 +302,7 @@ spec:
 ---
 # (3f) nats:4222 — the client port. Admitted from ANY intra-namespace pod, port-scoped, and honestly so:
 # the legitimate clients are the daprd SIDECARS, which live inside every dapr.io/enabled app pod
-# (gateway, catalog, lineage, compaction, lance-ray, each medallion mover) plus the nats-box hook Jobs
+# (gateway, catalog, lineage, compaction, medallion-producer, each medallion mover) plus the nats-box hook Jobs
 # (stream provision + DLQ tooling) — i.e. nearly every first-party pod in the namespace, and the set
 # follows the dapr.io/enabled ANNOTATION, which no label selector can see. Enumerating component labels
 # would restate that near-total list and silently strand the next sidecar carrier (a wedged bus, not a
@@ -326,17 +326,17 @@ spec:
       ports:
         - { protocol: TCP, port: 4222 }
 ---
-# The original lance-ray ingress restriction (pre-Batch-9, kept): /produce is a direct operator
+# The original medallion-producer ingress restriction (pre-Batch-9, kept): /produce is a direct operator
 # trigger — in-release pods only, defense-in-depth on top of require_dapr_token.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "lance.fullname" . }}-lance-ray
+  name: {{ include "lance.fullname" . }}-medallion-producer
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/component: lance-ray
+      app.kubernetes.io/component: medallion-producer
       app.kubernetes.io/instance: {{ .Release.Name }}
   policyTypes: [Ingress]
   ingress:

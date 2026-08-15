@@ -1,4 +1,4 @@
-"""The lance-ray producer's ``POST /ingest-media`` route — thin wrapper over the media ingest service."""
+"""The medallion-producer producer's ``POST /ingest-media`` route — thin wrapper over the media ingest service."""
 
 from __future__ import annotations
 

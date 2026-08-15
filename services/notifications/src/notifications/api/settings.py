@@ -36,7 +36,7 @@ class IngressSettings(BaseSettings):
     pubsub: str = Field(default="lineage-pubsub-notifications", alias="RASK_NOTIFICATIONS_PUBSUB")
 
     #: The catalog's control-plane pubsub component — v3 targeting's ingress. Its OWN per-subscriber
-    #: component, cloned from the `lance-ray` precedent (own queue group + durable), never a new scope
+    #: component, cloned from the `medallion-producer` precedent (own queue group + durable), never a new scope
     #: on the BROADCAST component: that one's whole point is every-replica delivery, and a competing
     #: consumer added to it would split the broadcast instead of joining it.
     control_pubsub: str = Field(default="catalog-control-pubsub-notifications", alias="RASK_NOTIFICATIONS_CONTROL_PUBSUB")

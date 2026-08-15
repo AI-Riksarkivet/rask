@@ -1,4 +1,4 @@
-"""The lance-ray producer's MEDIA ingest business logic — the multimodal head of the cascade (§9).
+"""The medallion-producer producer's MEDIA ingest business logic — the multimodal head of the cascade (§9).
 
 :func:`ingest_media` lands external media objects as a bronze blob-v2 table (through the provider-agnostic
 :class:`service_kit.lakehouse.sources.S3Source` seam), emits the ``source URIs -> bronze media`` OpenLineage event with the

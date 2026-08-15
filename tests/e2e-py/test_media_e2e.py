@@ -1,14 +1,14 @@
 """End-to-end test for the MEDIA lane of the event-driven cascade (§9 — the multimodal goal, live).
 
-ONE call to lance-ray's ``/ingest-media`` must land external media as bronze-media blobs, trigger the
+ONE call to medallion-producer's ``/ingest-media`` must land external media as bronze-media blobs, trigger the
 media mover over Dapr pub/sub, and end with the lineage graph showing ``silver-media$features`` derived
 from ``bronze-media$objects`` WITH the derived artifact columns (thumbnail + embedding) in its per-version
 schema. This is the regression guard for "the deployed combination actually derives media" — the gap the
 strategic audit found (derivation used to exist only in manual scripts).
 
-Run (port-forward lance-ray + lineage first), or ``make e2e-media``:
+Run (port-forward medallion-producer + lineage first), or ``make e2e-media``:
 
-    kubectl port-forward svc/lance-ns-lance-ray 8002:8000 &
+    kubectl port-forward svc/lance-ns-medallion-producer 8002:8000 &
     kubectl port-forward svc/lance-ns-lineage   8000:8000 &
     LANCE_E2E_LANCERAY_URL=http://localhost:8002 LANCE_E2E_LINEAGE_URL=http://localhost:8000 \
     uv run pytest tests/e2e-py/test_media_e2e.py -v
@@ -42,7 +42,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.media]
 def urls() -> tuple[str, str]:
     if not (LANCERAY and LINEAGE):
         pytest.skip("set LANCE_E2E_LANCERAY_URL and LANCE_E2E_LINEAGE_URL (see module docstring)")
-    for name, url in (("lance-ray", LANCERAY), ("lineage", LINEAGE)):
+    for name, url in (("medallion-producer", LANCERAY), ("lineage", LINEAGE)):
         try:
             requests.get(f"{url.rstrip('/')}/livez", timeout=5).raise_for_status()
         except Exception:

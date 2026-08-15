@@ -3,25 +3,25 @@
 {{- $port := .Values.medallion.port }}
 {{- $img := include "lance.catalogImage" . }}
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-# lance-ray — the dummy producer / HEAD of the medallion pipeline (R23: bronze is the FIRST governed
+# medallion-producer — the dummy producer / HEAD of the medallion pipeline (R23: bronze is the FIRST governed
 # tier; raw is the external world). POST /produce emits ONLY the bronze$events OpenLineage event;
-# lance-ray's OWN /bronze-arrival subscription reacts to that event and publishes the first trigger
+# medallion-producer's OWN /bronze-arrival subscription reacts to that event and publishes the first trigger
 # (medallion.bronze) the bronze→silver mover consumes — the event-driven head (B2), not a direct publish.
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "lance.fullname" . }}-lance-ray
+  name: {{ include "lance.fullname" . }}-medallion-producer
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   replicas: {{ (hasKey .Values.medallion "producerReplicas") | ternary .Values.medallion.producerReplicas 1 }}
   selector:
-    matchLabels: { app.kubernetes.io/component: lance-ray, app.kubernetes.io/instance: {{ .Release.Name }} }
+    matchLabels: { app.kubernetes.io/component: medallion-producer, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
     metadata:
       labels:
         {{- include "lance.labels" . | nindent 8 }}
-        app.kubernetes.io/component: lance-ray
+        app.kubernetes.io/component: medallion-producer
         {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
       {{- if .Values.dapr.sidecars }}
@@ -31,10 +31,10 @@ spec:
     spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
       {{- if .Values.security.serviceAccounts.enabled }}
-      serviceAccountName: {{ include "lance.fullname" . }}-sa-lance-ray
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-medallion-producer
       {{- end }}
       containers:
-        - name: lance-ray
+        - name: medallion-producer
           image: {{ $img | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "lance.securityContext" . | nindent 10 }}
@@ -61,7 +61,7 @@ spec:
             - name: APP_API_TOKEN  # verify the Dapr-stamped header on /bronze-arrival (forged-trigger guard)
               valueFrom:
                 secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
-            # lance-ray's OWN subscriber component (queueGroupName=lance-ray, deliverPolicy=new) — it
+            # medallion-producer's OWN subscriber component (queueGroupName=medallion-producer, deliverPolicy=new) — it
             # subscribes on /bronze-arrival AND publishes through the same handle (same NATS subjects).
             - { name: MEDALLION_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.medallion.producer.daprAppId) | quote }} }
             - { name: MEDALLION_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
@@ -137,7 +137,7 @@ spec:
             {{- if .Values.dapr.resiliency.enabled }}
             # Dapr-native DLQ (ships with the Resiliency CRD): the producer's bronze-arrival + train
             # subscriptions park exhausted deliveries here, ERROR-logged by /dlq-event.
-            - { name: MEDALLION_DLQ_TOPIC, value: "dlq.lance-ray" }
+            - { name: MEDALLION_DLQ_TOPIC, value: "dlq.medallion-producer" }
             {{- end }}
             {{- if .Values.medallion.compute }}
             # Real fake-Ray compute: the producer seeds the BRONZE Lance dataset directly (R23 — so the
@@ -187,7 +187,7 @@ spec:
             {{- end }}
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
-          resources: {{- include "lance.resources" (dict "root" . "comp" "lance-ray") | nindent 12 }}
+          resources: {{- include "lance.resources" (dict "root" . "comp" "medallion-producer") | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
       volumes:
@@ -196,11 +196,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "lance.fullname" . }}-lance-ray
+  name: {{ include "lance.fullname" . }}-medallion-producer
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   ports: [{ name: http, port: {{ $port }}, targetPort: http }]
-  selector: { app.kubernetes.io/component: lance-ray, app.kubernetes.io/instance: {{ .Release.Name }} }
+  selector: { app.kubernetes.io/component: medallion-producer, app.kubernetes.io/instance: {{ .Release.Name }} }
 {{- range .Values.medallion.movers }}
 ---
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -293,7 +293,7 @@ spec:
             # Keyed by the mover's APP-ID, not its subTopic: two movers share medallion.bronze
             # (bronze-to-silver + pages-to-gold-htr), and a per-subTopic name had both declaring AND
             # subscribing the same DLQ — every dead letter delivered to both, parked and counted twice,
-            # attributed to neither (open_dapr.md §2.11). The producer's dlq.lance-ray is the precedent.
+            # attributed to neither (open_dapr.md §2.11). The producer's dlq.medallion-producer is the precedent.
             - { name: MEDALLION_DLQ_TOPIC, value: "dlq.{{ .daprAppId }}" }
             {{- end }}
             {{- if .requiredColumns }}

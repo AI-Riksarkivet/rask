@@ -2,7 +2,7 @@
 # #64 live proof of the /produce + /train HUMAN trigger door (dual-auth authorize_produce) + #83 DLQ ops.
 #
 # Applies the chart change (medallion OIDC env + web MEDALLION_API) to the live kind `lance` cluster, rolls
-# the already-loaded lance-ray + web + catalog + lineage images (all backend shares lance-rest-catalog:dev,
+# the already-loaded medallion-producer + web + catalog + lineage images (all backend shares lance-rest-catalog:dev,
 # so this one deploy also ships #68 + Phase A + #83), then drives the door end-to-end against a real Dex token:
 #   • a project ADMIN bearer (alice, admin project:acme)      → 202  (the new human door opens)
 #   • a NON-admin bearer     (bob, no grant)                  → 403  (FGA denies, not a silent allow)
@@ -30,23 +30,23 @@ helm upgrade "$RELEASE" ./chart --reuse-values --set medallion.produceAdminProje
 step "2/7 roll the freshly-loaded images (kind same-tag → delete pods, not just rollout)"
 # catalog too: it carries the #68 access-simulator fix (service_kit/governed/fga.py qualify flag) under the same
 # :dev tag, so without an explicit pod delete the running catalog keeps the old double-prefix Check.
-kubectl delete pod -l app.kubernetes.io/component=lance-ray --wait=false
+kubectl delete pod -l app.kubernetes.io/component=medallion-producer --wait=false
 kubectl delete pod -l app.kubernetes.io/component=catalog --wait=false
 # lineage too: the SAME :dev image carries #83's /admin/dlq ops endpoints (all backend services share
 # lance-rest-catalog:dev), so without rolling lineage the DLQ panel 404s against the old pod.
 kubectl delete pod -l app.kubernetes.io/component=lineage --wait=false
 # (the monolithic web app is retired — the MFE zones are web-<name> and none consumes MEDALLION_API,
 # so only the backends roll here)
-kubectl rollout status "deploy/$RELEASE-lance-ray" --timeout=150s
+kubectl rollout status "deploy/$RELEASE-medallion-producer" --timeout=150s
 kubectl rollout status "deploy/$RELEASE-catalog" --timeout=150s
 kubectl rollout status "deploy/$RELEASE-lineage" --timeout=150s
 
-step "3/7 confirm the OIDC door env is live on lance-ray"
+step "3/7 confirm the OIDC door env is live on medallion-producer"
 env_val() {
-  kubectl get deploy "$RELEASE-lance-ray" \
+  kubectl get deploy "$RELEASE-medallion-producer" \
     -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name=='$1')].value}"
 }
-[ "$(env_val MEDALLION_OIDC_ENABLED)" = "true" ] || fail "MEDALLION_OIDC_ENABLED not true on lance-ray"
+[ "$(env_val MEDALLION_OIDC_ENABLED)" = "true" ] || fail "MEDALLION_OIDC_ENABLED not true on medallion-producer"
 [ "$(env_val MEDALLION_PRODUCE_ADMIN_PROJECT)" = "acme" ] || fail "produce-admin project not acme"
 echo "   OIDC_ENABLED=true  ADMIN_PROJECT=acme  ISSUER=$(env_val MEDALLION_OIDC_ISSUER)"
 # The monolithic web app is retired — every MFE zone carries MEDALLION_API (the produce/train door UI
@@ -55,9 +55,9 @@ webapi="$(kubectl get deploy "$RELEASE-web-models" -o jsonpath="{.spec.template.
 [ -n "$webapi" ] || fail "web-models has no MEDALLION_API"
 echo "   web-models MEDALLION_API=$webapi"
 
-step "4/7 port-forward dex + lance-ray + openfga + lineage"
+step "4/7 port-forward dex + medallion-producer + openfga + lineage"
 kubectl port-forward "svc/$RELEASE-dex" 5556:5556 >/tmp/pf-dex.log 2>&1 & PF_PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-lance-ray" 8000:8000 >/tmp/pf-ray.log 2>&1 & PF_PIDS+=($!)
+kubectl port-forward "svc/$RELEASE-medallion-producer" 8000:8000 >/tmp/pf-ray.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-lineage" 8010:8000 >/tmp/pf-lin.log 2>&1 & PF_PIDS+=($!)
 for i in $(seq 1 30); do

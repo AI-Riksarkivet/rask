@@ -65,7 +65,7 @@ thin in-process fill.
   does a real `lance.write_dataset` per stage (incl. gold) — proven by `test_medallion_cascade.py`. What
   stays demo-only is the **gold whole-history JSONB embed** (`medallion_demo.py: write_gold`); the fake-Ray
   `compute.py` only stamps a `stage` column, not the JSONB. The genuine remaining gap is the **distributed**
-  producer — **lance-ray** (a Ray Data job; `lr.write_lance`/`read_lance`, the same read→transform→write→
+  producer — **medallion-producer** (a Ray Data job; `lr.write_lance`/`read_lance`, the same read→transform→write→
   version contract the fake-Ray compute fills) — which lands when this merges into rask's KubeRay cluster
   (`docs/DECISIONS.md`). So: event-driven + provenance + (opt-in) in-process data are validated here; the
   distributed compute + the gold-JSONB-in-the-deployed-path are the rask integration.

@@ -108,7 +108,7 @@ datasets the services write, so a version split there is a correctness bug, not 
 
 Two related version facts measured in the same pass, for anyone reading old comments in the Ray jobs:
 
-- `lance_ray.write_lance` genuinely had **no** `enable_stable_row_ids` at lance-ray 0.4.2 (hence the
+- `lance_ray.write_lance` genuinely had **no** `enable_stable_row_ids` at medallion-producer 0.4.2 (hence the
   create-with-stable-ids-then-append dance); it exists at 0.5.0. `add_columns_from`,
   `merge_columns_from`, `vector_search` and the reusable global Ray Pool are 0.5.0-only too.
 - `lance_ray.create_scalar_index` fails at 0.4.2 + pylance 8.0.0 with *"BTREE distributed indexing uses
