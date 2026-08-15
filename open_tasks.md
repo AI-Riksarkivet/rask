@@ -59,7 +59,36 @@ exists with `curl -s http://localhost:5000/v2/rest-catalog/tags/list` before dep
 | 8 | verify-first: three maintenance claims already drifted | ✅ verified; **two were wrong** |
 | 9 | #60 + #61 — `optimize_indices` gaps, per-tier fragment sizing | ✅ `633ce5b7` |
 
-Verified together: `4260 passed, 0 failed` with NATS reachable; ruff + `ty` clean.
+Verified together: `4261 passed, 0 failed` with NATS reachable; ruff + `ty` clean.
+
+**DEPLOYED AND VERIFIED LIVE 2026-08-15**, not merely built. `lance-rest-catalog:maint-728d2e41`
+(`dagger call image --name=rest-catalog publish …`, `DAGGER_EXIT=0`, digest `sha256:43fa4d02…`), tag
+confirmed present in the registry BEFORE the deploy, `kubectl set image deploy/rask-maintenance` →
+rolled out, pod `2/2 Running`, 0 restarts. A REAL reconcile tick driven through the service's own Dapr
+cron route returns the new field:
+
+```json
+"skipped": [{ "category": "orphan_files", "reason": "MAINTENANCE_ORPHAN_SCAN_ENABLED is off — …",
+              "coverage_gap": true }]
+```
+
+and `report_is_clean` on that live report blocks. The estate currently blocks for TWO reasons — 14 real
+drift findings (12 orphan buckets, 2 unbound namespaces) AND the unexamined file layer — with the
+findings reported first, which is the designed ordering: drift is immediately actionable, a coverage
+gap is a config change.
+
+Two things the deploy itself surfaced, both worth knowing:
+
+- **`dagger publish` failed first** with `http: server gave HTTP response to HTTPS client`. The build
+  succeeded; only the push failed. `make dagger-engine` fixes it (the CLI had auto-provisioned a
+  config-less engine), and the engine needs `_EXPERIMENTAL_DAGGER_RUNNER_HOST` exported.
+- **The background wrapper reported "exit code 0" while the command exited 1.** Capture
+  `DAGGER_EXIT=$?` explicitly — the same class of trap as `| tail -1` reporting tail's status.
+
+**Still to deploy:** the running deployment predates the chart change, so it carries NO
+`MAINTENANCE_ORPHAN_SCAN_ENABLED` env var at all. Rendering it needs `make k3s-up` (NOT a hand
+`helm upgrade` — that replaces every deployed image with the chart default). Behaviour is correct
+either way: absent reads as off, and off now blocks the purge instead of silently certifying.
 
 **What #8 actually found, and it is why it ran first.** Two of the four claims did not survive
 checking. `bytes_removed` hedged "possibly the Lance stats object" — it resolves AGAINST itself:
