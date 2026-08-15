@@ -178,3 +178,82 @@ def test_no_production_path_writes_the_registry_unconditionally() -> None:
         "lifts a quarantine (diff2 F4). Use `upsert_warehouse` (re-create) or `set_warehouse_status` "
         "(lifecycle flip); both are conditional on the record's ETag:\n  " + "\n  ".join(offenders)
     )
+
+
+# --------------------------------------------------------------------------- #
+# diff2 F1 leg (c) — the same hazard one rung up: the PROJECT registry
+# --------------------------------------------------------------------------- #
+
+
+def _seed_project(control_root: str, **overrides: str) -> dict[str, str]:
+    from catalog.services import projects
+
+    record = {"id": "acme", "created_at": "t0", "created_by": "user:anna", "protected": "false"} | overrides
+    projects.put_project(control_root, {}, record)
+    return record
+
+
+def test_a_protection_arm_that_lands_mid_recreate_is_not_reverted(control_root: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE ACCEPTANCE CRITERION for F1(c). Final `protected` MUST be "true".
+
+    `POST /v1/projects` is idempotent: a re-POST carries `created_at`/`created_by`/`protected` forward
+    from a read taken earlier in the handler, then wrote the whole record back unconditionally. So an
+    admin arming deletion protection in that window was silently disarmed — no `/protection` call, no
+    audit signal, and `protected` is precisely the flag the delete door's `force` rule turns on.
+
+    Injected AT THE READ→WRITE SEAM for the reason F4's test records: a deactivate landed merely
+    BEFORE the call passes against the unconditional shape too, because a single-threaded test gives
+    an unconditional write no window to lose.
+    """
+    from catalog.services import projects
+
+    from service_kit.lakehouse import records as rec
+
+    _seed_project(control_root)
+    real_replace = rec._replace_json
+    fired = {"n": 0}
+
+    def racing_replace(root: str, so: dict, key: str, record: dict, *, etag: str) -> None:
+        if fired["n"] == 0:
+            fired["n"] = 1
+            # An admin arms deletion protection, inside the window this request opened.
+            projects.put_project(root, so, {**_seed_project(root), "protected": "true"})
+        real_replace(root, so, key, record, etag=etag)
+
+    monkeypatch.setattr(rec, "_replace_json", racing_replace)
+
+    written = projects.upsert_project(control_root, {}, {"id": "acme", "created_at": "t2", "created_by": "user:bob"})
+
+    assert fired["n"] == 1, "the conditional write seam was never reached — the race was not exercised"
+    assert written["protected"] == "true", "the re-POST disarmed deletion protection nobody asked to disarm"
+    live = projects.get_project(control_root, {}, "acme")
+    assert live is not None
+    assert live["protected"] == "true"
+    # Identity belongs to the ORIGINAL create — a re-POST never resets a tenant's age or author.
+    assert (live["created_at"], live["created_by"]) == ("t0", "user:anna")
+
+
+def test_a_project_that_vanished_is_a_conflict_not_a_resurrection(control_root: str) -> None:
+    """Racing a concurrent tenant DELETE must not blind-write the project back into existence."""
+    from catalog.services import projects
+
+    with pytest.raises(RecordMissingError):
+        projects.upsert_project(control_root, {}, {"id": "gone", "created_at": "t", "created_by": "user:x"})
+
+
+def test_no_production_path_writes_the_project_registry_unconditionally() -> None:
+    """`put_project` is a SEEDING primitive, same rule as `put_warehouse`."""
+    offenders: list[str] = []
+    for path in sorted(REPO_ROOT.glob("services/*/src/**/*.py")):
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped.startswith("*"):
+                continue
+            if re.search(r"\bput_project\s*\(", line) and "def put_project" not in line:
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{n}: {stripped}")
+
+    assert not offenders, (
+        "production code calls `put_project`, an UNCONDITIONAL overwrite. Whatever it carries forward "
+        "from an earlier read will silently discard a concurrent change — on `protected` that disarms "
+        "deletion protection (diff2 F1c). Use `upsert_project`, conditional on the record's ETag:\n  " + "\n  ".join(offenders)
+    )

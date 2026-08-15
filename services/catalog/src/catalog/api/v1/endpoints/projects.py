@@ -46,6 +46,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
+    ConcurrentModificationError,
     InvalidInputError,
     NamespaceNotEmptyError,
     PermissionDeniedError,
@@ -65,7 +66,7 @@ from catalog.services import projects as project_registry
 from catalog.services import warehouses
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
-from service_kit.lakehouse.records import RecordExistsError
+from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
 
 
 log = logging.getLogger(__name__)
@@ -172,6 +173,21 @@ class CreateProjectRequest(BaseModel):
     id: str
 
 
+async def _converge_project(settings: Settings, so: dict[str, str], record: dict[str, str]) -> dict[str, str]:
+    """The conditional re-POST write (diff2 F1 leg c) — shared by the sequential and lost-race paths.
+
+    Both used to end in an unconditional `put_project` of a record assembled from a read taken earlier
+    in the handler, so a `/protection` call landing in that window was silently reverted. The merge now
+    happens inside the write, against the record as it actually stands.
+    """
+    try:
+        return await run_in_threadpool(project_registry.upsert_project, settings.registry_root, so, record)
+    except RecordMissingError:
+        # Raced a concurrent tenant delete: retryable, never a blind re-create — code 14 -> 409, so
+        # the caller retries into a clean mint rather than resurrecting a project just deleted.
+        raise ConcurrentModificationError(f"project {record['id']!r} write raced a concurrent delete; retry") from None
+
+
 @router.post("", response_model_exclude_none=True)
 async def create_project(
     settings: SettingsDep,
@@ -209,13 +225,12 @@ async def create_project(
         try:
             await run_in_threadpool(project_registry.create_project_record, settings.registry_root, so, record)
         except RecordExistsError:
-            fresh = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id) or {}
-            record["created_at"] = fresh.get("created_at") or record["created_at"]
-            record["created_by"] = fresh.get("created_by") or record["created_by"]
-            record["protected"] = fresh.get("protected") or record["protected"]
-            await run_in_threadpool(project_registry.put_project, settings.registry_root, so, record)
+            # Lost the mint race — converge on the WINNER, conditionally (diff2 F1 leg c). The merge
+            # happens inside the write, against the record as it actually stands, so a protection
+            # change landing in this window is preserved instead of clobbered.
+            record = await _converge_project(settings, so, record)
     else:
-        await run_in_threadpool(project_registry.put_project, settings.registry_root, so, record)
+        record = await _converge_project(settings, so, record)
     granted = await fga_deps.seed_project_admin(client, settings, token, project=project_id)
     log.info("project_created", extra={"project": project_id, "existing": existing is not None})
     await emit_control(
