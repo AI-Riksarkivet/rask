@@ -42,12 +42,20 @@ test:
 
 # Slow tests need real models / a GPU (e.g. the YOLO layout smoke test) and hang on
 # hosts without them — opt in explicitly. Runs the full suite including slow marks.
+#
+# BOTH legs were broken, and between them this target ran ZERO slow tests while reading as if it
+# ran them all. Leg 1 selects none: the root workspace declares NO `slow` mark at all — every one
+# of them lives in a sealed runner. Leg 2 omitted the `cd` that `make test` documents four lines
+# above as mandatory, so from the repo root pytest read the ROOT testpaths and died at collection
+# (`ModuleNotFoundError: lineage_kit` — a fleet module absent from the runner's venv). It failed on
+# the second line AFTER a two-minute green suite, which reads as "no GPU on this box".
+# `runners/dummy` was simply missing. Pinned by tests/unit/test_runner_suites_are_invoked.py.
 test-slow:
 	uv run pytest -m "not e2e"
-	# The HTR runner is sealed OUT of the root workspace (its model stack must not enter the
-	# fleet's resolution), so the root pytest cannot see it. Run its suite in its own env —
-	# without this line 28 tests would silently never run.
-	uv run --project runners/htr --frozen pytest
+	# No `-m` filter, unlike `make test` above: dropping the `not slow` deselection is the entire
+	# difference between the two targets, and the sealed runners are where the slow marks are.
+	cd runners/htr && uv run --frozen pytest
+	cd runners/dummy && uv run --frozen pytest
 
 lint:
 	uv run ruff check .
