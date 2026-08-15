@@ -401,7 +401,7 @@ class _MemoryCursor:
     async def get(self) -> LineageCursor | None:
         return None if self.seq is None else LineageCursor(seq=self.seq, updated_at="2026-08-09T12:00:00Z")
 
-    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None) -> None:
+    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None, stalls: int = 0) -> None:
         self.seq = seq
         self.writes.append(seq)
 

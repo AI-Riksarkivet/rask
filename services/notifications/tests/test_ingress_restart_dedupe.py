@@ -101,7 +101,7 @@ class _MemoryCursor:
     async def get(self) -> LineageCursor | None:
         return LineageCursor(seq=self.seq, updated_at=datetime.now(UTC))
 
-    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None) -> None:
+    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None, stalls: int = 0) -> None:
         self.writes.append(seq)
         self.seq = seq
 

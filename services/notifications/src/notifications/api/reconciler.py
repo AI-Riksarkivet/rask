@@ -75,6 +75,19 @@ CURSOR_KEY: Final = "notifications-lineage-cursor"
 #: correct per-cluster value to tune.
 FEED_OVERLAP: Final = 64
 
+#: How many CONSECUTIVE passes may end in a retry before the walk steps over the rows asking for it.
+#:
+#: The mark advances only on a clean pass, which is right for a TRANSIENT failure — the row is
+#: re-offered next tick and nothing is lost. It is wrong for a PERMANENT one: a recipient whose actor
+#: refuses forever makes every pass end `retried > 0`, so the mark never moves and every notification
+#: above it is never delivered TO ANYONE. The lane stalls while each tick logs `lineage_feed_reconciled`
+#: and reports progress it did not make.
+#:
+#: Stepping over loses those rows, which is why it takes this many passes and an ERROR log to get there:
+#: at the 30s cron period, ~5 minutes of a row failing every single time. Retrying forever loses every
+#: row above it instead, and silently — the strictly worse trade.
+FEED_MAX_STALLS: Final = 10
+
 
 class LineageCursorUnreadable(ServiceUnavailableError):
     """The stored cursor exists but cannot be read — never reported as absent.
@@ -122,6 +135,8 @@ class LineageCursor(BaseModel):
     resume_from: int | None = Field(default=None, ge=0)
     #: The newest row the interrupted walk had reached; becomes `seq` when it completes.
     pending_high: int | None = Field(default=None, ge=0)
+    #: Consecutive passes that ended in a retry without moving the mark. Reset by any clean pass.
+    stalls: int = Field(default=0, ge=0)
     #: The seq `FEED_OVERLAP` may never reach below — the rows this deployment deliberately SKIPPED.
     #:
     #: Without it the overlap is not merely imprecise, it is wrong in the one direction that matters.
@@ -259,7 +274,7 @@ class LineageCursorStore:
             log.exception("lineage_cursor_unreadable")
             raise LineageCursorUnreadable("the stored lineage feed cursor no longer fits its schema") from exc
 
-    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None) -> None:
+    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None, stalls: int = 0) -> None:
         """Move the mark. Last write wins — one writer, no contender to race.
 
         Called with `resume_from`/`pending_high` to PARK an interrupted walk (the mark itself does not
@@ -267,7 +282,7 @@ class LineageCursorStore:
         a completed one — which also clears any parked state, so a walk that finishes leaves nothing
         behind for the next tick to resume from.
         """
-        cursor = LineageCursor(seq=seq, updated_at=datetime.now(UTC), resume_from=resume_from, pending_high=pending_high, floor=floor)
+        cursor = LineageCursor(seq=seq, updated_at=datetime.now(UTC), resume_from=resume_from, pending_high=pending_high, floor=floor, stalls=stalls)
         try:
             response = await self._client.post(
                 self._base,
@@ -391,6 +406,20 @@ async def reconcile(
         # default, so running out of pages means the rows between here and the cursor are already
         # pruned. They are unrecoverable, so stalling would buy nothing and only hide it.
         log.error("lineage_feed_gap_skipped", extra={"cursor": stored.seq, "resumed_at": high, "pages": max_pages})
+    if retried:
+        # A retry holds the mark — unless it has held it for FEED_MAX_STALLS consecutive passes, which
+        # is a PERMANENT failure wearing a transient's costume. Step over it, loudly: the rows asking
+        # for the retry are lost, and every row above them is delivered instead of joining them.
+        stalls = stored.stalls + 1
+        if stalls < FEED_MAX_STALLS:
+            await store.set(stored.seq, floor=settled_floor, stalls=stalls)
+            return ReconcileResult(scanned=scanned, retried=retried, cursor=stored.seq, truncated=truncated)
+        log.error(
+            "lineage_feed_poison_skipped",
+            extra={"cursor": stored.seq, "resumed_at": high, "retried": retried, "stalls": stalls},
+        )
+        await store.set(high, floor=settled_floor)
+        return ReconcileResult(scanned=scanned, retried=retried, cursor=high, truncated=truncated)
     if not retried:
         # No `resume_from`/`pending_high`: a completed walk settles the mark AND clears whatever an
         # earlier interrupted pass parked, so the next tick starts from the top again.

@@ -18,6 +18,7 @@ from pydantic import SecretStr
 from notifications.api.ingest import DAPR_RETRY, DAPR_SUCCESS
 from notifications.api.metrics import Lane
 from notifications.api.reconciler import (
+    FEED_MAX_STALLS,
     LineageCursor,
     LineageCursorStore,
     LineageCursorUnreadable,
@@ -86,11 +87,14 @@ class _Plane:
 class _MemoryCursor:
     """The cursor store's contract in memory — the walk's tests are about the walk."""
 
-    def __init__(self, seq: int | None = None, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None) -> None:
+    def __init__(
+        self, seq: int | None = None, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None, stalls: int = 0
+    ) -> None:
         self.seq = seq
         self.resume_from = resume_from
         self.pending_high = pending_high
         self.floor = floor
+        self.stalls = stalls
         self.writes: list[int] = []
         #: Every write in full, so a test can assert on the PARKED state an interrupted walk leaves.
         self.records: list[tuple[int, int | None, int | None]] = []
@@ -98,13 +102,16 @@ class _MemoryCursor:
     async def get(self) -> LineageCursor | None:
         if self.seq is None:
             return None
-        return LineageCursor(seq=self.seq, updated_at=datetime.now(UTC), resume_from=self.resume_from, pending_high=self.pending_high, floor=self.floor)
+        return LineageCursor(
+            seq=self.seq, updated_at=datetime.now(UTC), resume_from=self.resume_from, pending_high=self.pending_high, floor=self.floor, stalls=self.stalls
+        )
 
-    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None) -> None:
+    async def set(self, seq: int, *, resume_from: int | None = None, pending_high: int | None = None, floor: int | None = None, stalls: int = 0) -> None:
         self.seq = seq
         self.resume_from = resume_from
         self.pending_high = pending_high
         self.floor = floor
+        self.stalls = stalls
         self.writes.append(seq)
         self.records.append((seq, resume_from, pending_high))
 
@@ -362,8 +369,13 @@ async def test_a_failed_row_holds_the_mark_where_it_was() -> None:
 
     assert result.retried == 1
     assert result.cursor == 7
-    assert memory.writes == []
+    # The MARK is what must not move. `writes` is no longer empty and that is deliberate: a retried
+    # pass now persists its stall count, so a permanently failing row can be stepped over after
+    # FEED_MAX_STALLS instead of blocking every newer notification forever. The write records the
+    # counter; it does not advance the mark, which is what this test is about.
     assert memory.seq == 7
+    assert memory.writes == [7], "a retried pass wrote a mark other than the one it was holding"
+    assert memory.stalls == 1
     assert len(plane.boxes["alice"]) == 1
 
 
@@ -683,3 +695,40 @@ async def test_a_cursor_from_before_the_floor_existed_adopts_its_own_mark() -> N
     delivered = sorted(row["notification_id"] for row in plane.boxes.get("alice", []))
     assert delivered == ["run-1002@FAIL"], f"an old cursor let the overlap reach below its mark: {delivered}"
     assert memory.floor == 1001, "the adopted floor was not persisted, so the next pass is unprotected again"
+
+
+# --- a poison row must not block every newer notification ----------------------------------------
+#
+# The mark advances only on a fully clean pass (`if not retried`), which is right for a TRANSIENT
+# failure: the row is re-offered next tick and nothing is lost. It is wrong for a PERMANENT one. A
+# recipient whose actor refuses forever makes every pass end `retried > 0`, so the mark never moves and
+# every notification above it — for everyone else — is never delivered. The lane stalls silently: each
+# tick logs `lineage_feed_reconciled` and reports progress it did not make.
+#
+# There is no attempt counter and no park-and-skip today, so the stall has no exit at all.
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_permanently_failing_recipient_does_not_block_every_newer_notification() -> None:
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9)], "next_cursor": 8}))
+    plane = _Plane(broken={"alice"})  # this subject's inbox refuses, every time, forever
+    store, memory = _store(8, floor=0)
+
+    for _ in range(FEED_MAX_STALLS + 1):
+        await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
+
+    assert memory.seq == 9, "the mark never moved past a permanently failing row, so every newer notification is blocked for every other subject too"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_transient_failure_still_holds_the_mark() -> None:
+    """The behaviour the counter must NOT break: one bad tick re-offers, it does not step over."""
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9)], "next_cursor": 8}))
+    plane = _Plane(broken={"alice"})
+    store, memory = _store(8, floor=0)
+
+    await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
+
+    assert memory.seq == 8, "a single failed pass stepped over the row instead of re-offering it"
