@@ -1791,7 +1791,9 @@ Three of the first draft's seven are now answered and have been struck.
 *(10–12 added 2026-08-08 from an external-material scan — the OneUptime Dapr corpus, 2,122 posts
 enumerated, 10 read against the estate's positions; shallow source, every claim marked verify.)*
 
-10. **Stream retention mode is a fan-out correctness invariant nothing asserts.** `--retention=work`
+10. ~~**Stream retention mode is a fan-out correctness invariant nothing asserts.**~~ **CLOSED by `751212ef` ("fix(nats): assert stream retention — §6 Q10"), and in a better place than this item proposed.** `assert_retention` in `nats-stream-job.yaml:114` checks EVERY stream and `exit 1`s the Job rather than logging — LINEAGE/MEDALLION/TRAINING/DLQ/CATALOG_CONTROL to `limits`, INGEST to `work` (correct: it IS the work queue). Put in the creation Job rather than the drift reconciler on purpose: the Job runs before anything consumes, so the invariant is checked before it can be violated rather than after. The item was never struck through — stale, like #148 and the `bytes_removed` claim this session also found.
+
+    ORIGINAL: `--retention=work`
     on a shared stream makes per-app durables steal from each other (first ack deletes);
     `--retention=interest` empties the stream for the ephemeral `deliverPolicy=all` replay
     consumer whenever nothing is attached. `nats-stream-job.yaml` pins `limits` correctly, but the
