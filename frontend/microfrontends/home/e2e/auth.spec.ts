@@ -89,10 +89,17 @@ test('the MAIN MENU navbar carries Home and Projects for an anonymous visitor �
 	await expect(nav.getByRole('button')).toHaveCount(0);
 	await expect(nav.getByRole('link')).toHaveCount(2);
 	// SETTINGS is the third main-menu entry and it is estate-admin ONLY. fetchMe resolves null here
-	// (no session, no catalog) → estate_admin unknowable → fail-closed, so an anonymous visitor's main
-	// menu is two entries, and the bar never names a surface this viewer is barred from.
+	// (no session, no catalog) → estate_admin unknowable → fail-closed. The DOOR is unchanged; what
+	// changed is that the bar now SHOWS the entry disabled instead of dropping it (#143), so the bar
+	// carries three entries of which two are links. It is still not reachable: neither a link nor a
+	// button, so it cannot be clicked, tabbed to as a control, or lifted out by paste.
 	await expect(nav.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
 	await expect(nav.getByRole('link', { name: 'Settings', exact: true })).toHaveCount(0);
+	// An anonymous visitor gets the SIGN-IN reason, not the relation name: `estate_admin` is unknown
+	// here rather than known-false, so "ask for can_observe_events" would be advice we cannot support.
+	const settings = nav.locator('[aria-disabled="true"]', { hasText: 'Settings' });
+	await expect(settings).toBeVisible();
+	await expect(settings).toHaveAttribute('title', /sign in/i);
 	// Access lives in the Settings panel now; nowhere in an anonymous bar, panel open or closed.
 	await expect(nav.getByText('Access')).toHaveCount(0);
 	// There is NO panel to open at all here — the main menu's one entry is a plain link. The rows that

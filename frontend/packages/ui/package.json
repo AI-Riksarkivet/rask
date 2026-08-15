@@ -32,10 +32,6 @@
 			"types": "./dist/components/button/index.d.ts",
 			"svelte": "./dist/components/button/index.js"
 		},
-		"./rainbow-button": {
-			"types": "./dist/components/rainbow-button/index.d.ts",
-			"svelte": "./dist/components/rainbow-button/index.js"
-		},
 		"./card": {
 			"types": "./dist/components/card/index.d.ts",
 			"svelte": "./dist/components/card/index.js"
@@ -73,17 +69,21 @@
 			"types": "./dist/components/field/index.d.ts",
 			"svelte": "./dist/components/field/index.js"
 		},
+		"./gated-action": {
+			"types": "./dist/components/gated-action/index.d.ts",
+			"svelte": "./dist/components/gated-action/index.js"
+		},
 		"./grants-panel": {
 			"types": "./dist/components/grants-panel/index.d.ts",
 			"svelte": "./dist/components/grants-panel/index.js"
 		},
-		"./identity": {
-			"types": "./dist/components/identity/index.d.ts",
-			"svelte": "./dist/components/identity/index.js"
-		},
 		"./hierarchy": {
 			"types": "./dist/components/hierarchy/index.d.ts",
 			"svelte": "./dist/components/hierarchy/index.js"
+		},
+		"./identity": {
+			"types": "./dist/components/identity/index.d.ts",
+			"svelte": "./dist/components/identity/index.js"
 		},
 		"./input": {
 			"types": "./dist/components/input/index.d.ts",
@@ -108,6 +108,10 @@
 		"./radio-group": {
 			"types": "./dist/components/radio-group/index.d.ts",
 			"svelte": "./dist/components/radio-group/index.js"
+		},
+		"./rainbow-button": {
+			"types": "./dist/components/rainbow-button/index.d.ts",
+			"svelte": "./dist/components/rainbow-button/index.js"
 		},
 		"./resizable-split": {
 			"types": "./dist/components/resizable-split/index.d.ts",

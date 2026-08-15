@@ -34,7 +34,17 @@ export const load: LayoutServerLoad = async ({ parent }) => {
 		}
 		error(404, 'Not found');
 	}
-	if (!me.estate_admin) error(404, 'Not found');
+	// 403 WITH THE REASON, not the 404 this was (#143). A confirmed identity that simply lacks the
+	// privilege was told the route did not exist — the strongest form of hiding there is, and now
+	// self-contradicting: the main menu shows Settings disabled to exactly this caller, so a 404 here
+	// would deny the existence of something the same page just rendered. The wording matches the
+	// navbar tooltip and the FGA denial, so all three name one relation on one object.
+	if (!me.estate_admin) {
+		error(
+			403,
+			'Estate settings are estate-admin only — your identity lacks can_observe_events on the FGA root.',
+		);
+	}
 	// The signed-in caller in FGA subject form (`user:<sub>`) — an already-typed sub passes through.
 	// The settings index prints it; keeping it here means the index needs no load of its own.
 	return { meSubject: me.sub.includes(':') ? me.sub : `user:${me.sub}` };

@@ -69,8 +69,17 @@
 	// It replaced `zoneOf(pathname) === ''`, which could not tell those two apart: both are home-zone
 	// paths, and one of them is the whole point of the distinction.
 	const inMainMenu = $derived(isMainMenu(pathname));
+	// The refusal reason depends on WHICH refusal it is. `me == null` is an unresolved identity — not
+	// signed in, or the catalog could not answer — so naming a relation would be useless advice; the
+	// step is to sign in. A resolved non-admin gets the relation, which IS actionable. Both stay
+	// visible (#143); only the sentence differs.
 	const entries = $derived(
-		inMainMenu ? mainMenuNav(me?.estate_admin ?? false) : topNav(me?.estate_admin ?? false),
+		inMainMenu
+			? mainMenuNav(
+					me?.estate_admin ?? false,
+					me ? undefined : 'sign in to see whether you can open estate settings',
+				)
+			: topNav(me?.estate_admin ?? false),
 	);
 	// The identity-free base set: what the skeleton reserves space for while /v1/me is in flight
 	// (an admin's extra panel columns append on resolve — earned content, not reserved chrome).
@@ -254,7 +263,27 @@
 						<li role="none" class="w-4 shrink-0 sm:w-6" data-slot="navbar-tier-gap"></li>
 					{/if}
 					<NavigationMenu.Item>
-						{#if entry.groups}
+						<!-- FIRST, before `groups` and `items` — and that order is the whole safety property.
+						     A refused entry must not render a TRIGGER: Settings carries `items`, so putting
+						     this branch later let a denied caller open the panel and follow a live link
+						     straight to /settings/access. Shown-not-hidden (#143) is about the ENTRY; it must
+						     not hand out the entry's children.
+
+						     A <span>, never a styled <a>: an anchor keeps its href reachable by keyboard and
+						     by paste however it is painted. `aria-disabled` + the reason as the tooltip carry
+						     it to a screen reader, which opacity alone would not. Mirrors `zone-nav`'s leaf. -->
+						{#if entry.unavailable}
+							<span
+								aria-disabled="true"
+								title="{entry.title} — {entry.unavailable}"
+								class="{chrome} cursor-not-allowed opacity-50"
+							>
+								{#if entry.icon}
+									<entry.icon class="size-4" aria-hidden="true" />
+								{/if}
+								{entry.title}
+							</span>
+						{:else if entry.groups}
 							<!-- A trigger spanning SEVERAL concerns (Lakehouse: the catalog, the model
 							     registry and — for an estate admin — governance/operations over the same
 							     estate) renders labelled columns, so the panel explains the shape instead

@@ -10,6 +10,7 @@
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import { Card } from '@rask/ui/card';
+	import { GatedAction } from '@rask/ui/gated-action';
 	import * as Table from '@rask/ui/table';
 	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
@@ -142,13 +143,20 @@
 							{/each}
 						</div>
 					{/if}
-					{#if estateAdmin}
-						<!-- Estate-admin only (the /v1/me gate). The create MINTS a project by provisioning its
-						     first warehouse; the gallery reflects it via the invalidate `oncreated` triggers. -->
+					<!-- Estate-admin only (the /v1/me gate), and SHOWN disabled to everyone else (#143). The
+					     create MINTS a project by provisioning its first warehouse; the gallery reflects it via
+					     the invalidate `oncreated` triggers. Hiding the button taught a non-admin that projects
+					     are not creatable in this product, when the truth is that THEY cannot create one — and
+					     only the second version tells them whom to ask. -->
+					<GatedAction
+						allowed={estateAdmin}
+						action="New project"
+						reason="estate-admin only (needs can_observe_events on the FGA root)"
+					>
 						<Button variant="outline" size="sm" onclick={() => (creating = true)}>
 							<Plus /> New project
 						</Button>
-					{/if}
+					</GatedAction>
 				</div>
 			</div>
 			<p class="text-muted-foreground">

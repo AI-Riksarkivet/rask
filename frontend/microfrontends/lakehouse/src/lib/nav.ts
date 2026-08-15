@@ -218,22 +218,50 @@ export function areaOf(pathname: string): string {
 }
 
 /**
- * The zone's sidebar, minus anything the caller may not use.
+ * The zone's sidebar, with anything the caller may not use rendered DISABLED — never dropped.
  *
- * The door used to hide the sidebar ENTIRELY (`zoneNav = null`) for a non-admin on an admin route.
- * That was tolerable when the sidebar only ever showed one area; with one merged nav it would blank
- * the catalog, lineage and models rows too — punishing a user for visiting a URL they were denied.
- * Privilege is now a per-GROUP filter, so a denied identity keeps the navigation it is entitled to
- * and simply never sees Governance or Admin. The door itself is unchanged and still fail-closed;
- * this only stops advertising routes it would refuse.
+ * Two earlier postures, both overturned. First the door hid the sidebar ENTIRELY (`zoneNav = null`)
+ * for a non-admin on an admin route, which — once the four areas merged into one nav — blanked the
+ * catalog, lineage and models rows too, punishing a user for visiting a URL they were denied. That
+ * became a per-GROUP filter, which stopped the collateral damage but kept the deeper mistake: a
+ * filtered row is INDISTINGUISHABLE from a product that has no such feature. A user who cannot see
+ * Operations does not conclude "I lack a privilege"; they conclude the lakehouse cannot do it, and
+ * they never ask anyone for the grant that would let them.
+ *
+ * The owner ruling (#143) settles it: every gated action is SHOWN disabled with its denial reason.
+ * So the privileged groups stay in the rail and each leaf carries `unavailable` — which `zone-nav`
+ * already renders as a non-navigating, `aria-disabled` row whose tooltip names the missing relation.
+ * The mechanism is unchanged; what changed is that it now covers PERMISSION and not just capability.
+ *
+ * The door itself is untouched and still fail-closed: the route's own `forbidden` gate renders a
+ * ForbiddenPage regardless of what the rail shows. Advertising a route we would refuse is the POINT —
+ * the refusal explains itself, and a disabled row is not a way in.
  */
 export function lakehouseSidebar(estateAdmin: boolean): ZoneNav {
+	// The FGA denial's own wording, so the rail, the ForbiddenPage and the API's 403 all name the same
+	// relation on the same object. A reason that paraphrases sends users looking for a setting.
+	const denial = 'estate-admin only (needs can_observe_events on the FGA root)';
 	return {
 		title: 'Lakehouse',
 		root: LAKEHOUSE_ROOT,
 		groups: estateAdmin
 			? LAKEHOUSE_GROUPS
-			: LAKEHOUSE_GROUPS.filter((g) => !PRIVILEGED_GROUPS.has(g.label)),
+			: LAKEHOUSE_GROUPS.map((g) =>
+					PRIVILEGED_GROUPS.has(g.label)
+						? {
+								...g,
+								// Children too: a parent may be disabled while its sub-routes stay live links,
+								// which is exactly the hole a shallow copy would leave open.
+								items: g.items.map((leaf) => ({
+									...leaf,
+									unavailable: denial,
+									...(leaf.children
+										? { children: leaf.children.map((c) => ({ ...c, unavailable: denial })) }
+										: {}),
+								})),
+							}
+						: g,
+				),
 		footer: LAKEHOUSE_FOOTER,
 	};
 }

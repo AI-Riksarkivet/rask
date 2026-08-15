@@ -118,8 +118,21 @@ describe('topNav', () => {
 		// The estate level. Standing here you are choosing WHAT to work on, not moving between zones,
 		// so the zone bar would answer a question nobody has asked yet.
 		expect(mainMenuNav(true).map((e) => e.title)).toEqual(['Home', 'Projects', 'Settings']);
-		// A non-admin gets two, not a disabled third — Settings is ABSENT, fail-closed.
-		expect(mainMenuNav(false).map((e) => e.title)).toEqual(['Home', 'Projects']);
+		// A non-admin gets the SAME THREE, the third disabled with its reason (#143). This asserted
+		// `['Home', 'Projects']` — Settings ABSENT — which the ruling overturns: a bar that loses the
+		// entry tells a non-admin the estate has no settings rather than that they cannot open them.
+		const denied = mainMenuNav(false);
+		expect(denied.map((e) => e.title)).toEqual(['Home', 'Projects', 'Settings']);
+		const deniedSettings = denied.find((e) => e.title === 'Settings')!;
+		expect(deniedSettings.unavailable).toMatch(/can_observe_events/);
+		// Disabled means CHILDLESS. The entry is shown; its rows are not, and not merely unrendered —
+		// they are absent from the data, so no future branch-ordering edit in the navbar can leak them.
+		expect(deniedSettings.items).toBeUndefined();
+		// The reason is caller-supplied when the identity is unresolved: "ask for can_observe_events" is
+		// useless advice to someone who is not signed in, and the point of the reason is the next step.
+		expect(mainMenuNav(false, 'sign in first').find((e) => e.title === 'Settings')!.unavailable).toBe(
+			'sign in first',
+		);
 		expect(mainMenuNav(true).map((e) => e.href)).toEqual(['/', '/projects', '/settings']);
 		// No zone leaks in, in either identity — this is what catches a zone added to `topNav` and
 		// silently appearing at the estate root too.
@@ -142,9 +155,15 @@ describe('topNav', () => {
 	});
 
 	it('closes the ruling: Settings is a REAL route, carries the platform rows, and is admin-ONLY', () => {
-		// Fail-closed like the column it replaced: ABSENT for a non-admin rather than
-		// present-and-disabled, so the bar never names a surface the viewer is barred from.
-		expect(mainMenuNav(false).some((e) => e.title === 'Settings')).toBe(false);
+		// Fail-closed like the column it replaced — but PRESENT-AND-DISABLED for a non-admin since #143,
+		// not absent. The door is what stays closed; the bar's job is to say the surface exists and why
+		// this viewer cannot open it. "Never names a surface the viewer is barred from" was the old rule
+		// and is exactly what the ruling reverses.
+		const deniedEntry = mainMenuNav(false).find((e) => e.title === 'Settings');
+		expect(deniedEntry).toBeDefined();
+		expect(deniedEntry!.unavailable).toBeTruthy();
+		// Fail-closed is preserved where it counts: no rows, so the panel cannot be opened into.
+		expect(deniedEntry!.items).toBeUndefined();
 		const menu = mainMenuNav(true);
 		expect(menu.at(-1)!.title).toBe('Settings');
 		const settings = menu.find((e) => e.title === 'Settings')!;

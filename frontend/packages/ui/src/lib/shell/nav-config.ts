@@ -65,8 +65,15 @@ export type ZoneNavLeaf = {
 	 *  graph" — two very different statements, and only the second is true. A greyed row with the
 	 *  reason in its tooltip says which.
 	 *
-	 *  It is not a substitute for authorization: a leaf someone may not SEE is still absent (the
-	 *  admin Settings precedent). This is for capability, not permission. */
+	 *  It covers PERMISSION as well as capability (#143). It did not: the rule was "a leaf someone may
+	 *  not SEE is still absent", which left every authorization gate hiding its rows. That reads to the
+	 *  denied user as a product without the feature, so they never ask for the grant — the same defect
+	 *  as the corpus case, with a worse remedy available, because a permission denial can name the
+	 *  exact relation to request. Carry the FGA denial's own wording and the tooltip becomes an
+	 *  actionable request rather than a dead end.
+	 *
+	 *  It is still not the DOOR. The route's own gate stays fail-closed and unchanged; this only
+	 *  decides whether the rail admits the route exists. A disabled row cannot navigate. */
 	unavailable?: string;
 };
 
@@ -207,6 +214,14 @@ export type TopNavEntry = {
 	 *  The MAIN MENU sets no tier and the shell renders none there: two or three peers are a group,
 	 *  not a hierarchy, and a spacer between them reads as one entry having fallen off the row. */
 	tier?: 'primary' | 'secondary';
+	/** WHY this entry cannot be opened by the current identity — a short phrase, or absent when it can.
+	 *
+	 *  The `ZoneNavLeaf.unavailable` contract, one level up (#143). An entry carrying it renders as a
+	 *  disabled, non-navigating row with the reason in its tooltip, rather than being dropped from the
+	 *  bar. Same argument as the sidebar's: a bar that silently loses Settings tells a non-admin the
+	 *  estate has no settings, when the true statement is that THEY cannot open them — and only the
+	 *  second tells them what to ask for. */
+	unavailable?: string;
 };
 
 // NO `Projects` row here, BY RULING (2026-08-03): there is ONE project concept and it is the TOP of
@@ -443,18 +458,19 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
  * main menu. The zone bar returns the moment you are inside a zone, which is where "move me to
  * another zone" is a real question.
  *
- * Settings is estate-admin only here for the same fail-closed reason it is everywhere else, which
- * means a non-admin's main menu carries exactly TWO entries — Home and Projects (it said ONE while
- * Home was still absent from this bar). That is correct, not a degenerate case: the estate has that
- * much for them to choose between at this level, and the shell centres two entries as readily as it
- * centres three.
+ * Settings is estate-admin only, and since #143 that shows as a DISABLED entry rather than an absent
+ * one — so the main menu carries three entries for everyone, the third inert for a non-admin. It used
+ * to be filtered out, leaving two, which this comment defended as "correct, not a degenerate case".
+ * The ruling overturns that: a bar which silently loses Settings does not tell a non-admin they lack
+ * a privilege, it tells them the estate has no settings — and the estate manifestly does. Disabled
+ * with the reason in the tooltip is the only version of this bar that is TRUE for both identities.
  *
  * NO TIERS here, unlike the zone bar. Weighting is for a row of eight zones, where "start at the
  * lakehouse" is real guidance; these two or three are the places you can BE at this level, peers by
  * construction, and the shell renders them as one uniform group (it also refuses to draw the tier
  * gap in this bar, so a re-tiered entry cannot punch a hole in it).
  */
-export function mainMenuNav(estateAdmin: boolean): TopNavEntry[] {
+export function mainMenuNav(estateAdmin: boolean, deniedReason?: string): TopNavEntry[] {
 	// HOME leads the main menu — and appears ONLY here. The zone bar carries no Home entry (see
 	// `topNav`): inside a project the way back up is the project switcher and the sidebar header, and
 	// a third control to the same place is noise in a bar whose job is moving BETWEEN zones. At the
@@ -470,7 +486,24 @@ export function mainMenuNav(estateAdmin: boolean): TopNavEntry[] {
 			match: exact('/'),
 		},
 		PROJECTS_ENTRY,
-		...(estateAdmin ? [SETTINGS_ENTRY] : []),
+		// The default is the FGA denial's own wording, so the bar, the route's 403 and the API all name
+		// the same relation on the same object — a reason that paraphrases sends people hunting for a
+		// setting. `deniedReason` exists because `estateAdmin: false` folds together two callers whose
+		// NEXT STEP differs: a signed-in non-admin must ask for the grant, an anonymous visitor must
+		// sign in first. Both are refused, only one can act on a relation name, and a reason that
+		// cannot be acted on is the dead end this ruling exists to remove.
+		estateAdmin
+			? SETTINGS_ENTRY
+			: {
+					// `items` is DROPPED, not merely left unrendered. Showing the entry must not hand out
+					// its children: `/settings/access` reads the platform's whole tuple store. Relying on
+					// the navbar's branch order to suppress the panel is one edit away from a leak — that
+					// exact regression happened while writing this — so a denied entry carries no rows to
+					// leak, and `rowsOf(mainMenuNav(false))` can keep proving it at the DATA level.
+					...SETTINGS_ENTRY,
+					items: undefined,
+					unavailable: deniedReason ?? 'estate-admin only (needs can_observe_events on the FGA root)',
+				},
 	];
 }
 
