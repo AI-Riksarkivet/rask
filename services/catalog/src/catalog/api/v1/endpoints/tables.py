@@ -202,6 +202,9 @@ async def declare_table(
     and emit a versionless DECLARE_TABLE marker (the table's first provenance — who reserved it + where)."""
     segments = parse_identifier(id, settings.delimiter)
     await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
+    # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
+    # its grants, so creating here would hand the new table the dead one's readers and writers.
+    await fga_deps.require_no_live_trash(settings, segments)
     req = body or DeclareTableRequest()
     req.id = reconcile_body_id(segments, req.id)
     response: DeclareTableResponse = await run_in_threadpool(native.call, ns, "declare_table", req)
@@ -465,6 +468,9 @@ async def register_table(
     ownership and emit a REGISTER_TABLE marker (who attached it + where)."""
     segments = parse_identifier(id, settings.delimiter)
     await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
+    # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
+    # its grants, so creating here would hand the new table the dead one's readers and writers.
+    await fga_deps.require_no_live_trash(settings, segments)
     body.id = reconcile_body_id(segments, body.id)
     response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
 
@@ -669,6 +675,9 @@ async def rename_table(
     # parentless id. Same rule, same door — checked before the native call, so a refused rename leaves
     # the source exactly where it was.
     await fga_deps.require_parent_exists(ns, "table", new_segments, delimiter=settings.delimiter)
+    # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
+    # its grants, so creating here would hand the new table the dead one's readers and writers.
+    await fga_deps.require_no_live_trash(settings, new_segments)
     # Renaming INTO a namespace is a create in that namespace: authorize can_create_table on the DESTINATION
     # parent BEFORE the (destructive, relocating) rename — else a source-table owner could plant their table
     # into a namespace/tenant they have no create rights on. (authorize already gated can_drop on the source.)

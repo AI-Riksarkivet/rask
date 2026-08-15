@@ -448,3 +448,68 @@ def test_the_rename_DESTINATION_must_have_a_real_namespace_too(moto_client: Test
     assert moved.status_code == 404, moved.text
     assert "ghostdest" in moved.text
     assert moto_client.post("/v1/table/rn$t/describe", json={}).status_code == 200, "the source was lost"
+
+
+# --------------------------------------------------------------------------- #
+# diff2 F10 item 4 — the trash-window privilege bleed
+#
+# A recoverable drop deliberately KEEPS the table's FGA tuples: `drop_table` revokes only
+# `if not trashed`, because the owner is the one person who needs them to undrop, and revoking made
+# undrop unreachable for exactly that caller. Correct for undrop — a hole for create. Nothing read
+# the trash on the way in, so a create at the same id during the grace window produced a brand-new
+# table silently wearing the DEAD table's grants: every reader, writer and validator it ever had, on
+# data they were never granted.
+#
+# Refusing is the honest answer rather than revoking-then-creating. The id is not free yet: the bytes
+# are still on storage and the owner still holds a live claim to recover them, so a create that
+# quietly took the name would trade a privilege bleed for silent data loss.
+# --------------------------------------------------------------------------- #
+
+
+def test_create_is_refused_while_the_id_is_still_recoverable(moto_client_recoverable: TestClient) -> None:
+    """The window: dropped-but-recoverable, so the old grants are still live."""
+    rows = pa.table({"id": pa.array([1], pa.int64())})
+    assert moto_client_recoverable.post("/v1/namespace/bleed/create", json={}).status_code == 200
+    assert _create(moto_client_recoverable, "bleed$t", rows).status_code == 200
+    assert moto_client_recoverable.post("/v1/table/bleed$t/drop", json={}).status_code == 200
+
+    refused = _create(moto_client_recoverable, "bleed$t", rows)
+    assert refused.status_code == 409, refused.text
+    body = refused.json()
+    # The refusal has to be ACTIONABLE: "already exists" about a table the caller cannot see is a
+    # dead end. It names the deadline and both ways out.
+    assert "recoverable" in body["detail"]
+    assert "undrop" in body["detail"]
+    assert "purge" in body["detail"]
+
+    # …and the recoverable table is untouched by the refused create — the whole point of refusing
+    # rather than revoking-and-overwriting.
+    undropped = moto_client_recoverable.post("/v1/table/bleed$t/undrop", json={})
+    assert undropped.status_code == 200, undropped.text
+    assert int(moto_client_recoverable.post("/v1/table/bleed$t/count_rows", json={}).text) == 1
+
+
+def test_declare_and_register_are_refused_on_a_trashed_id_too(moto_client_recoverable: TestClient) -> None:
+    """All the create doors, not just the Arrow one. A guard on one door is a guard on no door —
+    `declare` reserves the same id and `register` attaches bytes to it, and either would inherit the
+    dead table's grants exactly as the Arrow create would."""
+    rows = pa.table({"id": pa.array([1], pa.int64())})
+    assert moto_client_recoverable.post("/v1/namespace/bleed2/create", json={}).status_code == 200
+    assert _create(moto_client_recoverable, "bleed2$t", rows).status_code == 200
+    described = moto_client_recoverable.post("/v1/table/bleed2$t/describe", json={})
+    relative = str(described.json()["location"]).rstrip("/").rsplit("/", 1)[-1]
+    assert moto_client_recoverable.post("/v1/table/bleed2$t/drop", json={}).status_code == 200
+
+    assert moto_client_recoverable.post("/v1/table/bleed2$t/declare", json={}).status_code == 409
+    assert moto_client_recoverable.post("/v1/table/bleed2$t/register", json={"location": relative}).status_code == 409
+
+
+def test_a_destructive_drop_frees_the_id_immediately(moto_client: TestClient) -> None:
+    """The guard must not outstay its reason. A DESTRUCTIVE drop (the code default, grace=0) revokes
+    the tuples with the table, so there is no bleed to prevent and no recovery to protect — the id is
+    genuinely free and a create must succeed. Without this, the fix would read as 'creates sometimes
+    409 forever' to anyone who did not know the grace period was involved."""
+    rows = pa.table({"id": pa.array([1], pa.int64())})
+    assert _create(moto_client, "nobleed$t", rows).status_code == 200
+    assert moto_client.post("/v1/table/nobleed$t/drop", json={}).status_code == 200
+    assert _create(moto_client, "nobleed$t", rows).status_code == 200

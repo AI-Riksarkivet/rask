@@ -149,6 +149,9 @@ async def create_table(
     # lives here, so the Arrow create wrote real datasets into namespaces that do not exist, with a
     # live owner grant and no parent edge. Checked BEFORE the write: a refusal leaves nothing.
     await fga_deps.require_parent_exists(ns, "table", parse_identifier(id, settings.delimiter), delimiter=settings.delimiter)
+    # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
+    # its grants, so creating here would hand the new table the dead one's readers and writers.
+    await fga_deps.require_no_live_trash(settings, parse_identifier(id, settings.delimiter))
 
     # #3-B governance (the security crux): validate BEFORE any write. An off-allowlist base is a client
     # error (400), never a silent write to an unapproved bucket.

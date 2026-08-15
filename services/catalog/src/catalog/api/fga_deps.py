@@ -32,11 +32,13 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     InvalidInputError,
     LanceNamespace,
+    NamespaceAlreadyExistsError,
     NamespaceExistsRequest,
     NamespaceNotEmptyError,
     NamespaceNotFoundError,
     PermissionDeniedError,
     ServiceUnavailableError,
+    TableAlreadyExistsError,
     TableNotFoundError,
     UnauthenticatedError,
     UnsupportedOperationError,
@@ -51,6 +53,7 @@ from catalog.services import native
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.oidc import IDToken
+from service_kit.lakehouse import trash
 
 
 log = logging.getLogger(__name__)
@@ -685,6 +688,46 @@ async def require_parent_exists(ns: LanceNamespace, resource: str, segments: lis
             "for a top-level namespace) — a table whose namespace is absent is invisible to every "
             "cascade and to every parent-scoped grant."
         ) from exc
+
+
+async def require_no_live_trash(settings: Settings, segments: list[str], *, kind: str = "table") -> None:
+    """Refuse a create at an id whose PREVIOUS occupant is still in the trash (diff2 F10 item 4).
+
+    THE BLEED. A recoverable drop deliberately KEEPS the object's FGA tuples — `drop_table` revokes
+    only `if not trashed`, because the owner is the one person who needs them to undrop, and revoking
+    made undrop unreachable for exactly that caller. Correct for undrop; a hole for create. Nothing
+    else read the trash, so a create at the same id during the grace window produced a brand-new
+    object silently wearing the DEAD table's grants — every reader, writer and validator the old table
+    ever had, on data they have never been granted. That is the stale-grant privilege bleed
+    `revoke_object_tuples` exists to prevent, arriving through the one door that had opted out of it.
+
+    Refusing is the honest answer rather than revoking-then-creating: the id is not free yet. Its bytes
+    are still on storage and its owner still holds a live claim to recover them, so a create that
+    quietly took the name would also make that recovery impossible — trading a privilege bleed for
+    silent data loss. The 409 names the deadline and both ways out, because "already exists" on a
+    table the caller cannot see is otherwise unactionable.
+
+    Checked BEFORE the native write, like `require_parent_exists`, so a refusal leaves nothing
+    half-made. A read failure does NOT fail closed: an unreadable trash store must not make the whole
+    create path unavailable, and the window this closes is narrow and time-boxed. Logged instead.
+    """
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    try:
+        record = await run_in_threadpool(trash.get, settings.registry_root, settings.storage_options(), canonical, kind=kind)
+    except Exception as exc:  # noqa: BLE001 — an unreadable trash store must not 500 every create
+        log.warning("trash_probe_failed", extra={"object": canonical, "kind": kind, "error": str(exc)})
+        return
+    if record is None:
+        return
+    expires = str(record.get("expires_at", "")) or "an unrecorded deadline"
+    detail = (
+        f"cannot create '{canonical}': a dropped {kind} of that name is still recoverable until {expires}, "
+        f"and its grants are still live — creating here would hand the new {kind} the old one's readers and "
+        f"writers. Undrop it (POST /v1/{kind}/{canonical}/undrop) to restore it, or purge it to free the name."
+    )
+    # The type-specific AlreadyExists error, not a generic conflict: both map to 409 (spec code 2), and
+    # a caller's error handling switches on the CODE, so a table create must fail as a table conflict.
+    raise (NamespaceAlreadyExistsError(detail) if kind == "namespace" else TableAlreadyExistsError(detail))
 
 
 def require_warehouse_scoped(segments: list[str], *, delimiter: str, warehouses_enabled: bool) -> None:
