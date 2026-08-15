@@ -121,8 +121,10 @@ RUN chown app:app /app/deploy_serve.py
 # missing data rather than a missing file. Pinned by
 # `test_the_ray_image_BAKES_every_job_script_the_medallion_entrypoints_name`, which reads the
 # entrypoint defaults out of the config so the two halves cannot drift apart again.
-COPY scripts/ray_stage_job.py scripts/ray_train_job.py /home/ray/jobs/
-RUN chown -R app:app /home/ray/jobs
+#
+# `--chown` rather than a following `RUN chown`: one layer instead of two, and the ownership is part
+# of the copy rather than a correction to it.
+COPY --chown=app:app scripts/ray_stage_job.py scripts/ray_train_job.py /home/ray/jobs/
 
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \

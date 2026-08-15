@@ -39,9 +39,15 @@ JetStream work queue, and the lander commits ONE Lance version through the **cat
 (`bronze$pages`). It is the CATALOG's own COMPLETE event, not an ingest-side emit, that
 announces the write and that `/bronze-arrival` filters on. The medallion producer keeps the events lane
 (`POST /produce` → `bronze$events`) and the cascade head `/bronze-arrival`; **its
-`POST /ingest-iiif` is deleted** — the gateway's surviving `/api/ingest-iiif` row is a
-deprecation shim, so a call routed there today reaches a route that 404s. HTR stages run
-as event-triggered movers on the unified Ray cluster (P7b).
+`POST /ingest-iiif` is deleted, and so is the gateway row** — verified 2026-08-15 against
+`gateway/__init__.py::_routes()`, which carries no such row; the only `ingest-iiif` text left in
+that file is the comment explaining why the row's absence is safe (`_pick_route` requires
+`path == prefix` or `prefix + "/"`, and the next character is `-`). This reference previously
+described the row as a surviving deprecation shim, which would have made a call there **502
+rather than 404** — naming a backend as broken instead of the path as absent. The producer's
+remaining doors are exactly `POST /produce`, `POST /ingest-media` and `POST /train`, all
+root-mounted and token-guarded. HTR stages run as event-triggered movers on the unified Ray
+cluster (P7b).
 
 **Both bronze lanes converge on one topic, so movers must discriminate.** The events
 lane (the producer's `/produce` → `bronze$events`) and the page lane (the ingest
