@@ -1,4 +1,4 @@
-"""F1 (`open_lakehouse_diff2.md`) — conditional-create on the control-root registries.
+"""Conditional-create on the control-root registries.
 
 The registry's id-minting writes (`_projects/<id>.json`, `_warehouses/<id>.json`, bindings) were
 plain overwrites, so every guard in front of them was check-then-act: two concurrent creates of one

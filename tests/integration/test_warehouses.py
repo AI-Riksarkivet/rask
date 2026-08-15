@@ -297,7 +297,7 @@ def test_create_denied_for_non_admin_403(client: TestClient, tmp_path: Any, monk
 
 
 # --------------------------------------------------------------------------- #
-# F1 (open_lakehouse_diff2.md) — the mint race is closed AT THE STORE
+# The mint race is closed AT THE STORE
 # --------------------------------------------------------------------------- #
 
 

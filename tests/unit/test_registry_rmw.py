@@ -1,6 +1,6 @@
-"""F4 (`open_lakehouse_diff2.md`) — lost-update detection on control-root read-modify-writes.
+"""Lost-update detection on control-root read-modify-writes.
 
-F1 closed the CREATE race with put-if-not-exists. It could not close the MUTATION race, because a
+The conditional-CREATE work closed the create race with put-if-not-exists. It could not close the MUTATION race, because a
 mutation's key exists by definition — that is what makes it a mutation. So every mutable registry
 write stayed `get → mutate a dict → put` with no precondition, and a quarantine could be lifted
 without anyone calling `/activate`:
