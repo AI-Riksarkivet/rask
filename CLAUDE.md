@@ -203,6 +203,17 @@ Deployables are just workspace members with a dockerfile: `.docker/<name>.docker
 
 `rask` is a distributed HTR pipeline for the Swedish National Archives. See `docs/architecture/system-overview.md` for the full diagrams. Key facts that aren't obvious from any single file:
 
+- **LANCE ONLY, ALWAYS — a permanent ruling (owner, 2026-08-15), not a current-scope note.** The catalog
+  stores Lance tables and **no other format, ever**. A create naming a non-Lance format is refused 400
+  at the door (`data.py::_reject_unsupported_format`; pinned by `tests/unit/test_format_guard.py`) —
+  that 400 is the final answer, not a gap awaiting Parquet/Iceberg/Delta support. This is load-bearing,
+  not a preference: the catalog is deliberately format-AWARE (imports pylance, serves the data plane
+  in-process, coordinates commits), and all three are only sound because the format is closed. It is
+  also why the estate needs no relational DB — Iceberg puts the commit pointer IN the catalog so every
+  commit is a DB transaction, while Lance puts the CAS in the object store. A second format would
+  reintroduce exactly the requirement this architecture is built to avoid. Anyone needing Iceberg
+  interop should use Polaris or Lakekeeper; it is a road not taken, not a backlog item.
+
 - **Runner is the engine.** `runners/htr` submits one Ray Data pipeline per CLI invocation and blocks on `.materialize()`. It does not run a long-lived service.
 - **Ray Serve persists across job submissions.** TrOCR weights stay warm in `/transcribe` (**2 replicas × 0.49 GPU** — `RASK_SERVE_REPLICAS`/`RASK_SERVE_GPU_FRAC`, so `/transcribe` and `/htrflow` co-reside on a 2-GPU pool at 1.96 ≤ 2.0). The pipeline's `TranscribeViaServe` actor is CPU-only and calls Serve synchronously over a handle. `make serve-up` deploys this independently of any job.
 - **Two pipeline shapes:**

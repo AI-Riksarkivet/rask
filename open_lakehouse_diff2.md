@@ -741,6 +741,28 @@ Acceptance: audit stream shows one row per issuance on both paths.
 
 ### F9 (P2) — No generic/opaque asset rung; the model registry squats on the `table` type
 
+**OWNER RULING 2026-08-15, and it CONSTRAINS this finding rather than answering it: rask will only
+and always only support LANCE tables — no other format, ever.** Permanent, not current-scope.
+
+That settles the comparator framing below. This section reaches for Lakekeeper's Generic Table as
+precedent, and Generic Table is a **format-agnostic table** (name + format tag + location). Under the
+ruling rask cannot have one: a `format` tag with any value but `lance` is refused at the door
+(`data.py::_reject_unsupported_format`, pinned by `tests/unit/test_format_guard.py`), so the
+comparator's central field would be a constant.
+
+So if an asset rung lands, it is a **governed BLOB**, not a second table lane:
+
+- it governs NON-TABULAR bytes — model artefacts, EAD, IIIF sidecars — which is the actual gap (the
+  model registry squatting on `table` and `list_artifacts` being the one plain-path surface);
+- it carries NO format tag, NO schema interpretation, and NO data ops. Those are exactly what the
+  table rung has and what the ruling reserves to Lance;
+- it must not become a route for tabular data in another format. That is the failure mode the ruling
+  exists to prevent, and it is the thing to check any asset-rung design against.
+
+The rest of the finding — the type-squat, the "last row of the registry dataset" convention standing
+in for a key, and the visible/promotable boundary drawn by implementation accident — is unaffected and
+still open.
+
 **Evidence `[verify — one detail corrected]`.** The Lance-only gate: `data.py:96-108` — right
 call for the DATA plane. The model registry authorizes model objects as `table:models$<model>`
 (`endpoints/models.py:5-13, 51-62`; `fga_deps.py:907` for can_promote); `list_artifacts` is the
