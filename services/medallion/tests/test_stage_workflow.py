@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
-from medallion.workflow import MAX_POLLS, StageJobSpec, _is_terminal, publish_stage_ready, report_stage_outcome, stage_run, submit_stage
+from medallion.workflow import MAX_POLLS, StageJobOutcome, StageJobSpec, _is_terminal, publish_stage_ready, report_stage_outcome, stage_run, submit_stage
 
 
 class _Action:
@@ -311,3 +311,178 @@ def test_a_publish_that_EXHAUSTS_its_retries_still_reports() -> None:
         "the wake-up publish exhausted its retries and NOTHING reported it — the job succeeded, the data landed, and the cascade simply stopped"
     )
     assert outcome["verdict"] == "unnotified", "the outcome must name WHY the run did not continue"
+
+
+# --------------------------------------------------------------------------- #
+# The ACTIVITY BODIES — the gap that let three silent defects through
+# --------------------------------------------------------------------------- #
+#
+# Every S1 defect the audit found lived in a path no test drove: the FAILED-job report, the second
+# clock, the exhausted publish. All three passed 4,300 tests because the ORDER tests assert what the
+# workflow schedules, never what the activities DO. These pin the properties a defect would break.
+
+
+def test_submit_returns_THE_SAME_id_it_submitted_under(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The poll watches whatever this returns. If it derives a DIFFERENT id from the one
+    `submit_stage_job` used, the poll reads `None` forever, the watch abandons at the ceiling, and a
+    perfectly healthy job is reported as never finishing — with no error anywhere."""
+    from medallion.services import ray_submit
+    from medallion.workflow import submit_stage
+
+    submitted: dict[str, str] = {}
+
+    async def _fake_submit(_settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str | None, lineage_json: str = "") -> None:
+        submitted["id"] = ray_submit.stage_submission_id(stage, token, from_uri, to_uri)
+
+    monkeypatch.setattr("medallion.services.ray_submit.submit_stage_job", _fake_submit)
+
+    returned = submit_stage(cast("Any", None), _spec())
+
+    assert returned == submitted["id"], "the poll would watch an id the submitter never used"
+
+
+def test_poll_answers_NONE_for_an_id_the_dashboard_has_not_registered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The submit/register race, and why it must not be fatal.
+
+    The workflow polls seconds after submitting; the dashboard may not know the id yet. Raising there
+    would abort a healthy job on a timing artefact, so `job_status` answers None and the loop simply
+    asks again.
+    """
+    from medallion.workflow import poll_stage
+
+    async def _unknown(_client: Any, _sub: str) -> str | None:
+        return None
+
+    monkeypatch.setattr("ray_kit.submit.job_status", _unknown)
+
+    assert poll_stage(cast("Any", None), {"submission_id": "not-registered-yet"}) is None
+
+
+def test_poll_RAISES_on_transport_failure_rather_than_reporting_no_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unreachable dashboard is not evidence ABOUT THE JOB.
+
+    Swallowing it into `None` would make an outage indistinguishable from "not registered yet" — the
+    watch would poll to its ceiling and report `abandoned` for a job that may well have succeeded.
+    The activity's retry policy is the right owner of a transport blip.
+    """
+    from medallion.workflow import poll_stage
+
+    from ray_kit.submit import RayJobError
+
+    async def _down(_client: Any, _sub: str) -> str | None:
+        raise RayJobError("dashboard unreachable")
+
+    monkeypatch.setattr("ray_kit.submit.job_status", _down)
+
+    with pytest.raises(RayJobError):
+        poll_stage(cast("Any", None), {"submission_id": "sub"})
+
+
+def test_the_wakeup_carries_the_FLAG_and_goes_to_the_movers_OWN_topic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three properties in one publish, each of which silently breaks the cascade if wrong.
+
+    `ray_job_done` absent -> the mover dispatches a SECOND watcher instead of measuring, forever.
+    The wrong topic -> nothing consumes it and the run stops with data on disk.
+    A bare `.publish_event` -> unbounded, so a wedged sidecar hangs the activity and the workflow
+    never advances (the estate has an invariant test for that one).
+    """
+    from medallion.core.config import get_settings
+    from medallion.workflow import publish_stage_ready
+
+    sent: dict[str, Any] = {}
+
+    async def _capture(_client: Any, *, timeout_seconds: float, **kwargs: Any) -> None:
+        sent.update(kwargs)
+        sent["timeout_seconds"] = timeout_seconds
+
+    monkeypatch.setattr("service_kit.dapr_publish.publish_event", _capture)
+
+    class _NoopClient:
+        async def __aenter__(self) -> _NoopClient:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+    monkeypatch.setattr("dapr.aio.clients.DaprClient", lambda *a, **k: _NoopClient())
+
+    publish_stage_ready(
+        cast("Any", None),
+        {"spec": _spec(), "outcome": {"submission_id": "ray-silver-tok-1-abc", "status": "SUCCEEDED", "polls": 1, "verdict": "succeeded"}},
+    )
+
+    settings = get_settings()
+    body = json.loads(sent["data"])
+    assert body["ray_job_done"] is True, "without the flag the mover dispatches another watcher instead of measuring"
+    assert body["ray_submission_id"] == "ray-silver-tok-1-abc"
+    assert sent["topic_name"] == settings.sub_topic, "the wake-up must reach the mover's OWN subscription"
+    assert sent["timeout_seconds"] > 0, "an unbounded publish hangs the activity on a wedged sidecar"
+
+
+def test_register_ACTUALLY_registers_every_definition() -> None:
+    """The failure this prevents is a deploy-time one with an unhelpful message.
+
+    `test_every_activity_is_registered` checks the CONTENTS of WORKFLOWS/ACTIVITIES; nothing checked
+    that `register()` hands them to the runtime. A definition present in the tuple but never passed to
+    `register_activity` fails at runtime with "no such activity" — after the workflow has already
+    started, on a pod whose probes are green. That is precisely the asymmetry ingest's lifespan
+    docstring describes ("a definition registered in the API process but not the worker").
+    """
+    from medallion.workflow import ACTIVITIES, WORKFLOWS, register
+
+    class _Runtime:
+        def __init__(self) -> None:
+            self.workflows: list[Any] = []
+            self.activities: list[Any] = []
+
+        def register_workflow(self, fn: Any) -> None:
+            self.workflows.append(fn)
+
+        def register_activity(self, fn: Any) -> None:
+            self.activities.append(fn)
+
+    runtime = _Runtime()
+    register(cast("Any", runtime))
+
+    assert set(runtime.workflows) == set(WORKFLOWS), "a workflow in the tuple never reached the runtime"
+    assert set(runtime.activities) == set(ACTIVITIES), "an activity in the tuple never reached the runtime"
+    # Every activity the workflow SCHEDULES must be registered — the tuple is hand-kept, so this is
+    # where a new `ctx.call_activity(...)` with a forgotten registration shows up.
+    assert {submit_stage, publish_stage_ready, report_stage_outcome} <= set(runtime.activities)
+
+
+def test_the_FAIL_emit_goes_through_the_OUTBOX_not_a_bare_publish(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The durability half of the FAIL fix, which the earlier tests stub past.
+
+    A bare publish loses the FAIL on a crash between the decision and the send — and the FAIL is the
+    ONLY record that a succeeded-then-unreported run exists. The handler's own failure path stages
+    through the outbox for exactly that reason; this asserts the workflow's does too, and that it
+    carries the deterministic run_id so a redelivery MERGEs rather than forking a second failure.
+    """
+    from medallion.workflow import _build_stage_fail_event, _publish_fail_event
+
+    staged: dict[str, Any] = {}
+
+    async def _capture(_client: Any, **kwargs: Any) -> None:
+        staged.update(kwargs)
+
+    monkeypatch.setattr("service_kit.lakehouse.outbox.publish_lineage_with_outbox", _capture)
+
+    class _NoopClient:
+        async def __aenter__(self) -> _NoopClient:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+    monkeypatch.setattr("dapr.aio.clients.DaprClient", lambda *a, **k: _NoopClient())
+
+    spec = StageJobSpec.model_validate(_spec())
+    outcome = StageJobOutcome(submission_id="sub", status="FAILED", polls=2, verdict="failed")
+    event = _build_stage_fail_event(spec, outcome, "the Ray stage job sub ended FAILED after 2 poll(s)")
+
+    _publish_fail_event(event, spec)
+
+    assert staged, "the FAIL never reached the outbox"
+    assert staged["run_id"] == event["run"]["runId"], "a redelivery would fork a second failure run"
+    assert json.loads(staged["event_json"])["eventType"] == "FAIL"
