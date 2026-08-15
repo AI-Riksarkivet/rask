@@ -103,6 +103,11 @@ spec:
                    clean never reclaims, which is the designed direction, not a bug to route around. */}}
             - { name: MAINTENANCE_TRASH_PURGE_ENABLED, value: {{ hasKey .Values.maintenance "trashPurge" | ternary .Values.maintenance.trashPurge false | quote }} }
             - { name: MAINTENANCE_TRASH_PURGE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "trashPurgeMaxPerTick") | ternary .Values.maintenance.trashPurgeMaxPerTick 25 | quote }} }
+            {{- /* #128a: the orphan scan's lever. Rendered unconditionally rather than behind an `if`,
+                   because the whole defect was that the setting existed in config.py and had NO path
+                   from values — an env var that appears only when enabled is one nobody can discover
+                   from `kubectl describe`, and this one gates whether the purge can certify at all. */}}
+            - { name: MAINTENANCE_ORPHAN_SCAN_ENABLED, value: {{ hasKey .Values.maintenance "orphanScan" | ternary .Values.maintenance.orphanScan false | quote }} }
             {{- if .Values.maintenance.controlEmit }}
             {{- /* The purge announces each reclamation on the catalog's control topic. The broadcast
                    component must scope this app-id (dapr-component.yaml) or the sidecar refuses the

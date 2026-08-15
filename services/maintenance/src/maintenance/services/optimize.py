@@ -15,6 +15,7 @@ import pyarrow.fs as pafs
 from pydantic import BaseModel
 
 from maintenance.core.config import shared_lance_session
+from maintenance.services.base_refs import BaseRefs
 from service_kit.lakehouse.features import describe_unsupported_flags, manifest_feature_flags, unsupported_features_from_open_error
 
 
@@ -113,6 +114,7 @@ def compact_one(
     scan_batch_size: int | None = None,
     compact_threads: int | None = None,
     auto_cleanup_interval_commits: int | None = None,
+    protected: BaseRefs | None = None,
 ) -> DatasetResult:
     """One ORDERED maintenance pass over one dataset. Never raises — a per-dataset failure is captured
     in ``error`` so one bad dataset can't abort the whole pass.
@@ -161,6 +163,20 @@ def compact_one(
     if (refusal := describe_unsupported_flags(reader_flags, writer_flags)) is not None:
         log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": refusal})
         return DatasetResult(uri=uri, refused=refusal)
+    # #114 — the OTHER direction, and the flag check above cannot see it. Flag 16 marks the dataset
+    # that SPANS bases (the clone); the dataset in danger here is the SOURCE, which carries no flag
+    # and no base_paths of its own and looks completely ordinary. Only the cross-estate pre-pass
+    # (`base_refs.protected_roots`) knows another manifest resolves through these bytes.
+    #
+    # MEASURED, and the mechanism is not what the issue title says: `compact_files` ADDS the merged
+    # file and deletes nothing (4 -> 5 files, clone still opens); `cleanup_old_versions` then removes
+    # the obsoleted originals (-> 1 file) and the clone fails to open IN A FRESH PROCESS. Since this
+    # function runs compact -> optimize_indices -> cleanup as one pass, the refusal belongs here, in
+    # front of all three, rather than in front of compaction alone.
+    if protected is not None and (root := protected.is_protected(uri)) is not None:
+        why = f"another dataset resolves its files through {root} (shallow clone / multi-base) — compacting or reclaiming here would break it"
+        log.warning("maintenance_refused_protected_base", extra={"uri": uri, "reason": why})
+        return DatasetResult(uri=uri, refused=why)
     result = DatasetResult(uri=uri)
     try:
         # defer_index_remap: with the Fragment Reuse Index the row-id remap is deferred, so compaction and

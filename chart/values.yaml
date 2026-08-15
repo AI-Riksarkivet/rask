@@ -958,6 +958,20 @@ maintenance:
   # Per-tick ceiling on purged records. The remainder is reported (`trash_purge.capped`) and drained on
   # the next tick, so a backlog never becomes one unbounded delete storm against object storage.
   trashPurgeMaxPerTick: 25
+  # The reconciler's per-dataset FILE scan — the unreferenced-file category (#128a).
+  #
+  # THIS IS THE LEVER TRASHPURGE ABOVE DEPENDS ON, and until 2026-08-15 it did not exist at any values
+  # level: `MAINTENANCE_ORPHAN_SCAN_ENABLED` defaults False in config.py and the chart rendered no env
+  # var for it, so the scan could not be turned on in a deployed estate by any means. The reconciler
+  # therefore recorded `orphan_files` as SKIPPED on every tick, forever — and `report_is_clean` used to
+  # treat a skip as harmless, so the purge reclaimed bytes against a file layer nobody had inspected.
+  # The gate now BLOCKS on that skip, which is only reachable-not-fatal because this key exists.
+  #
+  # Off by default deliberately, and the cost is why: the scan opens EVERY dataset and unions the file
+  # references of EVERY live version across the data buckets — a different order of work from the rest
+  # of the report, which merely compares three stores. Turn it on to let the purge certify; leaving it
+  # off is a valid choice that now costs you the purge rather than silently granting it.
+  orphanScan: false
   # Announce each reclamation on the catalog's control topic (catalog.control.v1). Requires
   # dapr.sidecars — and the component's `scopes` must list this app-id, which the chart does below;
   # without it the sidecar rejects every publish SILENTLY (emission is best-effort by design).

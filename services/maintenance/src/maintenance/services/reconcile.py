@@ -160,10 +160,24 @@ class CategoryUnavailable(BaseModel):
 
 
 class CategorySkipped(BaseModel):
-    """A category deliberately not checked because its rule does not apply to this estate."""
+    """A category deliberately not checked — either because its rule does not apply, or because
+    nobody looked. Those are different facts and `report_is_clean` must be able to tell them apart.
+
+    ``coverage_gap`` carries the distinction as DATA rather than leaving the gate to infer it from
+    the category name. Two skips shipped here and they are opposites:
+
+      * ``unbound_namespaces`` when warehouses are off — the rule genuinely does not apply. There are
+        no bindings, so nothing was missed and nothing can be found. NOT a gap.
+      * ``orphan_files`` when the scan is off — the rule applies and we chose not to run it. The file
+        layer was never inspected. A GAP, and the #128a defect was that the gate could not see it.
+
+    Defaults False so a does-not-apply skip added later cannot silently block every purge in the
+    estate; a genuine gap has to SAY so, which is the whole job of the flag.
+    """
 
     category: str
     reason: str
+    coverage_gap: bool = False
 
 
 class IncompleteScan(BaseModel):
@@ -648,7 +662,10 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
     one number this report must never print.
     """
     if not settings.orphan_scan_enabled:
-        report.skipped.append(CategorySkipped(category="orphan_files", reason=_ORPHAN_SCAN_OFF))
+        # coverage_gap: the rule APPLIES and we did not run it, so the file layer is unexamined. That
+        # blocks `report_is_clean`, and therefore the #79 purge — reclaiming bytes on the strength of
+        # a scan that never opened a dataset is the failure the report-first rule exists to prevent.
+        report.skipped.append(CategorySkipped(category="orphan_files", reason=_ORPHAN_SCAN_OFF, coverage_gap=True))
         return
     fs, _ = fs_and_base(f"s3://{settings.s3_bucket}", settings.storage_options())
     datasets: list[tuple[str, str]] = []

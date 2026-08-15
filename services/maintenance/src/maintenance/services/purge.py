@@ -68,6 +68,7 @@ from pydantic import BaseModel, Field
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from maintenance.core.metrics import record_trash_purge
+from maintenance.services.base_refs import BaseRefs
 from maintenance.services.reconcile import MANIFEST_DIR, ReconcileReport
 from service_kit.control_events import ControlAction, ControlObjectType
 from service_kit.governed import fga
@@ -172,17 +173,34 @@ def due_records(control_root: str, storage_options: StorageOptions) -> list[dict
 def report_is_clean(report: ReconcileReport) -> str | None:
     """The gate: ``None`` when this tick's drift report certifies the estate, else the blocking reason.
 
-    CLEAN := no findings, no category unavailable, no scan incomplete.
+    CLEAN := no findings, no category unavailable, no scan incomplete, and no skipped category that
+    represents a COVERAGE GAP.
 
-    A deliberately SKIPPED category does not block, and that is a decision rather than a loophole: the
-    shipped configuration skips ``orphan_files`` (it opens every dataset — a different order of work)
-    and skips ``unbound_namespaces`` when warehouses are off, so treating a skip as drift would make the
-    purge unreachable in every real deployment. The skips are copied onto the purge report instead, so
-    the operator sees exactly which parts of the estate were never looked at.
+    A skip blocks or not depending on WHICH KIND it is (#128a), and this used to be a blanket pass.
+    The old docstring defended that with: "the shipped configuration skips ``orphan_files`` … so
+    treating a skip as drift would make the purge unreachable in every real deployment." That was
+    true, and the reasoning was CIRCULAR — it held only because `orphan_scan_enabled` defaulted False
+    and the chart shipped no lever to turn it on, so the scan could never run anywhere. The purge
+    therefore reclaimed bytes against a file layer nobody had ever inspected, and the report printed
+    the same thing for "we looked and it was clean" as for "we didn't look".
 
-    An UNAVAILABLE or INCOMPLETE category does block, for the opposite reason: those are questions the
+    So the two kinds are now distinguished by `CategorySkipped.coverage_gap`:
+
+      * NOT a gap — ``unbound_namespaces`` with warehouses off. The rule does not apply; there are no
+        bindings, nothing was missed. Blocking would make the purge unreachable on every single-bucket
+        deployment over a question with no answer to give.
+      * A GAP — ``orphan_files`` with the scan off. The rule applies and we chose not to run it.
+
+    The lever landed with this change (chart ``maintenance.orphanScan``), which is what makes blocking
+    reachable rather than fatal: an operator who wants the purge turns the scan on.
+
+    An UNAVAILABLE or INCOMPLETE category blocks for the neighbouring reason: those are questions the
     report tried to answer and could not, and reclaiming on the strength of a scan that half-failed is
     the failure mode the whole report-first rule exists to prevent.
+
+    Order matters. Real findings are reported FIRST because they are immediately actionable, whereas a
+    gap is a configuration change — a caller staring at "turn the scan on" while three orphans sit
+    unmentioned is being told the less useful of two true things.
     """
     if report.total:
         drifting = sorted(name for name, count in report.counts.items() if count)
@@ -191,6 +209,10 @@ def report_is_clean(report: ReconcileReport) -> str | None:
         return f"the drift report could not check {sorted(u.category for u in report.unavailable)} — a category nobody looked at is not a clean one"
     if report.incomplete:
         return f"the drift report is INCOMPLETE ({sorted({i.source for i in report.incomplete})}) — a partial scan cannot certify the estate"
+    # EVERY gap, not just the first: an operator who enables one scan and re-runs must not discover a
+    # second gap, then a third, each round trip costing a pass that opens every dataset in the estate.
+    if gaps := sorted(s.category for s in report.skipped if s.coverage_gap):
+        return f"the drift report SKIPPED {gaps} — that part of the estate was never examined, so this report cannot certify it"
     return None
 
 
@@ -310,7 +332,15 @@ def check(record: dict[str, Any], *, roots: set[str], live_ids: set[str] | None)
 # --------------------------------------------------------------------------- #
 
 
-def delete_location(location: str, storage_options: StorageOptions) -> tuple[int, int]:
+class ProtectedBaseError(RuntimeError):
+    """Refusal: another dataset's manifest resolves its files through this location (#128d).
+
+    Its own type rather than a bare RuntimeError because the caller must be able to report this as a
+    REFUSAL — a deliberate, correct non-deletion — and not as an error that failed the purge.
+    """
+
+
+def delete_location(location: str, storage_options: StorageOptions, *, protected: BaseRefs | None = None) -> tuple[int, int]:
     """Delete the recorded dataset directory; return ``(bytes_deleted, files_deleted)``.
 
     The recursive listing that sums the bytes doubles as the existence probe — one round trip answers
@@ -318,7 +348,22 @@ def delete_location(location: str, storage_options: StorageOptions) -> tuple[int
     idempotent success (a crash between the delete and the record clear re-runs the whole record); ANY
     other ``OSError`` propagates, because ``pyarrow`` raises ``ArrowIOError`` (an ``OSError``) for a
     RustFS/S3 5xx and swallowing that would report a purge over bytes that are still there.
+
+    ``protected`` is the #128d guard: the estate's foreign ``base_paths`` collected by
+    :func:`maintenance.services.base_refs.protected_roots`. When this location is one of them — or
+    sits under one — a live shallow clone resolves its data files through these bytes and deleting
+    them breaks it. Refuses with :class:`ProtectedBaseError` rather than deleting.
+
+    Passing ``None`` skips the check, and that is for callers that have already run the pre-pass, not
+    a default to lean on: the SOURCE of a clone carries no feature flag and no ``base_paths`` of its
+    own (measured), so nothing about the dataset in front of you reveals the danger. Only the
+    cross-estate pre-pass can.
     """
+    if protected is not None and (root := protected.is_protected(location)) is not None:
+        raise ProtectedBaseError(
+            f"refusing to delete {location}: another dataset resolves its files through {root} "
+            f"(shallow clone / multi-base) — deleting these bytes would break a live dataset"
+        )
     fs, path = fs_and_base(location, storage_options)
     infos = fs.get_file_info(pafs.FileSelector(path, recursive=True, allow_not_found=True))
     files = [info for info in infos if info.type == pafs.FileType.File]

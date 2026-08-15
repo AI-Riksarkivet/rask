@@ -20,30 +20,32 @@ Closed items are not listed. Git history is the record of those.
 
 ---
 
-## ⛔ BLOCKS EVERY IMAGE BUILD — ahead of the five
+## ✅ #148 — CLOSED 2026-08-15 in `3e816ffa`. Was never open long.
 
-**#148 — `medallion.workflow` imports `dapr.ext.workflow`; `services/medallion/pyproject.toml` never
-declares it.** The workspace venv resolves it through a sibling (`flows`, `ingest`), so every test
-stays green; the image's own closure cannot, so `.docker/rest-catalog.dockerfile`'s import gate fails
-and **no `rest-catalog` image can be built by anyone**. That one image serves catalog, lineage,
-medallion, maintenance, viewer, search and annotator — so #6–#9 above cannot be SHIPPED until it lands,
-even when their code is done.
-
-Dagger prints only `✘ withExec … exit code: 1`; the module name comes from the gate's own recipe:
+**The diagnosis was exactly right and the fix is already in.** `medallion.workflow` imports
+`dapr.ext.workflow`; `services/medallion/pyproject.toml` did not declare it, the workspace venv
+resolved it through a sibling (`flows`, `ingest`) so every test stayed green, and only the image's own
+closure could see it — `.docker/rest-catalog.dockerfile`'s import gate failed with:
 
 ```
-UV_PROJECT_ENVIRONMENT=/tmp/gatevenv uv sync --frozen --no-dev --package catalog --package lineage \
-  --package medallion --package maintenance --package viewer --package search --package annotator
-/tmp/gatevenv/bin/python .docker/import-gate.py catalog lineage medallion maintenance viewer search annotator
+import gate FAILED — 1/238 modules could not be IMPORTED:
+  medallion.workflow: ModuleNotFoundError: No module named 'dapr.ext.workflow'
 ```
 
-Fix: add `"dapr-ext-workflow>=1.18",` to medallion's dependencies (precedents `services/flows/pyproject.toml:19`,
-`services/ingest/pyproject.toml:22`; `services/notifications:23` deliberately does NOT and says why),
-then refresh the root `uv.lock`. Owner: whoever owns the medallion S1 work — it arrived in `0473e240`.
+Fixed the way the note prescribed: `"dapr-ext-workflow>=1.18"` added
+(`services/medallion/pyproject.toml:30`, precedents `flows:19` / `ingest:22`) and the root `uv.lock`
+refreshed (`medallion` entry carries both the dependency and the `>=1.18` specifier).
 
-Symptom if ignored: the build "succeeds" through a pipe (`| tail -1` reports tail's status), the tag is
-never pushed, and `kubectl set image` onto it leaves ErrImagePull. Confirm a tag exists with
-`curl -s http://localhost:5000/v2/rest-catalog/tags/list` before deploying.
+**Verified, not assumed** — `dagger call image --name=rest-catalog` → `EXIT=0`, gate passes 238/238.
+
+Kept rather than deleted, because the note's *reasoning* is the durable part: a dependency satisfied
+by a sibling in the shared workspace venv is invisible to every test and fails only in the image, and
+`| tail -1` reports tail's status so a piped build prints success while pushing no tag. Confirm a tag
+exists with `curl -s http://localhost:5000/v2/rest-catalog/tags/list` before deploying.
+
+> **Note to whoever wrote the blocker.** It was authored against a tree that predated the fix by
+> minutes. That is the same drift these five items are about — which is why the goal now runs
+> verify-first before touching anything.
 
 ---
 

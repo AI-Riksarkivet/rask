@@ -86,6 +86,13 @@ _FLAG_NAMES = {
 _MANIFEST_READER_FLAGS_FIELD = 9
 _MANIFEST_WRITER_FLAGS_FIELD = 10
 
+#: ``base_paths`` — repeated ``BasePath``, and ``BasePath.path`` inside it. MEASURED, not read: the
+#: format doc gives the BasePath message (``id=1, name=2, is_dataset_root=3, path=4``) but never the
+#: manifest field number that carries it. Taken off a real shallow clone's manifest bytes —
+#: ``92 01`` decodes as varint 146 → field 18, wire 2 — with the source path following at field 4.
+_MANIFEST_BASE_PATHS_FIELD = 18
+_BASE_PATH_PATH_FIELD = 4
+
 #: pylance's own refusal names the offending bits: "… Please upgrade Lance to read this dataset.
 #: Flags: 64, /home/runner/work/lance/…". Match on Lance's WORDING, never on "the open failed" —
 #: a missing directory must keep reading as an ordinary ``open:`` error, not as a feature refusal.
@@ -124,6 +131,71 @@ def manifest_feature_flags(ds: ManifestCarrier) -> tuple[int, int]:
             # a garbage reader value would refuse a healthy dataset forever.
             break
     return reader, writer
+
+
+def manifest_base_paths(ds: ManifestCarrier) -> list[str]:
+    """Every ``BasePath.path`` this dataset's manifest declares — the roots its files may live under.
+
+    WHY THIS IS NEEDED AT ALL, and why the feature flag is not enough. Flag 16 tells you that THIS
+    dataset spans bases, and that is what stops a scan subtracting a prefix listing from a clone. It
+    says nothing about the opposite direction, which is the destructive one: the SOURCE of a shallow
+    clone carries NO flag and looks completely ordinary, while its data files are the only copy the
+    clone's manifest resolves through. Delete or compact the source and the clone breaks — a defect
+    reproduced as 8 data files becoming 1, after which the clone fails to open in a fresh process.
+
+    So the paths have to be read from the referring side and collected across the estate, which is
+    what `maintenance.services.base_refs` does with this. A per-dataset check cannot see it, because
+    the endangered dataset is not the one carrying the evidence.
+
+    Returns absolute paths as the manifest states them (the format calls them "interpretable by the
+    object store"). An empty list is the overwhelmingly common case and means exactly what it says:
+    this dataset resolves everything under its own root.
+    """
+    blob: bytes = ds._ds.serialized_manifest()  # noqa: SLF001 — same access `manifest_feature_flags` documents
+    paths: list[str] = []
+    i, n = 0, len(blob)
+    while i < n:
+        key, i = _varint(blob, i)
+        field, wire = key >> 3, key & 7
+        if wire == 2:
+            length, i = _varint(blob, i)
+            if field == _MANIFEST_BASE_PATHS_FIELD:
+                paths.extend(_base_path_paths(blob[i : i + length]))
+            i += length
+        elif wire == 0:
+            _, i = _varint(blob, i)
+        elif wire == 5:
+            i += 4
+        elif wire == 1:
+            i += 8
+        else:
+            # Same rule as the flag walker: STOP rather than misread. A garbage path here would
+            # either refuse a healthy dataset forever or, worse, fail to name a real one.
+            break
+    return paths
+
+
+def _base_path_paths(message: bytes) -> list[str]:
+    """``BasePath.path`` out of one submessage. Skips by wire type, so added fields cannot shift it."""
+    out: list[str] = []
+    i, n = 0, len(message)
+    while i < n:
+        key, i = _varint(message, i)
+        field, wire = key >> 3, key & 7
+        if wire == 2:
+            length, i = _varint(message, i)
+            if field == _BASE_PATH_PATH_FIELD:
+                out.append(message[i : i + length].decode("utf-8", errors="replace"))
+            i += length
+        elif wire == 0:
+            _, i = _varint(message, i)
+        elif wire == 5:
+            i += 4
+        elif wire == 1:
+            i += 8
+        else:
+            break
+    return out
 
 
 def _varint(blob: bytes, i: int) -> tuple[int, int]:
