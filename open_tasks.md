@@ -26,134 +26,69 @@ all four read wrappers); the catalog call-site half (`_require` passes no contex
 
 ---
 
-## BLOCKER — the release can no longer be upgraded AT ALL. Yours to decide.
+## 1. `make k3s-up` and CI are now WRONG, and they fail silently. Highest priority.
 
-`helm upgrade` now fails before it applies anything:
-
-```
-Error: UPGRADE FAILED: update: failed to update: Secret "sh.helm.release.v1.rask.v35"
-is invalid: data: Too long: may not be more than 1048576 bytes
-```
-
-This is not about the manifest. Helm embeds the WHOLE CHART in every revision, and ~880 KB of
-`chart/charts/*.tgz` is ALREADY-COMPRESSED subchart archives that gzip cannot shrink further.
-Measured 2026-08-15:
-
-| part | size |
-| --- | --- |
-| vendored subchart archives (10 of them) | ~880 KB, incompressible |
-| rendered manifest, gzipped | 262 KB |
-| **release secret, v34 / v35** | **1,046.9 KB / 1,048.5 KB** vs a 1,024 KB hard limit |
-
-It has been creeping up for months — v28 was 964 KB — and v35 crossed the line. Every revision
-since v28 was one small edit away from this. It blocks `make k3s-up` and CI, not just this session.
-
-**Do not "fix" it by trimming comments** (worth only ~39 KB gzipped) **or by disabling Kueue.**
-Kueue is idle today — 0 workloads, and the only `queue-name` reference in the repo is a comment in
-`values.yaml` — so `kueue.enabled=false` would buy 184 KB with no functional loss TODAY. It is still
-deleting an operator that was installed on purpose, to dodge a storage limit, at the wrong layer.
-
-**Four workarounds were measured and all four are dead**, so nobody re-tries them:
-
-| attempt | result |
-| --- | --- |
-| trim rendered comments to Helm template comments | broke the render TWICE — ate content inside block scalars (`- \|`, ConfigMap SQL). Reverted both times |
-| drop an unused subchart | all ten are genuinely enabled |
-| unpack `charts/*.tgz` so gzip can compress them | measured: packed 871.9 KB, unpacked 882.8 KB — **costs 11 KB** |
-| `kueue.enabled=false` | buys 184 KB, and Kueue is provably idle (0 workloads, the only `queue-name` reference in the repo is a comment) — but it deletes an operator installed on purpose, to dodge a storage limit |
-
-The two real fixes, both yours:
-
-1. **Split the chart** — infra (operators + CRDs, installed rarely) from app (upgraded constantly).
-   This matches how the estate actually operates and is the architecturally correct answer.
-2. **Move Helm to the SQL storage driver** (`HELM_DRIVER=sql`) against the Postgres already running.
-   No 1 MiB limit. Smaller change, keeps one chart.
-
-**✅ OPTION 2 IS DONE — the release is `deployed` again (2026-08-15).** `helm history rask` under the
-SQL driver shows revision 1, `Install complete`, and every image survived on its intended tag. Both
-hook jobs that failed revision 34 passed (`72505fef` NATS retention, `5d93e6f3` AGE extension).
-
-**THE ENV VARS ARE NOW LOAD-BEARING.** Every `helm`, `make k3s-up` and CI invocation must carry them,
-or Helm reads the empty Secret backend and concludes nothing is installed:
+The release moved to Helm's SQL storage driver on 2026-08-15 (the Secret backend hit Kubernetes' hard
+1 MiB limit — see item 2). Every `helm` invocation must now carry:
 
 ```bash
-AGEIP=$(kubectl get pod rask-age-0 -o jsonpath='{.status.podIP}')   # ClusterIP is not host-routable; the pod IP is
+AGEIP=$(kubectl get pod rask-age-0 -o jsonpath='{.status.podIP}')   # ClusterIP is NOT host-routable
 export HELM_DRIVER=sql
 export HELM_DRIVER_SQL_CONNECTION_STRING="postgresql://lance@${AGEIP}:5432/helm?sslmode=disable"
 ```
 
-The password lives in `~/.pgpass` (mode 600), not the DSN — lib/pq reads it, and a credential does not
-belong on a command line. **The pod IP changes when the AGE pod restarts**, so re-derive it; a stable
-answer wants a Service DNS name reachable from wherever helm runs, which is one reason splitting the
-chart (option 1) is still the better end state.
+The password lives in `~/.pgpass` (mode 600), never the DSN. **Without these vars Helm reads the empty
+Secret backend, reports the release as absent, and `--install` re-installs over a live estate** — the
+worst kind of failure, because it looks like a fresh cluster rather than an error. `Makefile::k3s-up`
+sets neither, and neither does CI.
 
-**READ THE VALUES WITH THE SECRET DRIVER, UPGRADE WITH THE SQL ONE.** Exporting `HELM_DRIVER=sql`
-before `helm get values rask` returns ZERO values, because the old release lives in the Secret backend.
-The chart then refused with *"image.repository must be set … A bare name resolves to Docker Hub and
-will ImagePullBackOff"* — the #135 guard doing exactly its job, and the reason nothing was applied.
-Scope the SQL vars to the `helm upgrade` line alone.
+Two traps to encode wherever this is fixed, both hit for real:
 
-<details><summary>The command that did it</summary>
+- **Read values with the SECRET driver, upgrade with the SQL one.** `helm get values rask` under
+  `HELM_DRIVER=sql` returns ZERO values, because the old release lives in the Secret backend. The
+  chart then refuses (`image.repository must be set … will ImagePullBackOff`) — the #135 guard doing
+  its job. Scope the SQL vars to the `helm upgrade` line alone.
+- **The AGE pod IP changes on restart.** A stable answer needs a Service DNS name reachable from
+  wherever helm runs, which is really an argument for item 2.
 
-```bash
-helm get values rask > /tmp/lv.yaml            # SECRET driver — no HELM_DRIVER set
-AGEIP=$(kubectl get pod rask-age-0 -o jsonpath='{.status.podIP}')
-HELM_DRIVER=sql HELM_DRIVER_SQL_CONNECTION_STRING="postgresql://lance@${AGEIP}:5432/helm?sslmode=disable" \
-  helm upgrade --install rask ./chart --take-ownership --wait --wait-for-jobs --timeout 9m \
-  -f /tmp/lv.yaml -f chart/values-live-pins.yaml
-```
-</details>
+## 2. The 1 MiB release ceiling is still there. The SQL driver only routed around it.
 
-Historical, kept because the reasoning still applies: the `helm`
-database exists in the AGE Postgres with `search_path=public` and the AGE extension (without the
-extension every `DROP` there fails — see the fix above), a `CREATE TABLE`/`DROP TABLE` round-trip
-passes in it, the pod network is routable from the host so no port-forward is needed, and
-`helm list -a` connects through the driver and returns an empty release list. Only the write is
-left, and it was refused by this session's permission classifier four times (it carries a DSN):
+Helm embeds the whole chart in every revision, and ~880 KB of `chart/charts/*.tgz` is
+already-compressed archives gzip cannot shrink. Measured: v28 964 KB → v35 1,048.5 KB against a
+1,024 KB limit. **Four workarounds were measured and all four are dead** — do not re-try them:
 
-```bash
-cd /home/blackwell/Desktop/rask && export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-helm get values rask > /tmp/lv.yaml
-AGEIP=$(kubectl get pod rask-age-0 -o jsonpath='{.status.podIP}')
-HELM_DRIVER=sql HELM_DRIVER_SQL_CONNECTION_STRING="postgresql://lance:lance@$AGEIP:5432/helm?sslmode=disable" \
-  helm upgrade --install rask ./chart --take-ownership --wait --wait-for-jobs --timeout 9m \
-  -f /tmp/lv.yaml -f chart/values-live-pins.yaml
-```
+| attempt | result |
+| --- | --- |
+| convert rendered YAML comments to Helm template comments | broke the render TWICE (ate content inside block scalars — `- \|`, ConfigMap SQL). Reverted both times |
+| drop an unused subchart | all ten are genuinely enabled |
+| unpack `charts/*.tgz` so gzip can compress them | packed 871.9 KB vs unpacked 882.8 KB — **costs 11 KB** |
+| `kueue.enabled=false` | buys 184 KB, and Kueue is provably idle (0 workloads; the only `queue-name` reference in the repo is a comment) — but it deletes an operator installed on purpose |
 
-It reads the CURRENT values out of the Secret-based release, so nothing is invented, and
-`--take-ownership` adopts the running resources (Helm has no history under the new driver, so this
-is an install that adopts, not an upgrade). Fully reversible: the Secret-based release records are
-untouched — drop the two `HELM_DRIVER*` vars to return to exactly today's state.
+**The real fix is splitting the chart**: infra (operators + CRDs, installed rarely) from app (upgraded
+constantly). That also dissolves item 1, since the app chart would fit the Secret backend again.
 
-**The standing cost, and why option 1 is still the better answer:** every later `helm`, `make k3s-up`
-and CI invocation must carry those two env vars, or Helm reads the empty Secret backend and concludes
-nothing is installed.
+## 3. Dapr — one design item and one decision. Everything else is closed.
 
-Both hook jobs that failed revision 34 are fixed (`72505fef` NATS retention, `5d93e6f3` AGE
-extension), so they should pass on the next run.
+The workstream is otherwise done: determinism review clean across all three workflow bodies, the
+activity and management rules satisfied, `open_dapr.md` deleted with its 74 citations.
 
-Interim state, verified: revision 35 was left `pending-upgrade`, which refuses every later upgrade;
-its release secret was deleted so 34 is latest again. **Workloads are correct and healthy regardless**
-— every service is on its intended image and 0 pods are outside Running/Completed. What is stale is
-the RELEASE RECORD, not the estate.
+- **`stage_run` is a Monitor without `continue_as_new`.** Dapr's docs are explicit that an unbounded
+  poll loop is an anti-pattern and `continue_as_new` is the API. `MAX_POLLS = 2880` at 30 s = 24 h,
+  ≈5,760 history events in ONE instance. Bounded, so not the literal anti-pattern; the code names this
+  and defers it to S2. Changing a live workflow's action sequence is deploy-coupled — read
+  `tests/unit/test_workflow_action_order.py`'s docstring before touching it.
+- **Outbox: DIY vs native — yours.** `service_kit.lakehouse.outbox` is hand-rolled (stage to S3 →
+  publish → drop on ack). Dapr ships a transactional outbox, but it spans *Dapr state + pubsub* and
+  our durable artefact is a Lance dataset on S3, so the DIY version is defensible rather than sloppy.
+  It COULD be outsourced by writing a transactional marker to Dapr state after the Lance write and
+  letting the native outbox guarantee the publish — which would delete the relay.
 
----
+## 4. The cascade's SUCCESS path has never run.
 
-## The chart changes still waiting on that window
-
-Chart changes are committed and render correctly but are NOT in the release. `make k3s-up` owns it —
-a hand `helm upgrade` with different values replaces every deployed image with the chart default.
-
-- `lance-statestore` now scoped to the mover app-ids. **daprd cannot hot-reload an actor state
-  store**, so a mover pod that started before this keeps the OLD scope list and fails to dispatch on
-  every delivery. The medallion deployments need a restart. The workflow is new, so no in-flight
-  instances exist and **no drain is required**.
-- `medallion.compute` / `medallion.ray` now default true, with `rayAddress` derived when empty. This
-  supersedes the env I set by hand on `rask-bronze-to-silver` while driving S1 — the upgrade replaces
-  improvised state with declared state.
-- `MAINTENANCE_ORPHAN_SCAN_ENABLED` — the running maintenance pod carries no such variable at all.
-- The observability retention floor, and `dapr.io/config` gated on `dapr.enabled`.
-- The otel-collector app-log filter (applied by hand 2026-08-15; the upgrade makes it durable).
+Only the FAIL path has fired end-to-end (a Ray job that failed produced a FAIL RunEvent in the graph,
+run `035fd388`, deterministic on the trigger token). The cluster has **no bronze data**, so
+`read_upstream` cannot resolve and every drive ends in the failure branch. Seeding a bronze dataset is
+what turns S1's success half from "tested" into "witnessed".
 
 ---
 
