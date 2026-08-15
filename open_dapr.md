@@ -1702,9 +1702,22 @@ Three of the first draft's seven are now answered and have been struck.
 6. **Is `app-id: lance-ray` worth renaming now, or does it ride the next state-store change?**
    The rename touches component scopes, DLQ topics, resiliency targets and the scope list, and
    the state store cannot hot-reload — so it is one coordinated rollout either way.
-7. **Purge policy for workflow history.** Nothing collects it today (§2.23), and both §4 and
-   §5 make it worse before they make it better. Decide the retention rule before adding a
-   second workflow host.
+7. ~~**Purge policy for workflow history.**~~ **RULE DECIDED — BUT NOT LIVE, and the deadline this
+   item set has now passed.** The rule is in the chart: `dapr.workflowRetention` enabled,
+   `completed: 168h` / `failed: 720h` / `terminated: 720h`, rendered as `stateRetentionPolicy` on the
+   Configuration (`chart/templates/observability.yaml:65-70`, `values.yaml:1509-1513`). Per-terminal-state
+   rather than `anyTerminal` because a COMPLETED instance and a FAILED one are not worth the same.
+
+   Two things keep this OPEN rather than closed, both measured 2026-08-15:
+
+   * **It is not on the cluster.** `kubectl get configuration` returns `daprsystem` and `lance-tracing`,
+     and `lance-tracing` has NO `workflow` block. So the live estate still retains every instance
+     forever — the state §2.23 measured (1367 rows, `count(expiredate) = 0`) is unchanged. Rendering it
+     needs `make k3s-up`; a hand `helm upgrade` would replace every hand-deployed image.
+   * **"Before adding a second workflow host" was overtaken.** There are now THREE
+     (`grep -l "WorkflowRuntime()"`): `ingest/__init__.py`, `flows/runtime.py`, and — added this session
+     by S1 — `medallion/mover.py`. The rule existing in the chart is what makes that acceptable; the
+     rule not being live is what keeps it a live risk rather than a settled one.
 8. **What is the measured size of an `enumerate_chunks` result at the advertised scale?** §2.13's
    structure is confirmed but its magnitude is not establishable from source — no gRPC limit and
    no state-store row limit is set anywhere in this repo. Measure before sizing the fix.
