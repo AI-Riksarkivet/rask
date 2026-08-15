@@ -18,6 +18,7 @@ producer/relay already use; a local/``file://`` path uses the local filesystem (
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import Iterator
@@ -32,30 +33,82 @@ from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 log = logging.getLogger(__name__)
 
 
+def _object_key(run_id: str, event_json: str) -> str:
+    """The staged object's name: the run id AND the event type it carries.
+
+    The run id alone collides, and by design: `build_run_event` deliberately EXCLUDES event_type from
+    it, because one run has a START and then a COMPLETE or a FAIL. Keying the object on the run id
+    therefore made the second event truncate the first, and which one survived was whichever raced
+    last.
+
+    `transform.py` documents that destroying the very object this module exists to preserve — "a
+    COMPLETE whose PUBLISH failed left `completed = False`, the handler below staged a FAIL, and that
+    truncating write destroyed the staged COMPLETE — the exact object the outbox exists to preserve, on
+    a run whose Lance write had already committed." The workaround was to set a flag BEFORE the emit;
+    with a per-event key the hazard is gone rather than sequenced around.
+
+    Falls back to the bare run id when the payload carries no readable eventType, which is also what
+    keeps the change BACKWARD-COMPATIBLE: `list_events` derives the drop key from the FILENAME, so an
+    object staged under the old shape still lists and still drops.
+    """
+    try:
+        event_type = str((json.loads(event_json) or {}).get("eventType") or "").strip().upper()
+    except (ValueError, TypeError):
+        event_type = ""
+    return f"{run_id}@{event_type}" if event_type else run_id
+
+
 def stage_event(outbox_uri: str, storage_options: StorageOptions, run_id: str, event_json: str) -> None:
     """Persist the event JSON at ``<outbox_uri>/<run_id>.json`` (overwrite — a redelivery re-stages the
     same run_id). Blocking object-store IO; callers run it in a threadpool."""
     fs, base = fs_and_base(outbox_uri, storage_options)
     fs.create_dir(base, recursive=True)  # local FS needs the parent dir; an S3 prefix marker is harmless
-    with fs.open_output_stream(f"{base}/{run_id}.json") as stream:
+    with fs.open_output_stream(f"{base}/{_object_key(run_id, event_json)}.json") as stream:
         stream.write(event_json.encode("utf-8"))
 
 
-def drop_event(outbox_uri: str, storage_options: StorageOptions, run_id: str) -> None:
+def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> None:
     """Delete the staged event (called after a publish returns / after the relay re-ingests it). An
     already-absent object is fine (idempotent). Blocking IO; callers threadpool it."""
     fs, base = fs_and_base(outbox_uri, storage_options)
     with suppress(FileNotFoundError):
-        fs.delete_file(f"{base}/{run_id}.json")
+        fs.delete_file(f"{base}/{key}.json")
 
 
-def read_event(outbox_uri: str, storage_options: StorageOptions, run_id: str) -> str | None:
+def resolve_event(outbox_uri: str, storage_options: StorageOptions, run_id: str) -> tuple[str, str] | None:
+    """Find the staged object for one RUN ID, as ``(key, event_json)``.
+
+    Exists because the object key is now per EVENT (`_object_key`) while the DLQ replay route addresses
+    a RUN — its path parameter is a run id, not a key. An exact-key read alone would 404 every replay
+    the moment the key widened, which is precisely what it did.
+
+    Exact match first, so a caller that already holds a key (the relay, which reads keys straight off
+    the filenames) pays nothing. Otherwise the newest `<run_id>@*.json` wins: a run's later event is the
+    one worth replaying, and a COMPLETE staged after a FAIL is the outcome that stands.
+
+    Returns the KEY as well as the payload because the caller must drop exactly what it replayed —
+    dropping by run id would miss the object it just re-ingested and leave it for the relay to do again.
+    """
+    exact = read_event(outbox_uri, storage_options, run_id)
+    if exact is not None:
+        return run_id, exact
+    prefix = f"{run_id}@"
+    matches = [i for i in _staged_infos(outbox_uri, storage_options) if i.path.rsplit("/", 1)[-1].startswith(prefix)]
+    if not matches:
+        return None
+    newest = matches[-1]  # `_staged_infos` is oldest-first
+    key = newest.path.rsplit("/", 1)[-1].removesuffix(".json")
+    payload = read_event(outbox_uri, storage_options, key)
+    return None if payload is None else (key, payload)
+
+
+def read_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> str | None:
     """The staged event JSON for one ``run_id``, or ``None`` if it isn't staged (already drained / never
     staged). The targeted read behind an admin DLQ replay (#83) — cheaper + race-safer than scanning the
     whole prefix. Blocking IO; callers threadpool it."""
     fs, base = fs_and_base(outbox_uri, storage_options)
     try:
-        with fs.open_input_stream(f"{base}/{run_id}.json") as stream:
+        with fs.open_input_stream(f"{base}/{key}.json") as stream:
             return stream.readall().decode("utf-8")
     except FileNotFoundError:
         return None
@@ -167,4 +220,4 @@ async def publish_lineage_with_outbox(
     outbox_metrics.record_published()
     if staged:
         with suppress(Exception):
-            await run_in_threadpool(drop_event, outbox_uri, storage_options, run_id)
+            await run_in_threadpool(drop_event, outbox_uri, storage_options, _object_key(run_id, event_json))

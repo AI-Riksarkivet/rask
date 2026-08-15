@@ -109,9 +109,11 @@ async def replay_dlq(
     if not settings.outbox_uri:
         raise TransactionNotFoundError(f"no staged lineage event for run {run_id}")
     opts = storage_options(settings)
-    event_json = await run_in_threadpool(outbox.read_event, settings.outbox_uri, opts, run_id)
-    if event_json is None:
+    # Resolve the RUN to its staged object: the key is per-event now, and this route addresses a run.
+    resolved = await run_in_threadpool(outbox.resolve_event, settings.outbox_uri, opts, run_id)
+    if resolved is None:
         raise TransactionNotFoundError(f"no staged lineage event for run {run_id}")
+    staged_key, event_json = resolved
     try:
         event = RunEvent.model_validate_json(event_json)
     except ValidationError as exc:
@@ -133,7 +135,8 @@ async def replay_dlq(
     await enforce_output_authz(event, request, settings, token)
     await repository.ingest_event(event)  # idempotent MERGE on run_id
     await record_event_best_effort(repository, event)  # project onto the durable /events feed too
-    await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, run_id)
+    # Drop exactly what was replayed — dropping by run id would miss it and leave a redundant object.
+    await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, staged_key)
     # A completed ACTION records SUCCESS unconditionally (house vocabulary: ALLOW/DENY belong to authz
     # decisions — mirror access_grant/vend_credentials); the subject is empty in auth-off dev.
     audit.audit("dlq_replay", SUCCESS, subject=token.sub if token else "", resource=f"run:{run_id}")

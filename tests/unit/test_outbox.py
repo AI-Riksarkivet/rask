@@ -236,3 +236,58 @@ def test_bounded_drain_makes_progress_across_ticks(tmp_path: Any) -> None:
 
     assert seen == ["run-0", "run-1", "run-2", "run-3", "run-4"]  # strictly oldest-first, fully drained
     assert outbox.backlog(uri, {}) == (0, 0.0)
+
+
+# --- one run, MANY events: the staged object must not collide ------------------------------------
+#
+# `build_run_event` deliberately excludes event_type from the run id — one run has a START, a COMPLETE
+# or a FAIL, and they share it. `stage_event` keyed on the run id ALONE, so the second event for a run
+# truncated the first, and the one that survived was whichever raced last.
+#
+# `transform.py:508-516` documents that happening to the event the outbox exists to preserve: "a
+# COMPLETE whose PUBLISH failed left `completed = False`, the handler below staged a FAIL, and that
+# truncating write destroyed the staged COMPLETE — the exact object the outbox exists to preserve, on a
+# run whose Lance write had already committed." The workaround was to set a flag BEFORE the emit.
+#
+# Widening the key is backward-compatible by construction: `list_events` derives the drop key from the
+# FILENAME, so an object staged under the old shape still lists and still drops.
+
+
+def _event(run_id: str, event_type: str) -> str:
+    return json.dumps({"eventType": event_type, "run": {"runId": run_id}})
+
+
+def test_a_complete_and_a_fail_for_one_run_are_both_staged(tmp_path: Any) -> None:
+    uri = _uri(tmp_path)
+
+    outbox.stage_event(uri, {}, "run-1", _event("run-1", "COMPLETE"))
+    outbox.stage_event(uri, {}, "run-1", _event("run-1", "FAIL"))
+
+    staged = {json.loads(payload)["eventType"] for _key, payload in outbox.list_events(uri, {})}
+    assert staged == {"COMPLETE", "FAIL"}, f"the second event truncated the first — one run's events share an object: {staged}"
+
+
+def test_each_staged_event_drops_independently(tmp_path: Any) -> None:
+    """Dropping the FAIL after its publish must not take the still-unpublished COMPLETE with it."""
+    uri = _uri(tmp_path)
+    outbox.stage_event(uri, {}, "run-1", _event("run-1", "COMPLETE"))
+    outbox.stage_event(uri, {}, "run-1", _event("run-1", "FAIL"))
+
+    for key, payload in list(outbox.list_events(uri, {})):
+        if json.loads(payload)["eventType"] == "FAIL":
+            outbox.drop_event(uri, {}, key)
+
+    left = [json.loads(payload)["eventType"] for _key, payload in outbox.list_events(uri, {})]
+    assert left == ["COMPLETE"], f"dropping one event disturbed the other: {left}"
+
+
+def test_an_object_staged_under_the_old_key_still_drains(tmp_path: Any) -> None:
+    """Upgrade path: a `<run_id>.json` written before this change must still list and drop."""
+    uri = _uri(tmp_path)
+    outbox.stage_event(uri, {}, "legacy-run", json.dumps({"run": {"runId": "legacy-run"}}))
+
+    keys = [key for key, _payload in outbox.list_events(uri, {})]
+    assert keys == ["legacy-run"]
+
+    outbox.drop_event(uri, {}, keys[0])
+    assert list(outbox.list_events(uri, {})) == []

@@ -507,13 +507,16 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
         # recorded and the bad batch stays auditable.
         # Set BEFORE the emit, not after it returns. `publish_lineage_with_outbox` STAGES the COMPLETE
         # and only then publishes, re-raising on failure with the event left staged — that is the
-        # crash window working. But `stage_event` keys on run_id alone and `build_run_event` excludes
-        # event_type from the run_id, so a COMPLETE and a FAIL for one run share `<run_id>.json`. With
-        # the flag set after the await, a COMPLETE whose PUBLISH failed left `completed = False`, the
-        # handler below staged a FAIL, and that truncating write destroyed the staged COMPLETE — the
-        # exact object the outbox exists to preserve, on a run whose Lance write had already committed.
-        # The run succeeded the moment that write committed; redelivery re-publishes the staged
-        # COMPLETE, idempotent on its deterministic run_id.
+        # crash window working. The run succeeded the moment the Lance write committed; redelivery
+        # re-publishes the staged COMPLETE, idempotent on its deterministic run_id.
+        #
+        # This ordering was once LOAD-BEARING for a second reason, and no longer is: `stage_event`
+        # keyed on run_id alone while `build_run_event` excludes event_type from it, so a COMPLETE and
+        # a FAIL for one run shared `<run_id>.json` — and with the flag set after the await, a COMPLETE
+        # whose publish failed left `completed = False`, the handler below staged a FAIL, and that
+        # truncating write destroyed the staged COMPLETE. The staged object is keyed per EVENT now
+        # (`outbox._object_key`), so the hazard is gone rather than sequenced around. The ordering
+        # stays because it is still the correct one on its own terms, not because it is a workaround.
         completed = True
         await outbox.publish_lineage_with_outbox(
             dapr,

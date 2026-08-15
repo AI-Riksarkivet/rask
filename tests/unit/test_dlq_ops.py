@@ -163,7 +163,7 @@ def test_replay_reingests_and_drops(tmp_path: Path) -> None:
     assert out.status == "replayed" and out.run_id == "r1"
     assert len(repo.ingested) == 1 and repo.ingested[0].run.run_id == "r1"
     # the staged object is gone (drop only runs on success)
-    assert outbox.read_event(s.outbox_uri, storage_options(s), "r1") is None
+    assert outbox.resolve_event(s.outbox_uri, storage_options(s), "r1") is None
 
 
 def test_replay_missing_run_is_404(tmp_path: Path) -> None:
@@ -178,7 +178,7 @@ def test_replay_poison_is_unsupported_and_not_dropped_dev(tmp_path: Path) -> Non
     _stage(s, "bad", "{not valid json")
     with pytest.raises(UnsupportedOperationError):
         asyncio.run(_replay(s, "bad", _Repo()))
-    assert outbox.read_event(s.outbox_uri, storage_options(s), "bad") is not None
+    assert outbox.resolve_event(s.outbox_uri, storage_options(s), "bad") is not None
 
 
 def test_replay_poison_is_404_under_fga_no_oracle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -192,7 +192,7 @@ def test_replay_poison_is_404_under_fga_no_oracle(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr(fga, "batch_check", any_visible)
     with pytest.raises(TransactionNotFoundError):
         asyncio.run(_replay(s, "bad", _Repo(), _token()))
-    assert outbox.read_event(s.outbox_uri, storage_options(s), "bad") is not None
+    assert outbox.resolve_event(s.outbox_uri, storage_options(s), "bad") is not None
 
 
 def test_replay_hidden_event_is_404_not_a_name_disclosing_403(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -209,7 +209,7 @@ def test_replay_hidden_event_is_404_not_a_name_disclosing_403(tmp_path: Path, mo
     with pytest.raises(TransactionNotFoundError):
         asyncio.run(_replay(s, "r1", repo, _token()))
     assert repo.ingested == []
-    assert outbox.read_event(s.outbox_uri, storage_options(s), "r1") is not None
+    assert outbox.resolve_event(s.outbox_uri, storage_options(s), "r1") is not None
 
 
 def test_replay_seen_but_not_writable_is_403(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -226,7 +226,7 @@ def test_replay_seen_but_not_writable_is_403(tmp_path: Path, monkeypatch: pytest
     with pytest.raises(PermissionDeniedError):
         asyncio.run(_replay(s, "r1", repo, _token()))
     assert repo.ingested == []
-    assert outbox.read_event(s.outbox_uri, storage_options(s), "r1") is not None
+    assert outbox.resolve_event(s.outbox_uri, storage_options(s), "r1") is not None
 
 
 def list_dlq_off(settings: LineageSettings) -> Any:
