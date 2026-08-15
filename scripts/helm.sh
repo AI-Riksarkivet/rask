@@ -13,7 +13,8 @@
 # success against the wrong backend is worse than any error.
 #
 # THE REAL FIX IS STILL SPLITTING THE CHART (infra vs app), which would let the app release fit the
-# Secret backend again and delete this file. See open_tasks.md item 2.
+# Secret backend again and delete this file. The decision NOT to split it now — with the four
+# measured alternatives and the conditions that reopen it — is in docs/DECISIONS.md.
 set -euo pipefail
 
 # Read-only subcommands never touch the release store, and REQUIRING a reachable database for them

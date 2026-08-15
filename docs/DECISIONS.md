@@ -711,8 +711,8 @@ requirement. A workflow engine would buy convenience here, and convenience is no
 **Decision.** `service_kit.lakehouse.outbox` — stage the event to object storage, publish, drop on ack,
 relay any survivor — stays. Dapr's transactional outbox is not an available alternative, and the
 proposal to reach it by "writing a transactional marker to Dapr state after the Lance write" does not
-work. Recorded here because `open_tasks.md` still poses it as an open question and the plan doc that
-answered it is deleted.
+work. Recorded here because the working notes that posed it as an open question are deleted, and a
+decision must outlive them.
 
 **Why Dapr's cannot apply.** Its outbox is a property OF A DAPR STATE STORE: it publishes the message
 inside the transaction Dapr is already running, which requires the write to go through Dapr's
