@@ -48,17 +48,27 @@ PAYLOAD_TRUNCATED_MARKER = "\n…[flows truncated this payload: {total} characte
 #: puts N payloads in one message while presenting a single source.
 #:
 #: THE ARITHMETIC, which `test_the_bounds_are_ARITHMETICALLY_consistent_...` re-checks so it cannot
-#: drift: worst case is 32 x 256 KiB = 8 MiB raw against daprd's `--max-body-size=32Mi` (verified
-#: live on daprd 1.18.1, where that single flag governs HTTP *and* gRPC — there is no separate
-#: `max-grpc-message-size` to raise). The 4x margin is for the node config, the serve origin, the
-#: JSON envelope and above all escape expansion, which can nearly double a text payload full of
-#: quotes and newlines. Past the limit the sidecar REJECTS the activity input and the run wedges
-#: with nothing to paint, which is why this is refused at validate time as a 422 naming the node.
+#: drift: worst case is 8 x 256 KiB = 2 MiB raw, against a **4 MiB** ceiling, leaving a 2x margin for
+#: the node config, the serve origin, the JSON envelope and above all escape expansion, which can
+#: nearly double a text payload full of quotes and newlines.
+#:
+#: THE CEILING IS 4 MiB, NOT daprd's `--max-body-size=32Mi`. This was shipped wrong once (fan-in 32,
+#: i.e. 8 MiB — twice the real limit, so the bound did not bind). Two different channels exist and the
+#: SMALLER one governs: `--max-body-size` configures daprd's own server, but an activity payload
+#: crosses the app<->sidecar WORKFLOW channel opened by the vendored durabletask worker.
+#: `WorkflowRuntime` builds `TaskHubGrpcWorker(...)` WITHOUT `channel_options`, so `get_grpc_channel`
+#: merges only `DEFAULT_GRPC_KEEPALIVE_OPTIONS` — keepalive values and no `grpc.max_*_message_length`
+#: whatsoever — leaving grpc's 4 MiB default. Read out of dapr 1.18.3, and independently reproduced
+#: against a real grpc server (`RESOURCE_EXHAUSTED ... 5242880 vs 4194304`). Raising daprd's flag does
+#: NOT move it, and nothing plumbs channel options through, so it is not reachable from config at all.
+#:
+#: Past the limit the worker REJECTS the activity input and the run wedges with nothing to paint,
+#: which is why this is refused at validate time as a 422 naming the node.
 #:
 #: Both numbers are DEFAULTS chosen from that arithmetic, not from a profile of real flows — a
 #: visual builder graph does not approach either. Raising one means redoing the sum.
 MAX_GRAPH_NODES = 256
-MAX_NODE_FAN_IN = 32
+MAX_NODE_FAN_IN = 8
 
 #: Terminal-or-running vocabulary, shared by a run and by each of its nodes so a caller reads one
 #: set of words. A node that never got to run because an upstream failed is `failed` with the

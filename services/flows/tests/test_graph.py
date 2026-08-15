@@ -202,12 +202,21 @@ def test_the_bounds_are_ARITHMETICALLY_consistent_with_the_payload_cap_and_the_s
     """
     from flows.models import MAX_NODE_FAN_IN, MAX_PAYLOAD_CHARS
 
-    daprd_max_body_bytes = 32 * 1024 * 1024  # `--max-body-size=32Mi`, chart/values.yaml `dapr.maxBodySize`
+    # 4 MiB, and NOT daprd's `--max-body-size=32Mi`. Two different channels, and the SMALLER binds.
+    # `--max-body-size` governs daprd's own server; the activity payload crosses the app<->sidecar
+    # WORKFLOW channel, which the vendored durabletask worker opens. `WorkflowRuntime` constructs
+    # `TaskHubGrpcWorker(...)` without `channel_options`, so `get_grpc_channel` merges only
+    # `DEFAULT_GRPC_KEEPALIVE_OPTIONS` — keepalive settings and no `grpc.max_*_message_length` at all,
+    # leaving grpc's 4 MiB default. Read out of dapr 1.18.3 in `.venv`, and independently reproduced
+    # against a real grpc server (`RESOURCE_EXHAUSTED ... 5242880 vs 4194304`, open_medallion_workflow.md).
+    # It is not raisable from config: nothing in the runtime plumbs channel options through.
+    grpc_default_max_message_bytes = 4 * 1024 * 1024
     worst_case_raw = MAX_NODE_FAN_IN * MAX_PAYLOAD_CHARS
 
-    assert worst_case_raw * 2 <= daprd_max_body_bytes, (
+    assert worst_case_raw * 2 <= grpc_default_max_message_bytes, (
         f"worst-case activity input is {MAX_NODE_FAN_IN} x {MAX_PAYLOAD_CHARS} = {worst_case_raw} bytes raw, "
-        f"which does not leave a 2x margin for JSON escape expansion under the {daprd_max_body_bytes}-byte "
-        f"sidecar limit. Lower MAX_NODE_FAN_IN, lower MAX_PAYLOAD_CHARS, or raise dapr.maxBodySize — but do "
-        f"the sum, because past this limit the sidecar rejects the input and the run WEDGES rather than failing."
+        f"which does not leave a 2x margin for JSON escape expansion under the "
+        f"{grpc_default_max_message_bytes}-byte workflow-channel limit. Lower MAX_NODE_FAN_IN or "
+        f"MAX_PAYLOAD_CHARS — raising daprd's --max-body-size does NOT help, because this is the worker's "
+        f"own channel. Past the limit the worker rejects the input and the run WEDGES rather than failing."
     )
