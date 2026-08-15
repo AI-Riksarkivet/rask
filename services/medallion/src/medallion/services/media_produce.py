@@ -84,6 +84,18 @@ def _seed_and_ingest(settings: MedallionSettings) -> IngestResult:
     )
 
 
+def _split_source_uri(source_uri: str) -> tuple[str, str]:
+    """``s3://lake/batch/img.png`` -> (``s3://lake/batch``, ``img.png``).
+
+    The namespace must carry the URI scheme — see the call site. Mirrors
+    `htr_stage._split_source_uri`; kept local rather than imported because that module is the HTR
+    lane's and this is the media lane's, and a shared private helper across two lanes is a coupling
+    neither asked for.
+    """
+    base, _, leaf = source_uri.rpartition("/")
+    return (base, leaf) if base else ("", source_uri)
+
+
 async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str | None = None) -> dict[str, str]:
     """Land external media as bronze blobs, emit its lineage, and trigger the media chain.
 
@@ -105,7 +117,15 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
         author=settings.producer_author,
         job_namespace=settings.job_namespace,
         # One input per source object: the graph records source-URI -> bronze provenance in the data path.
-        inputs=[("source", uri) for uri in result.source_uris],
+        #
+        # SPLIT AT THE LAST SEGMENT so the namespace keeps the URI SCHEME. `is_external_source` is
+        # literally `"://" in namespace`, and R23 rests on it: raw is the external world, never a
+        # governed tier, so these inputs must read as external. Emitted as `("source", uri)` they did
+        # not — every media event named an input that looked like a governed `table:source`, which
+        # nobody holds a grant on, so `GET /events` hid the whole event from EVERY caller under FGA
+        # (the feed shows a row only if the reader can see every dataset it references).
+        # Same convention as `htr_stage._split_source_uri`: `iiif://vol/00012.jpg` -> (`iiif://vol`, `00012.jpg`).
+        inputs=[_split_source_uri(uri) for uri in result.source_uris],
         output_namespace=settings.media_bronze_namespace,
         output_name=settings.media_bronze_dataset,
         version=result.version,
