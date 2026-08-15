@@ -19,9 +19,11 @@ import sys
 import textwrap
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import lance
 import pyarrow as pa
+import pytest
 from maintenance.services.base_refs import protected_roots
 
 from service_kit.lakehouse.features import manifest_base_paths, manifest_feature_flags
@@ -165,3 +167,67 @@ def test_the_clone_breaks_IN_A_FRESH_PROCESS_after_the_source_is_swept(tmp_path:
         f"sweeping the source did NOT break the clone ({fresh}). If pylance has started copying or "
         f"refusing, this reproduction is obsolete — verify before deleting the guard it justifies."
     )
+
+
+# --------------------------------------------------------------------------- #
+# The wiring — a guard nothing calls is a guard that does not exist
+# --------------------------------------------------------------------------- #
+
+
+def _sweep_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, uris: list[str]) -> list[Any]:
+    """Drive the REAL `run_sweep` over ``uris`` and return its per-dataset results.
+
+    Only the two things that need infrastructure are stubbed — the S3 filesystem and dataset
+    discovery. Everything the refusal depends on runs for real, which is the point: the earlier tests
+    call `protected_roots` directly and would pass even if the sweep never invoked it.
+    """
+    from maintenance.core.config import MaintenanceSettings
+    from maintenance.services import sweep as sweep_mod
+    from maintenance.services.optimize import Discovery
+
+    settings = MaintenanceSettings.model_validate({"s3_endpoint": "", "s3_access_key_id": "x", "s3_secret_access_key": "x", "policy_root": str(tmp_path)})
+    monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
+    monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket: Discovery(uris=list(uris)))
+    return sweep_mod.run_sweep(settings)
+
+
+def test_a_REAL_SWEEP_TICK_refuses_the_source_of_a_live_clone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE wiring test, and the one the rest of this file cannot substitute for.
+
+    Every other test here calls `protected_roots` directly. All of them passed while the sweep never
+    invoked it — the pre-pass existed, both guards existed, and the real code path walked straight
+    past both. A guard nothing calls is indistinguishable from no guard, and a suite that only
+    exercises the guard directly reports the same green either way.
+
+    So this drives `run_sweep` itself and asserts the SOURCE comes back REFUSED, with the refusal
+    naming why. The clone is refused too, by the pre-existing flag-16 gate — different mechanism, and
+    asserting both keeps the two from being confused for one another.
+    """
+    src, clone = _source_and_clone(tmp_path, rows=3, files=4)
+
+    results = _sweep_results(monkeypatch, tmp_path, [src, clone])
+
+    by_uri = {r.uri: r for r in results}
+    assert by_uri[src].refused, "the sweep compacted the SOURCE of a live clone — the pre-pass is not wired in"
+    assert "resolves its files through" in by_uri[src].refused
+    assert by_uri[clone].refused, "the clone should still be refused by the feature-flag gate"
+
+
+def test_an_ORDINARY_dataset_is_still_swept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard must not make the sweep a no-op.
+
+    A refusal that fires on everything would be indistinguishable from a working guard in the test
+    above, and would silently stop all maintenance in the estate.
+    """
+    plain = str(tmp_path / "plain.lance")
+    for chunk in range(3):
+        lance.write_dataset(
+            pa.table({"id": pa.array(range(chunk * 3, (chunk + 1) * 3), pa.int64())}),
+            plain,
+            mode="overwrite" if chunk == 0 else "append",
+        )
+
+    results = _sweep_results(monkeypatch, tmp_path, [plain])
+
+    assert not results[0].refused, f"an ordinary dataset was refused: {results[0].refused}"
+    assert results[0].error is None, f"an ordinary dataset errored: {results[0].error}"

@@ -407,6 +407,7 @@ async def _purge_one(
     live_ids: set[str] | None,
     fga_client: Any,  # noqa: ANN401 — OpenFgaClient | None
     control: ControlEmitter,
+    protected: BaseRefs | None = None,
 ) -> None:
     """Revoke → delete → clear → announce, for ONE record. Never raises; every failure is a refusal."""
     kind = str(record.get("kind") or "table")
@@ -429,7 +430,14 @@ async def _purge_one(
     deleted_bytes = deleted_files = 0
     if location and kind != "namespace":
         try:
-            deleted_bytes, deleted_files = await run_in_threadpool(delete_location, location, storage_options)
+            deleted_bytes, deleted_files = await run_in_threadpool(_delete_guarded, location, storage_options, protected)
+        except ProtectedBaseError as exc:
+            # A REFUSAL, not a failure: the bytes are deliberately untouched because a live dataset
+            # resolves through them. The record survives, so an operator who drops the clone first can
+            # let the next tick reclaim this legitimately.
+            out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=str(exc)))
+            log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
+            return
         except OSError as exc:
             reason = f"deleting {location!r} failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
             out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason))
@@ -530,6 +538,12 @@ async def purge_expired_trash(
     # One manifest read per root per tick, shared by every record — and `None` (unreadable) refuses all
     # of them rather than letting a broken index read as "nothing is live".
     live_ids = await run_in_threadpool(live_ids_across, roots, storage_options) if due else set()
+    # #128d THE PRE-PASS, over every dataset in the maintained estate and BEFORE any delete. A trash
+    # record names one path, but nothing in that record says whether a live shallow clone resolves its
+    # data files through it — the SOURCE carries no feature flag and no `base_paths` of its own
+    # (measured), so only the referring side holds the evidence and only a whole-estate pass finds it.
+    # Computed once per tick and shared by every record, exactly like `live_ids` above.
+    protected = await run_in_threadpool(_estate_base_refs, roots, storage_options) if due else BaseRefs()
     for record in due:
         await _purge_one(
             record,
@@ -541,6 +555,7 @@ async def purge_expired_trash(
             live_ids=live_ids,
             fga_client=fga_client,
             control=control,
+            protected=protected,
         )
 
     _record_metrics(out)
@@ -567,3 +582,30 @@ def _record_metrics(out: TrashPurgeReport) -> None:
     for refusal in out.refused:
         refused[refusal.kind] = refused.get(refusal.kind, 0) + 1
     record_trash_purge(purged, refused, sum(p.bytes_deleted for p in out.purged))
+
+
+def _estate_base_refs(roots: set[str], storage_options: StorageOptions) -> BaseRefs:
+    """Foreign ``base_paths`` across every maintained root — the #128d pre-pass for the purge.
+
+    Discovery is per-root and best-effort: a root that will not list contributes nothing rather than
+    aborting the tick, and `protected_roots` separately records datasets that would not open. Both
+    gaps narrow the protection rather than widening the deletion, which is the safe direction — but a
+    caller reading this should know the set is a floor, not a proof of completeness.
+    """
+    from maintenance.services.base_refs import protected_roots
+    from maintenance.services.optimize import discover_datasets
+
+    uris: list[str] = []
+    for root in sorted(roots):
+        bucket = root.split("://", 1)[-1].strip("/")
+        try:
+            fs, _ = fs_and_base(root, storage_options)
+            uris.extend(discover_datasets(fs, bucket).uris)
+        except Exception as exc:  # noqa: BLE001 — an unlistable root must not abort the purge
+            log.warning("trash_purge_base_ref_discovery_failed", extra={"root": root, "error": str(exc)})
+    return protected_roots(uris, storage_options)
+
+
+def _delete_guarded(location: str, storage_options: StorageOptions, protected: BaseRefs | None) -> tuple[int, int]:
+    """`delete_location` with the #128d guard bound — the shape `run_in_threadpool` can call."""
+    return delete_location(location, storage_options, protected=protected)

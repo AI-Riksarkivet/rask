@@ -23,7 +23,7 @@ from opentelemetry.trace import StatusCode
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
 from maintenance.core.metrics import record_dataset_swept, record_reclaimed, record_refused, record_run, record_run_started
-from maintenance.services import purge
+from maintenance.services import base_refs, purge
 from maintenance.services.optimize import DatasetResult, compact_one, discover_datasets
 from service_kit.governed import fga
 from service_kit.lakehouse import maintenance_policies, warehouse_records
@@ -178,6 +178,26 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
             )
     except Exception as exc:  # noqa: BLE001 — the trash report must never abort a maintenance tick
         log.warning("trash_expiry_report_failed", extra={"error": str(exc)})
+    # #128d/#114 THE PRE-PASS — over every discovered dataset in EVERY bucket, before a single one is
+    # compacted. It has to be whole-estate and it has to be first: a shallow clone in bucket B is the
+    # only thing that knows bucket A's dataset must not be touched, so a per-bucket or per-dataset
+    # check cannot see it. The SOURCE carries no feature flag and no `base_paths` of its own
+    # (measured), which is why the flag gate inside `compact_one` misses this entirely.
+    #
+    # Cost is one manifest read per dataset and no data file is opened — the same order as discovery
+    # itself, paid once per tick.
+    protected = base_refs.protected_roots(uris, options)
+    if protected.protected:
+        log.info("maintenance_protected_bases", extra={"count": len(protected.protected), "roots": sorted(protected.protected)[:20]})
+    if protected.unreadable:
+        # NOT fatal, and not silent either. An unreadable dataset might have been the referrer whose
+        # base_paths protect a dataset this tick is about to rewrite, so the gap is named — the same
+        # rule the orphan scan follows with `checked=False`. Escalating to a refusal of the whole tick
+        # would let one corrupt dataset stop maintenance estate-wide.
+        log.warning(
+            "maintenance_base_refs_incomplete",
+            extra={"count": len(protected.unreadable), "datasets": [uri for uri, _ in protected.unreadable][:20]},
+        )
     results: list[DatasetResult] = []
     now = datetime.now(UTC)
     # The FAIL-emit cap's own argument (top of this module), applied to the sweep it lives in: the
@@ -242,6 +262,7 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
                 optimize_indices_enabled=bool((policy or {}).get("optimize_indices_enabled", True)),
                 scan_batch_size=batch_size,
                 compact_threads=settings.compact_threads,
+                protected=protected,
                 auto_cleanup_interval_commits=auto_cleanup_interval,
             )
             if policy is not None and policy.get("compact_interval_hours") and result.error is None:
