@@ -1718,9 +1718,28 @@ Three of the first draft's seven are now answered and have been struck.
      (`grep -l "WorkflowRuntime()"`): `ingest/__init__.py`, `flows/runtime.py`, and — added this session
      by S1 — `medallion/mover.py`. The rule existing in the chart is what makes that acceptable; the
      rule not being live is what keeps it a live risk rather than a settled one.
-8. **What is the measured size of an `enumerate_chunks` result at the advertised scale?** §2.13's
-   structure is confirmed but its magnitude is not establishable from source — no gRPC limit and
-   no state-store row limit is set anywhere in this repo. Measure before sizing the fix.
+8. ~~**What is the measured size of an `enumerate_chunks` result at the advertised scale?**~~
+   **MEASURED 2026-08-15 — 8.4% of budget at a million units, and the ceiling is ~11.8M.** Serializing
+   the real `ChunkSpec` at `CHUNK_SIZE=1000`:
+
+   | units | chunks | result bytes | % of the 3 MiB dispatch budget |
+   |---:|---:|---:|---:|
+   | 1,000 | 1 | 257 | 0.0% |
+   | 10,000 | 10 | 2,597 | 0.1% |
+   | 100,000 | 100 | 26,177 | 0.8% |
+   | **1,000,000** | 1,000 | 263,777 | **8.4%** ← the advertised scale |
+   | 10,000,000 | 10,000 | 2,657,777 | 84.5% |
+
+   Budget reached at **11,820,001 units** (11,821 chunks). And the shape it replaced, with keys inline
+   at a realistic S3 key length (~70 B/unit), is exhausted at **44,849 units** — so the pointer
+   redesign moved the ceiling by roughly **264x**, and §2.13's "met grpc's 4 MiB ceiling at roughly
+   38k units" was a good estimate of the measured 44.8k.
+
+   **The answer to "measure before sizing the fix" is therefore: the fix does not need resizing.** The
+   3 MiB budget is not a scale limit at any volume this plane plausibly sees; it is a guard against a
+   STRUCTURAL regression. Which is the residual risk, and it is now a test rather than a note —
+   `tests/unit/test_chunk_dispatch_scale.py` fails if a chunk descriptor starts carrying per-unit data
+   again, because the numbers above hold only while a chunk is a pointer.
 9. ~~**Does an orphaned `drain_chunk` fail loudly or silently after §2.4 deletes its consumer?**~~
    **ANSWERED 2026-08-11 — BOTH, in that order.** Settled by experiment against the live NATS
    (throwaway `Q9_PROBE` work-queue stream, durable deleted under an in-flight `fetch`):
