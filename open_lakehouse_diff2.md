@@ -347,12 +347,19 @@ BEFORE the seed, so a failed grant left the table re-registered-but-ownerless AN
 deleted — the recovery door destroying the means of recovery. Four retry-convergence tests
 (`tests/integration/test_moto_s3.py`), one per fixed door.
 
-NOT LANDED, and none of it is silent: `rename` (revokes the SOURCE before seeding the DESTINATION —
-reordering trades "stranded" for "stale grant on a dead id", a decision not a cleanup);
-`batch_commit_tables` (a LOOP of seeds — partial failure needs batch-level convergence);
-the warehouse-scoped namespace create's bind step (state 3, untouched); fix-option 2, the
-write-capable structural reconcile. Two doors carry `undo=None` DELIBERATELY, documented at the site:
-`undrop_namespace` (compensating would destroy a cascade the user just recovered) and
+ALSO LANDED (`15525d4d`, `529c6367`): **`rename` reordered to seed-then-revoke** (owner ruling
+2026-08-15 — a failed seed used to leave the table with no tuples ANYWHERE while the source's were
+already deleted; seeding first trades that for a stale grant on a dead id, which only matters if that
+id is reused and which the create path's own revoke already clears). And **state 3 is closed**: the
+warehouse-scoped namespace create now compensates (drop the namespace, drop the binding, evict the
+cache), so `adopt_existing` is no longer doing undocumented double duty as a repair path — with
+`undo=None` when the namespace WAS adopted, because those datasets predate the request.
+
+STILL NOT LANDED, and none of it is silent: `batch_commit_tables` (a LOOP of seeds — partial failure
+needs batch-level convergence, not a per-call compensator); fix-option 2, the write-capable
+structural reconcile (owner deferred it 2026-08-15 — it is the only thing that can repair objects
+ALREADY stranded in the live estate). Two doors carry `undo=None` DELIBERATELY, documented at the
+site: `undrop_namespace` (compensating would destroy a cascade the user just recovered) and
 `create_materialized_view` (this backend exposes no `drop_materialized_view` at all).
 
 Also confirmed by the pass and worth recording: **the reconciler cannot even DETECT states 1 and 3** —
@@ -459,6 +466,30 @@ final status MUST be `deactivated`. Same shape for `protected` on projects
 ---
 
 ### F5 (P1) — The flagship credential-isolation e2e cannot run against the real endpoint: key-name and shape mismatch
+
+**STATUS: CODE LANDED 2026-08-15 (`3cacdd91`) — ACCEPTANCE CRITERIA NOT YET MET.** The e2e now reads
+`body["credentials"]["storage_options"]` with the bare key names, and prefers the vended `endpoint`
+(the `region` bug this section flags had the same root cause — it lives inside `storage_options`
+too). `make e2e-isolation` EXISTS now and fails loudly on missing env instead of running nothing; it
+stays out of `e2e-ci`, which cannot provision two tenants (#84).
+
+The real fix is the pin in `tests/unit/test_vending.py`, a COLLECTED path, because the e2e cannot be
+relied on to notice its own drift: every credential-issuing vendor must emit the same bare key
+vocabulary (parametrized over `sts` AND `web_identity`, since a divergence between them would be
+invisible to both) with no `aws_`-prefixed alias in either direction, plus a contract test that reads
+the e2e's own `_client` and asserts each key it pulls is one a vendor emits. That second pin was
+verified against the PRE-FIX source: replaying it yields
+`['aws_access_key_id', 'aws_secret_access_key', 'aws_session_token']` and the assertion fails, so it
+catches the bug that actually shipped.
+
+**Still open, and this is what keeps F5 from being closed:** the suite has NOT been run against a
+deployed vending-enabled stack, and the sabotage run — widen the session policy to the bucket root,
+confirm the cross-tenant GET assertion then FAILS — has not been done. Until both happen, RustFS's
+session-policy fidelity remains untested and the #74 isolation claim still rests on the offline
+policy evaluator. The code is now capable of running; nobody has watched it run.
+
+**Correction to this section's own text:** the placement constraint it cites ("`services/catalog/tests`
+is NOT in the root `testpaths`") is stale — it is listed in `testpaths` today.
 
 **Evidence.**
 - Producer: `services/catalog/src/catalog/core/vending.py:210-218` (verified) — vended
