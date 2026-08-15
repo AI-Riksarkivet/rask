@@ -60,6 +60,35 @@ METADATA_RELATION: Final = "can_get_metadata"
 NOTIFY_RELATION: Final = "can_be_notified"
 
 
+def _as_object(name: str) -> str:
+    """The FGA object for one pointer's `object_id` — qualified, but never qualified TWICE.
+
+    The plane has two pointer sources and they spell this differently, which is the whole reason this
+    function exists rather than an f-string at the call site:
+
+    * a LINEAGE run stamps the BARE dataset name (`notifiable()` takes `outputs[0]`, e.g.
+      `silver$pages`), so it needs the type prefix;
+    * a GOVERNANCE event stamps the CANONICAL id, already carrying its type —
+      `CatalogControlEvent.object_id` is documented as "e.g. `warehouse:acme`, `table:db1$t`,
+      `namespace:db1`" — and `as_delivery` copies it through verbatim.
+
+    Prefixing unconditionally checked every v3 row as `table:table:db1$t`, an object that cannot
+    resolve, so every governance notification was filtered out of the feed permanently. The badge does
+    NOT go through this filter (`/inbox/unread` is answered from the actor's own partition), so the
+    result was a badge counting a row the list would never show — an unclearable badge, which is the
+    precise failure this plane exists to end.
+
+    Honouring the stamped type is better than merely un-breaking it: `can_get_metadata` is defined on
+    the container types as well, so a grant on a warehouse is now asked about the WAREHOUSE rather
+    than about a table that never existed.
+
+    A dataset name cannot collide with this: the estate's are `<namespace>$<table>`, delimiter-joined
+    and colon-free. An output named with a URI-ish namespace would pass through unqualified and answer
+    False — exactly as it answers False today under the prefix, since no tuple exists for it either.
+    """
+    return name if ":" in name else f"{FGA_OBJECT_TYPE}:{name}"
+
+
 class Visibility:
     """One subject-agnostic view onto OpenFGA, asked per subject.
 
@@ -88,13 +117,14 @@ class Visibility:
             # FGA on with no client is a BROKEN authorization layer, and answering it open turns that
             # into an open one, silently.
             raise ServiceUnavailableError("authorization is enabled but unavailable")
+        objects = {name: _as_object(name) for name in names}
         allowed = await fga.batch_check(
             self._client,
             user=subject,
             relation=relation,
-            objects=[f"{FGA_OBJECT_TYPE}:{name}" for name in names],
+            objects=list(objects.values()),
         )
-        return {name for name in names if allowed.get(f"{FGA_OBJECT_TYPE}:{name}")}
+        return {name for name, obj in objects.items() if allowed.get(obj)}
 
     async def visible(self, subject: str, names: Collection[str]) -> set[str]:
         """RENDER: the subset of `names` the subject may SEE. Stays on `can_get_metadata`.

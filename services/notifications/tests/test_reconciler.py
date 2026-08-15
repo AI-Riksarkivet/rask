@@ -600,3 +600,39 @@ async def test_the_feed_lane_pushes_channels_for_a_row_it_actually_wrote() -> No
     )
 
     assert pushed == ["alice"], "no channel push on the feed lane — every HTTP-emitted run is silent on email/Slack"
+
+
+# --- KNOWN GAP: the mark can step over a row that had not COMMITTED yet -------------------------
+#
+# `seq` is a `bigserial` (lineage repository.py:135) allocated at INSERT, and lineage's pool runs
+# autocommit (core/age.py:33), so events commit independently and NOT necessarily in seq order. Two
+# producers interleave: writer A takes 1000 and is still inserting when writer B takes 1001 and
+# commits. A tick reading at that instant sees 1001 and not 1000, sets the mark to 1001, and every
+# later tick filters `seq > stored.seq` — so 1000 sits below the mark forever and its author and
+# watchers are never told. No gap log fires, because the page was not truncated.
+#
+# XFAIL RATHER THAN FIXED, and the reason is worth recording: the obvious fix — trail the mark by a
+# bounded overlap and re-offer the last few rows — is SAFE on its face (delivery is idempotent on the
+# notification's natural key, and `dismiss` marks a pointer rather than deleting it, so a re-offer
+# cannot resurrect a dismissal) and still WRONG here. The first-ever tick primes the cursor to the
+# newest row and deliberately notifies nobody; an overlap would then reach BELOW that primed mark on
+# the very next tick and deliver the backlog it had just promised to skip — replaying the retained
+# feed into everyone's inbox on deployment day, which is the exact failure priming exists to prevent.
+#
+# Closing it properly needs a floor the overlap may not cross (the seq the cursor was primed at), or a
+# commit-ordered column the feed does not currently have. Both are design decisions, not edits.
+
+
+@pytest.mark.xfail(reason="known gap: bigserial commit order — see the note above; fixing it needs a primed-at floor", strict=True)
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_row_that_committed_late_below_the_mark_is_still_delivered() -> None:
+    # The mark is at 1001; row 1000 only became visible afterwards.
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(1001), _event(1000)], "next_cursor": 999}))
+    plane = _Plane()
+    store, _ = _store(1001)
+
+    await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
+
+    delivered = sorted(row["notification_id"] for row in plane.boxes.get("alice", []))
+    assert "run-1000@FAIL" in delivered, "the late-committing row was stepped over and is lost forever"
