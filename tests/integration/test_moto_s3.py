@@ -47,8 +47,8 @@ def moto_endpoint() -> Iterator[str]:
     server.stop()
 
 
-@pytest.fixture
-def moto_client(moto_endpoint: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+def _client(moto_endpoint: str, monkeypatch: pytest.MonkeyPatch, **extra: str) -> Iterator[TestClient]:
+    """The catalog app against moto, with `extra` overriding/adding env before settings are read."""
     for key, value in {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": f"s3://{BUCKET}",
@@ -58,6 +58,7 @@ def moto_client(moto_endpoint: str, monkeypatch: pytest.MonkeyPatch) -> Iterator
         "LANCE_S3_ALLOW_HTTP": "true",
         "LANCE_OIDC_ENABLED": "false",
         "LANCE_FGA_ENABLED": "false",
+        **extra,
     }.items():
         monkeypatch.setenv(key, value)  # auto-restored on teardown -> order-independent
 
@@ -69,6 +70,23 @@ def moto_client(moto_endpoint: str, monkeypatch: pytest.MonkeyPatch) -> Iterator
     with TestClient(app) as test_client:
         yield test_client
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def moto_client(moto_endpoint: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    yield from _client(moto_endpoint, monkeypatch)
+
+
+@pytest.fixture
+def moto_client_recoverable(moto_endpoint: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """`moto_client` with a GRACE PERIOD, so `drop` files a trash record instead of destroying.
+
+    A separate fixture rather than a flag on the shared one: `trash_grace_days` defaults to 0 in code
+    (`core/config.py`) and a grace period changes what `drop_table` MEANS for every caller, so the
+    tests asserting destructive drops must keep the default. Turning it on per-test is also how a real
+    deployment turns the feature on — the chart ships 7.
+    """
+    yield from _client(moto_endpoint, monkeypatch, LANCE_TRASH_GRACE_DAYS="7")
 
 
 def test_catalog_roundtrip_on_moto_s3(moto_client: TestClient) -> None:
@@ -251,6 +269,113 @@ def test_compensation_matrix_never_drops_a_replaced_or_kept_table() -> None:
     assert _compensation_allowed("overwrite", overwrote_existing=True) is False  # replaced a table
     assert _compensation_allowed("exist_ok", overwrote_existing=False) is False
     assert _compensation_allowed("ExistOk", overwrote_existing=False) is False
+
+
+# --------------------------------------------------------------------------- #
+# diff2 F3: RETRY CONVERGENCE — every create door, not just the Arrow one
+#
+# The rule each test below asserts is the same one, and it is deliberately loose about WHICH way a
+# door converges: after a failed grant, attempt 2 must leave the object USABLE or leave it GONE.
+# Half-states are the defect. An object that exists natively but holds no tuples is invisible to
+# every list (per-item FGA filtering), undroppable by everyone (`can_drop: owner`, and `owner from
+# parent` cannot help because the seed writes the owner grant and the parent edge in ONE batch — so
+# with neither written there is no inheritance path for any admin either), and permanently blocks
+# its own id against the retry that would repair it.
+#
+# `seed_ownership` is patched, NOT `seed_ownership_or_compensate`: the compensating seam is the code
+# under test, so stubbing it would assert nothing. The patch lands on the fga_deps module global,
+# which is exactly what the seam's internal call resolves.
+# --------------------------------------------------------------------------- #
+
+
+def _failing_seed_ctx(mp: pytest.MonkeyPatch) -> None:
+    """Patch the grant to fail the way a real OpenFGA outage does (503 → ServiceUnavailableError)."""
+    from lance_namespace import ServiceUnavailableError
+
+    async def failing_seed(*_a: object, **_kw: object) -> None:
+        raise ServiceUnavailableError("fga down mid-create")
+
+    import catalog.api.fga_deps as fga_deps_mod
+
+    mp.setattr(fga_deps_mod, "seed_ownership", failing_seed)
+
+
+def test_declare_converges_after_a_failed_grant(moto_client: TestClient) -> None:
+    """DECLARE was bare native-then-seed. A failed grant left a declared-only table that its declarer
+    could not see, could not drop and could not re-declare (native `TableAlreadyExists`) — reserving
+    the id against everyone, permanently. The undo is unconditionally safe here: a declared table
+    holds no data, so nothing can be destroyed by removing it."""
+    assert moto_client.post("/v1/namespace/f3d/create", json={}).status_code == 200
+    with pytest.MonkeyPatch.context() as mp:
+        _failing_seed_ctx(mp)
+        failed = moto_client.post("/v1/table/f3d$t/declare", json={})
+    assert failed.status_code == 503, failed.text
+    # GONE, not stranded — so the id is free…
+    assert moto_client.post("/v1/table/f3d$t/describe", json={}).status_code == 404
+    # …and the plain retry converges with FGA recovered.
+    assert moto_client.post("/v1/table/f3d$t/declare", json={}).status_code == 200
+
+
+def test_namespace_create_converges_after_a_failed_grant(moto_client: TestClient) -> None:
+    """A stranded namespace is worse than a stranded table: it blocks the NAME, and every child
+    create under it inherits the missing parent edge."""
+    with pytest.MonkeyPatch.context() as mp:
+        _failing_seed_ctx(mp)
+        failed = moto_client.post("/v1/namespace/f3ns/create", json={})
+    assert failed.status_code == 503, failed.text
+    assert moto_client.post("/v1/namespace/f3ns/describe", json={}).status_code == 404
+    assert moto_client.post("/v1/namespace/f3ns/create", json={}).status_code == 200
+
+
+def test_undrop_keeps_the_table_recoverable_when_the_grant_fails(moto_client_recoverable: TestClient) -> None:
+    """The nastiest of the three, because the RECOVERY door destroyed the means of recovery.
+
+    `trash.clear` ran BEFORE the seed, so a failed grant left the table re-registered but ownerless
+    AND its trash record already deleted — simultaneously unreachable and unrecoverable, with no
+    path back for anyone. The fix is an ordering one: seed first, clear only once everything that can
+    still fail has succeeded. So the assertion that matters is not that undrop failed, it is that a
+    SECOND undrop still works.
+    """
+    rows = pa.table({"id": pa.array([1], pa.int64())})
+    assert moto_client_recoverable.post("/v1/namespace/f3u/create", json={}).status_code == 200
+    assert _create(moto_client_recoverable, "f3u$t", rows).status_code == 200
+    # Trash it (a recoverable drop files the record the undrop below reads).
+    dropped = moto_client_recoverable.post("/v1/table/f3u$t/drop", json={})
+    assert dropped.status_code == 200, dropped.text
+
+    with pytest.MonkeyPatch.context() as mp:
+        _failing_seed_ctx(mp)
+        failed = moto_client_recoverable.post("/v1/table/f3u$t/undrop", json={})
+    assert failed.status_code == 503, failed.text
+
+    # THE POINT: the trash record survived the failed undrop, so recovery is still possible.
+    retried = moto_client_recoverable.post("/v1/table/f3u$t/undrop", json={})
+    assert retried.status_code == 200, retried.text
+    assert int(moto_client_recoverable.post("/v1/table/f3u$t/count_rows", json={}).text) == 1
+
+
+def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: TestClient) -> None:
+    """REGISTER attaches bytes that already existed and are not ours to destroy, so its undo is
+    `deregister`, never `drop`. This is the test that would catch someone "simplifying" the four
+    undo callbacks into one shared drop: the retry must converge AND the data must survive."""
+    rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
+    assert moto_client.post("/v1/namespace/f3r/create", json={}).status_code == 200
+    assert _create(moto_client, "f3r$src", rows).status_code == 200
+    described = moto_client.post("/v1/table/f3r$src/describe", json={})
+    assert described.status_code == 200, described.text
+    location = str(described.json()["location"])
+    relative = location.rstrip("/").rsplit("/", 1)[-1]
+
+    with pytest.MonkeyPatch.context() as mp:
+        _failing_seed_ctx(mp)
+        failed = moto_client.post("/v1/table/f3r$copy/register", json={"location": relative})
+    assert failed.status_code == 503, failed.text
+    # The catalog object this request made is gone…
+    assert moto_client.post("/v1/table/f3r$copy/describe", json={}).status_code == 404
+    # …but the underlying data was NOT deleted — the source still reads its three rows.
+    assert int(moto_client.post("/v1/table/f3r$src/count_rows", json={}).text) == 3
+    # …and the retry converges.
+    assert moto_client.post("/v1/table/f3r$copy/register", json={"location": relative}).status_code == 200
 
 
 # --------------------------------------------------------------------------- #

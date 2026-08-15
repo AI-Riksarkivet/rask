@@ -253,17 +253,22 @@ async def create_table(
     # the existing owner (or the /declare-r of a declared-only table) keeps ownership. Skipping the seed also
     # skips the compensation (there is nothing this request wrote to compensate).
     if not existok_kept_existing:
-        try:
-            await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments)
-        except Exception:
-            if _compensation_allowed(mode, overwrote_existing):
-                try:  # compensation is best-effort; the GRANT error below stays the response either way
-                    await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
-                    await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
-                    log.warning("create_compensated", extra={"table": table_id, "reason": "grant_failed"})
-                except Exception as drop_exc:
-                    log.warning("create_compensation_failed", extra={"table": table_id, "error": str(drop_exc)})
-            raise
+
+        async def _undo_create() -> None:
+            await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
+
+        # The revoke-then-drop pair moved into `seed_ownership_or_compensate` (diff2 F3) because it was
+        # ONE try block here: the revoke is an OpenFGA call, so on the outage this compensation exists
+        # for, it raised and the native drop never ran. Now they are independent best-effort steps and
+        # the drop — which needs no FGA — always gets its turn.
+        await fga_deps.seed_ownership_or_compensate(
+            client,
+            settings,
+            token,
+            resource="table",
+            segments=segments,
+            undo=_undo_create if _compensation_allowed(mode, overwrote_existing) else None,
+        )
     # Record provenance authoritatively: the catalog knows the verified principal. Fire-and-forget
     # (after the response, best-effort) so the lineage service can never block/fail a create. The
     # canonical id keeps the lineage Dataset == the OpenFGA object id == the catalog table id; the

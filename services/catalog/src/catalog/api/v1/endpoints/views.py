@@ -46,7 +46,12 @@ async def create_materialized_view(
     # Create is gated on the parent namespace (can_create_materialized_view); seed owner + the parent edge
     # on the ``materialized_view`` object so the creator keeps can_refresh/can_read on their own view and a
     # namespace writer inherits refresh rights via the cascade. Without it the creator would be locked out.
-    await fga_deps.seed_ownership(client, settings, token, resource="materialized_view", segments=segments)
+    # undo=None because there is nothing to call: this backend exposes no `drop_materialized_view`
+    # (grep the tree — create and refresh are the only two view ops wired). So a failed seed still
+    # strands the view, and routing through the compensating seam rather than bare `seed_ownership`
+    # is the point: the day a drop op appears, the fix is one argument here, and until then this line
+    # states the gap instead of hiding it behind a call that looks identical to the covered doors.
+    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="materialized_view", segments=segments, undo=None)
     return response
 
 

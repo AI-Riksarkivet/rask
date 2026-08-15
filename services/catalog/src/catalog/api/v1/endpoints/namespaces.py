@@ -106,10 +106,19 @@ async def create_namespace(
     req = body or CreateNamespaceRequest()
     req.id = reconcile_body_id(segments, req.id)
     response: CreateNamespaceResponse = await run_in_threadpool(native.call, ns, "create_namespace", req)
+
+    async def _undo_create() -> None:
+        await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
+
     # Owner + parent edge (parent namespace if nested, else the catalog root) so the
     # concentric cascade reaches the namespace and its tables — stops a nested-namespace
     # lockout and lets a layer-level grant (medallion bronze/silver/gold) reach children.
-    await fga_deps.seed_ownership(client, settings, token, resource="namespace", segments=segments)
+    #
+    # Compensated (diff2 F3): the namespace is EMPTY at this instant — it was created three lines up
+    # and nothing can have been put in it yet — so the undo cannot destroy anyone's data. A failed
+    # seed used to leave a namespace its creator could neither see nor drop, while native
+    # `NamespaceAlreadyExists` refused every retry, permanently reserving the name.
+    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="namespace", segments=segments, undo=_undo_create)
     await emit_control(
         control,
         action="namespace_created",
@@ -407,7 +416,15 @@ async def undrop_namespace(
         await run_in_threadpool(trash.clear, settings.registry_root, so, t_id)
     # The recoverable cascade kept every tuple (#75's rule), so the descendants' owners are intact;
     # seeding the ROOT records the undrop actor the same way the table undrop does.
-    await fga_deps.seed_ownership(client, settings, token, resource="namespace", segments=segments)
+    #
+    # undo=None DELIBERATELY (diff2 F3). Every other create door can undo what it made, but by this
+    # line the loop above has already re-registered N tables and cleared N trash records — a compensating
+    # `drop_namespace` would destroy a cascade the user just recovered, to repair a missing tuple on its
+    # root. Stranded-but-recoverable beats destroyed, and the damage here is genuinely small: the
+    # descendants kept their owners, so only the root's actor record is missing and an estate admin can
+    # re-seed it. Making this convergent means making the per-child loop resumable, which is F3's
+    # structural-reconcile half, not something a compensator can reach.
+    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="namespace", segments=segments, undo=None)
     await emit_control(
         control,
         action="namespace_undropped",

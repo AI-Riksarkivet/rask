@@ -24,6 +24,7 @@ named table. Fail-closed twice over: an unwired client raises 503 here, and
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from functools import lru_cache
 
 from fastapi import Request
@@ -861,6 +862,67 @@ async def revoke_ownership(
     removed = await fga.revoke_object_tuples(client, obj, actor=actor, origin="create")
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": removed})
+
+
+async def seed_ownership_or_compensate(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: IDToken | None,
+    *,
+    resource: str,
+    segments: list[str],
+    undo: Callable[[], Awaitable[None]] | None,
+) -> None:
+    """:func:`seed_ownership`, but UNDO the native create when the grant fails (diff2 F3).
+
+    The dual-write hazard this closes: every create door runs the native mutation FIRST and seeds
+    tuples second. If the seed fails — an OpenFGA blip is enough — the object exists on storage with
+    no owner and no ``parent`` edge, so per-item list filtering hides it from every caller including
+    its creator, and the obvious retry hits native ``AlreadyExists`` and never reaches the seed again.
+    The object is then unreachable by anything except a hand-written tuple. ``undo`` runs the native
+    delete of what THIS request just created, so the retry starts from a clean slate and converges.
+
+    TWO ORDERING FACTS CARRY THIS, and the first is why the pattern moved here rather than being
+    copy-pasted a ninth time:
+
+    1. The revoke and the undo are INDEPENDENT best-effort steps, not one try block. They were one
+       (`data.py`, the single door that had any compensation at all), and the revoke goes through
+       ``read_object_tuples`` — an OpenFGA call. So in the exact scenario the compensation exists for,
+       a down OpenFGA, the revoke raised and the native undo NEVER RAN. The compensation was inert
+       precisely when it was needed, which is worse than absent because the code reads as covered.
+       The undo needs no FGA, so nothing FGA-shaped may stand in front of it.
+    2. The revoke is attempted FIRST anyway, when it can run. A grant can commit server-side while its
+       response is lost, and a stale owner tuple on a freed id silently grants its holder the NEXT
+       object created at that id — the reused-id privilege bleed :func:`revoke_ownership` exists for.
+
+    ``undo=None`` means the caller has decided a native delete is unsafe here — an ExistOk that KEPT a
+    pre-existing object, or an Overwrite that replaced one whose id still carries the prior
+    incarnation's time-travel history. Dropping either escalates a transient blip into irreversible
+    loss; stranded-but-admin-recoverable beats destroyed. Passing ``None`` is a decision, not a
+    default: it leaves the stranded state reachable, and the structural repair is F3's second half.
+
+    The original grant error is always re-raised — compensation changes what is left behind, never
+    what the caller is told.
+    """
+    try:
+        await seed_ownership(client, settings, token, resource=resource, segments=segments)
+    except Exception:
+        if undo is not None:
+            obj = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+            try:
+                await revoke_ownership(client, settings, resource=resource, segments=segments, token=token)
+            except Exception as revoke_exc:
+                # Expected when OpenFGA is the thing that is down. Logged, never fatal — the undo below
+                # is what actually makes the retry converge, and it must not be skipped for this.
+                log.warning("compensation_revoke_failed", extra={"object": obj, "resource": resource, "error": str(revoke_exc)})
+            try:
+                await undo()
+                log.warning("create_compensated", extra={"object": obj, "resource": resource, "reason": "grant_failed"})
+            except Exception as undo_exc:
+                # Both halves failed: the object is stranded and only the structural reconcile can
+                # reach it. Loud on purpose — this is the state an operator has to be told about.
+                log.error("create_compensation_failed", extra={"object": obj, "resource": resource, "error": str(undo_exc)})
+        raise
 
 
 async def require_can_drop_table(

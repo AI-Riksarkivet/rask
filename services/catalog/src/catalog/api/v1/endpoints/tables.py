@@ -205,7 +205,15 @@ async def declare_table(
     req = body or DeclareTableRequest()
     req.id = reconcile_body_id(segments, req.id)
     response: DeclareTableResponse = await run_in_threadpool(native.call, ns, "declare_table", req)
-    await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments)
+
+    async def _undo_declare() -> None:
+        await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
+
+    # A declared table holds NO data — the undo can never destroy bytes, so this door is the safest
+    # possible place to compensate and there was never a reason for it to be the riskiest. Without it a
+    # failed seed left a declared-only table that its declarer could not see, could not drop, and could
+    # not re-declare (native `AlreadyExists`), reserving the id against everyone, permanently (F3).
+    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_declare)
     # Versionless (no data yet): records who declared it + the reserved location, and keys the CREATED edge
     # (declare_table ∈ lineage _CREATE_OPS). Reconcile fills the real version once data lands at the URI.
     await emit_write_event(
@@ -459,7 +467,14 @@ async def register_table(
     await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
-    await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments)
+
+    async def _undo_register() -> None:
+        # DEREGISTER, never drop. Register ATTACHES bytes that already existed and are not ours to
+        # destroy — the whole point of the door. Deregister is the exact inverse: it removes the
+        # catalog object this request created and leaves the data exactly where it was found.
+        await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+
+    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_register)
     # Versionless + source_uri=the attached location, keying the CREATED edge (register_table ∈ _CREATE_OPS).
     # The registered table already holds data at some version; we don't reopen a possibly-external location on
     # the request path (a reopen failure must never fail an already-committed register) — #23 reconcile reads
@@ -543,9 +558,25 @@ async def undrop_table(
     location = str(record["location"])
     body = RegisterTableRequest(id=segments, location=location.rstrip("/").rsplit("/", 1)[-1])
     response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
-    # Clear only AFTER the re-register commits — a failed register must leave the table recoverable.
+
+    async def _undo_undrop() -> None:
+        # Deregister, not drop: the bytes are the user's recovered data and the trash record below is
+        # still intact, so detaching returns the table to exactly the recoverable state it was in.
+        await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+
+    # The seed comes BEFORE the trash record is cleared, and that ordering is the fix (diff2 F3).
+    # It used to be clear-then-seed, which made a failed seed the worst outcome in the whole plane:
+    # the table was re-registered but ownerless (invisible to its owner, undroppable) AND its trash
+    # record — the one thing that made a retry possible — had already been deleted. The recovery path
+    # destroyed the ability to recover. Now a failed seed deregisters the table and leaves the record,
+    # so the caller simply undrops again.
+    #
+    # This is the same principle the line below already stated for the register step, carried one step
+    # further: nothing irreversible until every step that can still fail has succeeded.
+    await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_undrop)
+    # Clear only AFTER the re-register AND the seed commit — a failure in either must leave the table
+    # recoverable.
     await run_in_threadpool(trash.clear, settings.registry_root, so, canonical)
-    await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments)
     await emit_control(
         control,
         action="table_undropped",
