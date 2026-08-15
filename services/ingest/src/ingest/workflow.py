@@ -429,7 +429,21 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
         # could say "4 done" and never "4 of 500" — no progress bar was possible for exactly the long
         # harvest where one matters. Custom status rides the workflow's own durable state, so it survives
         # a pod death like every other run fact and needs no second writable copy.
-        units_total = sum(len(chunk.get("keys") or ()) for chunk in chunks)
+        # `expected_units`, NOT `len(keys)`. §2.13 turned chunks into POINTERS — `offset` + `count`
+        # into the run's unit manifest — and left `keys` empty by design (:230). This line kept summing
+        # `keys`, so it was ZERO for every chunk a current build produces, and zero is not inert: it is
+        # the early-return condition below. Every real run therefore reported COMPLETE having published
+        # nothing, drained nothing and committed nothing, before the fan-out — and silently disabled
+        # the `max_units` ceiling too, since 0 is never over any bound.
+        #
+        # The accessor exists precisely to resolve the pointer/inline split and the CHILD workflow
+        # already used it (:663); only the parent did not. Every existing test drove the body with the
+        # legacy inline shape, so nothing saw it.
+        # Read the two fields directly rather than `ChunkSpec.model_validate(...).expected_units`:
+        # validating here would REQUIRE run_id/chunk_id, and this sum must tolerate any descriptor the
+        # enumerate activity hands back — including a partial one from an older build replaying across
+        # a deploy. Same precedence the accessor uses: `count` when present, else `len(keys)`.
+        units_total = sum(int(chunk.get("count") or 0) or len(chunk.get("keys") or ()) for chunk in chunks)
         ctx.set_custom_status(json.dumps({"units_total": units_total, "chunks": len(chunks)}))
 
         # THE REFUSAL enumerate_chunks may return instead of chunks — the unit ceiling and the
