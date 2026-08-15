@@ -791,21 +791,22 @@ LANDED — the five that are defects rather than opinions:
   accident of `maintenance.yaml:47`'s hardcoded `replicas: 1`.
 - **2** the nine-vs-ten type count.
 
+ALSO LANDED SINCE: **4** (`4b2a0b15` — a create at a still-recoverable id is refused 409 rather than
+inheriting the dead table's readers and writers) and **5** (`78eb09a2` + `a9986cd5` — the deadline is
+purge-eligibility, `TrashEntry.expired` says which state you are in). **1 is CLOSED as no-defect**;
+its corrected premise is the item text below.
+
 STILL OPEN — each is a BEHAVIOUR change, and each needs a call rather than a patch:
-- **1 (two project-id regexes)** — they are not merely duplicated, they DISAGREE: `CONTROL_ID_RE` is
-  lowercase 3–63, `PROJECT_PATTERN` allows uppercase and 1–64. Unifying changes which project ids are
-  accepted, so the question is which rule wins and what happens to existing ids that only satisfy the
-  looser one. Not a de-duplication.
 - **3 (binding-cache TTL)** — adds re-reads on a hot path; the corrected consequence is narrow
   (persistent 403s on a re-bound namespace until restart), so the TTL is a cost/benefit call.
-- **4 (trash-window privilege bleed)** — SECURITY-relevant: a same-id re-create during the grace
-  window inherits the old table's tuples, and undrop seeds the UNDROPPER as owner (an implicit
-  ownership transfer). The doc's cheapest option — refuse a same-id create while a live trash record
-  exists — changes what `create` does. Worth doing; needs the ruling.
-- **5 (undrop ignores expiry)** — decide whether the `/tasks` deadline means "gone" or
-  "purge-eligible". Today it overstates finality either way.
+- **4b (undrop ownership)** — the residue of 4. `undrop` seeds the UNDROPPER as owner while the
+  original owner's tuples are still live, so an undrop by someone else ADDS an owner rather than
+  transferring. Bug or intent? Genuinely ambiguous; left for a ruling rather than guessed at.
 - **6 (purge reuses `table_dropped`)** — needs the wire-contract regen (`make openapi` +
-  `gen:types:catalog` + `test_openapi_contract`), so it touches generated clients.
+  `gen:types:catalog` + `test_openapi_contract`), so it touches generated clients. **No longer
+  blocked**: that regen was done safely for items 5/8 (`a9986cd5`), including the trap that
+  `make openapi` reads the WORKING TREE and will bake a concurrent session's uncommitted edits into a
+  committed artefact. The vocabulary itself is one constant — `service_kit/control_events.py:51`.
 
 **Item 11 — "grant PROVENANCE is not recordable" — is FALSE, and the design it asks for already
 exists.** `_audit_tuples` (`packages/service-kit/src/service_kit/governed/fga.py`) emits one audit row
@@ -825,11 +826,25 @@ The original evidence missed it by grepping for `granted_by`/`grantor`; the fiel
 only `action`/`outcome`/`subject`/`resource`, so `grantee`/`relation`/`origin` are stored but not
 rendered, and the `openfga` skill documents no provenance procedure. That is a projection + docs gap.
 
-1. Two project-id regexes: `CONTROL_ID_RE` (`catalog/core/identifiers.py:32-33`, lowercase 3-63,
-   `\Z`-anchored) vs `PROJECT_PATTERN` (`service_kit/lakehouse/warehouse_registry.py:37`,
-   `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`) (agent-read) — the exact single-constant lesson
-   `identifiers.py` records, recurring across the package boundary. Fix: one constant exported from
-   service-kit, both import it.
+1. ~~Two project-id regexes … the exact single-constant lesson recurring. Fix: one constant, both
+   import it.~~ **PREMISE CORRECTED 2026-08-15 — they are not two copies of one rule, and there is no
+   live defect.** Verified by driving both, not by reading:
+   - `CONTROL_ID_RE` is the **mint-side** rule and gates every create door — `projects.py:78`,
+     `warehouses.py:82`, `policies.py:71`, `members.py:49` all alias it. Lowercase, 3–63, `\Z`.
+   - `PROJECT_PATTERN` is the **consume-side** rule: `is_safe_project` plus medallion's
+     `ProjectParam` query constraint, validating a project value those services RECEIVE. Mixed case,
+     `_`, 1–64, `$`.
+   The `$` looked like the exact hole `identifiers.py`'s docstring records fixing on 2026-08-04 (a
+   `$`-anchored copy accepting `"acme\n"`). It is not reachable: `is_safe_project` uses `fullmatch`,
+   and driving medallion's real `Query(pattern=PROJECT_PATTERN)` through FastAPI answers **422** for
+   `acme\n` and `acme\nx` (Pydantic v2 anchors). Both consumers are safe.
+
+   **What remains is an ASYMMETRY, not a duplication:** the consume rule accepts strings the mint
+   rule can never produce (`ACME`, `a_b`, 1-char, 64-char), so "validated" there means
+   "syntactically plausible" rather than "could exist". Tightening it is probably right and probably
+   a no-op for valid traffic — but it is a WIRE-VISIBLE change (medallion's OpenAPI `pattern`), and
+   it is not obviously safe while **#67 (pre-registry ghost projects: FGA tuples with no registry
+   record)** is open, because those never passed the mint rule at all. Decide #67 first.
 2. `fga.py:3-6` docstring says "nine types"; `model.fga` defines ten (`annotation_project`)
    (agent-read). One-line fix.
 3. Binding cache is forever-positive with best-effort broadcast eviction over a ring-buffer
