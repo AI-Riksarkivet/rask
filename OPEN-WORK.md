@@ -1206,6 +1206,98 @@ work).
 8. **#82** TRIPWIRE — deliberately nothing until interactive-frequency listings force a
    query-store design round.
 
+## K. lakehouse diff2 — what survives its deletion *(folded 2026-08-15)*
+
+`open_lakehouse_diff2.md` diffed rask's catalog layer against Lakekeeper / Unity / Polaris and
+produced ten findings. Six are terminal in code and one was refuted outright; what follows is the
+residue that is NOT work-in-progress but **blocked**, folded here whole because that file is an
+`open_*.md` — ephemeral by design — and nothing may be the only copy of anything.
+
+Each item names what landed, what is left, and precisely what would unblock it. Where a fix is
+partly landed the commit is given, so "deferred" cannot be read as "untouched".
+
+1. **F1.a — a cross-ID bucket-claim race the conditional creates cannot arbitrate.** *(needs a
+   ruling)*
+   The mint is keyed by warehouse ID, so two DIFFERENT ids claiming one BUCKET both pass. Mallory
+   POSTs `{id: wh-evil, bucket: acme-wh, project: evil}` while acme's own reconcile is mid-flight;
+   both read the registry before either writes, both clear the rival-claim scan, both mint their own
+   record. Her project then holds `owner` on `warehouse:wh-evil` whose `root_uri` is acme's bucket —
+   full cross-tenant disclosure — and `set_project_policy` resolves through the same registry, so her
+   maintenance policy can destroy acme's version history. No code path detects a double-claimed
+   bucket; recovery is manual.
+   **Deferred by diff2's own F1 landing note**, not by omission: the fix is a bucket-KEYED claim
+   record (`_warehouses/bucket-claims/<bucket>.json`, written with the same `IfNoneMatch: *`
+   primitive as the id mint) and it is to be designed WITH **#85**'s collapse of the four
+   control-root JSON stores into one record primitive, rather than adding a fifth ad-hoc store first.
+   **Unblocked by:** a ruling to either pull it forward or confirm it stays behind #85.
+
+2. **F3.1 — `batch_commit_tables` does not converge.** *(needs a ruling)*
+   LANDED (`6772a35c`): the seed loop no longer abandons the batch at the first failure, and the
+   error NAMES every table that landed without ownership plus the fact that a retry will not repair
+   them. LEFT: the batch still cannot converge — a retry re-runs the atomic native commit, hits
+   `TableAlreadyExists`, and never reaches the seeds again.
+   **Unblocked by:** a decision between three shapes that trade different failures — pre-flight the
+   seeds (a check that can still go stale), seed-then-commit (trades this for tuples on tables that
+   may not exist), or an idempotent re-seed keyed on the declared ids (needs the native declare
+   sub-op to be idempotent).
+
+3. **F3.2 — a write-capable structural reconcile.** *(owner-deferred 2026-08-15: "No — not yet")*
+   The ONLY repair for objects already stranded in the live estate — F3.1's batch case, the two
+   deliberate `undo=None` doors, and anything created before the compensation pass. Today they are
+   not listed, not droppable at any tier, not repaired by any automated pass, and not even reported.
+   Stays deferred until that ruling is overturned. The DETECTOR half needs no ruling and is item 4.
+
+4. **F3.3 — a zero-tuple detector for tables and namespaces.** *(needs a ruling)*
+   LANDED (`3c155308`): the drift scan now reads EVERY registered warehouse root, not just the shared
+   one, so the per-warehouse namespace layer is no longer invisible; an unreadable root is an
+   `IncompleteScan` rather than an estate-wide `CategoryUnavailable` that would block the purge.
+   LEFT: nothing detects an object with ZERO tuples, so a stranded table is still invisible to the
+   report that `purge_expired_trash` gates on.
+   **Unblocked by:** a decision on the read pattern — it needs an O(objects) per-object FGA
+   cross-check, where the report today does one bulk `read_tuples` — and a rule for not flagging
+   legitimately-untupled objects during a migration window.
+
+5. **F5 — the credential-isolation e2e cannot run.** *(needs infrastructure — #84)*
+   CODE LANDED (`3cacdd91`). The estate's strongest claim — tenant B's vended credentials are refused
+   on tenant A's bucket — is proven only by an OFFLINE policy evaluator, i.e. by rask's own belief
+   about what its session policy says, never by RustFS evaluating it. Every test SKIPS against the
+   shipped stack, and a skip reads identically to a pass.
+   **Unblocked by:** `vending.mode=web_identity` (which requires `rustfs.oidc.enabled` +
+   `auth.enabled`) plus a SECOND tenant with its own admin subject — neither provisioned by
+   `scripts/e2e_stack.sh`. The sabotage half additionally needs a deliberate widened-policy lever so
+   the cross-tenant GET can be shown to FAIL; that lever is a live security downgrade if it can be
+   reached in production, so it belongs in the harness's chart values rather than in `vending.py`.
+
+6. **F7 — the shipped posture exercises almost none of the isolation apparatus.** *(needs a ruling)*
+   Two halves, both open.
+   *(a)* Prod vending is `mode_b` everywhere, so #74's isolation machinery is dormant on every
+   shipped estate. **Unblocked by:** a posture ruling to set `vending.mode=web_identity`, which
+   requires `rustfs.oidc.enabled=true`, accepts a RustFS roll, and needs `ROLE_POLICY` provisioned.
+   *(b)* Every fleet service holds the RustFS ROOT key (`maintenance/core/config.py` literally
+   defaults to `rustfsadmin`), so credential-level tenant isolation exists only for EXTERNAL clients.
+   Any RCE or path-traversal in medallion, maintenance, lineage, the viewer or the catalog is
+   immediately a full-lakehouse compromise, and RustFS sees one principal for the whole fleet so no
+   object-store mutation can be attributed to a service. **Coupled by the source docs**:
+   `open_ingest_design.md` §2 rules against human-vs-service tier guards in the write doors and
+   `open_gateway.md` Phase 2 is the same decision, so all three must be settled together.
+
+7. **F9 — no generic/opaque asset rung; the model registry squats on the `table` FGA type.**
+   *(excluded by scope ruling, and constrained by another)*
+   Outside the model/Ray-train scope exclusion. Additionally CONSTRAINED by the 2026-08-15 LANCE-ONLY
+   ruling: if the rung ever lands it must be a governed opaque BLOB — no format tag, no schema
+   interpretation, no data ops — because a second TABLE lane carrying a format tag is exactly what
+   that ruling forbids. The ruling constrains the shape; it does not authorize the rung.
+   **Unblocked by:** ratification of the rung's shape. Do not scope it by naming one workload's file
+   formats — the owner struck EAD/IIIF as scoping.
+
+8. **F10.1r — mint-vs-consume project-id rules are asymmetric.** *(gated on #67)*
+   No live defect: `is_safe_project` uses `fullmatch` and the Pydantic models anchor, so the
+   trailing-newline case is refused at the door. Tightening the CONSUME rule to match the MINT rule
+   is wire-visible on medallion's generated clients.
+   **Unblocked by:** deciding **#67** (pre-registry ghost projects) FIRST — those ids never passed the
+   mint rule, so tightening consume would refuse them, and the adopt-vs-revoke call has to come
+   before the tightening does.
+
 ## How this survives
 
 1. **P0** of `docs/architecture/lance-ns-merge.md` copies this file to `rask/docs/OPEN-WORK.md`.
