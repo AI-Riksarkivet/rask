@@ -237,31 +237,81 @@ export function areaOf(pathname: string): string {
  * ForbiddenPage regardless of what the rail shows. Advertising a route we would refuse is the POINT —
  * the refusal explains itself, and a disabled row is not a way in.
  */
-export function lakehouseSidebar(estateAdmin: boolean): ZoneNav {
+/** The reason every row carries when no project is open.
+ *
+ *  It names the missing CONTEXT and where to supply it, because the control that fixes it is already
+ *  on screen — the project switcher sits in the sidebar header, directly above these rows. "Open one
+ *  from Projects" would send someone to another zone for something they can do here. */
+const NO_PROJECT = 'needs an active project — pick one from the switcher above';
+
+/** Mark every leaf in `groups` unavailable, PRESERVING any reason already on it.
+ *
+ *  `??`, never `=`, and the order it composes in is the whole point. A non-admin with no project has
+ *  two problems, and only one of them survives fixing the other: pick a project and Operations is
+ *  still refused, so the FGA denial is the reason that must show. Overwriting it would tell someone
+ *  to pick a project, watch the row stay dead afterwards, and leave them with no next move. */
+function withReason(groups: ZoneNav['groups'], reason: string): ZoneNav['groups'] {
+	return groups.map((g) => ({
+		...g,
+		items: g.items.map((leaf) => ({
+			...leaf,
+			unavailable: leaf.unavailable ?? reason,
+			...(leaf.children
+				? { children: leaf.children.map((c) => ({ ...c, unavailable: c.unavailable ?? reason })) }
+				: {}),
+		})),
+	}));
+}
+
+/** The zone's rail. `activeProject` is REQUIRED, not optional, and that is deliberate.
+ *
+ *  THE RAIL USED TO CONTRADICT THE PAGE IT FRAMED. `/lakehouse` with no project open renders "Every
+ *  lakehouse surface is scoped to the project you are standing in — warehouses, namespaces and tables
+ *  all hang beneath one" while the rail beside it offered thirteen live links into exactly those
+ *  surfaces. Every one of them resolved to a page with nothing to resolve against, so the zone read as
+ *  broken rather than as un-chosen, and the state was reachable by simply opening `/lakehouse`.
+ *
+ *  Disabled-with-a-reason rather than hidden (the estate's standing ruling) and rather than a redirect:
+ *  a 307 at this exact spot was RETIRED at #109 when the zone root became this overview, and projects
+ *  are ambient context (a cookie + the host), never URL segments — so bouncing someone off
+ *  `/lakehouse/catalog/tables` discards a route that is still perfectly valid once a project is open.
+ *
+ *  The root Overview stays a live link on purpose: it is the page that EXPLAINS the empty state, and
+ *  disabling it would leave the rail with nothing reachable and no way to read why.
+ *
+ *  Required rather than defaulted because the safe default is not obvious in either direction — a
+ *  `= null` would silently disable the whole rail for any caller that forgot it, and a `= 'unknown'`
+ *  would silently re-open it. Making the caller state it means the answer comes from `data.activeProject`
+ *  or not at all. */
+export function lakehouseSidebar(
+	estateAdmin: boolean,
+	activeProject: string | null | undefined,
+): ZoneNav {
 	// The FGA denial's own wording, so the rail, the ForbiddenPage and the API's 403 all name the same
 	// relation on the same object. A reason that paraphrases sends users looking for a setting.
 	const denial = 'estate-admin only (needs can_observe_events on the FGA root)';
+	const gated = estateAdmin
+		? LAKEHOUSE_GROUPS
+		: LAKEHOUSE_GROUPS.map((g) =>
+				PRIVILEGED_GROUPS.has(g.label)
+					? {
+							...g,
+							// Children too: a parent may be disabled while its sub-routes stay live links,
+							// which is exactly the hole a shallow copy would leave open.
+							items: g.items.map((leaf) => ({
+								...leaf,
+								unavailable: denial,
+								...(leaf.children
+									? { children: leaf.children.map((c) => ({ ...c, unavailable: denial })) }
+									: {}),
+							})),
+						}
+					: g,
+			);
 	return {
 		title: 'Lakehouse',
 		root: LAKEHOUSE_ROOT,
-		groups: estateAdmin
-			? LAKEHOUSE_GROUPS
-			: LAKEHOUSE_GROUPS.map((g) =>
-					PRIVILEGED_GROUPS.has(g.label)
-						? {
-								...g,
-								// Children too: a parent may be disabled while its sub-routes stay live links,
-								// which is exactly the hole a shallow copy would leave open.
-								items: g.items.map((leaf) => ({
-									...leaf,
-									unavailable: denial,
-									...(leaf.children
-										? { children: leaf.children.map((c) => ({ ...c, unavailable: denial })) }
-										: {}),
-								})),
-							}
-						: g,
-				),
+		groups: activeProject ? gated : withReason(gated, NO_PROJECT),
 		footer: LAKEHOUSE_FOOTER,
 	};
 }

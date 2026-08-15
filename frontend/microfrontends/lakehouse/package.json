@@ -10,6 +10,7 @@
 		"preview": "vite preview",
 		"start": "bun ./build/index.js",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"test": "vitest run --dir src",
 		"test:e2e": "playwright test",
 		"lint": "oxlint .",
 		"fmt": "rsvelte-fmt .",
