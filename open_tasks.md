@@ -11,6 +11,40 @@ Read the source before starting; update the source, not this file, when the work
 
 Closed items are not listed. Git history is the record of those.
 
+**Scope.** This file is the backend/platform queue. The wider estate queue — frontend (#110, #111,
+#116, #130, #147), owner rulings (#98, #134, #143, #146), and the lakehouse/catalog items (#43, #48,
+#56, #67, #84, #85, #91, #142) — lives in the session task list and in `open_lakehouse_diff2.md` §5.
+`diff2` §5 row 2 (F2, time-boxed grants) is **half done**: the wrapper half landed 2026-08-14
+(`b58eff4f` — `condition_context()` + `context` on all four read wrappers); the catalog call-site half
+(`_require` passes no context) is still open.
+
+---
+
+## ⛔ BLOCKS EVERY IMAGE BUILD — ahead of the five
+
+**#148 — `medallion.workflow` imports `dapr.ext.workflow`; `services/medallion/pyproject.toml` never
+declares it.** The workspace venv resolves it through a sibling (`flows`, `ingest`), so every test
+stays green; the image's own closure cannot, so `.docker/rest-catalog.dockerfile`'s import gate fails
+and **no `rest-catalog` image can be built by anyone**. That one image serves catalog, lineage,
+medallion, maintenance, viewer, search and annotator — so #6–#9 above cannot be SHIPPED until it lands,
+even when their code is done.
+
+Dagger prints only `✘ withExec … exit code: 1`; the module name comes from the gate's own recipe:
+
+```
+UV_PROJECT_ENVIRONMENT=/tmp/gatevenv uv sync --frozen --no-dev --package catalog --package lineage \
+  --package medallion --package maintenance --package viewer --package search --package annotator
+/tmp/gatevenv/bin/python .docker/import-gate.py catalog lineage medallion maintenance viewer search annotator
+```
+
+Fix: add `"dapr-ext-workflow>=1.18",` to medallion's dependencies (precedents `services/flows/pyproject.toml:19`,
+`services/ingest/pyproject.toml:22`; `services/notifications:23` deliberately does NOT and says why),
+then refresh the root `uv.lock`. Owner: whoever owns the medallion S1 work — it arrived in `0473e240`.
+
+Symptom if ignored: the build "succeeds" through a pipe (`| tail -1` reports tail's status), the tag is
+never pushed, and `kubectl set image` onto it leaves ErrImagePull. Confirm a tag exists with
+`curl -s http://localhost:5000/v2/rest-catalog/tags/list` before deploying.
+
 ---
 
 ## The five
