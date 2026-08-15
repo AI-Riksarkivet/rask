@@ -142,3 +142,37 @@ def test_a_GENUINELY_empty_enumeration_still_short_circuits() -> None:
     assert stop.value.value["status"] == "COMPLETE"
     assert stop.value.value["units_total"] == 0
     assert not any(a.startswith("child:") for a in ctx.actions), "an empty run must not dispatch a child"
+
+
+def test_an_ENUMERATION_REFUSAL_renders_as_FAILED_not_an_AttributeError() -> None:
+    """The refusal branch was UNREACHABLE, and it is the ceiling guard's only rendering path.
+
+    `enumerate_chunks` may return a compact dict `{"__refused__": reason}` instead of a chunk list —
+    that is how the unit ceiling and the dispatch budget refuse, "both decided where the payload is
+    built because neither can be decided after it has failed to arrive" (:449).
+
+    But `units_total = sum(... for chunk in chunks)` ran FIRST, and iterating a dict yields its string
+    KEYS — so `chunk.get(...)` raised `AttributeError: 'str' object has no attribute 'get'` before the
+    `isinstance(chunks, dict)` check twelve lines later could ever see it. A refusal therefore
+    surfaced as an unhandled workflow crash rather than the FAILED outcome carrying its reason, and
+    the ceiling `resolve_limits` exists to enforce could not report why it fired.
+
+    Order matters here and nowhere else in this body: the refusal must be recognised BEFORE anything
+    tries to treat the return value as a sequence of chunks.
+    """
+    ctx = _Ctx()
+    gen = ingest_run(cast("Any", ctx), SPEC)
+    gen.send(None)
+    gen.send(None)
+    gen.send(NO_LIMITS)
+    gen.send(HANDLE)
+
+    # The refusal shape, exactly as `_refuse_oversized_dispatch` builds it.
+    gen.send({"__refused__": "2,000,000 units exceeds the 500,000 ceiling"})
+    with pytest.raises(StopIteration) as stop:
+        gen.send(None)
+
+    outcome = stop.value.value
+    assert outcome["status"] == "FAILED", "a refused enumeration must render as FAILED, not crash the workflow"
+    assert "ceiling" in json.dumps(outcome), "the refusal must carry its REASON to the operator"
+    assert not any(a.startswith("child:") for a in ctx.actions), "a refused run must not dispatch"

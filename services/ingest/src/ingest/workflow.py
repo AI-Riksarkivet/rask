@@ -439,17 +439,13 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
         # The accessor exists precisely to resolve the pointer/inline split and the CHILD workflow
         # already used it (:663); only the parent did not. Every existing test drove the body with the
         # legacy inline shape, so nothing saw it.
-        # Read the two fields directly rather than `ChunkSpec.model_validate(...).expected_units`:
-        # validating here would REQUIRE run_id/chunk_id, and this sum must tolerate any descriptor the
-        # enumerate activity hands back — including a partial one from an older build replaying across
-        # a deploy. Same precedence the accessor uses: `count` when present, else `len(keys)`.
-        units_total = sum(int(chunk.get("count") or 0) or len(chunk.get("keys") or ()) for chunk in chunks)
-        ctx.set_custom_status(json.dumps({"units_total": units_total, "chunks": len(chunks)}))
-
-        # THE REFUSAL enumerate_chunks may return instead of chunks — the unit ceiling and the
-        # dispatch budget, both decided where the payload is built because neither can be decided
-        # after it has failed to arrive. Rendered through the SAME returned-FAILED path as the ceiling
-        # below, so a refusal reads identically to an operator however it was reached.
+        # THE REFUSAL FIRST, before ANYTHING treats the return value as a sequence of chunks.
+        # `enumerate_chunks` may return a compact dict `{"__refused__": reason}` instead of a list, and
+        # this check used to sit twelve lines BELOW the units_total sum — which iterates a dict as its
+        # string KEYS, so `chunk.get(...)` raised `AttributeError: 'str' object has no attribute 'get'`
+        # first. The error boundary then rendered that AttributeError as the run's FAILED reason, so an
+        # operator whose run hit the unit ceiling was told about a missing `.get` instead of the
+        # ceiling. The guard reported the wrong thing at exactly the moment it mattered.
         if isinstance(chunks, dict):
             reason = str(chunks.get(REFUSAL_KEY) or "enumeration was refused")
             terminal_emitted = True
@@ -463,6 +459,17 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
             )
             return RunOutcome(status="FAILED", errors={"run": reason}, errors_total=1).model_dump()
 
+        # Read the two fields directly rather than `ChunkSpec.model_validate(...).expected_units`:
+        # validating here would REQUIRE run_id/chunk_id, and this sum must tolerate any descriptor the
+        # enumerate activity hands back — including a partial one from an older build replaying across
+        # a deploy. Same precedence the accessor uses: `count` when present, else `len(keys)`.
+        units_total = sum(int(chunk.get("count") or 0) or len(chunk.get("keys") or ()) for chunk in chunks)
+        ctx.set_custom_status(json.dumps({"units_total": units_total, "chunks": len(chunks)}))
+
+        # THE REFUSAL enumerate_chunks may return instead of chunks — the unit ceiling and the
+        # dispatch budget, both decided where the payload is built because neither can be decided
+        # after it has failed to arrive. Rendered through the SAME returned-FAILED path as the ceiling
+        # below, so a refusal reads identically to an operator however it was reached.
         # THE UNIT CEILING — refused HERE, before a single task is published.
         #
         # A mis-pointed source is the case: `s3-prefix` with an empty `prefix` lists a whole bucket, and
