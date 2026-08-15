@@ -159,11 +159,23 @@ data:
           - sources: [{ from: connection }]
       # The app pods already export OTLP logs (trace-correlated) — drop the file-tailed duplicate. Mirrors
       # what the retired Vector agent's `lance.dev/logs!=otlp` selector did. error_mode ignore: a pod without the label is kept.
+      #
+      # BOTH CLAUSES ARE LOAD-BEARING, and the second was missing until 2026-08-15. The pod label alone
+      # cannot tell the two copies apart, because it is a property of the POD and both copies come from
+      # the same pod: `k8sattributes` associates filelog records by `k8s.pod.uid` and OTLP records by
+      # `{from: connection}`, stamping `lance.dev/logs=otlp` on both. So the label-only condition dropped
+      # the OTLP ORIGINAL along with its duplicate — the entire application log tier, silently, while
+      # every pipeline reported healthy. Measured live: `opentelemetry_logs` held 60.4M rows and not one
+      # with a `medallion`/`lineage`/`catalog` scope; only unlabelled infra pods survived.
+      #
+      # `log.file.path` is the discriminator: the filelog receiver sets it (`include_file_path: true`
+      # above) and OTLP records never carry it. Keyed on the SOURCE, the filter drops what it was
+      # written to drop and nothing else.
       filter/drop_app_file_logs:
         error_mode: ignore
         logs:
           log_record:
-            - 'resource.attributes["lance.dev/logs"] == "otlp"'
+            - 'resource.attributes["lance.dev/logs"] == "otlp" and attributes["log.file.path"] != nil'
       batch: {}
     exporters:
       # Traces carry GreptimeDB's trace-pipeline header (→ opentelemetry_traces); metrics/logs must NOT, so

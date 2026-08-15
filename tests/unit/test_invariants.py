@@ -2100,3 +2100,61 @@ def test_inbound_retry_is_declared_on_the_COMPONENT_never_on_the_app() -> None:
         inbound_components += [name for name, block in (targets.get("components") or {}).items() if "inbound" in block]
 
     assert inbound_components, "no component anywhere declares an `inbound` policy — pub/sub delivery is ungoverned"
+
+
+def test_the_app_log_filter_discriminates_by_SOURCE_not_by_POD() -> None:
+    """The whole application log tier was being deleted, both copies, and nothing said so.
+
+    THE INTENT. App pods export OTLP logs directly AND have their stdout tailed by the Collector's
+    filelog receiver, so every app log arrived twice. `filter/drop_app_file_logs` exists to drop the
+    file-tailed duplicate, keeping the OTLP original (which alone carries scope, severity and trace
+    correlation).
+
+    THE DEFECT. It dropped on `resource.attributes["lance.dev/logs"] == "otlp"` — a POD-level label
+    extracted by `k8sattributes`. But k8sattributes associates records from BOTH receivers to that pod:
+    the filelog rows by `k8s.pod.uid`, and the OTLP rows by `{from: connection}` (the app's own IP).
+    One condition, both sources, same resource attribute — so the OTLP original was dropped alongside
+    its duplicate and the app log tier reached GreptimeDB not at all.
+
+    MEASURED, not theorised (2026-08-15, live k3s): `opentelemetry_logs` held 60.4M rows of which
+    every one in the last 40 minutes had an EMPTY `scope_name` — i.e. filelog rows from pods that do
+    NOT carry the label. Zero rows with a `medallion` scope; zero matching a stage failure this
+    session's S1 drive had provably just emitted at ERROR.
+
+    THE DISCRIMINATOR. The filelog receiver sets `include_file_path: true`, so its records — and only
+    its records — carry `log.file.path`. That attribute is what tells the two sources apart; the pod
+    label cannot, because both sources share the pod.
+    """
+    import yaml as _yaml
+
+    rendered = _helm_template("observability.enabled=true")
+    configmaps = [d for d in _yaml.safe_load_all(rendered) if d and d.get("kind") == "ConfigMap"]
+
+    collector_conf = None
+    for cm in configmaps:
+        for value in (cm.get("data") or {}).values():
+            if isinstance(value, str) and "filter/drop_app_file_logs" in value:
+                collector_conf = _yaml.safe_load(value)
+    assert collector_conf is not None, (
+        "no rendered ConfigMap carries the Collector config with `filter/drop_app_file_logs` — this gate "
+        "would pass vacuously (the processor was renamed, or observability stopped rendering)"
+    )
+
+    conditions = collector_conf["processors"]["filter/drop_app_file_logs"]["logs"]["log_record"]
+    assert conditions, "the filter has no conditions — it drops nothing, and every app log is duplicated"
+
+    # The filelog receiver must keep announcing itself, or the discriminator below is a fiction.
+    assert collector_conf["receivers"]["filelog"]["include_file_path"] is True, (
+        "the filelog receiver no longer sets `include_file_path` — `log.file.path` is then absent from "
+        "file-tailed records too, and the filter can no longer tell the two sources apart"
+    )
+
+    for condition in conditions:
+        assert "log.file.path" in condition, (
+            f"the app-log filter condition does not mention `log.file.path`:\n    {condition}\n\n"
+            f"It therefore discriminates by POD, not by SOURCE. `k8sattributes` stamps "
+            f"`lance.dev/logs=otlp` onto records from BOTH receivers (filelog by k8s.pod.uid, OTLP by "
+            f"`{{from: connection}}`), so a pod-level condition drops the OTLP original as well as the "
+            f"file-tailed duplicate — deleting the entire application log tier while the pipeline reports "
+            f"healthy. Key on `log.file.path`, which only the filelog receiver sets."
+        )
