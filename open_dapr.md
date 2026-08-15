@@ -1751,15 +1751,20 @@ Three of the first draft's seven are now answered and have been struck.
 
    | units | chunks | result bytes | % of the 3 MiB dispatch budget |
    |---:|---:|---:|---:|
-   | 1,000 | 1 | 257 | 0.0% |
-   | 10,000 | 10 | 2,597 | 0.1% |
-   | 100,000 | 100 | 26,177 | 0.8% |
-   | **1,000,000** | 1,000 | 263,777 | **8.4%** ← the advertised scale |
-   | 10,000,000 | 10,000 | 2,657,777 | 84.5% |
+   | 1,000 | 1 | 441 | 0.0% |
+   | 100,000 | 100 | 44,577 | 1.4% |
+   | **1,000,000** | 1,000 | 447,777 | **14.2%** ← the advertised scale |
+   | 10,000,000 | 10,000 | 4,497,777 | **143.0% — does NOT fit** |
 
-   Budget reached at **11,820,001 units** (11,821 chunks). And the shape it replaced, with keys inline
+   Budget reached at **6,995,001 units** (6,996 chunks).
+
+   **CORRECTED 2026-08-15, and the first numbers were wrong.** An adversarial audit found the fixture
+   omitted five of the ten fields `enumerate_chunks` actually sets (`sizing` — a nested
+   `ResolvedSizing` — plus `kind`, `project`, `dataset`, `options`). It therefore under-measured the
+   real payload by ~1.7x and reported a ceiling nearly double the true one, including a claim that 10M
+   units fits when it does not. A fixture cheaper than the thing it measures does not measure it. And the shape it replaced, with keys inline
    at a realistic S3 key length (~70 B/unit), is exhausted at **44,849 units** — so the pointer
-   redesign moved the ceiling by roughly **264x**, and §2.13's "met grpc's 4 MiB ceiling at roughly
+   redesign moved the ceiling by roughly **156x** (6,995,001 / 44,849), and §2.13's "met grpc's 4 MiB ceiling at roughly
    38k units" was a good estimate of the measured 44.8k.
 
    **The answer to "measure before sizing the fix" is therefore: the fix does not need resizing.** The

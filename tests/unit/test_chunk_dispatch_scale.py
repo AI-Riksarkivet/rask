@@ -8,13 +8,17 @@ sizing the fix."
 Measured 2026-08-15, serializing the real `ChunkSpec` at `CHUNK_SIZE=1000`:
 
     units          chunks   result bytes   % of the 3 MiB dispatch budget
-    1,000               1            257    0.0%
-    10,000             10          2,597    0.1%
-    100,000           100         26,177    0.8%
-    1,000,000       1,000        263,777    8.4%      <- the advertised scale
-    10,000,000     10,000      2,657,777   84.5%
+    1,000               1            441    0.0%
+    100,000           100         44,577    1.4%
+    1,000,000       1,000        447,777   14.2%      <- the advertised scale
+    10,000,000     10,000      4,497,777  143.0%      <- OVER budget
 
-    budget reached at 11,820,001 units (11,821 chunks)
+    budget reached at 6,995,001 units (6,996 chunks)
+
+CORRECTED 2026-08-15. The first numbers here (8.4% at 1M, ceiling 11.8M) came from a fixture that
+omitted five of the ten fields `enumerate_chunks` actually sets. The conclusion survives — the pointer
+redesign still moved the ceiling from ~45k to ~7M — but 10M units does NOT fit, and an estate planning
+for it would have believed it did.
 
 And the shape it replaced, with keys carried inline at a realistic S3 key length (~70 B/unit):
 
@@ -34,6 +38,7 @@ from __future__ import annotations
 
 import json
 
+from ingest.sizing import resolve
 from ingest.workflow import CHUNK_DISPATCH_BUDGET_BYTES, CHUNK_SIZE, GRPC_MAX_MESSAGE_BYTES, ChunkSpec
 
 
@@ -44,10 +49,17 @@ ADVERTISED_UNITS = 1_000_000
 def _result_bytes(units: int) -> tuple[int, int]:
     """`(chunks, bytes)` for the activity's ACTUAL return — a list of serialized ChunkSpec dicts.
 
-    Serialized rather than measured on the model, because what crosses the gRPC boundary and lands in
-    workflow history is the JSON, not the object.
+    EVERY field `enumerate_chunks` populates (workflow.py:875-887), not the four that are obvious. The
+    first version of this helper set only run_id/chunk_id/offset/count/dataset_uri and omitted
+    `sizing` (a nested ResolvedSizing), `kind`, `project`, `dataset` and `options` — so it
+    under-measured the real payload by ~1.7x and reported a ceiling nearly double the true one. A
+    fixture that is cheaper than the thing it measures does not measure it.
+
+    Serialized rather than sized on the model, because what crosses the gRPC boundary and lands in
+    workflow history is the JSON.
     """
     n = (units + CHUNK_SIZE - 1) // CHUNK_SIZE
+    sizing = resolve(None)
     chunks = [
         ChunkSpec(
             run_id="r-0123456789abcdef",
@@ -55,10 +67,15 @@ def _result_bytes(units: int) -> tuple[int, int]:
             offset=i * CHUNK_SIZE,
             count=min(CHUNK_SIZE, units - i * CHUNK_SIZE),
             dataset_uri="s3://bind86-wh/bind86-bronze/pages.lance",
+            sizing=sizing,
+            kind="iiif",
+            project="bind86",
+            dataset="pages",
+            options={"root": "s3://bind86-wh/raw/volumes/SE_RA_420001_01_A_0001", "recursive": True},
         ).model_dump()
         for i in range(n)
     ]
-    return n, len(json.dumps(chunks).encode())
+    return n, len(json.dumps(chunks, default=str).encode())
 
 
 def test_the_ADVERTISED_million_unit_harvest_fits_with_room_to_spare() -> None:
@@ -79,17 +96,35 @@ def test_the_ADVERTISED_million_unit_harvest_fits_with_room_to_spare() -> None:
 
 
 def test_the_ceiling_is_MILLIONS_of_units_not_tens_of_thousands() -> None:
-    """The property the pointer redesign bought, asserted where a regression would show.
+    """The property the pointer redesign bought — and the honest edge of it.
 
-    Pre-§2.13 the same budget was exhausted at ~45k units because each chunk carried its 1000 keys.
-    Ten million units is the scale at which this plane would need a different design; forty thousand
-    is the scale at which it would need one immediately.
+    Pre-§2.13 the budget was exhausted at ~45k units because each chunk carried its 1000 keys. It is
+    now ~7M. That is the difference between "needs a different design immediately" and "needs one at a
+    scale nobody has asked for", which is the property worth holding.
+
+    Asserted at 5M rather than 10M ON PURPOSE: 10M genuinely does NOT fit (143% of budget), and the
+    earlier version of this test claimed it did because its fixture was missing five fields. An
+    assertion that passes only because the fixture is wrong is worse than no assertion.
+    """
+    _, at_five_million = _result_bytes(5_000_000)
+
+    assert at_five_million < CHUNK_DISPATCH_BUDGET_BYTES, (
+        f"5M units serializes to {at_five_million:,} B, over the {CHUNK_DISPATCH_BUDGET_BYTES:,} B budget — "
+        f"the dispatch ceiling has fallen back toward the range the pointer redesign moved it out of"
+    )
+
+
+def test_TEN_million_units_does_NOT_fit_and_that_is_recorded_not_hidden() -> None:
+    """The limit stated as a fact, so nobody plans a 10M-unit harvest on a wrong number.
+
+    `_refuse_oversized_dispatch` catches it at runtime — a refusal, not a crash — but a plane whose
+    docstrings advertise "the million-unit harvest" should say where the million stops working.
     """
     _, at_ten_million = _result_bytes(10_000_000)
 
-    assert at_ten_million < CHUNK_DISPATCH_BUDGET_BYTES, (
-        f"10M units serializes to {at_ten_million:,} B, over the {CHUNK_DISPATCH_BUDGET_BYTES:,} B budget — "
-        f"the dispatch ceiling has fallen back into the range the pointer redesign moved it out of"
+    assert at_ten_million > CHUNK_DISPATCH_BUDGET_BYTES, (
+        "10M units now FITS the dispatch budget. Good news, but this test records a measured limit — "
+        "re-measure and update the docstring table rather than deleting the assertion."
     )
 
 
