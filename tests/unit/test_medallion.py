@@ -163,7 +163,7 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
 
     dispatched: dict[str, Any] = {}
 
-    def fake_dispatch(_settings: Any, *, from_uri: str, to_uri: str, token: str | None, lineage_json: str, trigger: Any) -> str:
+    def fake_dispatch(_settings: Any, *, from_uri: str, to_uri: str, token: str | None, lineage_json: str, trigger: Any, event_time: str | None = None) -> str:
         dispatched.update({"from": from_uri, "to": to_uri, "token": token, "lineage": lineage_json, "trigger": trigger})
         return "stage-ray-silver-tok-abc"
 

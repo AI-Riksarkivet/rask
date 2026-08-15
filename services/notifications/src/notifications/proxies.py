@@ -178,7 +178,7 @@ def _channel_table() -> "ChannelTable | None":
     the hop entirely. On an estate with channels off — the default — that is the whole cost removed
     rather than merely made cheap.
     """
-    from notifications.api.channels import EMAIL, SLACK, ChannelTable, make_binding_sender
+    from notifications.api.channels import EMAIL, SLACK, ChannelTable, make_binding_sender, make_slack_sender
     from notifications.api.settings import get_ingress_settings
 
     settings = get_ingress_settings()
@@ -193,7 +193,9 @@ def _channel_table() -> "ChannelTable | None":
     if EMAIL in enabled:
         table[EMAIL] = make_binding_sender(client, binding=settings.email_binding, operation="create", timeout_seconds=settings.channel_timeout_seconds)
     if SLACK in enabled:
-        table[SLACK] = make_binding_sender(client, binding=settings.slack_binding, operation="post", timeout_seconds=settings.channel_timeout_seconds)
+        # `make_slack_sender`, not the generic one: the webhook's payload contract (a JSON object,
+        # sent as JSON) is the provider's, and a bare body was refused every time.
+        table[SLACK] = make_slack_sender(client, binding=settings.slack_binding, timeout_seconds=settings.channel_timeout_seconds)
     return table or None
 
 

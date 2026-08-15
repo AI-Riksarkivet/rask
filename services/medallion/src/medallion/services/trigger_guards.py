@@ -119,6 +119,29 @@ class StageTrigger(BaseModel):
     ray_job_done: bool = False
     ray_submission_id: str | None = None
 
+    #: R26's ONE INSTANT, carried from the dispatch pass to the completed pass. `transform.py` stamps
+    #: `datetime.now(UTC)` at the top of the handler, so the two-pass Ray lane stamped TWICE: pass 1's
+    #: instant went into the `lineage` JSONB the Ray job writes INTO the dataset, pass 2's onto the
+    #: COMPLETE published to the graph. The dataset and the graph then disagree on the only field a
+    #: consumer can join runs by time on — permanently, on every distributed run.
+    #:
+    #: Validated like every other field: a malformed timestamp would build a spec-invalid RunEvent and
+    #: fail the emit AFTER the data landed, which is the worst moment to discover it.
+    event_time: str | None = None
+
+    @field_validator("event_time")
+    @classmethod
+    def _event_time_is_an_instant(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from datetime import datetime
+
+        try:
+            datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("event_time must be an ISO-8601 instant") from exc
+        return value
+
     @field_validator("token")
     @classmethod
     def _token_is_well_shaped(cls, value: str | None) -> str | None:

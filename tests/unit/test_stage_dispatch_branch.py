@@ -167,3 +167,58 @@ def test_the_scheduled_input_ROUND_TRIPS_the_trigger_for_republication(monkeypat
     assert spec.trigger["dataset"] == "pages"
     assert spec.lineage_json == '{"run_id": "r1"}', "the R26 provenance document must reach the job's own commit"
     assert spec.from_uri.endswith("acme-bronze/pages.lance")
+
+
+def test_BOTH_passes_name_the_SAME_instant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R26's one-instant rule, which S1's two-pass split broke on every Ray-lane run.
+
+    `transform.py:277` states it: "ONE instant for the whole run: the `lineage` JSONB written into the
+    dataset (R26) and the event published to the graph must name the same eventTime, or the two
+    provenance records disagree on the only field a consumer can join runs by time on."
+
+    That held while the ray branch was ONE pass. S1 made it two, and `event_time = datetime.now(UTC)`
+    runs at the top of each — so pass 1 stamps instant A into the `lineage` document the Ray job
+    writes INTO the dataset, and pass 2 stamps instant B onto the COMPLETE published to the graph. The
+    dataset and the graph then disagree, permanently, on every distributed run.
+
+    The instant therefore rides the re-published trigger: pass 1 owns it, pass 2 reuses it.
+    """
+    from medallion.core.config import get_settings
+    from medallion.services import transform
+    from medallion.workflow import StageJobSpec
+
+    captured: dict[str, Any] = {}
+
+    class _Client:
+        def schedule_new_workflow(self, *, workflow: Any, input: Any, instance_id: str) -> None:  # noqa: A002
+            captured["input"] = input
+
+    import dapr.ext.workflow as wf
+
+    monkeypatch.setattr(wf, "DaprWorkflowClient", lambda *a, **k: _Client())
+
+    transform._dispatch_stage_workflow(
+        get_settings(),
+        from_uri="s3://wh/p-bronze/pages.lance",
+        to_uri="s3://wh/p-silver/pages.lance",
+        token="tok-1",
+        lineage_json='{"run_id": "r1"}',
+        trigger=StageTrigger(token="tok-1"),
+        event_time="2026-08-15T12:00:00+00:00",
+    )
+
+    spec = StageJobSpec.model_validate(captured["input"])
+    assert spec.trigger.get("event_time") == "2026-08-15T12:00:00+00:00", (
+        "pass 1's instant did not ride the trigger — pass 2 will stamp its own, and the dataset's "
+        "lineage document and the published COMPLETE will disagree on eventTime"
+    )
+
+
+def test_the_carried_instant_is_REFUSED_if_malformed() -> None:
+    """The trigger is untrusted input like every other field. A garbage eventTime would produce a
+    spec-invalid RunEvent, and the emit would fail AFTER the data landed — the worst moment."""
+    from medallion.services.trigger_guards import parse_stage_trigger
+
+    assert parse_stage_trigger({"data": {"token": "t", "event_time": "not-a-timestamp"}}) is None
+    ok = parse_stage_trigger({"data": {"token": "t", "event_time": "2026-08-15T12:00:00+00:00"}})
+    assert ok is not None and ok.event_time == "2026-08-15T12:00:00+00:00"

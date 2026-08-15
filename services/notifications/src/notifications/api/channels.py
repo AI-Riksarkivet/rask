@@ -25,6 +25,7 @@ changes.
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Final, Protocol
@@ -73,27 +74,76 @@ def render(pointer: InboxPointer) -> tuple[str, str]:
     return headline, "\n".join(lines)
 
 
-def make_binding_sender(client: DaprBindingClient, *, binding: str, operation: str, timeout_seconds: float) -> Sender:
+def _plain_body(subject_line: str, body: str) -> str:
+    """SMTP's wire body: the render, verbatim. `subject_line` rides in the binding metadata instead."""
+    return body
+
+
+def _slack_body(subject_line: str, body: str) -> str:
+    """Slack's wire body: a JSON object, because an incoming webhook rejects anything else.
+
+    `json.dumps` rather than an f-string, and that is not fastidiousness: the render interpolates an
+    object id and a run id, both estate-supplied, so a table named with a quote or a backslash would
+    otherwise produce a body Slack cannot parse — a channel that fails for one dataset and not another.
+    """
+    return json.dumps({"text": body})
+
+
+def make_binding_sender(
+    client: DaprBindingClient,
+    *,
+    binding: str,
+    operation: str,
+    timeout_seconds: float,
+    encode: Callable[[str, str], str] = _plain_body,
+    content_type: str | None = None,
+) -> Sender:
     """A `Sender` over a Dapr OUTPUT BINDING.
 
     The binding is the seam on purpose: the SMTP host, the Slack webhook URL and their credentials
     live in a chart-managed Component reading the secret store, so no address and no token is ever in
     this service's env or its code. Swapping SMTP for a provider API is a Component change.
+
+    `encode` exists because ONE wire shape was wrong. Both channels used to be handed `data=body` on
+    the argument that the HTTP binding "takes the body … a difference the Component already absorbs".
+    It does not absorb it: a Slack incoming webhook takes a JSON object and answers `invalid_payload`
+    to a bare string, so every Slack push failed — and failed PERMANENTLY, because the claim ledger
+    marks `(notification_id, channel)` before the send and deliberately does not roll back. What a
+    Component absorbs is the ADDRESS and the CREDENTIAL; the payload contract belongs to the provider,
+    so it belongs here, next to the render that produces it.
     """
 
     async def send(*, destination: str, subject_line: str, body: str) -> None:
+        # `emailTo`/`subject` are the SMTP binding's own metadata keys; the HTTP binding ignores them.
+        metadata = {"emailTo": destination, "subject": subject_line}
+        if content_type is not None:
+            metadata["Content-Type"] = content_type
         async with asyncio.timeout(timeout_seconds):
             await client.invoke_binding(
                 binding_name=binding,
                 operation=operation,
-                data=body,
-                # `emailTo`/`subject` are the SMTP binding's own metadata keys; the HTTP binding
-                # ignores them and takes the body. One shape, because the alternative is a per-channel
-                # branch here for a difference the Component already absorbs.
-                binding_metadata={"emailTo": destination, "subject": subject_line},
+                data=encode(subject_line, body),
+                binding_metadata=metadata,
             )
 
     return send
+
+
+def make_slack_sender(client: DaprBindingClient, *, binding: str, timeout_seconds: float) -> Sender:
+    """The Slack webhook's `Sender` — `post`, a JSON body, and the content type that makes it one.
+
+    Named rather than assembled at the call site so the provider's contract is stated in one place
+    and cannot be half-applied: a JSON body sent as `text/plain` is refused just as firmly as a bare
+    string.
+    """
+    return make_binding_sender(
+        client,
+        binding=binding,
+        operation="post",
+        timeout_seconds=timeout_seconds,
+        encode=_slack_body,
+        content_type="application/json",
+    )
 
 
 type ChannelTable = dict[str, Sender]

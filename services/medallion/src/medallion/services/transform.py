@@ -82,6 +82,7 @@ def _dispatch_stage_workflow(
     token: str | None,
     lineage_json: str,
     trigger: StageTrigger,
+    event_time: str | None = None,
 ) -> str:
     """Schedule `stage_run` for this trigger and return its instance id (S1).
 
@@ -101,13 +102,18 @@ def _dispatch_stage_workflow(
 
     stage = settings.to_namespace
     instance_id = f"stage-{stage_submission_id(stage, token, from_uri, to_uri)}"
+    # R26: pass 1 OWNS the instant and hands it forward, so pass 2 reuses it rather than stamping its
+    # own. Without this the in-dataset `lineage` document and the published COMPLETE disagree.
+    carried = trigger.model_dump()
+    if event_time is not None:
+        carried["event_time"] = event_time
     spec = StageJobSpec(
         from_uri=from_uri,
         to_uri=to_uri,
         stage=stage,
         token=token,
         lineage_json=lineage_json,
-        trigger=trigger.model_dump(),
+        trigger=carried,
     )
     client = wf.DaprWorkflowClient()
     try:
@@ -277,7 +283,9 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
     # ONE instant for the whole run: the `lineage` JSONB written into the dataset (R26) and the event
     # published to the graph must name the same eventTime, or the two provenance records disagree on the
     # only field a consumer can join runs by time on.
-    event_time = datetime.now(UTC).isoformat()
+    # REUSED when the trigger carries one (the S1 completed pass), stamped fresh otherwise. The Ray
+    # lane runs this handler TWICE for one run, so a fresh stamp on the second pass is a second clock.
+    event_time = trigger.event_time or datetime.now(UTC).isoformat()
     try:
         # #84: resolve THIS stage's roots for a tenant trigger — the registry read is blocking IO
         # (threadpool). No active warehouse is deterministic → the dedicated except below records the
@@ -415,6 +423,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                             token=token,
                             lineage_json=lineage_doc.to_json(),
                             trigger=trigger,
+                            event_time=event_time,
                         )
                         log.info(
                             "medallion_stage_dispatched_to_workflow",
