@@ -765,6 +765,29 @@ test('a dropped-but-recoverable table offers undrop, with the real deadline (#75
 	await expect(panel.locator(`[title="${TRASH_ENTRY.dropped_by}"]`)).toBeVisible();
 });
 
+test('an unreadable trash record is NAMED, never rendered as "your data is gone" (#147)', async ({
+	page,
+}) => {
+	// The branch that had no coverage at all, and the reason this card was wrong: a FAILED read used
+	// to render the same "not a catalog-registered table" copy as a genuine absence. The catalog
+	// answers 200 with an empty list when there really is no record, so a non-2xx here is strictly an
+	// anomaly — and an anomaly must not be reported to the owner of a recoverable table as a verdict.
+	await seed(page, {
+		[`POST /v1/table/${GONE}/describe`]: { status: 404, body: { detail: 'Table not found' } },
+		[`GET /v1/table/${GONE}/tasks`]: { status: 500, body: { detail: 'trash store unreachable' } },
+	});
+	await page.goto(`/lakehouse/catalog/tables/${GONE}`);
+
+	const panel = page.locator('.empty.stack');
+	await expect(panel).toBeVisible();
+	await expect(panel).toContainText('Could not read this table');
+	// The upstream's own words, VERBATIM — a synthesised "HTTP {status}" would print "HTTP 0" for the
+	// most likely failure of all (an unreachable catalog).
+	await expect(panel).toContainText('trash store unreachable');
+	// …and it must NOT claim the drop was destructive.
+	await expect(panel).not.toContainText('Not a catalog-registered table');
+});
+
 test('undrop posts to the catalog and re-registers the table (#75)', async ({ page }) => {
 	await seed(page, {
 		...droppedRoutes(),
