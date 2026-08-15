@@ -82,8 +82,27 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     ("services/medallion/src/medallion/workflow.py", "settings.sub_topic"): "trigger",
 }
 
-#: The lineage publishes that do NOT go through the outbox. KNOWN DEBT, not permission — the plan and the
-#: reason the fix is not simply "route them through it today" are in `open_atomicity.md` section 4(f).
+#: The lineage publishes that do NOT go through the outbox. DEFERRED WITH A STATED TRADE, not an oversight.
+#:
+#: Routing `catalog` through the outbox is a LATENCY decision on a user-facing path, not a mechanical
+#: change. `catalog/core/lineage_emit.py` awaits its emit INLINE on purpose — "so the event reaches the
+#: durable Dapr/JetStream transport BEFORE the response returns; `BackgroundTasks` have no retry and die
+#: with the worker" — so the estate already chose durability-before-response over a fast response once,
+#: and rejected the obvious way to move the work off the request path.
+#:
+#: The outbox would serve that same intent BETTER (a staged object survives a failed publish, where today
+#: the failure is swallowed and the event is simply lost) and would cost an S3 write on every table
+#: create/write. Neither service has `outbox_uri` config, so it also needs new settings and chart wiring
+#: in both. What is missing is not the code but a latency budget for the catalog write path to judge the
+#: trade against; nothing in the estate measures one today.
+#:
+#: `maintenance` is de-prioritised on its own terms: a compaction mints no logical data, its event is
+#: deliberately versionless, and reconcile's `latest_write_version` excludes it — so there is no
+#: data-vs-graph divergence for the outbox to prevent.
+#:
+#: The prerequisite that made widening DANGEROUS is gone: the staged object is keyed per EVENT now, so
+#: adding producers can no longer spread a key collision (`outbox._object_key`).
+#:
 #: This set may shrink. It may not grow.
 _KNOWN_BARE_LINEAGE: Final[frozenset[str]] = frozenset(module for (module, _topic), intent in _PUBLISH_INTENT.items() if intent == "lineage-bare")
 
@@ -139,8 +158,9 @@ def test_the_set_of_bare_lineage_publishes_does_not_grow() -> None:
     Recorded rather than asserted-away because the fix has a prerequisite: `stage_event` keys the staged
     object on `<run_id>.json` while the run id excludes event_type, so a COMPLETE and a FAIL for one run
     share one object — `transform.py` documents that having destroyed a staged COMPLETE. Routing more
-    producers through the outbox before fixing the key would spread a lossy implementation, so the debt is
-    made VISIBLE here instead of silently missed, as it was by the guard this replaces.
+    producers through the outbox before fixing the key would have spread a lossy implementation. That key is
+    fixed now; what remains is the latency trade stated at `_KNOWN_BARE_LINEAGE`. The debt is VISIBLE here
+    instead of silently missed, as it was by the guard this replaces.
     """
     observed = _observed_publish_sites()
     bare = {module for (module, _topic), location in observed.items() if module in _KNOWN_BARE_LINEAGE}
