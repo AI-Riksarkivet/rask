@@ -516,6 +516,11 @@
           "object": {
             "title": "Object",
             "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
           }
         },
         "required": [
@@ -8875,6 +8880,11 @@
             "title": "Relation",
             "type": "string"
           },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
           "users": {
             "items": {
               "type": "string"
@@ -9603,6 +9613,11 @@
           "dropped_by": {
             "title": "Dropped By",
             "type": "string"
+          },
+          "expired": {
+            "default": false,
+            "title": "Expired",
+            "type": "boolean"
           },
           "expires_at": {
             "title": "Expires At",
@@ -14388,7 +14403,7 @@
     },
     "/v1/namespace/{id}/table/list": {
       "get": {
-        "description": "List the tables under namespace ``id`` via ``list_tables`` (page_token/limit paged);\n``include_declared=false`` drops declared-only tables (reserved, no storage yet).",
+        "description": "List the tables under namespace ``id``; when FGA is on, filtered to what the caller can\n``can_read_data``. ``include_declared=false`` drops declared-only tables (reserved, no storage yet).\n\n**WHY THIS FILTERS AT ALL \u2014 the route's gate stopped implying its contents.** The router mounts\nevery endpoint here under ``authorize``, which resolves this route's ``list`` action to\n``can_get_metadata``; C1 (upward visibility) then redefined that on a namespace as\n``reader or can_get_metadata from child``. The widening is correct for what it was for \u2014 without\nit a grantee could not resolve the breadcrumb to their own table and every list above it 403'd \u2014\nbut it means holding ``reader`` on ONE table opens this route, and the route used to answer with\nevery SIBLING table's name. Measured against both compiled models: before ``14a84022`` the check\nwas ``false`` (403); after it, ``true`` (200, full listing). A table list is not a harmless header;\n``viewer.api.security`` states the estate's position outright \u2014 \"A corpus LIST is itself sensitive:\nit names data someone may not know exists.\"\n\nSo the split ``open_notifications.md`` \u00a73.1 already settled applies verbatim: the ROUTE may open on\n``can_get_metadata``, each ITEM is checked on the object itself. ``list_all_tables`` (``tables.py``)\nhas always done this; that this route did not was the inconsistency, not the policy.\n\n**Pagination moved off the native call, for the reason it moved there too (#141).** A backend\n``limit`` truncates BEFORE the filter, so ``limit=10`` could answer 2 and hand out a cursor that\nskips everything the filter removed \u2014 pages that silently drop tables the caller CAN read. The\nnative call is therefore unpaginated and the keyset cursor is applied to the filtered list. The\nlist is sorted and deduped first because the cursor is the last NAME of the previous page and is\nstable only over an ordered one.",
         "operationId": "list_tables_v1_namespace__id__table_list_get",
         "parameters": [
           {
@@ -22877,7 +22892,7 @@
     },
     "/v1/table/{id}/tasks": {
       "get": {
-        "description": "What is queued for THIS table (#75 brings \u00a72.4). Today that is exactly one thing: a pending\ntrash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see\nis not a safety feature \u2014 the estate's task surfaces are otherwise all estate-global, so \"what is\nscheduled against my table\" was unanswerable. Reader-gated by the router alongside describe.",
+        "description": "What is queued for THIS table (#75 brings \u00a72.4). Today that is exactly one thing: a pending\ntrash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see\nis not a safety feature \u2014 the estate's task surfaces are otherwise all estate-global, so \"what is\nscheduled against my table\" was unanswerable. Reader-gated by the router alongside describe.\n\n`expires_at` is when the object becomes PURGE-ELIGIBLE, not when recovery stops (diff2 F10 item\n5). Undrop does not check the clock \u2014 it checks whether the record is still there \u2014 so a passed\ndeadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as\nfinality would push an owner to give up on data that is still on storage and still recoverable.",
         "operationId": "table_tasks_v1_table__id__tasks_get",
         "parameters": [
           {
@@ -22977,7 +22992,7 @@
     },
     "/v1/table/{id}/undrop": {
       "post": {
-        "description": "Recover a dropped table from the trash (#75) \u2014 re-register its still-present bytes at its old\nid and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into\nthe namespace is the same authority as removing it).\n\n404 when there is no trash record: an expired or never-trashed drop is genuinely unrecoverable,\nand saying so plainly beats a 200 that recovers nothing.",
+        "description": "Recover a dropped table from the trash (#75) \u2014 re-register its still-present bytes at its old\nid and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into\nthe namespace is the same authority as removing it).\n\n404 when there is no trash record \u2014 a never-trashed or already-PURGED drop is genuinely\nunrecoverable, and saying so plainly beats a 200 that recovers nothing.\n\nTHE CLOCK DOES NOT GATE THIS, deliberately (diff2 F10 item 5). A record whose `expires_at` has\npassed but which the purge has not yet collected still undrops, because the bytes are still on\nstorage and refusing would destroy recoverable data on a timestamp alone. The estate already\nreasons this way one service over \u2014 maintenance's own config says \"a record that survives is a\nrecovery that still works; a purged one is not\" \u2014 and this door simply never said so out loud.\nWhat was wrong was the DESCRIPTION: the previous docstring called an expired drop \"genuinely\nunrecoverable\" alongside a never-trashed one, and `/tasks` reported the deadline as finality.\nBoth now say purge-eligible, which is what it is.\n\nAn expired undrop IS logged: it means the purge is behind, or somebody recovered at the very\nedge of the window, and an operator should be able to see either.",
         "operationId": "undrop_table_v1_table__id__undrop_post",
         "parameters": [
           {

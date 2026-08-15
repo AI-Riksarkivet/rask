@@ -816,8 +816,30 @@ export interface paths {
         };
         /**
          * List Tables
-         * @description List the tables under namespace ``id`` via ``list_tables`` (page_token/limit paged);
-         *     ``include_declared=false`` drops declared-only tables (reserved, no storage yet).
+         * @description List the tables under namespace ``id``; when FGA is on, filtered to what the caller can
+         *     ``can_read_data``. ``include_declared=false`` drops declared-only tables (reserved, no storage yet).
+         *
+         *     **WHY THIS FILTERS AT ALL — the route's gate stopped implying its contents.** The router mounts
+         *     every endpoint here under ``authorize``, which resolves this route's ``list`` action to
+         *     ``can_get_metadata``; C1 (upward visibility) then redefined that on a namespace as
+         *     ``reader or can_get_metadata from child``. The widening is correct for what it was for — without
+         *     it a grantee could not resolve the breadcrumb to their own table and every list above it 403'd —
+         *     but it means holding ``reader`` on ONE table opens this route, and the route used to answer with
+         *     every SIBLING table's name. Measured against both compiled models: before ``14a84022`` the check
+         *     was ``false`` (403); after it, ``true`` (200, full listing). A table list is not a harmless header;
+         *     ``viewer.api.security`` states the estate's position outright — "A corpus LIST is itself sensitive:
+         *     it names data someone may not know exists."
+         *
+         *     So the split ``open_notifications.md`` §3.1 already settled applies verbatim: the ROUTE may open on
+         *     ``can_get_metadata``, each ITEM is checked on the object itself. ``list_all_tables`` (``tables.py``)
+         *     has always done this; that this route did not was the inconsistency, not the policy.
+         *
+         *     **Pagination moved off the native call, for the reason it moved there too (#141).** A backend
+         *     ``limit`` truncates BEFORE the filter, so ``limit=10`` could answer 2 and hand out a cursor that
+         *     skips everything the filter removed — pages that silently drop tables the caller CAN read. The
+         *     native call is therefore unpaginated and the keyset cursor is applied to the filtered list. The
+         *     list is sorted and deduped first because the cursor is the last NAME of the previous page and is
+         *     stable only over an ordered one.
          */
         get: operations["list_tables_v1_namespace__id__table_list_get"];
         put?: never;
@@ -1796,7 +1818,7 @@ export interface paths {
          *
          *     ``vend_credentials`` (spec 0.9) returns short-lived, table-scoped ``storage_options`` in the response —
          *     the SPEC'S OWN way for a client to get credentials. We previously ignored the field entirely and offered
-         *     only a bespoke ``POST /{id}/credentials``, which meant a GENERIC Lance client (including lance-ray in
+         *     only a bespoke ``POST /{id}/credentials``, which meant a GENERIC Lance client (including medallion-producer in
          *     REST mode) got no credentials and had no way to discover our endpoint: interop-breaking, and the one
          *     confirmed reinvention in the 2026-07-14 audit. ``/credentials`` remains as the richer superset (tiers,
          *     web-identity exchange).
@@ -2497,6 +2519,11 @@ export interface paths {
          *     trash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see
          *     is not a safety feature — the estate's task surfaces are otherwise all estate-global, so "what is
          *     scheduled against my table" was unanswerable. Reader-gated by the router alongside describe.
+         *
+         *     `expires_at` is when the object becomes PURGE-ELIGIBLE, not when recovery stops (diff2 F10 item
+         *     5). Undrop does not check the clock — it checks whether the record is still there — so a passed
+         *     deadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as
+         *     finality would push an owner to give up on data that is still on storage and still recoverable.
          */
         get: operations["table_tasks_v1_table__id__tasks_get"];
         put?: never;
@@ -2522,8 +2549,20 @@ export interface paths {
          *     id and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into
          *     the namespace is the same authority as removing it).
          *
-         *     404 when there is no trash record: an expired or never-trashed drop is genuinely unrecoverable,
-         *     and saying so plainly beats a 200 that recovers nothing.
+         *     404 when there is no trash record — a never-trashed or already-PURGED drop is genuinely
+         *     unrecoverable, and saying so plainly beats a 200 that recovers nothing.
+         *
+         *     THE CLOCK DOES NOT GATE THIS, deliberately (diff2 F10 item 5). A record whose `expires_at` has
+         *     passed but which the purge has not yet collected still undrops, because the bytes are still on
+         *     storage and refusing would destroy recoverable data on a timestamp alone. The estate already
+         *     reasons this way one service over — maintenance's own config says "a record that survives is a
+         *     recovery that still works; a purged one is not" — and this door simply never said so out loud.
+         *     What was wrong was the DESCRIPTION: the previous docstring called an expired drop "genuinely
+         *     unrecoverable" alongside a never-trashed one, and `/tasks` reported the deadline as finality.
+         *     Both now say purge-eligible, which is what it is.
+         *
+         *     An expired undrop IS logged: it means the purge is behind, or somebody recovered at the very
+         *     edge of the window, and an operator should be able to see either.
          */
         post: operations["undrop_table_v1_table__id__undrop_post"];
         delete?: never;
@@ -3268,6 +3307,11 @@ export interface components {
             grants: components["schemas"]["RelationGrants"][];
             /** Object */
             object: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
         };
         /**
          * AccessListUsersRequest
@@ -6971,6 +7015,11 @@ export interface components {
         RelationGrants: {
             /** Relation */
             relation: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
             /** Users */
             users: string[];
         };
@@ -7317,6 +7366,11 @@ export interface components {
             dropped_at: string;
             /** Dropped By */
             dropped_by: string;
+            /**
+             * Expired
+             * @default false
+             */
+            expired: boolean;
             /** Expires At */
             expires_at: string;
             /** Id */
@@ -7634,7 +7688,7 @@ export interface components {
          * VendedCredentials
          * @description Scoped storage credentials for one table at one tier.
          *
-         *     ``storage_options`` is consumed directly by pylance / lance-ray /
+         *     ``storage_options`` is consumed directly by pylance / medallion-producer /
          *     object_store. ``expires_at_millis`` is when the client must refresh
          *     (``None`` for long-lived static keys).
          */
