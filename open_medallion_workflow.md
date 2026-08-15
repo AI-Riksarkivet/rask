@@ -293,8 +293,29 @@ design does not do.)
 
 ## 9. What is actually left for an owner
 
-1. **The review band's value.** `promotionReviewBand` default ±25% is a starting number, not a
-   measured one — nobody has looked at what a normal silver→gold delta is on this corpus. The shape
-   does not depend on the answer; the interrupt rate does.
+1. ~~**The review band's value.**~~ **DECIDED 2026-08-15 — ±25%, plus first-promotion-of-a-dataset.
+   Assumed, not measured, and flagged as such.** Nobody has looked at what a normal silver→gold delta
+   is on this corpus, so the number is a defensible starting point rather than a finding. It is safe
+   to assume rather than block on because of three properties the design already has:
+
+   * the SHAPE does not depend on the value — only the interrupt rate does;
+   * it is a values knob, so tightening it is a config change and not a deploy;
+   * the first-promotion clause fires once per dataset, so the band's exact width does not decide
+     whether anyone ever looks at a new table — which is the case that actually matters.
+
+   **NO CODE SHIPS FOR THIS YET, deliberately.** The consumer is S3's `run_quality_assertions`, and
+   S3 is not built. A `promotionReviewBand` value in `values.yaml` today would be config nothing
+   reads — the dead-config defect this plane has already been bitten by twice (the orphan-scan lever
+   that existed in `config.py` with no path from values, and an S1 state-store scope naming an app-id
+   that does not exist). The value lands WITH its consumer, in S3, or not at all.
+
+   Re-open this only with a measurement: the row-count deltas of a few real silver→gold promotions.
+   Until then ±25% is the shipped intent.
 2. **Q6 — the `lance-ray` rename.** One coordinated rollout (the state store cannot hot-reload), same
    cost whenever it happens. Purely scheduling.
+
+   **RECOMMENDATION 2026-08-15: ride it with S3.** The rename touches component scopes, DLQ topics
+   and resiliency targets, and the state store cannot hot-reload — so it needs a restart of every
+   scoped app either way. S3 adds `promotionReviewBand` and the quality-gate wiring, which is already
+   a chart change plus a mover restart. Doing both in one window costs one rollout instead of two,
+   and there is no ordering dependency between them.
