@@ -486,3 +486,39 @@ def test_the_FAIL_emit_goes_through_the_OUTBOX_not_a_bare_publish(monkeypatch: p
     assert staged, "the FAIL never reached the outbox"
     assert staged["run_id"] == event["run"]["runId"], "a redelivery would fork a second failure run"
     assert json.loads(staged["event_json"])["eventType"] == "FAIL"
+
+
+def test_a_SUBMIT_that_exhausts_its_retries_still_reports() -> None:
+    """The third silent path, and the earliest one.
+
+    `submit_stage` had a retry policy and no boundary, so an exhausted submit raised into the
+    workflow and took the instance terminal FAILED with no report. Nothing was watching a job that
+    may or may not have been submitted, the trigger was already acked in pass 1, and the only record
+    was a Dapr instance in a FAILED state nobody queries.
+    """
+    ctx = _Ctx({"submit_stage": ["sub"]})
+    ctx.raise_on = "submit_stage"
+
+    outcome = _drive(ctx, _spec())
+
+    assert "call_activity(report_stage_outcome)" in ctx.actions, "an exhausted submit reported nothing"
+    assert outcome["verdict"] == "failed"
+    assert "call_activity(poll_stage)" not in ctx.actions, "nothing should be polled when the submit never landed"
+
+
+def test_a_POLL_that_exhausts_its_retries_reports_ABANDONED() -> None:
+    """The watch lost, which is not the same as the job failing.
+
+    An exhausted poll means the dashboard stayed unreachable across the whole retry policy. The JOB
+    may be running perfectly. Reporting `failed` would send an operator hunting a healthy job, so this
+    reuses `abandoned` — the vocabulary already carrying "we stopped watching, the job may still
+    land" — rather than inventing a fourth verdict for the same fact.
+    """
+    ctx = _Ctx({"submit_stage": ["sub"], "poll_stage": ["RUNNING"]})
+    ctx.raise_on = "poll_stage"
+
+    outcome = _drive(ctx, _spec())
+
+    assert "call_activity(report_stage_outcome)" in ctx.actions, "a lost watch reported nothing"
+    assert outcome["verdict"] == "abandoned"
+    assert "call_activity(publish_stage_ready)" not in ctx.actions, "an unwatched job must not wake the mover"

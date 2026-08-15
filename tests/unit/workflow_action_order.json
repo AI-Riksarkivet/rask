@@ -29,6 +29,7 @@
   ],
   "services/medallion/src/medallion/workflow.py::stage_run": [
     "call_activity(submit_stage)",
+    "call_activity(report_stage_outcome)",
     "create_timer(timedelta(seconds=spec.poll_interval_seconds))",
     "call_activity(poll_stage)",
     "call_activity(report_stage_outcome)",

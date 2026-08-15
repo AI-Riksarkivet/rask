@@ -130,7 +130,18 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     """
     spec = StageJobSpec.model_validate(payload)
 
-    submission_id: str = yield ctx.call_activity(submit_stage, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+    # BOUNDED, like the publish below. An exhausted submit used to raise into the workflow and take
+    # the instance terminal FAILED with no report: nothing watching a job that may or may not have
+    # been submitted, the trigger already acked in pass 1, and the only record a Dapr instance in a
+    # FAILED state nobody queries.
+    try:
+        submission_id: str = yield ctx.call_activity(submit_stage, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+    except Exception:
+        if not ctx.is_replaying:
+            log.error("medallion_stage_submit_failed", extra={"stage": spec.stage, "to_uri": spec.to_uri})
+        failed = StageJobOutcome(submission_id="", status=None, polls=0, verdict="failed")
+        yield ctx.call_activity(report_stage_outcome, input={"spec": spec.model_dump(), "outcome": failed.model_dump()}, retry_policy=ACTIVITY_RETRY)
+        return failed.model_dump()
 
     status: str | None = None
     polls = 0
@@ -141,7 +152,18 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         # very likely not registered yet, spending an activity and a history entry to learn nothing —
         # and `job_status` answers None for an unknown id precisely so that race is not fatal.
         yield ctx.create_timer(timedelta(seconds=spec.poll_interval_seconds))
-        status = yield ctx.call_activity(poll_stage, input={"submission_id": submission_id}, retry_policy=ACTIVITY_RETRY)
+        # An exhausted poll means the dashboard stayed unreachable across the whole retry policy. The
+        # JOB may be running perfectly, so this is a LOST WATCH, not a job failure — reporting `failed`
+        # would send an operator hunting a healthy job. Break to the abandoned path below, whose
+        # vocabulary already means exactly "we stopped watching, the job may still land".
+        try:
+            status = yield ctx.call_activity(poll_stage, input={"submission_id": submission_id}, retry_policy=ACTIVITY_RETRY)
+        except Exception:
+            if not ctx.is_replaying:
+                log.error("medallion_stage_watch_lost", extra={"submission_id": submission_id, "polls": attempt})
+            status = None
+            polls = attempt
+            break
         polls = attempt + 1
         if _is_terminal(status):
             break
