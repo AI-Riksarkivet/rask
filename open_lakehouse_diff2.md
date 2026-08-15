@@ -752,8 +752,11 @@ comparator's central field would be a constant.
 
 So if an asset rung lands, it is a **governed BLOB**, not a second table lane:
 
-- it governs NON-TABULAR bytes — model artefacts, EAD, IIIF sidecars — which is the actual gap (the
-  model registry squatting on `table` and `list_artifacts` being the one plain-path surface);
+- it governs NON-TABULAR bytes, which is the actual gap: the model registry squats on `table` because
+  no other rung exists, and `list_artifacts` is the one plain-path surface sitting outside the
+  governance everything else has. **Model artefacts are the first and only known consumer** — do not
+  scope this rung by naming file formats from one workload (rask is a format-agnostic multimodal
+  platform; HTR/IIIF is an example task, never its identity);
 - it carries NO format tag, NO schema interpretation, and NO data ops. Those are exactly what the
   table rung has and what the ruling reserves to Lance;
 - it must not become a route for tabular data in another format. That is the failure mode the ruling
@@ -792,7 +795,11 @@ create/describe/list/deregister(+drop with the same trash semantics), vending ag
 prefix, protection + trash reuse as-is. NO data ops, NO schema interpretation — Lakekeeper's
 boundary, coexisting with the Lance-only table rung. First consumer: the model registry's artifact
 trees (fixes the type-squat and gives model versions a keyed home instead of last-row-order).
-Relevant for the archives estate beyond models: EAD files, IIIF sidecars.
+~~Relevant for the archives estate beyond models: EAD files, IIIF sidecars.~~ **Struck 2026-08-15
+(owner):** naming one workload's file formats scopes a platform rung by an example task. rask is an
+agnostic multimodal lakehouse and HTR/IIIF is a workload it happens to run. The rung's consumer set is
+"governed opaque bytes that are not a Lance table"; model artefacts are the first and only known one,
+and the next should arrive as a requirement rather than be guessed at from the current corpus.
 
 ---
 

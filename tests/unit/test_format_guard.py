@@ -17,10 +17,12 @@ What that settles, so nobody reopens it as a feature request:
 * It is also what lets the estate skip a relational database: Iceberg puts the commit pointer in the
   catalog (so every commit is a DB transaction), Lance puts the CAS in the object store. Supporting
   both formats would reintroduce the very requirement the architecture is built to avoid.
-* Consequence for the opaque-asset rung (diff2 F9): an `asset` type may govern NON-TABULAR bytes
-  (model artefacts, EAD, IIIF sidecars) — it must NEVER become a second TABLE lane carrying a
-  format tag. Lakekeeper's Generic Table is a format-agnostic table; rask's asset rung, if it lands,
-  is a governed blob. Those are different things and this ruling is the line between them.
+* Consequence for the opaque-asset rung (diff2 F9): an `asset` type may govern NON-TABULAR bytes —
+  model artefacts are the first and only known consumer — but it must NEVER become a second TABLE
+  lane carrying a format tag. Lakekeeper's Generic Table is a format-agnostic table; rask's asset
+  rung, if it lands, is a governed blob. Those are different things and this ruling is the line
+  between them. (Do not enumerate future consumers by workload: rask is a format-agnostic multimodal
+  platform, and HTR/IIIF is one example task, not its identity.)
 """
 
 from __future__ import annotations
