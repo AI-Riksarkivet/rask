@@ -49,6 +49,27 @@ exists with `curl -s http://localhost:5000/v2/rest-catalog/tags/list` before dep
 
 ---
 
+## ✅ Observability — the app log tier was DELETED estate-wide. CLOSED 2026-08-15 in `c9eed1cb`.
+
+**Found by driving a real S1 stage failure, not by reading.** The FAIL reached the lineage graph, but
+`report_stage_outcome`'s ERROR line — which the code itself calls "the record" — was in neither
+`kubectl logs` nor `opentelemetry_logs`.
+
+`filter/drop_app_file_logs` is meant to drop the file-tailed DUPLICATE of an app log and keep the OTLP
+original (the only copy with scope, severity, trace correlation). It keyed on
+`resource.attributes["lance.dev/logs"] == "otlp"` — a **pod** label. Both copies come from the same
+pod (`k8sattributes` associates filelog by `k8s.pod.uid`, OTLP by `{from: connection}`), so it dropped
+the original too. Every Python service, not just medallion.
+
+Measured before: 60.4M rows in `opentelemetry_logs`, every one of the last 40 minutes' 124k with an
+EMPTY `scope_name` — unlabelled infra pods only. After: `ERROR | medallion.workflow |
+medallion_stage_job_not_completed`. Fix keys on `log.file.path`, which only filelog sets. Gated by
+`test_the_app_log_filter_discriminates_by_SOURCE_not_by_POD` (also pins `include_file_path`, without
+which the discriminator is a fiction). **Deployed to the live estate** (ConfigMap + collector restart);
+still needs to ride the next full `helm upgrade` like every other chart change below.
+
+---
+
 ## The five — four CLOSED 2026-08-15, one still yours
 
 | # | Task | State |
