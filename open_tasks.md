@@ -26,7 +26,16 @@ all four read wrappers); the catalog call-site half (`_require` passes no contex
 
 ---
 
-## 1. `make k3s-up` and CI are now WRONG, and they fail silently. Highest priority.
+## 1. CI still calls helm without the driver. (The Makefile half landed in `ba6b1f91`.)
+
+**Done:** `scripts/helm.sh` is now the one seam and `$(HELM)` points at it, so `k3s-up`, `k3s-down`
+and `kind-deploy` are correct. It derives the AGE pod IP per call, keeps the password in `~/.pgpass`
+rather than the DSN, refuses to run when it cannot resolve the address, and passes read-only
+subcommands straight through so `make k3s-install` still works with no cluster.
+
+**Left:** `.github/workflows/ci.yml` references helm and needs the same treatment — route it through
+`./scripts/helm.sh`, or give the job the two env vars. It was another session's in-flight file when
+this landed, so it was deliberately not touched. Everything below still applies to it.
 
 The release moved to Helm's SQL storage driver on 2026-08-15 (the Secret backend hit Kubernetes' hard
 1 MiB limit — see item 2). Every `helm` invocation must now carry:

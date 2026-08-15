@@ -2425,3 +2425,41 @@ def test_the_helm_seam_REQUIRES_the_sql_driver_rather_than_falling_back() -> Non
         "the seam has no failure path. If it cannot resolve the AGE address it must EXIT, not fall "
         "through to helm's default Secret driver — a silent wrong-store success is the whole hazard."
     )
+
+
+def test_the_ray_image_BAKES_every_job_script_the_medallion_entrypoints_name() -> None:
+    """The Ray lane submitted an entrypoint the cluster's image did not contain, and every job died.
+
+    `ray_submit` posts `settings.ray_entrypoint` — `python /home/ray/jobs/ray_stage_job.py` — to the
+    Ray Jobs API. `.docker/ray-lance.dockerfile` bakes those scripts, but the chart's KubeRay cluster
+    runs the **ray-cluster** image, which did not. Measured on the live cluster 2026-08-15:
+
+        Running entrypoint for job ray-silver-...: python /home/ray/jobs/ray_stage_job.py
+        python: can't open file '/home/ray/jobs/ray_stage_job.py': No such file or directory
+        Job entrypoint command failed with exit code 2
+
+    Every stage job failed this way, which is why the cascade's SUCCESS path had never once run — the
+    fail path was exercised thoroughly and looked like a data problem.
+
+    The trap is that the two halves live in different files and neither imports the other: a default in
+    `medallion/core/config.py` and a COPY in a dockerfile. `medallion.ray` defaulting ON (2026-08-15)
+    made that latent mismatch load-bearing, since the movers now point at the chart's unified cluster
+    rather than the separate `ray-lance` demo the lane was first written against.
+    """
+    import re
+
+    config = (REPO / "services/medallion/src/medallion/core/config.py").read_text(encoding="utf-8")
+    scripts = set(re.findall(r"/home/ray/jobs/(\w+\.py)", config))
+    assert scripts, "no /home/ray/jobs/*.py entrypoint defaults found — the config was restructured and this gate is now blind"
+
+    dockerfile = (REPO / ".docker/ray-cluster.dockerfile").read_text(encoding="utf-8")
+    missing = sorted(s for s in scripts if s not in dockerfile)
+
+    assert not missing, (
+        f"the chart's Ray cluster image does not bake: {missing}\n\n"
+        f"`.docker/ray-cluster.dockerfile` is the image the KubeRay cluster actually runs, and "
+        f"`medallion/core/config.py` names these under /home/ray/jobs/. A submitted job whose entrypoint "
+        f"is absent fails with 'can't open file' and exit code 2 — the stage reports FAILED and the "
+        f"cascade never completes, with nothing pointing at the image as the cause.\n\n"
+        f"Add a COPY of scripts/<name> into /home/ray/jobs/, as .docker/ray-lance.dockerfile already does."
+    )

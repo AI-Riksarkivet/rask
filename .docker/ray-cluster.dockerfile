@@ -112,6 +112,18 @@ RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
 COPY runners/htr/scripts/deploy_serve.py /app/deploy_serve.py
 RUN chown app:app /app/deploy_serve.py
 
+# The medallion Ray lane submits `python /home/ray/jobs/<job>.py` — the defaults of `ray_entrypoint`
+# and `train_entrypoint` in services/medallion/src/medallion/core/config.py. `ray-lance.dockerfile`
+# baked these for the SEPARATE ray-lance demo cluster; this is the image the chart's KubeRay cluster
+# actually runs, and it did not, so every submitted stage job died with
+#   python: can't open file '/home/ray/jobs/ray_stage_job.py': No such file or directory
+# and exit code 2. The cascade's success path had therefore never once run — the failure looked like
+# missing data rather than a missing file. Pinned by
+# `test_the_ray_image_BAKES_every_job_script_the_medallion_entrypoints_name`, which reads the
+# entrypoint defaults out of the config so the two halves cannot drift apart again.
+COPY scripts/ray_stage_job.py scripts/ray_train_job.py /home/ray/jobs/
+RUN chown -R app:app /home/ray/jobs
+
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
