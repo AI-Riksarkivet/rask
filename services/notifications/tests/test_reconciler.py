@@ -175,20 +175,25 @@ async def test_without_an_app_token_neither_header_is_sent() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_a_transient_failure_is_retried_on_this_services_own_egress() -> None:
-    """Tenacity lives HERE and nowhere else: no sidecar policy covers a call this service makes
-    itself. The subscription handler has the opposite rule."""
-    route = respx.get(f"{LINEAGE}/events").mock(
-        side_effect=[
-            httpx.Response(503),
-            httpx.Response(200, json={"events": [_event(9)], "next_cursor": None}),
-        ]
+async def test_a_transient_failure_is_NOT_retried_in_this_module() -> None:
+    """The inverse of what this test used to assert, and the change is deliberate.
+
+    It read: "Tenacity lives HERE and nowhere else: no sidecar policy covers a call this service makes
+    itself." That was true only because the feed was read over a DIRECT httpx call. Read through Dapr
+    service invocation (`IngressSettings.feed_base_url`), the estate's existing `invokeRetry` policy
+    covers it — and that policy already encodes the same rule the hand-written `_is_transient` did:
+    `408,429,500-599`, never a 4xx.
+
+    So a 503 must now propagate on the FIRST attempt. One layer owns redelivery; a second multiplies it.
+    """
+    route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(503))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await _feed_client().page(after=None)
+
+    assert route.call_count == 1, (
+        "the module retried the call itself, so the sidecar policy and this code both back off — the multiplication the subscription handler has always refused"
     )
-
-    page = await _feed_client().page(after=None)
-
-    assert [record.seq for record in page.events] == [9]
-    assert route.call_count == 2
 
 
 @pytest.mark.asyncio

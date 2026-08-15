@@ -118,7 +118,7 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         app.state.http = httpx.AsyncClient()
         app.state.lineage_feed = LineageFeedClient(
             client=app.state.http,
-            base_url=ingress.lineage_url,
+            base_url=ingress.feed_base_url,
             identity=ingress.service_identity,
             token=ingress.app_api_token,
             timeout_seconds=ingress.feed_timeout_seconds,

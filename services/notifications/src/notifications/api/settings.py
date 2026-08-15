@@ -13,6 +13,7 @@ literal on this side and a rendered name on that side are two places that drift 
 nothing is ever delivered to.
 """
 
+import os
 from functools import lru_cache
 from typing import Self
 
@@ -128,6 +129,34 @@ class IngressSettings(BaseSettings):
     #: subscriptions are wired at app-build time — before any lifespan exists to hand that object over.
     #: The same env var, so the two can disagree only if someone changes it between two reads.
     dapr_enabled: bool = Field(default=False, alias="RASK_DAPR_ENABLED")
+
+    @property
+    def feed_base_url(self) -> str:
+        """Where the reconciler reads lineage's feed: THROUGH THE SIDECAR when Dapr is on.
+
+        The direct URL was why the walk needed a hand-written retry — this module used to say so:
+        "This is the service's OWN egress: no sidecar policy covers it, so the retry has to." True of
+        a direct httpx call, and nothing recorded why it had to be direct.
+
+        Through service invocation, the estate's EXISTING `invokeRetry` policy covers it, and that
+        policy already encodes the rule `_is_transient` hand-rolled — `httpStatusCodes: 408,429,500-599`,
+        never a 4xx — for the reason its own comment gives, measured on the ingest door: "Retrying a 403
+        is also pointless on its own terms: the answer will not change." `lineage` is already one of
+        that policy's targets.
+
+        The auth pair still completes, and differently: lineage's door opens on
+        `dapr-api-token` + `x-lance-service-identity` together, and the sidecar "stamps that token on
+        every request it delivers" (see `LineageFeedClient._headers`). So the token comes from the
+        delivering sidecar and this service supplies only the identity claim.
+
+        Falls back to the direct URL when Dapr is off, which is the gateway's own shape
+        (`gateway/__init__.py::_target_base`) and what keeps dev-micro and the unit tests on a plain
+        base URL.
+        """
+        if not self.dapr_enabled:
+            return self.lineage_url
+        port = os.environ.get("DAPR_HTTP_PORT", "3500")
+        return f"http://127.0.0.1:{port}/v1.0/invoke/lineage/method"
 
     #: The cron binding that TICKS the reconciler, and therefore also the route path it is delivered
     #: to: Dapr POSTs an input binding to `/<component name>` at the ROOT, so the two are one string

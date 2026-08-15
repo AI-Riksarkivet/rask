@@ -24,9 +24,16 @@ class of run.
 new" would mean replaying the retained feed into people's inboxes on the day the service is deployed
 — the same failure `deliverPolicy: new` exists to prevent on the bus, arriving by the other door.
 
-**Tenacity lives here and nowhere else in this service.** This is the service's OWN egress: no sidecar
-policy covers it, so the retry has to. The subscription handler has the opposite rule — the sidecar
-owns redelivery there, and a second layer would multiply it.
+**THE RETRY IS THE SIDECAR'S, NOT THIS MODULE'S.** It used to be tenacity's, on the argument that this
+is the service's own egress and "no sidecar policy covers it" — true only because the feed was read
+over a DIRECT httpx call, and nothing recorded why it had to be. Read through Dapr service invocation
+(`IngressSettings.feed_base_url`), the estate's existing `invokeRetry` policy covers it, and that
+policy already encodes the rule the hand-written `_is_transient` did: `408,429,500-599`, never a 4xx,
+for the reason its own comment gives — "Retrying a 403 is also pointless on its own terms: the answer
+will not change." `lineage` is already one of that policy's targets.
+
+So this module now carries NO retry of its own, which is the same rule the subscription handler always
+had: one layer owns redelivery, and a second would multiply it.
 """
 
 import asyncio
@@ -36,7 +43,6 @@ from typing import Any, Final
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
-from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt, stop_after_delay, wait_exponential_jitter
 
 from notifications.api.fanout import ChannelPush, InboxOpener, WatcherLookup
 from notifications.api.ingest import DAPR_RETRY, ingest_run_event
@@ -51,8 +57,6 @@ log = logging.getLogger(__name__)
 #: app's own name rather than going through the user-state key derivation.
 CURSOR_KEY: Final = "notifications-lineage-cursor"
 
-_RETRY_ATTEMPTS: Final = 4
-_RETRY_BUDGET_SECONDS: Final = 30.0
 
 #: How far below the mark the walk re-offers rows, in feed seqs.
 #:
@@ -170,28 +174,6 @@ class ReconcileResult(BaseModel):
     skipped: bool = False
 
 
-def _is_transient(exc: BaseException) -> bool:
-    """Worth retrying: a transport fault, or a 429/5xx from lineage.
-
-    Everything else is permanent and retrying it is pure delay — a 400 will be a 400 again, and a 401
-    or 403 means this deployment's service identity is not configured, which no amount of backoff
-    fixes. `ValueError` is deliberately absent for the same reason: a payload that will not parse is
-    not a network problem.
-    """
-    if isinstance(exc, httpx.TransportError):
-        return True
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        return status == httpx.codes.TOO_MANY_REQUESTS or status >= httpx.codes.INTERNAL_SERVER_ERROR
-    return False
-
-
-def _log_retry(state: RetryCallState) -> None:
-    """Log every retry — silent retries hide an outage behind a slow tick."""
-    exc = state.outcome.exception() if state.outcome else None
-    log.warning("lineage_feed_retry", extra={"attempt": state.attempt_number, "exception_type": type(exc).__name__ if exc else None})
-
-
 class LineageFeedClient:
     """Reads pages of lineage's durable event feed through its SERVICE door.
 
@@ -231,13 +213,6 @@ class LineageFeedClient:
             return {}
         return {"dapr-api-token": self._token.get_secret_value(), "x-lance-service-identity": self._identity}
 
-    @retry(
-        retry=retry_if_exception(_is_transient),
-        stop=stop_after_attempt(_RETRY_ATTEMPTS) | stop_after_delay(_RETRY_BUDGET_SECONDS),
-        wait=wait_exponential_jitter(initial=0.5, max=5.0),
-        before_sleep=_log_retry,
-        reraise=True,
-    )
     async def page(self, *, after: int | None) -> FeedPage:
         """One page of the feed, newest first; `after` walks OLDER (`seq < after`).
 
@@ -328,7 +303,7 @@ async def reconcile(
 
     The hard budget is `asyncio.timeout`, so a lineage that answers slowly fails this tick instead of
     letting the next cron delivery stack on top of it. It covers the cursor READ and the PRIMING poll
-    as well as the walk — the priming poll is a full tenacity-retried request, so a first-ever tick
+    as well as the walk — the priming poll is a full sidecar-retried request, so a first-ever tick
     against a sick lineage is the longest thing this function can do and the one an unbounded version
     would let stack. Only the cursor WRITE is outside it, deliberately: a walk that finished inside the
     budget must not lose the progress it made to a timer firing during the write that records it.
