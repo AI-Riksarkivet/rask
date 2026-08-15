@@ -75,7 +75,7 @@ request; only the skipping one claims the deny.
 create (which does gate), or run the stack with `LANCE_FGA_LOCK_ROOT_CREATE=true` — the configuration
 the assertion actually describes. Then give the file the CI lane `e2e-auth` already boots.
 
-### H3 — `nav-truth.test.ts:104-110` · the scanner drops 5 of 45 leaves; the floor absorbs it
+### H3 — `nav-truth.test.ts:104-110` · the scanner drops 5 of 45 leaves; the floor absorbs it — **CLOSED**
 
 One bounded regex pairs `title:` with `href:`. Measured against a raw `href:` count per file:
 
@@ -96,6 +96,24 @@ defect is using a bounded-window regex at all.
 
 **Fix:** parse per object literal, then assert the pair count equals the raw `href:` count in that
 file — a self-consistency check, not a magic floor. Raise the floors to the real counts.
+
+**CLOSED.** Fixed as written, and the audit UNDERSTATED it: 5 was the shell's miss alone — the zone
+sidebars miss 5 more, so **10 of the estate's 90 nav hrefs were asserted by nothing**
+(`/compute/gpu`, `/compute/serve`, `/lakehouse/lineage/columns`, `/lakehouse/workbench`,
+`/explorer/graph`, and the shell's `/explorer/workflow`, `/models/runs`, `/lakehouse/admin/dlq`, `/`
+and `/settings`). Root cause measured, not guessed: the trailing `(?=title:)` lookahead had to be
+reached within the window, so a leaf whose gap to the NEXT leaf exceeded 900 chars was dropped whole
+— compute's `Actors` match ended at L38 and the next began at L54, taking `GPU` with it. The regex is
+replaced by a brace-depth frame walk that consumes comments and string bodies (both load-bearing:
+`models/nav.ts` documents this regex in prose containing "href:", and `nav-config.ts` declares
+TypeScript `href: string;` members inside `{…}` type literals).
+
+Verified both directions. Forward: pointing `/compute/gpu` at a missing route reds naming `"GPU"`,
+while the old regex ships that same break GREEN. Backward: putting the old regex back under the new
+self-consistency assertion reds all four files, naming all ten hrefs — matching an independent count
+exactly. The phantom leaf is gone too: the gate reported `compute: "Compute" -> /compute` (the
+ZoneNav's own label glued to the Overview leaf's href) and now reports `compute: "Overview"`.
+105 tests pass, up from 89.
 
 ### H4 — `models/package.json` · declares `test:e2e` at HEAD with zero test files
 

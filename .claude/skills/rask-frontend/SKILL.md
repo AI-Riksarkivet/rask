@@ -44,7 +44,7 @@ Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consume
 | `@rask/explorer-api` | Arrow-backed explorer/viewer client (media bytes, Arrow batches) |
 | `@rask/engine` | Framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage) |
 | `@rask/labeling` | The `LabelOp` model + annotator Arrow-IPC transport |
-| `@rask/zone-contract` | **Gates + the dev tooling they guard** — the vitest suite on the estate's shape (counts and the near-floor scanner guards in § Gates), plus two dev scripts that live here so a package's `lint`/`fmt` tasks actually cover them: `src/proxy.ts` (`dev:proxy`, a hand-rolled composition proxy nothing invokes) and `src/dev-zone.ts` (`dev:zone`, behind `make dev-zone`). It ships no runtime code — nothing imports it |
+| `@rask/zone-contract` | **Gates + the dev tooling they guard** — the vitest suite on the estate's shape (counts and the scanner self-consistency guards in § Gates), plus two dev scripts that live here so a package's `lint`/`fmt` tasks actually cover them: `src/proxy.ts` (`dev:proxy`, a hand-rolled composition proxy nothing invokes) and `src/dev-zone.ts` (`dev:zone`, behind `make dev-zone`). It ships no runtime code — nothing imports it |
 | `@rask/config` | One shared `tsconfig.base.json` — weaker than the inlined copy; see § TypeScript strictness is split |
 
 **A `frontend/packages/*` entry is a LIBRARY, never a domain slice.** A zone's panels, stores and
@@ -377,13 +377,17 @@ reads a mock. It is a real finding about the dev loop, not a flake, and it is un
 you are changing — check it is still the *only* red before assuming your diff is clean.
 **Do not pin the assertion count here**: `link-targets`
 and `cross-zone-reload` emit one test per anchor they find, so the total tracks how many links the
-estate has and moves between runs — two consecutive green runs measured 954 and 1115. Two of its
-guards are counters, so read them before
-adding to either file: `nav-truth.test.ts`'s scanner guard is `ALL.length > 30` (**47** leaves today —
-it was 31 at #109, so deleting a leaf no longer risks the floor the way it once did), and
-`redirect-truth.test.ts`'s is `ALL.length > 0` (4 redirects, all in the lakehouse, after that same
-change retired the zone-root 307). A guard that reaches its floor makes every assertion below it
-vacuous while staying green — the opposite failure to a red gate, and quieter.
+estate has and moves between runs — two consecutive green runs measured 954 and 1115. Its guards used to be two counters. **`nav-truth.test.ts`'s is not one any more**, and why it
+stopped being one is the lesson: a `ALL.length > 30` floor sat under a scanner that saw **80 of the
+estate's 90** nav hrefs, and a floor cannot know what it is missing — ten leaves were unasserted,
+including `/` and `/settings`, which the estate navbar renders in all seven zones. It now asserts,
+per nav source, that the parse reproduces that file's own `href: '…'` literals **exactly** (45 zone
+leaves + 45 shell today), so a scanner regression reds naming the specific hrefs that fell out. The
+old scan was a bounded-window regex whose window had already been widened 200 → 900 once for this
+same symptom; the frame walk that replaced it has no window to tune. `redirect-truth.test.ts`'s
+guard is still the counter `ALL.length > 0` (4 redirects, all in the lakehouse, after #109 retired
+the zone-root 307) — read it before adding to that file. A guard that reaches its floor makes every
+assertion below it vacuous while staying green — the opposite failure to a red gate, and quieter.
 
 **There are two separate e2e layers — `make e2e` is not the frontend one.**
 

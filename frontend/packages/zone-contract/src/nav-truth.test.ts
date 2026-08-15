@@ -28,31 +28,119 @@ type Leaf = { zone: string; title: string; href: string; reload: boolean };
  *  inside a SvelteKit build, and a test that needs the app's module graph to check a static table
  *  would be more fragile than the thing it guards. */
 function leavesOf(zone: string): Leaf[] {
-	const path = resolve(FRONTEND_ROOT, 'microfrontends', zone, 'src', 'lib', 'nav.ts');
+	const path = zoneNavPath(zone);
 	if (!existsSync(path)) return [];
 	return scanLeaves(readFileSync(path, 'utf8'), zone);
 }
 
-/** The title/href scan itself, shared with the SHELL navbar check below — one regex, one set of
- *  window rules, so the two nav surfaces cannot drift in what the gate can see. */
+const zoneNavPath = (zone: string) =>
+	resolve(FRONTEND_ROOT, 'microfrontends', zone, 'src', 'lib', 'nav.ts');
+
+/** The estate navbar — a nav surface in its own right, rendered in all seven zones. */
+const SHELL_NAV = resolve(FRONTEND_ROOT, 'packages/ui/src/lib/shell/nav-config.ts');
+
+/** Every nav source this gate reads: each zone's sidebar, plus the shared navbar. */
+const NAV_SOURCES: { label: string; path: string }[] = [
+	...ZONES.map((z) => ({ label: z, path: zoneNavPath(z) })).filter((s) => existsSync(s.path)),
+	{ label: 'shell', path: SHELL_NAV },
+];
+
+/** One object literal's OWN text — nested literals, comments and string bodies removed. */
+type Frame = { start: number; own: string };
+
+/**
+ * Split a source file into object literals, each carrying only the text at its OWN brace depth.
+ *
+ * THIS REPLACED A BOUNDED-WINDOW REGEX, and the replacement is the point. The old scan paired each
+ * `title:` with the first `href:` after it, then had to lazily reach a `(?=title:)` lookahead within
+ * a fixed window — so a leaf whose gap to the NEXT leaf exceeded the window was dropped whole. The
+ * window went 200 -> 900 once, which moved the threshold and left the defect; measured at 900, ten
+ * hrefs were still invisible across four files (compute's `/compute/gpu` + `/compute/serve`,
+ * lakehouse's `/lakehouse/lineage/columns` + `/lakehouse/workbench`, explorer's `/explorer/graph`,
+ * and the shell's `/explorer/workflow`, `/models/runs`, `/lakehouse/admin/dlq` and — rendered in all
+ * seven zones — `/` and `/settings`).
+ *
+ * Worse than dropping, it MIS-PAIRED: compute's ZoneNav carries its own `title: 'Compute'` above the
+ * `root` leaf, so the scan glued that label to the Overview leaf's href and reported a leaf named
+ * "Compute" that does not exist — a failure here would have named the wrong row.
+ *
+ * A frame walk has no window to tune. The walk consumes comments and string bodies as it goes, which
+ * is load-bearing twice over: `models/nav.ts` documents this very regex and contains the text
+ * "`href:`" in prose, and `nav-config.ts` declares TypeScript members `href: string;` inside `{…}`
+ * type literals. Both would be counted by a naive scan; neither is a leaf.
+ */
+function objectFrames(src: string): Frame[] {
+	const frames: Frame[] = [];
+	const stack: { start: number; own: string }[] = [];
+	const push = (s: string) => {
+		const top = stack.at(-1);
+		if (top) top.own += s;
+	};
+	let i = 0;
+	while (i < src.length) {
+		const c = src[i]!;
+		const n = src[i + 1];
+		if (c === '/' && n === '/') {
+			while (i < src.length && src[i] !== '\n') i++;
+			continue;
+		}
+		if (c === '/' && n === '*') {
+			i += 2;
+			while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++;
+			i += 2;
+			continue;
+		}
+		if (c === "'" || c === '"' || c === '`') {
+			const start = i++;
+			while (i < src.length && src[i] !== c) i += src[i] === '\\' ? 2 : 1;
+			i++;
+			push(src.slice(start, i)); // the body is kept — it holds the title/href VALUES
+			continue;
+		}
+		if (c === '{') {
+			stack.push({ start: i, own: '' });
+			i++;
+			continue;
+		}
+		if (c === '}') {
+			const done = stack.pop();
+			if (done) frames.push(done); // popped, NOT merged up: own-depth only
+			i++;
+			continue;
+		}
+		push(c);
+		i++;
+	}
+	return frames.sort((a, b) => a.start - b.start);
+}
+
+/** Every `href: '…'` value in the file's CODE — the set the frame scan must reproduce exactly. */
+function hrefLiterals(src: string): string[] {
+	// Same walk, so comments and the `href: string;` type members are excluded on the same terms.
+	const code = objectFrames(src)
+		.map((f) => f.own)
+		.join('\n');
+	return [...code.matchAll(/href:\s*'([^']+)'/g)].map((m) => m[1]!);
+}
+
+/** The leaf scan, shared with the SHELL navbar check below — one parser for both nav surfaces, so
+ *  they cannot drift in what the gate can see. A leaf is any object literal declaring its own
+ *  quoted `href`; its `title` and `reload` are read at that same depth, so a nested object can
+ *  neither donate nor steal them. */
 function scanLeaves(src: string, zone: string): Leaf[] {
 	const out: Leaf[] = [];
-	// Each leaf carries exactly one `title:` and one `href:`; take them pairwise in source order.
-	//
-	// The window was 200 chars and that SILENTLY dropped leaves: this estate comments its nav heavily,
-	// and any leaf whose trailing comment ran past 200 chars fell out of the scan along with the NEXT
-	// leaf's pairing. Measured at #105 — seven leaves were invisible (lakehouse's Warehouses, Storage,
-	// DLQ; explorer's Search, Atlas, Tree; compute's API docs), i.e. the gate silently did not check the
-	// object browser it was written to protect. 900 catches every leaf in the estate today; the lazy
-	// quantifier plus the `(?=title:)` lookahead keep the pairing to the FIRST href after each title, so
-	// a wider window cannot mis-pair, only stop missing.
-	const re = /title:\s*'([^']+)'[\s\S]{0,900}?href:\s*'([^']+)'([\s\S]{0,900}?)(?=title:\s*'|$)/g;
-	for (const m of src.matchAll(re)) {
+	for (const frame of objectFrames(src)) {
+		const href = /href:\s*'([^']+)'/.exec(frame.own);
+		if (!href) continue;
+		const title = /title:\s*'([^']+)'/.exec(frame.own);
 		out.push({
 			zone,
-			title: m[1]!,
-			href: m[2]!,
-			reload: /reload:\s*true/.test(m[3] ?? ''),
+			// An href with no title at its own depth is still a promise a route exists, so it is
+			// checked; it just cannot be named. None exist today — if one appears, the route
+			// assertion below still covers it.
+			title: title?.[1] ?? `(untitled ${href[1]})`,
+			href: href[1]!,
+			reload: /reload:\s*true/.test(frame.own),
 		});
 	}
 	return out;
@@ -100,15 +188,31 @@ function routeExists(zone: string, href: string): boolean {
 	return existsSync(resolve(dir, '+page.svelte')) || existsSync(resolve(dir, '+page.ts'));
 }
 
-describe('every sidebar href resolves to a real route', () => {
-	it('finds leaves to check at all (guards the scanner itself)', () => {
-		// A regex that silently matched nothing would make every assertion below vacuously pass.
-		expect(
-			ALL.length,
-			'no nav leaves were parsed — the scanner is broken, not the estate',
-		).toBeGreaterThan(30);
-	});
+describe('the scanner sees every href (guards the gate itself)', () => {
+	// THIS is what the old `> 30` floor was standing in for, and why the floor could not do the job:
+	// 90 hrefs exist, the floor asked for 30, and the scan found 80 — a 10-href hole that no
+	// assertion could ever notice because a floor cannot know what it is missing. Self-consistency
+	// can: the parse must reproduce the file's own href literals exactly, so a scanner regression is
+	// reported as the specific hrefs that fell out, in the file they fell out of.
+	it.each(NAV_SOURCES.map((s) => [s.label, s.path] as const))(
+		'%s: the scan reproduces every href literal in the source',
+		(label, path) => {
+			const src = readFileSync(path, 'utf8');
+			const scanned = scanLeaves(src, label);
+			const declared = hrefLiterals(src);
+			const seen = new Set(scanned.map((l) => l.href));
+			const missed = declared.filter((h) => !seen.has(h));
+			expect(
+				scanned.length,
+				`the ${label} nav declares ${declared.length} href literals but the scan produced ` +
+					`${scanned.length}. Unchecked: ${missed.join(', ') || '(a duplicate href, not a miss)'}. ` +
+					`Every one is a sidebar promise no assertion below covers.`,
+			).toBe(declared.length);
+		},
+	);
+});
 
+describe('every sidebar href resolves to a real route', () => {
 	for (const leaf of ALL) {
 		it(`${leaf.zone}: "${leaf.title}" -> ${leaf.href}`, () => {
 			const owner = ownerOf(leaf.href);
@@ -167,14 +271,9 @@ describe('every SHELL navbar href resolves to a real route', () => {
 	// exactly how `/models/playground` stayed a live navbar 404 after #131 moved inference out (the
 	// removal comment in nav-config.ts:293-301 names this gap verbatim). Same scanner, same resolver
 	// as the zone sidebars above, so the two nav surfaces cannot drift in what the gate can see.
-	const shellLeaves = scanLeaves(
-		readFileSync(resolve(FRONTEND_ROOT, 'packages/ui/src/lib/shell/nav-config.ts'), 'utf8'),
-		'shell',
-	).filter((leaf) => leaf.href.startsWith('/'));
-
-	it('finds navbar leaves to check', () => {
-		expect(shellLeaves.length).toBeGreaterThan(10);
-	});
+	const shellLeaves = scanLeaves(readFileSync(SHELL_NAV, 'utf8'), 'shell').filter((leaf) =>
+		leaf.href.startsWith('/'),
+	);
 
 	it.each(shellLeaves.map((l) => [l.title, l.href] as const))(
 		'shell: "%s" -> %s',
