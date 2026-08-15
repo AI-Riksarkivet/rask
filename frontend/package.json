@@ -47,5 +47,8 @@
 	},
 	"patchedDependencies": {
 		"svelte-adapter-bun@1.0.1": "patches/svelte-adapter-bun@1.0.1.patch"
+	},
+	"overrides": {
+		"svelte": "5.56.8"
 	}
 }
