@@ -1,9 +1,12 @@
 """Fine-grained authorization via OpenFGA (Zanzibar-style relationship checks).
 
-The authorization model (``service_kit/governed/auth/model.fga`` / ``model.json``) defines nine types —
+The authorization model (``service_kit/governed/auth/model.fga`` / ``model.json``) defines TEN types —
 ``user``, ``team`` (with ``team#member`` as a group subject), ``role`` (``role#assignee``), ``project``,
-``warehouse`` (the S3-bucket root), a self-nesting ``namespace``, ``table``, plus ``materialized_view`` and
-``transaction`` (both hanging off namespace/warehouse and inheriting the same rungs via ``parent``).
+``warehouse`` (the S3-bucket root), a self-nesting ``namespace``, ``table``, ``materialized_view`` and
+``transaction`` (both hanging off namespace/warehouse and inheriting the same rungs via ``parent``), and
+``annotation_project`` (the annotator's own rung, tenanted by ``project``). This said "nine" and listed
+nine while the model declared ten — the count is worth keeping honest because it is the first thing a
+reader checks this docstring against.
 Privileges are concentric (``owner`` ⊇ ``writer`` ⊇ ``reader``, plus a separate ``validator`` rung gating
 ``can_promote``) and cascade DOWN the hierarchy via ``parent`` (team → project → warehouse → namespace →
 nested namespace → table / materialized_view / transaction). Every API operation is checked against a

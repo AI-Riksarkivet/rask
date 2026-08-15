@@ -29,11 +29,22 @@ class RelationGrants(BaseModel):
 
     relation: str
     users: list[str]
+    #: True when OpenFGA's ``listUsersMaxResults`` cap was hit, so ``users`` is a PREFIX of the holders,
+    #: not the set. Per-relation because the cap applies per call: on a wide object one relation can be
+    #: complete while its neighbour is cut off, and a response-level flag would smear that distinction.
+    #: An access review that silently returns 1000 of 1500 holders is worse than one that refuses —
+    #: the reviewer concludes the other 500 have no grant. The admin door
+    #: (``AccessListUsersResponse.truncated``) has carried this since it shipped; this is the same flag
+    #: on the PER-OBJECT review, which is the surface a human actually reads (diff2 F10 item 8).
+    truncated: bool = False
 
 
 class AccessListResponse(BaseModel):
     object: str
     grants: list[RelationGrants]
+    #: True when ANY relation above was truncated — a roll-up so a caller can spot an incomplete review
+    #: without walking the list. The per-relation flags say WHICH.
+    truncated: bool = False
 
 
 class ManagedAccessRequest(BaseModel):

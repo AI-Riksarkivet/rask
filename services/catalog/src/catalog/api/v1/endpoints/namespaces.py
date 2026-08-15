@@ -33,7 +33,11 @@ from lance_namespace import (
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
 from catalog.api.security import CurrentToken
-from catalog.api.v1.endpoints.tables import _paginate
+
+# `_MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
+# over the same tree disagreed about how deep it may go, and a second copy of the number would let
+# them drift apart again the moment one is tuned.
+from catalog.api.v1.endpoints.tables import _MAX_NAMESPACE_DEPTH, _paginate
 from catalog.core.config import Settings
 from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
@@ -58,7 +62,17 @@ def _collect_descendants(ns: LanceNamespace, segments: list[str]) -> list[tuple[
     Enumerated BEFORE a Cascade drop removes them (afterwards they can't be listed), so the caller can
     revoke their FGA tuples once the drop commits. ``include_declared`` catches declared-only tables (they
     hold an owner grant too). Blocking native list calls → the caller runs this in a threadpool.
+
+    DEPTH-CAPPED at the same bound the listing walk uses (diff2 F10 item 10). This recursed without one
+    while `tables.py::_collect_tables` capped at ``_MAX_NAMESPACE_DEPTH``, so the identical pathological
+    tree was a truncated listing in one walker and a Python stack overflow in the other — and this is the
+    walker that runs on the DESTRUCTIVE path, where crashing mid-enumeration means the cascade proceeds
+    against a partial descendant list. Hitting the cap is reported the same way page truncation already
+    is, because it has the same consequence: an incomplete revoke leaves orphan grants.
     """
+    if len(segments) >= _MAX_NAMESPACE_DEPTH:
+        log.warning("namespace_depth_capped", extra={"namespace": segments, "cap": _MAX_NAMESPACE_DEPTH})
+        return []
     found: list[tuple[str, list[str]]] = []
     token: str | None = None
     for _ in range(_MAX_LIST_PAGES):

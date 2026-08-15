@@ -25,6 +25,7 @@ logs a warning when a result looks capped).
 from __future__ import annotations
 
 import asyncio
+import logging
 from functools import lru_cache
 
 from fastapi import APIRouter, Request
@@ -53,6 +54,8 @@ from catalog.schemas import (
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
+
+log = logging.getLogger(__name__)
 
 table_router = APIRouter(prefix="/v1/table", tags=["access"])
 namespace_router = APIRouter(prefix="/v1/namespace", tags=["access"])
@@ -120,10 +123,19 @@ async def _access_list(request: Request, settings: Settings, token: CurrentToken
     # #41 audit the actual ACL disclosure (who reviewed what) — the gate's can_drop/can_delete allow
     # alone would be byte-identical to a pending destructive op.
     audit("access_review", SUCCESS, subject=subject, resource=obj)
-    return AccessListResponse(
-        object=obj,
-        grants=[RelationGrants(relation=relation, users=task.result()) for relation, task in zip(relations, tasks, strict=True)],
-    )
+    # TRUNCATION IS REPORTED, not just logged (diff2 F10 item 8). `list_users` stops at OpenFGA's
+    # `listUsersMaxResults` and warned into the log; the response looked complete. On this surface that
+    # is the dangerous direction to be wrong in — a reviewer reading 1000 of 1500 holders concludes the
+    # other 500 hold nothing, which is the opposite of the truth and is exactly the answer an access
+    # review exists to prevent. Inferred from the length against the cap, the same way the admin door
+    # (`AccessListUsersResponse.truncated`) has always done it.
+    grants = [
+        RelationGrants(relation=relation, users=(users := task.result()), truncated=len(users) >= fga.LIST_USERS_SERVER_CAP)
+        for relation, task in zip(relations, tasks, strict=True)
+    ]
+    if any(g.truncated for g in grants):
+        log.warning("access_review_truncated", extra={"object": obj, "relations": [g.relation for g in grants if g.truncated]})
+    return AccessListResponse(object=obj, grants=grants, truncated=any(g.truncated for g in grants))
 
 
 @table_router.post("/{id}/access/list")

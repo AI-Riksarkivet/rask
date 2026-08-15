@@ -1165,3 +1165,53 @@ def test_access_list_fails_closed_when_enumeration_hits_an_fga_outage(client: Te
 
     resp = client.post("/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 503
+
+
+def test_access_list_reports_truncation_instead_of_silently_shortening(client: TestClient, monkeypatch) -> None:
+    """diff2 F10 item 8 — a capped enumeration must SAY it was capped.
+
+    `fga.list_users` stops at OpenFGA's `listUsersMaxResults` and only warned into the log, so the
+    response looked complete. On an access review that is the dangerous direction to be wrong in: a
+    reviewer reading 1000 of 1500 holders concludes the other 500 hold nothing — the exact opposite of
+    the truth, and precisely the question the review exists to answer. The admin door
+    (`AccessListUsersResponse.truncated`) has always reported it; this is the per-object review, which
+    is the surface a human actually reads.
+
+    Per-relation, because the cap applies per call: one relation can be complete while its neighbour
+    is cut off, and only a per-relation flag can say which.
+    """
+    _wire(client)
+    monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
+    capped = [f"user:u{i}" for i in range(fga_module.LIST_USERS_SERVER_CAP)]
+
+    async def fake_list_users(_c: object, *, relation: str, obj: str, **_kw: object) -> list[str]:
+        # Exactly ONE relation is at the cap — the rest are small. A response-level-only flag would
+        # lose which, and a test that capped everything could not tell the two designs apart.
+        return capped if relation == "can_read_data" else ["user:alice"]
+
+    monkeypatch.setattr(fga_module, "list_users", fake_list_users)
+
+    resp = client.post("/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["truncated"] is True, "the roll-up must flag a review that is missing holders"
+    by_relation = {g["relation"]: g for g in body["grants"]}
+    assert by_relation["can_read_data"]["truncated"] is True
+    # …and the relations that were NOT capped must not be smeared as incomplete.
+    others = [g for r, g in by_relation.items() if r != "can_read_data"]
+    assert others, "expected more than one can_* relation on table"
+    assert all(g["truncated"] is False for g in others), [g["relation"] for g in others if g["truncated"]]
+
+
+def test_access_list_is_not_flagged_truncated_when_it_is_complete(client: TestClient, monkeypatch) -> None:
+    """The flag must stay off for an ordinary review, or it becomes noise nobody reads."""
+    _wire(client)
+    monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
+
+    async def fake_list_users(_c: object, *, relation: str, obj: str, **_kw: object) -> list[str]:
+        return ["user:alice", "user:bob"]
+
+    monkeypatch.setattr(fga_module, "list_users", fake_list_users)
+    body = client.post("/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"}).json()
+    assert body["truncated"] is False
+    assert all(g["truncated"] is False for g in body["grants"])

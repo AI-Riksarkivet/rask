@@ -353,3 +353,76 @@ def test_grant_routes_are_intercepted_before_the_suffix_fallthrough() -> None:
         assert actions, f"no can_grant_* enumerated for {fga_type}"
         for rung in _GRANTABLE_BASE:
             assert f"can_grant_{rung}" in actions, f"{fga_type}: {rung} is grantable with no can_grant_{rung} gate"
+
+
+# --------------------------------------------------------------------------- #
+# diff2 F10 item 9 — every shape where a governed OBJECT is the user on another object
+# --------------------------------------------------------------------------- #
+
+#: Shapes that place a governed object in the USER position, and how each one gets cleaned up when
+#: that object is dropped. `revoke_object_tuples` reads tuples BY OBJECT, so a tuple whose *user* is
+#: the dropped object is invisible to it — it reconstructs exactly ONE such tuple, the inverse
+#: `child` edge, from the `parent` relation it just read.
+#:
+#: value = why this shape does not leave a dangling tuple on drop.
+_OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
+    # The parent/child pairs: `revoke_object_tuples` rebuilds `<obj> child <parent>` from the
+    # `parent` tuple, which is the one case it explicitly handles.
+    ("namespace", "child", "namespace"): "inverse child edge, reconstructed on revoke",
+    ("namespace", "child", "table"): "inverse child edge, reconstructed on revoke",
+    ("namespace", "child", "materialized_view"): "inverse child edge, reconstructed on revoke",
+    ("warehouse", "child", "namespace"): "inverse child edge, reconstructed on revoke",
+    # The forward `parent`/`tenant` edges live ON the dropped object, so a read-by-object sees them.
+    ("namespace", "parent", "namespace"): "tuple's object IS the dropped object",
+    ("namespace", "parent", "warehouse"): "tuple's object IS the dropped object",
+    ("table", "parent", "namespace"): "tuple's object IS the dropped object",
+    ("materialized_view", "parent", "namespace"): "tuple's object IS the dropped object",
+    ("transaction", "parent", "namespace"): "tuple's object IS the dropped object",
+    ("transaction", "parent", "warehouse"): "tuple's object IS the dropped object",
+    # Subject types, not governed objects with a lifecycle of their own — nothing drops them.
+    ("project", "team", "team"): "team is a subject type, not a droppable object",
+    ("namespace", "managed_access", "role"): "role is a subject type, not a droppable object",
+    ("warehouse", "managed_access", "role"): "role is a subject type, not a droppable object",
+    # A project cannot be deleted while a warehouse claims it — `projects.py`'s emptiness refusal
+    # 409s naming every held warehouse, and a warehouse's own delete revokes this edge with it.
+    ("warehouse", "project", "project"): "unreachable: project delete refuses while warehouses exist",
+    # THE ONE THAT GENUINELY SURVIVES. Deleting a project leaves `annotation_project:X#tenant@project:Y`
+    # pointing at a project that is gone. Known, and reported by the reconciler as drift rather than
+    # repaired — the annotator owns that object and the catalog's revoke does not reach across.
+    ("annotation_project", "tenant", "project"): "KNOWN RESIDUAL: reconciler-reported drift",
+}
+
+
+def test_no_new_object_as_user_shape_slips_past_revoke() -> None:
+    """A new model shape that puts an object in the USER position must force a revoke review.
+
+    `revoke_object_tuples` deletes every tuple whose OBJECT is the dropped object, plus the single
+    inverse `child` edge it can reconstruct. Any OTHER shape where the dropped object appears as the
+    *user* survives the drop — a dangling grant or edge pointing at something that no longer exists,
+    which is the stale-tuple privilege-bleed class the revoke exists to prevent.
+
+    The model cannot express "clean this up on delete", so this test is the tripwire: adding such a
+    shape fails HERE, at the point of the model edit, with the reason it must be triaged. Extending
+    the dict is a fine resolution — but only after deciding, and recording, which of the four
+    categories the new shape falls into.
+    """
+    model = fga_module.load_model()
+    governed = {td["type"] for td in model["type_definitions"]} - {"user"}
+    found: set[tuple[str, str, str]] = set()
+    for td in model["type_definitions"]:
+        for relation, info in ((td.get("metadata") or {}).get("relations") or {}).items():
+            for direct in info.get("directly_related_user_types") or []:
+                # `relation`-qualified (`team#member`) and wildcard entries are usersets/public
+                # grants, not an object standing in the user position.
+                if direct.get("type") in governed and not direct.get("relation") and not direct.get("wildcard"):
+                    found.add((td["type"], relation, str(direct["type"])))
+
+    unreviewed = found - set(_OBJECT_AS_USER_SHAPES)
+    assert not unreviewed, (
+        f"new object-as-user shape(s) {sorted(unreviewed)} — a dropped object in the USER position is "
+        "invisible to revoke_object_tuples (it reads BY OBJECT). Decide how each is cleaned up, then "
+        "add it to _OBJECT_AS_USER_SHAPES with that reason."
+    )
+    # And the reverse: a shape removed from the model must not linger here pretending to be reviewed.
+    stale = set(_OBJECT_AS_USER_SHAPES) - found
+    assert not stale, f"_OBJECT_AS_USER_SHAPES lists {sorted(stale)}, which the model no longer defines"

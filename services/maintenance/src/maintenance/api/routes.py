@@ -42,7 +42,16 @@ router = APIRouter()
 # outlast the cron interval. Without this, the next tick starts a SECOND concurrent sweep and the two race
 # compact_files()/cleanup_old_versions() on the same datasets (concurrent commits + a GC deleting versions
 # the other is reading). Module-level asyncio.Lock created without binding a loop (py3.10+); with
-# compactionReplicas=1 (values.yaml) this is cluster-wide single-flight. The reconcile sweep does the same
+# ONE replica this is cluster-wide single-flight — which holds today, but not for the reason this comment
+# used to give. It cited `compactionReplicas=1 (values.yaml)`; that key EXISTS NOWHERE in the chart
+# (diff2 F10 item 7), so the citation was itself drift. What actually pins it is
+# `chart/templates/maintenance.yaml:47`, which HARDCODES `replicas: 1` — scaling is not reachable through
+# values at all, only by a kubectl scale or a template edit. So the lock is safe by accident of an
+# unparameterised template, and anyone who adds that values key without also making this lock
+# distributed silently gets two concurrent sweeps racing compact_files()/cleanup_old_versions() on the
+# same datasets. The invariant test that would BIND lock-as-cluster-lock to a replica count is planned
+# in `open_batch_process.md` B13; coordinate there rather than guarding a key that does not exist.
+# The reconcile sweep does the same
 # with a pg advisory lock — maintenance is stateless (no DB), so an in-process lock is the analog. A tick
 # that finds a sweep already running SKIPS (does not queue): the running sweep already covers every dataset,
 # so re-running is redundant, and queuing would pile ticks up behind a long sweep.
