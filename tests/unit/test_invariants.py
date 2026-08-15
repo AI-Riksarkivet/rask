@@ -1649,6 +1649,65 @@ def test_the_actor_state_store_is_scoped_to_the_service_whose_whole_state_it_is(
     )
 
 
+def test_the_ray_lane_is_ON_by_default_because_this_is_a_ray_first_platform() -> None:
+    """Ray IS the compute plane here — the in-process write is a no-Ray fallback, not the intent.
+
+    Both shipped `false` until 2026-08-15, which made the DEFAULT configuration one where the cascade
+    emits lineage describing data a fake computed, and where S1's whole reason for existing — waiting
+    for a Ray job to reach a terminal state before measuring it — was dead code nobody ran.
+
+    `compute` is asserted alongside `ray` because the settings validator refuses `ray` without it
+    (`MEDALLION_RAY_ENABLED requires MEDALLION_COMPUTE_ENABLED`) — measured live as a crash-loop, which
+    is the right failure but a poor default.
+    """
+    docs = _rendered_docs()
+    movers = [
+        c
+        for doc in docs
+        if doc.get("kind") == "Deployment"
+        for c in doc["spec"]["template"]["spec"]["containers"]
+        if any(e.get("name") == "MEDALLION_FROM_URI" for e in (c.get("env") or []))
+    ]
+    assert movers, "no medallion movers rendered — the fixture cannot prove anything"
+    for container in movers:
+        env = {e["name"]: e.get("value") for e in container["env"]}
+        assert env.get("MEDALLION_RAY_ENABLED") == "true", "the Ray lane is off by default on a Ray-first platform"
+        assert env.get("MEDALLION_COMPUTE_ENABLED") == "true", "ray without compute fails the settings validator at boot"
+
+
+def test_the_ray_address_names_a_service_the_chart_actually_creates() -> None:
+    """`ray-lance-head` was the hardcoded default and does not exist in a KubeRay deployment.
+
+    Measured 2026-08-15 from inside a pod: `ray-lance-head` fails DNS, `rask-ray-head-svc` answers
+    `/api/version` with ray 2.56.1. The old value was the on-kind demo's raw head, and every mover
+    would have submitted into a hostname that does not resolve — a failure that surfaces only when a
+    trigger arrives.
+
+    Derived from the release name rather than pinned, and pointing at the STABLE head service: the
+    RayCluster KubeRay owns carries a generated suffix (`rask-ray-22nls`) that no chart can name and
+    that changes on re-provision.
+    """
+    docs = _rendered_docs()
+    services = {(doc.get("metadata") or {}).get("name") for doc in docs if doc.get("kind") == "Service"}
+    addresses = {
+        e.get("value")
+        for doc in docs
+        if doc.get("kind") == "Deployment"
+        for c in doc["spec"]["template"]["spec"]["containers"]
+        for e in (c.get("env") or [])
+        if e.get("name") == "MEDALLION_RAY_ADDRESS"
+    }
+    assert addresses, "no mover declares MEDALLION_RAY_ADDRESS"
+    for address in addresses:
+        host = str(address).removeprefix("http://").split(":")[0]
+        assert host.endswith("-ray-head-svc"), f"{address} does not name KubeRay's stable head service"
+        assert "{{" not in str(address), "values.yaml is not templated — a {{ }} default ships literal braces"
+        # The RayService creates it, so it is absent from the rendered docs when ray.enabled is off —
+        # assert the SHAPE unconditionally and the existence only when the chart renders Ray at all.
+        if any(str(s).endswith("-ray-head-svc") for s in services):
+            assert host in services, f"{host} is not a Service this chart creates"
+
+
 def test_every_mover_that_hosts_a_workflow_is_scoped_to_the_actor_state_store() -> None:
     """The general property the notifications test above only covers one instance of.
 

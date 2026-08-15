@@ -100,7 +100,7 @@ spec:
             # Found live 2026-07-13: this flag was wired only in the movers loop below, so /train could
             # never be configured through the chart (409 "train head not configured" on every POST).
             - { name: MEDALLION_RAY_ENABLED, value: "true" }
-            - { name: MEDALLION_RAY_ADDRESS, value: {{ .Values.medallion.rayAddress | quote }} }
+            - { name: MEDALLION_RAY_ADDRESS, value: {{ .Values.medallion.rayAddress | default (printf "http://%s-ray-head-svc:8265" (include "rask.fullname" .)) | quote }} }
             {{- end }}
             {{- if or .Values.medallion.fgaEnabled .Values.auth.enabled }}
             # Rendered under fgaEnabled OR auth.enabled: the #64 human door below NEEDS the FGA client
@@ -323,7 +323,7 @@ spec:
             # the in-process write. Requires medallion.compute (from/to URIs + S3 creds) + a running Ray
             # cluster (deploy/ray-lance-demo.yaml). Default off — fake-Ray in-process stays the default path.
             - { name: MEDALLION_RAY_ENABLED, value: "true" }
-            - { name: MEDALLION_RAY_ADDRESS, value: {{ $root.Values.medallion.rayAddress | quote }} }
+            - { name: MEDALLION_RAY_ADDRESS, value: {{ $root.Values.medallion.rayAddress | default (printf "http://%s-ray-head-svc:8265" (include "rask.fullname" $root)) | quote }} }
             {{- if .stageJob }}
             # P7b seam: this mover's stage-job entrypoint (movers[].stageJob) — how the HTR lanes select
             # the layout/lines + transcribe jobs on the unified cluster; unset = ray_stage_job.py default.

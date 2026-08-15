@@ -825,7 +825,11 @@ medallion:
   # (`--set openbao.enabled=false`): the medallion is a dummy producer with no OpenBao secret-fetch (unlike
   # the catalog), so with OpenBao on the plaintext S3 secret is withheld and it fails fast at boot. Real
   # compute is a Ray job at rask.
-  compute: false
+  # ON by default: rask is a RAY-FIRST platform (docs/architecture/system-overview.md — Ray batch is
+  # core, not an add-on), and a cascade that cannot compute is a cascade that emits lineage for data it
+  # never wrote. Off was the demo-safe default and it made the shipped configuration the one nobody
+  # runs in anger.
+  compute: true
   # Media head demo seeding: /ingest-media writes two sample PNGs into the source prefix before
   # ingesting (the stand-in for an external media drop). Prod points the source at real media and
   # sets this false. Prefix/topic/dataset names use the code defaults.
@@ -835,8 +839,22 @@ medallion:
   # RESPONSE TO its Dapr trigger (Ray Jobs REST API, httpx-only — no ray package in the mover image), instead
   # of the in-process fake-Ray write. Default off. Production is KubeRay (the RayService this chart already
   # renders under ray.enabled); the raw Ray head here is the on-kind proof.
-  ray: false
-  rayAddress: "http://ray-lance-head:8265"
+  # ON by default, for the same reason `compute` is: Ray IS the compute plane here. The in-process
+  # "fake-Ray" write is a fallback for a cluster with no Ray, not the intended path — and shipping the
+  # fallback as the default meant S1's whole reason for existing (waiting for a Ray job to reach a
+  # terminal state before measuring it) was dead code in the shipped configuration.
+  ray: true
+  # DERIVED from the RayService this chart renders, not a hardcoded hostname. `ray-lance-head` was the
+  # on-kind demo's raw head and does not exist in a KubeRay deployment — measured 2026-08-15, it fails
+  # DNS from inside a pod while `rask-ray-head-svc` answers `/api/version` with ray 2.56.1.
+  #
+  # `<release>-ray-head-svc` is KubeRay's STABLE head service for a RayService: the RayCluster it owns
+  # carries a generated suffix (`rask-ray-22nls`) that no chart can name, and pinning the suffixed
+  # `-head-svc` would break on every RayService re-provision.
+  # EMPTY MEANS DERIVE — values.yaml is not templated, so a `{{ }}` here would ship literal braces.
+  # The template defaults it to `<release>-ray-head-svc:8265`; set it only to point at a Ray outside
+  # this release.
+  rayAddress: ""
   # When true, after the compute writes a stage's Lance dataset the mover runs data-quality assertions on it
   # (row_count > 0, key column non-null) and BLOCKS promotion on failure — the failed run + its
   # dataQualityAssertions facet are still emitted (auditable in lineage), but the next stage is NOT
