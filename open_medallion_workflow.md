@@ -357,3 +357,35 @@ cascade, because the mover deliberately receives more than one message per token
 to another's, that IS a duplicate and the instance_id will correctly dedupe it. The property to preserve
 is that the token distinguishes *events*, while `stage_submission_id` distinguishes *work* — they are
 different questions and must not be merged.
+
+---
+
+## 11. DROPPED — the HTTP heads' "missing durable obligation-carrier" is the caller-retry contract
+
+An atomicity audit listed the three HTTP-initiated heads — `/ingest-media`, `/produce`, `/train` — as
+having no durable carrier for the trigger they publish after committing, so a pod death in between
+would strand healthy data with the cascade stopped. Recorded here because medallion owns these heads.
+
+**The premise is false, and the design is deliberate.** `media_produce.py` states it outright:
+
+> "The media-chain TRIGGER below stays a bare publish on purpose: the outbox re-ingests lineage, it
+> never re-fires triggers — trigger loss is the documented idempotency-token caller-retry contract."
+
+`produce.py` then documents the contract itself: the route's 503 tells the caller to retry; a retry that
+minted a FRESH token would double-fire the head as two unrelated runs, so the key is REUSED; every
+downstream `run_id` derives from it, so the graph MERGEs the duplicate and the overwrite-writes land the
+same data. `train.py` carries the same key-reuse contract. The audit comment in `media_produce.py` even
+separates the two failure domains: a failed EMIT means no run landed (a retry re-ingests, no duplicate
+possible), while a failed TRIGGER after a landed emit still 503s, and the retry emits for a NEW bronze
+version — so every COMPLETE in the graph maps to a real committed write rather than a duplicated one.
+
+**What would actually change it is an API decision, not a durability fix.** The caller IS the transaction
+boundary for a synchronous head. Making the obligation durable server-side means accepting the request,
+persisting the intent, and returning 202 — turning three synchronous 503-retry heads into asynchronous
+accept-and-report heads. That is a contract change for every caller, and it is not what "add a durable
+carrier" sounds like.
+
+**The residual risk, stated plainly:** a caller that does not retry strands the work. That is inherent to
+the synchronous shape and is why the idempotency key is documented as a *skill rule* — "an operation
+whose route invites retry must pair it with one". If the estate ever wants the heads to survive a caller
+that gives up, the change to make is 202-with-persisted-intent, decided as an API change.
