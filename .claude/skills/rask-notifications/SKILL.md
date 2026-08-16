@@ -214,10 +214,30 @@ Rules with reasons, so they are not "fixed" back into defects:
   plane exists to replace.
 - **Synchronous HTTP failures** — the caller already has the 4xx; an inbox row is a second copy.
 
-## Known coverage gaps
+## What is still uncovered — the CLASSES, not a row list
 
-A workflow audit (2026-08-16, 8 services, three adversarial verify lenses) found the plane sound but
-its **producers** thin — the register, with per-gap `file:line` and a value-ordered sequence, is
-`open_notifications_coverage.md` at the repo root. The two highest-leverage items are both one dict
-key: stamp `lance.project` in the catalog's emitter, and carry the verified human sub through the
-medallion cascade head. Fix a producer named there and delete its row.
+A workflow audit (2026-08-16, 8 services, three adversarial verify lenses) found the plane sound and
+its **producers** thin. Its register is gone because the work it tracked is done or ruled on; what
+survives is the shape of what remains, because these classes recur every time a new feature asks to
+notify somebody.
+
+1. **No identity at the door.** A producer that never captured a verified sub can never name a person,
+   and nothing downstream can repair it. Closed for `/produce`, `/train` and ingest; still open for
+   `services/compute` (`RayJob` has no author field) and the controlplane (the Project CR carries
+   `spec.team`, a literal, not a requester). See `docs/DECISIONS.md` — an emitter without an identity
+   produces events the plane is *designed* to discard, which reads as coverage and is not.
+2. **No principal at all.** Some transitions are caused by a TIMER, not a person: the annotator's
+   `lease_expired` fires from an actor reminder with no request and no emitter in scope. The audience
+   exists (the task's holder) but the emit site does not.
+3. **A fact that only exists while somebody is looking.** Several failures are composed at read time
+   inside an HTTP handler and never persisted or published — flows' unparsable result, ingest's
+   provenance-verification defect. Nothing can notify what was never recorded.
+4. **An audience that is real but unmodelled.** `services/flows` has no project and no lakehouse
+   output, so even a perfect emit dies on `notifiable()`'s output rule; the controlplane keys watches
+   by CR name while fan-out matches the FGA tenant id, and nothing joins the two namespaces.
+5. **Steady states wearing an event's clothes.** A permanently un-granted mover, a repeating denial, a
+   degraded lane — these are METRICS, and `docs/DECISIONS.md` records why lineage must not carry them.
+
+**The line, worth re-reading before adding anything:** lineage answers *what happened to this dataset
+and who produced it*; the control lane answers *what changed for this person*; metrics answer *how
+often is this happening*. A fact that names a principal and touches no data is never lineage.
