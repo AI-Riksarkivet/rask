@@ -80,7 +80,17 @@
 	// the two can no longer disagree about what exists — they now advance on one shared cursor.
 	liveRead(lineageTick, () => load());
 
-	// Group by the namespace segment (before the first `$`); a bare name with no delimiter is its own root.
+	// Group by the table's PARENT namespace — every segment but the LAST, via `namespaceOfTable`
+	// (`@rask/api/identifiers`). A bare name with no delimiter is its own root, which is this view's
+	// rule and not the backend's: `parent_namespace_id` returns None there, so a root-level table
+	// gets a row here rather than vanishing. That divergence is safe because this answer is only a
+	// grouping key; anywhere it would become an FGA object id, `parentNamespaceOrNull` is the one to use.
+	//
+	// This comment used to say "before the first `$`", and it was describing a bug rather than the
+	// code: namespaces NEST, so `acme$bronze$pages` belongs to `acme$bronze`, and folding it under
+	// `acme` filed it beneath an object that is not its parent. The code was corrected while the
+	// comment was not — which is worse than either, because the next reader trusts the sentence and
+	// reproduces the mistake somewhere new. That is exactly how this bug survived in the home zone.
 	type Row = { ns: string; count: number; stage: StageInfo | null; warehouse: string | null };
 	const rows = $derived.by((): Row[] => {
 		const m = new Map<string, number>();
