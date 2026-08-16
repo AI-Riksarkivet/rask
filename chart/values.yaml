@@ -1004,7 +1004,23 @@ maintenance:
   # off, a persistently failing dataset is visible only in OTel spans + the cron response body. When ON,
   # also consider services.lineage.runRetentionDays > 0: a recovered dataset's FAIL Run node otherwise
   # persists in /runs indefinitely (the deterministic id means exactly one node per dataset).
-  lineageEmit: false
+  # ON since 2026-08-16. The reason it was off — "opt-in, like the medallion toggles" — was a posture,
+  # not a cost: the events are graph-only by construction, so turning it on adds provenance and cannot
+  # add notification noise. `maintenance/core/lineage_emit.py` stamps a `lance` facet and outputs, and
+  # NO `author` facet and no `lance.project`; per `.claude/skills/rask-notifications`, AUTHOR targeting
+  # reads `author.sub` and nothing else, and WATCH needs `lance.project` — so a sweep addresses nobody.
+  # That is correct rather than a gap: a cron tick has no human to name.
+  #
+  # What it buys is the FAILURE surface named below. Left off, a persistently failing dataset was
+  # visible only in OTel spans and the cron response body — and this estate spent 2026-08-16 proving
+  # how well that hides (the sweep's own summary reached no sink at all for the life of the renamed
+  # service). Enabling it also joins the pubsub scope, which dapr-component.yaml already conditions on
+  # this same value, so there is no second switch to forget.
+  #
+  # The `runRetentionDays` note below still applies and is deliberately NOT changed here: with the
+  # sweep at 0 errors there are no FAIL Run nodes to accumulate, so pruning run history is a separate
+  # decision to make on its own evidence rather than as a side effect of turning provenance on.
+  lineageEmit: true
   # #79 RECLAMATION. When on, the reconcile tick DELETES the bytes of every trash record past its grace
   # deadline and revokes that object's grants — gated on that same tick's drift report running clean
   # (no findings, no unavailable category, no incomplete scan).
