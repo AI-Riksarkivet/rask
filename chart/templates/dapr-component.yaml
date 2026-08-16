@@ -50,6 +50,13 @@ scopes:
   # subscription, so the broadcast/ephemeral semantics above are unaffected.
   - {{ .Values.maintenance.daprAppId }}
 {{- end }}
+{{- if and .Values.explorer.enabled .Values.explorer.controlEmit }}
+  # The annotator PUBLISHES here: an assignment names the person who must act on it, which is the
+  # same class of event as a grant. Publisher-only — it runs no subscription, so the broadcast
+  # semantics above are unaffected. Missing from this list, every emit is rejected by the sidecar
+  # and lost silently, because the emit is best-effort.
+  - {{ .Values.explorer.services.annotator.daprAppId }}
+{{- end }}
 {{- if .Values.medallion.enabled }}
 ---
 # The CASCADE's view of the same control stream (§ D2 B8). A SEPARATE component, not another scope on

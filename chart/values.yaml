@@ -1078,6 +1078,13 @@ explorer:
   # only when set. FGA decides what the identity may do — grant it the writer rung on the annotations
   # table. Unset = anonymous (fail-closed 401/403 on governed catalogs; fine for auth-off dev).
   catalogToken: ""
+  # The annotator PUBLISHES control events (`task_assigned` / `task_unassigned`) so the notifications
+  # plane can put assigned work in the assignee's inbox instead of making them go looking for it.
+  # Off by default like every other transport in this estate — a half-configured emitter must never
+  # pretend to publish. Turning it on ALSO scopes the annotator's app-id on the control pubsub
+  # component (dapr-component.yaml); without that the sidecar rejects every publish, silently,
+  # because the emit is best-effort by design.
+  controlEmit: false
   services:
     viewer: { port: 8101, daprAppId: viewer }
     search: { port: 8102, daprAppId: search }
