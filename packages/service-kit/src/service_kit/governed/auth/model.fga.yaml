@@ -72,6 +72,9 @@ tuples:
   - { user: user:mona, relation: owner, object: namespace:beta_locked }
   # nora is the records manager: grant authority at the warehouse, which the flag centralizes on her.
   - { user: user:nora, relation: manage_grants, object: warehouse:beta_bucket }
+  # oskar owns the MANAGED warehouse DIRECTLY (not via project admin). He is the subject C4 was always
+  # about and the one the warehouse rung used to miss: the flag is supposed to take his granting away.
+  - { user: user:oskar, relation: owner, object: warehouse:beta_bucket }
 
   # grace: an editor-only grant on a standalone (parentless) transaction — may edit properties, NOT commit
   - { user: user:grace, relation: editor, object: transaction:standalone_txn }
@@ -831,3 +834,52 @@ tests:
         object: namespace:depth_7
         assertions:
           can_get_metadata: true
+
+  - name: managed access binds the WAREHOUSE OWNER too — the rung the subtraction used to miss
+    check:
+      # oskar owns the managed warehouse outright. Before the subtraction reached this rung he kept
+      # `manage_grants` here, which is the WIDEST grant in the model: `reader from parent` cascades from
+      # a warehouse to every namespace and every table beneath it. So the flag locked down everything
+      # below and left untouched the one grant that reaches all of it.
+      - user: user:oskar
+        object: warehouse:beta_bucket
+        assertions:
+          can_grant_reader: false
+          can_grant_writer: false
+          can_grant_owner: false
+          can_grant_manage_grants: false
+          # …and he cannot clear the flag that binds him, for the same reason mona cannot one rung down.
+          can_set_managed_access: false
+      # He keeps every power that is not granting — the withdrawal is surgical, not a demotion.
+      - user: user:oskar
+        object: warehouse:beta_bucket
+        assertions:
+          reader: true
+          writer: true
+          can_get_metadata: true
+      # The records manager is exactly who the flag centralizes granting ON, so she still grants here.
+      - user: user:nora
+        object: warehouse:beta_bucket
+        assertions:
+          can_grant_reader: true
+          can_grant_owner: true
+      # THE ESCAPE HATCH, and the reason `can_administer from project` is required rather than tidy.
+      # `can_set_managed_access` is `manage_grants`, so without a path from ABOVE the flag would
+      # withdraw the only relation that can clear it and freeze this bucket's access administration
+      # forever. frank is project:beta's admin (through team:partners), and he already reached
+      # `manage_grants` here via `owner: [...] or admin from project` — so this preserves authority
+      # rather than adding any.
+      - user: user:frank
+        object: warehouse:beta_bucket
+        assertions:
+          can_grant_reader: true
+          can_set_managed_access: true
+      # An UNMANAGED warehouse is untouched: root_admin owns lance_catalog and still grants there.
+      # Without this the subtraction could be wrong in the other direction and every check above would
+      # still pass.
+      - user: user:root_admin
+        object: warehouse:lance_catalog
+        assertions:
+          can_grant_reader: true
+          can_grant_owner: true
+          can_set_managed_access: true

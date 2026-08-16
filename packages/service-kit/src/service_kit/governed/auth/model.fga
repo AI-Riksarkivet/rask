@@ -115,11 +115,31 @@ type warehouse
     # them owners — which also stops them working.
     define managed_access: [user:*, role:*]
     define managed_access_inheritance: managed_access
-    # `but not managed_access_inheritance from parent` is the whole mechanism: ownership normally
-    # carries the right to grant, and this withdraws exactly that when the enclosing scope is managed,
-    # leaving the owner every other power they had. `manage_grants from parent` is what keeps the
-    # centralized case working — the manager above stays able to grant here.
-    define manage_grants: [user, role#assignee] or owner
+    # `but not managed_access_inheritance` is the whole mechanism: ownership normally carries the right
+    # to grant, and this withdraws exactly that when the scope is managed, leaving the owner every
+    # other power they had. `can_administer from project` is what keeps the centralized case working —
+    # the authority ABOVE stays able to grant here.
+    #
+    # THE SUBTRACTION USED TO BE MISSING AT THIS RUNG, and only at this rung — `namespace` and `table`
+    # both carried it while this line read `[user, role#assignee] or owner`, under a comment describing
+    # the clause it did not have. So flipping `managed_access` on a warehouse locked down every
+    # namespace and table beneath it and left the warehouse owner able to grant ON THE WAREHOUSE — the
+    # widest grant in the model, since `reader from parent` cascades from here to every namespace and
+    # every table under it. The one grant the lock did not stop was the one with the largest blast
+    # radius, which is the opposite of what "only the records manager hands out access to this
+    # collection" is supposed to mean.
+    #
+    # NOT `from parent`, unlike the rungs below: a warehouse's parent is a `project`, which has no
+    # managed_access of its own. The flag on a warehouse is about THIS warehouse.
+    #
+    # `can_administer from project` is REQUIRED, not a nicety, and it is not a widening — a project
+    # admin already reaches this today through `owner: [...] or admin from project`, so this clause
+    # preserves authority that exists rather than granting new authority. Without it the model would
+    # deadlock: `can_set_managed_access` is `manage_grants`, so the flag would withdraw the only
+    # relation able to clear it, and with no rung above to reach in, one write would freeze that
+    # bucket's access administration permanently. It plays exactly the part `manage_grants from parent`
+    # plays one rung down.
+    define manage_grants: [user, role#assignee] or (owner but not managed_access_inheritance) or can_administer from project
     # The GRANT OPTION: hand on a rung you hold yourself, and nothing more. Deliberately NOT
     # self-passing — `can_grant_pass_grants` is `manage_grants` alone below, so a delegate cannot mint
     # further delegates and the chain stays one hop deep. Not time-boxable for the same reason `owner`

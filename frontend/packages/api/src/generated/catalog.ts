@@ -2946,7 +2946,21 @@ export interface paths {
         put?: never;
         /**
          * Set Warehouse Managed Access
-         * @description The same, for a whole warehouse — the scope root, so this governs every stage and table in it.
+         * @description The same, for a whole warehouse — the scope root, so this governs every stage and table in it,
+         *     **and the warehouse itself**.
+         *
+         *     That last clause was not true until 2026-08-16. ``warehouse#manage_grants`` was the one rung
+         *     missing the ``but not managed_access_inheritance`` subtraction, so turning this on locked down
+         *     every namespace and table below and left the warehouse OWNER still able to grant on the warehouse —
+         *     the widest grant there is, since ``reader from parent`` cascades from here to everything beneath.
+         *
+         *     Who can still grant here once it is on: an explicitly appointed ``manage_grants`` holder (the
+         *     records manager this exists for), and the PROJECT admin above. The project admin is not a new
+         *     power — they already reached it through ``owner: [...] or admin from project`` — but the clause is
+         *     load-bearing: ``can_set_managed_access`` derives from ``manage_grants``, so without a path from
+         *     above, the flag would withdraw the only relation able to clear it and freeze this bucket's access
+         *     administration permanently. Unlike a namespace, a warehouse has no managed parent scope to
+         *     unlock it from.
          *
          *     Gated EXPLICITLY rather than through the router's suffix map: ``warehouse`` is not in
          *     ``_RESOURCES``, so ``authorize`` returns early for these paths (the same reason ``warehouses.py``
