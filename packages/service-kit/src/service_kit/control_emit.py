@@ -170,3 +170,36 @@ async def emit_control(
         )
         return
     await emitter.emit(event)
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# The PROCESS-level emitter — for code with no request to resolve a dependency from
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+#
+# Every HTTP producer reaches its emitter through a FastAPI dependency over `app.state`, which is the
+# right shape: one emitter per process, resolved per request, overridable in a test.
+#
+# A DAPR ACTOR has no request. The annotator's lease reminder fires from `receive_reminder` on a timer
+# — no principal, no `Request`, no dependency graph — and it is the edge whose audience most needs
+# telling, because the person's hold on the task is being taken away while they are not looking. Its
+# only options were a module-global or nothing.
+#
+# So: a process-scoped holder, set by the same lifespan that builds `app.state.control_emitter`, and
+# defaulting to the NO-OP. The default matters — a service that never sets it (or one whose emit is
+# disabled) gets silence rather than an AttributeError inside an actor turn, which is the same
+# fail-open posture `emit_control` already has.
+#
+# NOT a replacement for the dependency. A request-path producer that reached for this would lose the
+# per-test override that makes the emit assertable, and would couple itself to import order.
+_PROCESS_EMITTER: ControlEmitter = NoopControlEmitter()
+
+
+def set_process_control_emitter(emitter: ControlEmitter) -> None:
+    """Publish the process's emitter for non-request callers. Called once, from the lifespan."""
+    global _PROCESS_EMITTER  # one process-wide handle is the point
+    _PROCESS_EMITTER = emitter
+
+
+def process_control_emitter() -> ControlEmitter:
+    """The process's emitter, or the no-op when the lifespan never set one."""
+    return _PROCESS_EMITTER

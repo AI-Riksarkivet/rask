@@ -101,6 +101,16 @@ ControlAction = Literal[
     # will ever look for that work again.
     "task_changes_requested",
     "task_dropped",
+    # THE ONE NO PERSON CAUSES. A self-claimed task carries a lease (30 min by default, renewed on
+    # every save); when it lapses the task returns to the pool and the holder is left with a draft
+    # against work that is no longer theirs. An ASSIGNED task never expires, so this only ever names
+    # somebody who took the work off the pool themselves — exactly the person with no reason to
+    # suspect they lost it.
+    #
+    # It is fired by the task actor's own reminder, so its `actor` is `system:annotator` rather than a
+    # principal. That is honest rather than limiting: the lane targets on `extra.subject` and never
+    # reads `actor` at all.
+    "task_lease_expired",
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the

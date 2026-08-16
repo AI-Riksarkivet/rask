@@ -39,7 +39,9 @@ log = logging.getLogger(__name__)
 #: annotator is the third producer on this topic. Adding a member here is only ONE THIRD of the change:
 #: `ControlAction` must carry it (or the envelope will not validate) and `NotificationReason` must too,
 #: because `as_delivery` builds `NotificationReason(event.action)` and would raise on every delivery.
-NAMED_ACTIONS: frozenset[str] = frozenset({"grant_added", "grant_revoked", "task_assigned", "task_unassigned", "task_changes_requested", "task_dropped"})
+NAMED_ACTIONS: frozenset[str] = frozenset(
+    {"grant_added", "grant_revoked", "task_assigned", "task_unassigned", "task_changes_requested", "task_dropped", "task_lease_expired"}
+)
 
 #: The FGA wildcard principal, which is a grant to EVERYONE and therefore names no one.
 #:

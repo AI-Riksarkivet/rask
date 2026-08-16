@@ -3527,8 +3527,13 @@ export interface components {
          */
         AddColumnsEntry: {
             /**
+             * Computed
+             * @description SQL expression declaring a maintained computed column (optional if expression or virtual_column is specified). The column is added all-null with the expression persisted as its binding in field metadata; its type and input columns are inferred from the expression. Rows are filled by backfill, never at declaration.
+             */
+            computed?: string | null;
+            /**
              * Expression
-             * @description SQL expression for the column (optional if virtual_column is specified)
+             * @description SQL expression for the column (optional if virtual_column or computed is specified). Evaluated once over existing rows; nothing is stored, so rows appended later read null.
              */
             expression?: string | null;
             /**
@@ -4381,7 +4386,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -6054,10 +6059,20 @@ export interface components {
                 [key: string]: string;
             } | null;
             /**
+             * Num Inserted Rows
+             * @description Number of rows inserted
+             */
+            num_inserted_rows?: number | null;
+            /**
              * Transaction Id
              * @description Optional transaction identifier
              */
             transaction_id?: string | null;
+            /**
+             * Version
+             * @description The commit version associated with the operation
+             */
+            version?: number | null;
         };
         /**
          * JsonArrowDataType

@@ -21,7 +21,7 @@ from annotator.core.config import get_annotator_settings
 from annotator.projects.actor import AnnotationTaskActor
 from annotator.projects.project_actor import AnnotationProjectActor
 from annotator.projects.tenant_actor import TenantProjectsActor
-from service_kit.control_emit import make_control_emitter
+from service_kit.control_emit import make_control_emitter, set_process_control_emitter
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.actor_warmup import warm_actor_proxy_factory
@@ -99,6 +99,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         timeout_seconds=settings.control_emit_timeout_seconds,
         service="annotator",
     )
+    # ALSO publish it process-wide, for the one producer that has no request to resolve a dependency
+    # from: the task actor's lease reminder. Without this line a lapsed lease emits through the no-op
+    # and the annotator who lost their hold is told nothing — the same silence, arriving by a subtler
+    # door than a missing emit.
+    set_process_control_emitter(app.state.control_emitter)
 
     # Register the actor types. This is the estate's FIRST actor: `lance-statestore` has carried
     # `actorStateStore: "true"` scoped to catalog+annotator since it was provisioned, and nothing used

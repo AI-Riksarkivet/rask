@@ -430,4 +430,44 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         if task is None or task.state is not TaskState.CLAIMED:
             await self._disarm_lease()  # stale reminder for a task that already moved on
             return
+        # READ THE HOLDER BEFORE THE TRANSITION TAKES IT. `fire()` nulls `assignee` in this same turn
+        # (`elif event in {"release", "lease_expired", "skip"}`), so the document it returns can no
+        # longer name anybody — this line is the only moment the audience exists.
+        holder = task.assignee or ""
         await self.fire({"event": "lease_expired", "actor": None})
+        await self._announce_lease_lapse(task.task_id, holder)
+
+    async def _announce_lease_lapse(self, task_id: str, holder: str) -> None:
+        """Tell the annotator whose hold just lapsed — the one departure edge no person causes.
+
+        Only a SELF-CLAIMED task can arrive here: `assign` pins `lease_expires_at = None` and never
+        expires, and `save_draft` renews the lease. So this names exactly the person who took the work
+        off the pool and then went quiet — who has no reason to suspect the task is no longer theirs,
+        and whose draft is still sitting against it.
+
+        The emitter comes from the PROCESS holder rather than a dependency: a reminder has no request
+        to resolve `ControlEmitterDep` from. `actor` is `system:annotator` because no principal fired
+        this; the lane targets on `extra.subject` and never reads `actor`, so that is honesty rather
+        than a limitation.
+
+        Best-effort, and that is load-bearing here in a way it is not on the HTTP edges: this runs
+        AFTER the transition committed, so an emit that raised would fail the actor turn for a task
+        that has already returned to the pool — leaving a lapsed lease reported as an error and,
+        worse, retried. Telling somebody must never be able to stop the work being freed.
+        """
+        if not holder:
+            return
+        from service_kit.control_emit import emit_control, process_control_emitter
+
+        with suppress(Exception):
+            await emit_control(
+                process_control_emitter(),
+                action="task_lease_expired",
+                object_type="annotation_task",
+                # The TASK's own id, not `self.id.id`. They are the same value in production (Dapr routes
+                # `AnnotationTaskActor/<task_id>`), but reading it off the record keeps this emit
+                # independent of the actor runtime — which is what makes it assertable at all.
+                object_id=f"annotation_task:{task_id}",
+                actor="system:annotator",
+                extra={"subject": f"user:{holder}", "event": "lease_expired"},
+            )

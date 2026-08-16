@@ -772,6 +772,18 @@
       "AddColumnsEntry": {
         "description": "AddColumnsEntry",
         "properties": {
+          "computed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SQL expression declaring a maintained computed column (optional if expression or virtual_column is specified). The column is added all-null with the expression persisted as its binding in field metadata; its type and input columns are inferred from the expression. Rows are filled by backfill, never at declaration.",
+            "title": "Computed"
+          },
           "expression": {
             "anyOf": [
               {
@@ -781,7 +793,7 @@
                 "type": "null"
               }
             ],
-            "description": "SQL expression for the column (optional if virtual_column is specified)",
+            "description": "SQL expression for the column (optional if virtual_column or computed is specified). Evaluated once over existing rows; nothing is stored, so rows appended later read null.",
             "title": "Expression"
           },
           "name": {
@@ -2693,7 +2705,8 @@
               "task_assigned",
               "task_unassigned",
               "task_changes_requested",
-              "task_dropped"
+              "task_dropped",
+              "task_lease_expired"
             ],
             "title": "Action",
             "type": "string"
@@ -6484,6 +6497,19 @@
             "description": "Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{\"header.Authorization\": \"Bearer abc\"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{\"header.x-request-id\": \"abc123\"}`. ",
             "title": "Context"
           },
+          "num_inserted_rows": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Number of rows inserted",
+            "title": "Num Inserted Rows"
+          },
           "transaction_id": {
             "anyOf": [
               {
@@ -6495,6 +6521,19 @@
             ],
             "description": "Optional transaction identifier",
             "title": "Transaction Id"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The commit version associated with the operation",
+            "title": "Version"
           }
         },
         "title": "InsertIntoTableResponse",

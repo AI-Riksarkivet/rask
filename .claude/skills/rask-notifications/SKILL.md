@@ -29,7 +29,7 @@ something adjacent.
 | **Q3** | Should people *other than the actor* know, because it is the project's work? | `WATCH` | the same event **plus** `lance.project` |
 | **Q4** | Does it give a specific person access? | `GRANT_ADDED` | `CatalogControlEvent`, `extra.subject` = the principal |
 | **Q5** | Does it take access away from a specific person? | `GRANT_REVOKED` | the same envelope, `action="grant_revoked"` |
-| **Q6** | Does it hand a person work, or take work away from them? | `TASK_ASSIGNED` / `TASK_UNASSIGNED` / `TASK_CHANGES_REQUESTED` / `TASK_DROPPED` | the same envelope; `extra.subject` is the WORKER, never the manager who clicked |
+| **Q6** | Does it hand a person work, or take work away from them? | `TASK_ASSIGNED` / `TASK_UNASSIGNED` / `TASK_CHANGES_REQUESTED` / `TASK_DROPPED` / `TASK_LEASE_EXPIRED` | the same envelope; `extra.subject` is the WORKER, never the manager who clicked |
 
 **Q2 is the one people miss, and it exists because Q1 is unreachable for most long work.** The estate's
 expensive runs — a Ray training job, a medallion stage — execute detached, hours after the request, and
@@ -56,8 +56,23 @@ user-visible label, so a distinct verb is not decoration — telling somebody th
 the task's **pre-turn snapshot**, never the post-transition document: the actor nulls `assignee` inside
 the very turn these edges fire, so by the time `fire()` returns there is nobody left to name.
 `submitted_by` is the safer field — written once and cleared by no edge — which is why it carries the
-review side. `lease_expired` is still uncovered and is structural, not an oversight: it fires from the
-actor's own reminder with no principal, no request and no emitter in scope.
+review side.
+
+**`lease_expired` is covered, and how it got there is the reusable part.** It was recorded as
+structurally impossible — "no principal, no request, no emitter in scope" — and two thirds of that was
+a misreading. No principal is true and IRRELEVANT: the lane targets on `extra.subject` and never reads
+`actor` (its envelope carries `system:annotator`). What was actually missing was a handle: a Dapr actor
+has no `Request`, so it cannot resolve `ControlEmitterDep`. `service_kit.control_emit`'s
+`set_process_control_emitter` / `process_control_emitter` pair closes that — set once in the lifespan
+beside `app.state.control_emitter`, read by any non-request producer, defaulting to the NO-OP so a
+service that never sets it is silent rather than broken. **Before filing an emit site as impossible,
+separate "no audience" from "no handle" — only the first is structural.**
+
+Two details that path forces, and both are general: read the audience BEFORE the transition (the actor
+nulls `assignee` in the same turn, so the post-turn document names nobody), and read the object id off
+the RECORD rather than `self.id.id` — identical in production, but the actor-runtime attribute does not
+exist under a test double, so an emit that used it silently swallowed an `AttributeError` and asserted
+nothing.
 
 Q4 is the sharpest and is why the control lane exists at all: *losing access silently is how someone
 discovers it by hitting a 403 in the middle of work*. That lane deliberately runs **no visibility

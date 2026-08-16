@@ -879,3 +879,104 @@ async def test_a_SYSTEM_edge_states_nothing_because_no_principal_causes_it() -> 
     out = await actor.fire({"event": "lease_expired", "actor": None})
 
     assert out["state"] == TaskState.UNASSIGNED and out["assignee"] is None
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# A LAPSED LEASE TELLS THE PERSON WHO LOST THE HOLD
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+#
+# The edge the annotator's own comment called the one that "most deserves a notification and cannot
+# have one". The second half was wrong. It fires with no principal, which is true and irrelevant: the
+# control lane targets on `extra.subject` and never reads `actor` at all. The real obstacle was that
+# this runs in a Dapr ACTOR, which has no `Request` to resolve `ControlEmitterDep` from — dependency
+# wiring, not a missing audience.
+#
+# The audience is `task.assignee`, and it is readable ONLY here: `fire()` nulls it in the same turn
+# (`elif event in {"release", "lease_expired", "skip"}`), so the document the reminder gets back can
+# no longer name anybody. Reading before firing is the whole mechanism.
+#
+# Only a SELF-CLAIMED task can reach this. An assigned task pins `lease_expires_at = None` and never
+# expires, and `save_draft` renews the lease — so this fires exactly when somebody took work off the
+# pool and then went quiet, which is precisely the person who does not know their hold is gone.
+
+
+class _RecordingControl:
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+
+    async def emit(self, event: Any) -> None:
+        self.events.append(event)
+
+
+@pytest.mark.asyncio
+async def test_a_lapsed_lease_TELLS_the_annotator_who_held_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gap this closes: an annotator comes back to a draft against a task that is no longer
+    theirs, and nothing ever said so."""
+    from service_kit import control_emit
+
+    control = _RecordingControl()
+    monkeypatch.setattr(control_emit, "process_control_emitter", lambda: control)
+
+    actor = await _seeded()
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+
+    await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
+
+    assert [(e.action, e.extra["subject"]) for e in control.events] == [("task_lease_expired", "user:gina")]
+    assert control.events[0].object_type == "annotation_task"
+
+
+@pytest.mark.asyncio
+async def test_the_lapsed_lease_event_names_the_SYSTEM_as_actor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No person caused this, and the envelope must not pretend one did. `system:annotator` rather
+    than a borrowed human sub — the lane never reads `actor`, so this is honesty rather than
+    targeting, and a stray human there would be a lie in an audit trail."""
+    from service_kit import control_emit
+
+    control = _RecordingControl()
+    monkeypatch.setattr(control_emit, "process_control_emitter", lambda: control)
+
+    actor = await _seeded()
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+    await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
+
+    assert control.events[0].actor == "system:annotator"
+
+
+@pytest.mark.asyncio
+async def test_a_STALE_reminder_for_a_task_that_moved_on_announces_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reminder can outlive the state it guarded — a submit disarms it, but a fire already in
+    flight still arrives. That path returns early WITHOUT a transition, so there is no change to
+    announce, and a row would tell somebody their work lapsed when it did not."""
+    from service_kit import control_emit
+
+    control = _RecordingControl()
+    monkeypatch.setattr(control_emit, "process_control_emitter", lambda: control)
+
+    actor = await _seeded()  # UNASSIGNED — never claimed, so the reminder is stale by construction
+
+    await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
+
+    assert control.events == []
+
+
+@pytest.mark.asyncio
+async def test_a_lease_lapse_still_returns_the_task_when_the_bus_is_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Best-effort, like every other emit in the estate: telling somebody must never be able to stop
+    the task returning to the pool. An emitter that raises here would leave the task held forever by
+    an annotator who has already stopped working on it — strictly worse than the silence."""
+    from service_kit import control_emit
+
+    class _Broken:
+        async def emit(self, _event: Any) -> None:
+            raise RuntimeError("sidecar down")
+
+    monkeypatch.setattr(control_emit, "process_control_emitter", lambda: _Broken())
+
+    actor = await _seeded()
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+
+    await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
+
+    task = await _state(actor)
+    assert task["state"] == TaskState.UNASSIGNED and task["assignee"] is None

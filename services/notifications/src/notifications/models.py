@@ -78,6 +78,10 @@ class NotificationReason(StrEnum):
     #: manager's `reopen`) — from the submitter's side those are one fact.
     TASK_CHANGES_REQUESTED = "task_changes_requested"
     TASK_DROPPED = "task_dropped"
+    #: v7 — a self-claimed task whose lease lapsed. The only reason in this family that no person
+    #: caused: it is fired by the annotator's own timer, which is exactly why the holder cannot be
+    #: expected to notice it.
+    TASK_LEASE_EXPIRED = "task_lease_expired"
 
 
 class InboxFilter(StrEnum):
