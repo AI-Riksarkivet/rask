@@ -362,18 +362,31 @@ def _build_stage_fail_event(spec: StageJobSpec, outcome: StageJobOutcome, reason
     no version — nothing was written) plus the errorMessage facet. Deterministic on the trigger's
     token, so a redelivered trigger MERGEs onto the same run rather than forking a second failure.
     """
-    from medallion.core.config import get_settings
+    from medallion.core.config import get_settings, project_namespace
     from medallion.schemas.events import build_run_event
 
     settings = get_settings()
     trigger = spec.trigger or {}
+    # PROJECT-QUALIFIED, exactly as the COMPLETE path names them (`transform.py` emits the
+    # `project_namespace(...)` locals). They diverged, and the divergence was silent in the worst way:
+    # delivery re-derives each recipient's visibility against `table:<output name>`, so a tenant run's
+    # FAIL naming the raw `silver$features` while every grant named `acme-silver$features` counted
+    # EVERY recipient hidden — the audience computed correctly, then discarded whole. The author was
+    # not told about their own failed run, and neither was any watcher.
+    #
+    # Empty project returns the env value unchanged, so single-tenant stays byte-identical.
+    project = trigger.get("project") or ""
+    from_namespace = project_namespace(project, settings.from_namespace)
+    from_dataset = project_namespace(project, settings.from_dataset)
+    to_namespace = project_namespace(project, settings.to_namespace)
+    to_dataset = project_namespace(project, settings.to_dataset)
     return build_run_event(
         operation=settings.operation,
         author=settings.author,
         job_namespace=settings.job_namespace,
-        inputs=[(settings.from_namespace, settings.from_dataset)],
-        output_namespace=settings.to_namespace,
-        output_name=settings.to_dataset,
+        inputs=[(from_namespace, from_dataset)],
+        output_namespace=to_namespace,
+        output_name=to_dataset,
         token=spec.token or trigger.get("token"),
         project=trigger.get("project") or None,
         # THE TRIGGER IS THE CARRIER. By the time a stage fails, the request that started the cascade is

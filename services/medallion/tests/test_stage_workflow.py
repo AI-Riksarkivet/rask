@@ -594,3 +594,43 @@ def test_a_stage_FAIL_without_an_originator_is_unchanged() -> None:
     event = _build_stage_fail_event(spec, outcome, "reason")
 
     assert "originator" not in event["run"]["facets"]["lance"]
+
+
+def test_a_stage_FAIL_names_the_PROJECT_QUALIFIED_datasets_like_the_COMPLETE_does() -> None:
+    """THE FAILURE NOBODY COULD BE TOLD ABOUT, because of a name.
+
+    `transform.py`'s COMPLETE emits the project-QUALIFIED locals — `project_namespace(project, ...)`,
+    e.g. `acme-silver` / `acme-silver$features` — which is what the catalog's grants are written
+    against. This FAIL builder read the raw env values instead (`settings.to_namespace`), so a tenant
+    run's failure named `silver$features` while every grant named `acme-silver$features`.
+
+    The consequence is worse than a cosmetic mismatch, and it is silent. Delivery re-derives each
+    recipient's visibility against `table:<output name>`, so a name nobody holds a grant on counts
+    EVERY recipient HIDDEN — the audience is computed correctly and then discarded whole. The author
+    is not told about their own failed run, and neither is any watcher.
+
+    The two paths must agree because they describe the same dataset; that they diverged at all is the
+    defect, and pinning both halves is what keeps them together.
+    """
+    from medallion.workflow import _build_stage_fail_event
+
+    spec = StageJobSpec.model_validate(_spec(trigger={"token": "tok-1", "dataset": "pages", "project": "acme"}))
+    outcome = StageJobOutcome(submission_id="sub", status="FAILED", polls=2, verdict="failed")
+    event = _build_stage_fail_event(spec, outcome, "the Ray stage job sub ended FAILED")
+
+    output = event["outputs"][0]
+    assert output["namespace"].startswith("acme-"), f"unqualified output namespace: {output['namespace']}"
+    assert output["name"].startswith("acme-"), f"unqualified output name: {output['name']}"
+    assert event["inputs"][0]["namespace"].startswith("acme-"), "the input edge must be qualified too"
+
+
+def test_a_projectless_stage_FAIL_is_byte_identical() -> None:
+    """Single-tenant is the default and must not move: with no project the names are exactly the env
+    values, which is what `project_namespace` returns for an empty project."""
+    from medallion.workflow import _build_stage_fail_event
+
+    spec = StageJobSpec.model_validate(_spec())
+    outcome = StageJobOutcome(submission_id="sub", status="FAILED", polls=1, verdict="failed")
+    event = _build_stage_fail_event(spec, outcome, "reason")
+
+    assert "-" not in event["outputs"][0]["namespace"].split("$")[0].replace("gold-htr", "goldhtr")

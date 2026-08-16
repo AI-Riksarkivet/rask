@@ -92,12 +92,33 @@ while an unknown reason value arrives on a declared field and carries nothing fo
   follows the MUTATION, not the request: a re-grant, a revoke of nothing, and a refused revoke all
   emit nothing. The annotator door had no tests at all; it has four.
 
+**CORRECTION to §6 #5** (emit the FAIL the siblings emit on `transform.py:279`/`:245`). Two of its
+three claims do not survive contact with the code. First, `transform.py:279`'s silence is DELIBERATE
+and pinned: `test_mover_denied_when_not_authorized` asserts `dapr.calls == []` — "not authorized -> no
+lineage emitted". Changing it contradicts an explicit decision, and a permanently un-granted mover
+would then emit a FAIL on every trigger. Second, "the governed HTR lane is silently dead" overstates
+it: the denial increments an OTel counter (`record_denied` -> `_stage_denied`, labelled by transition)
+AND logs `medallion_stage_denied`. It is absent from LINEAGE, which is a much weaker claim than
+silent. Third, `train.py` has no lineage emit ANYWHERE, so adding one there introduces a whole emit
+path to that module rather than mirroring a neighbour — a separate, larger item.
+
+What remains real: whether a denial deserves a lineage FAIL is a genuine design question (operator
+visibility vs. per-trigger noise on a deliberately un-granted mover). It needs a decision, not a
+patch.
+
 **CORRECTION to §6 #8** (fan `grant_revoked` from the tuple sets read before deletion). It is listed
 as *mechanical, 4 sites* and it is **not**: `fga.revoke_object_tuples` returns an `int`, reading the
 tuples only internally, so naming the subjects needs a signature change to a shared `service_kit`
 helper with six call sites — one of them in `services/maintenance`, which another session is actively
 committing to. Real, still worth doing, but it is a shared-contract change and should be scheduled as
 one rather than picked up as a quick win.
+
+- ~~**the medallion FAIL path named UNQUALIFIED datasets** (§6 #4, `workflow.py`)~~ — **FIXED.** The
+  COMPLETE path emits the `project_namespace(...)` locals; this builder read the raw env values, so a
+  tenant run's FAIL named `silver$features` while every grant named `acme-silver$features`. Delivery
+  re-derives visibility against `table:<output name>`, so a name nobody holds counted EVERY recipient
+  hidden — the audience computed correctly, then discarded whole, and the author never heard about
+  their own failed run.
 
 **Still open and worth knowing:** `lease_expired` is the annotator edge that most deserves a
 notification and cannot have one — its audience is the PREVIOUS holder and it fires with no principal
