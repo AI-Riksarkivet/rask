@@ -73,6 +73,10 @@
 			"types": "./dist/components/gated-action/index.d.ts",
 			"svelte": "./dist/components/gated-action/index.js"
 		},
+		"./grant-form": {
+			"types": "./dist/components/grant-form/index.d.ts",
+			"svelte": "./dist/components/grant-form/index.js"
+		},
 		"./grants-panel": {
 			"types": "./dist/components/grants-panel/index.d.ts",
 			"svelte": "./dist/components/grants-panel/index.js"

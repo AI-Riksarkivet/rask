@@ -12,8 +12,7 @@
 </script>
 
 <script lang="ts">
-	import { GatedAction } from '@rask/ui/gated-action';
-	import { Select } from '@rask/ui/select';
+	import { GrantForm } from '@rask/ui/grant-form';
 	import { enter } from '@rask/ui/motion';
 	import { Network, ShieldAlert } from '@lucide/svelte';
 	import { Background, BackgroundVariant, Controls, type Edge, SvelteFlow } from '@xyflow/svelte';
@@ -28,7 +27,7 @@
 
 	let { dataset }: { dataset: string } = $props();
 
-	const GRANTABLE = ['reader', 'writer', 'validator', 'owner'];
+
 
 	let nodes = $state.raw<AccessNodeType[]>([]);
 	let edges = $state.raw<Edge[]>([]);
@@ -37,9 +36,9 @@
 	let fitKey = $state(0);
 	let status = $state<'loading' | 'ok' | 'denied' | 'offline'>('loading');
 	let mgUser = $state('');
-	let mgRelation = $state('');
-	let mgBusy = $state(false);
-	let mgResult = $state<{ tone: 'ok' | 'fail'; text: string } | null>(null);
+
+
+
 
 	// #143, same treatment as `@rask/ui`'s GrantsPanel — this component carries a SECOND copy of the
 	// grant/revoke UI, which is how the wrong denial message survived in two places. Keyed by dataset,
@@ -48,24 +47,9 @@
 	// relying on that.
 	let perms = $state<{ for: string; map: Record<string, boolean> } | null>(null);
 	const permMap = $derived(perms?.for === dataset ? perms.map : null);
-	// Unknown (read failed, or not loaded yet) renders LIVE: this gate exists to explain a refusal, not
-	// to invent one from a missing read.
-	const mayGrant = $derived(
-		permMap === null || !mgRelation ? true : permMap[`can_grant_${mgRelation}`] === true,
-	);
-	const mayRevoke = $derived(permMap === null ? true : permMap.can_revoke_grant === true);
 
-	// Same advisory as `@rask/ui`'s GrantsPanel — the placeholder here taught the same wrong shape.
-	// A tuple is written for the id EXACTLY as typed while a store keys on the OIDC `sub`, so a display
-	// name grants to nobody AND still answers 200. The graph's own nodes are the directory: they carry
-	// the real subject ids this object already grants to.
-	const knownSubjects = $derived(new Set((graph?.nodes ?? []).map((n) => n.id)));
-	const looksUnresolvable = $derived.by(() => {
-		const u = mgUser.trim();
-		if (!u || u.includes(':') || u.includes('#')) return false;
-		if (knownSubjects.has(u) || knownSubjects.has(`user:${u}`)) return false;
-		return /^[a-z][a-z0-9._-]{0,30}$/i.test(u);
-	});
+
+
 
 	function rebuild(g: AccessGraph): void {
 		const obj = g.object;
@@ -142,42 +126,6 @@
 		if (graph) rebuild(graph);
 	}
 
-	async function runManage(grant: boolean): Promise<void> {
-		const user = mgUser.trim();
-		if (mgBusy || !user || !mgRelation) return;
-		mgBusy = true;
-		mgResult = null;
-		const current = dataset;
-		try {
-			const args = { kind: 'table', id: current, user, relation: mgRelation } as const;
-			const res = grant ? await grantAccess(args) : await revokeAccess(args);
-			if (dataset !== current) return;
-			if (res.ok) {
-				mgResult = {
-					tone: 'ok',
-					text: `${mgRelation} ${grant ? 'granted to' : 'revoked from'} ${res.data.user}.`,
-				};
-				await load(); // the graph now reflects the change
-			} else if (res.status === 401 || res.status === 403) {
-				// Same correction as `@rask/ui`'s GrantsPanel, which carried a second copy of this exact
-				// sentence: grant/revoke stopped being owner-tier when the grant axis was separated from
-				// ownership. `_authorize_grant` reads the rung from the body — grant needs
-				// `can_grant_<rung>`, revoke needs `can_revoke_grant` (`manage_grants` alone). Under
-				// `managed_access` an owner may hold the owner tier and still be refused, because that
-				// flag withdraws precisely `manage_grants` and the grant option beneath it.
-				mgResult = {
-					tone: 'fail',
-					text: grant
-						? `Granting ${mgRelation} here needs can_grant_${mgRelation} on this table — held by a grant-manager, or by someone holding ${mgRelation} plus the grant option. Owning the table is not sufficient if access is centrally managed.`
-						: 'Revoking here needs can_revoke_grant on this table — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them.',
-				};
-			} else {
-				mgResult = { tone: 'fail', text: `Failed (HTTP ${res.status}).` };
-			}
-		} finally {
-			mgBusy = false;
-		}
-	}
 </script>
 
 <div class="ag" {@attach enter({ y: 6 })}>
@@ -209,60 +157,21 @@
 			</SvelteFlow>
 		</div>
 
-		<div class="manage">
-			<input
-				class="mono"
-				placeholder="OIDC sub, or role:…#assignee / team:…#member"
-				bind:value={mgUser}
-			/>
-			<Select
-				bind:value={mgRelation}
-				ariaLabel="Rung"
-				placeholder="rung…"
-				options={GRANTABLE.map((r) => ({ value: r, label: r }))}
-			/>
-			<!-- #143: refused stays visible and says why. `disabled` is conditional on the verdict because
-			     GatedAction deliberately avoids the native attribute (it would kill the tooltip and drop
-			     the control from the tab order), so a natively-disabled child defeats the mechanism. -->
-			<GatedAction
-				allowed={mayGrant}
-				action={`Grant ${mgRelation || 'a rung'}`}
-				reason={`Granting ${mgRelation || 'a rung'} here needs can_grant_${mgRelation || '<rung>'} on this table — held by a grant-manager, or by someone holding ${mgRelation || 'that rung'} plus the grant option. Owning the table is not sufficient if access is centrally managed.`}
-			>
-				<button
-					class="btn"
-					disabled={mayGrant && (mgBusy || !mgUser.trim() || !mgRelation)}
-					onclick={() => runManage(true)}
-				>
-					{mgBusy ? '…' : 'Grant'}
-				</button>
-			</GatedAction>
-			<GatedAction
-				allowed={mayRevoke}
-				action="Revoke"
-				reason="Revoking here needs can_revoke_grant on this table — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them."
-			>
-				<button
-					class="btn ghost"
-					disabled={mayRevoke && (mgBusy || !mgUser.trim() || !mgRelation)}
-					onclick={() => runManage(false)}
-				>
-					Revoke
-				</button>
-			</GatedAction>
-			{#if looksUnresolvable}
-				<p class="advice">
-					Granted exactly as typed. A signed-in user's subject is their OIDC <code>sub</code> — a long
-					opaque id, not a display name — so <code>{mgUser.trim()}</code> matches nobody unless that is
-					literally the subject id (a service account or a userset).
-				</p>
-			{/if}
-			{#if mgResult}
-				<span class="res" class:ok={mgResult.tone === 'ok'} class:fail={mgResult.tone === 'fail'}
-					>{mgResult.text}</span
-				>
-			{/if}
-		</div>
+		<!-- ONE implementation of this form, shared with `@rask/ui`'s GrantsPanel. It used to live here
+		     too, and that duplication was the actual defect behind three bugs fixed on 2026-08-16 — each
+		     paid for twice — while the copies had already drifted: this one offered four rungs to the
+		     panel's six, so `pass_grants` and `manage_grants` were ungrantable from the graph and
+		     grantable from the panel, with no decision behind the difference.
+		     `bind:subject` is what keeps clicking a subject node prefilling the form. -->
+		<GrantForm
+			kind="table"
+			bind:subject={mgUser}
+			permissions={permMap}
+			knownSubjects={(graph?.nodes ?? []).map((n) => n.id)}
+			grant={(user, relation) => grantAccess({ kind: 'table', id: dataset, user, relation })}
+			revoke={(user, relation) => revokeAccess({ kind: 'table', id: dataset, user, relation })}
+			onmutated={load}
+		/>
 	{/if}
 </div>
 
@@ -298,53 +207,5 @@
 		color: var(--mut);
 		font-size: 12px;
 		padding: 24px 0;
-	}
-	.manage {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 8px;
-	}
-	.manage input {
-		flex: 1 1 220px;
-		min-width: 160px;
-		background: var(--panel-2);
-		border: 1px solid var(--line);
-		border-radius: var(--radius-sm);
-		color: var(--ink);
-		font-size: 12px;
-		padding: 4px 8px;
-	}
-	.btn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
-		border-radius: var(--radius-sm);
-		color: var(--ink);
-		font-size: 12px;
-		padding: 4px 12px;
-		cursor: pointer;
-	}
-	.btn.ghost {
-		background: none;
-		color: var(--mut);
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.res {
-		font-size: 12px;
-	}
-	.res.ok {
-		color: var(--ok);
-	}
-	.res.fail {
-		color: var(--fail);
-	}
-	.advice {
-		margin-top: 6px;
-		font-size: 11px;
-		line-height: 1.5;
-		color: var(--color-muted-foreground);
 	}
 </style>

@@ -10,8 +10,8 @@
 	// catalog types carry these fields can pass its functions straight through without adapters.
 	// Collapsed by default: one owner-tier round-trip per dataset, with definitive outcomes (the ACL,
 	// 401/403/501) cached and transient failures (offline, 5xx) retried on the next open.
-	import { GatedAction } from '../gated-action/index.js';
-	import { ChevronRight, ShieldCheck, TriangleAlert } from '@lucide/svelte';
+	import { ChevronRight, ShieldCheck } from '@lucide/svelte';
+	import { GrantForm } from '../grant-form/index.js';
 	import { Select } from '../select/index.js';
 	import Subject from '../identity/subject.svelte';
 
@@ -68,30 +68,15 @@
 	// An unkeyed field would let one object's permissions gate another's buttons on navigation — the
 	// exact cross-dataset bleed every other piece of state in this component is keyed to avoid.
 	let perms = $state<{ for: string; map: Record<string, boolean> } | null>(null);
+	// Keyed by dataset, like every other field here — an unkeyed map would let one object's verdicts
+	// gate another's buttons after a navigation, the cross-dataset bleed the 2026-07-16 audit fixed.
+	// `null` means UNKNOWN (no `fetchMyPermissions` wired, or the read failed), and GrantForm renders
+	// live on unknown: the gate explains a refusal, it does not invent one from a missing read.
+	const permMap = $derived(perms?.for === dataset ? perms.map : null);
 
-	// #72 the base rungs a grant-manager may hand out — the model's directly assignable relations,
-	// least→most privilege. NOT the can_* actions the review row shows (those are derived); a
-	// grant/revoke writes/deletes a direct base-rung tuple, then the review is re-fetched.
-	//
-	// The last two are the GRANT AXIS, and they are not more of the same: the four above say what a
-	// subject may do with the DATA, these say what they may do with ACCESS. `manage_grants` hands out
-	// any rung here without conferring a single byte of read — the security-admin persona that was
-	// unexpressible while granting was welded to `owner`. `pass_grants` is the grant OPTION: it lets a
-	// holder hand on what they already hold, and nothing more, so it is worthless on its own.
-	//
-	// Kept in privilege order rather than grouped, because that is the order the picker reads in and
-	// `manage_grants` genuinely outranks `owner` on the axis it belongs to. The catalog gates each one
-	// separately (`can_grant_<rung>`), so a rung offered here that the caller may not grant is refused
-	// server-side — the picker is a convenience, never the boundary.
-	const GRANTABLE = ['reader', 'writer', 'validator', 'owner', 'pass_grants', 'manage_grants'];
 
-	// `reader` and `owner` say what they mean; `pass_grants` and `manage_grants` do not, and picking
-	// the wrong one of those hands out the authority to hand out authority. The wire value stays the
-	// relation name — this is the label only, so nothing downstream has to know about it.
-	const RUNG_LABEL: Record<string, string> = {
-		pass_grants: 'pass_grants — may re-grant what they hold',
-		manage_grants: 'manage_grants — may grant anything, reads nothing',
-	};
+
+
 
 	// Every piece of state is keyed by the dataset it belongs to (no cross-dataset bleed, audit
 	// 2026-07-16: a single un-keyed `loading` let one dataset's in-flight review block another's):
@@ -117,27 +102,15 @@
 
 	// #72 manage-access form — grant/revoke a base rung to a subject. Keyed by dataset like the simulator.
 	let mgUser = $state('');
-	let mgRelation = $state('');
-	let mgBusy = $state(false);
-	let mgFor = $state<string | null>(null);
-	let mgResult = $state<{ tone: 'ok' | 'fail'; text: string } | null>(null);
 
-	// #143 verdicts. `undefined` (no `fetchMyPermissions` wired, or the read failed) means UNKNOWN, and
-	// unknown renders the control live — this gate exists to explain a refusal, not to invent one from
-	// a missing read. Grant is per-RUNG (`can_grant_<rung>`), revoke is `can_revoke_grant`; they differ
-	// and conflating them is the bug this same file carried in its failure message until today.
-	const permMap = $derived(perms?.for === dataset ? perms.map : null);
-	const mayGrant = $derived(
-		permMap === null || !mgRelation ? true : permMap[`can_grant_${mgRelation}`] === true,
-	);
-	const mayRevoke = $derived(permMap === null ? true : permMap.can_revoke_grant === true);
 
-	const grantReason = $derived(
-		`Granting ${mgRelation || 'a rung'} here needs can_grant_${mgRelation || '<rung>'} on this ${kind} — held by a grant-manager, or by someone holding ${mgRelation || 'that rung'} plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`,
-	);
-	const revokeReason = $derived(
-		`Revoking here needs can_revoke_grant on this ${kind} — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them.`,
-	);
+
+
+
+
+
+
+
 
 	const open = $derived(openedFor === dataset);
 	const shown = $derived(review?.for === dataset ? review : null);
@@ -145,22 +118,7 @@
 	// Declared AFTER `shown`, which it reads. `$derived` is lazy so the original order worked at
 	// runtime, but TypeScript reported a genuine use-before-declaration and a gate that has to be
 	// argued with is a gate that stops being read.
-	// SUBJECTS THIS OBJECT ALREADY GRANTS TO — the only directory available. There is no
-	// subject-enumeration endpoint anywhere in the estate, so nothing can resolve a display name to an
-	// OIDC `sub`; the review's own rows are the sole evidence of what a subject id looks like here.
-	const knownSubjects = $derived(
-		new Set((shown?.access?.grants ?? []).flatMap((g) => g.users)),
-	);
-	// A grant to a subject the store will never match writes a tuple that looks fine and does nothing.
-	// It is NOT an error — `service-ingest` is a real subject on this estate and role/team usersets are
-	// literal by design — so this ADVISES rather than blocks: bare, short, readable, unknown here, and
-	// not a userset. A real OIDC sub is a long opaque blob (`CiQwOGE4Njg0Yi…`).
-	const looksUnresolvable = $derived.by(() => {
-		const u = mgUser.trim();
-		if (!u || u.includes(':') || u.includes('#')) return false; // a userset or an explicit type
-		if (knownSubjects.has(u) || knownSubjects.has(`user:${u}`)) return false; // already a subject here
-		return /^[a-z][a-z0-9._-]{0,30}$/i.test(u); // a plain name, not an opaque sub
-	});
+
 	const loading = $derived(loadingFor === dataset);
 	const failed = $derived(failedFor === dataset);
 
@@ -240,50 +198,8 @@
 	}
 
 	// #72 grant or revoke a base rung, then re-fetch the review so the change is visible immediately.
-	async function runManage(grant: boolean): Promise<void> {
-		const user = mgUser.trim();
-		if (mgBusy || !user || !mgRelation) return;
-		mgBusy = true;
-		mgResult = null;
-		const current = dataset;
-		try {
-			const res = grant
-				? await client.grantAccess(kind, current, user, mgRelation)
-				: await client.revokeAccess(kind, current, user, mgRelation);
-			if (dataset !== current) return; // navigated away — drop the stale result
-			mgFor = current;
-			if (res.ok) {
-				const verb = grant ? 'granted to' : 'revoked from';
-				mgResult = { tone: 'ok', text: `${mgRelation} ${verb} ${res.data.user}.` };
-				const refreshed = await client.fetchAccess(kind, current);
-				if (dataset === current && refreshed.ok) {
-					review = { for: current, access: refreshed.data, denied: null };
-				}
-			} else if (res.status === 401 || res.status === 403) {
-				// NAME THE REAL GATE. This used to read "Managing access needs the owner tier", which was
-				// true of `access/list` and `access/check` (both still `can_drop`) and has NOT been true of
-				// grant/revoke since the grant axis was separated from ownership: `_authorize_grant` reads
-				// the rung out of the BODY, so grant is `can_grant_<rung>` and revoke is `can_revoke_grant`
-				// (= `manage_grants` alone). Telling a refused caller to obtain the owner tier is worse than
-				// saying nothing — under `managed_access` they may already HOLD it and still be refused,
-				// because that flag withdraws exactly `manage_grants` and the grant option beneath it.
-				mgResult = {
-					tone: 'fail',
-					text: grant
-						? `Granting ${mgRelation} here needs can_grant_${mgRelation} on this ${kind} — held by a grant-manager, or by someone holding ${mgRelation} plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`
-						: `Revoking here needs can_revoke_grant on this ${kind} — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them.`,
-				};
-			} else if (res.status === 400 || res.status === 422) {
-				mgResult = { tone: 'fail', text: `${mgRelation} is not a grantable rung here.` };
-			} else {
-				mgResult = { tone: 'fail', text: `Failed (HTTP ${res.status}).` };
-			}
-		} finally {
-			mgBusy = false;
-		}
-	}
 
-	const mgResultShown = $derived(mgFor === dataset ? mgResult : null);
+
 </script>
 
 <div class="grants">
@@ -364,73 +280,22 @@
 
 			<div class="sim">
 				<div class="sim-head">Manage access (grant / revoke)</div>
-				<div class="sim-form">
-					<input
-						class="mono"
-						placeholder="OIDC sub, or role:…#assignee / team:…#member"
-						bind:value={mgUser}
-					/>
-					<Select
-						bind:value={mgRelation}
-						ariaLabel="Grant rung"
-						placeholder="rung…"
-						options={GRANTABLE.map((r) => ({ value: r, label: RUNG_LABEL[r] ?? r }))}
-					/>
-					<!-- #143: a refused action stays VISIBLE and says why, rather than vanishing.
-					     `disabled` is deliberately conditional on the verdict. GatedAction does not use the
-					     native attribute — that would kill its tooltip and drop the control from the tab
-					     order — so a natively-disabled child defeats the whole mechanism. When refused we
-					     therefore leave the button enabled and let GatedAction's capture-phase guard block
-					     the click; form-validity disabling still applies in the ALLOWED case, where it is
-					     the only thing standing between the user and a pointless request. Same shape as
-					     ProjectGallery's `New project`, the ruling's reference call site. -->
-					<GatedAction allowed={mayGrant} action={`Grant ${mgRelation || 'a rung'}`} reason={grantReason}>
-						<button
-							class="btn"
-							disabled={mayGrant && (mgBusy || !mgUser.trim() || !mgRelation)}
-							onclick={() => runManage(true)}
-						>
-							{mgBusy ? '…' : 'Grant'}
-						</button>
-					</GatedAction>
-					<GatedAction allowed={mayRevoke} action="Revoke" reason={revokeReason}>
-						<button
-							class="btn ghost"
-							disabled={mayRevoke && (mgBusy || !mgUser.trim() || !mgRelation)}
-							onclick={() => runManage(false)}
-						>
-							Revoke
-						</button>
-					</GatedAction>
-				</div>
-				<!-- The tuple is written for the id EXACTLY as typed, and a store keys on the OIDC `sub`.
-				     Typing a display name therefore writes a grant nobody holds — and the call still
-				     answers 200, so the UI reported success while the grantee stayed denied (reproduced
-				     against the live estate 2026-08-16: "reader granted to user:bob", bob still refused;
-				     the same grant to his sub worked immediately). Advisory, never blocking: literal ids
-				     are legitimate for service accounts (`service-ingest` holds rungs on this estate) and
-				     role/team usersets are literal by design. -->
-				{#if looksUnresolvable}
-					<p class="advice">
-						<TriangleAlert size={12} />
-						<span>
-							Granted exactly as typed. A signed-in user's subject is their OIDC <code>sub</code> —
-							a long opaque id like <code class="mono">CiQwOGE4Njg0Yi…</code>, not a display name —
-							so <code class="mono">{mgUser.trim()}</code> will match nobody unless that is literally
-							the subject id (a service account or a userset). The review above shows the real ids
-							this object already grants to.
-						</span>
-					</p>
-				{/if}
-				{#if mgResultShown}
-					<p
-						class="verdict"
-						class:allow={mgResultShown.tone === 'ok'}
-						class:deny={mgResultShown.tone === 'fail'}
-					>
-						{mgResultShown.text}
-					</p>
-				{/if}
+				<!-- ONE implementation, shared with the lakehouse's AccessGraph. It lived in both, and on
+				     2026-08-16 three defects each had to be fixed twice while the copies had already
+				     drifted where nobody was looking (four rungs there, six here). `knownSubjects` comes
+				     from the review this panel already renders — the only subject directory that exists. -->
+				<GrantForm
+					{kind}
+					bind:subject={mgUser}
+					permissions={permMap}
+					knownSubjects={(shown?.access?.grants ?? []).flatMap((g) => g.users)}
+					grant={(user, relation) => client.grantAccess(kind, dataset, user, relation)}
+					revoke={(user, relation) => client.revokeAccess(kind, dataset, user, relation)}
+					onmutated={async () => {
+						const refreshed = await client.fetchAccess(kind, dataset);
+						if (refreshed.ok) review = { for: dataset, access: refreshed.data, denied: null };
+					}}
+				/>
 			</div>
 		{/if}
 	{/if}
@@ -544,10 +409,6 @@
 		padding: 3px 12px;
 		cursor: pointer;
 	}
-	.btn.ghost {
-		background: none;
-		color: var(--mut);
-	}
 	.btn:disabled {
 		opacity: 0.5;
 		cursor: default;
@@ -561,17 +422,5 @@
 	}
 	.verdict.deny {
 		color: var(--fail);
-	}
-	.advice {
-		display: flex;
-		align-items: flex-start;
-		gap: 6px;
-		margin-top: 8px;
-		font-size: 11px;
-		line-height: 1.5;
-		color: var(--color-muted-foreground);
-	}
-	.advice code {
-		font-size: 10px;
 	}
 </style>
