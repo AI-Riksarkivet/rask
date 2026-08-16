@@ -327,8 +327,16 @@ async def _access_mutate(
     """Grant or revoke one base rung (owner/writer/reader/validator) to a subject on a table/namespace.
 
     The MUTATE half of the #68 governance surface — the write counterpart of ``access/list``.
-    Owner-tier gated by the router (``access/grant`` / ``access/revoke`` → ``can_drop`` / ``can_delete`` in
-    fga_deps) — managing an object's ACL is an owner-privileged act, the same bar as reviewing it.
+
+    GATED PER RUNG FROM THE BODY, not by the router's owner-tier suffix map. This paragraph said the
+    opposite until 2026-08-16 — "owner-tier gated by the router (``can_drop``/``can_delete``) … the same
+    bar as reviewing it" — which describes the behaviour ``_authorize_grant`` explicitly replaced when
+    the grant axis was separated from ownership. Neither suffix appears in ``_OWNER_SUFFIX_RELATION``
+    any more; ``fga_deps`` routes both to :func:`_authorize_grant`, which reads the rung out of the body
+    because the path says only THAT a grant is happening. Grant needs ``can_grant_<relation>``; revoke
+    needs ``can_revoke_grant`` (``manage_grants`` alone, deliberately stricter — a delegate must not be
+    able to strip the owner who delegated to them). Reviewing (``access/list``/``access/check``) IS
+    still owner-tier, which is what made the stale sentence plausible.
     Fail-closed: only a grantable base rung the model defines is accepted (a ``can_*`` action or ``parent``
     is a 4xx, not a silent junk tuple); an OpenFGA outage is a 503, never a silent grant/revoke no-op. Both
     directions are idempotent (``write_tuples`` swallows a duplicate, ``delete_tuples`` an absent tuple) and

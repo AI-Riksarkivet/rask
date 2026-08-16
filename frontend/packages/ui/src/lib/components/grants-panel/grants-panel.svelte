@@ -193,7 +193,19 @@
 					review = { for: current, access: refreshed.data, denied: null };
 				}
 			} else if (res.status === 401 || res.status === 403) {
-				mgResult = { tone: 'fail', text: `Managing access needs the owner tier on this ${kind}.` };
+				// NAME THE REAL GATE. This used to read "Managing access needs the owner tier", which was
+				// true of `access/list` and `access/check` (both still `can_drop`) and has NOT been true of
+				// grant/revoke since the grant axis was separated from ownership: `_authorize_grant` reads
+				// the rung out of the BODY, so grant is `can_grant_<rung>` and revoke is `can_revoke_grant`
+				// (= `manage_grants` alone). Telling a refused caller to obtain the owner tier is worse than
+				// saying nothing — under `managed_access` they may already HOLD it and still be refused,
+				// because that flag withdraws exactly `manage_grants` and the grant option beneath it.
+				mgResult = {
+					tone: 'fail',
+					text: grant
+						? `Granting ${mgRelation} here needs can_grant_${mgRelation} on this ${kind} — held by a grant-manager, or by someone holding ${mgRelation} plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`
+						: `Revoking here needs can_revoke_grant on this ${kind} — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them.`,
+				};
 			} else if (res.status === 400 || res.status === 422) {
 				mgResult = { tone: 'fail', text: `${mgRelation} is not a grantable rung here.` };
 			} else {

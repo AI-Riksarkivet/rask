@@ -120,7 +120,18 @@
 				};
 				await load(); // the graph now reflects the change
 			} else if (res.status === 401 || res.status === 403) {
-				mgResult = { tone: 'fail', text: 'Managing access needs the owner tier on this table.' };
+				// Same correction as `@rask/ui`'s GrantsPanel, which carried a second copy of this exact
+				// sentence: grant/revoke stopped being owner-tier when the grant axis was separated from
+				// ownership. `_authorize_grant` reads the rung from the body — grant needs
+				// `can_grant_<rung>`, revoke needs `can_revoke_grant` (`manage_grants` alone). Under
+				// `managed_access` an owner may hold the owner tier and still be refused, because that
+				// flag withdraws precisely `manage_grants` and the grant option beneath it.
+				mgResult = {
+					tone: 'fail',
+					text: grant
+						? `Granting ${mgRelation} here needs can_grant_${mgRelation} on this table — held by a grant-manager, or by someone holding ${mgRelation} plus the grant option. Owning the table is not sufficient if access is centrally managed.`
+						: 'Revoking here needs can_revoke_grant on this table — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them.',
+				};
 			} else {
 				mgResult = { tone: 'fail', text: `Failed (HTTP ${res.status}).` };
 			}
