@@ -48,7 +48,7 @@ configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-
 log = logging.getLogger(__name__)
 
 
-def _make_fga_client(settings: MaintenanceSettings) -> Any | None:  # noqa: ANN401 — OpenFgaClient, no protocol
+async def _make_fga_client(settings: MaintenanceSettings) -> Any | None:  # noqa: ANN401 — OpenFgaClient, no protocol
     """The OpenFGA client this service reads with — and, since #79, REVOKES with. Or ``None``.
 
     Two consumers with different rights, and the difference is the whole point:
@@ -62,25 +62,48 @@ def _make_fga_client(settings: MaintenanceSettings) -> Any | None:  # noqa: ANN4
     It holds **no grant-writing path at all** — no `write_tuples`, no `seed_ownership` — which is why it
     needs no capability beyond what pins the store.
 
-    ``None`` on every "not configured" path — FGA off, or the store/model ids unpinned. This service must
-    NOT provision a store when the ids are absent: provisioning from a maintenance job would create an
-    empty store and then cheerfully report every real tenant as a ghost, which is worse than reporting
-    the category unavailable. With FGA enabled and this ``None``, the purge does not run at all.
+    This service must NOT PROVISION a store when the ids are absent: provisioning from a maintenance
+    job would create an empty store and then cheerfully report every real tenant as a ghost, which is
+    worse than reporting the category unavailable. That rule stands and `fga.provision` is referenced
+    nowhere here.
 
-    Never raises. A misconfigured authz endpoint degrades four categories; it must not stop the sweep.
+    IT MAY, HOWEVER, LOOK ONE UP — and refusing to was a distinct bug wearing the same justification.
+    Unpinned used to return ``None`` outright, so on the chart's DEFAULT posture (`auth.fgaStoreId: ""`,
+    because a store id is a per-cluster ULID that cannot be a committed default) this service never had
+    a client at all. Measured live 2026-08-16: `ghost_projects`, `ghost_warehouses` and
+    `unreferenced_projects` reported UNAVAILABLE on every tick, and since `report_is_clean` blocks on any
+    unavailable category, the #79 expired-trash purge could never certify in any default deployment.
+
+    `service_kit.governed.fga.resolve` exists for exactly this, and its docstring records the identical
+    mistake made by ingest — which applied the no-authoring principle to BOTH halves and therefore 503'd
+    out of the box on every dev and e2e cluster: *"reading is not authoring"*. Resolve is read-only, can
+    never create a store or write a model, and returns ``None`` when the estate is not bootstrapped —
+    so this still fails closed, it just no longer fails closed against an estate that is right there.
+
+    Never raises. A misconfigured or unreachable authz endpoint degrades the authz categories; it must
+    not stop the sweep, which is this service's primary job and needs no FGA at all.
     """
     if not settings.fga_enabled:
         return None
-    if not (settings.fga_store_id and settings.fga_model_id):
-        log.warning("reconcile_fga_unpinned", extra={"reason": "MAINTENANCE_FGA_STORE_ID/MODEL_ID unset — authz categories will report unavailable"})
-        return None
+
+    store_id, model_id = settings.fga_store_id, settings.fga_model_id
+    if not (store_id and model_id):
+        try:
+            resolved = await fga.resolve(settings.fga_api_url)
+        except Exception:
+            log.warning("reconcile_fga_resolve_failed", exc_info=True)
+            return None
+        if resolved is None:
+            log.warning(
+                "reconcile_fga_unpinned",
+                extra={"reason": "MAINTENANCE_FGA_STORE_ID/MODEL_ID unset and no store to resolve — authz categories will report unavailable"},
+            )
+            return None
+        store_id, model_id = resolved
+        log.info("reconcile_fga_resolved_by_name", extra={"store_id": store_id, "hint": "pin MAINTENANCE_FGA_STORE_ID/MODEL_ID for production"})
+
     try:
-        return fga.make_client(
-            settings.fga_api_url,
-            settings.fga_store_id,
-            settings.fga_model_id,
-            timeout_seconds=settings.fga_timeout_seconds,
-        )
+        return fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
     except Exception:
         log.warning("reconcile_fga_client_failed", exc_info=True)
         return None
@@ -150,7 +173,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The reconciler's two read-only clients. Both are OPTIONAL by design: a missing one degrades its
     # categories to UNAVAILABLE-with-a-reason, and the other five still report. Boot must NOT fail on
     # them — the sweep is this service's primary job and does not need either.
-    app.state.fga_client = _make_fga_client(settings)
+    app.state.fga_client = await _make_fga_client(settings)
     app.state.s3_client = _make_s3_client(settings)
     app.state.startup_complete = True
     try:

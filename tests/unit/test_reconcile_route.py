@@ -143,20 +143,78 @@ def test_an_overlapping_tick_skips_rather_than_stacking(monkeypatch: pytest.Monk
     assert out["status"] == "skipped"
 
 
-def test_the_service_never_provisions_an_fga_store() -> None:
+def test_the_service_never_provisions_an_fga_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """A maintenance job that provisioned its own store would read an EMPTY one and then report every
-    real tenant as a ghost — a false report is worse than an absent one. With the ids unpinned the
-    client is None (→ unavailable), and `fga.provision` is never referenced by this service at all."""
+    real tenant as a ghost — a false report is worse than an absent one.
+
+    The guard is the absent CALL, not a None return. This test used to assert that unpinned yields
+    ``None`` and treated that as proof of not-provisioning, which conflated two different claims and
+    pinned a real bug in place: see the sibling test for what unpinned must actually do.
+    """
     from pathlib import Path
 
     from maintenance import service
 
-    assert service._make_fga_client(_settings(fga_enabled=True)) is None  # ids unset → None, not a new store
-    assert service._make_fga_client(_settings(fga_enabled=False)) is None
-    # `fga.provision(...)` is the call that would create a store; prose about NOT provisioning is fine
-    # and is in fact the point, so match the CALL, not the word.
+    async def _no_store(*_a: Any, **_kw: Any) -> Any:
+        return None
+
+    monkeypatch.setattr(service.fga, "resolve", _no_store)
+    assert asyncio.run(service._make_fga_client(_settings(fga_enabled=False))) is None
+    assert asyncio.run(service._make_fga_client(_settings(fga_enabled=True))) is None, "no store to resolve → still None, never a new one"
+
+    # The CALL is what creates a store; prose about not provisioning is fine and is in fact the point.
+    # Matched as `fga.provision(` — the bare name matched documentation too, so a docstring explaining
+    # WHY the service must not provision failed the test asserting that it does not.
     src = Path(service.__file__).read_text()
-    assert "fga.provision" not in src, "the maintenance service must never provision an FGA store"
+    assert "fga.provision(" not in src, "the maintenance service must never provision an FGA store"
+
+
+def test_an_UNPINNED_store_is_RESOLVED_by_name_rather_than_abandoned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reading is not authoring — the distinction ingest already paid for once.
+
+    The chart's DEFAULT posture is `auth.fgaStoreId: ""`, because a store id is a per-cluster ULID that
+    cannot be a committed default. Unpinned used to return ``None`` outright, so in every default
+    deployment this service had no FGA client at all: `ghost_projects`, `ghost_warehouses` and
+    `unreferenced_projects` reported UNAVAILABLE on every tick (measured live 2026-08-16), and because
+    `report_is_clean` blocks on ANY unavailable category, the #79 expired-trash purge could never
+    certify anywhere.
+
+    `fga.resolve` is read-only: it cannot create a store or write a model, and answers ``None`` when the
+    estate is not bootstrapped. So this still fails closed — it just stops failing closed against an
+    estate that is sitting right there. Same fix, same reasoning, as `ingest.__init__`'s.
+    """
+    from maintenance import service
+
+    seen: list[str] = []
+
+    async def _resolve(api_url: str, **_kw: Any) -> tuple[str, str]:
+        seen.append(api_url)
+        return ("store-01ABC", "model-01XYZ")
+
+    made: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(service.fga, "resolve", _resolve)
+    monkeypatch.setattr(service.fga, "make_client", lambda url, store, model, **_kw: made.append((url, store, model)) or "CLIENT")
+
+    client = asyncio.run(service._make_fga_client(_settings(fga_enabled=True)))
+
+    assert client == "CLIENT", "an unpinned service with a resolvable store must get a client, not None"
+    assert seen, "resolve was never attempted — unpinned fell straight through to None again"
+    assert made and made[0][1:] == ("store-01ABC", "model-01XYZ"), f"the client must be built from the RESOLVED ids, got {made}"
+
+
+def test_a_resolve_that_raises_degrades_rather_than_killing_the_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OpenFGA being slow to accept connections is an ordering blip, not a reason to CrashLoopBackOff.
+
+    The sweep is this service's primary job and needs no FGA at all, so an unreachable authz endpoint
+    must cost the authz CATEGORIES and nothing else.
+    """
+    from maintenance import service
+
+    async def _boom(*_a: Any, **_kw: Any) -> Any:
+        raise ConnectionRefusedError("openfga not up yet")
+
+    monkeypatch.setattr(service.fga, "resolve", _boom)
+    assert asyncio.run(service._make_fga_client(_settings(fga_enabled=True))) is None
 
 
 def test_the_reconcile_client_is_read_only_by_construction() -> None:
