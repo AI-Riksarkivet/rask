@@ -24,9 +24,27 @@ export function stageOf(namespace: string): StageInfo | null {
 	return { stage: m[2] as Stage, project: m[1] ?? null, media: m[3] !== undefined };
 }
 
-/** The namespace segment of a `<ns>$<table>` id (a bare name is its own root — the registry rule). */
+/**
+ * The namespace of a `<ns>$…$<table>` id: EVERY segment but the last (a bare name is its own root —
+ * the registry rule).
+ *
+ * `lastIndexOf`, not `indexOf`, and the difference is a bug rather than a nicety. Namespaces nest —
+ * `namespace#parent: [warehouse, namespace]` in the FGA model, and the catalog's create door accepts
+ * a nested id — so `acme$bronze$pages` is the table `pages` inside the namespace `acme$bronze`. Taking
+ * the FIRST delimiter called that namespace `acme`, which is a different object.
+ *
+ * The backend is the authority and states it plainly: `parent_namespace_id` is "all segments but the
+ * last" (`service_kit/governed/fga.py:187-201`), and that is the id the grant and check paths use. A
+ * frontend deriving a different one disagrees with authz about which object a table belongs to.
+ *
+ * Four surfaces were wrong for a nested table: the Namespaces list folded it under its top-level
+ * ancestor so the real namespace never appeared as a row at all; the warehouse detail page's namespace
+ * list did the same; the Tables list linked its `namespace` column to an object one or more rungs too
+ * high; and `stageOfTable` derived the medallion stage from the wrong name, so a table in
+ * `acme$acme-silver` got no stage badge instead of `silver`.
+ */
 export function namespaceOfTable(table: string): string {
-	return table.includes('$') ? table.slice(0, table.indexOf('$')) : table;
+	return table.includes('$') ? table.slice(0, table.lastIndexOf('$')) : table;
 }
 
 /** The medallion stage of a table id, derived from its namespace segment. */
