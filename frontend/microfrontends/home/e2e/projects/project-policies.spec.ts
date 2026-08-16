@@ -2,6 +2,12 @@ import { test, expect, type Page } from '@playwright/test';
 import { ME_ADMIN, signIn, TOKEN } from '../session';
 import { postsTo, seed as seedFor } from '../mock-client';
 
+// Screenshots are EVIDENCE the owner reviews, not assertions — the same convention
+// `settings/gated-action.spec.ts` established. The maintenance surface earns them because its
+// whole job is making a winner-takes-all resolution legible: a reviewer has to be able to SEE
+// that the project's own knobs and the tiers shadowing it are rendered as different things.
+const SHOTS = 'e2e/__shots__';
+
 // `/projects/<p>` § Maintenance (#65) — the project-scoped VIEW of the maintenance policies governing
 // a tenant's data. The set/describe/delete trio for a project record shipped with #84 and had no
 // surface at all; the LIST is what makes a surface possible, because a page cannot describe records
@@ -88,6 +94,8 @@ test('renders the project record and every record that shadows it', async ({ pag
 	const ns = page.getByRole('row').filter({ hasText: 'gold$pages' });
 	await expect(ns).toContainText('acme-bucket/u1_gold$pages');
 	await expect(ns).toContainText('off'); // compact_enabled:false is a STATE, not an absence
+
+	await page.screenshot({ path: `${SHOTS}/65-policies-project.png`, fullPage: true });
 });
 
 test('each record row crosses INTO the lakehouse zone with data-sveltekit-reload', async ({

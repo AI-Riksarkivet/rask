@@ -99,8 +99,16 @@ suites: `test_object_store_cas_e2e.py` (Lance's own manifest commits) and
 
 ## Lifecycle
 
-Reclamation, scheduling and the GC design live in `open_table_maintenance.md` — read it before
-changing anything the sweep, the reconciler or the orphan scan touches.
+Reclamation, scheduling and the GC design live in `services/maintenance` itself — read
+`services/maintenance/services/{sweep,optimize,purge,reconcile,base_refs,index_health,tiers}.py`
+before changing anything the sweep, the reconciler or the orphan scan touches. This used to point at
+a root `open_*.md`, which is ephemeral by design: the plan was deleted when its work landed and the
+pointer dangled. The per-table/namespace/project POLICY that governs a sweep is
+`catalog.schemas.PolicyRequest` (retention, retain_versions, compact_enabled, interval, target rows),
+resolved **winner-takes-all** — an exact table match shadows the namespace record which shadows the
+project record, and the winner supplies EVERY field. Any surface showing an effective policy must say
+which record won; an inherited value rendered identically to a set one is how nobody can tell what is
+governing their data. The project-scoped surface is home's `/projects/<p>` § Maintenance.
 
 - Creates are top-down: parent must EXIST (registry), gated on the parent's `can_*`.
 - Deletes are bottom-up: a container refuses **409, naming its contents**; `cascade` is explicit;
