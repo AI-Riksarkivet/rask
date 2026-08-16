@@ -41,12 +41,9 @@ today and its own values comment says it should stay off, so nothing is broken.
 
 ## Also deferred (small, unblocked)
 
-- **`index_columns` is unreachable by construction** — no caller supplies it and no policy field exists
-  (`optimize.py:139` -> `:270`), so `inspect_indices`' dropped-index check is dead code whose docstring
-  promises "a policy that names the columns it depends on gets a real answer". Needs a new policy field,
-  which is a catalog schema change plus an OpenAPI regen.
 - **Multi-base leak**: dead files in a non-root base are reclaimed by nothing (measured:
-  `EXTRA_BASE_DELETED = []`).
+  `EXTRA_BASE_DELETED = []`). Lance offers no API that reclaims them, so this needs an upstream
+  answer rather than a local fix.
 
 ---
 
@@ -70,6 +67,9 @@ today and its own values comment says it should stay off, so nothing is broken.
   discarded.
 - **T9** `e4e73b68` — `MAINTENANCE_POLICY_ROOT` rendered nowhere while values told operators to "set
   both together"; reconcile defaulted to the wrong root; a dead parameter.
+- **index_columns** `2f85b270` — #60's dropped-index check was unreachable by construction: the
+  argument existed, the check existed, and no policy field could name the columns. Added to
+  `PolicyRequest`, threaded through the sweep, OpenAPI + TS client regenerated.
 
 **The first wave, earlier the same day:**
 
