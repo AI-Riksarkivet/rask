@@ -389,3 +389,65 @@ carrier" sounds like.
 the synchronous shape and is why the idempotency key is documented as a *skill rule* — "an operation
 whose route invites retry must pair it with one". If the estate ever wants the heads to survive a caller
 that gives up, the change to make is 202-with-persisted-intent, decided as an API change.
+
+---
+
+## 12. REVIEWED 2026-08-16 — `stage_run` is idiomatic; its operator surface is event-driven by design
+
+The Diagrid `review-workflow-{determinism,activity,management}` checklists, run over
+`services/medallion`. Recorded here because this doc is the cascade's design record and §3's monitor
+shape is exactly what the determinism rules grade.
+
+### Determinism: zero findings, and §3's shape is why
+
+`stage_run` (`workflow.py:131-224`) passes all fifteen `DWF-DET-*` rules. The three things that
+usually fail this review are absent for reasons this doc already argued:
+
+* **No unbounded loop (`DWF-DET-013`).** The poll loop is one poll per turn plus `continue_as_new`
+  (`workflow.py:157-160`) — the Monitor pattern §5 costed. The comment records what it replaced: the
+  earlier bounded loop was never the literal `while True` anti-pattern, but its bound *was* the
+  history bound, 2880 polls × 30 s ≈ 5,760 events replayed from the start on every continuation.
+* **No logging leak (`DWF-DET-012`).** Every one of the five `log.*` calls in workflow scope is
+  guarded by `if not ctx.is_replaying` (:151, :176, :191, :198, :219). A line-based scan flags all
+  five; each is a false positive, and the guard is the documented fix.
+* **No clock and no env read.** The poll interval and ceiling ride `StageJobSpec`, and
+  `_is_terminal` (`workflow.py:421-426`) is deliberately a pure comparison over two literals so the
+  workflow module has no import-time behaviour — with the literals test-pinned against `ray_kit`'s so
+  the duplication cannot drift silently.
+
+**The `continue_as_new` carry is the subtle part and it is already correct.** `submission_id` and
+`polls_done` ride the spec (`workflow.py:108-114`) because each turn starts with empty history: without
+them a turn has no memory that `submit_stage` ran, and would resubmit the same stage job once per poll
+interval forever, each overwriting the same output dataset, never reaching the ceiling because the
+count restarted at zero. Anything added to this workflow that must survive a turn goes in that spec.
+
+### Management: there is no HTTP surface, and that is the design
+
+Unlike ingest — whose missing `terminate` route is a live critical, recorded at
+`open_ingest_design.md` §6 — medallion exposes **no workflow management endpoints**, and none of
+`DWF-MGT-001`…`015` fires as a defect. The plane is trigger-driven: `transform.py:120` schedules
+`stage_run` from a pub/sub trigger with a deterministic `instance_id`, so Dapr's duplicate-instance
+answer *is* the dedupe (:94), and `transform.py:146` reads state back through `get_workflow_state`.
+There is no door for a human to call, so there is no door to add lifecycle control to.
+
+**Why that is acceptable here and not in ingest, stated so the asymmetry is deliberate:** `stage_run`
+is bounded by `max_polls` on every path and terminates itself, and its three exits are already
+distinguished (`succeeded` / `abandoned` / `unnotified`, §9's vocabulary). An ingest run has no such
+self-limit — its `max_run_hours` default is 0 = unbounded in code. Medallion's watcher cannot run away;
+ingest's harvest can.
+
+**What would change this:** a stage job that must be *cancelled* rather than waited out — an operator
+who knows the Ray job is wrong and wants the watcher to stop rather than abandon at the ceiling. That
+needs both a `terminate_workflow` call **and** a Ray-side `stop_job`, since terminating the watcher
+leaves the job running. Not needed today; if it is ever wanted, it is one decision covering both halves,
+not a route.
+
+### Carried over from ingest's review, same verdict
+
+**`DWF-ACT-009` (warning) applies identically:** all four activities (`submit_stage`, `poll_stage`,
+`publish_stage_ready`, `report_stage_outcome`) sign as `dict[str, Any]` while 1.18 makes Pydantic the
+first-class payload type. The models exist and every body opens with `model_validate`, so validation is
+present but one line inside the function rather than at the boundary. Same recommendation: fold it into
+a change that already touches these signatures — S3's quality-gate wiring is the natural window — rather
+than churning the file for it alone. `DWF-ACT-008` (naming suffix) is declined for the same
+single-language reason.

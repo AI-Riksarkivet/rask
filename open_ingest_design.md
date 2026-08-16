@@ -1054,3 +1054,90 @@ path commits a blind `Append` (`lander.py:123`), de-duplicates only within one r
 `worker.py:152-154` claims convergence. Two runs over one source land 2N rows over N ids and nothing
 reports it. **§1c's Option A removes the reason to re-run; it does not make the commit idempotent.**
 The measured cost of the real fix is already on record at `staging.py:144-153`.
+
+---
+
+## 6. The workflow's operator surface — reviewed 2026-08-16, one critical gap
+
+The Diagrid `review-workflow-{determinism,activity,management}` checklists, run over
+`services/ingest`. Recorded here because ingest owns `ingest_run` / `chunk_run` and this doc is the
+plane's design record. Two of the three areas came back clean; the third did not.
+
+### Clean, and worth banking so a later edit does not quietly regress it
+
+**Determinism: zero findings across `DWF-DET-001`…`015`.** No wall-clock read, no `uuid`/`random`, no
+network or file I/O, no DB client, no `os.environ` read, no unbounded loop, and no `await` that is not
+on `ctx` anywhere in either workflow body. Three properties are doing that work, and each was paid for:
+
+* **The env reads are already gone.** `RunLimits` (`workflow.py:98-116`) records the exact break —
+  `if max_run_hours > 0` decides whether a durable timer exists, so a rolling deploy that changed the
+  variable between a run's first execution and its replay produced an action stream the history does
+  not match. `resolve_limits` pins the numbers in history instead.
+* **The two helpers called from workflow scope are pure, and say so.** `bound_errors`
+  (`workflow.py:172-186`) chooses survivors "by sorted key, never by dict order"; medallion's
+  `_is_terminal` is a comparison over two literals whose equality with `ray_kit`'s is test-pinned.
+* **The error boundary is replay-safe by construction** (`workflow.py:365-368`) — the runtime re-raises
+  the recorded child failure identically on every replay, so the `except` branch is as deterministic as
+  the success branch.
+
+**Activity idempotency (`DWF-ACT-002`) is satisfied**, and by a real anchor rather than a header:
+`finalize` carries `read_version` on its *input* so a retry and a replay present the base version the
+first attempt did (`workflow.py:957-973`, F12a); `publish_units` uses content-derived `unit_id`; the
+lineage ingest MERGEs on `run_id`.
+
+### The gap: nothing can stop a live run — `DWF-MGT-003`, critical
+
+`api.py` exposes start (`POST /ingests`, :145) and status (`GET /ingests/{run_id}`, :376) and **no
+lifecycle control at all** — no route calls `terminate_workflow`, `pause_workflow` or
+`resume_workflow`. The only `terminate_workflow` in the service is `terminate_chunks`
+(`workflow.py:1089`), which the *parent* calls against its own children; there is no path by which an
+operator stops the parent.
+
+**What that costs, stated exactly.** A run that is wrong rather than broken — pointed at the wrong
+prefix, or enumerating a bucket someone meant to narrow — cannot be stopped. It holds its JetStream
+subject and its per-run durable, and it keeps committing. The two things that look like brakes are not:
+
+* **`max_units` refuses at enumeration**, before the fan-out. It cannot help a run that is already
+  draining.
+* **`max_run_hours` is a deadline, not a brake**, and *its in-code default is 0 = unbounded*
+  (`workflow.py:101-104`) — deliberately, because the plane advertises million-unit harvests. Only
+  `chart/values.yaml:175` opts in, at **24 hours**. So in-cluster the worst case is a full day of
+  unwanted commits, and on any deployment that does not set the value there is no bound whatsoever.
+
+The fix is small and needs no design: a `POST /ingests/{run_id}/terminate` calling
+`DaprWorkflowClient().terminate_workflow(run_id)` behind the `AuthSettingsDep` the other doors already
+carry. **Terminate is recursive by default**, so it reaches the chunk children — but note the SDK limit
+`terminate_chunks` already documents (`workflow.py:1058-1063`): it stops further scheduling and does
+**not** stop an in-flight activity, so a `drain_chunk` mid-fetch runs to completion. Bounded, not
+instant, and the route must not promise otherwise.
+
+### Deferred deliberately, not overlooked
+
+* **`DWF-MGT-004`/`005` (pause/resume)** — warnings. Worth having for incident response (draining an
+  S3 source under a live harvest), but terminate is the one that closes an actual hole. Ship terminate
+  first; pause/resume only if an incident asks for them.
+* **`DWF-MGT-012` (purge)** — not a violation: the rule guards purging a *live* instance, and nothing
+  in the estate calls `purge_workflow` at all. The residual is retention — completed histories
+  accumulate in the state store forever. This is a real question for a plane whose runs fan out per
+  chunk, and it belongs with §1c's backfill volumes rather than here. **Open.**
+
+### Reviewed and KEPT: `DaprWorkflowClient` inside an activity (`DWF-ACT-001`)
+
+`terminate_chunks` constructs a workflow client in activity scope (`workflow.py:1086`), which the
+checklist flags critical. **Keep it.** The rule's rationale is orchestration from an activity
+(deadlock, history corruption) and its suggested fix is `ctx.call_child_workflow` — which addresses
+*starting* children. There is no `ctx.terminate_child_workflow`; stopping one is a management-API call,
+not an orchestration primitive, and the activity is where a management call belongs. Recorded so the
+next reviewer does not "fix" it back into a defect.
+
+### Open question — 6
+
+**Should the activities take Pydantic models directly (`DWF-ACT-009`, warning)?** All ten activities
+sign as `dict[str, Any]` in and out, while dapr-ext-workflow 1.18 makes Pydantic the first-class
+payload type. The models already exist and every body opens with `model_validate`, so the validation
+is present — it is just one line inside the function instead of at the boundary. Changing it is
+mechanical and touches every activity and its tests; the gain is a typed seam and one less
+`model_validate`. Worth doing **with** another change to this file, not as its own churn.
+
+`DWF-ACT-008` (activity names lack the `_activity` suffix) is noted and **declined**: the convention
+eases cross-language invocation, and this plane is single-language by design.
