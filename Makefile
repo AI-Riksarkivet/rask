@@ -530,7 +530,11 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	if [ -z "$$HF_TOKEN" ]; then echo "WARN: no HF token (env, .env, or 'hf auth login') — htrflow Serve will 401 on the gated TrOCR model"; fi; \
 	IMGARGS="--set image.localImages=true"; \
 	LIVE=$$(mktemp); \
-	if $(HELM) get values rask >"$$LIVE" 2>/dev/null && grep -q 'repository:' "$$LIVE"; then \
+	@# `-o yaml` is LOAD-BEARING, not a style choice. Bare `helm get values` prints a HUMAN header line
+	@# ("USER-SUPPLIED VALUES:") above the YAML; feeding that straight back through `-f` parses the header
+	@# as a KEY, so every upgrade re-stored a junk `USER-SUPPLIED VALUES: null` entry in the release and
+	@# carried it forward forever (observed live 2026-08-16 on rev 6). `-o yaml` emits values only.
+	if $(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null && grep -q 'repository:' "$$LIVE"; then \
 	  IMGARGS="-f $$LIVE"; \
 	  echo ">> reusing the LIVE release's image settings ($$(grep -c . "$$LIVE") values) — not imposing localImages"; \
 	fi; \

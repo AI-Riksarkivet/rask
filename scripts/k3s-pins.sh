@@ -19,7 +19,11 @@ KUBECTL="${KUBECTL:-kubectl}"
 import json, sys
 
 tags, digests = {}, {}
+# component -> {tag_or_digest: [workloads running it]}. The chart has ONE tag per image stem, so a stem
+# running two different tags cannot be represented in the output at all — see the guard below.
+sources = {}
 for item in json.load(sys.stdin)["items"]:
+    owner = item["metadata"]["name"]
     for c in item["spec"]["template"]["spec"].get("containers", []):
         ref = c["image"]
         # FIRST-PARTY ONLY. `image.tags` feeds `rask.image`, which renders only the images this repo
@@ -36,9 +40,31 @@ for item in json.load(sys.stdin)["items"]:
         if "@" in name:
             component, digest = name.split("@", 1)
             digests[component] = digest
+            sources.setdefault(component, {}).setdefault("@" + digest, []).append(owner)
         elif ":" in name:
             component, tag = name.rsplit(":", 1)
             tags[component] = tag
+            sources.setdefault(component, {}).setdefault(tag, []).append(owner)
+
+# REFUSE rather than guess. `tags[component] = tag` is keyed by image STEM, and eleven workloads share
+# the `lance-rest-catalog` stem here. When one of them runs a different tag — the normal result of a
+# `kubectl set image` on a single deployment — the assignment above is LAST-WRITER-WINS by dict
+# iteration order, and the losing tag vanishes from a file whose whole promise is "what the cluster is
+# actually RUNNING". The next `make k3s-up` then reverts that workload with nothing reporting it.
+# MEASURED 2026-08-16: rask-maintenance ran `maint-0517356a` (two shipped fixes) while its ten stem-mates
+# ran `main-d7d75cf0`; the generated file recorded only the latter, so an upgrade would have silently
+# rolled the fixes back. There is no honest pin to emit in that state, so this exits instead — the
+# resolution is to build ONE image carrying every change and roll the whole stem, not to hand-edit.
+split = {c: v for c, v in sorted(sources.items()) if len(v) > 1}
+if split:
+    sys.stderr.write("ERROR: these image stems run MORE THAN ONE tag; the chart has one tag per stem,\n")
+    sys.stderr.write("so no correct pin file exists until they converge:\n\n")
+    for component, by_tag in split.items():
+        sys.stderr.write("  " + component + "\n")
+        for tag, owners in sorted(by_tag.items()):
+            sys.stderr.write("    " + tag + "  <- " + ", ".join(sorted(owners)) + "\n")
+    sys.stderr.write("\nRebuild one image from a commit carrying every change, roll the whole stem, re-run.\n")
+    sys.exit(1)
 
 def block(label, mapping):
     if not mapping:
