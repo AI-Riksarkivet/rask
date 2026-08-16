@@ -10,6 +10,7 @@ selection keys on (``open:`` vs ``maintain:``).
 
 from __future__ import annotations
 
+import pytest
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
