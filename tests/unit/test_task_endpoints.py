@@ -739,3 +739,64 @@ def test_edges_with_no_named_audience_emit_nothing(event: str, monkeypatch: pyte
 
     assert resp.status_code == 200
     assert control.events == []
+
+
+# --------------------------------------------------------------------------------------------------
+# The other DEPARTURE edges — work leaving a named person's hands
+# --------------------------------------------------------------------------------------------------
+#
+# Twelve edges in `TASK_EDGES` take a task out of somebody's hands and, until this landed, exactly one
+# of them (`release`) said so. `assign`/`release` are not a special pair — they were simply the two
+# that got wired first. The audience for the review-side edges is `task.submitted_by`, which (unlike
+# `assignee`, nulled one line into the actor turn) is written once and never cleared, so it is
+# readable at every one of them.
+#
+# A DISTINCT ACTION PER EDGE, not a reused `task_unassigned`. The reason string IS the user-visible
+# row label in the bell, so telling somebody their reviewed work was "unassigned" would be a worse
+# answer than the silence it replaces.
+
+
+def test_request_changes_tells_the_person_who_must_REDO_the_work(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The audience is the SUBMITTER, and AUTHOR-style targeting inverts it: the actor here is the
+    reviewer, who already knows what they just did. The person with work to do hears nothing today —
+    and the review note that says WHY was written for exactly them."""
+    control = _RecordingControl()
+    actor = _FakeActor(_task(state=TaskState.IN_REVIEW, submitted_by="dave"))
+    resp = _fire(_app_with_control(control), actor, monkeypatch, {"event": "request_changes"})
+
+    assert resp.status_code == 200, resp.text
+    assert [(e.action, e.extra["subject"]) for e in control.events] == [("task_changes_requested", "user:dave")]
+
+
+def test_reopen_tells_the_person_whose_ACCEPTED_work_was_un_finished(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A manager act on work that was already DONE. The submitter's task went from accepted back to
+    changes-requested without them touching it — the one departure a person is least likely to notice,
+    because they had every reason to stop looking."""
+    control = _RecordingControl()
+    actor = _FakeActor(_task(state=TaskState.ACCEPTED, submitted_by="dave"))
+    resp = _fire(_app_with_control(control), actor, monkeypatch, {"event": "reopen"})
+
+    assert resp.status_code == 200, resp.text
+    assert [(e.action, e.extra["subject"]) for e in control.events] == [("task_changes_requested", "user:dave")]
+
+
+def test_reopening_your_OWN_submission_tells_nobody(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same standing exclusion the assign/release pair already applies: the caller is looking at the
+    response that says so, and a row would be a second copy of something they just did."""
+    control = _RecordingControl()
+    actor = _FakeActor(_task(state=TaskState.ACCEPTED, submitted_by=SUBJECT))
+    resp = _fire(_app_with_control(control), actor, monkeypatch, {"event": "reopen"})
+
+    assert resp.status_code == 200, resp.text
+    assert control.events == []
+
+
+def test_a_departure_with_nobody_to_name_announces_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An edge whose audience field is empty has no audience — the plane's own rule. Emitting with a
+    bare `user:` would be filed IGNORED downstream anyway, which is a silent drop rather than a fix."""
+    control = _RecordingControl()
+    actor = _FakeActor(_task(state=TaskState.ACCEPTED, submitted_by=None))
+    resp = _fire(_app_with_control(control), actor, monkeypatch, {"event": "reopen"})
+
+    assert resp.status_code == 200, resp.text
+    assert control.events == []

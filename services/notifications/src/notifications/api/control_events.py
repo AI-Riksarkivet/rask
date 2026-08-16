@@ -13,9 +13,11 @@ out of the rule — it is a different question. The lineage lane asks "may this 
 this OBJECT"; this lane asks "was this person the SUBJECT of this act", and the event itself answers
 it. Nothing about the object is disclosed beyond its id, which the subject was already named against.
 
-**Only the two grant actions, and only when `extra.subject` is present.** Every other control action
-is a catalog mutation with no named party, and delivering those would recreate the estate-wide feed
-this plane exists to replace.
+**Only the actions in `NAMED_ACTIONS`, and only when `extra.subject` is present.** Every other control
+action is a catalog mutation with no named party, and delivering those would recreate the estate-wide
+feed this plane exists to replace. (This read "only the two grant actions" until 2026-08-16, by which
+time the set held six — the drift was harmless here only because the constant, not the prose, is what
+the gate reads.)
 """
 
 import logging
@@ -37,7 +39,7 @@ log = logging.getLogger(__name__)
 #: annotator is the third producer on this topic. Adding a member here is only ONE THIRD of the change:
 #: `ControlAction` must carry it (or the envelope will not validate) and `NotificationReason` must too,
 #: because `as_delivery` builds `NotificationReason(event.action)` and would raise on every delivery.
-NAMED_ACTIONS: frozenset[str] = frozenset({"grant_added", "grant_revoked", "task_assigned", "task_unassigned"})
+NAMED_ACTIONS: frozenset[str] = frozenset({"grant_added", "grant_revoked", "task_assigned", "task_unassigned", "task_changes_requested", "task_dropped"})
 
 #: The FGA wildcard principal, which is a grant to EVERYONE and therefore names no one.
 #:

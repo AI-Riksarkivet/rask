@@ -45,6 +45,7 @@ from annotator.projects.machines import (
 from annotator.projects.models import Link, ProjectState, Shape, TaskState
 from annotator.projects.ontology import LabelOntology
 from service_kit.control_emit import emit_control
+from service_kit.control_events import ControlAction
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
@@ -205,14 +206,27 @@ async def _refuse_second_replica(task_id: str, current: dict[str, Any], recipien
             raise ConflictError(f"one replica per annotator per group: {recipient} already holds or worked replica {sibling_id} of group {group}")
 
 
-#: The task edges that HAND WORK TO or TAKE WORK FROM a named person, and therefore have an audience.
+#: The task edges that HAND WORK TO or TAKE WORK FROM a named person: edge -> (action, audience field).
 #:
-#: `assign` names its recipient on the request; `release` returns a task to the pool, so the person who
-#: loses it is the CURRENT holder. The other edges (`claim`, `submit`, `request_changes`) are the
-#: holder's own actions or land on a reviewer the plane cannot yet name — `lease_expired` is the one
-#: that most deserves a notification and cannot have one, because its audience is the PREVIOUS holder
-#: and it fires with no principal at all (`machines.py` gives it permission `None`).
-_NOTIFIED_EDGES: Final[frozenset[str]] = frozenset({"assign", "release"})
+#: The audience field names the key on the task's PRE-TURN snapshot that holds the person, or `None`
+#: when the request itself names them (`assign`). Reading the snapshot is load-bearing rather than
+#: incidental: the actor nulls `assignee` inside the very turn these edges fire, so the document
+#: `fire()` returns can no longer name anybody.
+#:
+#: `submitted_by` is the review side's audience and is the safer of the two — it is written once
+#: (`actor.py`, on submit) and cleared by no edge at all, so it is readable at every return-to-the-pool
+#: transition.
+#:
+#: STILL UNCOVERED, and both for structural reasons rather than oversight: `lease_expired` fires from
+#: the actor's own reminder with no principal, no request and no emitter in scope (it is refused on
+#: HTTP as a SYSTEM_ONLY_EVENT), and `skip`/`submit`/`claim` are the holder's OWN actions, whose
+#: outcome the caller already has synchronously.
+_NOTIFIED_EDGES: Final[dict[str, tuple[ControlAction, str | None]]] = {
+    "assign": ("task_assigned", None),
+    "release": ("task_unassigned", "assignee"),
+    "request_changes": ("task_changes_requested", "submitted_by"),
+    "reopen": ("task_changes_requested", "submitted_by"),
+}
 
 
 @router.post("/{task_id}/events", status_code=status.HTTP_200_OK)
@@ -307,8 +321,9 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
     #
     # `task_unassigned` rides the RELEASE edges, and is the sharper half: an annotator holding a draft
     # against a task that is no longer theirs otherwise discovers it by losing the work.
-    if payload.event in _NOTIFIED_EDGES:
-        told = payload.assignee if payload.event == "assign" else current.get("assignee")
+    if (notified := _NOTIFIED_EDGES.get(payload.event)) is not None:
+        action, audience_field = notified
+        told = payload.assignee if audience_field is None else current.get(audience_field)
         # NEVER the actor's own action. A manager may assign a task to themselves, and a holder may
         # release their own; in both cases the person is looking at the response that says so, and an
         # inbox row would be a second copy of something they just did. Same rule as the plane's standing
@@ -316,7 +331,7 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
         if told and told != subject:
             await emit_control(
                 control,
-                action="task_assigned" if payload.event == "assign" else "task_unassigned",
+                action=action,
                 object_type="annotation_task",
                 object_id=f"annotation_task:{task_id}",
                 actor=f"user:{subject}",

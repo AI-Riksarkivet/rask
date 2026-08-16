@@ -46,6 +46,9 @@ class _FakeProjectActor:
 
 def _app(actor: _FakeProjectActor, monkeypatch: pytest.MonkeyPatch, *, allow: bool = True, seen: list | None = None) -> FastAPI:
     monkeypatch.setattr(events_ep, "_project_proxy", lambda _p: actor)
+    # The route reads the TASK before dropping it, to learn who loses the work. These tests are about
+    # the removal itself, so the default stand-in holds nobody — the audience cases override it.
+    monkeypatch.setattr(events_ep, "_task_proxy", lambda _t: _FakeTaskActor(None))
 
     async def checker(*, user: str, relation: str, obj: str) -> bool:
         if seen is not None:
@@ -137,3 +140,93 @@ def test_an_unknown_project_is_404(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert client.delete("/projects/p1/tasks/t1").status_code == 404
     assert actor.dropped == []
+
+
+# --------------------------------------------------------------------------------------------------
+# The person holding the dropped item is TOLD
+# --------------------------------------------------------------------------------------------------
+#
+# `drop_task` is the sharpest of the annotator's departure edges: a manager discards an item somebody
+# may be actively holding, the task actor is left alive with their draft in it, and the index entry
+# that `saga.collect` enumerates is gone — so their work is not merely stopped, it is orphaned where
+# nothing will ever look for it again. Before this the only record was one audit line in a log they
+# cannot read.
+
+
+class _RecordingControl:
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+
+    async def emit(self, event: Any) -> None:
+        self.events.append(event)
+
+
+class _FakeTaskActor:
+    def __init__(self, doc: dict[str, Any] | None) -> None:
+        self._doc = doc
+
+    async def get(self) -> dict[str, Any] | None:
+        return self._doc
+
+
+def _app_with_control(
+    actor: _FakeProjectActor,
+    control: _RecordingControl,
+    monkeypatch: pytest.MonkeyPatch,
+    task_doc: dict[str, Any] | None,
+) -> FastAPI:
+    from annotator.api.dependencies import get_control_emitter
+
+    app = _app(actor, monkeypatch)
+    monkeypatch.setattr(events_ep, "_task_proxy", lambda _t: _FakeTaskActor(task_doc))
+    app.dependency_overrides[get_control_emitter] = lambda: control
+    return app
+
+
+def test_dropping_a_HELD_task_tells_the_person_who_loses_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The holder's draft is orphaned by this call. `assignee` is read from the task BEFORE the drop —
+    afterwards the index entry naming it is gone."""
+    actor, control = _FakeProjectActor(), _RecordingControl()
+    client = TestClient(_app_with_control(actor, control, monkeypatch, {"assignee": "dave", "submitted_by": None}))
+
+    r = client.delete("/projects/p1/tasks/t1")
+
+    assert r.status_code == 200, r.text
+    assert [(e.action, e.extra["subject"]) for e in control.events] == [("task_dropped", "user:dave")]
+
+
+def test_dropping_a_SUBMITTED_task_tells_whoever_did_the_work(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A task in review has no assignee — the actor nulls it on submit — so the person who loses work
+    is the SUBMITTER. Falling back only to `assignee` would tell nobody for exactly the tasks where
+    the most work has already been done."""
+    actor, control = _FakeProjectActor(), _RecordingControl()
+    client = TestClient(_app_with_control(actor, control, monkeypatch, {"assignee": None, "submitted_by": "dave"}))
+
+    r = client.delete("/projects/p1/tasks/t1")
+
+    assert r.status_code == 200, r.text
+    assert [(e.action, e.extra["subject"]) for e in control.events] == [("task_dropped", "user:dave")]
+
+
+def test_dropping_an_ABSENT_task_announces_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The route is idempotent by design, so a retry must not put a second row in anyone's inbox — and
+    a drop that removed nothing is not a change to announce."""
+    actor, control = _FakeProjectActor(), _RecordingControl()
+    client = TestClient(_app_with_control(actor, control, monkeypatch, {"assignee": "dave", "submitted_by": None}))
+
+    r = client.delete("/projects/p1/tasks/never-sent")
+
+    assert r.status_code == 200, r.text
+    assert control.events == [], "nothing was removed, so nothing happened to announce"
+
+
+def test_dropping_a_task_nobody_holds_announces_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The motivating case: an unfinishable item nobody ever claimed. There is no audience, and the
+    manager doing the tidying is looking at the response."""
+    actor, control = _FakeProjectActor(), _RecordingControl()
+    client = TestClient(_app_with_control(actor, control, monkeypatch, {"assignee": None, "submitted_by": None}))
+
+    r = client.delete("/projects/p1/tasks/t1")
+
+    assert r.status_code == 200, r.text
+    assert control.events == []

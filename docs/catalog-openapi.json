@@ -2691,7 +2691,9 @@
               "namespace_purged",
               "table_published",
               "task_assigned",
-              "task_unassigned"
+              "task_unassigned",
+              "task_changes_requested",
+              "task_dropped"
             ],
             "title": "Action",
             "type": "string"

@@ -71,6 +71,13 @@ class NotificationReason(StrEnum):
     #: rung down: the audience is the ASSIGNEE, never the manager whose click produced the event.
     TASK_ASSIGNED = "task_assigned"
     TASK_UNASSIGNED = "task_unassigned"
+    #: v6 — the rest of the departure edges. DISTINCT members rather than a reuse of TASK_UNASSIGNED
+    #: because the panel renders the reason as each row's user-visible label: "unassigned" is simply
+    #: the wrong sentence for reviewed work coming back, or for an item being discarded outright.
+    #: `task_changes_requested` covers both review-side returns (a reviewer's `request_changes` and a
+    #: manager's `reopen`) — from the submitter's side those are one fact.
+    TASK_CHANGES_REQUESTED = "task_changes_requested"
+    TASK_DROPPED = "task_dropped"
 
 
 class InboxFilter(StrEnum):

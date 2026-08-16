@@ -30,11 +30,13 @@ from fastapi import APIRouter, Path, status
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from annotator.api.dependencies import ControlEmitterDep
 from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.projects.machines import FROZEN_PROJECT_STATES, PROJECT_EDGES, IllegalTransition, legal_task_events, project_transition
 from annotator.projects.models import ItemSource, MediaRef, ProjectState, Shape, Task, TaskState, new_id
 from annotator.projects.ontology import LabelOntology, ShapeLike, membership_violation
 from annotator.projects.project_actor import AnnotationProjectActorInterface
+from service_kit.control_emit import emit_control
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 from service_kit.media.deps import StateDep
@@ -280,6 +282,7 @@ async def drop_task(
     task_id: Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")],
     checker: CheckerDep,
     subject: CurrentSubject,
+    control: ControlEmitterDep,
 ) -> dict[str, Any]:
     """Remove one item from a project.
 
@@ -301,8 +304,33 @@ async def drop_task(
     state = ProjectState(doc["state"])
     if state not in DROPPABLE_STATES:
         raise ConflictError(f"project {project_id} is {state.value} — items can be dropped only in {sorted(s.value for s in DROPPABLE_STATES)}")
+    # WHO LOSES WORK, read BEFORE the drop. Afterwards the index entry naming this task is gone, and
+    # the task actor — which keeps their draft — is no longer reachable from the project. `assignee`
+    # first, then `submitted_by`: a task in review has no assignee (the actor nulls it on submit), so
+    # falling back is what covers exactly the tasks with the most work already in them.
+    holder = ""
+    task = await _task_proxy(task_id).get()
+    if isinstance(task, dict):
+        holder = str(task.get("assignee") or task.get("submitted_by") or "")
+
     result = await proxy.drop_task({"task_id": task_id, "actor": subject})
     audit("project.drop_task", SUCCESS, subject=subject, resource=project_id)
+
+    # The sharpest departure edge in the service: the item is DISCARDED, so their draft is not merely
+    # stopped, it is orphaned where `saga.collect` will never enumerate it again.
+    #
+    # Gated on `removed` because the route is idempotent — a retry drops nothing and must not put a
+    # second row in anyone's inbox — and on `holder != subject`, the standing exclusion for an outcome
+    # the caller already has in the response they are looking at.
+    if result.get("removed") and holder and holder != subject:
+        await emit_control(
+            control,
+            action="task_dropped",
+            object_type="annotation_task",
+            object_id=f"annotation_task:{task_id}",
+            actor=f"user:{subject}",
+            extra={"subject": f"user:{holder}", "project": project_id, "event": "drop_task"},
+        )
     return result
 
 

@@ -88,6 +88,19 @@ ControlAction = Literal[
     # losing the work, the same way a revoked grant is discovered by a 403 mid-task.
     "task_assigned",
     "task_unassigned",
+    # THE OTHER DEPARTURE EDGES. `TASK_EDGES` has twelve transitions that take a task out of somebody's
+    # hands; `release` was simply the first one wired, not a special case. These two cover the rest of
+    # the HTTP-reachable ones, and each is a DISTINCT action rather than a reused `task_unassigned`
+    # because the notifications panel RENDERS the reason as the row's label — telling somebody their
+    # reviewed work was "unassigned" is a worse answer than the silence it replaces.
+    #
+    # `task_changes_requested` carries both review-side returns (`request_changes` from a reviewer,
+    # `reopen` from a manager): from the submitter's side they are the same fact — work they had
+    # finished is theirs again. `task_dropped` is the sharpest of all, because the item is DISCARDED:
+    # the task actor keeps their draft, the index entry `saga.collect` enumerates is gone, and nothing
+    # will ever look for that work again.
+    "task_changes_requested",
+    "task_dropped",
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the

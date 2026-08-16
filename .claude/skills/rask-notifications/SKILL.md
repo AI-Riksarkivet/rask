@@ -29,7 +29,7 @@ something adjacent.
 | **Q3** | Should people *other than the actor* know, because it is the project's work? | `WATCH` | the same event **plus** `lance.project` |
 | **Q4** | Does it give a specific person access? | `GRANT_ADDED` | `CatalogControlEvent`, `extra.subject` = the principal |
 | **Q5** | Does it take access away from a specific person? | `GRANT_REVOKED` | the same envelope, `action="grant_revoked"` |
-| **Q6** | Does it hand a person a task, or take one back? | `TASK_ASSIGNED` / `TASK_UNASSIGNED` | the same envelope; `extra.subject` is the WORKER, never the manager who clicked |
+| **Q6** | Does it hand a person work, or take work away from them? | `TASK_ASSIGNED` / `TASK_UNASSIGNED` / `TASK_CHANGES_REQUESTED` / `TASK_DROPPED` | the same envelope; `extra.subject` is the WORKER, never the manager who clicked |
 
 **Q2 is the one people miss, and it exists because Q1 is unreachable for most long work.** The estate's
 expensive runs — a Ray training job, a medallion stage — execute detached, hours after the request, and
@@ -49,6 +49,15 @@ self-emitted lane or the post-mortem one.
 `AUTHOR` needs no registry and no opt-in — you may always be told about your own run
 (`fanout.py:87`). `WATCH` is an explicit `project#member`-gated opt-in: **membership gates watching and
 never implies it**, so no audience widens by default.
+
+**Q6 needs ONE ACTION PER EDGE, not a generic one.** The panel renders the reason as each row's
+user-visible label, so a distinct verb is not decoration — telling somebody their reviewed work was
+"unassigned" is a worse answer than the silence it replaces. The annotator's audience always comes off
+the task's **pre-turn snapshot**, never the post-transition document: the actor nulls `assignee` inside
+the very turn these edges fire, so by the time `fire()` returns there is nobody left to name.
+`submitted_by` is the safer field — written once and cleared by no edge — which is why it carries the
+review side. `lease_expired` is still uncovered and is structural, not an oversight: it fires from the
+actor's own reminder with no principal, no request and no emitter in scope.
 
 Q4 is the sharpest and is why the control lane exists at all: *losing access silently is how someone
 discovers it by hitting a 403 in the middle of work*. That lane deliberately runs **no visibility
