@@ -256,6 +256,34 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   subtract what is referenced" logic the orphan scan REFUSES to run on these datasets for safety.
   The same root-scoping is what makes cleanup SAFE on a shallow clone (see `SUPPORTED_FOR_GC`) — the
   property that protects the base is the property that strands its garbage.
+- **A JSON index has NO stats, and Lance says so with a PANIC — upstream, already contained.** On
+  pylance 10.0.0 every maintenance sweep prints `thread '<unnamed>' panicked at
+  lance-index/src/scalar/json.rs:95:9: not yet implemented`, twice, once per Json index. The
+  reproducing call is `ds.stats.index_stats("lineage_run_id_idx")` against either cascade tier
+  (`s3://lance-catalog/medallion/{silver,gold}`), whose index `medallion/services/compute.py::
+  _ensure_lineage_index` creates as `IndexConfig(index_type="json", parameters={"target_index_type":
+  "btree", "path": ...})`. `not yet implemented` is Lance's own `todo!()` — stats for the JSON scalar
+  index simply do not exist yet — so there is nothing to fix on our side and nothing to file beyond
+  upstream. It is CONTAINED, and deliberately: `index_health._stats` catches **`BaseException`**, not
+  `Exception`, because a Rust panic surfaces as pyo3's `PanicException`, which derives from
+  BaseException and would otherwise sail straight through the sweep's error handling and kill the tick.
+  It logs `index_stats_unreadable` and the finding reports *"its statistics could not be read, so its
+  health is UNKNOWN — not the same as healthy"*, which is the honest answer: those two indices are
+  UNMONITORED, not proven fine. Do not "fix" the noise by narrowing that except clause. Note also that a
+  JSON index can only be built on a Binary/LargeBinary column holding real **JSONB** — raw JSON text
+  bytes fail `InvalidJsonb` at `json.rs:456`, and a string column is refused outright at `json.rs:726`.
+- **`lance_ray.compact_files` DOES NOT COMPACT — upstream, and only the distributed path.** lance-ray
+  0.5.0 + pylance 10.0.0: `scripts/ray_lance_job.py` stage 4 reports `compaction did not reduce
+  fragments: 4->4` and exits 1, which is the sole red in `make test`. Stages 1–3 pass on the real
+  cluster (distributed WRITE → 4 fragments, distributed INDEX via lance_ray, EVOLVE v3→v4), so the Ray
+  integration itself works. MEASURED 2026-08-16 against the identical shape — 64 rows in 4 fragments of
+  16, `data_storage_version="2.2"`, `enable_stable_row_ids=True`, evolved with `add_columns`, then
+  `target_rows_per_fragment=32` — NATIVE `dataset.optimize.compact_files` reduces **4 → 2**. Same
+  dataset shape, same option, opposite result, so Lance is not the defect. The job's call matches
+  lance-ray 0.5.0's signature (`compact_files(uri, *, compaction_options, num_workers,
+  storage_options, ...)`), so it is not misuse either. `tests/e2e-py/test_ray_batch_e2e.py` carries a
+  **strict** xfail with this reason: switching the job to native compaction would delete the capability
+  the test exists to prove, and strict means the suite goes red — correctly — the day upstream fixes it.
 - **CHECK THE TRASH RECORD BEFORE TOUCHING BYTES — including when you are "only looking".** The sweep
   reports `versions_removed: 0` on datasets holding versions far older than the retention, and the
   reason is almost always the F6(d) exclusion: a recoverably-dropped dataset (`_trash/` record) is

@@ -83,6 +83,20 @@ def _cleanup(kubectl: str, run: str) -> None:
     )
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "UPSTREAM lance-ray 0.5.0: `lance_ray.compact_files` does not reduce fragments. The job's first "
+        "three stages pass on the real cluster (distributed WRITE 4 fragments, distributed INDEX, schema "
+        "EVOLVE 3->4); stage 4 reports `compaction did not reduce fragments: 4->4` and exits 1. Measured "
+        "2026-08-16: NATIVE pylance 10.0.0 `optimize.compact_files(target_rows_per_fragment=32)` on the "
+        "identical shape (64 rows / 4 fragments of 16 / dsv 2.2 / stable row ids / post-`add_columns`) "
+        "reduces 4 -> 2, so Lance is fine and the distributed path is not. The call matches lance-ray "
+        "0.5.0's signature, so this is not misuse. Kept STRICT on purpose: rewriting the job to use native "
+        "compaction would make the suite green by deleting the very capability it exists to prove, and a "
+        "strict xfail goes red the moment upstream fixes this — which is the signal to remove this marker."
+    ),
+)
 def test_batch_job_distributed_write_index_evolve_compact() -> None:
     kubectl = _kubectl()
     # The head must exist and be Ready — this suite does not deploy it (make ray-demo does).
