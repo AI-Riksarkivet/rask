@@ -242,3 +242,37 @@ def test_an_ORDINARY_dataset_is_still_swept(tmp_path: Path, monkeypatch: pytest.
 
     assert not results[0].refused, f"an ordinary dataset was refused: {results[0].refused}"
     assert results[0].error is None, f"an ordinary dataset errored: {results[0].error}"
+
+
+def test_the_pre_pass_actually_USES_the_credentials_it_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`storage_options` was accepted and DROPPED, so the guard was inert against real object storage.
+
+    Every other test in this file builds datasets under `tmp_path`, where a local open needs no
+    credentials and no endpoint — which is precisely why the defect survived: the parameter could be
+    ignored and the whole suite stayed green.
+
+    In production it is not ignorable. The maintenance pod carries no ambient `AWS_*` (only
+    `MAINTENANCE_S3_*`), so every `s3://` open failed, every dataset landed in `unreadable`, and
+    `protected` came back EMPTY on every tick. The sweep logs `maintenance_base_refs_incomplete` and
+    proceeds, so an empty set read as "this estate has no clones" rather than "this pre-pass cannot
+    open anything" — and both guards built on it (#114 sweep refusal, #128d purge refusal) were inert
+    against the data-loss path they exist to close.
+
+    Asserted on the CALL rather than on a result, because the result is indistinguishable: a dataset
+    that opens without credentials and one that never needed them look identical from the outside.
+    """
+    seen: list[dict[str, object]] = []
+
+    def _fake_dataset(uri: str, **kwargs: object) -> object:
+        seen.append({"uri": uri, **kwargs})
+        raise RuntimeError("stop here — the call itself is the assertion")
+
+    monkeypatch.setattr("maintenance.services.base_refs.lance.dataset", _fake_dataset)
+    creds = {"access_key_id": "k", "secret_access_key": "s", "endpoint": "http://rustfs:9000"}
+    protected_roots(["s3://bucket/a.lance"], creds)
+
+    assert seen, "protected_roots never opened the dataset at all"
+    assert seen[0].get("storage_options") == creds, f"the credentials were not threaded into the open — the guard is inert against s3://. got {seen[0]}"
+    # The #102 bounded session, for the same reason every other maintenance open threads it: without it
+    # each dataset mints Lance's default 1 GiB metadata + 6 GiB index caches against a 512Mi pod.
+    assert seen[0].get("session") is not None, "the bounded Lance session was not threaded into the open"

@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING
 import lance
 from pydantic import BaseModel, Field
 
+from maintenance.core.config import shared_lance_session
 from service_kit.lakehouse.features import manifest_base_paths
 
 
@@ -126,11 +127,29 @@ def protected_roots(dataset_uris: Iterable[str], storage_options: StorageOptions
     A dataset that will not open is RECORDED rather than skipped: it may be the referrer whose
     reference matters, and a caller that proceeds on a partial map is doing the thing this module
     exists to prevent.
+
+    ``storage_options`` IS USED, and the fact that it once was not is the whole reason this paragraph
+    exists. The parameter was accepted and dropped, so every ``s3://`` open failed for want of
+    credentials and an endpoint — the maintenance pod carries no ambient ``AWS_*``, only
+    ``MAINTENANCE_S3_*`` — and ``protected`` came back EMPTY on every tick. Both guards built on this
+    (the #114 sweep refusal and the #128d purge refusal) were therefore inert in production, which is
+    precisely the data-loss path they were written to close: maintaining a base whose clone depends on
+    it deletes files the clone resolves through, and the clone then will not open at all.
+
+    The failure was invisible because "unreadable" is a legitimate state here — the sweep logs
+    ``maintenance_base_refs_incomplete`` and proceeds — so an empty protected set read as "no clones in
+    this estate" rather than "this pre-pass cannot open anything".
+
+    The ``session`` is the #102 bounded one for the same reason every other maintenance open threads it
+    (``orphans.py``, ``purge.py``, ``reconcile.py``, ``optimize.py``): without it each dataset mints
+    Lance's default 1 GiB metadata + 6 GiB index caches, against a pod limited to 512Mi.
     """
     refs = BaseRefs()
     for uri in dataset_uris:
         try:
-            paths = manifest_base_paths(lance.dataset(uri))
+            paths = manifest_base_paths(
+                lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())  # ty: ignore[invalid-argument-type] — stub lacks session=, runtime verified
+            )
         except Exception as exc:
             refs.unreadable.append((uri, f"{type(exc).__name__}: {exc}"))
             continue
