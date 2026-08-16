@@ -170,7 +170,7 @@ def _emitter() -> Any:  # noqa: ANN401 — Emitter
     return build_emitter()
 
 
-def _run(run_id: str, project: str = "") -> Any:  # noqa: ANN401 — LineageRun, imported lazily to keep this module light
+def _run(run_id: str, project: str = "", originator: str = "") -> Any:  # noqa: ANN401 — LineageRun, imported lazily to keep this module light
     """Reconstruct this ingest run's graph run. Same inputs -> same run, in any activity.
 
     `namespace` is keyword-only AND has no default — `job_run()` fills it from `LineageSettings`, and
@@ -186,11 +186,11 @@ def _run(run_id: str, project: str = "") -> Any:  # noqa: ANN401 — LineageRun,
         namespace=LineageSettings().namespace,
         run_id=lineage_run_id(run_id),
         emitter=_emitter(),
-        run_facets=_tenant_facet(project, run_id),
+        run_facets=_tenant_facet(project, run_id, originator),
     )
 
 
-def _tenant_facet(project: str, run_id: str | None = None) -> dict[str, Any]:
+def _tenant_facet(project: str, run_id: str | None = None, originator: str = "") -> dict[str, Any]:
     """The `lance` run facet carrying the tenant this run's write belongs to — the THIRD half of #52.
 
     The cascade head derives its expected namespace from this facet (`ingest_trigger._cascade_project`
@@ -220,20 +220,28 @@ def _tenant_facet(project: str, run_id: str | None = None) -> dict[str, Any]:
     # single-tenant run still has an id worth linking.
     if run_id:
         fields["run_id"] = run_id
+    # The HUMAN who asked for this harvest. This run reaches lineage over HTTP, where `enforce_author`
+    # replaces the author facet with the CALLER's sub — and the caller is this SERVICE
+    # (`RASK_LINEAGE_SERVICE_IDENTITY`). So without this field every ingest run was announced to an
+    # inbox named `service-ingest`, and the person who started it heard nothing about their own run.
+    # Read by `notifications.api.lineage_events.originator_subject`; absent is byte-identical, which is
+    # the right answer for a service-token call — an invented placeholder would re-create the defect.
+    if originator:
+        fields["originator"] = originator
     return {LANCE_RUN_FACET: custom_facet(**fields)} if fields else {}
 
 
 class LineageRecorder:
     """Emits ingest run lineage through lineage-kit. Deliberately never raises (I8)."""
 
-    def start(self, run_id: str, project: str, dataset: str, kind: str, options: dict[str, Any]) -> None:
+    def start(self, run_id: str, project: str, dataset: str, kind: str, options: dict[str, Any], originator: str = "") -> None:
         """START, with the EXTERNAL source as the input (R23).
 
         The input is the external source (`s3://bucket`), never a governed tier: raw is the outside world, and
         naming bronze as its own input would make the graph claim the data came from where it landed.
         """
         self._record(LineageEvent(run_id=run_id, event_type="START", project=project, dataset=dataset, source_kind=kind))
-        self._emit(lambda: _run(run_id, project).start(inputs=self._inputs(kind, project, dataset, options)))
+        self._emit(lambda: _run(run_id, project, originator).start(inputs=self._inputs(kind, project, dataset, options)))
 
     def terminal(
         self,
@@ -244,6 +252,7 @@ class LineageRecorder:
         errors: dict[str, str],
         project: str = "",
         dataset: str = "",
+        originator: str = "",
     ) -> None:
         """COMPLETE or FAIL — and a COMPLETE must NAME WHAT IT WROTE.
 
@@ -265,7 +274,7 @@ class LineageRecorder:
         outputs = _output_datasets(project, dataset, version, rows)
 
         def emit() -> None:
-            run = _run(run_id, project)
+            run = _run(run_id, project, originator)
             if event_type == "FAIL":
                 run.fail(f"ingest run {run_id} failed: {errors or 'no detail'}", outputs=outputs)
             else:

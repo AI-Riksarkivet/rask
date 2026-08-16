@@ -103,7 +103,7 @@ async def authorize_ingest(
     dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
     dapr_caller_app_id: Annotated[str | None, Header()] = None,
-) -> None:
+) -> str | None:
     """Allow EITHER the Dapr app-api-token (service, configured project only) OR a project admin.
 
     `project` is the project the REQUEST names — the routes pass `body.project` / the run's recorded
@@ -127,7 +127,7 @@ async def authorize_ingest(
     # request falls through to the OIDC + FGA project-admin path and, failing that, to the
     # `PermissionDeniedError` at the end of this function.
     if not expected and not (settings.oidc_enabled or settings.fga_enabled):
-        return  # dev: nothing configured to authenticate against, exactly like the estate's other doors
+        return None  # dev: nothing configured to authenticate against, exactly like the estate's other doors
 
     target = project or settings.service_project
     obj = f"project:{target}"
@@ -145,7 +145,7 @@ async def authorize_ingest(
         # The caller is recorded, not just the fact that A service called: an audit line that says
         # only "service" cannot answer "which one", which is the question an incident starts from.
         audit("ingest_service_token", ALLOW, subject=f"service:{dapr_caller_app_id or 'direct'}", resource=obj)
-        return
+        return None
 
     if from_public_door and dapr_api_token and not authorization:
         # Named explicitly so the denial is legible: the request DID carry a valid service token and
@@ -174,6 +174,12 @@ async def authorize_ingest(
         if client is None:  # OIDC on but FGA unwired → fail closed, never an unauthorized ingest
             raise ServiceUnavailableError("authorization service is not available")
         await _require_admin(client, user=token.sub, obj=obj)
-        return
+        # RETURNED, not discarded. This door is the LAST place the human exists: everything downstream
+        # is a workflow activity running behind this service's own token, and lineage's `enforce_author`
+        # stamps THAT as the author — so an ingest run used to be announced to an inbox named
+        # `service-ingest`. The value is a TARGETING hint only (it rides `lance.originator`, which the
+        # notifications plane re-authorizes per recipient at delivery); it widens no authorization, and
+        # every decision above is unchanged. A service-token call returns None: no human is behind it.
+        return token.sub
 
     raise PermissionDeniedError("invalid or missing ingest credential")

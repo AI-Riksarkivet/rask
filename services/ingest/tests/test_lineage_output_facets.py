@@ -168,7 +168,7 @@ def test_a_FAIL_carries_an_errorMessage_facet() -> None:
 
     recorder = _Capture()
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("ingest.lineage._run", lambda _rid, _project="": _Run())
+        mp.setattr("ingest.lineage._run", lambda _rid, _project="", _originator="": _Run())
         recorder.terminal(run_id="run-42", status="FAILED", version=None, rows=0, errors={"unit-9": "corrupt tiff"}, project="bind86", dataset="pages")
 
     assert recorder.emitted, "a FAILED run emitted no terminal at all — the run leaves a record whichever way it ends"
@@ -244,3 +244,53 @@ def test_the_run_facet_carries_the_INGEST_run_id() -> None:
 
     # No id and no project -> no facet at all, exactly as before this field existed.
     assert _tenant_facet("../etc", None) == {}
+
+
+def test_the_ingest_run_names_the_HUMAN_who_asked_for_it() -> None:
+    """THE INGEST LANE'S TARGETING DEFECT.
+
+    An ingest run reaches lineage over HTTP, where `enforce_author` overwrites the author facet with
+    the CALLER's verified sub — and the caller is this service, presenting
+    `RASK_LINEAGE_SERVICE_IDENTITY: service-ingest` (`chart/values.yaml:161`). So every ingest run in
+    the estate was announced to an inbox named `service-ingest`, and the person who asked for the
+    harvest was told nothing about their own run finishing or failing.
+
+    That is the WORST shape in the register precisely because it looks covered: a row IS delivered on
+    every run, so nothing anywhere reads as broken — the plane simply tells a service instead of a
+    person. The medallion had the same defect with a role literal; `lance.originator` is the field
+    that fixed it, and notifications reads it from any producer that stamps it (`originator_subject`).
+
+    `RunSpec`'s own docstring already claimed this: "the request, plus the identity minted at accept".
+    The identity was minted and then dropped.
+    """
+    from ingest.lineage import _tenant_facet
+
+    facet = _tenant_facet("bind86", "run-123", originator="alice")["lance"]
+    assert facet["originator"] == "alice"
+
+
+def test_an_ingest_run_without_an_originator_is_unchanged() -> None:
+    """A service-token call has no human behind it, and a placeholder there would re-create the very
+    defect this closes — an inbox addressed to something that is not a person. Absent, not invented."""
+    from ingest.lineage import _tenant_facet
+
+    assert "originator" not in _tenant_facet("bind86", "run-123")["lance"]
+
+
+def test_the_originator_survives_into_what_notifications_actually_reads() -> None:
+    """The facet key is a contract with a consumer in ANOTHER deployable, so asserting the dict key
+    alone would still pass if the reader looked somewhere else.
+
+    Driven through notifications' own parser, exactly as the cross-service tests for the assignment
+    lane are: what matters is that the plane which reads this wire JSON finds the person."""
+    from ingest.lineage import _tenant_facet
+
+    from notifications.api.lineage_events import LineageRunEvent, originator_subject
+
+    event = {
+        "eventType": "FAIL",
+        "eventTime": "2026-08-16T12:00:00+00:00",
+        "run": {"runId": "11111111-2222-4333-8444-555555555555", "facets": _tenant_facet("bind86", "run-9", originator="alice")},
+        "outputs": [{"namespace": "bind86-bronze", "name": "bind86-bronze$pages"}],
+    }
+    assert originator_subject(LineageRunEvent.model_validate(event).run) == "alice"

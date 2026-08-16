@@ -294,6 +294,12 @@ class RunSpec(BaseModel):
     project: str
     dataset: str
     options: dict[str, Any] = Field(default_factory=dict)
+    #: The HUMAN who asked for this run, captured at the accept door — the ONE place their identity
+    #: exists. Everything after runs as a workflow activity behind a service token, and lineage's
+    #: `enforce_author` then stamps THAT as the author, so without carrying it here an ingest run is
+    #: announced to an inbox named `service-ingest` and the person who started it is never told.
+    #: Empty for a service-token call, which has no human behind it — see `notifications` ORIGINATOR.
+    originator: str = ""
     #: Resolved at ACCEPT (`api.create_ingest`) so a refusal is a 400 rather than a drain that hangs,
     #: and so the whole fan-out shares one set of numbers. `None` rather than a `resolve()` default
     #: for the reason spelled out on `ChunkSpec.sizing`: this model is validated inside the
@@ -707,7 +713,7 @@ def emit_start(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
     incomplete run rather than an absence someone has to notice.
     """
     spec = RunSpec.model_validate(payload)
-    _lineage().start(spec.run_id, spec.project, spec.dataset, spec.kind, spec.options)
+    _lineage().start(spec.run_id, spec.project, spec.dataset, spec.kind, spec.options, spec.originator)
 
 
 def resolve_limits(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1016,6 +1022,7 @@ def emit_terminal(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None
         outcome.errors,
         project=spec.project,
         dataset=spec.dataset,
+        originator=spec.originator,
     )
 
 

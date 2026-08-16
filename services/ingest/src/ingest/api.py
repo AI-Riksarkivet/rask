@@ -160,7 +160,7 @@ async def create_ingest(
     # BEFORE anything else. The body names the project this write lands in, so the admin check targets
     # that project rather than a configured one — authorization scope must equal write scope, or an
     # admin of project A passes the gate while the rows land in project B.
-    await authorize_ingest(request, settings, body.project, dapr_api_token, authorization, dapr_caller_app_id)
+    originator = await authorize_ingest(request, settings, body.project, dapr_api_token, authorization, dapr_caller_app_id)
 
     if body.kind not in registered_kinds():
         raise HTTPException(
@@ -238,7 +238,7 @@ async def create_ingest(
 
     spec = SourceSpec(kind=body.kind, project=body.project, dataset=body.dataset, options=body.options)
     try:
-        await starter.start(run_id, {"run_id": run_id, **spec.model_dump(), "sizing": sizing.model_dump()})
+        await starter.start(run_id, {"run_id": run_id, **spec.model_dump(), "sizing": sizing.model_dump(), "originator": originator or ""})
     except (TimeoutError, ScheduleUnavailable) as exc:
         # 503, not 500. A1 bounds the schedule call so a slow sidecar cannot hold the POST past its
         # one-second contract — but the bound turned a BUSY sidecar into an unretryable server error,
