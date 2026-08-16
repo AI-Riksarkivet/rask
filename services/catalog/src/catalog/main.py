@@ -29,6 +29,7 @@ from catalog.core.control_emit import make_control_emitter
 from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import build_namespace
 from catalog.core.vending import make_vendor
+from catalog.services import warehouses
 from service_kit.governed import fga
 from service_kit.governed.audit import configure_audit
 from service_kit.governed.dapr_auth import assert_app_token_configured
@@ -123,6 +124,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         dapr_client = DaprClient()
     elif settings.lineage_emit_enabled and settings.lineage_url:
         lineage_http = httpx.AsyncClient(timeout=settings.lineage_emit_timeout_seconds)
+
+    # WHICH TENANT a write belongs to, for the emitted `lance.project` facet — WATCH targeting's only
+    # key. Without it `notifications` skips the watcher loop entirely and every catalog write in the
+    # estate reaches its author and nobody else.
+    #
+    # Resolved through the warehouse registry (binding → warehouse → project) because no string rule
+    # can do it: `PROJECT_PATTERN` allows `-` inside a project id, so `acme-bronze` is ambiguous.
+    # Reads run in the threadpool (pyarrow's filesystem is blocking) and share the SAME positives-only
+    # binding cache the routing resolver uses, so a hot namespace costs one warehouse read, not two
+    # per write. Best-effort by construction — `project_for` swallows and degrades to `None`.
+    async def _resolve_project(top_ns: str) -> str | None:
+        cache: dict[str, dict[str, str]] = app.state.warehouse_binding_cache
+        cached = cache.get(top_ns, {}).get("project")
+        if cached:
+            return cached
+        project = await run_in_threadpool(warehouses.project_for_namespace, settings.registry_root, settings.storage_options(), top_ns)
+        if project:
+            cache.setdefault(top_ns, {})["project"] = project
+        return project
+
     app.state.lineage_emitter = make_emitter(
         enabled=settings.lineage_emit_enabled,
         transport=settings.lineage_transport,
@@ -133,6 +154,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         topic=settings.dapr_topic,
         job_namespace=settings.lineage_job_namespace,
         timeout_seconds=settings.lineage_emit_timeout_seconds,
+        project_resolver=_resolve_project,
     )
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). Publishes through
     # the same local sidecar (reuse/lazily build the Dapr client). The per-replica ring buffer is ALWAYS

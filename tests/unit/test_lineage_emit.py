@@ -69,6 +69,60 @@ def test_build_create_event_shape() -> None:
     assert event["job"] == {"namespace": "lance-catalog", "name": "create_table.alpha$bronze$images"}
 
 
+def test_build_write_event_stamps_the_project_so_watchers_can_be_found() -> None:
+    """THE WATCH DEFECT. `lance_fields` carried `operation` + `version` and nothing else, so every
+    catalog-authored event reached ZERO watchers estate-wide.
+
+    `notifications/api/lineage_events.py::project_id` reads `run.facets.lance.project`, and
+    `fanout.py:88` skips the watcher loop ENTIRELY when it is `None`. So a table created, dropped,
+    renamed or reindexed in a project nobody could hear about — not because the watch was wrong, but
+    because the producer never named the tenant. `ingest/lineage.py:213-215` had it right all along.
+
+    Asserted through `project_id` rather than only on the dict key: the key name IS the contract with
+    a consumer in another deployable, and a test on `lance["project"]` alone would still pass if the
+    reader looked somewhere else."""
+    from notifications.api.lineage_events import LineageRunEvent, project_id
+
+    event = build_write_event(
+        table_id="acme-bronze$images",
+        namespace="acme-bronze",
+        author="alice",
+        version=1,
+        operation=CREATE_TABLE,
+        run_id="r1",
+        event_time="2026-06-24T00:00:00+00:00",
+        job_namespace="lance-catalog",
+        project="acme",
+    )
+    assert event["run"]["facets"]["lance"]["project"] == "acme"
+    # Validated into the CONSUMER's model (notifications' own `LineageRunEvent`), not lineage's
+    # `RunEvent`: the assertion worth making is that the plane which reads this wire JSON finds the
+    # tenant, and only its parser proves that.
+    assert project_id(LineageRunEvent.model_validate(event).run) == "acme"
+
+
+def test_build_write_event_omits_an_unsafe_project_rather_than_qualifying_with_it() -> None:
+    """The same guard `ingest.naming.tenant` applies, for the reason stated there: a value outside the
+    path-safe shape must never become a lineage-name qualifier. Omitted, not sanitized — a project that
+    cannot be named is one whose watchers must not be guessed at, and silence is the safe direction
+    (`project_id`'s own docstring: a project-less run reaches its author and no watchers)."""
+    from notifications.api.lineage_events import LineageRunEvent, project_id
+
+    event = build_write_event(
+        table_id="alpha$bronze$images",
+        namespace="alpha$bronze",
+        author="alice",
+        version=1,
+        operation=CREATE_TABLE,
+        run_id="r1",
+        event_time="2026-06-24T00:00:00+00:00",
+        job_namespace="lance-catalog",
+        project="../etc/passwd",
+    )
+    assert "project" not in event["run"]["facets"]["lance"]
+    assert project_id(LineageRunEvent.model_validate(event).run) is None
+
+
 def test_build_write_event_attaches_schema_facet_and_round_trips() -> None:
     # #24 coverage fix: a catalog write now carries the per-version column schema (blob/vector-aware) as the
     # standard SchemaDatasetFacet, so the lineage consumer materialises real columns — previously the catalog
@@ -235,11 +289,40 @@ def test_http_emitter_forwards_authorization() -> None:
 class _RecordingEmitter:
     """Records the emit_write call kwargs (stands in for the real emitter)."""
 
-    def __init__(self) -> None:
+    def __init__(self, project: str | None = None) -> None:
         self.writes: list[dict[str, Any]] = []
+        self.resolved: list[str] = []
+        self._project = project
+
+    async def project_for(self, top_ns: str) -> str | None:
+        """Part of the `LineageEmitter` protocol, so the fake carries it too. Recording the argument
+        is the point of the assertion below: the tenant must be resolved from the table's TOP
+        namespace segment, which is the rung the warehouse registry actually binds."""
+        self.resolved.append(top_ns)
+        return self._project
 
     async def emit_write(self, **kwargs: Any) -> None:
         self.writes.append(kwargs)
+
+
+def test_emit_write_event_resolves_the_tenant_from_the_top_namespace_segment() -> None:
+    """The eight call sites have no project in scope, so `emit_write_event` resolves it once and
+    forwards it. Pinned because getting the SEGMENT wrong is silent: resolving `bronze` instead of
+    `alpha` finds no binding, returns None, and the write goes out watcher-less exactly as before."""
+    em = _RecordingEmitter(project="acme")
+    asyncio.run(
+        emit_write_event(
+            cast(LineageEmitter, em),
+            ["alpha", "bronze", "images"],
+            delimiter="$",
+            author="alice",
+            version=1,
+            operation=INSERT,
+            authorization=None,
+        )
+    )
+    assert em.resolved == ["alpha"]
+    assert em.writes[0]["project"] == "acme"
 
 
 def test_emit_write_event_maps_segments_to_canonical_ids_and_awaits_inline() -> None:

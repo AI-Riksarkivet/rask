@@ -269,6 +269,34 @@ def binding_for_namespace(control_root: str, storage_options: StorageOptions, to
     return _read_json(control_root, storage_options, f"{_BINDINGS_PREFIX}/{top_ns}.json")
 
 
+def project_for_namespace(control_root: str, storage_options: StorageOptions, top_ns: str) -> str | None:
+    """The TENANT owning top-level namespace ``top_ns``, or ``None`` when it cannot be established.
+
+    Two registry reads — the binding names the warehouse, the warehouse names the project — composed
+    HERE because both halves already live in this module and a caller assembling them itself would be
+    the third place that knows the shape.
+
+    **Why this is not a string split.** ``project_namespace`` joins with ``-``
+    (``("acme", "bronze")`` → ``"acme-bronze"``), but ``PROJECT_PATTERN`` permits ``-`` INSIDE a project
+    id — so ``acme-bronze`` is genuinely ambiguous between project ``acme`` and project ``acme-bronze``,
+    and a namespace a user named freely follows no convention at all. The binding is the only sound
+    answer, and guessing wrong would attribute a write to the wrong tenant.
+
+    Its consumer is lineage's ``lance.project`` facet, which is WATCH targeting's only key — see
+    ``catalog/core/lineage_emit.py``. ``None`` is a legitimate answer (an unbound namespace, a
+    single-tenant estate) and costs the event its watchers, never its author.
+    """
+    binding = binding_for_namespace(control_root, storage_options, top_ns)
+    if not binding:
+        return None
+    warehouse_id = binding.get("warehouse_id")
+    if not warehouse_id:
+        return None
+    record = get_warehouse(control_root, storage_options, warehouse_id)
+    project = record.get("project") if record else None
+    return str(project) if project else None
+
+
 def warehouse_status(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> str | None:
     """A warehouse's lifecycle status: ``"active"`` / ``"deactivated"``. Returns ``"active"`` when the field
     is ABSENT (backward compat — records written before the lifecycle feature have no status and are live),

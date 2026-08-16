@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
@@ -40,6 +41,7 @@ from pydantic import BaseModel
 from service_kit import dapr_publish
 from service_kit.governed import fga
 from service_kit.lakehouse.schema import SchemaFields
+from service_kit.lakehouse.warehouse_registry import is_safe_project
 from service_kit.openlineage import (
     DATASOURCE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
@@ -170,6 +172,7 @@ def build_write_event(
     schema_fields: SchemaFields | None = None,
     inputs: list[InputRef] | None = None,
     extra_run_facets: dict[str, Any] | None = None,
+    project: str | None = None,
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for any catalog write to a table.
 
@@ -189,6 +192,20 @@ def build_write_event(
     lance_fields: dict[str, Any] = {"operation": operation}
     if version is not None:
         lance_fields["version"] = version
+    # THE TENANT, and it is WATCH targeting's only key. `notifications` reads
+    # `run.facets.lance.project` (`api/lineage_events.py::project_id`) and its fan-out skips the
+    # watcher loop ENTIRELY when it is absent — so while this facet carried only operation/version,
+    # every catalog-authored event in the estate reached zero watchers. Not a broken watch: a
+    # producer that never named the tenant the watch is keyed on. `ingest/lineage.py` was the
+    # working precedent the whole time.
+    #
+    # GUARDED, and OMITTED rather than sanitized when it fails. `is_safe_project` is the same check
+    # ingest's `tenant()` and the medallion's `_cascade_project` apply, for the reason stated there:
+    # a value outside the path-safe shape must never become a lineage-name qualifier. Omitting is the
+    # safe direction — a project-less run reaches its author and no watchers, whereas a coerced one
+    # could reach the WRONG tenant's watchers, which is a disclosure rather than a miss.
+    if project and is_safe_project(project):
+        lance_fields["project"] = project
     # Caller-supplied run facets FIRST (e.g. a `params` training-params facet on a merge), already spec-shaped
     # by shape_run_facets, so the catalog stays un-opinionated about their content. The catalog-OWNED `lance`
     # (operation/version) and `author` facets are stamped AFTER — they always win a name collision, so a
@@ -271,9 +288,26 @@ def shape_run_facets(raw: dict[str, Any]) -> dict[str, Any]:
     return shaped
 
 
+#: How the emitter learns which TENANT a write belongs to, given the table's TOP namespace segment.
+#:
+#: A callable rather than a registry import, for the reason every other seam in this estate is one: the
+#: builder stays pure and testable, and a deployment with no warehouse registry supplies nothing rather
+#: than a stub that lies. Wired once in `main.py`, where the app-level binding cache lives.
+#:
+#: IT CANNOT BE A STRING SPLIT. `project_namespace` joins with `-` ("acme", "bronze") -> "acme-bronze",
+#: but `PROJECT_PATTERN` ALLOWS `-` inside a project id — so "acme-bronze" is ambiguous between project
+#: `acme` and project `acme-bronze`, and guessing wrong notifies the wrong tenant's watchers. The
+#: registry binding is the only sound answer.
+type ProjectResolver = Callable[[str], Awaitable[str | None]]
+
+
 @runtime_checkable
 class LineageEmitter(Protocol):
     """Emits catalog write events to the lineage service (best-effort)."""
+
+    async def project_for(self, top_ns: str) -> str | None:
+        """The tenant owning ``top_ns``, or ``None`` when it cannot be resolved."""
+        ...
 
     async def emit_create(
         self,
@@ -288,6 +322,7 @@ class LineageEmitter(Protocol):
         schema_fields: SchemaFields | None = None,
         inputs: list[InputRef] | None = None,
         extra_run_facets: dict[str, Any] | None = None,
+        project: str | None = None,
     ) -> None: ...
 
     async def emit_write(
@@ -304,11 +339,15 @@ class LineageEmitter(Protocol):
         schema_fields: SchemaFields | None = None,
         inputs: list[InputRef] | None = None,
         extra_run_facets: dict[str, Any] | None = None,
+        project: str | None = None,
     ) -> None: ...
 
 
 class NoopEmitter:
     """The emitter used when lineage emission is disabled — does nothing."""
+
+    async def project_for(self, top_ns: str) -> str | None:
+        return None
 
     async def emit_create(
         self,
@@ -323,6 +362,7 @@ class NoopEmitter:
         schema_fields: SchemaFields | None = None,
         inputs: list[InputRef] | None = None,
         extra_run_facets: dict[str, Any] | None = None,
+        project: str | None = None,
     ) -> None:
         return None
 
@@ -340,6 +380,7 @@ class NoopEmitter:
         schema_fields: SchemaFields | None = None,
         inputs: list[InputRef] | None = None,
         extra_run_facets: dict[str, Any] | None = None,
+        project: str | None = None,
     ) -> None:
         return None
 
@@ -352,6 +393,21 @@ class _BaseLineageEmitter:
     best-effort — ``_send`` swallows failures so a lineage outage never breaks a catalog write."""
 
     _job_namespace: str
+    #: Set by `make_emitter`; absent in the hand-constructed emitters the tests build, which is why it
+    #: carries a class-level default rather than being required in every `__init__`.
+    _project_resolver: ProjectResolver | None = None
+
+    async def project_for(self, top_ns: str) -> str | None:
+        """Resolve the tenant, swallowing failure. BEST-EFFORT LIKE THE EMIT ITSELF: this runs on a
+        committed write, and a registry blip must cost the watchers their notification, never the
+        caller their request. `None` degrades to exactly the pre-existing behaviour (author only)."""
+        if self._project_resolver is None or not top_ns:
+            return None
+        try:
+            return await self._project_resolver(top_ns)
+        except Exception:
+            log.debug("lineage project resolution failed for %r — emitting without a tenant", top_ns, exc_info=True)
+            return None
 
     async def emit_create(
         self,
@@ -366,6 +422,7 @@ class _BaseLineageEmitter:
         schema_fields: SchemaFields | None = None,
         inputs: list[InputRef] | None = None,
         extra_run_facets: dict[str, Any] | None = None,
+        project: str | None = None,
     ) -> None:
         await self.emit_write(
             table_id=table_id,
@@ -398,6 +455,7 @@ class _BaseLineageEmitter:
         schema_fields: SchemaFields | None = None,
         inputs: list[InputRef] | None = None,
         extra_run_facets: dict[str, Any] | None = None,
+        project: str | None = None,
     ) -> None:
         event = build_write_event(
             table_id=table_id,
@@ -414,6 +472,7 @@ class _BaseLineageEmitter:
             schema_fields=schema_fields,
             inputs=inputs,
             extra_run_facets=extra_run_facets,
+            project=project,
         )
         await self._send(event, operation=operation, table_id=table_id, authorization=authorization)
 
@@ -488,15 +547,20 @@ def make_emitter(
     topic: str,
     job_namespace: str,
     timeout_seconds: float = 5.0,
+    project_resolver: ProjectResolver | None = None,
 ) -> LineageEmitter:
     """Select the lineage transport: ``dapr`` (durable pub/sub via the sidecar) or ``http`` (direct POST);
     no-op when disabled or unwired (a half-configured transport must never silently become the other)."""
     if not enabled:
         return NoopEmitter()
     if transport == "dapr" and dapr is not None:
-        return DaprEmitter(dapr, pubsub, topic, job_namespace=job_namespace, timeout_seconds=timeout_seconds)
+        emitter: _BaseLineageEmitter = DaprEmitter(dapr, pubsub, topic, job_namespace=job_namespace, timeout_seconds=timeout_seconds)
+        emitter._project_resolver = project_resolver
+        return emitter
     if transport == "http" and url and client is not None:
-        return HttpLineageEmitter(client, url, job_namespace=job_namespace)
+        http_emitter = HttpLineageEmitter(client, url, job_namespace=job_namespace)
+        http_emitter._project_resolver = project_resolver
+        return http_emitter
     return NoopEmitter()
 
 
@@ -535,6 +599,12 @@ async def emit_write_event(
         )
         for pin in (inputs or [])
     ]
+    # THE TENANT, resolved from the table's TOP namespace segment — the rung the warehouse registry
+    # binds. Done HERE rather than at the eight call sites because not one of them has a project in
+    # scope (`endpoints/data.py` does not mention the word), and because a lookup repeated eight times
+    # is eight chances to derive it differently. `project_for` is best-effort and returns `None` on any
+    # failure, which degrades to exactly the previous behaviour: the author is told, the watchers are not.
+    project = await emitter.project_for(segments[0] if segments else "")
     await emitter.emit_write(
         table_id=fga.canonical_object_id(segments, delimiter=delimiter),
         namespace=fga.parent_namespace_id(segments, delimiter=delimiter) or "",
@@ -547,4 +617,5 @@ async def emit_write_event(
         schema_fields=schema_fields,
         inputs=refs or None,
         extra_run_facets=extra_run_facets,
+        project=project,
     )
