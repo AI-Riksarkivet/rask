@@ -399,3 +399,41 @@ def test_fail_run_id_is_deterministic_per_dataset_and_complete_stays_random() ->
     assert fail_b != fail_a1  # per-dataset, not global
     assert complete_1 != complete_2  # COMPLETE semantics untouched (uuid4 per tick)
     assert complete_1 not in {fail_a1, fail_b}
+
+
+def test_a_DECLARED_lineage_name_is_read_from_the_dataset(tmp_path: Any) -> None:
+    """The medallion tiers cannot be NAMED from their URI, so a producer must be able to declare it.
+
+    `table_id_from_uri` splits the directory on its first "_", which works for the catalog's
+    `<uuid8>_<ns>$<table>` layout and returns None for `medallion/<tier>`. That is not a parsing
+    shortfall: the chart composes those URIs from the namespace ALONE while the canonical id is a
+    separate literal, so `medallion/bronze` is both `bronze$events` and `bronze$pages`. No split can
+    recover a name the path never carried.
+
+    The name must equal the OpenFGA object id — delivery re-checks `can_get_metadata` against
+    `table:<output name>` — so a wrong name counts every recipient HIDDEN, which is worse than silence.
+    Hence a declared key rather than a guess.
+    """
+    import lance
+    import pyarrow as pa
+    from maintenance.core.lineage_emit import LINEAGE_DATASET_ID_KEY, declared_table_id
+
+    uri = str(tmp_path / "medallion-bronze.lance")
+    table = pa.table({"v": [1, 2, 3]})
+    table = table.replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "bronze$events"})
+    lance.write_dataset(table, uri)
+
+    assert declared_table_id(lance.dataset(uri)) == "bronze$events"
+
+
+def test_an_UNDECLARED_dataset_yields_None_rather_than_a_guess(tmp_path: Any) -> None:
+    """No key means no name. Falling back to a guess is the failure this exists to avoid — and datasets
+    already on disk carry no key, so this is the common case until a producer stamps it."""
+    import lance
+    import pyarrow as pa
+    from maintenance.core.lineage_emit import declared_table_id
+
+    uri = str(tmp_path / "plain.lance")
+    lance.write_dataset(pa.table({"v": [1]}), uri)
+
+    assert declared_table_id(lance.dataset(uri)) is None

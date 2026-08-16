@@ -116,6 +116,42 @@ def build_maintenance_fail_event(*, table_id: str, namespace: str, job_namespace
     return event
 
 
+#: Schema-metadata key a PRODUCER may stamp to declare its dataset's canonical lineage name.
+#:
+#: The derivation below cannot name the medallion cascade's own datasets, and that is not a parsing
+#: shortfall — the mapping does not exist. The chart composes those URIs from the namespace alone
+#: (`.../medallion/<fromNamespace>`) while the canonical id is a separate literal (`bronze$events`,
+#: `gold$htr`), so `medallion/bronze` is BOTH `bronze$events` and `bronze$pages`. No cleverer split can
+#: recover a name the path never carried.
+#:
+#: The name must equal the OpenFGA object id: delivery re-checks `can_get_metadata` against
+#: `table:<output name>`, so a wrong name counts every recipient HIDDEN — worse than emitting nothing.
+#: Hence a DECLARED key rather than a guess.
+#:
+#: Reading it here is deliberately landed ahead of any producer writing it: the read is inert until a
+#: dataset carries the key, and it makes the producer side a one-line stamp rather than a coordinated
+#: change. Datasets already on disk carry no key and keep the URI derivation — the backfill gap is real
+#: and is why this is additive rather than a replacement.
+LINEAGE_DATASET_ID_KEY = "lineage.dataset_id"
+
+
+def declared_table_id(dataset: Any) -> str | None:  # noqa: ANN401 — LanceDataset, no protocol
+    """The canonical lineage name a producer stamped on the dataset, or ``None``.
+
+    Never raises: an unreadable schema must cost this dataset its provenance, not the sweep its tick.
+    """
+    try:
+        metadata = dict(getattr(dataset.schema, "metadata", None) or {})
+    except Exception:  # noqa: BLE001 — a malformed schema is a missing name, never a failed sweep
+        return None
+    for key, value in metadata.items():
+        name = key.decode() if isinstance(key, bytes) else str(key)
+        if name == LINEAGE_DATASET_ID_KEY:
+            declared = value.decode() if isinstance(value, bytes) else str(value)
+            return declared or None
+    return None
+
+
 def table_id_from_uri(uri: str) -> str | None:
     """Extract the catalog table id from a dataset URI laid out as ``<uuid>_<table_id>``.
 
