@@ -88,6 +88,15 @@ tuples:
   - { user: user:carol, relation: reviewer, object: annotation_project:labels_2026 }
   - { user: user:henry, relation: manager, object: annotation_project:labels_2026 }
 
+  # MUTATION-DETECTING FIXTURES (openfga skill: references/test-check-assertions.md distinguishes a
+  # NEGATIVE case — a subject who holds access and must not hold THIS one — from a BOUNDARY case, a
+  # subject with no tuples at all). Every negative for the actions below used the boundary kind, so
+  # it denied under ANY model and five separate rung slips passed the whole suite 38/38. Each subject
+  # here holds the rung IMMEDIATELY BELOW the action's required rung, so a slip flips them.
+  - { user: user:olive, relation: reader, object: warehouse:lance_catalog }
+  - { user: user:peter, relation: writer, object: table:acme_gold_catalog }
+  - { user: user:quincy, relation: viewer, object: annotation_project:labels_2026 }
+
 tests:
   - name: only a ROOT-warehouse (estate) admin can observe the estate-wide control-plane event feed
     check:
@@ -125,6 +134,31 @@ tests:
       - user: user:alice
         object: warehouse:acme_bucket
         assertions: { can_browse_storage: true }
+  - name: an owner-only action must be REFUSED to the rung directly below it (mutation-detecting)
+    check:
+      # Each subject here HOLDS a live relation on the object, which is what the negatives above lack:
+      # alice and dave hold nothing on warehouse:lance_catalog, so they deny under any model. The
+      # `reader: true` / `writer: true` / `viewer: true` line is load-bearing — it proves the tuple is
+      # still there, so removing it can never quietly turn these negatives vacuous again.
+      - user: user:olive
+        object: warehouse:lance_catalog
+        assertions:
+          reader: true              # the tuple is live
+          can_get_metadata: true    # what a reader IS entitled to
+          can_observe_events: false # owner-only: slips to true if the rung drops to reader
+          can_browse_storage: false # owner-only: same
+      - user: user:peter
+        object: table:acme_gold_catalog
+        assertions:
+          writer: true              # the tuple is live
+          can_write_data: true      # what a writer IS entitled to
+          can_deregister: false     # owner-only: slips to true if the rung drops to writer
+      - user: user:quincy
+        object: annotation_project:labels_2026
+        assertions:
+          viewer: true              # the tuple is live
+          can_send_items: false     # annotator-only: slips to true if the rung drops to viewer
+          can_annotate: false       # the sibling action on the same rung, same reasoning
   - name: team-owned project admins get full warehouse access (and a team owns MANY projects)
     check:
       - user: user:alice

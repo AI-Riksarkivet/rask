@@ -426,3 +426,124 @@ def test_no_new_object_as_user_shape_slips_past_revoke() -> None:
     # And the reverse: a shape removed from the model must not linger here pretending to be reviewed.
     stale = set(_OBJECT_AS_USER_SHAPES) - found
     assert not stale, f"_OBJECT_AS_USER_SHAPES lists {sorted(stale)}, which the model no longer defines"
+
+
+#: The (type, relation) pairs a TIME-BOXED grant may be written against — every direct type
+#: restriction carrying the `non_expired_grant` condition.
+#:
+#: The set is exactly the three data rungs (`reader`, `writer`, `validator`) plus the materialized
+#: view's `refresher`, and its shape is the invariant: **ownership and grant AUTHORITY are never
+#: time-boxable.** An expiring `owner` leaves the object with no owner at all — invisible to every
+#: list (per-item filtering) and undroppable by every caller including an estate admin, which is the
+#: stranded-object class the estate has spent real effort closing. An expiring `manage_grants` or
+#: `pass_grants` is the same failure one axis over: the delegation lapses while the grants it issued
+#: stand, and nobody is left able to revoke them.
+_CONDITIONAL_GRANT_RUNGS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("warehouse", "reader"),
+        ("warehouse", "writer"),
+        ("warehouse", "validator"),
+        ("namespace", "reader"),
+        ("namespace", "writer"),
+        ("namespace", "validator"),
+        ("table", "reader"),
+        ("table", "writer"),
+        ("table", "validator"),
+        ("materialized_view", "reader"),
+        ("materialized_view", "refresher"),
+    }
+)
+
+
+def test_only_the_data_rungs_accept_a_TIME_BOXED_grant() -> None:
+    """Adding `user with non_expired_grant` to a rung must be a decision, not a diff nobody notices.
+
+    This is a STRUCTURAL tripwire because no behavioural test can be one. A type restriction is
+    ADDITIVE — it permits new tuples and changes the resolution of not a single existing one — so
+    widening `namespace#owner` to accept a conditional grant leaves every check in `model.fga.yaml`
+    answering exactly as before. Measured: that mutation passes the whole suite, before and after the
+    fixtures were made mutation-sensitive.
+
+    What it would cost is not visible until the clock runs out. A time-boxed OWNER expires into an
+    object with no owner — not listed (the listings filter per item), not droppable at any tier, not
+    repairable except by hand-writing tuples. The model cannot express "and then what?", so the
+    guard has to live here, at the point of the edit, with the reason attached.
+
+    Extending `_CONDITIONAL_GRANT_RUNGS` is a fine resolution — after deciding what an expiry leaves
+    behind on that rung, and recording it.
+    """
+    model = fga_module.load_model()
+    found = {
+        (td["type"], relation)
+        for td in model["type_definitions"]
+        for relation, info in ((td.get("metadata") or {}).get("relations") or {}).items()
+        for direct in info.get("directly_related_user_types") or []
+        if direct.get("condition")
+    }
+
+    widened = found - _CONDITIONAL_GRANT_RUNGS
+    assert not widened, (
+        f"{sorted(widened)} now accept a TIME-BOXED grant. Ownership and grant authority must not "
+        "expire: an expired owner leaves the object unlistable and undroppable by everyone, and an "
+        "expired manage_grants/pass_grants leaves the grants it issued with nobody able to revoke "
+        "them. Decide what the expiry leaves behind, then add the rung here with that reason."
+    )
+    # The reverse, matching `_OBJECT_AS_USER_SHAPES`: a rung removed from the model must not linger
+    # here pretending to be reviewed.
+    stale = _CONDITIONAL_GRANT_RUNGS - found
+    assert not stale, f"_CONDITIONAL_GRANT_RUNGS lists {sorted(stale)}, which the model no longer defines"
+
+
+def _dsl_conditional_rungs(text: str) -> set[tuple[str, str]]:
+    """``(type, relation)`` pairs whose DSL type-restriction list carries a ``with <condition>``.
+
+    Parsed from the AUTHORED ``.fga`` rather than the compiled JSON, so the two can be compared. Only
+    the bracketed restriction list counts — a condition can appear nowhere else in a `define` line.
+    """
+    out: set[tuple[str, str]] = set()
+    current: str | None = None
+    for raw in text.splitlines():
+        # A DSL comment is `#` at line start or after whitespace. Splitting on a bare `#` — which is
+        # what `_dsl_relations` above does — truncates `[user, role#assignee, ...]` to `[user, role`,
+        # because a USERSET carries a `#` too. That helper only reads the name before the colon so the
+        # mangling is harmless there; here it silently emptied the restriction list and made this test
+        # report the whole model as drifted.
+        line = re.sub(r"(?:^|\s)#.*$", "", raw).strip()
+        if line.startswith("type "):
+            current = line.removeprefix("type ").strip()
+        elif line.startswith("define ") and current:
+            name, _, body = line.removeprefix("define ").partition(":")
+            bracket = re.search(r"\[([^\]]*)\]", body)
+            if bracket and " with " in bracket.group(1):
+                out.add((current, name.strip()))
+    return out
+
+
+def test_the_compiled_model_carries_the_SAME_time_boxed_rungs_as_the_source() -> None:
+    """`test_both_model_copies_agree` compares relation NAMES, and a type restriction has no name.
+
+    So widening a rung to accept a time-boxed grant in `model.fga` WITHOUT regenerating `model.json`
+    passed every gate in this file: the name set is unchanged, and every other structural test —
+    including the tripwire above — reads the compiled JSON, which still said the old thing. Measured
+    while writing that tripwire: mutating the source alone left all 11 tests green.
+
+    Both directions are dangerous, which is why this compares rather than checks one side. Source
+    ahead of compiled means the reviewed model is not the deployed one; compiled ahead of source
+    means the DEPLOYED model accepts a grant nobody wrote down — and `_CONDITIONAL_GRANT_RUNGS`
+    above, which reads the compiled side, would be reviewing a rung the author never intended.
+    """
+    model = fga_module.load_model()
+    compiled = {
+        (td["type"], relation)
+        for td in model["type_definitions"]
+        for relation, info in ((td.get("metadata") or {}).get("relations") or {}).items()
+        for direct in info.get("directly_related_user_types") or []
+        if direct.get("condition")
+    }
+    authored = _dsl_conditional_rungs((AUTH_DIR / "model.fga").read_text())
+
+    assert authored == compiled, (
+        f"time-boxed rungs DRIFTED between the authored DSL and the compiled model — "
+        f"source-only {sorted(authored - compiled)}, compiled-only {sorted(compiled - authored)}. "
+        "The app loads model.json; regenerate it: fga model transform --file model.fga"
+    )
