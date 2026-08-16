@@ -32,7 +32,7 @@ from fastapi import APIRouter, Request
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError, UnsupportedOperationError
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import SettingsDep, get_control_emitter
+from catalog.api.dependencies import FgaClientDep, SettingsDep, get_control_emitter
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.control_emit import emit_control
@@ -62,6 +62,11 @@ namespace_router = APIRouter(prefix="/v1/namespace", tags=["access"])
 # Warehouse is NOT in fga_deps._RESOURCES, so `authorize` returns early for these paths — every route
 # mounted here must gate itself explicitly (see `set_warehouse_managed_access`).
 warehouse_router = APIRouter(prefix="/v1/warehouse", tags=["access"])
+# Same rule as the warehouse router above: `/v1/projects/…` is outside `fga_deps._RESOURCES`, so
+# `authorize` returns early and every route here gates itself. Its own router rather than a route on
+# the projects module so the access surface stays in one file — the place someone looks when asking
+# "what is gated, and how".
+project_router = APIRouter(prefix="/v1/projects", tags=["access"])
 
 
 # The base rungs an admin may directly assign. The model defines each as ``[user, role#assignee] or …``
@@ -261,6 +266,52 @@ async def my_table_permissions(id: str, request: Request, settings: SettingsDep,
 async def my_namespace_permissions(id: str, request: Request, settings: SettingsDep, token: CurrentToken) -> MyPermissionsResponse:
     """What the caller may do on this namespace — reader-gated by the router (``can_get_metadata``)."""
     return await _my_permissions(request, settings, token, "namespace", id)
+
+
+@warehouse_router.post("/{id}/access/my-permissions")
+async def my_warehouse_permissions(id: str, request: Request, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> MyPermissionsResponse:
+    """What the caller may do on this warehouse — the self-view the UI needs to render a DISABLED
+    action with its reason instead of a button that 403s on click.
+
+    GATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `fga_deps._RESOURCES`
+    (`namespace`, `table`, `materialized_view`, `transaction`), so the router-level `authorize`
+    returns early for every `/v1/warehouse/…` path and a route mounted here that forgets its own check
+    is simply ungated — the hazard this module's own header comment names.
+
+    Reader tier (`can_get_metadata`), matching `_my_permissions`' rule rather than the owner bar its
+    two siblings on this router use: "what may I do here" discloses nothing about any other principal,
+    and gating it at the owner bar would mean only the people who already know the answer could ask.
+    """
+    await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{id}")
+    return await _my_permissions(request, settings, token, "warehouse", id)
+
+
+@project_router.post("/{id}/access/my-permissions")
+async def my_project_permissions(id: str, request: Request, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> MyPermissionsResponse:
+    """What the caller may do on this project — same self-view, same explicit gate as the warehouse
+    rung (``/v1/projects/…`` is likewise outside ``_RESOURCES``).
+
+    The project rung is where the estate's most irreversible action lives (`DELETE /v1/projects/{id}`
+    has no cascade at all), so this is the one whose absence forced the UI to show a delete button and
+    discover the answer from a 403.
+
+    GATED ON `member`, A BASE RUNG, and that is a deliberate departure worth reading. Every other
+    surface here gates on a `can_*` action, but the `project` type defines NO reader-tier action — its
+    whole action surface is `can_administer` / `can_create_warehouse` / `can_create_annotation_project`
+    / `can_grant_*` / `can_read_assignments`, all admin or member tier. I reached for
+    `can_get_metadata` by analogy with table and namespace; it does not exist on this type, and
+    `test_every_fga_relation_in_code_exists_in_the_compiled_model` caught it — OpenFGA rejects an
+    undefined relation with a 400 that fails closed to a 503 for every caller, so the analogy would
+    have made this endpoint permanently unavailable.
+
+    `member` is the reader-equivalent for this type: it is the tier ordinary tenant work already sits
+    at (`can_create_annotation_project: member`), and a caller with no relationship to the project
+    still gets a 403 rather than learning the tenant exists. The alternative — adding
+    `can_get_metadata: member` to the model for symmetry — is a MODEL change with `.fga.yaml` updates
+    and a migration story behind it, which is not something a UI-gating endpoint should drag in.
+    """
+    await fga_deps.require_relation(client, settings, token, relation="member", obj=f"project:{id}")
+    return await _my_permissions(request, settings, token, "project", id)
 
 
 async def _access_mutate(
@@ -525,3 +576,4 @@ router = APIRouter()
 router.include_router(table_router)
 router.include_router(namespace_router)
 router.include_router(warehouse_router)
+router.include_router(project_router)

@@ -15221,6 +15221,102 @@
         ]
       }
     },
+    "/v1/projects/{id}/access/my-permissions": {
+      "post": {
+        "description": "What the caller may do on this project \u2014 same self-view, same explicit gate as the warehouse\nrung (``/v1/projects/\u2026`` is likewise outside ``_RESOURCES``).\n\nThe project rung is where the estate's most irreversible action lives (`DELETE /v1/projects/{id}`\nhas no cascade at all), so this is the one whose absence forced the UI to show a delete button and\ndiscover the answer from a 403.\n\nGATED ON `member`, A BASE RUNG, and that is a deliberate departure worth reading. Every other\nsurface here gates on a `can_*` action, but the `project` type defines NO reader-tier action \u2014 its\nwhole action surface is `can_administer` / `can_create_warehouse` / `can_create_annotation_project`\n/ `can_grant_*` / `can_read_assignments`, all admin or member tier. I reached for\n`can_get_metadata` by analogy with table and namespace; it does not exist on this type, and\n`test_every_fga_relation_in_code_exists_in_the_compiled_model` caught it \u2014 OpenFGA rejects an\nundefined relation with a 400 that fails closed to a 503 for every caller, so the analogy would\nhave made this endpoint permanently unavailable.\n\n`member` is the reader-equivalent for this type: it is the tier ordinary tenant work already sits\nat (`can_create_annotation_project: member`), and a caller with no relationship to the project\nstill gets a 403 rather than learning the tenant exists. The alternative \u2014 adding\n`can_get_metadata: member` to the model for symmetry \u2014 is a MODEL change with `.fga.yaml` updates\nand a migration story behind it, which is not something a UI-gating endpoint should drag in.",
+        "operationId": "my_project_permissions_v1_projects__id__access_my_permissions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPermissionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "My Project Permissions",
+        "tags": [
+          "access"
+        ]
+      }
+    },
     "/v1/projects/{id}/policies": {
       "get": {
         "description": "Every maintenance policy governing data inside this project (#65) \u2014 the tenant-scoped VIEW.\n\nAdmin-gated on ``project:<id>#can_administer``, exactly like ``describe_project_policy``: the trio\nalready set that bar, and a second (estate-observer) door for the same information would split the\ntier \u2014 a tenant admin could then be shown one of their records and denied the list of all of them.\n\nALL warehouse statuses count, not just active ones. ``set_project_policy`` filters to active because\nit is WRITING coverage (a policy over a bucket that no live warehouse serves could never match); this\nREADS coverage, and a deactivated warehouse's data \u2014 plus any policy still governing it \u2014 remains the\ntenant's. Narrowing here would hide exactly the retention record an operator is looking for while\noffboarding.\n\nTolerant like every other listing: an unreadable warehouse or policy record is skipped with a warning\nby the registry primitives themselves. An unreadable BINDING is different and is reported \u2014\n``read_bindings`` (not ``list_bindings``) so the skip list crosses the return boundary into\n``incomplete``/``skipped_bindings``. A binding you cannot read is a namespace you cannot see, and a\nquietly short list would read as checked-and-clean. It still answers 200: this is a listing, not the\ndestructive door ``namespaces_bound_to`` guards, where one corrupt object correctly refuses the whole\noperation.",
@@ -25074,6 +25170,102 @@
         "summary": "Put Workflow Graph",
         "tags": [
           "user-state"
+        ]
+      }
+    },
+    "/v1/warehouse/{id}/access/my-permissions": {
+      "post": {
+        "description": "What the caller may do on this warehouse \u2014 the self-view the UI needs to render a DISABLED\naction with its reason instead of a button that 403s on click.\n\nGATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `fga_deps._RESOURCES`\n(`namespace`, `table`, `materialized_view`, `transaction`), so the router-level `authorize`\nreturns early for every `/v1/warehouse/\u2026` path and a route mounted here that forgets its own check\nis simply ungated \u2014 the hazard this module's own header comment names.\n\nReader tier (`can_get_metadata`), matching `_my_permissions`' rule rather than the owner bar its\ntwo siblings on this router use: \"what may I do here\" discloses nothing about any other principal,\nand gating it at the owner bar would mean only the people who already know the answer could ask.",
+        "operationId": "my_warehouse_permissions_v1_warehouse__id__access_my_permissions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPermissionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "My Warehouse Permissions",
+        "tags": [
+          "access"
         ]
       }
     },
