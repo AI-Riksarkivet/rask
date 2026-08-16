@@ -71,6 +71,29 @@ FLAG_DATA_OVERLAYS = 64
 #: version GC and the orphan pass have each been checked against that layout on a real dataset.
 SUPPORTED = FLAG_DELETION_FILES | FLAG_STABLE_ROW_IDS | FLAG_USE_V2_FORMAT_DEPRECATED | FLAG_TABLE_CONFIG
 
+#: The same whitelist plus ``base_paths``, for the operations that are ROOT-SCOPED and therefore safe on
+#: a shallow clone: ``cleanup_old_versions``, ``enable_auto_cleanup`` and ``optimize_indices``.
+#:
+#: A SECOND mask rather than a widening of ``SUPPORTED``, because that constant is also consumed by
+#: ``maintenance/services/orphans.py`` and ``catalog/services/maintenance.py`` — and for the orphan scan
+#: the refusal is genuinely required: a shallow clone's files resolve through ``base_paths`` to another
+#: dataset's root, so "list the prefix, subtract what is referenced" would report live data as garbage.
+#: Widening one constant would have silently changed all three call sites.
+#:
+#: MEASURED on pylance 9.0.0 rather than argued, because the blanket refusal's own docstring asserted it
+#: was necessary. The discriminating experiment: a clone whose overwrite orphaned dead fragments on BOTH
+#: sides, then ONE ``cleanup_old_versions(delete_unverified=True)`` call — it removed the 2 clone-owned
+#: files and left all 4 base-owned ones, base data files 4 -> 4, and the base still read in a fresh
+#: process. The same held for inherited ``_deletions/`` and ``_indices/``, across six cleanup shapes and
+#: ten repeat cycles, with zero base files deleted in every run. ``optimize_indices`` likewise writes a
+#: delta into the clone's own root and leaves the base byte-identical.
+#:
+#: ``compact_files`` is EXCLUDED and stays on ``SUPPORTED``: it silently materialises the shared data into
+#: the clone's own root — a pristine clone went 1,072 -> 108,199 bytes against a 119,693-byte base —
+#: which defeats the point of cloning. It never damages the base, so this is a cost refusal, not a safety
+#: one, but it is still the wrong thing to do behind an operator's back.
+SUPPORTED_FOR_GC = SUPPORTED | FLAG_BASE_PATHS
+
 _FLAG_NAMES = {
     FLAG_DELETION_FILES: "deletion files",
     FLAG_STABLE_ROW_IDS: "stable row ids",
@@ -222,8 +245,25 @@ def unsupported_features(ds: ManifestCarrier) -> str | None:
 
 
 def describe_unsupported_flags(reader: int, writer: int) -> str | None:
-    """The refusal reason for an already-read flag pair, or ``None`` when both are understood."""
+    """The refusal reason for an already-read flag pair, or ``None`` when both are understood.
+
+    This is the COMPACTION / orphan-scan gate. For version reclamation and index maintenance use
+    :func:`describe_gc_unsupported_flags`, which additionally tolerates ``base_paths``.
+    """
     unknown = (reader | writer) & ~SUPPORTED
+    if not unknown:
+        return None
+    return f"unsupported manifest feature flags: {_named(unknown)} (reader={reader}, writer={writer})"
+
+
+def describe_gc_unsupported_flags(reader: int, writer: int) -> str | None:
+    """The refusal reason for the ROOT-SCOPED operations, or ``None`` when they are safe to run.
+
+    Version reclamation and index maintenance touch only the dataset's own root, so a shallow clone's
+    ``base_paths`` does not endanger them — see :data:`SUPPORTED_FOR_GC` for the measurement. Everything
+    else refuses exactly as before.
+    """
+    unknown = (reader | writer) & ~SUPPORTED_FOR_GC
     if not unknown:
         return None
     return f"unsupported manifest feature flags: {_named(unknown)} (reader={reader}, writer={writer})"

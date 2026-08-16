@@ -475,3 +475,55 @@ def test_auto_cleanup_does_not_COMMIT_A_VERSION_when_already_configured(tmp_path
     assert lance.dataset(uri).version == settled, (
         f"re-applying an identical auto-cleanup config committed new versions ({settled} -> {lance.dataset(uri).version})"
     )
+
+
+def test_a_SHALLOW_CLONE_gets_reclamation_and_indices_but_NOT_compaction(tmp_path: Path) -> None:
+    """The flag-16 refusal was over-broad by exactly one operation, and the cost was the whole sweep.
+
+    MEASURED on this estate 2026-08-16: 17 datasets were refused on `base_paths`, and they were exactly
+    the ones with multiple fragments and version history; the 9 the sweep did maintain needed nothing.
+    So the sweep ran every 120s and, by construction, did no work at all.
+
+    The split is safe because the hazards differ. `cleanup_old_versions` is root-scoped — one call on a
+    clone with dead fragments on BOTH sides removed the 2 clone-owned files and left all 4 base-owned
+    ones — and `optimize_indices` writes a delta into the clone's own root. Only `compact_files` is
+    wrong, and for COST not safety: it materialises the shared data into the clone (1,072 -> 108,199
+    bytes against a 119,693-byte base), defeating the point of cloning.
+
+    Asserted on both halves: the pass must not report a bare refusal that stops everything, and the
+    clone must not silently grow a private copy.
+    """
+    source = str(tmp_path / "src.lance")
+    ds = lance.write_dataset(pa.table({"v": list(range(64))}), source, max_rows_per_file=16)
+    clone = str(tmp_path / "clone.lance")
+    ds.shallow_clone(clone, reference=ds.version)
+    assert not (tmp_path / "clone.lance" / "data").exists(), "fixture must really be a metadata-only clone"
+
+    # Give the clone real reclamation work: extra versions, all superseded.
+    for extra in range(3):
+        lance.write_dataset(pa.table({"v": [extra]}), clone, mode="overwrite")
+
+    result = compact_one(clone, {}, older_than=None, retain_versions=1)
+
+    assert result.error is None, f"the clone must not error: {result.error}"
+    # THE DISCRIMINATOR. Before the split the pass returned at the flag gate having done nothing, so
+    # asserting only "no error / no fragments removed" passed with and without the fix.
+    assert result.old_versions_removed > 0, "the clone got no version reclamation — the blanket flag-16 refusal is still stopping root-scoped work"
+    assert result.fragments_removed == 0, "compaction must NOT run on a clone — it would materialise a private copy"
+    assert result.refused is not None and "base_paths" in result.refused, (
+        f"the compaction skip must be reported with its reason, got refused={result.refused!r}"
+    )
+
+
+def test_an_UNKNOWN_flag_still_refuses_everything(tmp_path: Path) -> None:
+    """Splitting the gate must not weaken it. `SUPPORTED_FOR_GC` adds base_paths and nothing else, so
+    data overlays (flag 64) and any future unknown flag still refuse the whole pass — the narrow gate
+    is a per-operation exception, not a general relaxation."""
+    from service_kit.lakehouse import features
+
+    assert features.describe_gc_unsupported_flags(features.FLAG_DATA_OVERLAYS, 0) is not None
+    assert features.describe_gc_unsupported_flags(1 << 20, 0) is not None
+    # base_paths is the ONLY difference between the two masks.
+    assert features.SUPPORTED_FOR_GC == features.SUPPORTED | features.FLAG_BASE_PATHS
+    assert features.describe_gc_unsupported_flags(features.FLAG_BASE_PATHS, features.FLAG_BASE_PATHS) is None
+    assert features.describe_unsupported_flags(features.FLAG_BASE_PATHS, features.FLAG_BASE_PATHS) is not None

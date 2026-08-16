@@ -21,7 +21,12 @@ from pydantic import BaseModel, Field
 from maintenance.core.config import shared_lance_session
 from maintenance.services.base_refs import BaseRefs
 from maintenance.services.index_health import inspect_indices
-from service_kit.lakehouse.features import describe_unsupported_flags, manifest_feature_flags, unsupported_features_from_open_error
+from service_kit.lakehouse.features import (
+    describe_gc_unsupported_flags,
+    describe_unsupported_flags,
+    manifest_feature_flags,
+    unsupported_features_from_open_error,
+)
 
 
 log = logging.getLogger(__name__)
@@ -179,12 +184,26 @@ def compact_one(
             log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": refusal})
             return DatasetResult(uri=uri, refused=refusal)
         return DatasetResult(uri=uri, error=f"open: {exc}", error_type=type(exc).__name__)
-    # BEFORE compact_files / cleanup_old_versions / optimize_indices — the whole point. A shallow
-    # clone (flag 16) opens fine and compacts "successfully" while silently materializing a full copy
-    # of data it only referenced, and then has its versions GC'd. Measured on pylance 9.0.0.
-    if (refusal := describe_unsupported_flags(reader_flags, writer_flags)) is not None:
-        log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": refusal})
-        return DatasetResult(uri=uri, refused=refusal)
+    # TWO GATES, because the three operations do not share a hazard. This was ONE blanket refusal, and
+    # the cost was measured: 17 of the estate's datasets were refused on flag 16 and they were exactly
+    # the ones with multiple fragments and version history, while the 9 the sweep did maintain needed
+    # nothing. The sweep ran every 120s and, by construction, did no work at all.
+    #
+    # The narrow gate (below) refuses everything this pass cannot rewrite correctly, INCLUDING flag 64
+    # and anything unknown. The wide gate refuses only what is unsafe root-scoped, which flag 16 is not:
+    # ONE `cleanup_old_versions` call on a clone with dead fragments on both sides removed the 2
+    # clone-owned files and left all 4 base-owned ones, and the base still read in a fresh process
+    # (pylance 9.0.0). `optimize_indices` writes a delta into the clone's own root and leaves the base
+    # byte-identical.
+    #
+    # So flag 16 gates COMPACTION alone — not for safety but for cost: compacting a clone silently
+    # materialises the shared data into its own root (1,072 -> 108,199 bytes against a 119,693-byte
+    # base), defeating the point of cloning. A refusal that says so beats doing it behind someone's back.
+    gc_refusal = describe_gc_unsupported_flags(reader_flags, writer_flags)
+    if gc_refusal is not None:
+        log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": gc_refusal})
+        return DatasetResult(uri=uri, refused=gc_refusal)
+    compact_refusal = describe_unsupported_flags(reader_flags, writer_flags)
     # #114 — the OTHER direction, and the flag check above cannot see it. Flag 16 marks the dataset
     # that SPANS bases (the clone); the dataset in danger here is the SOURCE, which carries no flag
     # and no base_paths of its own and looks completely ordinary. Only the cross-estate pre-pass
@@ -214,31 +233,38 @@ def compact_one(
             size_kw["batch_size"] = scan_batch_size
         if compact_threads is not None:
             size_kw["num_threads"] = compact_threads
-        try:
-            metrics: Any = ds.optimize.compact_files(defer_index_remap=True, **size_kw)
-        except Exception as exc:
-            # defer_index_remap needs row_addrs (a stable-row-id, fragment-reuse-able layout). A dataset
-            # WITHOUT them — e.g. a small model-REGISTRY dataset (models$<model>) — raises
-            # "defer_index_remap requires row_addrs but none were provided". Fall back to the plain
-            # (non-deferred) compaction so one such dataset doesn't get reported as a sweep failure. These
-            # registry datasets aren't concurrently indexed, so the CommitConflict that defer_index_remap
-            # avoids isn't a risk here. Any OTHER error propagates to the outer per-dataset error capture.
-            # MATCH THE PARAMETER, NOT ONE MESSAGE. Lance refuses `defer_index_remap` in BOTH
-            # directions and this only caught one:
-            #   * no stable row ids -> "defer_index_remap requires row_addrs but none were provided"
-            #   * WITH stable row ids -> "defer_index_remap=true is not supported on datasets with
-            #     stable row IDs: ... there is nothing to defer."
-            # The second carries no `row_addrs`, so it re-raised and became a per-dataset sweep error.
-            # Measured on the live estate 2026-08-16: a real sweep reported datasets 31,
-            # fragments_removed 0, errors 11 — every one of them this, because the medallion cascade
-            # writes with stable row ids, so the datasets the pipeline produces were exactly the ones
-            # compaction could never touch. Maintenance ran and reclaimed nothing.
-            # Either refusal means the same thing operationally: this dataset does not want the
-            # deferred remap, so compact without it. Anything else still propagates.
-            if "defer_index_remap" not in str(exc):
-                raise
-            log.warning("compact_defer_index_remap_unsupported", extra={"uri": uri, "error": str(exc)})
-            metrics = ds.optimize.compact_files(**size_kw)
+        if compact_refusal is not None:
+            # Root-scoped work still runs below; only the rewrite is skipped. Recorded on the result so
+            # the reason is visible without inferring it from a zero, and logged once per dataset.
+            log.info("maintenance_compaction_skipped_unsupported", extra={"uri": uri, "reason": compact_refusal})
+            result.refused = compact_refusal
+            metrics: Any = None
+        else:
+            try:
+                metrics = ds.optimize.compact_files(defer_index_remap=True, **size_kw)
+            except Exception as exc:
+                # defer_index_remap needs row_addrs (a stable-row-id, fragment-reuse-able layout). A dataset
+                # WITHOUT them — e.g. a small model-REGISTRY dataset (models$<model>) — raises
+                # "defer_index_remap requires row_addrs but none were provided". Fall back to the plain
+                # (non-deferred) compaction so one such dataset doesn't get reported as a sweep failure. These
+                # registry datasets aren't concurrently indexed, so the CommitConflict that defer_index_remap
+                # avoids isn't a risk here. Any OTHER error propagates to the outer per-dataset error capture.
+                # MATCH THE PARAMETER, NOT ONE MESSAGE. Lance refuses `defer_index_remap` in BOTH
+                # directions and this only caught one:
+                #   * no stable row ids -> "defer_index_remap requires row_addrs but none were provided"
+                #   * WITH stable row ids -> "defer_index_remap=true is not supported on datasets with
+                #     stable row IDs: ... there is nothing to defer."
+                # The second carries no `row_addrs`, so it re-raised and became a per-dataset sweep error.
+                # Measured on the live estate 2026-08-16: a real sweep reported datasets 31,
+                # fragments_removed 0, errors 11 — every one of them this, because the medallion cascade
+                # writes with stable row ids, so the datasets the pipeline produces were exactly the ones
+                # compaction could never touch. Maintenance ran and reclaimed nothing.
+                # Either refusal means the same thing operationally: this dataset does not want the
+                # deferred remap, so compact without it. Anything else still propagates.
+                if "defer_index_remap" not in str(exc):
+                    raise
+                log.warning("compact_defer_index_remap_unsupported", extra={"uri": uri, "error": str(exc)})
+                metrics = ds.optimize.compact_files(**size_kw)
         result.fragments_removed = int(getattr(metrics, "fragments_removed", 0))
         result.fragments_added = int(getattr(metrics, "fragments_added", 0))
         # Keep secondary indices (vector ANN / scalar / FTS) covering the new fragments. WITHOUT this a
