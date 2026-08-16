@@ -79,7 +79,12 @@ def test_media_pipeline_bronze_blob_to_silver_thumbnail_embedding(tmp_path: Path
         bronze,
         data_storage_version="2.2",
     )
-    payloads = [p for _addr, p in lance.dataset(bronze).read_blobs("payload", indices=[0, 1])]
+    # pylance 10 types each payload `bytes | None`, and the derivers take `bytes`. Filtered rather
+    # than asserted: `assert all(...)` does not narrow a list's ELEMENT type, so the deriver calls
+    # below would still be passing an Optional. The length check keeps a fixture that silently
+    # wrote no blobs from passing as an empty run.
+    payloads = [p for _addr, p in lance.dataset(bronze).read_blobs("payload", indices=[0, 1]) if p is not None]
+    assert len(payloads) == 2, "the bronze fixture did not produce both blob payloads"
     lance.write_dataset(
         pa.table(
             {

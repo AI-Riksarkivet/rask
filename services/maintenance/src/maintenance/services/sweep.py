@@ -444,7 +444,11 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
     # (an unparseable maintain:-errored URI must not consume a cap slot while emitting nothing).
     failed: list[tuple[str, str, str]] = []  # (table_id, namespace, error)
     for result in results:
-        table_id = table_id_from_uri(result.uri)
+        # The DECLARED name wins over the URI derivation. Without this the read half of T6 was dead
+        # code: `declared_table_id` existed and nothing called it, so the cascade's own tiers still
+        # emitted nothing — a URI like `medallion/bronze` names two different objects and cannot be
+        # resolved, which is why the producer stamps it instead.
+        table_id = result.declared_table_id or table_id_from_uri(result.uri)
         if table_id is None:
             continue
         namespace = fga.parent_namespace_id(table_id, delimiter=delimiter) or ""

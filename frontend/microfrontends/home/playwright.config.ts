@@ -6,6 +6,7 @@ import {
 	AUTH_ON_PORT,
 	MOCK_CATALOG_PORT,
 	MOCK_OBS_PORT,
+	MOCK_NOTIFICATIONS_PORT,
 } from './e2e/ports';
 
 // Hermetic e2e for the home zone — the catch-all at the origin root ("/"), which owns /auth/* AND, since
@@ -64,6 +65,10 @@ export default defineConfig({
 				// The audit trail's SQL upstream. Absent, `audit-core.ts` answers 501 ("needs the
 				// observability stack") — a real state the viewer renders, and not the one its spec means.
 				GREPTIME_API: `http://localhost:${MOCK_OBS_PORT}`,
+				// The watch page's remote functions call `${RASK_GATEWAY_URL}/api/notifications/*` from the
+				// ZONE SERVER. Unset it points at :8888, which is unreachable here and answers `null` —
+				// rendered as "watching is unavailable", indistinguishable from the bug this suite pins.
+				RASK_GATEWAY_URL: `http://localhost:${MOCK_NOTIFICATIONS_PORT}`,
 			},
 		},
 		{
@@ -75,6 +80,12 @@ export default defineConfig({
 		{
 			command: 'bun e2e/mock-observability.ts',
 			port: MOCK_OBS_PORT,
+			reuseExistingServer: !process.env.CI,
+			timeout: 30_000,
+		},
+		{
+			command: 'bun e2e/mock-notifications.ts',
+			port: MOCK_NOTIFICATIONS_PORT,
 			reuseExistingServer: !process.env.CI,
 			timeout: 30_000,
 		},
@@ -114,6 +125,17 @@ export default defineConfig({
 			testMatch: /e2e\/settings\/.*\.spec\.ts/,
 			use: { ...devices['Desktop Chrome'], baseURL: AUTH_ON },
 			dependencies: ['warmup-settings'],
+		},
+		// NOTIFICATIONS — watch enrolment. Auth-ON like the two above and for the same reason: the page
+		// lists the projects you may watch, that list is `me.projects`, and `/v1/me` needs a bearer.
+		// It reuses the PROJECTS warm-up rather than adding a third: both compile the same auth-ON
+		// server, and this route is a single card list — nothing like the Svelte Flow canvas that
+		// earned settings its own.
+		{
+			name: 'chromium-notifications',
+			testMatch: /e2e\/notifications\/.*\.spec\.ts/,
+			use: { ...devices['Desktop Chrome'], baseURL: AUTH_ON },
+			dependencies: ['warmup-projects'],
 		},
 	],
 });

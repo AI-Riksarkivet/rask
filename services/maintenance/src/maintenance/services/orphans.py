@@ -220,6 +220,41 @@ def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[s
                 # `path()` renders the on-disk name from (fragment id, read version, unique id); the
                 # naming is Lance's, so asking it beats reconstructing the convention here.
                 referenced.add(deletion.path(fragment.fragment_id))
+    # THE TRANSACTION FILE OF EVERY LIVE COMMIT IS REFERENCED, and omitting it reported the whole
+    # class as garbage. Nothing here ever added a `_transactions/*.txn` path, so a dataset with N live
+    # versions had all N of its transaction files named as orphans — including the one that produced
+    # the CURRENT version.
+    #
+    # The module docstring above is right that txn files from FAILED or rolled-back commits accumulate
+    # by design and nothing prunes them. It does not follow that every txn is garbage: the ones
+    # belonging to live versions are the provenance of the manifests being read. MEASURED live
+    # 2026-08-16 — `s3://lance-catalog/bronze/pages` has exactly ONE live version and exactly ONE txn
+    # file, and the scan reported that file as an orphan. Estate-wide, 34 of 56 `orphan_files` were
+    # this, which is why the count could never reach zero and the #79 purge gate could never certify.
+    #
+    # The name is `{read_version}-{uuid}.txn`, both fields exposed on the `Transaction`. Asked for
+    # `len(versions)` of them rather than the default 10, so the referenced set covers the same
+    # versions the loop above walked; a failure to read them is NOT fatal but DOES void the set,
+    # because a partial referenced set is exactly what makes a reclaimer delete live data.
+    try:
+        for transaction in ds.get_transactions(recent_transactions=max(len(versions), 1)):
+            if transaction is None:
+                continue
+            referenced.add(f"{_TRANSACTIONS_DIR}/{transaction.read_version}-{transaction.uuid}.txn")
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as exc:  # noqa: BLE001 — any failure here must void the set, never narrow it
+        # BaseException, not Exception, and that is not defensive over-reach. pylance 10.0.0 PANICS in
+        # Rust on `get_transactions()` against a SHALLOW CLONE — `src/transaction.rs:735: not yet
+        # implemented` — and `pyo3_runtime.PanicException` derives from BaseException directly, so
+        # `except Exception` does not see it. Measured 2026-08-16 while upgrading pylance 9 -> 10.
+        #
+        # The consequence was the exact inversion of this function's contract: instead of voiding the
+        # referenced set for ONE dataset and carrying on, a single shallow clone anywhere in the estate
+        # took the WHOLE orphan scan down — and the scan walks every warehouse bucket. Interrupts are
+        # re-raised above so this cannot swallow a Ctrl-C or a shutdown.
+        note = note or f"{dataset_uri}: transaction files unreadable ({type(exc).__name__}) — referenced set is INCOMPLETE"
+
     # Sidecar directories are expanded into the path set by the caller's prefix test, kept separate
     # here so the exact-match set stays exact.
     referenced |= {f"{d}/" for d in referenced_dirs}
@@ -312,13 +347,18 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, prefix: str, storage_opt
         log.warning("orphan_scan_unreadable", extra={"dataset": dataset_uri, "error": str(exc)})
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, reason=reason)
 
-    if note:
-        return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=note)
-
-    # Layout gate — refuse every shape whose false positives are LIVE data (see _unscannable_reason).
+    # LAYOUT GATE FIRST, then the incomplete-set note. Both refuse, so the order changes only which
+    # REASON is reported — and the layout answer is the better one: "this dataset spans base_paths" is a
+    # structural fact about the dataset, while "transaction files unreadable" is a fact about one read
+    # that failed. Ordering mattered from pylance 10.0.0, which panics on `get_transactions()` for a
+    # shallow clone: the note then fired first and shadowed the base_paths refusal, so the operator was
+    # told the least useful of the two true things.
     if (unscannable := _unscannable_reason(fs, prefix, referenced, ds)) is not None:
         log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": unscannable})
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=unscannable)
+
+    if note:
+        return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=note)
 
     orphans: list[OrphanFile] = []
     try:

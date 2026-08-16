@@ -479,3 +479,49 @@ def test_the_stamp_PRESERVES_other_schema_metadata(tmp_path: Any) -> None:
     metadata = {k.decode(): v.decode() for k, v in (out.schema.metadata or {}).items()}
     assert metadata["lineage.dataset_id"] == "gold$catalog"
     assert metadata["lineage.run_id"] == "r-1" and metadata["owner"] == "data_eng", "the stamp destroyed existing metadata"
+
+
+def test_the_DECLARED_name_is_what_the_sweep_EMITS_under(tmp_path: Any) -> None:
+    """The read half was DEAD CODE until this wiring: `declared_table_id` existed and nothing called it.
+
+    `compact_one` holds the open dataset, so it reads the declaration there and carries it on the
+    result; the emit path downstream has only a URI. That matters because for the cascade's own tiers a
+    URI cannot be resolved to a name at all — `medallion/bronze` is both `bronze$events` and
+    `bronze$pages` — so without the carry those datasets still emit nothing and T6 is unfinished while
+    looking finished.
+
+    Asserted end to end through `compact_one`, not on the helper, because the helper passing while the
+    sweep ignores it is exactly the failure this closes.
+    """
+    from datetime import timedelta
+
+    import lance
+    import pyarrow as pa
+    from maintenance.services.optimize import compact_one
+    from medallion.services.compute import _with_declared_id
+
+    uri = str(tmp_path / "medallion-gold.lance")
+    lance.write_dataset(_with_declared_id(pa.table({"v": [1, 2, 3]}), "gold$catalog"), uri)
+
+    result = compact_one(uri, {}, timedelta(days=7))
+
+    assert result.error is None
+    assert result.declared_table_id == "gold$catalog", "the sweep did not pick up the producer's declaration"
+
+
+def test_an_UNDECLARED_dataset_still_falls_back_to_the_uri(tmp_path: Any) -> None:
+    """Every dataset already on disk carries no key — the fallback must stay intact, not become None."""
+    from datetime import timedelta
+
+    import lance
+    import pyarrow as pa
+    from maintenance.core.lineage_emit import table_id_from_uri
+    from maintenance.services.optimize import compact_one
+
+    uri = str(tmp_path / "deadbeef_silver$plain.lance")
+    lance.write_dataset(pa.table({"v": [1]}), uri)
+
+    result = compact_one(uri, {}, timedelta(days=7))
+
+    assert result.declared_table_id is None
+    assert table_id_from_uri(result.uri) == "silver$plain.lance", "the URI derivation must still answer for undeclared datasets"

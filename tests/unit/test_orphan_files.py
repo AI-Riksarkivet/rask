@@ -118,13 +118,29 @@ def test_transaction_files_are_reported_because_they_accumulate_by_design(tmp_pa
     commit attempt". So a busy table grows `_transactions/` forever, nothing prunes them, and this is
     the only thing that will ever say so."""
     uri, prefix = _dataset(tmp_path)
-    txns = list((tmp_path / "t.lance" / "_transactions").iterdir())
-    assert txns, "fixture must actually produce .txn files"
+    txn_dir = tmp_path / "t.lance" / "_transactions"
+    live = sorted(p.name for p in txn_dir.iterdir())
+    assert live, "fixture must actually produce .txn files"
+
+    # THE FIXTURE MUST CONTAIN A FAILED ATTEMPT, and until 2026-08-16 it did not — it made only
+    # successful appends, whose txn files all belong to live versions and are therefore REFERENCED,
+    # not garbage. Under pylance 10.0.0 `get_transactions` returns one entry per live version
+    # (measured: 3 files, 3 versions, 0 unreferenced), so every txn matched and the assertion below
+    # had nothing left to find. The scanner was right; the fixture was describing a different dataset
+    # from the one the docstring describes.
+    #
+    # The class this test is about is the CONFLICTED commit — the spec's "transaction files remain in
+    # storage describing each commit attempt" — so the fixture now leaves one behind explicitly. A
+    # read_version far past any live version cannot be claimed by a manifest.
+    orphaned = txn_dir / "999-00000000-0000-0000-0000-0000deadbeef.txn"
+    orphaned.write_bytes(b"a commit attempt that never became a version")
 
     result = orphans.scan_dataset(_fs(), uri, prefix)
     reported = {o.path for o in result.orphans if o.kind == "transactions"}
-    assert reported, "the .txn files Lance leaves behind were not reported"
-    assert all(p.endswith(".txn") for p in reported)
+    assert reported == {f"_transactions/{orphaned.name}"}, (
+        "only the UNREFERENCED txn is garbage — a txn belonging to a live version is the provenance "
+        f"of a manifest being read, and reporting it would be reporting live data. live={live}"
+    )
 
 
 def test_manifests_and_the_version_hint_are_never_reported(tmp_path: pathlib.Path) -> None:
@@ -488,3 +504,46 @@ def test_an_ordinary_dataset_is_not_refused_by_the_flag_gate(tmp_path: pathlib.P
 
     assert result.checked is True, result.reason
     assert result.reason is None
+
+
+def test_the_transaction_of_a_LIVE_version_is_not_an_orphan(tmp_path: pathlib.Path) -> None:
+    """Nothing ever added `_transactions/*.txn` to the referenced set, so EVERY txn file on disk was
+    reported as garbage — including the one that produced the version being read.
+
+    The module docstring is right that txn files from FAILED or rolled-back commits accumulate by
+    design and nothing prunes them. It does not follow that every txn is garbage: the ones belonging
+    to live versions are the provenance of the manifests. The baseline test above quietly encodes the
+    old behaviour by filtering transactions out of "healthy", which is how this survived.
+
+    MEASURED live 2026-08-16: `s3://lance-catalog/bronze/pages` had exactly ONE live version and
+    exactly ONE txn file, and the scan called that file an orphan. Estate-wide it was 34 of 56
+    `orphan_files` — which is why the count could never reach zero and the #79 purge gate could never
+    certify, on an estate with no actual garbage.
+    """
+    uri, prefix = _dataset(tmp_path)
+    # A second commit, so there are two live versions and two transaction files.
+    lance.write_dataset(pa.table({"v": [9, 9]}), uri, mode="overwrite")
+
+    result = orphans.scan_dataset(_fs(), uri, prefix)
+
+    assert result.checked
+    txn_orphans = [o.path for o in result.orphans if o.kind == "transactions"]
+    assert txn_orphans == [], f"the transactions of live versions were reported as orphans: {txn_orphans}"
+
+
+def test_a_STALE_transaction_is_still_reported(tmp_path: pathlib.Path) -> None:
+    """The fix references live transactions only — it must not blanket-exempt the directory.
+
+    A txn from a failed or rolled-back commit belongs to no live version and IS the accumulation the
+    module docstring describes. Referencing every `.txn` would trade a false positive for a blind
+    spot, which is the worse of the two for a reclaimer's input.
+    """
+    uri, prefix = _dataset(tmp_path)
+    stale = pathlib.Path(prefix) / "_transactions" / "999-deadbeef-0000-0000-0000-000000000000.txn"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_bytes(b"not a live commit")
+
+    result = orphans.scan_dataset(_fs(), uri, prefix)
+
+    txn_orphans = [o.path for o in result.orphans if o.kind == "transactions"]
+    assert any("999-deadbeef" in p for p in txn_orphans), f"a stale transaction must still be reported, got {txn_orphans}"

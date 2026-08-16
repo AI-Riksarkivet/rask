@@ -94,7 +94,9 @@ def test_unrecognised_media_carries_through_untouched(tmp_path: Path) -> None:
     names = set(ds.schema.names)
     assert "thumbnail" not in names and "embedding" not in names
     _addr, payload = ds.read_blobs("payload", indices=[0])[0]
-    assert bytes(payload).startswith(b"RIFF")  # the blob itself survived the hop byte-for-byte
+    # pylance 10 types the payload `bytes | None`; losing the blob is exactly what this asserts
+    # against, so the None case must fail loudly rather than be coerced.
+    assert payload is not None and bytes(payload).startswith(b"RIFF")  # survived the hop byte-for-byte
 
 
 def test_derive_skips_when_artifacts_already_present() -> None:

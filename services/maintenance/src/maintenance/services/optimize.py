@@ -19,6 +19,7 @@ import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
 from maintenance.core.config import shared_lance_session
+from maintenance.core.lineage_emit import declared_table_id
 from maintenance.services.base_refs import BaseRefs
 from maintenance.services.index_health import inspect_indices
 from service_kit.lakehouse.features import (
@@ -67,6 +68,11 @@ class DatasetResult(BaseModel):
     #: Distinguishes "reclaimed nothing" from "the writer reclaims this one" — which read identically
     #: on ``old_versions_removed=0`` alone.
     auto_cleanup_configured: bool = False
+    #: The canonical lineage/FGA name a PRODUCER declared on the dataset (`lineage.dataset_id` in its
+    #: schema metadata), or None. Carried here because `compact_one` already holds the open dataset —
+    #: the emit path downstream has only a URI, and for the medallion tiers a URI cannot be resolved
+    #: to a name at all (`medallion/bronze` is both `bronze$events` and `bronze$pages`).
+    declared_table_id: str | None = None
     error: str | None = None
     # Stable identifier for span aggregation (otel attributes.md: set `error.type` whenever the span
     # status is ERROR) — the exception CLASS name, never the message.
@@ -218,7 +224,11 @@ def compact_one(
         why = f"another dataset resolves its files through {root} (shallow clone / multi-base) — compacting or reclaiming here would break it"
         log.warning("maintenance_refused_protected_base", extra={"uri": uri, "reason": why})
         return DatasetResult(uri=uri, refused=why)
-    result = DatasetResult(uri=uri)
+    # Read the producer's DECLARED name while the dataset is open — the emit path downstream holds only
+    # a URI, and for the cascade's own tiers a URI cannot be resolved to a name at all. Never fatal: a
+    # dataset with no declared id simply falls back to the URI derivation, which is the common case
+    # until producers stamp it and remains the case for every dataset already on disk.
+    result = DatasetResult(uri=uri, declared_table_id=declared_table_id(ds))
     try:
         # defer_index_remap: with the Fragment Reuse Index the row-id remap is deferred, so compaction and
         # index maintenance "no longer conflict" (lance_docs/guide.md:3150) — cuts the CommitConflict class

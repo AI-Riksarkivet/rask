@@ -62,7 +62,10 @@ def test_ingest_to_bronze_writes_2_2_blob_table_with_provenance(tmp_path: Path) 
     assert {"name": "payload", "type": "blob"} in result.fields
     assert {"name": "source_uri", "type": "string"} in result.fields
     # a real PNG round-trips through the managed blob, and the source URI is carried in the data
-    assert ds.read_blobs("payload", indices=[0])[0][1][:4] == b"\x89PNG"
+    payload = ds.read_blobs("payload", indices=[0])[0][1]
+    # pylance 10 types the payload `bytes | None`; a missing blob is a real failure mode here,
+    # so assert it is present rather than subscripting an Optional.
+    assert payload is not None and payload[:4] == b"\x89PNG"
     assert ds.to_table(columns=["source_uri"]).column("source_uri")[0].as_py().startswith("file://")
 
 
@@ -124,7 +127,10 @@ def test_ingest_streams_batches_into_one_atomic_commit(tmp_path: Path) -> None:
     assert ds.has_stable_row_ids
     assert ds.to_table(columns=["id"]).column("id").to_pylist() == [0, 1, 2, 3, 4]  # global order
     # every blob readable across the batch boundary (row 4 lives in the last yielded batch)
-    assert ds.read_blobs("payload", indices=[4])[0][1][:4] == b"\x89PNG"
+    payload = ds.read_blobs("payload", indices=[4])[0][1]
+    # pylance 10 types the payload `bytes | None`; a missing blob is a real failure mode here,
+    # so assert it is present rather than subscripting an Optional.
+    assert payload is not None and payload[:4] == b"\x89PNG"
     # a RE-INGEST overwrites from scratch in one commit — the idempotent-overwrite contract holds
     again = ingest_to_bronze(LocalDirSource(source_dir, "*.png"), bronze, {}, chunk_objects=2)
     assert again.version == 2 and again.row_count == 5
