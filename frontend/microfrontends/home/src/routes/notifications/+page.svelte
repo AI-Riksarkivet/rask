@@ -41,7 +41,9 @@
 
 	// A project is keyed by its SLUG estate-wide — the id the catalog and FGA both name it by, and the
 	// id `watches.py` builds `project:<id>` from.
-	const projects = $derived((page.data.me?.projects ?? []).map((p: { project: string }) => ({ id: p.project })));
+	const projects = $derived(
+		(page.data.me?.projects ?? []).map((p: { project: string }) => ({ id: p.project })),
+	);
 
 	// THE THIRD STATE, taken from `gallery.ts`. A session WITHOUT a resolvable identity is not "signed
 	// out": telling that user to sign in sends them round a loop that cannot help — they already did,
@@ -111,8 +113,8 @@
 			<BellOff class="text-muted-foreground mx-auto mb-2 size-5" aria-hidden="true" />
 			<p class="text-sm font-medium">We could not confirm who you are.</p>
 			<p class="text-muted-foreground mt-1 text-xs">
-				You are signed in, but the catalog did not answer with your identity, so your projects cannot
-				be listed. Signing in again will not help — this clears when the catalog is reachable.
+				You are signed in, but the catalog did not answer with your identity, so your projects cannot be
+				listed. Signing in again will not help — this clears when the catalog is reachable.
 			</p>
 		</Card>
 	{:else if watches === null}

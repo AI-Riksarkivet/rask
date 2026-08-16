@@ -23,7 +23,8 @@ import { seed as seedFor } from '../mock-client';
 
 let token: string;
 
-const seed = (page: Page, routes: Record<string, unknown>): Promise<void> => seedFor(page, token, routes);
+const seed = (page: Page, routes: Record<string, unknown>): Promise<void> =>
+	seedFor(page, token, routes);
 
 const ME_WITH_MEMBERSHIPS = {
 	...ME_MEMBER,
@@ -38,7 +39,9 @@ test.beforeEach(async ({ context }, testInfo) => {
 	await signIn(context, { token });
 });
 
-test('a member can see their projects to watch while the controlplane is unreachable', async ({ page }) => {
+test('a member can see their projects to watch while the controlplane is unreachable', async ({
+	page,
+}) => {
 	// Only `/v1/me` is seeded. `/v1/projects` and every controlplane path stay unstubbed and 404 —
 	// standing in for the 503 the live estate returns. If the page still consults them, it breaks.
 	await seed(page, { 'GET /v1/me': ME_WITH_MEMBERSHIPS });
@@ -52,7 +55,9 @@ test('a member can see their projects to watch while the controlplane is unreach
 	await expect(page.getByText('Watching is unavailable on this stack')).toBeHidden();
 });
 
-test('a member of nothing is told that membership is what makes a project watchable', async ({ page }) => {
+test('a member of nothing is told that membership is what makes a project watchable', async ({
+	page,
+}) => {
 	await seed(page, { 'GET /v1/me': { ...ME_MEMBER, projects: [] } });
 	await page.goto('/notifications');
 
