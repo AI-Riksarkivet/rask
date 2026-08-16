@@ -112,9 +112,7 @@ def test_upstream_fixed_the_null_drop_and_the_shape_changed_with_it(bronze_with_
 
     read = list(ds.read_blobs("payload", indices=[0, 1, 2]))
     assert len(read) == 3, "cardinality is preserved as of pylance 10 — one entry per selected row"
-    assert all(isinstance(entry, tuple) and len(entry) == 2 for entry in read), (
-        "read_blobs now yields (row_index, bytes) tuples, not blob handles"
-    )
+    assert all(isinstance(entry, tuple) and len(entry) == 2 for entry in read), "read_blobs now yields (row_index, bytes) tuples, not blob handles"
 
     took = ds.take_blobs("payload", indices=[0, 1, 2])
     assert len(took) == 3, "take_blobs no longer omits the null row"
