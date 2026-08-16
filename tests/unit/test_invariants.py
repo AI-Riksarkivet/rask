@@ -18,6 +18,7 @@ a guess. Each test below fails on the ORIGINAL buggy code and passes now.
 
 from __future__ import annotations
 
+import ast
 import json
 import pathlib
 import re
@@ -2766,3 +2767,55 @@ def test_every_service_that_raises_its_loggers_is_ON_the_allowlist() -> None:
     packages |= {path.name for path in REPO.glob("packages/*/src/*") if path.is_dir()}
     dead = sorted(name for name in listed - packages if name not in {"common", "ratch"})
     assert dead == [], f"_APP_LOGGERS names packages that do not exist (a rename left the old name behind): {dead}"
+
+
+def test_every_lifecycle_door_that_clears_PROTECTION_also_handles_the_POLICY_record() -> None:
+    """TWO CONTROL-ROOT RECORDS, ONE LIFECYCLE — and only one of them was being cleaned up.
+
+    Protection and maintenance-policy records are siblings: both live on the control root, both are keyed
+    by `kind` + canonical id, both are written by their own endpoint and both are meaningless once their
+    object is destroyed. The drop and cascade doors cleared protection and said why — *"the record dies
+    with the object — a reused id must not inherit protection nobody set on it"* — and simply never
+    learned about the policy. `delete_policy` was reachable ONLY from the three explicit policy-delete
+    endpoints, so every destroyed table and every cascaded subtree leaked one.
+
+    The leak is not inert, which is what makes it worth a guard rather than a cleanup. The sweep
+    discovers datasets by walking storage for a `_versions/` marker, NOT by reading the registry, so a
+    later table created at the same canonical id is swept under a retention window, fragment sizing and
+    cleanup toggles that nobody set on it — silently, and forever.
+
+    Anchored on `clear_protection` deliberately: it marks exactly the doors that have already decided
+    "this object is going away", so the next record type added to the control root is dragged into the
+    same decision instead of quietly repeating this.
+    """
+    doors = {
+        "services/catalog/src/catalog/api/v1/endpoints/tables.py",
+        "services/catalog/src/catalog/api/v1/endpoints/namespaces.py",
+    }
+    # Doors that clear protection but deliberately do NOT touch the policy, each with a recorded reason.
+    exempt = {
+        # Not lifecycle at all — the protection set/clear endpoints themselves.
+        "set_table_protection",
+        "set_namespace_protection",
+        # deregister keeps the BYTES on purpose (external data) and the sweep still discovers that
+        # dataset by its `_versions/` marker, so its policy still governs something real. Protection's
+        # jurisdiction is governance and ends here; the policy's is the dataset on storage, and does not.
+        "deregister_table",
+    }
+
+    offenders: list[str] = []
+    for rel in sorted(doors):
+        tree = ast.parse((REPO / rel).read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+                continue
+            body = ast.dump(node)
+            if "clear_protection" not in body or node.name in exempt:
+                continue
+            if "maintenance_policies" not in body:
+                offenders.append(f"{rel}::{node.name}")
+
+    assert offenders == [], (
+        "these doors destroy an object and clear its protection record but leave its maintenance policy "
+        f"behind, where a later object reusing the id inherits it: {offenders}"
+    )

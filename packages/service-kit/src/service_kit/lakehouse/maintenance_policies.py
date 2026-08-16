@@ -86,6 +86,32 @@ def delete_policy(control_root: str, storage_options: StorageOptions, kind: str,
     return True
 
 
+def migrate_policy(control_root: str, storage_options: StorageOptions, kind: str, old_id: str, new_id: str) -> bool:
+    """Move one policy record to a new canonical id; ``False`` when there was nothing to move.
+
+    For RENAME, where deleting would be wrong in both directions. The record key is a hash of
+    ``kind:canonical_id`` (see :func:`_key`), so a renamed object's policy no longer resolves under its
+    new id while the old key lingers forever matching nothing — the operator's retention window,
+    fragment sizing and cleanup toggles silently revert to defaults on an operation that is supposed to
+    move a table, not reconfigure it.
+
+    Migration rather than deletion is what the sibling records already do: ``rename_table`` migrates the
+    FGA tuples from the old id to the new, on the principle that a rename relocates an object and keeps
+    everything attached to it. The policy is attached to the object, not to the name.
+
+    Writes the destination BEFORE removing the source, so a failure mid-way leaves a duplicate (both ids
+    resolve, the new one correctly) rather than a table with no policy at all — the same
+    seed-then-revoke ordering, and for the same reason: of the two imperfect failure states, the
+    recoverable one is the one that keeps configuration alive.
+    """
+    record = get_policy(control_root, storage_options, kind, old_id)
+    if record is None:
+        return False
+    put_policy(control_root, storage_options, {**record, "id": new_id})
+    delete_policy(control_root, storage_options, kind, old_id)
+    return True
+
+
 def list_policies(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
     """Every readable policy record (unordered) — the sweep's per-tick load. Absent prefix yields ``[]``.
 

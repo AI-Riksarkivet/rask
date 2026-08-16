@@ -46,7 +46,7 @@ from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import native, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import protection, trash
+from service_kit.lakehouse import maintenance_policies, protection, trash
 
 
 log = logging.getLogger(__name__)
@@ -381,6 +381,17 @@ async def drop_namespace(
         for resource, child_segments in descendants:
             child_id = fga.canonical_object_id(child_segments, delimiter=settings.delimiter)
             await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), resource, child_id)
+    # The MAINTENANCE POLICIES die with a DESTROYED subtree, under the same reuse rule as the protection
+    # records above and the warehouse binding below — and NOT on the recoverable path, where undrop
+    # rebuilds the subtree and each object must come back configured as it was.
+    # The descendants are cleared unconditionally here rather than under `force`, unlike protection: an
+    # unforced cascade proves no PROTECTED descendant exists, which says nothing about policies, so
+    # gating on `force` would leak a policy for every table destroyed by an ordinary cascade.
+    if not recoverable:
+        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, settings.storage_options(), "namespace", canonical)
+        for resource, child_segments in descendants:
+            child_id = fga.canonical_object_id(child_segments, delimiter=settings.delimiter)
+            await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, settings.storage_options(), resource, child_id)
     # The warehouse BINDING dies with a destroyed top-level namespace. `unbind_namespace` existed and
     # only the warehouse-delete door called it, so every direct drop of a top-level namespace leaked
     # its binding record — and the UI derives its namespace list from bindings, so the dropped

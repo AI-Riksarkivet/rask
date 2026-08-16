@@ -64,7 +64,7 @@ from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import protection, trash
+from service_kit.lakehouse import maintenance_policies, protection, trash
 
 
 log = logging.getLogger(__name__)
@@ -412,6 +412,15 @@ async def drop_table(
     # inherit a protection nobody set on it (the same reuse rule as the FGA revoke below).
     if guard:  # only when one existed — a clear on nothing is a guaranteed-wasted S3 DELETE per drop
         await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    # The MAINTENANCE POLICY is the same kind of record and needs the same reuse rule — it had none, so
+    # `delete_policy` was reachable only from the explicit policy-delete endpoints and a destroyed table
+    # left its policy behind forever. That record is not inert: the sweep discovers datasets by walking
+    # storage for a `_versions/` marker, not by reading the registry, so a re-created table at the same
+    # id is swept under a retention window and fragment sizing nobody set on it.
+    # NOT on the recoverable path, exactly as the namespace door keeps its warehouse binding and the
+    # drop keeps its grants: undrop restores the table, and it must come back configured as it was.
+    if not trashed:
+        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, settings.storage_options(), "table", canonical)
     # Record the drop as best-effort lineage — provenance of the deletion (the dataset node persists in the
     # graph, named a `drop_table` run). Inline-awaited (NOT BackgroundTasks) → reaches the durable
     # Dapr/JetStream transport before the response; best-effort, so it never fails the drop. Emitted BEFORE
@@ -804,6 +813,23 @@ async def rename_table(
             "rename_source_revoke_failed",
             extra={"source": fga.canonical_object_id(segments, delimiter=settings.delimiter), "error": str(revoke_exc)},
         )
+    # The MAINTENANCE POLICY migrates with the tuples, for the same reason they do: a rename relocates an
+    # object and keeps what is attached to it. Nothing moved it before, so the record stayed keyed to the
+    # OLD canonical id — `_key` hashes `kind:canonical_id` — and therefore matched nothing while the
+    # renamed table silently reverted to default retention, fragment sizing and cleanup toggles. A rename
+    # is supposed to move a table, not reconfigure it. Best-effort and logged, never raised: the native
+    # rename has already committed by here, so a failed policy move must not strand the caller.
+    try:
+        await run_in_threadpool(
+            maintenance_policies.migrate_policy,
+            settings.registry_root,
+            so,
+            "table",
+            canonical,
+            fga.canonical_object_id(new_segments, delimiter=settings.delimiter),
+        )
+    except Exception as policy_exc:
+        log.warning("rename_policy_migrate_failed", extra={"source": canonical, "error": str(policy_exc)})
     # …then the DESTINATION's (re)attachment at its new location — AFTER its ownership is seeded, so the
     # emit's own ``can_write_data`` check passes on the http transport. Versionless: #23 reconcile back-fills
     # the real on-disk version, which the relocate preserved along with the whole version history.

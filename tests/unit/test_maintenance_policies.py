@@ -432,3 +432,61 @@ def test_the_shipped_defaults_fit_the_pods_chart_tier(tmp_path: Path) -> None:
     worst_case_row_bytes = 1_800_000  # measured, bronze page images
     ceiling = settings.scan_batch_size * worst_case_row_bytes * settings.compact_threads
     assert ceiling < 256 * 1024 * 1024, f"the shipped read ceiling is {ceiling / 2**20:.0f} MiB against a 512Mi pod limit"
+
+
+# ------------------------------------------------- the record's lifecycle vs its object's
+
+
+def test_a_policy_MIGRATES_with_a_rename(tmp_path: Path) -> None:
+    """A rename relocates an object and keeps what is attached to it — the tuples already do this.
+
+    `_key` hashes `kind:canonical_id`, so a renamed table's policy stops resolving under its new id the
+    instant the name changes. Before `migrate_policy` nothing moved it, and the renamed table silently
+    reverted to default retention, fragment sizing and cleanup toggles while the old record lingered
+    forever matching nothing. A rename is supposed to move a table, not reconfigure it.
+    """
+    root = str(tmp_path)
+    mp.put_policy(root, {}, {"kind": "table", "id": "bronze$pages", "retention_days": 30})
+
+    assert mp.migrate_policy(root, {}, "table", "bronze$pages", "bronze$scans") is True
+
+    assert mp.get_policy(root, {}, "table", "bronze$pages") is None, "the old id must stop resolving"
+    moved = mp.get_policy(root, {}, "table", "bronze$scans")
+    assert moved is not None, "the renamed table must still carry its policy"
+    assert moved["retention_days"] == 30, "the operator's configuration must survive the move intact"
+    assert moved["id"] == "bronze$scans", "the record must be re-keyed to the new id, not merely copied"
+
+
+def test_migrating_a_policy_that_does_not_exist_is_a_no_op(tmp_path: Path) -> None:
+    """Most renames move a table that never had a policy; that must not mint an empty one."""
+    root = str(tmp_path)
+    assert mp.migrate_policy(root, {}, "table", "bronze$absent", "bronze$new") is False
+    assert mp.get_policy(root, {}, "table", "bronze$new") is None
+
+
+def test_a_migrated_policy_does_not_leave_the_destination_unconfigured_on_a_partial_failure(tmp_path: Path) -> None:
+    """Destination first, source second — so the recoverable half is the one that keeps config alive.
+
+    Same ordering, and the same reasoning, as rename's seed-then-revoke: of the two imperfect failure
+    states, a duplicate record (both ids resolve, the new one correctly) beats a table with no policy at
+    all. Asserted by observing that the destination is readable before the source is gone.
+    """
+    root = str(tmp_path)
+    mp.put_policy(root, {}, {"kind": "table", "id": "a$t", "retention_days": 7})
+    seen: list[str | None] = []
+
+    original = mp.delete_policy
+
+    def _spy(control_root: str, storage_options: Any, kind: str, canonical_id: str) -> bool:
+        # At the moment the source is removed, the destination must ALREADY be readable.
+        record = mp.get_policy(control_root, storage_options, "table", "b$t")
+        seen.append(None if record is None else record["id"])
+        return original(control_root, storage_options, kind, canonical_id)
+
+    mp.delete_policy = _spy  # type: ignore[assignment]
+    try:
+        mp.migrate_policy(root, {}, "table", "a$t", "b$t")
+    finally:
+        mp.delete_policy = original  # type: ignore[assignment]
+
+    assert seen == ["b$t"], "the destination must be written BEFORE the source is deleted"
