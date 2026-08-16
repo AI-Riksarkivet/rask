@@ -155,9 +155,7 @@ def test_the_verified_author_is_read_off_a_payload_even_when_it_will_not_parse()
         assert author_sub_from_payload(junk) is None
 
 
-def test_a_parked_delivery_names_the_author_whose_provenance_was_lost(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_a_parked_delivery_names_the_author_whose_provenance_was_lost(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A parked delivery is TERMINAL provenance loss until someone replays the stream. The log said
     only which event id was lost, while the payload being discarded carried the person it belonged
     to — so an operator could see that provenance was dropped and not whose."""

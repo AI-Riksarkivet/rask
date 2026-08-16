@@ -70,16 +70,12 @@ async def _allow(*, user: str, relation: str, obj: str) -> bool:
 
 def _grant(relation: str, user: str, control: _RecordingControl) -> Any:
     body = members.GrantRequest(user=user, relation=cast(Any, relation))
-    return asyncio.run(
-        members.grant_member(PROJECT, body, _allow, MANAGER, cast(OpenFgaClient, object()), cast(Any, control))
-    )
+    return asyncio.run(members.grant_member(PROJECT, body, _allow, MANAGER, cast(OpenFgaClient, object()), cast(Any, control)))
 
 
 def _revoke(relation: str, user: str, control: _RecordingControl) -> Any:
     body = members.GrantRequest(user=user, relation=cast(Any, relation))
-    return asyncio.run(
-        members.revoke_member(PROJECT, body, _allow, MANAGER, cast(OpenFgaClient, object()), cast(Any, control))
-    )
+    return asyncio.run(members.revoke_member(PROJECT, body, _allow, MANAGER, cast(OpenFgaClient, object()), cast(Any, control)))
 
 
 def test_a_grant_names_the_person_who_received_it(monkeypatch: pytest.MonkeyPatch) -> None:

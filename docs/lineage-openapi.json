@@ -826,6 +826,17 @@
               }
             ],
             "title": "Next Cursor"
+          },
+          "oldest_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Seq"
           }
         },
         "required": [
