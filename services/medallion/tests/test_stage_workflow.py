@@ -368,9 +368,7 @@ def test_submit_returns_THE_SAME_id_it_submitted_under(monkeypatch: pytest.Monke
 
     submitted: dict[str, str] = {}
 
-    async def _fake_submit(
-        _settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str | None, lineage_json: str = "", **_identity: str
-    ) -> None:
+    async def _fake_submit(_settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str | None, lineage_json: str = "", **_identity: str) -> None:
         submitted["id"] = ray_submit.stage_submission_id(stage, token, from_uri, to_uri)
 
     monkeypatch.setattr("medallion.services.ray_submit.submit_stage_job", _fake_submit)

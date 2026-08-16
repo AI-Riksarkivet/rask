@@ -93,6 +93,31 @@ CATEGORIES: tuple[str, ...] = (
     "orphan_files",
 )
 
+#: Categories that are REPORTED but do not gate the #79 purge — counted, named, visible in every
+#: report, and excluded from `total`.
+#:
+#: THE GATE'S JOB IS TO PROVE THE STORAGE STATE IS UNDERSTOOD before the purge deletes expired trash
+#: bytes. Neither of these is a storage fact, and neither can change which bytes the purge touches:
+#:
+#:   * `orphaned_annotation_tasks` — an FGA edge in the ANNOTATOR plane naming a retired tenant.
+#:     Annotation tasks deliberately do not block a project delete, so retiring a tenant legitimately
+#:     leaves the edge behind; the task is not dangerous, it is UNREACHABLE (see
+#:     :class:`OrphanedAnnotationTask`). No bytes are implicated.
+#:   * `unbound_namespaces` — a top-level namespace with no warehouse BINDING record. It is a registry
+#:     gap about routing, not about what exists on disk.
+#:
+#: And neither has a door. No endpoint in the product clears an orphaned annotation task or binds a
+#: legacy namespace, so gating on them did not make the purge safer — it made the gate permanently
+#: unsatisfiable. MEASURED 2026-08-16: the estate sat at 3 and 5 respectively with every other category
+#: at zero, so `report_is_clean` could never return None by any action an operator could take. An
+#: unreachable gate is not a safety property; it is a feature that cannot be switched on, and it hides
+#: the categories that DO matter behind a total that never falls.
+#:
+#: Adding a door for either is still worthwhile and is the strictly better fix — the drift is real. The
+#: two halves differ in risk and should not be built together: revoking an orphaned annotation task
+#: DELETES unreachable tuples, while binding a legacy namespace WRITES a registry record for live data.
+NON_GATING_CATEGORIES: frozenset[str] = frozenset({"orphaned_annotation_tasks", "unbound_namespaces"})
+
 
 # --------------------------------------------------------------------------- #
 # The report
@@ -649,7 +674,9 @@ def build_report(
         report.orphaned_annotation_tasks = _orphaned_annotation_tasks(sources.tuples.annotation_tenants if sources.tuples else [], project_ids)
         report.counts["orphaned_annotation_tasks"] = len(report.orphaned_annotation_tasks)
 
-    report.total = sum(report.counts.values())
+    # `total` is the PURGE GATE, not the drift count — every category stays in `counts` and is still
+    # reported. See `NON_GATING_CATEGORIES` for why these two are reported without gating.
+    report.total = sum(count for name, count in report.counts.items() if name not in NON_GATING_CATEGORIES)
     return report
 
 

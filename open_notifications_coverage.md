@@ -323,10 +323,10 @@ Four things must all be true or the row reaches nobody. `notifiable()` (`lineage
 ```python
 # The wire shape `notifiable()` reads. Keys are the OpenLineage aliases (runId/eventType/eventTime).
 event = {
-    "eventType": "FAIL",                      # (1) TERMINAL. START/RUNNING notify nobody.
+    "eventType": "FAIL",  # (1) TERMINAL. START/RUNNING notify nobody.
     "eventTime": datetime.now(UTC).isoformat(),
     "run": {
-        "runId": str(run_uuid),               # graph id; the notification id is `runId@STATE`
+        "runId": str(run_uuid),  # graph id; the notification id is `runId@STATE`
         "facets": {
             # (2) VERIFIED sub. `token.sub` from the OIDC bearer — NEVER settings.author,
             #     never a team/role string, never a display name. Both keys, `{name, sub}`,
@@ -334,8 +334,8 @@ event = {
             "author": {"name": token.sub, "sub": token.sub},
             "lance": {
                 "operation": "promote",
-                "run_id": producer_run_id,    # what YOUR detail door answers to
-                "project": project_id,        # (3) WATCH's key. Omit → zero watchers.
+                "run_id": producer_run_id,  # what YOUR detail door answers to
+                "project": project_id,  # (3) WATCH's key. Omit → zero watchers.
             },
             "errorMessage": {"message": reason},
         },
@@ -344,9 +344,12 @@ event = {
     "outputs": [{"namespace": "gold", "name": f"{project_id}-gold$catalog"}],
 }
 
-await publish_event(                          # service_kit.dapr_publish
-    client, pubsub_name="pubsub", topic_name="lineage.events.v1",
-    data=json.dumps(event), data_content_type="application/json",
+await publish_event(  # service_kit.dapr_publish
+    client,
+    pubsub_name="pubsub",
+    topic_name="lineage.events.v1",
+    data=json.dumps(event),
+    data_content_type="application/json",
 )
 # HTTP alternative: POST /api/v1/lineage on the lineage service. It reaches the durable feed
 # only, so notifications sees it via the 30 s cron reconciler — and `enforce_author` REPLACES
@@ -356,16 +359,16 @@ await publish_event(                          # service_kit.dapr_publish
 ### 4.2 The CONTROL lane
 
 ```python
-from catalog.core.control_emit import emit_control      # or your service's ControlEmitterDep
+from catalog.core.control_emit import emit_control  # or your service's ControlEmitterDep
 
-await emit_control(                                     # control_emit.py:102-127 — best-effort,
-    emitter,                                            #   never raises into a committed mutation
-    action="grant_revoked",                             # MUST be in NAMED_ACTIONS
+await emit_control(  # control_emit.py:102-127 — best-effort,
+    emitter,  #   never raises into a committed mutation
+    action="grant_revoked",  # MUST be in NAMED_ACTIONS
     object_type="project",
     object_id=f"project:{project_id}",
-    actor=f"user:{token.sub}",                          # the VERIFIED principal that made the change
-    extra={"relation": relation, "subject": user},      # `subject` = WHO this is about, `user:bob`
-)                                                       #   — a userset here creates a phantom inbox
+    actor=f"user:{token.sub}",  # the VERIFIED principal that made the change
+    extra={"relation": relation, "subject": user},  # `subject` = WHO this is about, `user:bob`
+)  #   — a userset here creates a phantom inbox
 ```
 
 Call it **after** the FGA/backend mutation and its audit succeed, so a real change is never announced (`control_emit.py:113`). `extra.subject` is the whole targeting: `named_subject` returns `None` for a missing subject, a bare `user:`, and the `*` wildcard (`control_events.py:47, 69-72`), and the event is then filed IGNORED with a `SUCCESS` ack.
@@ -391,23 +394,30 @@ from notifications.api.visibility import Visibility
 
 boxes: dict[str, list[dict]] = {}
 
-class _Inbox:                                  # stands in for the Dapr actor proxy
-    def __init__(self, subject): self.subject = subject
+
+class _Inbox:  # stands in for the Dapr actor proxy
+    def __init__(self, subject):
+        self.subject = subject
+
     async def deliver(self, payload):
         rows = boxes.setdefault(self.subject, [])
         if any(r["notification_id"] == payload["notification_id"] for r in rows):
-            return {"delivered": False}        # idempotent on notification_id
+            return {"delivered": False}  # idempotent on notification_id
         rows.append(payload)
         return {"delivered": True}
 
-assert await ingest_run_event(
-    my_event,                                  # the dict from §4.1
-    lane=Lane.BUS,
-    visibility=Visibility(client=None, enabled=False),
-    watchers=lambda project: _mock[project],   # WatcherLookup
-    open_inbox=_Inbox,                         # InboxOpener
-) == DAPR_SUCCESS
-assert boxes["alice"][0]["reason"] == "author" # AUTHOR fired; a role literal would leave boxes EMPTY
+
+assert (
+    await ingest_run_event(
+        my_event,  # the dict from §4.1
+        lane=Lane.BUS,
+        visibility=Visibility(client=None, enabled=False),
+        watchers=lambda project: _mock[project],  # WatcherLookup
+        open_inbox=_Inbox,  # InboxOpener
+    )
+    == DAPR_SUCCESS
+)
+assert boxes["alice"][0]["reason"] == "author"  # AUTHOR fired; a role literal would leave boxes EMPTY
 ```
 
 Assert on `boxes`, never on the status: an event that names nobody returns `SUCCESS` too. `services/notifications/tests/test_ingress_audience.py` is the worked reference.

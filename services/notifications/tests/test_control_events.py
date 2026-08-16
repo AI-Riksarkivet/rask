@@ -255,9 +255,7 @@ class TestUsersetGrants:
             assert userset == "role:reviewers#assignee"
             return ("bob", "carol")
 
-        result = await ingest_control_event(
-            self._event("role:reviewers#assignee").model_dump(mode="json"), open_inbox=plane.open, expand=expand
-        )
+        result = await ingest_control_event(self._event("role:reviewers#assignee").model_dump(mode="json"), open_inbox=plane.open, expand=expand)
 
         assert result == {"status": "SUCCESS"}
         assert sorted(plane.boxes) == ["bob", "carol"]

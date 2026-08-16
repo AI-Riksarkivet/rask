@@ -72,38 +72,37 @@ reports the loss. This is the estate's most expensive silent failure mode.
 
 ```python
 event = {
-    "eventType": "FAIL",                       # (1) TERMINAL. START/RUNNING notify nobody.
+    "eventType": "FAIL",  # (1) TERMINAL. START/RUNNING notify nobody.
     "eventTime": datetime.now(UTC).isoformat(),
     "run": {
-        "runId": str(run_uuid),                # the notification id is `runId@STATE`
+        "runId": str(run_uuid),  # the notification id is `runId@STATE`
         "facets": {
             # (2) The VERIFIED token sub. NOT settings.author, NOT a role/team string,
             #     NOT a display name. `{name, sub}` together is what every verifying writer stamps.
             "author": {"name": token.sub, "sub": token.sub},
             "lance": {
                 "operation": "promote",
-                "run_id": producer_run_id,     # what YOUR detail door answers to
-                "project": project_id,         # (3) WATCH's key. Omit -> zero watchers.
+                "run_id": producer_run_id,  # what YOUR detail door answers to
+                "project": project_id,  # (3) WATCH's key. Omit -> zero watchers.
             },
             "errorMessage": {"message": reason},
         },
     },
-    "outputs": [{"namespace": "gold", "name": f"{project_id}-gold$catalog"}],   # (4)
+    "outputs": [{"namespace": "gold", "name": f"{project_id}-gold$catalog"}],  # (4)
 }
-await publish_event(client, pubsub_name="pubsub", topic_name="lineage.events.v1",
-                    data=json.dumps(event), data_content_type="application/json")
+await publish_event(client, pubsub_name="pubsub", topic_name="lineage.events.v1", data=json.dumps(event), data_content_type="application/json")
 ```
 
 ## Lane 2 — control (`catalog.control.v1`)
 
 ```python
-await emit_control(                                  # best-effort; never raises into a committed mutation
+await emit_control(  # best-effort; never raises into a committed mutation
     emitter,
-    action="grant_revoked",                          # MUST be in NAMED_ACTIONS
+    action="grant_revoked",  # MUST be in NAMED_ACTIONS
     object_type="project",
     object_id=f"project:{project_id}",
-    actor=f"user:{token.sub}",                       # the VERIFIED principal that made the change
-    extra={"relation": relation, "subject": user},   # `subject` = WHO this is about, `user:bob`
+    actor=f"user:{token.sub}",  # the VERIFIED principal that made the change
+    extra={"relation": relation, "subject": user},  # `subject` = WHO this is about, `user:bob`
 )
 ```
 

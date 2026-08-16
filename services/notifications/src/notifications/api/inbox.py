@@ -91,9 +91,7 @@ async def get_inbox(
     # DERIVED from `NAMED_ACTIONS` rather than restated, so the two cannot drift: a new named action
     # is exempt here the moment it becomes deliverable there, which is the same edit.
     governed = {pointer.object_id for pointer in page.pointers if pointer.reason not in _CONTROL_REASONS}
-    allowed = await visibility.visible(subject, governed) | {
-        pointer.object_id for pointer in page.pointers if pointer.reason in _CONTROL_REASONS
-    }
+    allowed = await visibility.visible(subject, governed) | {pointer.object_id for pointer in page.pointers if pointer.reason in _CONTROL_REASONS}
     return InboxFeed(
         # Projected onto the WIRE row, which drops the delivery ledger: what a reader may see is a
         # declared field list, never whatever the storage record happens to carry today.

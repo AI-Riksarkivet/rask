@@ -118,7 +118,6 @@ def _stub_create(monkeypatch, *, response: object = None, error: BaseException |
 # --------------------------------------------------------------------------- #
 
 
-
 def _revoked_tuple(user: str = "user:someone", relation: str = "owner", obj: str = "table:db1$users") -> SimpleNamespace:
     """One tuple in the shape `revoke_object_tuples` hands back.
 

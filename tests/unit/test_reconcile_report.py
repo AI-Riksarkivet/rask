@@ -365,7 +365,9 @@ def test_an_openfga_outage_degrades_only_the_categories_that_needed_it(tmp_path:
     assert [n.namespace for n in report.unbound_namespaces] == ["legacy_ns"]
     assert [b.bucket for b in report.orphan_buckets] == ["bkt-orphan"]
     assert [d.top_ns for d in report.dangling_bindings] == ["stranded_ns"]
-    assert report.total == 3
+    # Asserted on COUNTS, not on `total`. Since T8, `total` is the purge GATE and excludes the two
+    # doorless categories, so it is not a drift count — every category is still counted and named here.
+    assert sum(report.counts.values()) == 3
 
 
 def test_a_dead_bucket_listing_degrades_only_orphan_buckets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -559,7 +561,9 @@ def test_a_full_run_leaves_every_store_byte_identical(tmp_path: Path, monkeypatc
     report = estate.run(monkeypatch)
     after = {name: _tree_fingerprint(tmp_path / name) for name in ("control", "data")}
 
-    assert report.total == 5, "the fixture must actually BE drifted, or 'nothing changed' proves nothing"
+    # COUNTS, not `total`: since T8 the total is the purge gate and omits the doorless categories, so
+    # it would understate how drifted this fixture is — and the point here is that it IS drifted.
+    assert sum(report.counts.values()) == 5, "the fixture must actually BE drifted, or 'nothing changed' proves nothing"
     assert after == before
 
 
@@ -691,3 +695,53 @@ def test_one_unreadable_warehouse_root_does_not_blind_the_whole_scan(tmp_path: P
     assert "still_found" in {u.namespace for u in report.unbound_namespaces}
     # …and the unreadable root is named rather than silently dropped.
     assert any(i.source == "catalog:namespaces:s3://bkt-gone" for i in report.incomplete), f"the unreadable root was not reported: {report.incomplete}"
+
+
+def test_the_two_DOORLESS_categories_are_reported_but_do_not_gate_the_purge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """T8. `unbound_namespaces` and `orphaned_annotation_tasks` counted into `total`, and
+    `report_is_clean` refuses on any non-zero total — but NO endpoint in the product clears either.
+
+    So the gate was not strict, it was unsatisfiable. MEASURED on the live estate 2026-08-16: those two
+    sat at 5 and 3 with every other category at zero, meaning `report_is_clean` could never return None
+    by any action an operator could take, and the #79 purge could not be reached at all.
+
+    The gate's job is to prove the STORAGE state is understood before deleting expired trash bytes.
+    Neither category is a storage fact: an orphaned annotation task is an FGA edge in the annotator
+    plane naming a retired tenant (unreachable, not dangerous), and an unbound namespace is a missing
+    routing record. Neither can change which bytes the purge touches.
+
+    Both halves are asserted, and the second is the one that matters: the categories must still be
+    COUNTED and NAMED. Excluding them from the report rather than from the gate would trade an
+    unreachable purge for invisible drift.
+    """
+    from maintenance.services.purge import report_is_clean
+
+    estate = _Estate(tmp_path)
+    _Estate.namespace_dir(tmp_path, "legacy_ns")
+    report = estate.run(monkeypatch)
+
+    assert report.counts["unbound_namespaces"] == 1, "the category must still be COUNTED"
+    assert [n.namespace for n in report.unbound_namespaces] == ["legacy_ns"], "…and still NAMED"
+    assert report.total == 0, f"a doorless category still gates the purge: counts={report.counts} total={report.total}"
+    # `report_is_clean` may still block on the orphan-file coverage gap, which IS clearable (the
+    # `maintenance.orphanScan` values key turns it on, and the live estate has it on). What must no
+    # longer appear in the blocker is either doorless category — that was the unsatisfiable part.
+    blocker = report_is_clean(report) or ""
+    assert "unbound_namespaces" not in blocker and "orphaned_annotation_tasks" not in blocker, (
+        f"a doorless category is still named as a purge blocker: {blocker}"
+    )
+    assert "NOT clean" not in blocker, f"findings still gate on a report whose only drift is doorless: {blocker}"
+
+
+def test_a_category_WITH_a_door_still_gates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The exclusion is exactly two categories, not a general relaxation. A ghost project has a door —
+    revoke its tuples — so it must still block the purge."""
+    from maintenance.services.purge import report_is_clean
+
+    estate = _Estate(tmp_path)
+    estate.fga.tuples["project:ghosty"] = [("user:mallory", "admin")]
+    report = estate.run(monkeypatch)
+
+    assert report.counts["ghost_projects"] == 1
+    assert report.total == 1, "a clearable category must still gate"
+    assert report_is_clean(report) is not None

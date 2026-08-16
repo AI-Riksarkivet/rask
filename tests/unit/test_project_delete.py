@@ -315,7 +315,7 @@ def test_force_does_not_bypass_the_emptiness_refusal(monkeypatch: pytest.MonkeyP
 
 
 def test_empty_project_is_deleted_and_its_tuples_revoked(monkeypatch: pytest.MonkeyPatch) -> None:
-    world = _world(monkeypatch, tuples=[_grant('user:a', 'admin'), _grant('user:b', 'member'), _grant('team:t', 'team')])
+    world = _world(monkeypatch, tuples=[_grant("user:a", "admin"), _grant("user:b", "member"), _grant("team:t", "team")])
     _allow_gate(monkeypatch)
     control = _Emitter()
     result = _delete("acme", _settings(fga_enabled=True), client=object(), control=control)
@@ -332,7 +332,7 @@ def test_empty_project_is_deleted_and_its_tuples_revoked(monkeypatch: pytest.Mon
 def test_tuples_are_revoked_before_the_record_is_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
     # Order is load-bearing: a revoke that fails (OpenFGA outage → 503) must leave the tenant fully
     # described and re-deletable, never strand grants on a project no API can name any more.
-    world = _world(monkeypatch, tuples=[_grant('user:u0', 'member')])
+    world = _world(monkeypatch, tuples=[_grant("user:u0", "member")])
     _allow_gate(monkeypatch)
     _delete("acme", _settings(fga_enabled=True), client=object())
     assert world.calls == ["revoke", "delete_record"]
@@ -342,7 +342,11 @@ def test_an_openfga_outage_aborts_the_delete_instead_of_reporting_a_half_success
     # The reason the revoke goes first: when it fails there is nothing to half-report. The 503 propagates,
     # the record survives (so the tenant is still named, still administered, still deletable on a retry),
     # nothing is announced on the bus and no compliance row claims a revocation that never happened.
-    world = _world(monkeypatch, tuples=[_grant('user:u0', 'member'), _grant('user:u1', 'member'), _grant('user:u2', 'member'), _grant('user:u3', 'member')], revoke_error=ServiceUnavailableError("openfga is unavailable"))
+    world = _world(
+        monkeypatch,
+        tuples=[_grant("user:u0", "member"), _grant("user:u1", "member"), _grant("user:u2", "member"), _grant("user:u3", "member")],
+        revoke_error=ServiceUnavailableError("openfga is unavailable"),
+    )
     _allow_gate(monkeypatch)
     control = _Emitter()
     with pytest.raises(ServiceUnavailableError):
@@ -353,7 +357,18 @@ def test_an_openfga_outage_aborts_the_delete_instead_of_reporting_a_half_success
 
 
 def test_fga_off_still_deletes_the_record_and_reports_zero(monkeypatch: pytest.MonkeyPatch) -> None:
-    world = _world(monkeypatch, tuples=[_grant('user:u0', 'member'), _grant('user:u1', 'member'), _grant('user:u2', 'member'), _grant('user:u3', 'member'), _grant('user:u4', 'member'), _grant('user:u5', 'member'), _grant('user:u6', 'member')])
+    world = _world(
+        monkeypatch,
+        tuples=[
+            _grant("user:u0", "member"),
+            _grant("user:u1", "member"),
+            _grant("user:u2", "member"),
+            _grant("user:u3", "member"),
+            _grant("user:u4", "member"),
+            _grant("user:u5", "member"),
+            _grant("user:u6", "member"),
+        ],
+    )
     _allow_gate(monkeypatch)
     result = _delete("acme", _settings(fga_enabled=False))
     assert result.tuples_revoked == 0  # a fact about an auth-off stack, never a fabricated success
@@ -364,7 +379,7 @@ def test_fga_off_still_deletes_the_record_and_reports_zero(monkeypatch: pytest.M
 
 
 def test_a_real_revoke_is_audited_like_the_create_audits_its_grant(monkeypatch: pytest.MonkeyPatch, audited: list[logging.LogRecord]) -> None:
-    _world(monkeypatch, tuples=[_grant('user:u0', 'member'), _grant('user:u1', 'member')])
+    _world(monkeypatch, tuples=[_grant("user:u0", "member"), _grant("user:u1", "member")])
     _allow_gate(monkeypatch)
     _delete("acme", _settings(fga_enabled=True), client=object())
     rows = [r.__dict__ for r in audited if r.__dict__.get("audit.action") == "access_revoke"]
@@ -416,7 +431,7 @@ def test_deleting_a_project_tells_everyone_who_just_lost_it(monkeypatch: pytest.
     `user:<sub>` or a userset (`role:x#assignee`, which the lane now expands); anything else is graph
     plumbing.
     """
-    world = _world(
+    _world(
         monkeypatch,
         tuples=[_grant("user:alice", "admin"), _grant("user:bob", "member"), _grant("team:writers", "team")],
     )
