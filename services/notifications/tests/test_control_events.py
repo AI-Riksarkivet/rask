@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import pytest
 
-from notifications.api.control_events import as_delivery, ingest_control_event, named_subject
+from notifications.api.control_events import as_delivery, ingest_control_event, named_subjects
 from notifications.models import NotificationReason
 from service_kit.control_events import CatalogControlEvent
 
@@ -54,37 +54,45 @@ class _Plane:
 
 
 class TestNamedSubject:
-    def test_a_grant_names_its_grantee(self) -> None:
-        assert named_subject(_event(action="grant_added")) == "alice"
+    @pytest.mark.asyncio
+    async def test_a_grant_names_its_grantee(self) -> None:
+        assert await named_subjects(_event(action="grant_added")) == ("alice",)
 
-    def test_a_revoke_names_its_subject_too(self) -> None:
-        assert named_subject(_event(action="grant_revoked")) == "alice"
+    @pytest.mark.asyncio
+    async def test_a_revoke_names_its_subject_too(self) -> None:
+        assert await named_subjects(_event(action="grant_revoked")) == ("alice",)
 
-    def test_the_fga_type_prefix_is_stripped(self) -> None:
+    @pytest.mark.asyncio
+    async def test_the_fga_type_prefix_is_stripped(self) -> None:
         """The catalog writes `user:alice`; an inbox is addressed by the bare token sub. One
         translation, done here so the actor never learns about FGA."""
-        assert named_subject(_event(subject="user:bob")) == "bob"
+        assert await named_subjects(_event(subject="user:bob")) == ("bob",)
 
-    def test_a_bare_sub_survives_unchanged(self) -> None:
-        assert named_subject(_event(subject="carol")) == "carol"
+    @pytest.mark.asyncio
+    async def test_a_bare_sub_survives_unchanged(self) -> None:
+        assert await named_subjects(_event(subject="carol")) == ("carol",)
 
     @pytest.mark.parametrize("action", ["table_created", "warehouse_bound", "policy_set"])
-    def test_an_action_that_names_nobody_targets_nobody(self, action: str) -> None:
+    @pytest.mark.asyncio
+    async def test_an_action_that_names_nobody_targets_nobody(self, action: str) -> None:
         """Every other control action is a catalog mutation with no named party. Delivering those
         would recreate the estate-wide feed this plane exists to replace."""
-        assert named_subject(_event(action=action)) is None
+        assert await named_subjects(_event(action=action)) == ()
 
-    def test_a_grant_with_no_subject_names_nobody(self) -> None:
+    @pytest.mark.asyncio
+    async def test_a_grant_with_no_subject_names_nobody(self) -> None:
         """`extra` is an open bag on an envelope this service does not own: a producer that stops
         stamping it makes this lane quiet, never wrong."""
-        assert named_subject(_event(subject=None)) is None
+        assert await named_subjects(_event(subject=None)) == ()
 
     @pytest.mark.parametrize("subject", ["", "   ", "user:"])
-    def test_an_empty_subject_names_nobody(self, subject: str) -> None:
-        assert named_subject(_event(subject=subject)) is None
+    @pytest.mark.asyncio
+    async def test_an_empty_subject_names_nobody(self, subject: str) -> None:
+        assert await named_subjects(_event(subject=subject)) == ()
 
     @pytest.mark.parametrize("subject", ["user:*", "*", "user:*  "])
-    def test_a_wildcard_subject_names_nobody(self, subject: str) -> None:
+    @pytest.mark.asyncio
+    async def test_a_wildcard_subject_names_nobody(self, subject: str) -> None:
         """THE MANAGED-ACCESS DEFECT. `POST .../managed-access` writes the FGA WILDCARD principal
         (`_MANAGED_ACCESS_SUBJECT = "user:*"`, `catalog/api/v1/endpoints/access.py:455`) and then emits
         `grant_added`/`grant_revoked` stamping that same value as `extra.subject`. Stripping the type
@@ -98,7 +106,7 @@ class TestNamedSubject:
         A wildcard is a statement about EVERYONE, which is precisely what this lane cannot address —
         its entire contract is that being NAMED is the targeting. `user:*` names no one, so it must be
         treated exactly like the absent subject above: quiet, never wrong."""
-        assert named_subject(_event(subject=subject)) is None
+        assert await named_subjects(_event(subject=subject)) == ()
 
 
 class TestDeliveryProjection:
@@ -186,16 +194,18 @@ class TestTaskAssignment:
             extra=extra,
         )
 
-    def test_an_assignment_names_its_assignee_not_the_manager(self) -> None:
+    @pytest.mark.asyncio
+    async def test_an_assignment_names_its_assignee_not_the_manager(self) -> None:
         """The whole defect in one assertion: `actor` is alice (who assigned) and the audience is bob
         (who must do it). A lane keyed on the actor would tell the manager about their own click."""
-        assert named_subject(self._assignment()) == "bob"
+        assert await named_subjects(self._assignment()) == ("bob",)
 
-    def test_an_unassignment_names_the_person_who_lost_the_work(self) -> None:
+    @pytest.mark.asyncio
+    async def test_an_unassignment_names_the_person_who_lost_the_work(self) -> None:
         """The mirror, and the sharper one — same reasoning as `grant_revoked`. Someone who has been
         unassigned is holding a draft against a task that is no longer theirs, and silence there is how
         they discover it by losing the work."""
-        assert named_subject(self._assignment(action="task_unassigned")) == "bob"
+        assert await named_subjects(self._assignment(action="task_unassigned")) == ("bob",)
 
     @pytest.mark.asyncio
     async def test_the_assignee_gets_a_row_and_the_reason_survives(self) -> None:
@@ -208,3 +218,73 @@ class TestTaskAssignment:
         assert result == {"status": "SUCCESS"}
         assert list(plane.boxes) == ["bob"], "the manager must not be told about their own assignment"
         assert plane.boxes["bob"][0]["reason"] == NotificationReason.TASK_ASSIGNED
+
+
+class TestUsersetGrants:
+    """A grant to a ROLE or TEAM must reach its members, not a phantom actor named after the group.
+
+    THE LIVE DEFECT. `named_subject` stripped a `user:` prefix and returned whatever was left, so a
+    grant to `role:reviewers#assignee` — which `model.fga` permits on nearly every grantable relation
+    (`owner`, `writer`, `reader`, `validator`, `manage_grants`) — was delivered to an InboxActor keyed
+    `role:reviewers#assignee`. No person can ever open that actor. Every userset grant in the estate
+    was silently accumulating unreadable state while telling none of the people it actually affected.
+
+    REFUSING would have been the safe-looking fix and the wrong one: roles are the estate's primary
+    grouping mechanism, so refusing means the most common way to grant access notifies nobody — the
+    exact coverage hole this lane exists to close. Expansion is the answer, through the same
+    `list_users` primitive the access review uses, injected as a callable so the lane stays testable
+    with no FGA behind it (the seam `WatcherLookup` already is).
+    """
+
+    def _event(self, subject: str) -> CatalogControlEvent:
+        return CatalogControlEvent(
+            event_id="evt-us-1",
+            occurred_at=datetime(2026, 8, 16, 12, 0, tzinfo=UTC),
+            action=cast(Any, "grant_added"),
+            object_type=cast(Any, "table"),
+            object_id="table:acme$gold",
+            actor="user:admin",
+            extra={"relation": "reader", "subject": subject},
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_role_grant_reaches_every_member(self) -> None:
+        plane = _Plane()
+
+        async def expand(userset: str) -> tuple[str, ...]:
+            assert userset == "role:reviewers#assignee"
+            return ("bob", "carol")
+
+        result = await ingest_control_event(
+            self._event("role:reviewers#assignee").model_dump(mode="json"), open_inbox=plane.open, expand=expand
+        )
+
+        assert result == {"status": "SUCCESS"}
+        assert sorted(plane.boxes) == ["bob", "carol"]
+        assert "role:reviewers#assignee" not in plane.boxes, "the group itself must never get an inbox"
+
+    @pytest.mark.asyncio
+    async def test_a_plain_user_needs_no_expansion(self) -> None:
+        """The common case must not grow an FGA round-trip: a bare principal is already an address."""
+        plane = _Plane()
+        calls: list[str] = []
+
+        async def expand(userset: str) -> tuple[str, ...]:
+            calls.append(userset)
+            return ()
+
+        await ingest_control_event(self._event("user:alice").model_dump(mode="json"), open_inbox=plane.open, expand=expand)
+
+        assert list(plane.boxes) == ["alice"]
+        assert calls == [], "a plain principal must not be expanded"
+
+    @pytest.mark.asyncio
+    async def test_an_unexpandable_userset_tells_nobody_rather_than_a_phantom(self) -> None:
+        """With no expander wired — a deployment with FGA off — a userset resolves to no audience at
+        all. Quiet, never wrong: the alternative is the phantom actor this whole class exists to end."""
+        plane = _Plane()
+
+        result = await ingest_control_event(self._event("role:reviewers#assignee").model_dump(mode="json"), open_inbox=plane.open)
+
+        assert result == {"status": "SUCCESS"}
+        assert plane.boxes == {}

@@ -23,18 +23,23 @@ stranger. It is not an authorization decision, and none is needed here: this han
 inboxes it derives itself, and every recipient's visibility is re-checked before a pointer is written.
 """
 
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from dapr.ext.fastapi import DaprApp
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 
-from notifications.api.control_events import ingest_control_event
+from notifications.api.control_events import UsersetExpander, ingest_control_event
 from notifications.api.dlq import register_dlq_route
 from notifications.api.ingest import ingest_run_event
 from notifications.api.metrics import Lane
 from notifications.api.security import VisibilityDep
 from notifications.api.settings import get_ingress_settings
 from notifications.proxies import channel_push, inbox_for, watchers_of
+from service_kit.governed import fga
+
+
+if TYPE_CHECKING:  # no runtime cost, and it breaks no import cycle
+    from openfga_sdk import OpenFgaClient
 from service_kit.governed.dapr_auth import assert_app_token_configured, require_dapr_token
 
 
@@ -70,6 +75,26 @@ def register_subscriptions(app: FastAPI) -> None:
         """
         return await ingest_run_event(event.get("data"), lane=Lane.BUS, visibility=visibility, open_inbox=inbox_for, watchers=watchers_of, push=channel_push())
 
+    def _make_expander(client: "OpenFgaClient | None") -> UsersetExpander | None:
+        """Resolve `role:reviewers#assignee` to the people holding that relation, via the SAME
+        `list_users` primitive the access review uses.
+
+        `None` when authorization is off or unwired — the lane then names nobody for a userset rather
+        than inventing an audience. Raises on an FGA outage rather than answering empty: the caller
+        turns that into a RETRY, because an empty answer would read as "this group has no members" and
+        silently drop everyone's notification.
+        """
+        if client is None or not settings.fga_enabled:
+            return None
+
+        async def expand(userset: str) -> tuple[str, ...]:
+            obj, _, relation = userset.partition("#")
+            if not obj or not relation:
+                return ()
+            return tuple(await fga.list_users(client, relation=relation, obj=obj))
+
+        return expand
+
     @dapr_app.subscribe(
         pubsub=settings.control_pubsub,
         topic=settings.control_topic,
@@ -78,6 +103,7 @@ def register_subscriptions(app: FastAPI) -> None:
     )
     async def on_control_event(
         event: dict[str, Any],
+        request: Request,
         _: Annotated[None, Depends(require_dapr_token)],
     ) -> dict[str, str]:
         """v3 targeting: a governance act that NAMED someone.
@@ -85,5 +111,14 @@ def register_subscriptions(app: FastAPI) -> None:
         No `VisibilityDep`, and that absence is the design rather than an omission — see
         `control_events`. Being named IS the targeting, and after a `grant_revoked` the subject can no
         longer see the object, so a visibility check would drop the one event they most need.
+
+        It DOES take an FGA client, and that is a different question from a visibility check: a grant
+        may name a GROUP (`role:reviewers#assignee`), and expanding it is how the people in it get
+        told at all. Absent a client the expander is `None`, which resolves a userset to no audience —
+        quiet, never a phantom inbox keyed on the group string.
         """
-        return await ingest_control_event(event.get("data"), open_inbox=inbox_for)
+        return await ingest_control_event(
+            event.get("data"),
+            open_inbox=inbox_for,
+            expand=_make_expander(getattr(request.app.state, "fga", None)),
+        )
