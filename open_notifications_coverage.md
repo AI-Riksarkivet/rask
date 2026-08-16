@@ -75,6 +75,19 @@ while an unknown reason value arrives on a declared field and carries nothing fo
 **Still strict and still this class, each needing its own containment argument before it is touched:
 `InboxMeta`, `InboxRows`, `ChannelPrefs`.** Adding a field to any bricks older readers of that record.
 
+- ~~**membership grants tell nobody** (§6 #3, `catalog/…/members.py` + `annotator/…/members.py`)~~ —
+  **FIXED `bb3d13b8`.** Both doors held the grantee, the relation, the verified actor and a committed
+  FGA write, and announced none of it while `access.py` announced every table grant. The announcement
+  follows the MUTATION, not the request: a re-grant, a revoke of nothing, and a refused revoke all
+  emit nothing. The annotator door had no tests at all; it has four.
+
+**CORRECTION to §6 #8** (fan `grant_revoked` from the tuple sets read before deletion). It is listed
+as *mechanical, 4 sites* and it is **not**: `fga.revoke_object_tuples` returns an `int`, reading the
+tuples only internally, so naming the subjects needs a signature change to a shared `service_kit`
+helper with six call sites — one of them in `services/maintenance`, which another session is actively
+committing to. Real, still worth doing, but it is a shared-contract change and should be scheduled as
+one rather than picked up as a quick win.
+
 **Still open and worth knowing:** `lease_expired` is the annotator edge that most deserves a
 notification and cannot have one — its audience is the PREVIOUS holder and it fires with no principal
 at all (`machines.py` gives it permission `None`). That needs a fifth *audience shape*, not another
