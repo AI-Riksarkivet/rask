@@ -20,7 +20,9 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 from fastapi import APIRouter, Path, status
 from pydantic import BaseModel, Field
 
+from annotator.api.dependencies import ControlEmitterDep
 from annotator.api.security import CheckerDep, CurrentSubject, FgaClientDep
+from service_kit.control_emit import emit_control
 from service_kit.exceptions import ConflictError, ForbiddenError
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
@@ -109,7 +111,9 @@ async def list_members(project_id: ProjectId, checker: CheckerDep, subject: Curr
 
 
 @router.put("/{project_id}/members", status_code=status.HTTP_200_OK, response_model=MemberList)
-async def grant_member(project_id: ProjectId, payload: GrantRequest, checker: CheckerDep, subject: CurrentSubject, fga_client: FgaClientDep) -> MemberList:
+async def grant_member(
+    project_id: ProjectId, payload: GrantRequest, checker: CheckerDep, subject: CurrentSubject, fga_client: FgaClientDep, control: ControlEmitterDep
+) -> MemberList:
     """Grant one rung to one person. Idempotent — re-granting what someone already has is a no-op."""
     obj = await _require_manage(checker, subject, project_id, "annotation_project.members.grant")
     if fga_client is None:
@@ -130,11 +134,25 @@ async def grant_member(project_id: ProjectId, payload: GrantRequest, checker: Ch
         )
         existing = await fga.read_object_tuples(client, obj)
     audit("annotation_project.members.grant", SUCCESS, subject=subject, resource=project_id, relation=payload.relation)
+    # TELL THE PERSON — the same lane the catalog's tenant door uses, one rung down. Gated on the
+    # write actually happening: a re-grant is already a no-op on the store, and announcing an
+    # unchanged state would put a row in someone's inbox for something that did not occur.
+    if not already:
+        await emit_control(
+            control,
+            action="grant_added",
+            object_type="grant",
+            object_id=obj,
+            actor=f"user:{subject}",
+            extra={"relation": payload.relation, "subject": user},
+        )
     return MemberList(members=_direct_grants(existing, obj))
 
 
 @router.delete("/{project_id}/members", status_code=status.HTTP_200_OK, response_model=MemberList)
-async def revoke_member(project_id: ProjectId, payload: GrantRequest, checker: CheckerDep, subject: CurrentSubject, fga_client: FgaClientDep) -> MemberList:
+async def revoke_member(
+    project_id: ProjectId, payload: GrantRequest, checker: CheckerDep, subject: CurrentSubject, fga_client: FgaClientDep, control: ControlEmitterDep
+) -> MemberList:
     """Revoke one rung from one person.
 
     REFUSES the last administrative grant. `owner` and `manager` are the rungs that can grant others;
@@ -171,4 +189,15 @@ async def revoke_member(project_id: ProjectId, payload: GrantRequest, checker: C
         origin="annotator",
     )
     audit("annotation_project.members.revoke", SUCCESS, subject=subject, resource=project_id, relation=payload.relation)
+    # The sharper half, for the reason `grant_revoked` carries everywhere: after this the subject can
+    # no longer see the project, so no visibility-gated feed could tell them — being NAMED is the
+    # targeting. Unannounced, losing access to an annotation project is discovered by a 403 mid-task.
+    await emit_control(
+        control,
+        action="grant_revoked",
+        object_type="grant",
+        object_id=obj,
+        actor=f"user:{subject}",
+        extra={"relation": payload.relation, "subject": user},
+    )
     return MemberList(members=_direct_grants(await fga.read_object_tuples(client, obj), obj))

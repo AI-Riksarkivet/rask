@@ -31,8 +31,9 @@ from fastapi import APIRouter, Path, Request, status
 from pydantic import BaseModel, Field
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import SettingsDep
+from catalog.api.dependencies import SettingsDep, get_control_emitter
 from catalog.api.security import CurrentToken
+from service_kit.control_emit import emit_control
 from service_kit.exceptions import ConflictError
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
@@ -144,10 +145,27 @@ async def grant_member(project_id: ProjectId, payload: GrantRequest, request: Re
     actor = token.sub if token else "system:catalog"
 
     existing = await fga.read_object_tuples(client, obj)
-    if not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing):
+    granted = not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing)
+    if granted:
         await fga.write_tuples(client, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")
         existing = await fga.read_object_tuples(client, obj)
     audit("project.members.grant", SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
+    # TELL THE PERSON. `access.py` has announced every per-object grant it writes since the control lane
+    # existed; this door — one rung UP, and strictly more consequential — wrote the same class of tuple
+    # and announced nothing, so being made a project admin arrived in silence.
+    #
+    # Gated on `granted`, not fired unconditionally: a re-grant is already a no-op on the store, and an
+    # announcement of an unchanged state would put a row in someone's inbox for something that did not
+    # happen. After the audit, like every other emit — a change that did not commit is never announced.
+    if granted:
+        await emit_control(
+            get_control_emitter(request),
+            action="grant_added",
+            object_type="grant",
+            object_id=obj,
+            actor=f"user:{token.sub}" if token else None,
+            extra={"relation": payload.relation, "subject": user},
+        )
     return MemberList(members=_direct_grants(existing, obj))
 
 
@@ -179,4 +197,19 @@ async def revoke_member(project_id: ProjectId, payload: GrantRequest, request: R
 
     await fga.delete_tuples(client, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")
     audit("project.members.revoke", SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
+    # THE SHARPER HALF. After this the subject can no longer see the project, so no visibility-gated
+    # feed could ever tell them — which is precisely why the control lane runs no visibility check and
+    # why being NAMED is the targeting. Unannounced, losing tenant access is discovered as a 403 in the
+    # middle of work, the failure this lane exists to end.
+    #
+    # Unconditional here because the no-op case already returned above: reaching this line means a
+    # tuple really was deleted.
+    await emit_control(
+        get_control_emitter(request),
+        action="grant_revoked",
+        object_type="grant",
+        object_id=obj,
+        actor=f"user:{token.sub}" if token else None,
+        extra={"relation": payload.relation, "subject": user},
+    )
     return MemberList(members=_direct_grants(await fga.read_object_tuples(client, obj), obj))

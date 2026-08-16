@@ -65,8 +65,18 @@ class _Harness:
         monkeypatch.setattr(members.fga, "delete_tuples", fake_delete)
 
 
-def _request() -> Any:
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=object())))
+class _RecordingControl:
+    """The control bus's seat. Holds the events a door actually announced."""
+
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+
+    async def emit(self, event: Any) -> None:
+        self.events.append(event)
+
+
+def _request(control: _RecordingControl | None = None) -> Any:
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=object(), control_emitter=control)))
 
 
 def _settings(*, fga_enabled: bool = True) -> Settings:
@@ -77,14 +87,14 @@ def _token() -> IDToken:
     return cast(IDToken, SimpleNamespace(sub="alice"))
 
 
-def _grant(h: _Harness, user: str, relation: str) -> members.MemberList:
+def _grant(h: _Harness, user: str, relation: str, control: _RecordingControl | None = None) -> members.MemberList:
     body = members.GrantRequest(user=user, relation=cast(Any, relation))
-    return asyncio.run(members.grant_member("acme", body, _request(), _settings(), _token()))
+    return asyncio.run(members.grant_member("acme", body, _request(control), _settings(), _token()))
 
 
-def _revoke(h: _Harness, user: str, relation: str) -> members.MemberList:
+def _revoke(h: _Harness, user: str, relation: str, control: _RecordingControl | None = None) -> members.MemberList:
     body = members.GrantRequest(user=user, relation=cast(Any, relation))
-    return asyncio.run(members.revoke_member("acme", body, _request(), _settings(), _token()))
+    return asyncio.run(members.revoke_member("acme", body, _request(control), _settings(), _token()))
 
 
 # --------------------------------------------------------------------------- #
@@ -228,3 +238,61 @@ def test_authz_off_refuses_rather_than_reporting_a_grant_that_never_happened(mon
     body = members.GrantRequest(user="bob", relation=cast(Any, "member"))
     with pytest.raises(ConflictError, match="not configured"):
         asyncio.run(members.grant_member("acme", body, _request(), _settings(fga_enabled=False), _token()))
+
+
+class TestTenantMembershipIsAnnounced:
+    """Being added to or removed from a PROJECT must tell the person, exactly as a table grant does.
+
+    The asymmetry this closes was invisible from either side. `access.py` announces every per-object
+    grant it writes, so `grant_added` reaches the grantee's inbox — but the TENANT door, one rung up
+    and strictly more consequential, wrote the same class of tuple and announced nothing. Being made a
+    project admin arrived in silence, and being removed arrived as a 403 in the middle of work, which
+    is the exact failure the control lane's docstring names as its reason to exist.
+
+    Revocation matters more than the grant, for the reason `grant_revoked` already carries: after it
+    the subject can no longer see the object, so no visibility-gated feed could ever tell them. Being
+    NAMED is the targeting, which is why this lane runs no visibility check at all.
+    """
+
+    def test_a_tenant_grant_names_the_person_who_received_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        h = _Harness()
+        h.install(monkeypatch)
+        control = _RecordingControl()
+        _grant(h, "bob", "member", control)
+
+        assert len(control.events) == 1, "a membership grant must be announced exactly once"
+        event = control.events[0]
+        assert event.action == "grant_added"
+        assert event.extra["subject"] == "user:bob", "the audience is the grantee, not the admin who granted"
+        assert event.extra["relation"] == "member"
+        assert event.object_id == "project:acme"
+
+    def test_a_tenant_revoke_names_the_person_who_lost_access(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        h = _Harness()
+        h.install(monkeypatch)
+        _grant(h, "bob", "member")
+        control = _RecordingControl()
+        _revoke(h, "bob", "member", control)
+
+        assert [(e.action, e.extra["subject"]) for e in control.events] == [("grant_revoked", "user:bob")]
+
+    def test_a_no_op_regrant_announces_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Re-granting what someone already holds is already a no-op on the store — it must be one on
+        the bus too. Announcing an unchanged state puts a row in their inbox for something that did not
+        happen, which is how a bell stops being read."""
+        h = _Harness()
+        h.install(monkeypatch)
+        _grant(h, "bob", "member")
+        control = _RecordingControl()
+        _grant(h, "bob", "member", control)
+
+        assert control.events == []
+
+    def test_a_no_op_revoke_announces_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The mirror: revoking what nobody holds changes nothing, so it tells nobody."""
+        h = _Harness()
+        h.install(monkeypatch)
+        control = _RecordingControl()
+        _revoke(h, "carol", "member", control)
+
+        assert control.events == []
