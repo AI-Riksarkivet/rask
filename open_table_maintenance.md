@@ -39,6 +39,18 @@ today and its own values comment says it should stay off, so nothing is broken.
 
 ---
 
+## Open question — 9-day-old versions surviving cleanup
+
+`versions_removed` went 0 -> 12 -> 0 across the T2 gate split, so the split unlocked real reclamation
+that had never happened. But `bind86-wh/…$converge-proof` still holds 7 versions whose oldest four are
+**9 days old** against `older_than_days = 7`, and one sweep pass did not remove them.
+
+Neither of my first two explanations survived checking: they are not already-clean (the versions are
+there) and they are not inside the retention window (they are 9 days old). Candidates not yet
+excluded: tag pinning (`cleanup_old_versions` exempts tagged versions by design), a manifest chain
+that requires them, or the flag-16 path behaving differently from the plain one. Worth one focused
+experiment before assuming the split is complete.
+
 ## Also deferred (small, unblocked)
 
 - **Multi-base leak**: dead files in a non-root base are reclaimed by nothing (measured:
