@@ -2002,9 +2002,23 @@ greptimedb-standalone:
   # Memory bound (#139) — see the note under `openfga.resources`. Sized HIGHEST of the group on
   # purpose: this is a database ingesting OTLP traces + RED metrics from the whole fleet, so it is
   # the one workload here whose footprint genuinely grows with how busy the estate is.
+  #
+  # RAISED 2Gi -> 8Gi (2026-08-16) because 2Gi was not headroom, it was a crash loop. MEASURED on the
+  # live cluster: 8 restarts, lastState OOMKilled, exit 137. Idle sits at ~619Mi, so the ceiling was
+  # never hit at rest — it is hit by the spikes this workload is FOR (mito compaction, parquet
+  # metadata preload, OTLP ingest bursts), which is exactly when telemetry matters most.
+  #
+  # The failure is silent in the worst way: GreptimeDB is the sole sink for the estate's logs, metrics
+  # AND traces, so every OOM is a hole in the record of what the estate was doing — and nothing else
+  # reports it, because the thing that would report it is what just died. It is also why the
+  # maintenance sweep's summary could not be confirmed end-to-end even after its logger was un-muted.
+  #
+  # 8Gi is not a measured working-set, it is room to stop the loop: the node carries 503Gi and runs at
+  # ~26%, so the cost of being generous here is nil next to the cost of a blind estate. Revisit with a
+  # real high-water measurement once it has survived a busy period without restarting.
   resources:
     requests: { cpu: 100m, memory: 256Mi }
-    limits: { memory: 2Gi }
+    limits: { memory: 8Gi }
   objectStorage:
     s3:
       bucket: "rask-observability"
