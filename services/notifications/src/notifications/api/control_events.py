@@ -19,6 +19,7 @@ this plane exists to replace.
 """
 
 import logging
+from typing import Final
 
 from notifications.api.fanout import InboxOpener
 from notifications.api.metrics import Lane, Outcome, record_ingress
@@ -31,6 +32,19 @@ log = logging.getLogger(__name__)
 #: The control actions that name a party. `grant_revoked` matters MORE than `grant_added`: losing
 #: access silently is how someone discovers it by hitting a 403 in the middle of work.
 NAMED_ACTIONS: frozenset[str] = frozenset({"grant_added", "grant_revoked"})
+
+#: The FGA wildcard principal, which is a grant to EVERYONE and therefore names no one.
+#:
+#: `POST .../managed-access` writes exactly this (`_MANAGED_ACCESS_SUBJECT`,
+#: `catalog/api/v1/endpoints/access.py:455`) and emits a normal `grant_added`/`grant_revoked` carrying
+#: it as `extra.subject`. It survived the emptiness check — `"user:*"` strips to a truthy `"*"` — so
+#: every managed-access toggle delivered a pointer into an inbox actor literally named `*`.
+#:
+#: Filtered HERE, at the one place that turns a principal into an inbox address, rather than at the
+#: catalog: this lane consumes an envelope it does not own, and the rule ("an address must identify a
+#: person") belongs with the code that does the addressing. A producer stamping any other non-personal
+#: principal is then quiet by the same rule instead of needing its own patch.
+_WILDCARD: Final = "*"
 
 
 def named_subject(event: CatalogControlEvent) -> str | None:
@@ -53,7 +67,9 @@ def named_subject(event: CatalogControlEvent) -> str | None:
     # nothing, so the pre-check let it through and handed `inbox_actor_id` an empty subject — which
     # raises, turning a malformed producer field into a RETRY loop on an event that can never succeed.
     subject = raw.removeprefix("user:").strip()
-    return subject or None
+    if not subject or subject == _WILDCARD:
+        return None
+    return subject
 
 
 def as_delivery(event: CatalogControlEvent) -> NotificationDelivery:

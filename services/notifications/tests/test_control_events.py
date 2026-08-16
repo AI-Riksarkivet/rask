@@ -83,6 +83,23 @@ class TestNamedSubject:
     def test_an_empty_subject_names_nobody(self, subject: str) -> None:
         assert named_subject(_event(subject=subject)) is None
 
+    @pytest.mark.parametrize("subject", ["user:*", "*", "user:*  "])
+    def test_a_wildcard_subject_names_nobody(self, subject: str) -> None:
+        """THE MANAGED-ACCESS DEFECT. `POST .../managed-access` writes the FGA WILDCARD principal
+        (`_MANAGED_ACCESS_SUBJECT = "user:*"`, `catalog/api/v1/endpoints/access.py:455`) and then emits
+        `grant_added`/`grant_revoked` stamping that same value as `extra.subject`. Stripping the type
+        prefix left a truthy `"*"`, so every managed-access toggle in the estate wrote a real pointer
+        into an inbox actor literally named `*` — an actor no person can ever open, accumulating rows
+        about objects nobody was granted.
+
+        Not a disclosure (nothing reads that inbox) but not inert either: it is unbounded junk in the
+        actor state store, and it makes the lane's delivered-count lie about how many people were told.
+
+        A wildcard is a statement about EVERYONE, which is precisely what this lane cannot address —
+        its entire contract is that being NAMED is the targeting. `user:*` names no one, so it must be
+        treated exactly like the absent subject above: quiet, never wrong."""
+        assert named_subject(_event(subject=subject)) is None
+
 
 class TestDeliveryProjection:
     def test_the_id_is_event_scoped_not_run_scoped(self) -> None:
