@@ -162,4 +162,8 @@ async def get_events(
         next_cursor = records[-1].seq
     else:
         next_cursor = None  # the feed is exhausted
-    return Events(events=returned, next_cursor=next_cursor)
+    # UNGOVERNED, deliberately: a seq number names no dataset and discloses nothing the governance
+    # filter above is protecting. It is precisely the number a caller needs in order to learn that a
+    # page it can NEVER see went missing — withholding it would hide a data-loss signal behind a rule
+    # written to hide dataset contents.
+    return Events(events=returned, next_cursor=next_cursor, oldest_seq=await repository.oldest_event_seq())

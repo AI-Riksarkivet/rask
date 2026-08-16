@@ -46,7 +46,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 from notifications.api.fanout import ChannelPush, InboxOpener, WatcherLookup
 from notifications.api.ingest import DAPR_RETRY, ingest_run_event
-from notifications.api.metrics import Lane
+from notifications.api.metrics import Lane, record_feed_gap
 from notifications.api.visibility import Visibility
 from service_kit.exceptions import ServiceUnavailableError
 
@@ -179,6 +179,10 @@ class FeedPage(BaseModel):
 
     events: list[FeedRecord] = Field(default_factory=list)
     next_cursor: int | None = None
+    #: The oldest seq lineage still RETAINS. `None` = an empty feed, or a lineage predating the field
+    #: — and both must read as "cannot tell", never as a gap, or the detector cries wolf on every tick
+    #: against a healthy older deployment.
+    oldest_seq: int | None = None
 
 
 class ReconcileResult(BaseModel):
@@ -193,6 +197,10 @@ class ReconcileResult(BaseModel):
     primed: bool = False
     #: The walk ran out of pages before reaching the cursor — rows were skipped. See `feed_max_pages`.
     truncated: bool = False
+    #: Lineage's feed had already PRUNED rows this lane had not read. Distinct from `truncated`, which
+    #: is the walk running out of pages: this one exits through the success door — the feed floor comes
+    #: into view, the walk breaks clean, and the loss is invisible without lineage's `oldest_seq`.
+    gapped: bool = False
     #: A pass was already in flight, so this tick did nothing. Reported rather than silent: a lane
     #: that is permanently skipping is a lane whose budget no longer fits its schedule.
     skipped: bool = False
@@ -335,6 +343,7 @@ async def reconcile(
     scanned = 0
     retried = 0
     truncated = True
+    gapped = False
     stored = None
     after: int | None = None
     high = 0
@@ -360,6 +369,18 @@ async def reconcile(
             walk_floor = max(stored.seq - FEED_OVERLAP, settled_floor)
             for _ in range(max_pages):
                 page = await client.page(after=after)
+                # DID THE FEED DELETE ROWS WE HAD NOT READ? The walk wants everything above
+                # `walk_floor`; lineage can only serve rows at or above its own floor. If its floor has
+                # climbed past ours, the rows in between were pruned before this lane reached them.
+                #
+                # Checked per PAGE rather than once, because the prune runs inline on every ingest and
+                # can therefore move underneath a walk that is already in progress.
+                #
+                # `None` means "cannot tell" — an empty feed, or a lineage older than the field — and
+                # must never read as a gap: a detector that fires every tick against a healthy older
+                # deployment is one nobody keeps listening to.
+                if page.oldest_seq is not None and page.oldest_seq > walk_floor + 1:
+                    gapped = True
                 fresh = [record for record in page.events if record.seq > walk_floor]
                 for record in fresh:
                     scanned += 1
@@ -415,6 +436,16 @@ async def reconcile(
         # default, so running out of pages means the rows between here and the cursor are already
         # pruned. They are unrecoverable, so stalling would buy nothing and only hide it.
         log.error("lineage_feed_gap_skipped", extra={"cursor": stored.seq, "resumed_at": high, "pages": max_pages})
+    if gapped:
+        # A DIFFERENT loss from the one above, and the one that used to be invisible. `truncated` means
+        # the walk gave up; this means lineage's retention DELETED rows this lane had not read, so the
+        # walk reached a clean end over a hole. ERROR for the same reason: unrecoverable, so there is
+        # nothing to wait for and every tick that hides it makes the estate look healthier than it is.
+        #
+        # Not a stall. The rows are gone whatever this pass does, and holding the mark would forfeit
+        # every row ABOVE them as well — the same trade the out-of-pages branch already makes.
+        log.error("lineage_feed_pruned_below_cursor", extra={"cursor": stored.seq, "scanned": scanned})
+        record_feed_gap()
     if retried:
         # A retry holds the mark — unless it has held it for FEED_MAX_STALLS consecutive passes, which
         # is a PERMANENT failure wearing a transient's costume. Step over it, loudly: the rows asking
@@ -422,13 +453,13 @@ async def reconcile(
         stalls = stored.stalls + 1
         if stalls < FEED_MAX_STALLS:
             await store.set(stored.seq, floor=settled_floor, stalls=stalls)
-            return ReconcileResult(scanned=scanned, retried=retried, cursor=stored.seq, truncated=truncated)
+            return ReconcileResult(scanned=scanned, retried=retried, cursor=stored.seq, truncated=truncated, gapped=gapped)
         log.error(
             "lineage_feed_poison_skipped",
             extra={"cursor": stored.seq, "resumed_at": high, "retried": retried, "stalls": stalls},
         )
         await store.set(high, floor=settled_floor)
-        return ReconcileResult(scanned=scanned, retried=retried, cursor=high, truncated=truncated)
+        return ReconcileResult(scanned=scanned, retried=retried, cursor=high, truncated=truncated, gapped=gapped)
     if not retried:
         # No `resume_from`/`pending_high`: a completed walk settles the mark AND clears whatever an
         # earlier interrupted pass parked, so the next tick starts from the top again.
@@ -439,7 +470,7 @@ async def reconcile(
     # The cursor REPORTED is the one now in effect, not the highest row seen: a tick that hit a
     # transient failure leaves the mark where it was, and a result claiming otherwise would make the
     # log say the walk had made progress it deliberately did not make.
-    return ReconcileResult(scanned=scanned, retried=retried, cursor=stored.seq if retried else high, truncated=truncated)
+    return ReconcileResult(scanned=scanned, retried=retried, cursor=stored.seq if retried else high, truncated=truncated, gapped=gapped)
 
 
 async def _prime(client: LineageFeedClient, store: LineageCursorStore) -> ReconcileResult:

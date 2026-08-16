@@ -190,6 +190,16 @@ _LIST_EVENTS_SUMMARY_AFTER: Final = (
 )
 # Retention prune — keep the most-recent N rows (by the monotonic seq), drop older. Cheap (PK-indexed seq).
 _PRUNE_EVENTS: Final = "DELETE FROM public.lineage_events WHERE seq <= (SELECT COALESCE(MAX(seq), 0) FROM public.lineage_events) - %s"
+# The FLOOR the prune above leaves behind — the oldest row the feed can still serve.
+#
+# It exists because the prune runs on EVERY ingest and knows about no consumer: a reader whose cursor
+# has fallen below this number lost rows before it read them, and walking to the end of the feed would
+# otherwise look exactly like being caught up. Lineage cannot detect that itself — the notifications
+# reconciler's cursor lives in ITS Dapr state store, which lineage is not scoped to and must not be —
+# so lineage publishes the floor and each consumer draws its own conclusion.
+#
+# MIN(seq) rides the primary-key index, so this is a cheap read even on a full retention window.
+_OLDEST_EVENT_SEQ: Final = "SELECT MIN(seq) FROM public.lineage_events"
 # Read/access audit (#6) — a plain append log of WHO read WHICH dataset (public, like lineage_events; the
 # write provenance lives in the AGE graph, this is the complementary read log).
 _CREATE_READS_TABLE: Final = (
@@ -1329,6 +1339,18 @@ class LineageRepository:
             )
             for r in rows
         ]
+
+    async def oldest_event_seq(self) -> int | None:
+        """The oldest seq the feed still holds, or ``None`` when it holds nothing.
+
+        ``None`` rather than ``0`` on an empty feed: zero would read as "everything since the
+        beginning is still here", which is the exact opposite of what an empty feed means, and would
+        suppress the gap report a consumer needs most after a wipe.
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(_OLDEST_EVENT_SEQ)
+            row = await cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else None
 
     async def creator(self, name: str) -> Creator:
         """Who created ``name`` — the verified principal on the catalog create event."""

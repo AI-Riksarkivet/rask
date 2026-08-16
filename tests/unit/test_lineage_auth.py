@@ -367,6 +367,7 @@ class _FakeRepo:
         self.col_related: list[ColumnRef] = []
         self.col_graph: ColumnGraph | None = None
         self.lineage_graph: LineageGraph | None = None
+        self.oldest: int | None = None
         self.estate: EstateGraph | None = None
 
     async def ingest_event(self, event: RunEvent) -> None:
@@ -378,6 +379,9 @@ class _FakeRepo:
     async def list_events(self, limit: int = 500, *, after: int | None = None, summary: bool = False) -> list[EventRecord]:
         self.list_events_calls.append({"limit": limit, "after": after, "summary": summary})
         return self.events
+
+    async def oldest_event_seq(self) -> int | None:
+        return self.oldest
 
     async def list_runs(self) -> Runs:
         return Runs(runs=self.runs)
@@ -1220,3 +1224,47 @@ def test_the_EMITTER_path_carries_no_caller_id_and_is_untouched(monkeypatch: pyt
     )
 
     assert isinstance(principal, security.ServicePrincipal)
+
+
+def test_get_events_reports_the_feed_FLOOR_so_a_consumer_can_see_what_it_lost() -> None:
+    """`oldest_seq` — the oldest row the feed still holds.
+
+    Lineage prunes its durable feed inline on every ingest, keeping the newest N rows by seq. That
+    prune cannot consult any consumer's cursor: the notifications reconciler's mark lives in ITS Dapr
+    state store, which lineage is not scoped to and must never be — reaching across would couple the
+    producer of the feed to one of its readers.
+
+    So lineage reports its FLOOR and the consumer draws its own conclusion. Without it a reader whose
+    mark fell below the floor walks to the end of the feed, sees `next_cursor: None`, and concludes it
+    is caught up — the rows in between were deleted before it read them, and nothing anywhere says so.
+
+    UNGOVERNED on purpose: a seq number discloses no dataset, and it is exactly the number a caller
+    needs in order to know a page it CANNOT see is missing.
+    """
+    from lineage.api.v1.endpoints.runs import get_events
+
+    settings = _settings()  # auth off
+    repo = _FakeRepo()
+    repo.oldest = 8999
+    flt = fga_deps.DatasetFilter(_request(), settings, None)
+    repo.events = [EventRecord(seq=9000, outputs=["a"], inputs=[], event={})]
+
+    page = asyncio.run(get_events(cast(LineageRepository, repo), flt, settings, limit=2))
+
+    assert page.oldest_seq == 8999
+
+
+def test_get_events_on_an_EMPTY_feed_reports_no_floor() -> None:
+    """`None`, not `0`. A zero would read as "the feed still holds everything from the beginning",
+    which is the opposite of what an empty feed means, and would suppress the very gap report a
+    consumer needs after a wipe."""
+    from lineage.api.v1.endpoints.runs import get_events
+
+    settings = _settings()
+    repo = _FakeRepo()
+    repo.oldest = None
+    flt = fga_deps.DatasetFilter(_request(), settings, None)
+
+    page = asyncio.run(get_events(cast(LineageRepository, repo), flt, settings, limit=2))
+
+    assert page.oldest_seq is None

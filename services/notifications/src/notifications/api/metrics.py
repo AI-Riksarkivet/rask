@@ -79,6 +79,11 @@ _dlq_parked = _meter.create_counter(
     unit="{delivery}",
     description="Deliveries DEAD-LETTERED — parked after the sidecar's retry schedule was exhausted.",
 )
+_feed_gaps = _meter.create_counter(
+    "notifications.feed.gaps",
+    unit="{pass}",
+    description="Reconcile passes that found lineage's feed pruned BELOW this lane's cursor — rows lost unread.",
+)
 
 
 def record_ingress(lane: Lane, outcome: Outcome) -> None:
@@ -104,3 +109,14 @@ def record_dead_letter(app_label: str) -> None:
     to each other's dead letters double-counting every park — per-app naming is what avoids both.
     """
     _dlq_parked.add(1, {"lance.notifications.app": app_label})
+
+
+def record_feed_gap() -> None:
+    """Count one pass that found the feed pruned below this lane's cursor.
+
+    Unlabelled by design. The fact is estate-wide (this service holds ONE cursor) and the only useful
+    question is "is this happening at all, and how often" — which is the alertable shape. A seq number
+    would be unbounded cardinality on a counter for no gain: the seqs are already in the ERROR log
+    beside it, where an operator investigating a fired alert goes next.
+    """
+    _feed_gaps.add(1)

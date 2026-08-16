@@ -763,3 +763,82 @@ def test_a_cursor_written_by_a_newer_build_is_still_readable() -> None:
         }
     )
     assert cursor.seq == 4200, "the high-water mark must survive a field this build cannot name"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# The feed PRUNED rows this lane had not read yet
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+#
+# Lineage prunes its durable feed inline on EVERY ingest, keeping the newest N rows by seq. That prune
+# has no idea this lane exists, and it cannot be given one: the cursor lives in notifications' Dapr
+# state store, which lineage is not scoped to and must never be.
+#
+# So the loss is detected on THIS side, and until now it was not detected at all. The `truncated` flag
+# catches only one shape — the walk running out of PAGES. The other shape exits through the success
+# door: when the feed floor comes into view (`next_cursor is None`) the walk breaks with
+# `truncated = False` and the pass reports a clean reconcile, even when the rows between the mark and
+# the oldest surviving row were deleted before anyone read them. That is the exact population the bus
+# cannot serve — ingest, Ray TRAIN and every external OpenLineage producer emit over HTTP only — so
+# the silent case is the one that matters most.
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_feed_pruned_BELOW_the_cursor_reports_a_gap() -> None:
+    """The silent shape. The feed answers one page and says it is exhausted, so the walk breaks
+    happily — but its oldest surviving row is far above the mark, which means everything in between
+    was pruned before this lane read it. Unrecoverable, and previously reported by nothing."""
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 8999}))
+    plane = _Plane()
+    store, _memory = _store(5)
+
+    result = await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
+
+    assert result.gapped is True, "rows 6..8998 were pruned unread and the pass called itself clean"
+    assert not result.truncated, "this is the pruned-below-the-mark shape, not the out-of-pages one"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_feed_that_still_HOLDS_the_cursor_reports_no_gap() -> None:
+    """The ordinary case, and the one a false positive would ruin: the mark is inside the retained
+    window, so nothing was lost and the pass must not cry wolf every tick."""
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 1}))
+    plane = _Plane()
+    store, _memory = _store(8990)
+
+    result = await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
+
+    assert result.gapped is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_feed_that_does_not_REPORT_its_floor_is_not_a_gap() -> None:
+    """`oldest_seq` is additive, so a lineage older than this change omits it. Absent must mean "I
+    cannot tell", never "a gap" — a detector that fires on every tick against a healthy older
+    deployment is one nobody will keep listening to."""
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None}))
+    plane = _Plane()
+    store, _memory = _store(5)
+
+    result = await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
+
+    assert result.gapped is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_gap_still_lets_the_pass_deliver_and_advance() -> None:
+    """A gap is a REPORT, not a stall. The rows below the floor are gone whatever this pass does, so
+    holding the mark would forfeit every row above them too — the same reasoning the out-of-pages
+    branch already applies."""
+    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 8999}))
+    plane = _Plane()
+    store, memory = _store(5)
+
+    result = await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
+
+    assert result.gapped is True
+    assert result.scanned == 1, "the row that DID survive must still be delivered"
+    assert memory.seq == 9000, "the mark must advance past a loss it cannot undo"

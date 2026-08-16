@@ -275,6 +275,16 @@ class Events(BaseModel):
 
     events: list[EventRecord]
     next_cursor: int | None = None
+    #: The oldest seq the feed still RETAINS (additive, 2026-08-16). ``None`` = an empty feed, or a
+    #: lineage build predating the field.
+    #:
+    #: `next_cursor is None` says "no more rows below this page"; it does NOT say "you have seen
+    #: everything since your cursor". The feed self-prunes on every ingest, so a consumer whose mark
+    #: has fallen below this number lost rows before reading them — and without this field that loss
+    #: is indistinguishable from being caught up. Lineage cannot make the comparison itself: the
+    #: consumer's cursor lives in its own service's state store. So the floor is published and each
+    #: reader draws its own conclusion.
+    oldest_seq: int | None = None
 
 
 class DlqEvent(BaseModel):
