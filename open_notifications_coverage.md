@@ -34,7 +34,8 @@ best statement of what was wrong.
   `tasks.py`)~~ — **FIXED `80d244ab`.** `task_assigned` / `task_unassigned` across the three files the
   contract requires, plus `annotation_task` on `ControlObjectType`, emitted after the transition and
   its audit succeed. The audience is the ASSIGNEE, never the manager who clicked; acting on your own
-  task emits nothing.
+  task emits nothing. Live-verified on the deployed estate
+  (`tests/e2e/verify_task_assignment_lane.mjs`): **alice 2 -> 2, bob 14 -> 15**, browser badge 15.
 - ~~**movers author with a chart role literal, so a failed cascade reaches no human** (§2 High,
   `chart/values.yaml:926-943`)~~ — **FIXED `20fc659f`,** live-verified on the deployed estate (`tests/e2e/verify_originator_lane.mjs`: bob 12 -> 13 with `reason = originator`, for a run he neither authored nor watches). A fifth targeting source,
   `NotificationReason.ORIGINATOR`: the verified subject is captured at `authorize_produce` — the last
@@ -46,6 +47,17 @@ best statement of what was wrong.
 **Also landed, not from the register:** the control emitter was copy-pasted between the catalog and
 maintenance and the annotator would have been the third; it now lives once in `service_kit`
 (`2c397306`), guarded by `test_the_control_emitter_has_exactly_one_implementation`.
+
+**FOUND WHILE VERIFYING — the badge and the row list disagree.** On the live estate bob's inbox
+answers `unread: 15` beside 13 rows, under BOTH filters, and the two task rows are in neither page.
+That cannot come from one pointer list: `feed.unread_count` and `feed.visible(UNREAD)` apply the
+identical `pointer.unread` predicate, so the count and the rows are being read from different state.
+The actor's own docstring names the hazard exactly — *"a stored count and a stored row set are two
+truths that disagree the first time one write lands alone"* — and the drift was already 1 before this
+session added 2. Not diagnosed further here, and deliberately NOT bundled into item B: it is a
+separate defect in the inbox actor's meta/rows persistence, it predates the task lane, and the
+symptom (a badge you cannot clear by reading, because the row is not listed) is worse than the gap
+this register was opened for.
 
 **Still open and worth knowing:** `lease_expired` is the annotator edge that most deserves a
 notification and cannot have one — its audience is the PREVIOUS holder and it fires with no principal
