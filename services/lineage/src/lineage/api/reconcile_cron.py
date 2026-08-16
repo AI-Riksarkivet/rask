@@ -10,7 +10,9 @@ chart, not app code (no scheduler thread here). Blocking Lance/S3 reads run in t
 
 from __future__ import annotations
 
+import json
 import logging
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
@@ -29,7 +31,7 @@ from lineage.core.reconcile import (
     read_storage_version,
     reconcile_all,
 )
-from lineage.models import RunEvent
+from lineage.models import RunEvent, author_sub_from_payload
 from lineage.services.consumer import record_event_best_effort
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.lakehouse import outbox, outbox_metrics
@@ -183,7 +185,16 @@ async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: 
             # ONLY a genuinely-unparseable event is poison. This must stay NARROW (audit 2026-07-14): the
             # broad `except Exception` it replaces deleted the staged object on ANY failure — a transient
             # error would destroy the event's ONLY durable copy, the exact loss #4 exists to prevent.
-            log.warning("lineage_outbox_poison_dropped", extra={"run_id": run_id, "error": str(exc)})
+            # The author rides the RAW json: this branch fires because the event would not validate,
+            # so the strict model is unavailable exactly where the answer is needed. Destroying a
+            # committed write's only durable copy without recording whose it was is the loss twice over.
+            poison_author: str | None = None
+            with suppress(Exception):
+                poison_author = author_sub_from_payload(json.loads(event_json))
+            log.warning(
+                "lineage_outbox_poison_dropped",
+                extra={"run_id": run_id, "error": str(exc), "author": poison_author},
+            )
             outbox_metrics.record_poison_dropped()
             await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, run_id)
             continue

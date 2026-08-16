@@ -244,6 +244,39 @@ class Run(BaseModel):
     facets: dict[str, Any] = Field(default_factory=dict)
 
 
+def author_sub_from_payload(raw: object) -> str | None:
+    """The VERIFIED author sub inside a run-event payload, or ``None`` — tolerant of a payload that
+    does not parse.
+
+    For the DISCARD paths: a dead-lettered delivery and a poison outbox object are both terminal
+    provenance loss, and both throw away a payload that CONTAINS the person it belonged to. The log
+    named only the event id, so an operator could see that provenance was dropped and not whose.
+
+    Tolerant rather than a :class:`RunEvent` parse because the poison path fires precisely BECAUSE the
+    event failed validation — the strict model is unavailable exactly where the answer is needed.
+
+    ``sub`` and nothing else, unlike :attr:`RunEvent.author` one class up. That property prefers
+    ``name`` and falls back to the standard ``ownership`` job facet, which is right for ATTRIBUTION on
+    a board — an external producer's claimed owner beats no owner — and wrong here: both are
+    producer-supplied and unverified, so a loss record built on them could name someone who is not the
+    author of the run that was lost. Anonymous beats misattributed. Same rule
+    ``notifications.author_subject`` applies for the same reason.
+    """
+    if not isinstance(raw, dict):
+        return None
+    run = raw.get("run")
+    if not isinstance(run, dict):
+        return None
+    facets = run.get("facets")
+    if not isinstance(facets, dict):
+        return None
+    author = facets.get("author")
+    if not isinstance(author, dict):
+        return None
+    sub = author.get("sub")
+    return sub if isinstance(sub, str) and sub.strip() else None
+
+
 class RunEvent(BaseModel):
     """An OpenLineage run event (START/RUNNING/COMPLETE/FAIL/ABORT) with its inputs and outputs."""
 

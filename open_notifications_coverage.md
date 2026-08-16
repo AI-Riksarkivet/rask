@@ -120,6 +120,14 @@ one rather than picked up as a quick win.
   hidden — the audience computed correctly, then discarded whole, and the author never heard about
   their own failed run.
 
+- ~~**lineage's two discard paths threw away the person they belonged to** (§6 #11)~~ — **FIXED.** A
+  dead-lettered delivery and a poison outbox object are both TERMINAL provenance loss, and both logged
+  only an event/run id while the payload being destroyed carried its author. An operator could see
+  that provenance was dropped and never whose. `author_sub_from_payload` is tolerant by necessity —
+  the poison path fires BECAUSE the event failed validation — and reads `sub` only, never `name` or
+  `ownership`: those are producer-supplied, so a loss record built on them could name the wrong
+  person. Anonymous beats misattributed.
+
 **Still open and worth knowing:** `lease_expired` is the annotator edge that most deserves a
 notification and cannot have one — its audience is the PREVIOUS holder and it fires with no principal
 at all (`machines.py` gives it permission `None`). That needs a fifth *audience shape*, not another

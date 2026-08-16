@@ -125,3 +125,62 @@ def test_lineage_parking_rides_its_OWN_durable_component_never_the_replay_one(mo
     get_settings.cache_clear()
     subs2 = {s["topic"]: s for s in _subs(TestClient(app2))}
     assert subs2["dlq.lineage.events"]["pubsubname"] == subs2["lineage.events.v1"]["pubsubname"], "unset -> dev fallback to the main component"
+
+
+# --------------------------------------------------------------------------------------------------
+# A discarded event names WHOSE provenance was lost
+# --------------------------------------------------------------------------------------------------
+
+
+def test_the_verified_author_is_read_off_a_payload_even_when_it_will_not_parse() -> None:
+    """Both of lineage's discard paths throw away a payload that CONTAINS the person it belongs to.
+
+    The poison path is the reason this is tolerant rather than a `RunEvent` parse: it fires precisely
+    BECAUSE the event failed validation, so the strict model is unavailable exactly where the answer
+    is needed.
+
+    `sub` and nothing else, deliberately — the same rule `notifications.author_subject` applies. This
+    model's `author` property prefers `name` and falls back to the standard `ownership` facet, which
+    is right for ATTRIBUTION on a board and wrong here: those are producer-supplied and unverified, so
+    a loss log built on them could name someone who is not the author of the run that was lost.
+    """
+    from lineage.models import author_sub_from_payload
+
+    assert author_sub_from_payload({"run": {"facets": {"author": {"name": "Alice A", "sub": "alice"}}}}) == "alice"
+    # A name without a verified sub names nobody: the loss is anonymous rather than misattributed.
+    assert author_sub_from_payload({"run": {"facets": {"author": {"name": "Alice A"}}}}) is None
+    assert author_sub_from_payload({"job": {"facets": {"ownership": {"owners": [{"name": "claimed"}]}}}}) is None
+    # Shapes a discard path really meets: truncated, wrong-typed, absent.
+    for junk in ({}, {"run": {}}, {"run": {"facets": None}}, {"run": {"facets": {"author": "alice"}}}, "not-a-dict", None):
+        assert author_sub_from_payload(junk) is None
+
+
+def test_a_parked_delivery_names_the_author_whose_provenance_was_lost(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A parked delivery is TERMINAL provenance loss until someone replays the stream. The log said
+    only which event id was lost, while the payload being discarded carried the person it belonged
+    to — so an operator could see that provenance was dropped and not whose."""
+    import lineage.api.dapr as dapr_mod
+
+    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+    monkeypatch.setenv("LINEAGE_DAPR_ENABLED", "true")
+    monkeypatch.setenv("LINEAGE_DLQ_TOPIC", "dlq.lineage")  # the parking route exists only when configured
+    from lineage.core.config import get_settings
+
+    get_settings.cache_clear()
+    app = FastAPI()
+    dapr_mod.register_dapr(app)
+    get_settings.cache_clear()
+    client = TestClient(app)
+
+    with caplog.at_level(logging.ERROR, logger="lineage.api.dapr"):
+        response = client.post(
+            "/lineage-dlq",
+            json={"id": "evt-9", "data": {"run": {"facets": {"author": {"name": "A", "sub": "alice"}}}}},
+            headers={"dapr-api-token": "s3cret"},
+        )
+
+    assert response.json() == {"status": "SUCCESS"}
+    parked = next(r for r in caplog.records if r.message == "dapr_dead_letter_parked")
+    assert getattr(parked, "author", None) == "alice"

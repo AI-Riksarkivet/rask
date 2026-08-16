@@ -20,6 +20,7 @@ from fastapi import Depends, FastAPI, Request
 
 from lineage.core.config import get_settings
 from lineage.core.metrics import Outcome, record_outcome
+from lineage.models import author_sub_from_payload
 from lineage.services.consumer import handle_cloud_event
 from service_kit.governed.dapr_auth import require_dapr_token
 
@@ -46,7 +47,15 @@ async def on_dead_letter(event: dict[str, Any], _: Annotated[None, Depends(requi
     re-reads the retained stream on restart); the DLQ adds operator VISIBILITY, not a second path."""
     log.error(
         "dapr_dead_letter_parked",
-        extra={"app": "lineage", "event_id": event.get("id") if isinstance(event, dict) else None},
+        extra={
+            "app": "lineage",
+            "event_id": event.get("id") if isinstance(event, dict) else None,
+            # WHOSE provenance was lost. This is terminal loss until someone replays the stream, and the
+            # payload being discarded carries the person it belonged to — naming only the event id let an
+            # operator see THAT provenance was dropped and never whose. `None` when the payload carries no
+            # verified sub: anonymous beats misattributed (see `author_sub_from_payload`).
+            "author": author_sub_from_payload(event.get("data") if isinstance(event, dict) else None),
+        },
     )
     # A parked delivery is TERMINAL provenance loss until a replay — without this counter the retries all
     # counted RETRIED and the loss itself vanished from the metrics (audit 2026-07-15; a dashboardable
