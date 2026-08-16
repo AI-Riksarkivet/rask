@@ -109,7 +109,9 @@ while an unknown reason value arrives on a declared field and carries nothing fo
   own job door) do not capture a verified sub yet, and nothing reads the metadata back on failure.
 - ~~**the estate's most expensive door was its most anonymous** (§2 High rows: the `/train` door
   discarding its sub; a TRAIN job failing after hours of GPU; any training run reaching terminal)~~ —
-  **FIXED.** `authorize_train` declared `-> None` and threw away the sub `authorize_produce` had
+  **FIXED `1d36b3ff`,** deployed from main (`lance-rest-catalog` + `ray-lance` at `main-1d2d50e1`;
+  the baked `/home/ray/jobs/ray_train_job.py` verified to carry it in the running pod).
+  `authorize_train` declared `-> None` and threw away the sub `authorize_produce` had
   already returned, so five links downstream had nothing to carry: the trigger, the consumer, the Ray
   submission, the job's env, and the job's own RunEvents. All five now carry it, and the job stamps
   `lance.originator` + `lance.project` on every event it emits — including the config-parse FAIL, the
