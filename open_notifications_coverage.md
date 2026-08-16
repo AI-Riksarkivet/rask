@@ -92,6 +92,22 @@ while an unknown reason value arrives on a declared field and carries nothing fo
   follows the MUTATION, not the request: a re-grant, a revoke of nothing, and a refused revoke all
   emit nothing. The annotator door had no tests at all; it has four.
 
+- ~~**a grant to a ROLE reached a phantom inbox** (§6 #7)~~ — **FIXED `460a5eb5`.** `role:x#assignee`
+  survived the `user:` strip and was delivered to an InboxActor keyed on the group string, which no
+  person can open. Refusing was the safe-looking wrong answer: `model.fga` permits usersets on nearly
+  every grantable relation, so roles are the estate's ordinary way to grant. They are EXPANDED via
+  `fga.list_users`, injected as a callable so the lane still runs with no FGA; an expander that raises
+  is a RETRY, because answering empty would read as "this group has no members".
+- ~~**a revoke returned a count, so nobody could be told** (§6 #8)~~ — **FIXED `36e17447`.**
+  `revoke_object_tuples` now hands back WHAT it revoked; the project-delete door fans `grant_revoked`
+  per principal, skipping structural `team`/`parent`/`child` edges whose user is another object. Six
+  stub suites moved to the list contract — the real cost, and why "mechanical, 4 sites" was corrected.
+- ~~**a Ray job carried no identity** (§6 #14, and #6's prerequisite)~~ — **PARTLY FIXED `36e17447`.**
+  The stage submission now carries Ray's own `metadata` (`rask.originator`/`project`/`token`/`stage`),
+  not `runtime_env.env_vars`: the identity has to be readable from OUTSIDE the job AFTER it fails, and
+  `metadata` comes back on `GET /api/jobs/<id>`. STILL OPEN: the other submitters (`/train`, compute's
+  own job door) do not capture a verified sub yet, and nothing reads the metadata back on failure.
+
 **DROPPED — §6 #5, ruled 2026-08-16 (`docs/DECISIONS.md`).** A denied mover must NOT emit a lineage
 FAIL: nothing is read and nothing is written, so the event would mint provenance for a non-event, and
 a permanently un-granted mover would emit one per trigger forever — a steady state, which is a metric
