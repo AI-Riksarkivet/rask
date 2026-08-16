@@ -58,19 +58,25 @@ describe('stageOfTable', () => {
 		expect(stageOfTable('media$documents')).toBeNull();
 	});
 
-	it('a NESTED medallion zone gets no stage — a known gap, pinned here rather than fixed silently', () => {
-		// `stageOf` takes a namespace NAME; `STAGE_RE` is anchored and `$` is outside its character
-		// class, so a nested namespace ID never matches however it is spelled. The leaf segment does:
+	it('a NESTED medallion zone resolves its stage from the LEAF segment', () => {
+		// Was pinned as a known gap and ruled 2026-08-16. `STAGE_RE` is anchored with `$` outside its
+		// character class, so a nested id matched nothing and the badge silently vanished — while the
+		// same namespace one rung up showed `silver`. The stage belongs to the zone the data sits IN;
+		// the ancestors above it are tenancy, not tier.
 		expect(stageOf('acme-silver')).toEqual({ stage: 'silver', project: 'acme', media: false });
-		expect(stageOf('acme$acme-silver')).toBeNull();
-		expect(stageOfTable('acme$acme-silver$features')).toBeNull();
+		expect(stageOf('acme$acme-silver')).toEqual({ stage: 'silver', project: 'acme', media: false });
+		expect(stageOfTable('acme$acme-silver$features')).toEqual({
+			stage: 'silver',
+			project: 'acme',
+			media: false,
+		});
+	});
 
-		// This is NOT a regression from the namespaceOfTable fix — the old first-delimiter split fed
-		// `stageOf('acme')`, which was equally null. It is the same root cause (nesting was never
-		// considered in this module) surfacing one function over, and fixing it means deciding whether a
-		// nested namespace's stage comes from its LEAF segment. That is a visible behaviour change —
-		// stage badges would appear where today there are none — so it is a separate call, not a rider
-		// on a correctness fix. Pinned so the answer is deliberate whenever it comes.
+	it('still returns null when the LEAF encodes no stage — the ancestors must not supply one', () => {
+		// The other direction, and the reason this is leaf-only rather than "any segment": a table in
+		// `acme-silver$scratch` is in `scratch`, which is not a medallion zone. Reading the stage off an
+		// ancestor would badge it `silver` and claim a tier the data does not have.
+		expect(stageOf('acme-silver$scratch')).toBeNull();
 		expect(stageOfTable('acme$transcripts$rows')).toBeNull();
 	});
 });

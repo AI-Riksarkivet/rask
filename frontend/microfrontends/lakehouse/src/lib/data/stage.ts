@@ -15,11 +15,37 @@ export type StageInfo = {
 
 // Non-greedy project prefix + literal stage names, so `acme-data-silver` parses as
 // project `acme-data`, stage `silver` (a greedy prefix would eat the stage).
+/**
+ * The identifier delimiter, in ONE place rather than the six literals that were scattered across this
+ * zone (stage.ts twice, DangerZone, ColumnNode, ColumnLineage, the namespace detail page).
+ *
+ * It is a CONSTANT and not a fetched value, deliberately and with a known limit: the server's
+ * `LANCE_NS_DELIMITER` is operator-settable, and the catalog exposes **no config endpoint at all**
+ * (verified against docs/catalog-openapi.json — there is no `/v1/config` path), so the zone has no way
+ * to learn the configured value. Making this truly dynamic therefore needs a backend endpoint first;
+ * until then, centralising it means a deployment that changes the delimiter is one edit rather than a
+ * hunt through six files that each looked local and correct.
+ */
+export const DELIMITER = '$';
+
 const STAGE_RE = /^(?:([a-z0-9][a-z0-9_-]*?)-)?(raw|bronze|silver|gold)(-media)?$/;
 
-/** The medallion stage a namespace name encodes, or null for a non-medallion namespace. */
+/**
+ * The medallion stage a namespace encodes, or null for a non-medallion namespace.
+ *
+ * Takes the LAST segment of a nested id. `STAGE_RE` is anchored and `$` is outside its character
+ * class, so a nested id like `acme$acme-silver` matched nothing at all and every table under a nested
+ * medallion zone rendered with no stage badge — while the identical namespace one rung higher showed
+ * `silver`. The stage is a property of the zone the data sits IN, and for `acme$acme-silver` that zone
+ * is `acme-silver`; the ancestors are tenancy, not tier.
+ *
+ * Ruled 2026-08-16 with the visible consequence stated: badges now appear where there were none.
+ */
 export function stageOf(namespace: string): StageInfo | null {
-	const m = STAGE_RE.exec(namespace);
+	const leaf = namespace.includes(DELIMITER)
+		? namespace.slice(namespace.lastIndexOf(DELIMITER) + 1)
+		: namespace;
+	const m = STAGE_RE.exec(leaf);
 	if (!m) return null;
 	return { stage: m[2] as Stage, project: m[1] ?? null, media: m[3] !== undefined };
 }
@@ -44,7 +70,7 @@ export function stageOf(namespace: string): StageInfo | null {
  * `acme$acme-silver` got no stage badge instead of `silver`.
  */
 export function namespaceOfTable(table: string): string {
-	return table.includes('$') ? table.slice(0, table.lastIndexOf('$')) : table;
+	return table.includes(DELIMITER) ? table.slice(0, table.lastIndexOf(DELIMITER)) : table;
 }
 
 /** The medallion stage of a table id, derived from its namespace segment. */

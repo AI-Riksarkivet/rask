@@ -237,10 +237,20 @@ test('a caller who may only SEE the namespace gets no policy actions, and is tol
 	await expect(page.getByText('Changing this policy needs the owner rung')).toBeVisible({
 		timeout: 15_000,
 	});
-	// The three actions are ABSENT, not disabled: a disabled control still advertises the operation.
-	await expect(page.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
-	await expect(page.getByRole('button', { name: 'Remove', exact: true })).toHaveCount(0);
-	await expect(page.getByRole('button', { name: 'Set policy', exact: true })).toHaveCount(0);
+	// The three actions are VISIBLE and REFUSED, not absent — #143, ruled estate-wide 2026-08-16. This
+	// asserted the opposite ("a disabled control still advertises the operation") and was correct about
+	// the code until the ruling; the ruling is that advertising the operation is the POINT, because an
+	// action that vanishes teaches nothing and reads as a broken page.
+	//
+	// `aria-disabled`, not `disabled`: GatedAction wraps the control in a span carrying the state rather
+	// than setting the native attribute, which would kill its tooltip and drop the control from the tab
+	// order. So the button is still in the accessibility tree — which is what makes this assertable.
+	const gated = page.locator('[data-slot="gated-action"][aria-disabled="true"]');
+	await expect(gated.filter({ hasText: 'Set policy' })).toHaveCount(1);
+	// …and it is genuinely inert: the capture-phase guard swallows the click, so the edit form must not
+	// open. Force past the pointer-events styling to prove the guard rather than the CSS.
+	await page.getByRole('button', { name: 'Set policy', exact: true }).click({ force: true });
+	await expect(page.getByRole('button', { name: 'Save policy', exact: true })).toHaveCount(0);
 });
 
 // The GRANT AXIS. Granting used to be a side-effect of `owner`, so the picker offered four data

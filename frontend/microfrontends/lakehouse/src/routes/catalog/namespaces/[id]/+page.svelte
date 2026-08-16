@@ -5,6 +5,7 @@
 	// table count from the registry the /namespaces page already derives from), the kind-generalized
 	// GrantsPanel, and a maintenance-policy card mirroring the table policy form. Same stack-mode
 	// states as the registry — governed without a session ⇒ sign-in, unreachable ⇒ retrying.
+	import { GatedAction } from '@rask/ui/gated-action';
 	import { GrantsPanel, type GrantsClient } from '@rask/ui/grants-panel';
 	import { subjectDisplay } from '@rask/ui/identity';
 	import { Boxes, Network, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
@@ -13,7 +14,7 @@
 	import { fetchTables } from '$lib/data/remote/catalog.remote';
 	import DetailTabs from '$lib/data/DetailTabs.svelte';
 	import StageBadge from '$lib/data/StageBadge.svelte';
-	import { stageOf } from '$lib/data/stage';
+	import { namespaceOfTable, stageOf } from '$lib/data/stage';
 	import { policyRequestFrom } from '$lib/data/namespace';
 	import type { AccessGraph, NamespacePolicy } from '$lib/data/namespace';
 	import {
@@ -99,6 +100,9 @@
 	// Namespace policy set/delete is gated by the catalog on `can_delete` (fga_deps' suffix map), so
 	// that is the rung the button must agree with — not a rung this page invents.
 	const mayEditPolicy = $derived(perms?.can_delete === true);
+	// ONE string, shared by the three gated policy controls and the sentence below them — three copies
+	// of a denial reason is how the grant message came to be wrong in two places at once.
+	const REASON_EDIT = $derived(`Changing this policy needs the owner rung (can_delete) on ${ns}.`);
 	const permsSettled = $derived(perms !== null);
 	// The one case worth naming separately: the caller owns this namespace, and granting is still
 	// denied. That is managed access doing its job, and it is the only reading under which an owner
@@ -108,11 +112,12 @@
 	const unauthorized = $derived(tables === null && lastStatus === 401);
 	const offline = $derived(tables === null && settled && lastStatus !== 401);
 
-	// The namespace's member tables, grouped the same way the registry groups them: the segment
-	// before the first `$`; a bare name with no delimiter is its own root.
-	const members = $derived(
-		(tables ?? []).filter((t) => (t.includes('$') ? t.slice(0, t.indexOf('$')) : t) === ns).sort(),
-	);
+	// The namespace's member tables, grouped the way the registry groups them — through the SAME helper,
+	// not a local re-implementation of it. This carried its own copy that split on the FIRST delimiter,
+	// the identical bug fixed in `namespaceOfTable` earlier today: for a nested namespace it compared
+	// the top-level ancestor against `ns`, so `acme$bronze` listed none of its own tables and `acme`
+	// listed all of them. Two copies of one rule is how they came to disagree.
+	const members = $derived((tables ?? []).filter((t) => namespaceOfTable(t) === ns).sort());
 
 	async function loadTables(): Promise<void> {
 		const current = ns;
@@ -412,26 +417,41 @@
 						{#if policy.target_rows_per_fragment}<span class="chip mono">target {policy.target_rows_per_fragment}
 						rows/frag</span>{/if}
 						{#if !policy.compact_enabled}<span class="chip off mono">maintenance off</span>{/if}
-						{#if mayEditPolicy}
+						<!-- #143 (owner ruling, 2026-08-16): a gated action stays VISIBLE and disabled with its
+						     reason. These were `{#if mayEditPolicy}` — absent, with the reason in a separate
+						     sentence below. The sentence STAYS: it is visible without hovering, which the
+						     tooltip is not, and it names the rung to ask for. What changes is that the
+						     operations themselves are now discoverable rather than invisible.
+						     `disabled` is conditional on the verdict because GatedAction deliberately avoids
+						     the native attribute — it would kill the tooltip and drop the control from the
+						     tab order. Until the self-view answers (`permsSettled` false) they render live,
+						     since "not answered yet" is not "denied". -->
+						<GatedAction allowed={!permsSettled || mayEditPolicy} action="Edit policy" reason={REASON_EDIT}>
 							<button class="btn ghost" onclick={startPolicyEdit}>Edit</button>
-							<button class="btn ghost danger" disabled={busy} onclick={removePolicy}>
+						</GatedAction>
+						<GatedAction allowed={!permsSettled || mayEditPolicy} action="Remove policy" reason={REASON_EDIT}>
+							<button
+								class="btn ghost danger"
+								disabled={(!permsSettled || mayEditPolicy) && busy}
+								onclick={removePolicy}
+							>
 								<Trash2 size={12} /> Remove
 							</button>
-						{/if}
+						</GatedAction>
 					</div>
 				{:else}
 					<p class="mut">
 						No policy — the sweep applies the global defaults.
-						{#if mayEditPolicy}
+						<GatedAction allowed={!permsSettled || mayEditPolicy} action="Set policy" reason={REASON_EDIT}>
 							<button class="btn ghost" onclick={startPolicyEdit}>Set policy</button>
-						{/if}
+						</GatedAction>
 					</p>
 				{/if}
 				<!-- Say WHY the controls are absent, once the self-view has actually answered. Silence
 				     would read as a broken page to someone who expected to be able to edit, and the
 				     rung is the useful part of the answer — it names what to ask for. -->
 				{#if permsSettled && !mayEditPolicy}
-					<p class="mut">Changing this policy needs the owner rung (<code>can_delete</code>) on {ns}.</p>
+					<p class="mut">{REASON_EDIT}</p>
 				{/if}
 				{#if policyError}<p class="error">{policyError}</p>{/if}
 			</section>
