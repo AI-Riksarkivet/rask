@@ -161,7 +161,35 @@ def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str]) -
     return result
 
 
-def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8) -> WriteResult:
+#: The schema-metadata key that DECLARES a dataset's canonical lineage/FGA name.
+#:
+#: The maintenance sweep cannot derive it. Its URI is composed from the NAMESPACE alone
+#: (`.../medallion/<namespace>`) while the canonical id is a separate literal, so `medallion/bronze` is
+#: both `bronze$events` and `bronze$pages` — one path, two objects. And the name must equal the OpenFGA
+#: object id, because notification delivery re-checks `can_get_metadata` against `table:<output name>`;
+#: a wrong name marks every recipient HIDDEN, which is worse than emitting nothing. So the writer, which
+#: is the only party that knows both, declares it.
+#:
+#: Read by `maintenance.core.lineage_emit.declared_table_id`. Without it the sweep emits no maintenance
+#: provenance for these datasets AND no per-dataset FAIL event — which is the estate's only per-dataset
+#: maintenance failure surface.
+LINEAGE_DATASET_ID_KEY = "lineage.dataset_id"
+
+
+def _with_declared_id(table: pa.Table, dataset_id: str | None) -> pa.Table:
+    """Stamp the canonical name onto the table's schema metadata, preserving what is already there.
+
+    MERGES rather than replaces: Lance keeps other producers' schema metadata (the #21 self-describing
+    coordinates among them), and a replace would silently destroy it.
+    """
+    if not dataset_id:
+        return table
+    existing = dict(table.schema.metadata or {})
+    existing[LINEAGE_DATASET_ID_KEY.encode()] = dataset_id.encode()
+    return table.replace_schema_metadata(existing)
+
+
+def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8, dataset_id: str | None = None) -> WriteResult:
     """Seed a small synthetic ``bronze$events`` dataset — the fake medallion-producer ingest at the head of the
     cascade (R23: the producer writes the first governed tier directly; there is no raw dataset).
 
@@ -183,7 +211,7 @@ def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8) -> 
     # at the cascade head to keep durable row identity available (e.g. to key blob carry-forward by _rowid if
     # a stage ever gains append/upsert). Free on top of overwrite; the positional read path is unaffected.
     lance.write_dataset(
-        table,
+        _with_declared_id(table, dataset_id),
         uri,
         mode="overwrite",
         storage_options=storage_options,
@@ -218,7 +246,9 @@ def _index_lineage(uri: str, storage_options: dict[str, str]) -> None:
     )
 
 
-def transform_stage(from_uri: str, to_uri: str, storage_options: dict[str, str], *, stage: str, lineage: LineageDoc | None = None) -> WriteResult:
+def transform_stage(
+    from_uri: str, to_uri: str, storage_options: dict[str, str], *, stage: str, lineage: LineageDoc | None = None, dataset_id: str | None = None
+) -> WriteResult:
     """Read the upstream Lance dataset, transform, write the downstream dataset (the generic stage).
 
     Every stage stamps the ``stage`` provenance column (set, not appended twice, so re-running over an
@@ -253,7 +283,7 @@ def transform_stage(from_uri: str, to_uri: str, storage_options: dict[str, str],
     # 2.2 + stable row ids like seed_bronze: every dataset the cascade writes is on the current format (so a blob
     # column never trips "Blob v2 requires file version >= 2.2" mid-cascade) and keeps durable row identity.
     lance.write_dataset(
-        out,
+        _with_declared_id(out, dataset_id),
         to_uri,
         mode="overwrite",
         storage_options=storage_options,

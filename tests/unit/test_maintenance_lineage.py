@@ -437,3 +437,45 @@ def test_an_UNDECLARED_dataset_yields_None_rather_than_a_guess(tmp_path: Any) ->
     lance.write_dataset(pa.table({"v": [1]}), uri)
 
     assert declared_table_id(lance.dataset(uri)) is None
+
+
+def test_the_PRODUCER_stamp_and_the_SWEEP_read_agree(tmp_path: Any) -> None:
+    """The two halves of T6, asserted together — because either alone is silently useless.
+
+    The medallion writer is the only party holding BOTH the URI (composed from the namespace) and the
+    canonical table id (a separate project-qualified literal). `medallion/bronze` is both
+    `bronze$events` and `bronze$pages`, so nothing downstream can derive one from the other. The writer
+    declares; the sweep reads.
+
+    Pinned as one test on purpose: a stamp under a key the reader does not look for, or a reader
+    looking for a key nobody stamps, both leave the cascade's datasets emitting no provenance and — the
+    part that matters — no per-dataset FAIL event, which is the estate's only maintenance failure
+    surface for those tiers.
+    """
+    import lance
+    import pyarrow as pa
+    from maintenance.core.lineage_emit import declared_table_id
+    from medallion.services.compute import LINEAGE_DATASET_ID_KEY, _with_declared_id
+
+    stamped = _with_declared_id(pa.table({"v": [1, 2, 3]}), "silver$features")
+    uri = str(tmp_path / "medallion-silver.lance")
+    lance.write_dataset(stamped, uri)
+
+    assert declared_table_id(lance.dataset(uri)) == "silver$features", "the sweep must read what the producer stamped"
+    # The two modules must name the SAME key — they are in different services and cannot share a constant.
+    from maintenance.core.lineage_emit import LINEAGE_DATASET_ID_KEY as READER_KEY
+
+    assert LINEAGE_DATASET_ID_KEY == READER_KEY, "producer and reader disagree about the metadata key"
+
+
+def test_the_stamp_PRESERVES_other_schema_metadata(tmp_path: Any) -> None:
+    """A replace would destroy the #21 self-describing coordinates other producers write. Merge only."""
+    import pyarrow as pa
+    from medallion.services.compute import _with_declared_id
+
+    table = pa.table({"v": [1]}).replace_schema_metadata({"lineage.run_id": "r-1", "owner": "data_eng"})
+    out = _with_declared_id(table, "gold$catalog")
+
+    metadata = {k.decode(): v.decode() for k, v in (out.schema.metadata or {}).items()}
+    assert metadata["lineage.dataset_id"] == "gold$catalog"
+    assert metadata["lineage.run_id"] == "r-1" and metadata["owner"] == "data_eng", "the stamp destroyed existing metadata"

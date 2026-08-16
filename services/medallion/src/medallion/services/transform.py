@@ -457,6 +457,13 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                             settings.storage_options(),
                             stage=settings.to_namespace,
                             lineage=lineage_doc,
+                            # DECLARE the canonical name. `to_uri` is composed from the NAMESPACE
+                            # alone, while `to_dataset` is the project-qualified table id — so nothing
+                            # downstream can derive one from the other (`medallion/bronze` is both
+                            # `bronze$events` and `bronze$pages`). The writer is the only party holding
+                            # both, so it stamps it; the maintenance sweep reads it back to emit this
+                            # dataset's provenance and its FAIL events.
+                            dataset_id=to_dataset,
                         )
                     span.set_attribute("lance.version", result.version)
                     span.set_attribute("lance.row_count", result.row_count)
