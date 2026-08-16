@@ -55,6 +55,7 @@ function declaredNames(spec: Record<string, unknown>): Record<string, Set<string
 		schema: new Set(),
 		property: new Set(),
 		parameter: new Set(),
+		enumMember: new Set(),
 	};
 
 	const paths = (spec.paths ?? {}) as Record<string, Record<string, unknown>>;
@@ -72,8 +73,28 @@ function declaredNames(spec: Record<string, unknown>): Record<string, Set<string
 	for (const [name, schema] of Object.entries(schemas)) {
 		out.schema!.add(name);
 		for (const prop of Object.keys(schema?.properties ?? {})) out.property!.add(prop);
+		// Enum MEMBERS, walked recursively — a vocabulary lives in the values, not the schema name, and
+		// this is the drift that reads as "the client cannot name an event the backend publishes".
+		// `ControlAction` is the live case: 30 members inside `CatalogControlEvent.properties.action`.
+		collectEnums(schema, out.enumMember!);
 	}
 	return out;
+}
+
+/** Every string in an `enum` anywhere beneath `node`, however deeply nested. */
+function collectEnums(node: unknown, into: Set<string>): void {
+	if (!node || typeof node !== 'object') return;
+	if (Array.isArray(node)) {
+		for (const item of node) collectEnums(item, into);
+		return;
+	}
+	for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+		if (key === 'enum' && Array.isArray(value)) {
+			for (const member of value) if (typeof member === 'string') into.add(member);
+		} else {
+			collectEnums(value, into);
+		}
+	}
 }
 
 /**
@@ -106,6 +127,25 @@ describe('generated API clients track their specs', () => {
 				// assertion below by having nothing to assert.
 				expect(declared.operation!.size).toBeGreaterThan(10);
 				expect(declared.schema!.size).toBeGreaterThan(10);
+			});
+
+			it('carries every enum member the spec declares', () => {
+				// Matched as a quoted literal, not a bare token: openapi-typescript emits
+				// `action: "grant_added" | "grant_revoked" | …`, and an enum VALUE — unlike an operation
+				// or property name — is under no obligation to be a valid identifier. Today every
+				// ControlAction member happens to be snake_case and would match the bare-token test by
+				// luck; the first value containing a dot or a space would silently stop being checked.
+				const source = readFileSync(pair.out, 'utf8');
+				const missing = [...declared.enumMember!].filter((m) => !source.includes(`"${m}"`)).sort();
+				expect(
+					missing,
+					missing.length
+						? `${pair.out.replace(REPO_ROOT + '/', '')} is missing ${missing.length} enum member(s): ` +
+								`${missing.slice(0, 12).join(', ')}${missing.length > 12 ? ', …' : ''}\n\n` +
+								`A vocabulary the backend publishes that the client cannot NAME. Regenerate:\n` +
+								`    bun --cwd=frontend run ${pair.name}`
+						: undefined,
+				).toEqual([]);
 			});
 
 			for (const kind of ['operation', 'schema', 'property', 'parameter'] as const) {

@@ -314,8 +314,24 @@ def test_table_published_is_in_the_control_VOCABULARY() -> None:
 
     `ControlAction` reaches the frontend through `docs/catalog-openapi.json` →
     `frontend/packages/api/src/generated/catalog.ts`. An action added without regenerating leaves the
-    TS client unable to NAME an event the backend publishes, and `test_openapi_contract` fails — so
-    this guards the Python half and that contract test guards the rest.
+    TS client unable to NAME an event the backend publishes.
+
+    THIS DOCSTRING NAMED THE WRONG GUARD until 2026-08-16. It claimed `test_openapi_contract` fails on
+    that drift; it does not, and cannot. That test compares only the SET OF PATH NAMES and the SET OF
+    SCHEMA NAMES (`tests/unit/test_openapi_contract.py:51-57`) — a new `ControlAction` member only
+    extends the `enum` array inside the existing `CatalogControlEvent` schema, so no name changes and
+    it passes. Citing a guard that does not guard is worse than citing none: it is why nobody looked.
+
+    The two that DO hold, one per hop:
+
+    * Python → spec: `make openapi-check` / `dagger call openapi` regenerates and diffs BYTE-EXACT, so
+      an action added without `make openapi` fails there.
+    * spec → TS: `@rask/zone-contract`'s `generated-client-freshness.test.ts`, which asserts every enum
+      MEMBER the spec declares appears as a quoted literal in the generated client. Added the same day,
+      after `lineage.ts` was found 19 days and three spec commits stale with nothing checking it.
+
+    So this test guards the Python half, and those two guard the hops out — none of them the one this
+    docstring used to name.
     """
     from typing import get_args
 
