@@ -298,6 +298,10 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
             # that names the field overrides it below, which is the point of per-tier tuning.
             batch_size: int = settings.scan_batch_size
             auto_cleanup_interval: int | None = None  # #58 — set means the DATASET owns version cleanup
+            # #60 — the columns this target's queries depend on being indexed. Reporting only, and
+            # unreachable until a policy could name them: `compact_one` has accepted this argument all
+            # along and no caller ever supplied one, so the dropped-index check was dead code.
+            index_columns: list[str] | None = None
             policy: dict[str, Any] | None
             try:
                 policy = maintenance_policies.resolve_policy(policy_records, uri, logical_id=table_id_from_uri(uri), delimiter=settings.delimiter)
@@ -322,6 +326,9 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
                         batch_size = int(str(policy["scan_batch_size"]))
                     if policy.get("auto_cleanup_interval_commits"):
                         auto_cleanup_interval = int(str(policy["auto_cleanup_interval_commits"]))
+                    if policy.get("index_columns"):
+                        declared = policy["index_columns"]
+                        index_columns = [str(c) for c in declared] if isinstance(declared, list) else None
             except Exception as exc:
                 log.warning("compaction_policy_ignored", extra={"uri": uri, "error": str(exc)})
                 effective_older_than, retain_versions, target_rows, policy = older_than, None, None, None
@@ -344,6 +351,7 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
                 compact_threads=settings.compact_threads,
                 protected=protected,
                 auto_cleanup_interval_commits=auto_cleanup_interval,
+                index_columns=index_columns,
             )
             if policy is not None and policy.get("compact_interval_hours") and result.error is None and result.refused is None:
                 # Stamp cadence state only after a pass that could actually DO something, so a failed

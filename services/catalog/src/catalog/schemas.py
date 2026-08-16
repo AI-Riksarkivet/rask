@@ -464,6 +464,21 @@ class PolicyRequest(BaseModel):
     # Turning it on DISABLES the sweep's own cleanup for that target — one owner, never two. Both
     # running is not additive, it is two processes racing to delete the same manifests.
     auto_cleanup_interval_commits: int | None = Field(default=None, ge=1, le=1_000_000)
+    # #60 — the columns this target's queries DEPEND ON having an index for. Reporting only: the sweep
+    # never builds or drops an index, it says when one it expected is absent.
+    #
+    # Opt-in by necessity rather than by taste. Without a declared expectation there is no way to tell
+    # "this column was never indexed" from "this column lost its index", and reporting every unindexed
+    # column in a wide table is noise nobody reads — so `inspect_indices` asks for the columns a policy
+    # names and checks the other three #60 states unconditionally.
+    #
+    # It had no way to be named until 2026-08-16. `compact_one(index_columns=…)` existed, no caller ever
+    # supplied it, and no policy field carried it, so the dropped-index check was unreachable by
+    # construction while its docstring promised "a policy that names the columns it depends on gets a
+    # real answer". A dropped index makes `optimize_indices()` a successful no-op — the pass stays green
+    # while every query on that column falls back to a full scan — which is exactly the silent-degradation
+    # class this whole report exists to surface.
+    index_columns: list[str] | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _not_empty(self) -> Self:

@@ -495,3 +495,35 @@ def test_a_migrated_policy_does_not_leave_the_destination_unconfigured_on_a_part
     mp.migrate_policy(root, {}, "table", "a$t", "b$t")
 
     assert seen == ["b$t"], "the destination must be written BEFORE the source is deleted"
+
+
+def test_a_policy_can_name_the_columns_it_depends_on_being_INDEXED(tmp_path: Path) -> None:
+    """#60's dropped-index check was unreachable by construction.
+
+    `compact_one(index_columns=…)` has always accepted the argument, `inspect_indices` has always
+    implemented the check, and NO caller ever supplied one — there was no policy field to carry it. So
+    the docstring's promise ("a policy that names the columns it depends on gets a real answer") was
+    true of the function and false of the system, and the one #60 state that needs an expectation
+    could never fire.
+
+    It matters because a dropped index makes `optimize_indices()` a SUCCESSFUL NO-OP: the sweep stays
+    green while every query on that column falls back to a full scan. Silent degradation is the whole
+    class this report exists to surface.
+    """
+    root = str(tmp_path)
+    mp.put_policy(root, {}, {"kind": "table", "id": "bronze$pages", "index_columns": ["page_key", "text"]})
+
+    resolved = mp.get_policy(root, {}, "table", "bronze$pages")
+
+    assert resolved is not None
+    assert resolved["index_columns"] == ["page_key", "text"], "the declared columns must survive the round trip"
+
+
+def test_the_policy_SCHEMA_accepts_index_columns() -> None:
+    """The field has to exist on `PolicyRequest`, not merely survive as loose JSON on the record —
+    otherwise the API refuses the only body that could set it."""
+    from catalog.schemas import PolicyRequest
+
+    policy = PolicyRequest(index_columns=["page_key"])
+    assert policy.index_columns == ["page_key"]
+    assert PolicyRequest(retention_days=30).index_columns is None, "undeclared must stay None, never an empty expectation"

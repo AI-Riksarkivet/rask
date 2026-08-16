@@ -7686,6 +7686,21 @@
             ],
             "title": "Compact Interval Hours"
           },
+          "index_columns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index Columns"
+          },
           "optimize_indices_enabled": {
             "default": true,
             "title": "Optimize Indices Enabled",

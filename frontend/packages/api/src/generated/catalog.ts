@@ -6609,6 +6609,8 @@ export interface components {
             compact_enabled: boolean;
             /** Compact Interval Hours */
             compact_interval_hours?: number | null;
+            /** Index Columns */
+            index_columns?: string[] | null;
             /**
              * Optimize Indices Enabled
              * @default true
