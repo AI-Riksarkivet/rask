@@ -2854,3 +2854,35 @@ def test_the_sweep_lock_is_only_correct_while_maintenance_CANNOT_scale() -> None
         "compact_files()/cleanup_old_versions() on the same datasets. Make the lock distributed before "
         "making the deployment scalable."
     )
+
+
+def test_every_perses_dashboard_is_declared_ONCE_and_is_valid_json() -> None:
+    """A REPEATED ConfigMap KEY silently discards a dashboard — YAML keeps the last one and says nothing.
+
+    `notifications.json` was declared twice, byte-identical, so the file carried 497 lines to provision
+    six documents. Harmless only because the duplicate agreed with the original: had one copy been
+    edited, Perses would have served the OTHER, and every reading of the template would have shown the
+    change that was not deployed. Neither Helm nor `kubectl apply` reports a duplicate key.
+
+    The JSON check rides along because the same failure shape applies one layer down: this template is
+    JSON embedded in YAML embedded in Go templating, and a dashboard that does not parse is not a
+    render error — Perses simply skips it at provisioning time, on a pod nobody is watching, leaving a
+    dashboard that "exists" in the chart and nowhere else.
+    """
+    raw = (REPO / "chart/templates/perses-dashboards.yaml").read_text()
+
+    keys = re.findall(r"^  ([A-Za-z0-9_.-]+\.json): \|", raw, re.MULTILINE)
+    dupes = sorted({k for k in keys if keys.count(k) > 1})
+    assert dupes == [], f"these Perses documents are declared more than once, so all but the last are silently dropped: {dupes}"
+
+    # Render it, so the assertion covers what SHIPS rather than the pre-template text.
+    docs = [d for d in yaml.safe_load_all(_helm_template("observability.enabled=true")) if d]
+    configmaps = [d for d in docs if d.get("kind") == "ConfigMap" and "perses-dashboards" in d.get("metadata", {}).get("name", "")]
+    assert len(configmaps) == 1, f"expected exactly one perses-dashboards ConfigMap, got {len(configmaps)}"
+    data = configmaps[0].get("data", {})
+    assert len(data) == len(set(keys)), f"rendered {len(data)} documents from {len(set(keys))} declared keys"
+    for name, document in data.items():
+        try:
+            json.loads(document)
+        except json.JSONDecodeError as exc:  # noqa: PERF203 — one message per offender is the point
+            pytest.fail(f"{name} is not valid JSON, so Perses will skip it at provisioning time: {exc}")

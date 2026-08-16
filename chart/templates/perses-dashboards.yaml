@@ -5,7 +5,7 @@ perses.config.provisioning.folders (see values.yaml); Perses loads the Project +
 on startup and reconciles them every provisioning interval. Queries target the default
 `greptimedb` Prometheus datasource.
 
-ONE project ("rask"), five dashboards — the merged estate is one platform under one
+ONE project ("rask"), six dashboards — the merged estate is one platform under one
 release, so lance-ns's dashboards moved from the `lance-ns` project onto this one rather
 than provisioning a second, near-empty project beside it:
   fleet-red    — rask's fleet RED view (OTLP http.server metrics from service_kit.setup_otel)
@@ -13,6 +13,7 @@ than provisioning a second, near-empty project beside it:
   service-flow — the event-driven medallion cascade edges + per-service activity
   training     — per-model training run metrics (Ray train job → OTLP)
   notifications— the targeted inbox: both ingress lanes, fan-out outcomes, the DLQ floor
+  maintenance  — the 120s table-maintenance sweep: coverage, refusals, and what it RECLAIMED
 
 Gated on observability.enabled ALONE, matching Chart.yaml's `condition: observability.enabled`
 on the perses dependency — so the dashboards exist exactly when Perses does. (Both charts
@@ -412,60 +413,62 @@ data:
         ]
       }
     }
-  notifications.json: |
+  maintenance.json: |
     {
       "kind": "Dashboard",
-      "metadata": { "name": "notifications", "project": "rask" },
+      "metadata": { "name": "maintenance", "project": "rask" },
       "spec": {
-        "display": { "name": "Notifications — the targeted inbox", "description": "The notification plane's two ingress lanes, its fan-out outcomes and its dead-letter floor. The lane split is the panel worth reading: the BUS carries run lifecycle, the FEED carries every producer that emits lineage over HTTP only (ingest, Ray TRAIN, external OpenLineage), and a feed lane flat at zero on a busy estate is a reconciler that is admitted but granted nothing — it runs perfectly and reconciles zero." },
+        "display": { "name": "Table maintenance — the sweep", "description": "What the 120s sweep actually did: datasets covered, what it refused, and what it RECLAIMED. Counters are compaction_* (the service was renamed to maintenance; the metric names were not)." },
         "duration": "6h",
         "panels": {
-          "ingressByLane": {
+          "runs": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Ingress events /s by lane" },
+              "display": { "name": "Sweep runs /s (started vs completed)" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (lance_notifications_lane) (rate(notifications_ingress_events_total[5m]))",
-                "seriesNameFormat": {{ "{{lance_notifications_lane}}" | quote }} } } } } ]
+              "queries": [
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(rate(compaction_runs_started_total[5m]))", "seriesNameFormat": "started" } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(rate(compaction_runs_total[5m]))", "seriesNameFormat": "completed" } } } }
+              ]
             }
           },
-          "ingressByOutcome": {
+          "coverage": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Ingress outcomes /s (dropped + retried are the ones to watch)" },
+              "display": { "name": "Datasets per tick — swept vs refused vs trash-skipped" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (lance_notifications_outcome) (rate(notifications_ingress_events_total[5m]))",
-                "seriesNameFormat": {{ "{{lance_notifications_outcome}}" | quote }} } } } } ]
+              "queries": [
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(increase(compaction_datasets_swept_total[10m]))", "seriesNameFormat": "swept" } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(increase(compaction_datasets_refused_total[10m]))", "seriesNameFormat": "refused" } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(increase(compaction_datasets_trashed_skipped_total[10m]))", "seriesNameFormat": "trash-skipped" } } } }
+              ]
             }
           },
-          "fanoutOutcomes": {
+          "reclaimed": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Per-recipient delivery outcomes /s" },
+              "display": { "name": "RECLAIMED per hour — fragments merged + versions GC'd (flat zero means the sweep is doing no work)" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (lance_notifications_outcome) (rate(notifications_fanout_recipients_total[5m]))",
-                "seriesNameFormat": {{ "{{lance_notifications_outcome}}" | quote }} } } } } ]
+              "queries": [
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(increase(compaction_fragments_removed_total[1h]))", "seriesNameFormat": "fragments removed" } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(increase(compaction_versions_removed_total[1h]))", "seriesNameFormat": "versions removed" } } } }
+              ]
             }
           },
-          "deadLettered": {
+          "indices": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Dead-lettered deliveries /s (the floor under RETRY)" },
+              "display": { "name": "Indices optimized per hour" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum(rate(notifications_dlq_parked_total[5m]))" } } } } ]
-            }
-          },
-          "actorTurnQueue": {
-            "kind": "Panel",
-            "spec": {
-              "display": { "name": "InboxActor pending calls (turn-queue depth)" },
-              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "max(dapr_runtime_actor_pending_actor_calls{actor_type=\"InboxActor\"})" } } } } ]
+                "query": "sum(increase(compaction_indices_optimized_total[1h]))", "seriesNameFormat": "indices optimized" } } } } ]
             }
           }
         },
@@ -473,21 +476,12 @@ data:
           {
             "kind": "Grid",
             "spec": {
-              "display": { "title": "Ingress" },
+              "display": { "title": "Sweep" },
               "items": [
-                { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/ingressByLane" } },
-                { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/ingressByOutcome" } }
-              ]
-            }
-          },
-          {
-            "kind": "Grid",
-            "spec": {
-              "display": { "title": "Delivery" },
-              "items": [
-                { "x": 0, "y": 0, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/fanoutOutcomes" } },
-                { "x": 8, "y": 0, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/deadLettered" } },
-                { "x": 16, "y": 0, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/actorTurnQueue" } }
+                { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/runs" } },
+                { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/coverage" } },
+                { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/reclaimed" } },
+                { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/indices" } }
               ]
             }
           }
