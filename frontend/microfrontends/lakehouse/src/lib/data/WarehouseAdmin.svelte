@@ -273,7 +273,7 @@
 	<header>
 		<WarehouseIcon size={16} />
 		<h1>Warehouses</h1>
-		<span class="sub mono">bucket-per-warehouse physical tenancy · project-admin gated</span>
+		<span class="sub mono">every warehouse your grants allow, across projects · bucket-per-warehouse tenancy · project-admin gated</span>
 	</header>
 
 	{#if banner}

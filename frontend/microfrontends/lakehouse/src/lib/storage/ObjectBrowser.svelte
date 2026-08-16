@@ -248,7 +248,7 @@
 <div class="page">
 	<header>
 		<h1>Objects</h1>
-		<span class="sub mono">the warehouse buckets · s3://{bucket}/{prefix}</span>
+		<span class="sub mono">every store the catalog knows · s3://{bucket}/{prefix}</span>
 	</header>
 
 	<div class="toolbar">

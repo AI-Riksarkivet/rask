@@ -114,6 +114,8 @@
 		</header>
 		<p class="text-muted-foreground mb-6 text-xs">
 			The active project, seen from the lakehouse — its hierarchy and the warehouses that claim it.
+			Only this page is per project: Catalog and Lineage list every table, namespace and run your
+			grants allow, across the estate.
 			<!-- UP a rung and ACROSS the zone seam: the project record itself is the home zone's.
 			     data-sveltekit-reload is mandatory — a soft nav would resolve against this zone's route
 			     manifest, which owns no /projects route, and 404. -->

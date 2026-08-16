@@ -219,7 +219,7 @@
 <div class="page">
 	<header>
 		<h1>Tables</h1>
-		<span class="sub mono">the catalog registry · &lt;namespace&gt;$&lt;table&gt;</span>
+		<span class="sub mono">the catalog registry, estate-wide — every table your grants allow · &lt;namespace&gt;$&lt;table&gt;</span>
 		{#if !unauthorized}
 			<button class="new" onclick={() => (declaring = !declaring)}>
 				<Plus size={12} /> Declare table

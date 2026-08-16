@@ -12,12 +12,18 @@
 </script>
 
 <script lang="ts">
+	import { GatedAction } from '@rask/ui/gated-action';
 	import { Select } from '@rask/ui/select';
 	import { enter } from '@rask/ui/motion';
 	import { Network, ShieldAlert } from '@lucide/svelte';
 	import { Background, BackgroundVariant, Controls, type Edge, SvelteFlow } from '@xyflow/svelte';
 	import type { AccessGraph } from './namespace';
-	import { fetchAccessGraph, grantAccess, revokeAccess } from './remote/access-objects.remote';
+	import {
+		fetchAccessGraph,
+		fetchMyPermissions,
+		grantAccess,
+		revokeAccess,
+	} from './remote/access-objects.remote';
 	import { FlowAutoFit } from '@rask/flow';
 
 	let { dataset }: { dataset: string } = $props();
@@ -34,6 +40,20 @@
 	let mgRelation = $state('');
 	let mgBusy = $state(false);
 	let mgResult = $state<{ tone: 'ok' | 'fail'; text: string } | null>(null);
+
+	// #143, same treatment as `@rask/ui`'s GrantsPanel — this component carries a SECOND copy of the
+	// grant/revoke UI, which is how the wrong denial message survived in two places. Keyed by dataset,
+	// so one object's verdicts never gate another's buttons after a navigation. Declared AFTER the
+	// `mg*` state it reads: `$derived` is lazy, but keeping the reading order honest is cheaper than
+	// relying on that.
+	let perms = $state<{ for: string; map: Record<string, boolean> } | null>(null);
+	const permMap = $derived(perms?.for === dataset ? perms.map : null);
+	// Unknown (read failed, or not loaded yet) renders LIVE: this gate exists to explain a refusal, not
+	// to invent one from a missing read.
+	const mayGrant = $derived(
+		permMap === null || !mgRelation ? true : permMap[`can_grant_${mgRelation}`] === true,
+	);
+	const mayRevoke = $derived(permMap === null ? true : permMap.can_revoke_grant === true);
 
 	function rebuild(g: AccessGraph): void {
 		const obj = g.object;
@@ -73,6 +93,13 @@
 	async function load(): Promise<void> {
 		const current = dataset;
 		const res = await fetchAccessGraph({ kind: 'table', id: current });
+		// The caller's own verdicts, for the #143 gate on Grant/Revoke below. Fire-and-forget with the
+		// same latest-wins guard: a failed permission read must not blank the graph, it just leaves the
+		// verdicts unknown, which renders the controls live.
+		void fetchMyPermissions({ kind: 'table', id: current }).then((r) => {
+			if (dataset !== current) return;
+			perms = r.ok ? { for: current, map: r.data.permissions } : null;
+		});
 		if (dataset !== current) return; // navigated away — drop stale
 		if (res.ok) {
 			graph = res.data;
@@ -182,20 +209,35 @@
 				placeholder="rung…"
 				options={GRANTABLE.map((r) => ({ value: r, label: r }))}
 			/>
-			<button
-				class="btn"
-				disabled={mgBusy || !mgUser.trim() || !mgRelation}
-				onclick={() => runManage(true)}
+			<!-- #143: refused stays visible and says why. `disabled` is conditional on the verdict because
+			     GatedAction deliberately avoids the native attribute (it would kill the tooltip and drop
+			     the control from the tab order), so a natively-disabled child defeats the mechanism. -->
+			<GatedAction
+				allowed={mayGrant}
+				action={`Grant ${mgRelation || 'a rung'}`}
+				reason={`Granting ${mgRelation || 'a rung'} here needs can_grant_${mgRelation || '<rung>'} on this table — held by a grant-manager, or by someone holding ${mgRelation || 'that rung'} plus the grant option. Owning the table is not sufficient if access is centrally managed.`}
 			>
-				{mgBusy ? '…' : 'Grant'}
-			</button>
-			<button
-				class="btn ghost"
-				disabled={mgBusy || !mgUser.trim() || !mgRelation}
-				onclick={() => runManage(false)}
+				<button
+					class="btn"
+					disabled={mayGrant && (mgBusy || !mgUser.trim() || !mgRelation)}
+					onclick={() => runManage(true)}
+				>
+					{mgBusy ? '…' : 'Grant'}
+				</button>
+			</GatedAction>
+			<GatedAction
+				allowed={mayRevoke}
+				action="Revoke"
+				reason="Revoking here needs can_revoke_grant on this table — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them."
 			>
-				Revoke
-			</button>
+				<button
+					class="btn ghost"
+					disabled={mayRevoke && (mgBusy || !mgUser.trim() || !mgRelation)}
+					onclick={() => runManage(false)}
+				>
+					Revoke
+				</button>
+			</GatedAction>
 			{#if mgResult}
 				<span class="res" class:ok={mgResult.tone === 'ok'} class:fail={mgResult.tone === 'fail'}
 					>{mgResult.text}</span

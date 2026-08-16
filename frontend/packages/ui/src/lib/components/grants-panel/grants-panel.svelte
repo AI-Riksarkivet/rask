@@ -10,6 +10,7 @@
 	// catalog types carry these fields can pass its functions straight through without adapters.
 	// Collapsed by default: one owner-tier round-trip per dataset, with definitive outcomes (the ACL,
 	// 401/403/501) cached and transient failures (offline, 5xx) retried on the next open.
+	import { GatedAction } from '../gated-action/index.js';
 	import { ChevronRight, ShieldCheck } from '@lucide/svelte';
 	import { Select } from '../select/index.js';
 	import Subject from '../identity/subject.svelte';
@@ -41,6 +42,20 @@
 			user: string,
 			relation: string,
 		) => Promise<GrantsResult<{ user: string }>>;
+		/** The caller's OWN verdicts on this object — `{ can_grant_reader: true, … }`.
+		 *
+		 *  OPTIONAL on purpose: two of the three call sites do not fetch it yet, and a required member
+		 *  would break them at the type level. Absent means "unknown", which renders the controls live
+		 *  exactly as before — this makes the gate possible, it does not make it silently fail closed on
+		 *  a caller that has not been wired up.
+		 *
+		 *  A 5th client member rather than a `permissions` prop, because the panel owns the flow and the
+		 *  zone owns the transport (the rule this whole file follows). A prop would push per-dataset
+		 *  refetching into every caller. */
+		fetchMyPermissions?: (
+			kind: GrantsKind,
+			id: string,
+		) => Promise<GrantsResult<{ permissions: Record<string, boolean> }>>;
 	};
 
 	let {
@@ -48,6 +63,11 @@
 		kind = 'table',
 		client,
 	}: { dataset: string; kind?: GrantsKind; client: GrantsClient } = $props();
+
+	// #143: the caller's own verdicts, KEYED BY DATASET like `review.for` / `simFor` / `mgFor` above.
+	// An unkeyed field would let one object's permissions gate another's buttons on navigation — the
+	// exact cross-dataset bleed every other piece of state in this component is keyed to avoid.
+	let perms = $state<{ for: string; map: Record<string, boolean> } | null>(null);
 
 	// #72 the base rungs a grant-manager may hand out — the model's directly assignable relations,
 	// least→most privilege. NOT the can_* actions the review row shows (those are derived); a
@@ -102,6 +122,22 @@
 	let mgFor = $state<string | null>(null);
 	let mgResult = $state<{ tone: 'ok' | 'fail'; text: string } | null>(null);
 
+	// #143 verdicts. `undefined` (no `fetchMyPermissions` wired, or the read failed) means UNKNOWN, and
+	// unknown renders the control live — this gate exists to explain a refusal, not to invent one from
+	// a missing read. Grant is per-RUNG (`can_grant_<rung>`), revoke is `can_revoke_grant`; they differ
+	// and conflating them is the bug this same file carried in its failure message until today.
+	const permMap = $derived(perms?.for === dataset ? perms.map : null);
+	const mayGrant = $derived(
+		permMap === null || !mgRelation ? true : permMap[`can_grant_${mgRelation}`] === true,
+	);
+	const mayRevoke = $derived(permMap === null ? true : permMap.can_revoke_grant === true);
+	const grantReason = $derived(
+		`Granting ${mgRelation || 'a rung'} here needs can_grant_${mgRelation || '<rung>'} on this ${kind} — held by a grant-manager, or by someone holding ${mgRelation || 'that rung'} plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`,
+	);
+	const revokeReason = $derived(
+		`Revoking here needs can_revoke_grant on this ${kind} — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them.`,
+	);
+
 	const open = $derived(openedFor === dataset);
 	const shown = $derived(review?.for === dataset ? review : null);
 	const loading = $derived(loadingFor === dataset);
@@ -117,6 +153,16 @@
 		loadingFor = dataset;
 		failedFor = null;
 		const current = dataset;
+		// The caller's own verdicts, fetched ALONGSIDE the review rather than on click. #143 renders a
+		// refused control disabled WITH ITS REASON, so the verdict has to be in hand before the user
+		// reaches for the button — asking at click time would be the post-hoc 403 this replaces.
+		// Fire-and-forget: a failure here must not block the review, which is the panel's main job.
+		if (client.fetchMyPermissions) {
+			void client.fetchMyPermissions(kind, current).then((r) => {
+				if (dataset !== current) return; // latest-wins, same rule as the review below
+				perms = r.ok ? { for: current, map: r.data.permissions } : null;
+			});
+		}
 		try {
 			const res = await client.fetchAccess(kind, current);
 			// Latest-wins: the user clicked away while this was in flight — drop the stale result.
@@ -309,20 +355,32 @@
 						placeholder="rung…"
 						options={GRANTABLE.map((r) => ({ value: r, label: RUNG_LABEL[r] ?? r }))}
 					/>
-					<button
-						class="btn"
-						disabled={mgBusy || !mgUser.trim() || !mgRelation}
-						onclick={() => runManage(true)}
-					>
-						{mgBusy ? '…' : 'Grant'}
-					</button>
-					<button
-						class="btn ghost"
-						disabled={mgBusy || !mgUser.trim() || !mgRelation}
-						onclick={() => runManage(false)}
-					>
-						Revoke
-					</button>
+					<!-- #143: a refused action stays VISIBLE and says why, rather than vanishing.
+					     `disabled` is deliberately conditional on the verdict. GatedAction does not use the
+					     native attribute — that would kill its tooltip and drop the control from the tab
+					     order — so a natively-disabled child defeats the whole mechanism. When refused we
+					     therefore leave the button enabled and let GatedAction's capture-phase guard block
+					     the click; form-validity disabling still applies in the ALLOWED case, where it is
+					     the only thing standing between the user and a pointless request. Same shape as
+					     ProjectGallery's `New project`, the ruling's reference call site. -->
+					<GatedAction allowed={mayGrant} action={`Grant ${mgRelation || 'a rung'}`} reason={grantReason}>
+						<button
+							class="btn"
+							disabled={mayGrant && (mgBusy || !mgUser.trim() || !mgRelation)}
+							onclick={() => runManage(true)}
+						>
+							{mgBusy ? '…' : 'Grant'}
+						</button>
+					</GatedAction>
+					<GatedAction allowed={mayRevoke} action="Revoke" reason={revokeReason}>
+						<button
+							class="btn ghost"
+							disabled={mayRevoke && (mgBusy || !mgUser.trim() || !mgRelation)}
+							onclick={() => runManage(false)}
+						>
+							Revoke
+						</button>
+					</GatedAction>
 				</div>
 				{#if mgResultShown}
 					<p

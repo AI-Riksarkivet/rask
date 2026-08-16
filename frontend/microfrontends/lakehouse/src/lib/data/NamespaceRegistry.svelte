@@ -280,7 +280,7 @@
 <div class="page">
 	<header>
 		<h1>Namespaces</h1>
-		<span class="sub mono">grouped from the catalog registry · &lt;namespace&gt;$&lt;table&gt;</span>
+		<span class="sub mono">grouped from the catalog registry, estate-wide — every namespace your grants allow · &lt;namespace&gt;$&lt;table&gt;</span>
 		<a
 			class="new"
 			href={`${base}/catalog/warehouses`}

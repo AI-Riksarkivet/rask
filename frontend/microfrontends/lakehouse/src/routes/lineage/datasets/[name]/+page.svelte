@@ -13,12 +13,7 @@
 	import ReadersPanel from '$lib/ReadersPanel.svelte';
 	import RunInputs from '$lib/lineage/RunInputs.svelte';
 	import { fetchDownstream, fetchProducers, fetchUpstream } from '$lib/api';
-	import {
-		checkAccess,
-		fetchAccess,
-		grantAccess,
-		revokeAccess,
-	} from '$lib/data/remote/access-objects.remote';
+	import { checkAccess, fetchAccess, fetchMyPermissions, grantAccess, revokeAccess } from '$lib/data/remote/access-objects.remote';
 	import type { DatasetRef, ProducerInfo } from '@rask/api/lineage';
 	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
 
@@ -31,6 +26,10 @@
 		checkAccess: (kind, id, user, relation) => checkAccess({ kind, id, user, relation }),
 		grantAccess: (kind, id, user, relation) => grantAccess({ kind, id, user, relation }),
 		revokeAccess: (kind, id, user, relation) => revokeAccess({ kind, id, user, relation }),
+		// #143: the panel renders a refused Grant/Revoke DISABLED WITH ITS REASON rather than letting
+		// the user discover the denial from a 403. It needs the caller's own verdicts to do that, and
+		// the zone owns the transport — so the seam gains a fifth member like the four above.
+		fetchMyPermissions: (kind, id) => fetchMyPermissions({ kind, id }),
 	};
 
 	// All three reads are keyed by the dataset they were fetched FOR (latest-wins by derivation —

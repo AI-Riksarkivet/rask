@@ -45,6 +45,10 @@
 		checkAccess: (kind, id, user, relation) => checkAccess({ kind, id, user, relation }),
 		grantAccess: (kind, id, user, relation) => grantAccess({ kind, id, user, relation }),
 		revokeAccess: (kind, id, user, relation) => revokeAccess({ kind, id, user, relation }),
+		// #143: the panel renders a refused Grant/Revoke DISABLED WITH ITS REASON rather than letting
+		// the user discover the denial from a 403. It needs the caller's own verdicts to do that, and
+		// the zone owns the transport — so the seam gains a fifth member like the four above.
+		fetchMyPermissions: (kind, id) => fetchMyPermissions({ kind, id }),
 	};
 
 	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).

@@ -20,12 +20,7 @@
 	import AccessGraph from './AccessGraph.svelte';
 	import { fetchProducers } from '$lib/api';
 	import type { ProducerInfo } from '@rask/api/lineage';
-	import {
-		checkAccess,
-		fetchAccess,
-		grantAccess,
-		revokeAccess,
-	} from './remote/access-objects.remote';
+	import { checkAccess, fetchAccess, fetchMyPermissions, grantAccess, revokeAccess } from './remote/access-objects.remote';
 	import { deriveQuality, type QualityBadge } from '$lib/quality';
 	import ReadersPanel from '$lib/ReadersPanel.svelte';
 	import { partErrored, type Policy, type TableStats, type TableDetail } from './catalog';
@@ -81,6 +76,10 @@
 		checkAccess: (kind, id, user, relation) => checkAccess({ kind, id, user, relation }),
 		grantAccess: (kind, id, user, relation) => grantAccess({ kind, id, user, relation }),
 		revokeAccess: (kind, id, user, relation) => revokeAccess({ kind, id, user, relation }),
+		// #143: the panel renders a refused Grant/Revoke DISABLED WITH ITS REASON rather than letting
+		// the user discover the denial from a 403. It needs the caller's own verdicts to do that, and
+		// the zone owns the transport — so the seam gains a fifth member like the four above.
+		fetchMyPermissions: (kind, id) => fetchMyPermissions({ kind, id }),
 	};
 
 	let detail = $state<TableDetail | null>(null);

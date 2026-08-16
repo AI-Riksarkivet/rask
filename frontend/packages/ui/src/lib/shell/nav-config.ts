@@ -237,7 +237,7 @@ const DATA_ITEMS: TopNavItem[] = [
 	{
 		title: 'Warehouses',
 		href: '/lakehouse/catalog/warehouses',
-		description: 'Storage bindings — one bucket per project.',
+		description: "Every project's storage bindings — one bucket per warehouse.",
 	},
 	{
 		title: 'Namespaces',
