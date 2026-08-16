@@ -30,6 +30,7 @@ from typing import Annotated, Any, Final, cast
 from fastapi import APIRouter, Depends, Path, Request, status
 from pydantic import BaseModel, Field
 
+from annotator.api.dependencies import ControlEmitterDep
 from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.projects.actor import AnnotationTaskActorInterface
 from annotator.projects.imports import shapes_from_ipc
@@ -43,6 +44,7 @@ from annotator.projects.machines import (
 )
 from annotator.projects.models import Link, ProjectState, Shape, TaskState
 from annotator.projects.ontology import LabelOntology
+from service_kit.control_emit import emit_control
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
@@ -203,8 +205,18 @@ async def _refuse_second_replica(task_id: str, current: dict[str, Any], recipien
             raise ConflictError(f"one replica per annotator per group: {recipient} already holds or worked replica {sibling_id} of group {group}")
 
 
+#: The task edges that HAND WORK TO or TAKE WORK FROM a named person, and therefore have an audience.
+#:
+#: `assign` names its recipient on the request; `release` returns a task to the pool, so the person who
+#: loses it is the CURRENT holder. The other edges (`claim`, `submit`, `request_changes`) are the
+#: holder's own actions or land on a reviewer the plane cannot yet name — `lease_expired` is the one
+#: that most deserves a notification and cannot have one, because its audience is the PREVIOUS holder
+#: and it fires with no principal at all (`machines.py` gives it permission `None`).
+_NOTIFIED_EDGES: Final[frozenset[str]] = frozenset({"assign", "release"})
+
+
 @router.post("/{task_id}/events", status_code=status.HTTP_200_OK)
-async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: CheckerDep, subject: CurrentSubject, control: ControlEmitterDep) -> dict[str, Any]:
     """Drive one task transition.
 
     The permission comes from the transition table, so adding an edge to `TASK_EDGES` automatically
@@ -282,6 +294,34 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
         raise ConflictError(str(exc)) from exc
 
     audit(f"task.{payload.event}", SUCCESS, subject=subject, resource=task_id)
+
+    # TELL THE ASSIGNEE. Emitted AFTER the transition and its audit both succeed, so work that was
+    # never handed over is never announced — and best-effort, so a bus outage cannot fail an assignment
+    # that already committed.
+    #
+    # `extra.subject` is the ASSIGNEE, never `subject` (the manager who fired the edge). That distinction
+    # is the whole point: the notifications plane targets on the named party, and keying it on the actor
+    # would tell managers about their own clicks while the person who has to do the work hears nothing.
+    # The same conflation already made `assign` behave as a self-claim once — see the `actor`/`assignee`
+    # comment on the `actor.fire` payload above.
+    #
+    # `task_unassigned` rides the RELEASE edges, and is the sharper half: an annotator holding a draft
+    # against a task that is no longer theirs otherwise discovers it by losing the work.
+    if payload.event in _NOTIFIED_EDGES:
+        told = payload.assignee if payload.event == "assign" else current.get("assignee")
+        # NEVER the actor's own action. A manager may assign a task to themselves, and a holder may
+        # release their own; in both cases the person is looking at the response that says so, and an
+        # inbox row would be a second copy of something they just did. Same rule as the plane's standing
+        # exclusion for synchronous failures the caller already sees.
+        if told and told != subject:
+            await emit_control(
+                control,
+                action="task_assigned" if payload.event == "assign" else "task_unassigned",
+                object_type="annotation_task",
+                object_id=f"annotation_task:{task_id}",
+                actor=f"user:{subject}",
+                extra={"subject": f"user:{told}", "project": project_id, "event": payload.event},
+            )
     return updated
 
 

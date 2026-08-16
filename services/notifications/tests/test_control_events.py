@@ -161,3 +161,50 @@ class TestIngest:
         plane = _Plane(broken={"alice"})
 
         assert await ingest_control_event(_event().model_dump(mode="json"), open_inbox=plane.open) == {"status": "RETRY"}
+
+
+class TestTaskAssignment:
+    """v3 targeting extended to ANNOTATION WORK, which is the same question the grant lane answers.
+
+    "You were given access to a table" and "you were given a task to label" are both governance acts that
+    NAME a person, and neither is expressible as a run: there is no terminal lineage event, no output
+    dataset, and the actor is the MANAGER rather than the audience. Before this the annotator emitted
+    nothing at all, so an assignee learned about their work by looking for it.
+    """
+
+    def _assignment(self, *, action: str = "task_assigned", subject: str | None = "user:bob") -> CatalogControlEvent:
+        extra: dict[str, Any] = {"project": "acme"}
+        if subject is not None:
+            extra["subject"] = subject
+        return CatalogControlEvent(
+            event_id="evt-task-1",
+            occurred_at=datetime(2026, 8, 16, 12, 0, tzinfo=UTC),
+            action=cast(Any, action),
+            object_type=cast(Any, "annotation_task"),
+            object_id="task:t-77",
+            actor="user:alice",
+            extra=extra,
+        )
+
+    def test_an_assignment_names_its_assignee_not_the_manager(self) -> None:
+        """The whole defect in one assertion: `actor` is alice (who assigned) and the audience is bob
+        (who must do it). A lane keyed on the actor would tell the manager about their own click."""
+        assert named_subject(self._assignment()) == "bob"
+
+    def test_an_unassignment_names_the_person_who_lost_the_work(self) -> None:
+        """The mirror, and the sharper one — same reasoning as `grant_revoked`. Someone who has been
+        unassigned is holding a draft against a task that is no longer theirs, and silence there is how
+        they discover it by losing the work."""
+        assert named_subject(self._assignment(action="task_unassigned")) == "bob"
+
+    @pytest.mark.asyncio
+    async def test_the_assignee_gets_a_row_and_the_reason_survives(self) -> None:
+        """Delivered end to end through the real ingress, and the REASON is asserted because it is
+        stored rather than inferred: a delivery re-check keys on it, and `as_delivery` constructs
+        `NotificationReason(event.action)` — so an action added without its matching reason member
+        raises on every delivery instead of failing at import."""
+        plane = _Plane()
+        result = await ingest_control_event(self._assignment().model_dump(mode="json"), open_inbox=plane.open)
+        assert result == {"status": "SUCCESS"}
+        assert list(plane.boxes) == ["bob"], "the manager must not be told about their own assignment"
+        assert plane.boxes["bob"][0]["reason"] == NotificationReason.TASK_ASSIGNED

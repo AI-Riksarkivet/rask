@@ -1013,6 +1013,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{id}/access/my-permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * My Project Permissions
+         * @description What the caller may do on this project — same self-view, same explicit gate as the warehouse
+         *     rung (``/v1/projects/…`` is likewise outside ``_RESOURCES``).
+         *
+         *     The project rung is where the estate's most irreversible action lives (`DELETE /v1/projects/{id}`
+         *     has no cascade at all), so this is the one whose absence forced the UI to show a delete button and
+         *     discover the answer from a 403.
+         *
+         *     GATED ON `member`, A BASE RUNG, and that is a deliberate departure worth reading. Every other
+         *     surface here gates on a `can_*` action, but the `project` type defines NO reader-tier action — its
+         *     whole action surface is `can_administer` / `can_create_warehouse` / `can_create_annotation_project`
+         *     / `can_grant_*` / `can_read_assignments`, all admin or member tier. I reached for
+         *     `can_get_metadata` by analogy with table and namespace; it does not exist on this type, and
+         *     `test_every_fga_relation_in_code_exists_in_the_compiled_model` caught it — OpenFGA rejects an
+         *     undefined relation with a 400 that fails closed to a 503 for every caller, so the analogy would
+         *     have made this endpoint permanently unavailable.
+         *
+         *     `member` is the reader-equivalent for this type: it is the tier ordinary tenant work already sits
+         *     at (`can_create_annotation_project: member`), and a caller with no relationship to the project
+         *     still gets a 403 rather than learning the tenant exists. The alternative — adding
+         *     `can_get_metadata: member` to the model for symmetry — is a MODEL change with `.fga.yaml` updates
+         *     and a migration story behind it, which is not something a UI-gating endpoint should drag in.
+         */
+        post: operations["my_project_permissions_v1_projects__id__access_my_permissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{id}/policies": {
         parameters: {
             query?: never;
@@ -2844,6 +2884,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/warehouse/{id}/access/my-permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * My Warehouse Permissions
+         * @description What the caller may do on this warehouse — the self-view the UI needs to render a DISABLED
+         *     action with its reason instead of a button that 403s on click.
+         *
+         *     GATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `fga_deps._RESOURCES`
+         *     (`namespace`, `table`, `materialized_view`, `transaction`), so the router-level `authorize`
+         *     returns early for every `/v1/warehouse/…` path and a route mounted here that forgets its own check
+         *     is simply ungated — the hazard this module's own header comment names.
+         *
+         *     Reader tier (`can_get_metadata`), matching `_my_permissions`' rule rather than the owner bar its
+         *     two siblings on this router use: "what may I do here" discloses nothing about any other principal,
+         *     and gating it at the owner bar would mean only the people who already know the answer could ask.
+         */
+        post: operations["my_warehouse_permissions_v1_warehouse__id__access_my_permissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/warehouse/{id}/managed-access/describe": {
         parameters: {
             query?: never;
@@ -4297,7 +4367,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "task_assigned" | "task_unassigned";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -4312,7 +4382,7 @@ export interface components {
              * Object Type
              * @enum {string}
              */
-            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table";
+            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "annotation_task";
             /**
              * Occurred At
              * Format: date-time
@@ -9511,6 +9581,41 @@ export interface operations {
             };
         };
     };
+    my_project_permissions_v1_projects__id__access_my_permissions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPermissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_project_policies_v1_projects__id__policies_get: {
         parameters: {
             query?: never;
@@ -12829,6 +12934,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_warehouse_permissions_v1_warehouse__id__access_my_permissions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPermissionsResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

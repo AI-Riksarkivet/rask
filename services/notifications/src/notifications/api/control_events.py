@@ -31,7 +31,12 @@ log = logging.getLogger(__name__)
 
 #: The control actions that name a party. `grant_revoked` matters MORE than `grant_added`: losing
 #: access silently is how someone discovers it by hitting a 403 in the middle of work.
-NAMED_ACTIONS: frozenset[str] = frozenset({"grant_added", "grant_revoked"})
+#:
+#: The task pair is the same shape one rung down — being handed work, and having it taken away — and the
+#: annotator is the third producer on this topic. Adding a member here is only ONE THIRD of the change:
+#: `ControlAction` must carry it (or the envelope will not validate) and `NotificationReason` must too,
+#: because `as_delivery` builds `NotificationReason(event.action)` and would raise on every delivery.
+NAMED_ACTIONS: frozenset[str] = frozenset({"grant_added", "grant_revoked", "task_assigned", "task_unassigned"})
 
 #: The FGA wildcard principal, which is a grant to EVERYONE and therefore names no one.
 #:

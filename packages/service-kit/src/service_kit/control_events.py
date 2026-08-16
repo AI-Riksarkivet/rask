@@ -80,12 +80,23 @@ ControlAction = Literal[
     # `extra` carries {from_version, to_version}: the RANGE (D-R3) a consumer turns straight into a
     # row delta via `_row_created_at_version`, holding no bookmark of its own.
     "table_published",
+    # ANNOTATION WORK, and the first control actions a service other than the catalog/maintenance pair
+    # publishes. They belong in this vocabulary rather than a stream of their own for the reason the
+    # grant actions do: both NAME a person and hand them (or take from them) something they must act on,
+    # which is exactly what the notifications plane's `NAMED_ACTIONS` targets. `task_unassigned` is the
+    # sharper half — an annotator holding a draft against a task that is no longer theirs discovers it by
+    # losing the work, the same way a revoked grant is discovered by a 403 mid-task.
+    "task_assigned",
+    "task_unassigned",
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the
 #: top of rask's hierarchy (project > warehouse > namespace > table) and became a first-class control object
 #: when tenants got their own registry record (`open_hierarchy_lifecycle.md` Decision 1).
-ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table"]
+#: `annotation_task` is deliberately NOT `table`: a task is a unit of work inside an annotation project,
+#: not a governed lakehouse object, and conflating them would send the console to invalidate a table view
+#: for an assignment that changed no data.
+ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "annotation_task"]
 
 
 class CatalogControlEvent(BaseModel):

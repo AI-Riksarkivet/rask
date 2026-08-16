@@ -57,6 +57,10 @@ class NotificationReason(StrEnum):
     #: v3 — this subject was NAMED by a governance act (`extra.subject`).
     GRANT_ADDED = "grant_added"
     GRANT_REVOKED = "grant_revoked"
+    #: v4 — annotation work. Same targeting rule as the grant pair (the event NAMES its subject), one
+    #: rung down: the audience is the ASSIGNEE, never the manager whose click produced the event.
+    TASK_ASSIGNED = "task_assigned"
+    TASK_UNASSIGNED = "task_unassigned"
 
 
 class InboxFilter(StrEnum):

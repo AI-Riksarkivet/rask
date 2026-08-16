@@ -23,6 +23,21 @@ class AnnotatorSettings(GovernedAuthSettings, Settings):
     service_name: str = "annotator"
     service_port: int = Field(default=8103, alias="ANNOTATOR_PORT")
 
+    #: Control-plane change events (`catalog.control.v1`). The annotator is the third producer on that
+    #: topic — it publishes `task_assigned`/`task_unassigned`, which NAME the annotator who must act, so
+    #: the notifications plane can put the work in their inbox instead of making them look for it.
+    #:
+    #: Default OFF and same shape as the catalog's knobs on purpose: a half-configured transport must
+    #: never pretend to emit. Off, `make_control_emitter` returns the no-op and assignment simply carries
+    #: no notification — the assignment itself is unaffected, because the emit is best-effort and runs
+    #: after the state change has already committed.
+    #:
+    #: In-cluster this needs the pubsub component's `scopes` to list this service's Dapr app-id, or the
+    #: sidecar rejects every publish silently.
+    control_emit_enabled: bool = Field(default=False, alias="ANNOTATOR_CONTROL_EMIT_ENABLED")
+    control_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="ANNOTATOR_CONTROL_EMIT_TIMEOUT_SECONDS")
+    control_pubsub: str = Field(default="catalog-control-pubsub", alias="ANNOTATOR_CONTROL_PUBSUB")
+
 
 @lru_cache
 def get_annotator_settings() -> AnnotatorSettings:

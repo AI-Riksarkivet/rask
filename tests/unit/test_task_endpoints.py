@@ -654,3 +654,88 @@ def test_an_import_requires_can_annotate(_live_project: Any, monkeypatch: pytest
     assert r.status_code == 403, r.text
     assert seen[0]["relation"] == "can_annotate"
     assert actor.drafts == []
+
+
+# --------------------------------------------------------------------------------------------------
+# The assignee is TOLD — the annotator's first control-plane emission
+# --------------------------------------------------------------------------------------------------
+
+
+class _RecordingControl:
+    """Captures what reached the control bus. Structural stand-in for `ControlEmitter`."""
+
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+
+    async def emit(self, event: Any) -> None:
+        self.events.append(event)
+
+
+def _app_with_control(control: _RecordingControl, *, allow: bool = True) -> FastAPI:
+    from annotator.api.dependencies import get_control_emitter
+
+    app = _app(allow=allow)
+    app.dependency_overrides[get_control_emitter] = lambda: control
+    return app
+
+
+def _fire(app: FastAPI, actor: _FakeActor, monkeypatch: pytest.MonkeyPatch, body: dict[str, Any]) -> Any:
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    return TestClient(app).post("/tasks/t1/events", json=body)
+
+
+def test_assign_tells_the_ASSIGNEE_not_the_manager_who_clicked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The defect the annotator shipped with: it emitted NOTHING, so an assignee learned about their
+    own work by going to look for it.
+
+    The assertion that matters is WHO is named. `actor` is the manager (the verified caller) and
+    `extra.subject` is the recipient — the notifications plane targets on the latter, so keying it on
+    the caller would tell managers about their own clicks and leave the worker silent. That exact
+    conflation already turned `assign` into a self-claim once."""
+    control = _RecordingControl()
+    actor = _FakeActor(_task(state=TaskState.UNASSIGNED))
+    resp = _fire(_app_with_control(control), actor, monkeypatch, {"event": "assign", "assignee": "bob"})
+
+    assert resp.status_code == 200
+    assert len(control.events) == 1
+    event = control.events[0]
+    assert event.action == "task_assigned"
+    assert event.object_type == "annotation_task"
+    assert event.extra["subject"] == "user:bob", "the audience is the assignee"
+    assert event.actor == f"user:{SUBJECT}", "the actor stays the verified caller"
+
+
+def test_release_tells_the_holder_who_lost_the_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The mirror, and the sharper half — the same reasoning as `grant_revoked`. Someone whose task was
+    taken by a manager is holding a draft against work that is no longer theirs."""
+    control = _RecordingControl()
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee="dave"))
+    resp = _fire(_app_with_control(control), actor, monkeypatch, {"event": "release"})
+
+    assert resp.status_code == 200
+    assert [(e.action, e.extra["subject"]) for e in control.events] == [("task_unassigned", "user:dave")]
+
+
+def test_acting_on_your_own_task_tells_nobody(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A holder releasing their own task is looking at the response that says so. An inbox row would be
+    a second copy of something they just did — the plane's standing exclusion for outcomes the caller
+    already has synchronously."""
+    control = _RecordingControl()
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee=SUBJECT))
+    resp = _fire(_app_with_control(control), actor, monkeypatch, {"event": "release"})
+
+    assert resp.status_code == 200
+    assert control.events == []
+
+
+@pytest.mark.parametrize("event", ["claim", "submit"])
+def test_edges_with_no_named_audience_emit_nothing(event: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_NOTIFIED_EDGES` is a whitelist on purpose. Emitting on every edge would put the annotator's own
+    claims and submissions in their own inbox, which is how a bell stops being read."""
+    control = _RecordingControl()
+    state = TaskState.UNASSIGNED if event == "claim" else TaskState.CLAIMED
+    actor = _FakeActor(_task(state=state, assignee=None if event == "claim" else SUBJECT))
+    resp = _fire(_app_with_control(control), actor, monkeypatch, {"event": event})
+
+    assert resp.status_code == 200
+    assert control.events == []

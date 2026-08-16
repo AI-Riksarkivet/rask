@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
+from dapr.aio.clients import DaprClient
 from dapr.ext.fastapi import DaprActor
 from fastapi import FastAPI, Request
 
@@ -20,6 +21,7 @@ from annotator.core.config import get_annotator_settings
 from annotator.projects.actor import AnnotationTaskActor
 from annotator.projects.project_actor import AnnotationProjectActor
 from annotator.projects.tenant_actor import TenantProjectsActor
+from service_kit.control_emit import make_control_emitter
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.actor_warmup import warm_actor_proxy_factory
@@ -79,6 +81,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.info("annotator: FGA client ready (%s)", settings.fga_api_url)
         except Exception:
             logger.exception("annotator: FGA client failed to build — authorized routes will 503")
+
+    # Control-plane change events. Built here so the emit path is a pure in-process call on the request
+    # path: the Dapr client targets the local sidecar, so construction needs no broker reachability.
+    # A build failure leaves the no-op in place rather than the attribute unset — unlike auth above,
+    # a missing notification must never 503 a task transition.
+    control_dapr: DaprClient | None = None
+    if settings.control_emit_enabled:
+        try:
+            control_dapr = DaprClient()
+        except Exception:
+            logger.exception("annotator: Dapr client failed to build — task assignments will not notify")
+    app.state.control_emitter = make_control_emitter(
+        enabled=settings.control_emit_enabled,
+        dapr=control_dapr,
+        pubsub=settings.control_pubsub,
+        timeout_seconds=settings.control_emit_timeout_seconds,
+        service="annotator",
+    )
 
     # Register the actor types. This is the estate's FIRST actor: `lance-statestore` has carried
     # `actorStateStore: "true"` scoped to catalog+annotator since it was provisioned, and nothing used

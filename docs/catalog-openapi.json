@@ -2689,7 +2689,9 @@
               "namespace_undropped",
               "table_purged",
               "namespace_purged",
-              "table_published"
+              "table_published",
+              "task_assigned",
+              "task_unassigned"
             ],
             "title": "Action",
             "type": "string"
@@ -2725,7 +2727,8 @@
               "warehouse",
               "policy",
               "namespace",
-              "table"
+              "table",
+              "annotation_task"
             ],
             "title": "Object Type",
             "type": "string"
