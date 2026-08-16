@@ -2819,3 +2819,38 @@ def test_every_lifecycle_door_that_clears_PROTECTION_also_handles_the_POLICY_rec
         "these doors destroy an object and clear its protection record but leave its maintenance policy "
         f"behind, where a later object reusing the id inherits it: {offenders}"
     )
+
+
+def test_the_sweep_lock_is_only_correct_while_maintenance_CANNOT_scale() -> None:
+    """AN IN-PROCESS LOCK IS A CLUSTER LOCK ONLY AT ONE REPLICA — and nothing tied the two together.
+
+    `routes.py` guards the sweep with a module-level `asyncio.Lock`, because a slow sweep can outlast the
+    120s cron and a second concurrent pass would race `compact_files()` / `cleanup_old_versions()` on the
+    same datasets — concurrent commits, and a GC deleting versions the other pass is still reading.
+
+    That lock is process-local. It is a CLUSTER-wide guarantee only because
+    `chart/templates/maintenance.yaml` hardcodes `replicas: 1` as a literal, with no values key to
+    override — scaling is unreachable except by a template edit or a `kubectl scale`. So the invariant
+    holds by accident of an unparameterised template, and the accident is undocumented anywhere the
+    person adding `maintenance.replicas` would look.
+
+    The routes.py comment already flags this and points at a plan that was never landed; it also cited a
+    `compactionReplicas` values key that EXISTS NOWHERE, so the citation meant to reassure a reader was
+    itself drift. This binds the two facts mechanically instead: while the lock is an `asyncio.Lock`, the
+    deployment must not be scalable. Replace it with a distributed lock and this guard steps aside.
+    """
+    routes = (REPO / "services/maintenance/src/maintenance/api/routes.py").read_text()
+    if "asyncio.Lock()" not in routes:
+        pytest.skip("the sweep no longer uses an in-process lock — a distributed one may scale freely")
+
+    template = (REPO / "chart/templates/maintenance.yaml").read_text()
+    replicas = [line.strip() for line in template.splitlines() if re.match(r"^\s*replicas:", line)]
+    assert replicas, "the maintenance Deployment declares no replica count at all — one concurrent sweep is not guaranteed"
+    assert len(replicas) == 1, f"more than one replicas declaration to reason about: {replicas}"
+
+    assert replicas[0] == "replicas: 1", (
+        f"maintenance declares {replicas[0]!r}. The sweep's single-flight is a module-level asyncio.Lock, "
+        "which guards ONE process — a second replica runs a second concurrent sweep that races "
+        "compact_files()/cleanup_old_versions() on the same datasets. Make the lock distributed before "
+        "making the deployment scalable."
+    )

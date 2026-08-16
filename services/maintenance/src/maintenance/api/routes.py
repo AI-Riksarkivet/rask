@@ -49,8 +49,11 @@ router = APIRouter()
 # values at all, only by a kubectl scale or a template edit. So the lock is safe by accident of an
 # unparameterised template, and anyone who adds that values key without also making this lock
 # distributed silently gets two concurrent sweeps racing compact_files()/cleanup_old_versions() on the
-# same datasets. The invariant test that would BIND lock-as-cluster-lock to a replica count is planned
-# in `open_batch_process.md` B13; coordinate there rather than guarding a key that does not exist.
+# same datasets. That coupling is now MECHANICAL rather than planned:
+# tests/unit/test_invariants.py::test_the_sweep_lock_is_only_correct_while_maintenance_CANNOT_scale
+# fails the moment `replicas` stops being a literal 1 while this lock is still an `asyncio.Lock`, so
+# parameterising the deployment forces the distributed-lock conversation instead of silently starting a
+# second concurrent sweep. (The guard keys on the LOCK, so replacing it lifts the restriction.)
 # The reconcile sweep does the same
 # with a pg advisory lock — maintenance is stateless (no DB), so an in-process lock is the analog. A tick
 # that finds a sweep already running SKIPS (does not queue): the running sweep already covers every dataset,
