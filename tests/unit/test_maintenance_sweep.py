@@ -239,3 +239,29 @@ def test_a_REFUSED_dataset_is_not_stamped_as_freshly_maintained(monkeypatch: Any
 
     assert len(results) == 1 and results[0].refused, "the harness did not produce the refusal under test"
     assert stamped == [], f"a REFUSED dataset was stamped as maintained, hiding it for the whole interval: {stamped}"
+
+
+def test_summarize_reports_what_the_INDEX_HEALTH_pass_found() -> None:
+    """#60's entire output was computed every tick and discarded.
+
+    `inspect_indices` runs a `describe_indices` + `index_stats` pass PER INDEX PER DATASET — the call
+    that panics on JSON scalar indices and needed two separate BaseException guards to contain — and
+    `summarize` had no key for its result. The estate paid for the diagnosis every 120 seconds and
+    never received it: rows left unindexed, delta proliferation and params drift surfaced only as a
+    count inside one warning log.
+
+    `auto_cleanup_configured` rides along for a related reason: without it, "reclaimed nothing" and
+    "this dataset reclaims itself" are the same zero.
+    """
+    finding = {"name": "id_idx", "column": "id", "unindexed_rows": 12, "note": "12 row(s) unindexed"}
+    results = [
+        DatasetResult(uri="s3://b/a.lance", index_findings=[finding]),
+        DatasetResult(uri="s3://b/b.lance", auto_cleanup_configured=True),
+        DatasetResult(uri="s3://b/healthy.lance"),
+    ]
+
+    out = summarize(results)
+
+    assert out["index_findings"] == {"s3://b/a.lance": [finding]}, "the #60 index report never reaches the caller"
+    assert out["auto_cleanup_configured"] == 1
+    assert "s3://b/healthy.lance" not in out["index_findings"], "a healthy dataset must not appear — a report that fires on healthy data gets ignored"

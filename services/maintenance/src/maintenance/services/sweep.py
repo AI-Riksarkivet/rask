@@ -167,6 +167,16 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
         # silent depth bound made "we maintained everything" and "we maintained what we could see"
         # the same summary line.
         truncated.extend(found.truncated)
+    # …and CONSUMED, which it was not. `truncated` was accumulated here and read by nothing (AST: the
+    # only load site was the `.extend` above), so `Discovery`'s own docstring — "the sweep counts it,
+    # the reconciler files an IncompleteScan" — was true of the reconciler and false of the sweep. A
+    # tick that never walked a prefix was indistinguishable from one that walked everything, which is
+    # exactly the "0 that means we did not look" this module's docstrings forbid elsewhere.
+    if truncated:
+        log.warning(
+            "maintenance_discovery_truncated",
+            extra={"prefixes": len(truncated), "examples": sorted(truncated)[:5], "max_depth": 3},
+        )
     # #75 trash expiry — REPORT ONLY **in the sweep**, permanently. #79's purge lives on the RECONCILE
     # tick instead, because its gate is that tick's drift report: a reclaimer earns its delete permission
     # by first proving the report runs clean, and the sweep does not produce that report. So the sweep
@@ -489,5 +499,14 @@ def summarize(results: list[DatasetResult]) -> dict[str, Any]:
         # discarded the number while reporting three counts that do not answer the question. "How much
         # did we get back" is the one thing a reclaimer exists to tell you.
         "bytes_removed": sum(r.bytes_removed for r in results),
+        # #58 — which datasets hand version reclamation to THEMSELVES instead of being swept. Without
+        # it "reclaimed nothing" and "the writer reclaims this one" read identically on a zero.
+        "auto_cleanup_configured": sum(1 for r in results if r.auto_cleanup_configured),
+        # #60 — what `optimize_indices()` could NOT put right: rows left unindexed, delta
+        # proliferation, params drift, a dropped index. This was computed on every tick — a
+        # `describe_indices` + `index_stats` pass per index per dataset, the call that PANICS and needed
+        # two separate BaseException guards to contain — and then discarded, surfacing only as a count
+        # in one warning. The estate paid for the diagnosis every 120s and never received it.
+        "index_findings": {r.uri: r.index_findings for r in results if r.index_findings},
         "errors": {r.uri: r.error for r in results if r.error},
     }
