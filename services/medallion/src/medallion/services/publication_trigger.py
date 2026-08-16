@@ -49,18 +49,39 @@ DELIMITER = "$"
 
 
 def _split_object_id(object_id: str, delimiter: str) -> tuple[str, str] | None:
-    """`table:ns$name` -> `(ns, name)`.
+    """`table:ns$name` -> `(project, table)`, at ANY nesting depth.
 
     The control event names the object canonically, which is the only identifier every consumer
     already agrees on. Anything not shaped like a table id is not ours to act on.
+
+    TWO SEGMENTS ARE WANTED AND THEY ARE NOT ADJACENT, which is what the first version got wrong by
+    reaching for `partition`. Catalog namespaces NEST — `namespace#parent: [warehouse, namespace]` in
+    the FGA model, and the create door accepts a nested id up to ``MAX_NAMESPACE_DEPTH`` (8) — so
+    `acme$bronze$pages` is the table `pages` inside the namespace `acme$bronze`:
+
+      * the LANE takes the table's own name, the LAST segment, because the medallion lane is
+        `<tier>$<unqualified-table>` and is the same string for every tenant (`transform.py:109`
+        compares the arrived name against the raw `settings.from_dataset`);
+      * the PROJECT takes the FIRST segment, the top of the hierarchy — a project is the top rung
+        (`project > warehouse > namespace > table`) and the ingest plane creates its namespace there.
+
+    `partition` returned the first segment for BOTH, so at depth 2 the lane became `bronze$pages`
+    and the published trigger read `bronze$bronze$pages` — a lane no mover matches, which
+    `transform.py` DROPs while the run reports nothing. Every live table is flat today, so this was
+    latent rather than firing; the catalog permits the depth through its ordinary door.
+
+    The MIDDLE segments are deliberately discarded: they are tenancy, not tier and not identity.
+    Nothing here needs them, and guessing which of them meant "project" is exactly the conflation
+    this docstring exists to prevent.
     """
     if not object_id.startswith("table:"):
         return None
     identifier = object_id.removeprefix("table:")
     if delimiter not in identifier:
         return None
-    namespace, _, dataset = identifier.partition(delimiter)
-    return (namespace, dataset) if namespace and dataset else None
+    segments = identifier.split(delimiter)
+    project, table = segments[0], segments[-1]
+    return (project, table) if project and table else None
 
 
 async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) -> dict[str, str]:  # noqa: ANN401 — the Dapr client + settings seams

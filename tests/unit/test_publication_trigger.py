@@ -207,3 +207,52 @@ async def test_a_DIFFERENT_table_is_a_DIFFERENT_lane() -> None:
     await handle_publication(dapr, _Settings(), _event(object_id="table:acme$pages", from_version=1, to_version=2))
 
     assert dapr.published[0]["dataset"] == "bronze$pages"
+
+
+@pytest.mark.asyncio
+async def test_a_NESTED_namespace_still_names_the_right_lane() -> None:
+    """The lane is the table's OWN name, however deep its namespace nests.
+
+    Catalog namespaces nest — `namespace#parent: [warehouse, namespace]` in the FGA model, and the
+    create door takes a nested id up to MAX_NAMESPACE_DEPTH (8) — so `acme$bronze$pages` is the table
+    `pages` inside the namespace `acme$bronze`. The head used `partition`, which takes the FIRST
+    delimiter, so the table read as `bronze$pages` and the published lane became `bronze$bronze$pages`.
+
+    That is not a cosmetic mis-name. `transform.py` compares the arrived name against
+    `settings.from_dataset` and DROPs anything else, so the publication vanishes and the run reports
+    nothing at all — the failure mode nobody goes looking for. Every live table measured flat on
+    2026-08-16, which is the only reason this had not fired.
+    """
+    dapr = _Dapr()
+    settings = _Settings()
+
+    await handle_publication(dapr, settings, _event(object_id="table:acme$bronze$pages", from_version=1, to_version=2))
+
+    assert dapr.published[0]["dataset"] == "bronze$pages"
+    assert dapr.published[0]["dataset"] != "bronze$bronze$pages"
+
+
+@pytest.mark.asyncio
+async def test_a_NESTED_namespace_still_names_the_top_level_PROJECT() -> None:
+    """The project is the TOP of the hierarchy, not whichever segment happens to sit next to the table.
+
+    `project > warehouse > namespace > table`, and the mover needs the project to resolve its tier
+    roots — without it it computes nothing. For `acme$bronze$pages` that is `acme`; the middle
+    segments are tenancy detail this head deliberately discards rather than guesses at.
+    """
+    dapr = _Dapr()
+
+    await handle_publication(dapr, _Settings(), _event(object_id="table:acme$bronze$pages", from_version=1, to_version=2))
+
+    assert dapr.published[0]["project"] == "acme"
+
+
+@pytest.mark.asyncio
+async def test_the_FLAT_case_is_byte_identical_to_before() -> None:
+    """The depth fix must not move the case that already worked — every live table is this shape."""
+    dapr = _Dapr()
+
+    await handle_publication(dapr, _Settings(), _event(object_id="table:acme$events", from_version=1, to_version=2))
+
+    assert dapr.published[0]["dataset"] == "bronze$events"
+    assert dapr.published[0]["project"] == "acme"
