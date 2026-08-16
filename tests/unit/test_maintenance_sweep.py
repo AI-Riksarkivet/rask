@@ -199,3 +199,43 @@ def test_summarize_reports_the_BYTES_reclaimed(tmp_path: Any) -> None:
     # The neighbouring counts must not shift — this is an addition, not a re-shape of the response.
     assert out["versions_removed"] == 3
     assert out["refused"] == 1
+
+
+def test_a_REFUSED_dataset_is_not_stamped_as_freshly_maintained(monkeypatch: Any) -> None:
+    """A refusal carries `error=None`, so the cadence stamp treated it as a successful pass.
+
+    `optimize.compact_one` returns `DatasetResult(uri=…, refused=…)` with no error — a refusal is not
+    a failure, and that distinction is deliberate everywhere else. But the stamp gate read
+    `result.error is None` and therefore recorded a dataset the sweep can NEVER maintain as freshly
+    maintained. For the whole `compact_interval_hours` window it then reported as a transient
+    `policy_interval` skip rather than a standing refusal: a permanent condition wearing a temporary
+    label, on the one surface an operator would use to notice it.
+
+    Measured context: 17 datasets in this estate are refused on manifest flag 16, and they are exactly
+    the ones that need compaction.
+    """
+    from maintenance.core.config import MaintenanceSettings
+    from maintenance.services import sweep as sweep_mod
+
+    policy = {"id": "p1", "kind": "table", "compact_interval_hours": 24}
+    stamped: list[str] = []
+
+    monkeypatch.setattr(sweep_mod, "_s3fs", lambda _settings: object())
+    monkeypatch.setattr(sweep_mod.maintenance_policies, "list_policies", lambda *_a, **_k: [policy])
+    monkeypatch.setattr(sweep_mod.maintenance_policies, "resolve_policy", lambda *_a, **_k: policy)
+    monkeypatch.setattr(sweep_mod.maintenance_policies, "read_state", lambda *_a, **_k: None)
+    monkeypatch.setattr(sweep_mod.maintenance_policies, "write_state", lambda _root, _o, _p, uri, _at: stamped.append(uri))
+    monkeypatch.setattr(sweep_mod.warehouse_records, "list_warehouse_records", lambda *_a, **_k: [])
+    monkeypatch.setattr(sweep_mod.trash, "list_all", lambda *_a, **_k: [])
+    monkeypatch.setattr(sweep_mod.base_refs, "protected_roots", lambda *_a, **_k: sweep_mod.base_refs.BaseRefs())
+    monkeypatch.setattr(sweep_mod, "discover_datasets", lambda *_a, **_k: type("D", (), {"uris": ["s3://b/clone.lance"], "truncated": []})())
+    monkeypatch.setattr(
+        sweep_mod,
+        "compact_one",
+        lambda *_a, **_k: DatasetResult(uri="s3://b/clone.lance", refused="unsupported manifest feature flags: 16"),
+    )
+
+    results = sweep_mod.run_sweep(MaintenanceSettings())
+
+    assert len(results) == 1 and results[0].refused, "the harness did not produce the refusal under test"
+    assert stamped == [], f"a REFUSED dataset was stamped as maintained, hiding it for the whole interval: {stamped}"

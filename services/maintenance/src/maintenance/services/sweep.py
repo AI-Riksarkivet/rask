@@ -335,8 +335,18 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
                 protected=protected,
                 auto_cleanup_interval_commits=auto_cleanup_interval,
             )
-            if policy is not None and policy.get("compact_interval_hours") and result.error is None:
-                # Stamp cadence state only after a successful pass, so a failed tick retries next tick.
+            if policy is not None and policy.get("compact_interval_hours") and result.error is None and result.refused is None:
+                # Stamp cadence state only after a pass that could actually DO something, so a failed
+                # tick retries next tick.
+                #
+                # `refused is None` is load-bearing and was missing. A refusal carries `error=None` by
+                # construction (optimize.py returns `DatasetResult(uri=…, refused=…)` with no error),
+                # so a dataset the sweep can never maintain was stamped as freshly maintained — and for
+                # the whole `compact_interval_hours` window it then reported as a transient
+                # `policy_interval` skip rather than a standing refusal. A permanent condition wearing
+                # a temporary label, on the one surface an operator would use to notice it.
+                #
+                # Deliberately NOT extended to policy skips: those are the cadence working as intended.
                 try:
                     maintenance_policies.write_state(settings.resolved_policy_root, options, policy, uri, now.isoformat())
                 except Exception as exc:
