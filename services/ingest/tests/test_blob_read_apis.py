@@ -83,7 +83,10 @@ def test_read_blobs_returns_whole_payloads_keyed_by_ROW_INDEX(tmp_path: Path) ->
 
     got = dataset.read_blobs("payload", indices=[0, 1, 2])
 
-    assert [(i, len(b)) for i, b in got] == [(0, 504), (1, 484), (2, 604)]
+    # Every payload here is non-null, which pylance 10.0.0's `bytes | None` element type cannot know —
+    # asserted rather than cast, so the premise is checked instead of assumed.
+    assert all(b is not None for _, b in got)
+    assert [(i, len(b)) for i, b in got if b is not None] == [(0, 504), (1, 484), (2, 604)]
     assert dict(got)[1] == PAYLOADS[1]
 
 
@@ -125,6 +128,9 @@ def test_take_blobs_returns_SEEKABLE_handles(tmp_path: Path) -> None:
 
     handles = dataset.take_blobs("payload", indices=[0])
     handle = handles[0]
+    # `BlobFile | None` from pylance 10.0.0 — a null payload now occupies its slot rather than being
+    # omitted. Row 0's payload is written non-null by the fixture, so this narrows AND states that.
+    assert handle is not None
 
     assert handle.size() == len(PAYLOADS[0])
     assert handle.read(4) == b"II*\x00", "a TIFF header should be readable without fetching the page"
@@ -160,7 +166,9 @@ def test_the_three_APIs_agree_on_the_same_bytes(tmp_path: Path) -> None:
     dataset = _dataset(tmp_path, list(PAYLOADS))
 
     eager = dict(dataset.read_blobs("payload", indices=[1]))[1]
-    streamed = dataset.take_blobs("payload", indices=[1])[0].read()
+    handle = dataset.take_blobs("payload", indices=[1])[0]
+    assert handle is not None  # non-null by fixture; narrows pylance 10's `BlobFile | None`
+    streamed = handle.read()
     ranged = dataset.read_blob_ranges("payload", [(1, 0, len(PAYLOADS[1]))], selector="indices")[0][-1]
 
     assert eager == streamed == ranged == PAYLOADS[1]
@@ -174,28 +182,37 @@ def test_the_three_APIs_agree_on_the_same_bytes(tmp_path: Path) -> None:
 _NULLABLE_SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("source_uri", pa.string()), blob_field("payload", nullable=True)])
 
 
-def test_ALL_THREE_apis_silently_drop_a_null_row(tmp_path: Path) -> None:
-    """Measured on pylance 9.0.0. Not one API — all three, and each fails differently.
+def test_the_null_row_trap_is_FIXED_upstream_and_all_three_apis_keep_position(tmp_path: Path) -> None:
+    """Measured on pylance 10.0.0. This asserted the OPPOSITE through 9.0.0, and the flip is the finding.
 
-    `read_blobs` is survivable because every tuple carries the ROW INDEX it came from — which is the
-    property that matters here, and is what makes the surviving rows re-identifiable after a drop.
-    `read_blob_ranges` answers `[]` for a null row with no error. `take_blobs` is the dangerous one:
-    a bare list, no row identity anywhere on the handle, so `handles[i]` silently becomes a
-    DIFFERENT row's bytes.
+    Through pylance 9 all three readers silently dropped a null row, each failing differently, and
+    `take_blobs` was the dangerous one: a bare list with no row identity on the handle, so `handles[i]`
+    silently became a DIFFERENT row's bytes. The old test even said what to do if upstream fixed it —
+    "if a handle ever gains row identity, the positional trap below is fixed upstream and this test
+    should be revisited". 10.0.0 fixed it a better way than predicted: position is preserved and the
+    null occupies its own slot, so identity comes from the index rather than from the handle.
+
+    Kept pointing the other way, because a regression would silently restore the mis-mapping. The
+    partner test below — bronze declaring `payload` non-nullable so the state is unreachable — is still
+    the real defence, and is unaffected either way.
     """
     dataset = _dataset(tmp_path, [PAYLOADS[0], None, PAYLOADS[2]], schema=_NULLABLE_SCHEMA)
 
     eager = dataset.read_blobs("payload", indices=[0, 1, 2])
-    assert [i for i, _ in eager] == [0, 2], "read_blobs dropped the null row but still names the survivors"
+    assert [i for i, _ in eager] == [0, 1, 2], "every selected row is named, the null one included"
+    assert dict(eager)[1] is None, "the null row's payload is None, not absent"
 
     handles = dataset.take_blobs("payload", indices=[0, 1, 2])
-    assert len(handles) == 2, "take_blobs dropped the null row"
-    assert not any(hasattr(h, "id") or hasattr(h, "row_id") or hasattr(h, "index") for h in handles), (
-        "if a handle ever gains row identity, the positional trap below is fixed upstream and this test should be revisited"
-    )
-    assert handles[1].size() == len(PAYLOADS[2]), "position 1 of the result is ROW 2 — the silent mis-mapping"
+    assert len(handles) == 3, "take_blobs no longer drops the null row"
+    assert handles[1] is None, "the null occupies its own slot — this is what fixes the positional trap"
+    third = handles[2]
+    assert third is not None
+    assert third.size() == len(PAYLOADS[2]), "position 2 is ROW 2 — no mis-mapping"
 
-    assert dataset.read_blob_ranges("payload", [(1, 0, 2)], selector="indices") == []
+    # `read_blob_ranges` changed the SAME way and is the third confirmation of the release's one idea:
+    # a null is represented rather than omitted. It answered `[]` through pylance 9; 10.0.0 answers
+    # `[(0, 1, None)]` — the request index, the row, and a None payload.
+    assert dataset.read_blob_ranges("payload", [(1, 0, 2)], selector="indices") == [(0, 1, None)]
 
 
 def test_bronze_makes_that_state_UNREACHABLE(tmp_path: Path) -> None:

@@ -9,7 +9,7 @@ dependencies = [
     # `service_kit.lancekit.openlineage` — the lancekit extra carries that subtree's deps.
     "service-kit[lancekit]",
     # Lance/Arrow core — `import lance`, `pyarrow`/`pyarrow.fs`, `lancedb{,.index,.rerankers}`.
-    "pylance>=9.0.0",
+    "pylance>=10.0.0",
     "pyarrow",
     "lancedb>=0.34.0",
     # The distributed plane. lance_ray is a TOP-LEVEL import in core/driver.py; ray itself is

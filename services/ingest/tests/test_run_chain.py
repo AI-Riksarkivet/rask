@@ -215,7 +215,9 @@ async def test_a4_a7_the_full_chain_lands_rows_and_commits_once(activity_ctx: Wo
     # `payload` is a BLOB column, so a written cell is a descriptor and carries no bytes — the same
     # drift `test_worker_queue` had. `read_blobs` is the reader path, and it keys by ROW INDEX.
     blobs = dict(dataset.read_blobs("payload", indices=[0]))
-    assert blobs[0].startswith(b"II*\x00"), "bronze must hold the bytes as received"
+    payload = blobs[0]
+    assert payload is not None  # bronze declares payload non-nullable; narrows pylance 10's bytes | None
+    assert payload.startswith(b"II*\x00"), "bronze must hold the bytes as received"
 
 
 def test_completing_with_errors_is_not_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

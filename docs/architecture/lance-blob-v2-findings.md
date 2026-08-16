@@ -1,8 +1,14 @@
 # Lance blob v2 — measured behaviour, and one landmine
 
 > Empirical notes for the medallion bronze page-image datasets. Every claim here was produced by
-> running against the **installed pylance 9.0.0**, not read from documentation. Reproduce with the
-> scripts described at the bottom.
+> running against the installed pylance, not read from documentation. Reproduce with the scripts
+> described at the bottom.
+>
+> **UPDATED 2026-08-16 for pylance 10.0.0 — the landmine below is FIXED upstream, and the API changed
+> shape in the same release.** The section is kept rather than deleted: the guard built for it is still
+> the right code, the estate still holds data written under 8/9, and a reader who finds
+> `read_aligned_table` without this history would reasonably think it superstition. What is no longer
+> true is marked inline.
 
 ## The three placement tiers (what `packed` vs `dedicated` actually means)
 
@@ -41,7 +47,21 @@ round-tripped identically through `read_blobs`, `take_blobs`, `read_blob_ranges`
 `scanner(blob_handling="all_binary")`. Storage tuning is therefore a pure write-side decision — it can
 be changed for new datasets without touching a single reader.
 
-## ⚠ LANDMINE: `read_blobs` / `take_blobs` DROP null rows
+## ⚠ LANDMINE: `read_blobs` / `take_blobs` DROP null rows — **FIXED in pylance 10.0.0**
+
+> **As of pylance 10.0.0 (measured 2026-08-16), all of the following is HISTORY.** Both entry points now
+> preserve cardinality: three selected rows with one null payload return three entries. Two further
+> changes arrived with it, and both broke live code:
+>
+> * **`read_blobs` changed SHAPE** — it yields `(row_index, bytes)` tuples where it used to yield blob
+>   handles. Anything calling `.size()` or `.read_range()` on its output raises `AttributeError`.
+> * **`take_blobs` puts `None` in a null row's slot** instead of omitting the row. Code written against
+>   "an empty result IS the null signal" then dereferences `None` — which is exactly how the catalog's
+>   blob-serving path answered 500 for a null payload it is supposed to serve as an empty body, and how
+>   the promotion health probe reported a healthy column as dangling.
+>
+> `blobs.read_aligned_table` is UNAFFECTED — it goes through `scanner(blob_handling="all_binary")`,
+> which was cardinality-preserving in both majors. The guard was built on the right seam.
 
 The documentation states:
 
@@ -97,7 +117,7 @@ null payload, then read at the version `.docker/ray-lance.dockerfile` used to pi
 
 | read path | pylance 8.0.0 | pylance 9.0.0 |
 |---|---|---|
-| `read_blobs` / `take_blobs` cardinality | 2 of 3 (drops nulls) | 2 of 3 (drops nulls) |
+| `read_blobs` / `take_blobs` cardinality | 2 of 3 (drops nulls) | 2 of 3 (drops nulls) | **3 of 3 on 10.0.0 — fixed** |
 | `scanner(blob_handling="all_binary")` | **`ArrowInvalid: there were more fields in the schema than provided column indices`** — on EVERY projection shape (all columns, blob only, no projection, ±`with_row_id`) | 3 rows, null correctly `None` |
 | blob descriptor `is_valid()` | **`[True, True, True]` — wrong**, so the presence-mask fallback silently mis-detects | `[True, False, True]` — correct |
 

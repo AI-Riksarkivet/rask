@@ -11,7 +11,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.30",
     "httpx>=0.27",
-    "pylance[otel]>=9.0.0",
+    "pylance[otel]>=10.0.0",
     "lancedb>=0.34.0",
     "pillow>=12.3.0",
     "numpy",

@@ -57,7 +57,14 @@ def rowid_for_doc(ds: lance.LanceDataset, doc_key: str, doc_id: str) -> int | No
 
 def stream_blob_range(ds: lance.LanceDataset, column: str, rowid: int, *, start: int, end: int) -> Iterator[bytes]:
     """Yield bytes of the inclusive ``[start, end]`` range from a blob column."""
+    # `[0]` can be None from pylance 10.0.0: `take_blobs` returns a same-length list with `None`
+    # in a null payload's slot, where 9.0.0 omitted the row entirely. Unguarded, `with blob as f:`
+    # raises AttributeError on `__enter__` and this endpoint answers 500 for a document whose
+    # payload is legitimately absent — a 404 is the honest answer and the one every other
+    # absence on this path already gives.
     blob = ds.take_blobs(column, ids=[rowid])[0]
+    if blob is None:
+        raise NotFoundError("no payload for this row")
     with blob as f:
         f.seek(start)
         remaining = end - start + 1
@@ -105,8 +112,13 @@ def parse_range(header: str, total: int) -> tuple[int, int] | str | None:
 
 
 def blob_size(ds: lance.LanceDataset, column: str, rowid: int) -> int:
-    """Probe a blob's size without reading its contents."""
+    """Probe a blob's size without reading its contents. A null payload is size 0, not an error."""
     blob = ds.take_blobs(column, ids=[rowid])[0]
+    # pylance 10.0.0 puts `None` in a null payload's slot (9.0.0 omitted the row). Zero is the honest
+    # answer here — the callers use it for Content-Length and range satisfiability, and an absent
+    # payload is a zero-length body, which is exactly what the serving contract already promises.
+    if blob is None:
+        return 0
     with blob as f:
         try:
             return f.size()  # type: ignore[attr-defined]
@@ -173,7 +185,14 @@ def thumbnail(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> Res
     if rowid is None:
         raise NotFoundError("doc_id not found")
     mime = _cell_value(ds, declared.identity.doc_key, doc_id, binding.thumbnail_mime, "image/jpeg")
+    # `[0]` can be None from pylance 10.0.0: `take_blobs` returns a same-length list with `None`
+    # in a null payload's slot, where 9.0.0 omitted the row entirely. Unguarded, `with blob as f:`
+    # raises AttributeError on `__enter__` and this endpoint answers 500 for a document whose
+    # payload is legitimately absent — a 404 is the honest answer and the one every other
+    # absence on this path already gives.
     blob = ds.take_blobs(binding.thumbnail, ids=[rowid])[0]
+    if blob is None:
+        raise NotFoundError("no thumbnail for doc_id")
     with blob as f:
         data = f.read()
     if not data:
@@ -232,6 +251,9 @@ def chunk_frame(
     except Exception as e:
         logger.warning("frame blob read failed", exc_info=True)
         raise NotFoundError("no frame for chunk") from e
+    # Same pylance-10 null slot as the sites above; the surrounding try only covers the take itself.
+    if blob is None:
+        raise NotFoundError("no frame for chunk")
     with blob as f:
         data = f.read()
     if not data:

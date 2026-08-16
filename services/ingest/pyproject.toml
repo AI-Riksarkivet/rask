@@ -26,7 +26,7 @@ dependencies = [
     # and they are exactly what makes the stream the outstanding-work ledger.
     "nats-py>=2.15",
     # The lander writes Lance directly (fragments + one commit). Pinned to the version §7.11 verified.
-    "pylance>=9.0.0",
+    "pylance>=10.0.0",
 ]
 
 [build-system]

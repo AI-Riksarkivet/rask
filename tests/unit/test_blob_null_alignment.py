@@ -1,7 +1,8 @@
 """The R27 null-blob alignment guards — the class of defect that has no exception to catch it.
 
-``read_blobs`` / ``take_blobs`` DROP null rows (measured on pylance 8.0.0 AND 9.0.0; recorded in
-``docs/architecture/lance-blob-v2-findings.md``), so any code that pairs their output with a second scan
+``read_blobs`` / ``take_blobs`` DROPPED null rows through pylance 9.0.0 (measured on 8.0.0 and 9.0.0;
+FIXED in 10.0.0 — see ``docs/architecture/lance-blob-v2-findings.md``), so any code that paired their
+output with a second scan
 BY POSITION is misaligned the moment one row's payload is null — which is exactly the medallion's own
 "a failed harvest, a skipped page" case. Before this guard the cascade turned one un-harvested page into
 ``ArrowInvalid: Column 1 named payload expected length 3 but got length 2``, which the movers classify as
@@ -92,17 +93,33 @@ def bronze_with_a_null_page(tmp_path: Path) -> str:
     return uri
 
 
-def test_read_blobs_still_drops_null_rows(bronze_with_a_null_page: str) -> None:
-    """The upstream landmine is still live — this is the premise every guard below depends on.
+def test_upstream_fixed_the_null_drop_and_the_shape_changed_with_it(bronze_with_a_null_page: str) -> None:
+    """THE LANDMINE IS FIXED UPSTREAM, as of pylance 10.0.0 — and this test firing is how we found out.
 
-    If pylance starts preserving cardinality this FAILS, which is the signal to re-measure and update
-    docs/architecture/lance-blob-v2-findings.md. A silently-fixed landmine would leave the workaround
-    (and this whole test file) looking like superstition.
+    It used to assert the opposite (`== 2` for three selected rows) as the premise every guard in this
+    file rests on, with an explicit note that a pass-to-fail flip would be "the signal to re-measure and
+    update docs/architecture/lance-blob-v2-findings.md". The 9.0.0 -> 10.0.0 upgrade flipped it on
+    2026-08-16 and the doc was updated. Keeping the tripwire pointed the other way matters just as much:
+    a regression upstream would silently restore the misalignment this file exists to prevent.
+
+    Both entry points now preserve cardinality, and `read_blobs` ALSO changed shape — it yields
+    `(row_index, bytes)` tuples where it used to yield blob handles, so anything calling `.size()` or
+    `.read_range()` on its output breaks. `take_blobs` still yields handles but now puts `None` in a
+    null row's slot instead of omitting the row.
     """
     ds = lance.dataset(bronze_with_a_null_page)
     assert ds.count_rows() == 3
-    assert len(list(ds.read_blobs("payload", indices=[0, 1, 2]))) == 2
-    assert len(ds.take_blobs("payload", indices=[0, 1, 2])) == 2
+
+    read = list(ds.read_blobs("payload", indices=[0, 1, 2]))
+    assert len(read) == 3, "cardinality is preserved as of pylance 10 — one entry per selected row"
+    assert all(isinstance(entry, tuple) and len(entry) == 2 for entry in read), (
+        "read_blobs now yields (row_index, bytes) tuples, not blob handles"
+    )
+
+    took = ds.take_blobs("payload", indices=[0, 1, 2])
+    assert len(took) == 3, "take_blobs no longer omits the null row"
+    assert took[1] is None, "the null payload is None in its slot, not absent"
+    assert took[0] is not None and took[2] is not None
 
 
 def test_read_aligned_table_preserves_cardinality(bronze_with_a_null_page: str) -> None:

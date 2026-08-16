@@ -99,13 +99,25 @@ class _BlobActor:
             return _empty_rowid_table(self._out, self._type)
         payloads: list[bytes] = []
         for blob in self._ds.take_blobs(self._blob_column, ids=row_ids):
+            if blob is None:
+                raise ValueError(
+                    f"{self._blob_column}: a NULL payload cannot be keyed by position by this stage. "
+                    f"Filter the scan to `{self._blob_column} IS NOT NULL`, or read via a "
+                    "blob_handling='all_binary' scan (service_kit.lakehouse.blobs.read_aligned_table)."
+                )
             with blob as handle:
                 payloads.append(handle.read())
-        # ``take_blobs`` DROPS null rows (measured, pylance 8.0.0 AND 9.0.0 —
-        # docs/architecture/lance-blob-v2-findings.md), so a null payload in this block would leave
-        # ``payloads`` short and pair every later value with the WRONG row id. Fail here, naming the
-        # cause, instead of letting pa.table raise an opaque length error two lines down or — worse —
-        # letting a broadcasting ``self._fn`` return the right length and commit silent misattribution.
+        # A NULL payload arrives as `None` in its slot from pylance 10.0.0, where 8/9 omitted the row
+        # entirely. Both are hazards, but different ones, and the fix differs:
+        #   * 8/9 — the list came back SHORT, so pairing by position misattributed every later value.
+        #     The length check below caught that.
+        #   * 10 — the list is the right LENGTH but `with blob as handle` dereferences `None` and
+        #     raises AttributeError before the check is ever reached.
+        # Refusing on the null is the same verdict either way: this stage keys payloads BY POSITION and
+        # cannot represent an absent one, so it names the cause rather than letting `pa.table` raise an
+        # opaque length error — or worse, letting a broadcasting `self._fn` return the right length and
+        # commit silent misattribution. The length check stays as the 8/9 belt; on 10 the null test
+        # fires first.
         if len(payloads) != len(row_ids):
             raise ValueError(
                 f"{self._blob_column}: take_blobs returned {len(payloads)} payload(s) for {len(row_ids)} "

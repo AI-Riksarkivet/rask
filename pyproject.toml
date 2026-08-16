@@ -14,12 +14,15 @@ build-backend = "hatchling.build"
 bypass-selection = true
 
 [tool.uv]
-# pylance 9.0.0's metadata caps `lance-namespace>=0.8.5,<0.9`, but the catalog requires >=0.9.0 —
+# pylance 10.0.0's metadata STILL caps `lance-namespace>=0.8.5,<0.9`, but the catalog requires >=0.11.0 —
 # mutually unsatisfiable, so `uv lock` fails outright without this. lance-ns carries the same
 # override at ITS root; overrides are honoured ONLY at the workspace root, so it has to live here.
 override-dependencies = [
-    "lance-namespace>=0.9.0",
-    "lance-namespace-urllib3-client>=0.9.0",
+    # KEEP. pylance 10.0.0 still declares `lance-namespace<0.9,>=0.8.5`, so without this override
+    # `uv lock` fails outright — the two halves of the same project ship incompatible pins. Floor moved
+    # to 0.11.0 with the 2026-08-16 upgrade so the generated client cannot skew from the spec model.
+    "lance-namespace>=0.11.0",
+    "lance-namespace-urllib3-client>=0.11.0",
 ]
 
 [tool.uv.workspace]
@@ -54,7 +57,7 @@ dev = [
     "ruff",
     "ty",
     "datasets>=4.8.4",
-    "pylance>=0.20",
+    "pylance>=10.0.0",
     "lancedb>=0.20",
     "pytest-postgresql>=6.1",
     "tracker[postgres]",

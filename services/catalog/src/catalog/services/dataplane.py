@@ -825,7 +825,13 @@ def read_blob(
     if if_range is not None and if_range.strip() != etag:
         range_spec = None  # validator mismatch (or an If-Range date) → full current payload
     files = dataset.take_blobs(column, indices=[row])
-    if not files:  # zero-length payload (null collapses to size-0 at write — see docstring)
+    # `not files` OR a `None` in the slot — the two spellings of "no payload here", one per pylance
+    # major. Through 9.0.0 `take_blobs` OMITTED a null row, so the empty-list test below was the whole
+    # check; 10.0.0 returns a same-length list with `None` instead (measured 2026-08-16). Without the
+    # `files[0] is None` half, serving a null payload reached `None.size()` and answered 500 on a row
+    # the endpoint is supposed to serve as an empty body — a user-facing break, on the exact case the
+    # zero-length contract exists for.
+    if not files or files[0] is None:  # zero-length payload (null collapses to size-0 at write)
         if range_spec is None:
             return BlobStream(size=0, start=0, length=0, etag=etag, ranged=False, satisfiable=True)
         return BlobStream(size=0, start=0, length=0, etag=etag, ranged=True, satisfiable=False)
@@ -1055,6 +1061,23 @@ def add_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAddColumn
     # request for an unsupported feature, not invalid input).
     if any(getattr(c, "virtual_column", None) is not None and not c.expression for c in columns):
         raise UnsupportedOperationError("virtual_column add_columns is not supported by this backend")
+    # `computed` arrived with lance-namespace 0.11.0 (PR #360) as a THIRD way to declare a column: the
+    # column is added all-null with the SQL expression persisted as a binding in field metadata, and rows
+    # are filled later by `alter_table_backfill_columns` — never at declaration. That is a different
+    # operation from the immediate `expression` transform below, and the `dir` backend implements neither
+    # the binding nor the backfill.
+    #
+    # Without this arm a spec-VALID 0.11.0 request (`{"name": "x", "computed": "a + b"}`) fell past the
+    # virtual_column guard, produced an empty `transforms`, and hit the InvalidInput below — a 400 saying
+    # the caller had sent no SQL expression when they had sent one the server simply does not support.
+    # 501 is the spec's answer for a valid request naming an unsupported feature.
+    #
+    # `getattr` so this file works against 0.9.0 and 0.11.0 alike, exactly as the virtual_column guard
+    # above already does — the field does not exist on the older model.
+    if any(getattr(c, "computed", None) is not None and not c.expression for c in columns):
+        raise UnsupportedOperationError(
+            "computed add_columns is not supported by this backend — the expression binding and its backfill are both unimplemented for the dir backend"
+        )
     transforms = {c.name: c.expression for c in columns if c.expression}
     if not transforms:
         raise InvalidInputError("add_columns requires a name and SQL expression per column")

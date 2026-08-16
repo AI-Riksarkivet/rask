@@ -10,7 +10,7 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.5",
     "uvicorn[standard]>=0.30",
-    "pylance[otel]>=9.0.0",
+    "pylance[otel]>=10.0.0",
     "pyarrow",
     "dapr>=1.18.1",
     "opentelemetry-api>=1.44.0",

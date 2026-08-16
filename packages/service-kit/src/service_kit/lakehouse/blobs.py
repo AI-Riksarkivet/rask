@@ -90,8 +90,8 @@ def blob_column_resolves(ds: lance.LanceDataset, column: str) -> bool:
     ``take_blobs`` itself raises (it opens the object), which is why the whole probe sits in the
     try. First+last catches the wholesale failures these checks exist for (wiped bucket, wrong or
     unregistered external base) at the cost of two 1-byte reads; per-row bitrot auditing is a
-    scrubber's job. Zero-length/null payloads resolve trivially (``take_blobs`` returns no handle
-    for them — the same probed behavior the catalog's serving path guards). An EMPTY dataset
+    scrubber's job. Zero-length/null payloads resolve trivially — through pylance 9 ``take_blobs`` returned no
+    handle for them at all; from 10.0.0 it returns ``None`` in that slot, which the loop skips. An EMPTY dataset
     resolves trivially too (nothing to probe).
     """
     rows = ds.count_rows()
@@ -100,6 +100,16 @@ def blob_column_resolves(ds: lance.LanceDataset, column: str) -> bool:
     try:
         for row in sorted({0, rows - 1}):
             for handle in ds.take_blobs(column, indices=[row]):
+                # `handle is None` IS the null payload, and testing for it is required from pylance
+                # 10.0.0. Through 9.0.0 `take_blobs` OMITTED a null row from its result, so the loop
+                # simply did not run for it — the "returns no handle for them" the docstring above
+                # describes. 10.0.0 returns a same-length list with `None` in that slot instead
+                # (measured 2026-08-16: row 0 -> BlobFile, row 1 (null) -> None, row 2 -> BlobFile),
+                # so the old loop reached `None.size()` and raised AttributeError — turning a healthy
+                # dataset whose first or last payload is null into a reported DANGLING column, which
+                # is a promotion-blocking verdict on correct data.
+                if handle is None:
+                    continue
                 if handle.size() > 0:
                     handle.read_range(0, 1)
     except Exception as exc:

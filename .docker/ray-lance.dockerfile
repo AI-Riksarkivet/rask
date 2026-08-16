@@ -32,7 +32,7 @@ FROM rayproject/ray:2.56.1-py312-cpu@sha256:56a97670c40913b7169c2b6e63be2e40c672
 # lance_ray's write strips blob-v2 typing (verified live — read_lance turns a blob column into plain
 # large_binary), so the job round-trips blobs via pylance and derives here rather than falling back
 # in-process. Drop this + the round-trip when lance-ray gains inline-blob-preserving read/write.
-RUN pip install --no-cache-dir "lance-ray==0.5.0" "pylance==9.0.0" "pyarrow==25.0.0" "pillow==11.3.0"
+RUN pip install --no-cache-dir "lance-ray==0.5.0" "pylance==10.0.0" "pyarrow==25.0.0" "pillow==11.3.0"
 
 # OTel SDK + OTLP/HTTP exporter so the train job (ray_train_job.py) can export its run metrics to
 # GreptimeDB (#18 experiment tracking → Perses). Pinned to the services' opentelemetry version for parity.

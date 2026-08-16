@@ -265,6 +265,14 @@ def _read_blobs(ds: lance.LanceDataset, column: str, row_ids: list[int]) -> list
     """
     payloads: list[bytes] = []
     for blob in ds.take_blobs(column, ids=row_ids):
+        # `None` in a null payload's slot from pylance 10.0.0 (8/9 omitted the row, making the list
+        # short — which the length check below was written for). Either way this function keys payloads
+        # by position and cannot represent an absent one, so it refuses with the cause named.
+        if blob is None:
+            raise ValueError(
+                f"{column}: a NULL payload cannot be keyed by position. Filter the scan to "
+                f"`{column} IS NOT NULL`, or use service_kit.lakehouse.blobs.read_aligned_table."
+            )
         with blob as handle:
             payloads.append(handle.read())
     if len(payloads) != len(row_ids):
