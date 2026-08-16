@@ -16,4 +16,3 @@ export * from './me';
 // media-plane viewer at /api/explorer/object*.)
 export * from './ray';
 export * from './ingest';
-export * from './projects';
