@@ -13,10 +13,11 @@
  * with authorization about which object a table belongs to, and links the user to a namespace page for
  * an object that is not its parent.
  *
- * NOT COVERED, deliberately: the delimiter. `LANCE_NS_DELIMITER` is operator-settable server-side and
- * this module hardcodes `$`, as does every other frontend module that splits an id. That is a real
- * pre-existing gap and a separate change — the zone has no route to the catalog's configured delimiter
- * today, so a test here could only assert the hardcoding it would be documenting.
+ * The grammar itself now lives in `@rask/api/identifiers` and is covered by that package's tests; this
+ * file keeps only the medallion-stage derivation built on top of it. The earlier note here claimed the
+ * delimiter was an open gap awaiting a config endpoint — it is not. `chart/templates/services.yaml`
+ * sets `LANCE_NS_DELIMITER` to a LITERAL `"$"` with no values.yaml knob, so changing it is already a
+ * repo edit and a constant in the same repo ships in the same commit. That question is closed.
  */
 
 import { describe, expect, it } from 'vitest';

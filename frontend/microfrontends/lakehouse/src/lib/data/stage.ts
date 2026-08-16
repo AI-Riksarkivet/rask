@@ -16,17 +16,16 @@ export type StageInfo = {
 // Non-greedy project prefix + literal stage names, so `acme-data-silver` parses as
 // project `acme-data`, stage `silver` (a greedy prefix would eat the stage).
 /**
- * The identifier delimiter, in ONE place rather than the six literals that were scattered across this
- * zone (stage.ts twice, DangerZone, ColumnNode, ColumnLineage, the namespace detail page).
+ * The identifier grammar now lives in `@rask/api/identifiers`, not here.
  *
- * It is a CONSTANT and not a fetched value, deliberately and with a known limit: the server's
- * `LANCE_NS_DELIMITER` is operator-settable, and the catalog exposes **no config endpoint at all**
- * (verified against docs/catalog-openapi.json — there is no `/v1/config` path), so the zone has no way
- * to learn the configured value. Making this truly dynamic therefore needs a backend endpoint first;
- * until then, centralising it means a deployment that changes the delimiter is one edit rather than a
- * hunt through six files that each looked local and correct.
+ * It was centralised into this module first, which was only half a fix: `stage.ts` is the LAKEHOUSE's
+ * `$lib`, and zones do not share `$lib`, so the `home` zone could not reach it and kept its own copy —
+ * a copy that split on the FIRST delimiter and therefore named the wrong namespace. Re-exported here so
+ * this module's existing callers and tests keep their import site.
  */
-export const DELIMITER = '$';
+import { leafSegment, parentNamespace } from '@rask/api/identifiers';
+
+export { DELIMITER, parentNamespace as namespaceOfTable } from '@rask/api/identifiers';
 
 const STAGE_RE = /^(?:([a-z0-9][a-z0-9_-]*?)-)?(raw|bronze|silver|gold)(-media)?$/;
 
@@ -42,38 +41,12 @@ const STAGE_RE = /^(?:([a-z0-9][a-z0-9_-]*?)-)?(raw|bronze|silver|gold)(-media)?
  * Ruled 2026-08-16 with the visible consequence stated: badges now appear where there were none.
  */
 export function stageOf(namespace: string): StageInfo | null {
-	const leaf = namespace.includes(DELIMITER)
-		? namespace.slice(namespace.lastIndexOf(DELIMITER) + 1)
-		: namespace;
-	const m = STAGE_RE.exec(leaf);
+	const m = STAGE_RE.exec(leafSegment(namespace));
 	if (!m) return null;
 	return { stage: m[2] as Stage, project: m[1] ?? null, media: m[3] !== undefined };
 }
 
-/**
- * The namespace of a `<ns>$…$<table>` id: EVERY segment but the last (a bare name is its own root —
- * the registry rule).
- *
- * `lastIndexOf`, not `indexOf`, and the difference is a bug rather than a nicety. Namespaces nest —
- * `namespace#parent: [warehouse, namespace]` in the FGA model, and the catalog's create door accepts
- * a nested id — so `acme$bronze$pages` is the table `pages` inside the namespace `acme$bronze`. Taking
- * the FIRST delimiter called that namespace `acme`, which is a different object.
- *
- * The backend is the authority and states it plainly: `parent_namespace_id` is "all segments but the
- * last" (`service_kit/governed/fga.py:187-201`), and that is the id the grant and check paths use. A
- * frontend deriving a different one disagrees with authz about which object a table belongs to.
- *
- * Four surfaces were wrong for a nested table: the Namespaces list folded it under its top-level
- * ancestor so the real namespace never appeared as a row at all; the warehouse detail page's namespace
- * list did the same; the Tables list linked its `namespace` column to an object one or more rungs too
- * high; and `stageOfTable` derived the medallion stage from the wrong name, so a table in
- * `acme$acme-silver` got no stage badge instead of `silver`.
- */
-export function namespaceOfTable(table: string): string {
-	return table.includes(DELIMITER) ? table.slice(0, table.lastIndexOf(DELIMITER)) : table;
-}
-
 /** The medallion stage of a table id, derived from its namespace segment. */
 export function stageOfTable(table: string): StageInfo | null {
-	return stageOf(namespaceOfTable(table));
+	return stageOf(parentNamespace(table));
 }

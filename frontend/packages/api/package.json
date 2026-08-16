@@ -17,10 +17,6 @@
 			"types": "./src/client.ts",
 			"default": "./src/client.ts"
 		},
-		"./upstream": {
-			"types": "./src/upstream.ts",
-			"default": "./src/upstream.ts"
-		},
 		"./dock-layout": {
 			"types": "./src/dock-layout.ts",
 			"default": "./src/dock-layout.ts"
@@ -36,6 +32,10 @@
 		"./generated/lineage": {
 			"types": "./src/generated/lineage.ts",
 			"default": "./src/generated/lineage.ts"
+		},
+		"./identifiers": {
+			"types": "./src/identifiers.ts",
+			"default": "./src/identifiers.ts"
 		},
 		"./inbox": {
 			"types": "./src/inbox.ts",
@@ -61,6 +61,10 @@
 		"./serve-proxy": {
 			"types": "./src/serve-proxy.ts",
 			"default": "./src/serve-proxy.ts"
+		},
+		"./upstream": {
+			"types": "./src/upstream.ts",
+			"default": "./src/upstream.ts"
 		}
 	},
 	"scripts": {

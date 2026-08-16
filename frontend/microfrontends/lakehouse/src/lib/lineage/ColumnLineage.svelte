@@ -1,5 +1,6 @@
 <script lang="ts" module>
 	import ColumnNode, { type ColumnNodeType } from '$lib/lineage/ColumnNode.svelte';
+	import { leafSegment } from '@rask/api/identifiers';
 	import type { NodeTypes } from '@xyflow/svelte';
 
 	// svelte-flow rule 5: register node components ONCE at module scope, not inline.
@@ -156,7 +157,7 @@
 	const focusedColumn = $derived(store.selectedColumn);
 	const colUpstream = $derived(store.upstream?.related ?? []);
 	const colDownstream = $derived(store.downstream?.related ?? []);
-	const shortDs = (ds: string) => ds.split('$').at(-1) ?? ds;
+	const shortDs = (ds: string) => leafSegment(ds);
 
 	// The direct field-to-field edge between two columns (if the subgraph carries it), for its
 	// transformation label + masking cue. Transitive (multi-hop) neighbors have no direct edge → no label.

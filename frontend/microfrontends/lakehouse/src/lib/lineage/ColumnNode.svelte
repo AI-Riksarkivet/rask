@@ -14,11 +14,12 @@
 	// Same medallion palette as the dataset plane, so a column reads as belonging to its layer.
 	const COLORS = ['#ff9457', '#cd7f32', '#9fb6cf', '#ffc14d', '#8aa0bd'];
 	// A column's short dataset label (drop the namespace$ prefix that the table id carries).
-	const shortDs = (ds: string) => ds.split('$').at(-1) ?? ds;
+	const shortDs = (ds: string) => leafSegment(ds);
 </script>
 
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
+	import { leafSegment } from '@rask/api/identifiers';
 	import { Columns3, ShieldAlert } from '@lucide/svelte';
 
 	let { data }: NodeProps<ColumnNodeType> = $props();

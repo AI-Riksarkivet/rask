@@ -7,6 +7,7 @@
 	// instance never survives a navigation — an armed confirm dies with it. No `onchanged` prop:
 	// every success here leaves the page (the id no longer names this table).
 	import { AlertDialog } from '@rask/ui/alert-dialog';
+	import { namespacePrefix } from '@rask/api/identifiers';
 	import { Trash2 } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
@@ -20,7 +21,7 @@
 	let dangerOpen = $state(false);
 	let dangerAction = $state<'drop' | 'deregister' | null>(null);
 	// The `<ns>$` prefix the renamed table keeps — this form renames within the table's own namespace.
-	const nsPrefix = $derived(table.includes('$') ? table.slice(0, table.lastIndexOf('$') + 1) : '');
+	const nsPrefix = $derived(namespacePrefix(table));
 
 	function openDanger(action: 'drop' | 'deregister'): void {
 		dangerAction = action;
