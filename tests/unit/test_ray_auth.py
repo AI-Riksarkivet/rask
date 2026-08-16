@@ -125,6 +125,54 @@ def test_external_secrets_owns_the_token_and_the_static_secret_is_skipped() -> N
     assert "auth_token:" in es[0], "the synced Secret must keep the auth_token data key the consumers reference"
 
 
+@pytest.mark.parametrize("eso", [False, True], ids=["static-secret", "external-secrets"])
+def test_the_token_renders_for_an_EXTERNAL_ray_cluster(eso: bool) -> None:
+    """singleTenant.enabled=false — the shape this estate calls NORMAL — must still get the credential.
+
+    configmap.yaml:101 states it outright: "rask's Ray is managed outside this repo, so an external
+    address is the NORMAL case and the in-cluster head is the opt-in". A fleet talking to a Ray it does
+    not host still has to present a bearer token, so the credential's existence cannot depend on whether
+    THIS chart also deploys the cluster.
+
+    REGRESSION: both templates opened with `and .Values.ray.enabled .Values.singleTenant.enabled`, while
+    the CONSUMING `rask.rayAuthEnv` fires on `ray.auth.enabled` alone. Every test above pins
+    singleTenant.enabled=true, so the suite only ever rendered the opt-in shape and stayed green while
+    the default one was broken. Switching auth on for real (2026-08-16) put rask-compute into
+    CreateContainerConfigError against a Secret that never rendered, and hung the release in
+    pending-upgrade behind `helm --wait`.
+    """
+    args = ["singleTenant.enabled=false", "ray.auth.enabled=true"]
+    if eso:
+        args.append("externalSecrets.enabled=true")
+    docs = _docs(_helm(*args).stdout)
+
+    kind = "ExternalSecret" if eso else "Secret"
+    owning = [d for d in docs if re.search(rf"^kind: {kind}$", d, re.MULTILINE) and "rask-ray-auth-token" in d]
+    assert len(owning) == 1, f"external-Ray render must still produce exactly one {kind} holding the token"
+    assert "auth_token:" in owning[0], "the data key consumers reference via secretKeyRef must survive"
+
+
+@pytest.mark.parametrize("single_tenant", [False, True], ids=["external-ray", "in-cluster-ray"])
+@pytest.mark.parametrize("eso", [False, True], ids=["static-secret", "external-secrets"])
+def test_every_secretKeyRef_to_the_token_has_something_that_creates_it(single_tenant: bool, eso: bool) -> None:
+    """The load-bearing symmetry: nothing may REFERENCE the token Secret unless the render also CREATES it.
+
+    This is the invariant the individual gate tests keep missing, because each one checks a single
+    template under a single combination. A `secretKeyRef` to an absent Secret is not a render error —
+    kubelet accepts the pod and then wedges it in CreateContainerConfigError, so it fails at deploy time
+    on a cluster, which is the most expensive place to find it.
+    """
+    args = ["ray.auth.enabled=true", f"singleTenant.enabled={str(single_tenant).lower()}"]
+    if eso:
+        args.append("externalSecrets.enabled=true")
+    docs = _docs(_helm(*args).stdout)
+
+    referrers = {_name(d) for d in docs if "rask-ray-auth-token" in d and "secretKeyRef" in d}
+    creators = [d for d in docs if re.search(r"^kind: (Secret|ExternalSecret)$", d, re.MULTILINE) and "rask-ray-auth-token" in d]
+    assert referrers, "expected at least the rayClient fleet to reference the token in this shape"
+    assert len(creators) == 1, f"{sorted(referrers)} reference rask-ray-auth-token but {len(creators)} manifests create it"
+
+
 def test_prod_render_fails_closed_when_ray_deploys_without_auth() -> None:
     """openbao.devMode=false is the prod signal: an unauthenticated Ray dashboard is remote
     code execution (jobs/Serve REST take arbitrary entrypoints), so the render must abort —

@@ -1,4 +1,3 @@
-{{- if and .Values.ray.enabled .Values.singleTenant.enabled }}
 # Ray auth token Secret (gate 7 / R3) — the ONE credential for RAY_AUTH_MODE=token: the Ray head
 # enforces it on the dashboard HTTP (:8265, 401 missing / 403 invalid) and the gRPC surfaces
 # (GCS :6379, client :10001). The kuberay >= 1.6.0 operator consumes THIS Secret natively via
@@ -16,6 +15,22 @@
 # The token must NEVER ride runtime_env.env_vars — the jobs API echoes runtime_env back to any
 # caller, so a token there is a leak. core's _passthrough_env (AWS_/HCP_/IIIF_/RASK_ prefixes) and
 # the runner's worker_env filter already exclude RAY_*; that exclusion is a stated invariant.
+{{- /* THE SECRET'S GATE MUST EQUAL rask.rayAuthEnv's GATE, and that is why neither `ray.enabled` nor
+     `singleTenant.enabled` appears on it. rayAuthEnv (_helpers.tpl) emits a secretKeyRef to this
+     Secret on `.Values.ray.auth.enabled` ALONE, for every service flagged `rayClient`. This file
+     used to open with `if and .Values.ray.enabled .Values.singleTenant.enabled`, so the CONSUMER
+     gate was strictly broader than the PRODUCER gate and the pod referenced a Secret the chart had
+     refused to render.
+     MEASURED 2026-08-16, the first time auth was actually switched on: singleTenant.enabled=false,
+     so `--set ray.auth.enabled=true` gave rask-compute a secretKeyRef to a Secret that did not
+     exist -> CreateContainerConfigError, and the release hung in pending-upgrade behind --wait.
+     The asymmetry also broke the case this estate actually wants: an EXTERNAL KubeRay. With Ray
+     deployed elsewhere, `ray.enabled`/`singleTenant.enabled` are false here, yet the fleet still
+     has to present a bearer token to reach it — so the credential is needed EXACTLY when a consumer
+     is configured to use one, independent of who runs the cluster.
+     The prod-render guards below stay gated on "this render deploys Ray", because that is genuinely
+     what they assert. */}}
+{{- if and .Values.ray.enabled .Values.singleTenant.enabled }}
 {{- if not .Values.openbao.devMode }}
 {{- /* Prod signal (values-prod flips devMode): an unauthenticated Ray dashboard is remote code
      execution (the jobs + Serve REST APIs take arbitrary entrypoints/import_paths), so a prod
@@ -29,6 +44,8 @@
 {{- fail "ray.auth.token is still the REPLACE-ME placeholder on a prod render — supply a real token (--set ray.auth.token=... from your secret manager) or leave it empty on a lookup-pinned install; do not commit it." }}
 {{- end }}
 {{- end }}
+{{- end }}
+{{- /* --- end of the deploys-Ray-here guards; the Secret below is NOT gated on them --- */}}
 {{- if and .Values.ray.auth.enabled (not .Values.externalSecrets.enabled) }}
 apiVersion: v1
 kind: Secret
@@ -40,5 +57,4 @@ type: Opaque
 stringData:
   # `auth_token` is the KubeRay operator-Secret data-key convention (kuberay-auth guide).
   auth_token: {{ include "rask.rayAuthToken" . | quote }}
-{{- end }}
 {{- end }}
