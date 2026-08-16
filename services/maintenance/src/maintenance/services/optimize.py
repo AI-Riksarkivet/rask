@@ -294,19 +294,48 @@ def compact_one(
         # #58: when the DATASET owns version reclamation, configure it here and do not also sweep.
         # Applied AFTER compaction so a failure to configure can never cost us the compaction that
         # already succeeded, and recorded on the result so an operator can see which owner ran.
-        if auto_cleanup_interval_commits is not None:
+        # ORDER MATTERS, and it used to be wrong. This was `if auto_cleanup … elif cleanup_enabled …
+        # else`, which made `cleanup_enabled=False` UNREACHABLE whenever a policy also set
+        # `auto_cleanup_interval_commits` — so a tier under legal hold handed its own commit path a
+        # standing instruction to delete the versions the hold existed for. A hold must beat a
+        # convenience, so the disable is checked FIRST and nothing below can override it.
+        if not cleanup_enabled:
+            if auto_cleanup_interval_commits is not None:
+                # Reported, not silently dropped: the policy asks for two contradictory things, and the
+                # operator needs to know which one won.
+                log.warning(
+                    "auto_cleanup_suppressed_by_cleanup_disabled",
+                    extra={"uri": uri, "interval_commits": auto_cleanup_interval_commits},
+                )
+            log.info("cleanup_disabled_by_policy", extra={"uri": uri})
+        elif auto_cleanup_interval_commits is not None:
             try:
                 from lance.dataset import AutoCleanupConfig
 
                 # AutoCleanupConfig is a TypedDict keyed in SECONDS, not a timedelta — the 14-day
                 # fallback mirrors what pylance substitutes when neither bound is given.
-                ds.optimize.enable_auto_cleanup(
-                    AutoCleanupConfig(
-                        interval=auto_cleanup_interval_commits,
-                        older_than_seconds=int((older_than or timedelta(days=14)).total_seconds()),
-                    ),
+                older_than_seconds = int((older_than or timedelta(days=14)).total_seconds())
+                # ONLY WRITE WHEN IT WOULD CHANGE SOMETHING. `enable_auto_cleanup` is `update_config`,
+                # which is a Lance TRANSACTION even when the config is byte-identical — measured on
+                # pylance 9.0.0: three identical calls took a dataset from version 1 to 4. This runs on
+                # every policied dataset every 120s, so the reclaimer was the estate's most prolific
+                # VERSION PRODUCER: it manufactured exactly the history it exists to remove, and each
+                # new version resets that dataset's age-based cleanup window.
+                # `config` is a METHOD on pylance 9.0.0, not a property — read defensively so a future
+                # release flipping it either way cannot turn "already configured" into a silent rewrite.
+                raw = getattr(ds, "config", None)
+                current = dict((raw() if callable(raw) else raw) or {})
+                already = (
+                    current.get("lance.auto_cleanup.interval") == str(auto_cleanup_interval_commits)
+                    and current.get("lance.auto_cleanup.older_than") == f"{older_than_seconds}s"
                 )
-                result.auto_cleanup_configured = True
+                if already:
+                    result.auto_cleanup_configured = True
+                else:
+                    ds.optimize.enable_auto_cleanup(
+                        AutoCleanupConfig(interval=auto_cleanup_interval_commits, older_than_seconds=older_than_seconds),
+                    )
+                    result.auto_cleanup_configured = True
             except Exception as exc:
                 # Not fatal: the dataset keeps whatever cleanup config it had, and the NEXT pass retries.
                 # It IS reported, because silently falling back to no cleanup at all is how a tier grows
@@ -314,12 +343,12 @@ def compact_one(
                 log.warning("auto_cleanup_enable_failed", extra={"uri": uri, "error": str(exc)})
                 result.error = f"auto_cleanup: {exc}"
                 result.error_type = type(exc).__name__
-        elif cleanup_enabled:
+        else:
+            # cleanup_enabled is necessarily True here — the disable is handled first, above — so this
+            # is the sweep-owned reclamation path and needs no second check.
             stats: Any = ds.cleanup_old_versions(older_than=older_than, retain_versions=retain_versions, error_if_tagged_old_versions=False)
             result.old_versions_removed = int(getattr(stats, "old_versions", 0))
             result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
-        else:
-            log.info("cleanup_disabled_by_policy", extra={"uri": uri})
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception; see below
         # `BaseException`, deliberately, and this is the LAST line of defence for the whole sweep.
         # pylance can PANIC (`pyo3_runtime.PanicException: not yet implemented` out of

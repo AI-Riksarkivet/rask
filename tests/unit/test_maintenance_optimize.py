@@ -428,3 +428,50 @@ def test_a_RUST_PANIC_in_index_stats_does_not_kill_the_whole_sweep(tmp_path: Pat
 
     assert result.error is None, f"a panic in a REPORTING step failed the dataset: {result.error}"
     assert result.fragments_removed >= 4, "compaction was lost to an index-report panic"
+
+
+def test_a_LEGAL_HOLD_beats_auto_cleanup(tmp_path: Path) -> None:
+    """`cleanup_enabled=False` must win over `auto_cleanup_interval_commits`, not be shadowed by it.
+
+    The branch was `if auto_cleanup … elif cleanup_enabled … else`, so a policy that set both left the
+    disable UNREACHABLE — and the disable is documented as "keeps the ENTIRE version history: a tier
+    under legal hold". The sweep would hand that dataset's own commit path a standing instruction to
+    delete exactly the versions the hold existed for, and report success.
+
+    Asserted on the dataset's config rather than a log line: the damage is that auto-cleanup gets
+    CONFIGURED, and configuration outlives the tick that wrote it.
+    """
+    uri = str(tmp_path / "held.lance")
+    lance.write_dataset(pa.table({"v": [1, 2, 3]}), uri)
+
+    result = compact_one(uri, {}, timedelta(days=7), cleanup_enabled=False, auto_cleanup_interval_commits=5)
+
+    assert result.error is None
+    assert result.auto_cleanup_configured is False, "a held dataset must not be configured to reclaim itself"
+    raw = getattr(lance.dataset(uri), "config", None)
+    config = dict((raw() if callable(raw) else raw) or {})
+    assert "lance.auto_cleanup.interval" not in config, f"auto-cleanup was written onto a legal-hold dataset: {config}"
+
+
+def test_auto_cleanup_does_not_COMMIT_A_VERSION_when_already_configured(tmp_path: Path) -> None:
+    """`enable_auto_cleanup` is `update_config`, a Lance transaction even when nothing changes.
+
+    MEASURED on pylance 9.0.0: three identical calls took a dataset from version 1 to 4. `compact_one`
+    called it unconditionally for every policied dataset on a 120s cron, which made the reclaimer the
+    estate's most prolific VERSION PRODUCER — manufacturing precisely the history it exists to remove,
+    and resetting each dataset's age-based cleanup window every time it did.
+    """
+    uri = str(tmp_path / "cfg.lance")
+    lance.write_dataset(pa.table({"v": [1, 2, 3]}), uri)
+
+    first = compact_one(uri, {}, timedelta(days=7), auto_cleanup_interval_commits=5)
+    assert first.error is None and first.auto_cleanup_configured
+    settled = lance.dataset(uri).version
+
+    for _ in range(3):
+        again = compact_one(uri, {}, timedelta(days=7), auto_cleanup_interval_commits=5)
+        assert again.auto_cleanup_configured, "an already-configured dataset must still report configured"
+
+    assert lance.dataset(uri).version == settled, (
+        f"re-applying an identical auto-cleanup config committed new versions ({settled} -> {lance.dataset(uri).version})"
+    )
