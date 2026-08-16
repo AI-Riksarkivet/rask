@@ -26,7 +26,12 @@ _APP_LOGGERS = (
     "catalog",
     "lineage",
     "medallion",
-    "compaction",
+    # `maintenance`, NOT `compaction`. The service was renamed and this entry was not, so it named a
+    # package that no longer existed while the real one inherited root's WARNING — which muted
+    # `log.info("maintenance_sweep", extra=summary)`, the sweep's only account of what it did, for the
+    # whole life of the renamed service. Guarded by
+    # test_invariants.py::test_every_service_that_raises_its_loggers_is_ON_the_allowlist.
+    "maintenance",
     # The shared platform library's own loggers (fga provisioning, outbox, warehouse registry …).
     # "common" stays until packages/common is deleted at the end of gate 3 (R19); the ported
     # copies log under "service_kit".

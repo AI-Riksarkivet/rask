@@ -57,22 +57,79 @@ GOLD_TARGET_ROWS: Final = 524_288
 _BY_TIER: Final = {"bronze": BRONZE_TARGET_ROWS, "silver": SILVER_TARGET_ROWS, "gold": GOLD_TARGET_ROWS}
 
 
+#: The one parent directory whose CHILD is the namespace rather than the table. The medallion cascade
+#: writes `s3://<bucket>/medallion/<tier>` — the dataset IS the tier — so `medallion` promotes its child
+#: instead of being read as the namespace itself. Kept to a single literal on purpose: every other
+#: parent segment must stay untrusted, or a table named `gold` would silently size itself as gold.
+_CASCADE_PARENT: Final = "medallion"
+
+
+def _tier_from_namespace(namespace: str) -> str | None:
+    """The tier encoded in a CATALOG namespace segment, or ``None``.
+
+    `project_namespace` composes `<project>-<tier>` (`acme-bronze`), and a bare `silver` is the
+    single-project form, so both shapes reduce from the RIGHT.
+    """
+    tier = namespace.rsplit("-", 1)[-1] if "-" in namespace else namespace
+    return tier if tier in _BY_TIER else None
+
+
+def _tier_from_cascade_namespace(namespace: str) -> str | None:
+    """The tier encoded in a MEDALLION namespace segment, or ``None``.
+
+    THE OPPOSITE END from `_tier_from_namespace`, and the distinction is load-bearing rather than
+    cosmetic. The cascade runs several lanes side by side and names each `<tier>-<lane>`:
+    `bronze-media` -> `silver-media` (chart/values.yaml:957), `bronze` -> `gold-htr` (:966), plus the
+    plain `bronze` -> `silver` -> `gold` (:949-950) and the live `bronze-pages`. So the tier LEADS here,
+    while the catalog's `<project>-<tier>` trails.
+
+    Reducing a cascade namespace from the right yields the LANE (`bronze-media` -> `media`), which is no
+    tier, so the dataset silently falls back to Lance's default sizing — the exact failure this module
+    exists to prevent, and the one `bronze-pages` hit.
+    """
+    tier = namespace.split("-", 1)[0]
+    return tier if tier in _BY_TIER else None
+
+
 def tier_of(dataset_uri: str) -> str | None:
-    """The medallion tier this dataset lives in, read from the NAMESPACE segment.
+    """The medallion tier this dataset lives in, read from the NAMESPACE — in whichever of the three
+    layouts the estate actually writes.
 
-    `project_namespace` composes `<project>-<tier>` (`acme-bronze`), so the tier is a property of the
-    namespace and never of the table name. Matching the table name instead would mis-tier a
-    `gold_summary` table that legitimately lives in silver — and mis-sizing is silent.
+    The tier is always a property of the namespace and never of the table name: matching the table
+    would mis-tier a `gold_summary` that legitimately lives in silver, and mis-sizing is silent. What
+    changed 2026-08-16 is WHERE the namespace sits, because reading only `parts[-2]` turned out to
+    resolve almost nothing in production:
 
-    ``None`` when the URI does not name a tier, which is a real case (a control-plane dataset, or a
-    single-tenant deployment with no tier suffix) and must not be guessed at.
+      1. ``<bucket>/<project>-<tier>/<table>``      — nested; the namespace is `parts[-2]` (original).
+      2. ``<bucket>/medallion/<tier>``              — the CASCADE. `parts[-2]` is the literal
+         `medallion`, so every governed tier read as untiered and the #61 defaults never once applied
+         to a medallion dataset. Measured live: bronze, silver and gold all returned None.
+      3. ``<bucket>/<uuid8>_<namespace>$<table>``   — the `dir` backend's FLAT layout, which does not
+         nest a table under its namespace at all but encodes both in ONE directory name. Here
+         `parts[-2]` is the BUCKET, so catalog-governed tables read as untiered too.
+
+    Layout 3 is matched on the delimiter rather than the uuid prefix, and the prefix is stripped with a
+    single `split("_", 1)` so a namespace that itself contains an underscore (`transcripts_v2`) survives
+    intact — that one must stay untiered, which is what keeps this from degenerating into "find a tier
+    word anywhere in the path".
+
+    ``None`` when the URI names no tier. That is a real case (a control-plane dataset, an untiered
+    namespace) and must not be guessed at — see `target_rows_for`.
     """
     parts = [segment for segment in dataset_uri.split("://")[-1].split("/") if segment]
     if len(parts) < 2:
         return None
-    namespace = parts[-2]
-    tier = namespace.rsplit("-", 1)[-1] if "-" in namespace else namespace
-    return tier if tier in _BY_TIER else None
+
+    leaf = parts[-1]
+    if "$" in leaf:  # layout 3 — flat: the namespace is the leaf's own prefix, not a parent directory
+        namespace = leaf.split("$", 1)[0]
+        # Strip the dir backend's uuid8 prefix, once: `aa3bed10_silver` -> `silver`.
+        return _tier_from_namespace(namespace.split("_", 1)[1] if "_" in namespace else namespace)
+
+    if parts[-2] == _CASCADE_PARENT:  # layout 2 — the cascade: the child IS the namespace
+        return _tier_from_cascade_namespace(leaf)
+
+    return _tier_from_namespace(parts[-2])  # layout 1 — nested
 
 
 def target_rows_for(dataset_uri: str) -> int | None:

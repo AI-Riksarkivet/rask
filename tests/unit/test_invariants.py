@@ -2732,3 +2732,37 @@ def test_the_control_emitter_has_exactly_one_implementation() -> None:
 
     strays = sorted(path.relative_to(REPO).as_posix() for path in REPO.glob("services/*/src/*/**/control_emit.py") if "NoopControlEmitter" in path.read_text())
     assert strays == [], f"control_emit re-implemented per service instead of imported from service_kit: {strays}"
+
+
+def test_every_service_that_raises_its_loggers_is_ON_the_allowlist() -> None:
+    """A LOG TIER THAT SILENTLY DELETES ITSELF — the rename that took the sweep's only report with it.
+
+    `configure_app_logging` raises a fixed tuple of package loggers to INFO so their records reach the
+    OTLP handler. Everything else inherits root's WARNING, so a package MISSING from that tuple keeps
+    emitting `log.info(...)` into nothing — no stdout, no GreptimeDB, no error anywhere.
+
+    `services/compaction` was renamed to `services/maintenance`, and the allowlist was not. The entry
+    `"compaction"` went on naming a package that no longer exists while `maintenance` was never added,
+    so `log.info("maintenance_sweep", extra=summary)` — the sweep's ONLY report of what it did — reached
+    nobody for the whole life of the renamed service. MEASURED live 2026-08-16: the sweep had run on a
+    120s cron across ~40 pod generations and not one summary line existed to read, which is why "has it
+    ever reclaimed anything?" could not be answered from the logs at all.
+
+    Both halves are guarded, because either alone would have let this through: a caller absent from the
+    allowlist is muted, and an allowlist entry naming no package is the dead rename that hid it.
+    """
+    obs = REPO / "packages/service-kit/src/service_kit/obs.py"
+    listed = set(re.findall(r'^\s*"([a-z_]+)",', obs.read_text(), re.MULTILINE))
+    assert listed, "could not parse _APP_LOGGERS out of obs.py — the guard must fail loudly, not vacuously"
+
+    # The package is the directory directly under `src` — parts = (services, <svc>, src, <package>, ...).
+    callers = {path.relative_to(REPO).parts[3] for path in REPO.glob("services/*/src/*/**/*.py") if "configure_app_logging(" in path.read_text()}
+    assert callers, "no caller of configure_app_logging found — the parse is wrong, not the estate"
+
+    muted = sorted(callers - listed)
+    assert muted == [], f"these services raise their loggers but are not on the allowlist, so their INFO records reach nobody: {muted}"
+
+    packages = {path.name for path in REPO.glob("services/*/src/*") if path.is_dir()}
+    packages |= {path.name for path in REPO.glob("packages/*/src/*") if path.is_dir()}
+    dead = sorted(name for name in listed - packages if name not in {"common", "ratch"})
+    assert dead == [], f"_APP_LOGGERS names packages that do not exist (a rename left the old name behind): {dead}"
