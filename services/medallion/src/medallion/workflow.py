@@ -49,7 +49,7 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import suppress
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
 import dapr.ext.workflow as wf
@@ -460,19 +460,214 @@ def _run_async(coro: Any) -> Any:  # noqa: ANN401 — mirrors ingest.workflow._r
     return asyncio.run(coro)
 
 
-WORKFLOWS = (stage_run,)
-
-ACTIVITIES = (
-    submit_stage,
-    poll_stage,
-    publish_stage_ready,
-    report_stage_outcome,
-)
-
-
 def register(runtime: wf.WorkflowRuntime) -> None:
     """Register everything with the runtime — one place, so nothing is silently unregistered."""
     for w in WORKFLOWS:
         runtime.register_workflow(w)
     for a in ACTIVITIES:
         runtime.register_activity(a)
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# The TRAIN watcher — the lane that had none
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+#
+# `stage_run` above watches a stage job. The train lane had no watcher at all: `handle_train_trigger`
+# submits and acks (D2 — training is hours of GPU, and holding a Dapr ack across it is the race A13
+# deleted), and the JOB emits its own OpenLineage lifecycle.
+#
+# That covers a job that RUNS and fails. It does not cover one that dies before emitting anything — a
+# bad image, an OOM during runtime-env setup, an entrypoint the image lacks (`exit 2`). Ray knows;
+# nobody else does; and the person who asked is told nothing, ever.
+#
+# This watcher is deliberately THINNER than `stage_run`: it submits nothing (the consumer already did)
+# and it wakes nothing (there is no next tier). It only watches, and speaks when the job died.
+
+
+class TrainJobSpec(BaseModel):
+    """What the watcher needs — the identity of the job and of the person it is for.
+
+    Deliberately not the whole trigger: a workflow input is persisted on every checkpoint, and the
+    training config is a claim-check payload that has no business being written to the state store
+    once per poll.
+    """
+
+    token: str
+    model: str
+    submission_id: str
+    #: The verified human `/train` captured, carried the whole way from the door. Without it the FAIL
+    #: below names nobody and the notification plane discards it by its own rule.
+    originator: str = ""
+    #: The configured single-tenant project the model registry lives in — WATCH's key.
+    project: str = ""
+    poll_interval_seconds: int = POLL_INTERVAL_SECONDS
+    max_polls: int = MAX_POLLS
+    #: Carried across `continue_as_new`; a fresh turn starts with empty history and would otherwise
+    #: count from zero and never reach the ceiling.
+    polls_done: int = 0
+
+
+class TrainJobOutcome(BaseModel):
+    """Why the watch ended. `verdict` is `succeeded` | `failed` | `abandoned`."""
+
+    submission_id: str
+    status: str | None = None
+    polls: int = 0
+    verdict: str = "failed"
+
+
+def train_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[Any, Any, dict[str, Any]]:
+    """Watch a submitted training job, and report it ONLY if it died.
+
+    A SUCCEEDED job is silent here on purpose: the job emits its own COMPLETE, and a second success
+    event would fork a duplicate run for one training run — so the graph would answer "what produced
+    this model" twice.
+    """
+    spec = TrainJobSpec.model_validate(payload)
+
+    status: str | None = None
+    polls = spec.polls_done
+    yield ctx.create_timer(timedelta(seconds=spec.poll_interval_seconds))
+    # An exhausted poll means the dashboard stayed unreachable across the whole retry policy. The JOB
+    # may be training perfectly, so this is a LOST WATCH — it falls through to `abandoned`, whose
+    # vocabulary already means "we stopped watching; it may still land". Reporting `failed` would be a
+    # lie about somebody's four-hour run.
+    try:
+        status = yield ctx.call_activity(poll_train, input={"submission_id": spec.submission_id}, retry_policy=ACTIVITY_RETRY)
+        polls = spec.polls_done + 1
+    except Exception:
+        if not ctx.is_replaying:
+            log.error("medallion_train_watch_lost", extra={"submission_id": spec.submission_id, "polls": polls})
+        status = None
+
+    if not _is_terminal(status) and status is not None and polls < spec.max_polls:
+        ctx.continue_as_new(spec.model_copy(update={"polls_done": polls}).model_dump())
+        return {}
+
+    if not _is_terminal(status):
+        # The ceiling, or a lost watch. NOT a failure: a training job still running at the ceiling is
+        # alive and may yet land, and reporting it as dead sends somebody hunting a healthy run.
+        outcome = TrainJobOutcome(submission_id=spec.submission_id, status=status, polls=polls, verdict="abandoned")
+        if not ctx.is_replaying:
+            log.warning("medallion_train_watch_abandoned", extra={"submission_id": spec.submission_id, "status": status, "polls": polls})
+        return outcome.model_dump()
+
+    verdict = "succeeded" if status == _TERMINAL_OK else "failed"
+    outcome = TrainJobOutcome(submission_id=spec.submission_id, status=status, polls=polls, verdict=verdict)
+    if not ctx.is_replaying:
+        log.info("medallion_train_job_terminal", extra={"submission_id": spec.submission_id, "status": status, "polls": polls})
+
+    if verdict == "failed":
+        yield ctx.call_activity(report_train_outcome, input={"spec": spec.model_dump(), "outcome": outcome.model_dump()}, retry_policy=ACTIVITY_RETRY)
+    return outcome.model_dump()
+
+
+def poll_train(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str | None:
+    """ONE status read of the training job. The workflow owns the waiting."""
+    import httpx
+
+    from medallion.core.config import get_settings
+    from ray_kit.submit import job_status
+
+    settings = get_settings()
+    submission_id = str(payload["submission_id"])
+
+    async def _read() -> str | None:
+        async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
+            return await job_status(client, submission_id)
+
+    return _run_async(_read())
+
+
+def report_train_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
+    """Put a dead training job in the graph, named for the person who asked for it.
+
+    THE RUN ID IS THE JOB'S OWN — `run_id_for(f"train-{token}")`, byte-identical to what
+    `scripts/ray_train_job.py` stamps. That is the load-bearing choice:
+
+    * if the job DID emit its own FAIL, this merges onto the same run rather than forking a second
+      failure for one training run;
+    * if the job died before emitting anything, this is the only record, and it lands under the id
+      every other surface already links to.
+
+    Emitting under a fresh id would answer "what happened to this model" with a duplicate.
+
+    Best-effort and suppressed, matching the stage reporter: an activity that RAISES is retried and can
+    end FAILED, so a lineage outage would leave the workflow unable to finish reporting a failure —
+    strictly worse than the silence it replaces.
+    """
+    spec = TrainJobSpec.model_validate(payload["spec"])
+    outcome = TrainJobOutcome.model_validate(payload["outcome"])
+
+    reason = f"the Ray training job {outcome.submission_id} ended {outcome.status or 'UNKNOWN'} after {outcome.polls} poll(s)"
+    with suppress(Exception):
+        _publish_train_fail(spec, reason)
+
+    log.error(
+        "medallion_train_job_not_completed",
+        extra={"submission_id": outcome.submission_id, "status": outcome.status, "polls": outcome.polls, "model": spec.model},
+    )
+
+
+def _publish_train_fail(spec: TrainJobSpec, reason: str) -> None:
+    """The FAIL RunEvent for a training job that died, through the lineage outbox."""
+    from dapr.aio.clients import DaprClient
+
+    from medallion.core.config import get_settings
+    from service_kit.lakehouse import outbox
+    from service_kit.openlineage import run_id_for
+
+    settings = get_settings()
+    run_id = run_id_for(f"train-{spec.token}")
+    lance: dict[str, Any] = {"operation": "training", "token": spec.token}
+    # The two fields that decide whether anybody hears. `originator` because the job authors as
+    # `service-trainer` and `enforce_author` overwrites anything else; `project` because omitting it
+    # skips the watcher loop entirely.
+    if spec.originator:
+        lance["originator"] = spec.originator
+    if spec.project:
+        lance["project"] = spec.project
+    event = {
+        "eventType": "FAIL",
+        "eventTime": datetime.now(UTC).isoformat(),
+        "producer": "rask://medallion/train-watcher",
+        "job": {"namespace": settings.job_namespace, "name": f"train_{spec.model}"},
+        "run": {
+            "runId": run_id,
+            "facets": {
+                "lance": lance,
+                "errorMessage": {"message": reason, "programmingLanguage": "PYTHON"},
+            },
+        },
+        "outputs": [{"namespace": settings.models_namespace, "name": f"{settings.models_namespace}${spec.model}"}],
+    }
+
+    async def _send() -> None:
+        async with DaprClient() as client:
+            await outbox.publish_lineage_with_outbox(
+                client,
+                outbox_uri=settings.lineage_outbox_uri,
+                storage_options=settings.storage_options(),
+                run_id=run_id,
+                event_json=json.dumps(event),
+                pubsub_name=settings.pubsub,
+                topic_name=settings.lineage_topic,
+                timeout_seconds=settings.publish_timeout_seconds,
+            )
+
+    _run_async(_send())
+
+
+# The registration tuples live at the END of the module, after every symbol they name. They used to
+# sit mid-file, which worked only for as long as nothing was defined below them — adding the train
+# watcher turned that into a NameError at import, i.e. a service that cannot start.
+WORKFLOWS = (stage_run, train_run)
+
+ACTIVITIES = (
+    submit_stage,
+    poll_stage,
+    publish_stage_ready,
+    report_stage_outcome,
+    poll_train,
+    report_train_outcome,
+)

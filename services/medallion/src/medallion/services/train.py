@@ -295,5 +295,42 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, fga_c
     if outcome == "already_failed":
         log.warning("train_previously_failed", extra={"token": token, "model": model})
         return _DROP
+    # WATCH IT. The job emits its own lifecycle, which covers a run that starts and then fails — but
+    # not one that dies before emitting anything (a bad image, an OOM in runtime-env setup, an
+    # entrypoint the image lacks). Ray knows; without this nobody else ever does.
+    schedule_train_watch(settings, token=token, model=model, originator=str(data.get("originator") or ""), project=settings.produce_admin_project)
     log.info("train_job_dispatched", extra={"token": token, "model": model, "outcome": outcome})
     return _SUCCESS
+
+
+def schedule_train_watch(settings: MedallionSettings, *, token: str, model: str, originator: str = "", project: str = "") -> str | None:
+    """Start the watcher over a submitted training job, and return its instance id.
+
+    A SEAM over `DaprWorkflowClient`, for the same reason `schedule_stage_watch` is one: a test must be
+    able to assert that the consumer DISPATCHES a watcher without standing up a sidecar.
+
+    Deterministic in the submission id, so a redelivered trigger re-attaches to the running instance
+    rather than starting a second watcher over one job.
+
+    **Failure here does NOT fail the trigger, and that is the opposite of the stage lane's rule.**
+    There, the workflow SUBMITS the job, so no workflow means no work at all and the trigger must
+    retry. Here the job is already submitted and running: losing the watcher costs the notification if
+    it dies, never the training run. Retrying the trigger instead would re-enter the FGA gate and the
+    submit, and `submit_train_job` deliberately refuses to resubmit a terminally-failed job — so a
+    watcher outage would turn into a DROPPED training request. Logged loudly and acked.
+    """
+    import dapr.ext.workflow as wf
+
+    from medallion.workflow import TrainJobSpec, train_run
+
+    submission_id = ray_submit.train_submission_id(token)
+    instance_id = f"train-{submission_id}"
+    spec = TrainJobSpec(token=token, model=model, submission_id=submission_id, originator=originator, project=project)
+    try:
+        client = wf.DaprWorkflowClient()
+        client.schedule_new_workflow(workflow=train_run, input=spec.model_dump(), instance_id=instance_id)
+    except Exception:
+        log.warning("medallion_train_watch_not_scheduled", extra={"token": token, "model": model, "instance_id": instance_id})
+        return None
+    log.info("medallion_train_watch_scheduled", extra={"token": token, "model": model, "instance_id": instance_id})
+    return instance_id

@@ -38,6 +38,16 @@ log = logging.getLogger(__name__)
 _TERMINAL_BAD = frozenset({"FAILED", "STOPPED"})
 
 
+def train_submission_id(token: str) -> str:
+    """The training job's deterministic id, derived in ONE place.
+
+    Same reason as `stage_submission_id`: the SUBMITTER and the WATCHER must name the same job, and a
+    second inline copy of this expression is exactly how a poller ends up watching an id nobody
+    submitted — reporting a healthy training run as missing forever.
+    """
+    return rk.submission_id("train", token)
+
+
 def stage_submission_id(stage: str, token: str | None, from_uri: str, to_uri: str) -> str:
     """The stage job's deterministic id, derived in ONE place.
 
@@ -163,7 +173,7 @@ async def submit_train_job(
     Dapr ack window. Returns ``"submitted"`` | ``"attached"`` | ``"already_failed"``; raises
     :class:`RayJobError` on transport/submit errors (the handler maps that to RETRY).
     """
-    submission_id = rk.submission_id("train", token)
+    submission_id = train_submission_id(token)
     body = {
         "entrypoint": settings.train_entrypoint,
         "submission_id": submission_id,

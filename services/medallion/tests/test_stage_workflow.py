@@ -243,7 +243,7 @@ def test_every_activity_is_registered() -> None:
     """A definition the runtime does not know fails at runtime with an unhelpful 'no such activity'."""
     from medallion.workflow import ACTIVITIES, WORKFLOWS
 
-    assert set(WORKFLOWS) == {stage_run}
+    assert stage_run in WORKFLOWS
     assert {submit_stage, publish_stage_ready, report_stage_outcome} <= set(ACTIVITIES)
 
 
