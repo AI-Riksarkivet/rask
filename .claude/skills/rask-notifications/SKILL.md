@@ -106,8 +106,12 @@ it, and a governance row is checked against no object rule at all, so a reader t
 apart from a run row would have to guess. Note also that `ControlAction` is a wire contract reaching
 the frontend through `docs/catalog-openapi.json` — see `rask-lance-catalog` for the regen step.
 
-Adding a `NotificationReason` needs **no frontend change**: the bell never reads `reason` (it appears
-only in a stories fixture, which is itself stale — `project_watch` vs the backend's `watch`).
+Adding a `NotificationReason` needs **no frontend change** — but not because the bell ignores it. The
+panel RENDERS the reason as each row's label (verified in a browser: rows read `originator · 1m ago`
+beside older `author` ones). It passes the string straight through rather than switching on a known
+set, so a new member displays correctly with no TS edit. Two consequences: the value is user-visible,
+so it must read as a reason a person would accept; and `notification-center.stories.svelte` is stale
+(`project_watch` vs the backend's `watch`) without anything failing.
 
 ## The four traps — an event emitted is not a person told
 

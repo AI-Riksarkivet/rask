@@ -36,7 +36,7 @@ best statement of what was wrong.
   its audit succeed. The audience is the ASSIGNEE, never the manager who clicked; acting on your own
   task emits nothing.
 - ~~**movers author with a chart role literal, so a failed cascade reaches no human** (§2 High,
-  `chart/values.yaml:926-943`)~~ — **FIXED (item C, this sequence).** A fifth targeting source,
+  `chart/values.yaml:926-943`)~~ — **FIXED `20fc659f`,** live-verified on the deployed estate (`tests/e2e/verify_originator_lane.mjs`: bob 12 -> 13 with `reason = originator`, for a run he neither authored nor watches). A fifth targeting source,
   `NotificationReason.ORIGINATOR`: the verified subject is captured at `authorize_produce` — the last
   place it exists — and rides `lance.originator` from the cascade head through the trigger to every
   stage. `author` is deliberately unchanged, because the mover really did run the stage and
