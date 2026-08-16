@@ -979,9 +979,16 @@ maintenance:
   # files, which is why it gets its own schedule instead of inheriting that one.
   reconcileBindingName: maintenance-reconcile-cron
   reconcileSchedule: "@every 300s"
-  # The catalog's control root (project/warehouse registries). Empty => the primary bucket, which is
-  # what the catalog itself defaults to; set both together if the catalog's root is moved.
+  # The catalog's control root (project/warehouse/trash registries). Empty => the primary bucket, which
+  # is what the catalog itself defaults to; set both together if the catalog's root is moved.
   controlRoot: ""
+  # …and "both" needs a second key to exist. `MAINTENANCE_POLICY_ROOT` was rendered NOWHERE until
+  # 2026-08-16, so an operator following the line above moved the trash/warehouse/project reads and
+  # left the #50 policy reads pointing at the old bucket. That failure is silent in the worst way: a
+  # policy registry at the wrong root lists cleanly as EMPTY, so every retention override and
+  # legal-hold opt-out simply stops applying while the sweep reports a healthy run.
+  # Empty => falls back to controlRoot, then to the primary bucket (config.py::resolved_policy_root).
+  policyRoot: ""
   olderThanDays: 7 # version GC keeps this much history
   # How much the compaction READ may pull at once. The two multiply — the ceiling is
   # scanBatchSize x row size x compactThreads — so they are set together or not at all.

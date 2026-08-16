@@ -163,6 +163,11 @@ spec:
             - { name: MAINTENANCE_RECONCILE_BINDING_NAME, value: {{ .Values.maintenance.reconcileBindingName | quote }} }
             - { name: MAINTENANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }
             - { name: MAINTENANCE_CONTROL_ROOT, value: {{ .Values.maintenance.controlRoot | default "" | quote }} }
+            {{- /* The #50 POLICY registry root. Rendered nowhere until 2026-08-16, so an operator who
+                   followed values.yaml's "set both together" had no second key to set and moved only
+                   half the reads. A policy registry at the wrong root lists cleanly as EMPTY, so every
+                   retention override and legal-hold opt-out silently stops applying. */}}
+            - { name: MAINTENANCE_POLICY_ROOT, value: {{ .Values.maintenance.policyRoot | default "" | quote }} }
             {{- if .Values.auth.enabled }}
             - { name: MAINTENANCE_FGA_ENABLED, value: "true" }
             - { name: MAINTENANCE_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }

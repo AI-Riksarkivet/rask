@@ -591,7 +591,6 @@ def build_report(
     sources: Sources,
     *,
     warehouses_enabled: bool,
-    namespace_root: str,
     platform_buckets: set[str],
     fga_root_object: str,
 ) -> ReconcileReport:
@@ -758,7 +757,14 @@ async def reconcile(
     that setting, and inferring it from the presence of records would report an estate mid-migration as
     clean. With warehouses off, ``unbound_namespaces`` is skipped, not zero.
     """
-    resolved_control_root = control_root or settings.resolved_policy_root
+    # `resolved_control_root`, not `resolved_policy_root`. This defaulted to the POLICY root while its
+    # own docstring above says "the catalog's control root … the one place the project/warehouse/binding
+    # records live" — two different settings that happen to coincide whenever neither is overridden.
+    # Latent only because `routes.py` passes the value explicitly; every other caller, and every test,
+    # read the wrong default, so an estate that moved its policy root would have had the drift report
+    # look for project and warehouse records where the policies live and find none — reporting every
+    # tenant as a ghost.
+    resolved_control_root = control_root or settings.resolved_control_root
     resolved_namespace_root = namespace_root or f"s3://{settings.s3_bucket}"
     storage_options = settings.storage_options()
     if bucket_client is None and resolved_namespace_root.startswith("s3://"):
@@ -793,7 +799,6 @@ async def reconcile(
     report = build_report(
         sources,
         warehouses_enabled=warehouses_enabled,
-        namespace_root=resolved_namespace_root,
         platform_buckets=platform,
         fga_root_object=fga_root_object,
     )
