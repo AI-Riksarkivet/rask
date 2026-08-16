@@ -1060,7 +1060,18 @@ maintenance:
   # references of EVERY live version across the data buckets — a different order of work from the rest
   # of the report, which merely compares three stores. Turn it on to let the purge certify; leaving it
   # off is a valid choice that now costs you the purge rather than silently granting it.
-  orphanScan: false
+  # ON since 2026-08-16. It is a REPORTING scan — it deletes nothing, and `trashPurge` above stays off —
+  # so the only thing being spent is read budget, and the estate just got cheap enough to spend it: the
+  # primary bucket went from 45 datasets to 13 when 32 leaked `ray-e2ebatch*` e2e artefacts were removed
+  # (they were 16 per-pid prefixes accumulated by a suite that called them "throwaway" and never threw
+  # them away). Opening every dataset across 13 is a different proposition from opening 45.
+  #
+  # It is also the last of the three blockers under `report_is_clean` that could be cleared by
+  # configuration rather than by work: `orphan_files` was the SKIPPED coverage gap, and the other two —
+  # real findings, and categories reporting UNAVAILABLE — are estate state, not switches. (The
+  # unavailable four cleared the same day for a different reason: the reconciler was refusing to LOOK UP
+  # its OpenFGA store when the ids were unpinned, which is the chart's default posture.)
+  orphanScan: true
   # Announce each reclamation on the catalog's control topic (catalog.control.v1). Requires
   # dapr.sidecars — and the component's `scopes` must list this app-id, which the chart does below;
   # without it the sidecar rejects every publish SILENTLY (emission is best-effort by design).
