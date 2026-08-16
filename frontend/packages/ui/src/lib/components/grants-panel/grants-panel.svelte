@@ -132,6 +132,19 @@
 	);
 	const mayRevoke = $derived(permMap === null ? true : permMap.can_revoke_grant === true);
 
+	const grantReason = $derived(
+		`Granting ${mgRelation || 'a rung'} here needs can_grant_${mgRelation || '<rung>'} on this ${kind} — held by a grant-manager, or by someone holding ${mgRelation || 'that rung'} plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`,
+	);
+	const revokeReason = $derived(
+		`Revoking here needs can_revoke_grant on this ${kind} — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them.`,
+	);
+
+	const open = $derived(openedFor === dataset);
+	const shown = $derived(review?.for === dataset ? review : null);
+
+	// Declared AFTER `shown`, which it reads. `$derived` is lazy so the original order worked at
+	// runtime, but TypeScript reported a genuine use-before-declaration and a gate that has to be
+	// argued with is a gate that stops being read.
 	// SUBJECTS THIS OBJECT ALREADY GRANTS TO — the only directory available. There is no
 	// subject-enumeration endpoint anywhere in the estate, so nothing can resolve a display name to an
 	// OIDC `sub`; the review's own rows are the sole evidence of what a subject id looks like here.
@@ -148,15 +161,6 @@
 		if (knownSubjects.has(u) || knownSubjects.has(`user:${u}`)) return false; // already a subject here
 		return /^[a-z][a-z0-9._-]{0,30}$/i.test(u); // a plain name, not an opaque sub
 	});
-	const grantReason = $derived(
-		`Granting ${mgRelation || 'a rung'} here needs can_grant_${mgRelation || '<rung>'} on this ${kind} — held by a grant-manager, or by someone holding ${mgRelation || 'that rung'} plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`,
-	);
-	const revokeReason = $derived(
-		`Revoking here needs can_revoke_grant on this ${kind} — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them.`,
-	);
-
-	const open = $derived(openedFor === dataset);
-	const shown = $derived(review?.for === dataset ? review : null);
 	const loading = $derived(loadingFor === dataset);
 	const failed = $derived(failedFor === dataset);
 

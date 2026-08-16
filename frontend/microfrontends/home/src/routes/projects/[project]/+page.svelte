@@ -8,7 +8,7 @@
 	// Gated by the catalog; every degrade state is named honestly rather than collapsed into "empty".
 	import { AlertTriangle, FolderKanban, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
-	import { ProjectHierarchy } from '@rask/ui/hierarchy';
+	import { ProjectHierarchy, type HierarchyHref } from '@rask/ui/hierarchy';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import type { ProjectSummary } from '$lib/catalog';
@@ -28,6 +28,22 @@
 	} from '$lib/remote/warehouses.remote';
 
 	const project = $derived(page.params.project ?? '');
+
+	// TODO 4a: the graph is a MAP. Every rung below the project links into the LAKEHOUSE — a different
+	// zone from this one — so the hrefs are absolute, and `HierarchyNode` marks every link
+	// `data-sveltekit-reload`; without it SvelteKit soft-navigates into a route this zone does not own
+	// and 404s. Built HERE rather than in `@rask/ui` because these are the estate's routes and the
+	// library is shared by two zones with different bases.
+	//
+	// `project` returns null: from `/projects/<id>`, the project rung IS this page.
+	const rungHref: HierarchyHref = (rung) => {
+		if (rung.tier === 'project') return null;
+		if (rung.tier === 'warehouse')
+			return `/lakehouse/catalog/warehouses/${encodeURIComponent(rung.id)}`;
+		if (rung.tier === 'namespace')
+			return `/lakehouse/catalog/namespaces/${encodeURIComponent(rung.id)}`;
+		return `/lakehouse/catalog/tables/${encodeURIComponent(rung.id)}`;
+	};
 
 	// Return here after the OIDC round-trip (the shell's ?redirect= contract, navbar-user.svelte).
 	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
@@ -260,6 +276,7 @@
 				warehouses={detail.warehouses}
 				fetchNamespaces={warehouseNamespaces}
 				fetchTables={namespaceTables}
+				hrefFor={rungHref}
 			/>
 		</section>
 		<section>

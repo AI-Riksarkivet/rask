@@ -15,13 +15,26 @@
 	import { FolderKanban, RefreshCw, ShieldAlert, Warehouse as WarehouseIcon } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { ProjectHierarchy } from '@rask/ui/hierarchy';
+	import { ProjectHierarchy, type HierarchyHref } from '@rask/ui/hierarchy';
 	import type { WarehouseRecord } from '$lib/data/catalog';
 	import { fetchNamespaceTables } from '$lib/data/remote/namespace.remote';
 	import { fetchWarehouseNamespaces, fetchWarehouses } from '$lib/data/remote/warehouses.remote';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+	const LH = base;
+	// TODO 4a: the graph is a MAP. Every rung links to the page that owns that object, and the URLs are
+	// built HERE because they are this estate's routes — `@rask/ui` is mounted by two zones with
+	// different bases and may not assert either one's routing.
+	//
+	// `project` returns null deliberately: from a project view, the project rung IS this page.
+	const rungHref: HierarchyHref = (rung) => {
+		if (rung.tier === 'project') return null;
+		if (rung.tier === 'warehouse') return `${LH}/catalog/warehouses/${encodeURIComponent(rung.id)}`;
+		if (rung.tier === 'namespace') return `${LH}/catalog/namespaces/${encodeURIComponent(rung.id)}`;
+		return `${LH}/catalog/tables/${encodeURIComponent(rung.id)}`;
+	};
+
 
 	// `zoneLayoutLoad` defaults the cookie to '' — an empty string is "no project is open", which is a
 	// real state of the estate and not a loading one.
@@ -159,6 +172,7 @@
 					warehouses={mine}
 					fetchNamespaces={fetchWarehouseNamespaces}
 					fetchTables={fetchNamespaceTables}
+					hrefFor={rungHref}
 				/>
 			</section>
 

@@ -1,4 +1,6 @@
 <script lang="ts" module>
+	import type { HierarchyTier } from './hierarchy-node.svelte';
+
 	/** Mirrors the zones' status-aware `ApiResult` (`@rask/api`'s client.ts): 0 = fetch-level
 	 *  failure/offline. Declared STRUCTURALLY rather than imported, so the library owns no API
 	 *  client (the GrantsPanel precedent) and a zone can hand its catalog remotes straight in. */
@@ -20,6 +22,19 @@
 		namespaceId: string,
 	) => Promise<HierarchyResult<{ tables: string[] }>>;
 
+	/** One rung, as `hrefFor` receives it. `id` is the OBJECT id and differs from `label` where the
+	 *  two diverge — a table's label is its bare name (`features`) while its id is the qualified
+	 *  `<namespace>$<table>` the catalog routes on. Passing the label would build a URL to nothing. */
+	export type HierarchyRung = { tier: HierarchyTier; id: string; label: string };
+
+	/** Where a rung navigates, or `null` to leave it a plain box.
+	 *
+	 *  The CALLER builds the URL, on the same reasoning that keeps the two rung reads as props: this
+	 *  component is mounted by home's `/projects/<id>` and the lakehouse's Overview, whose route
+	 *  namespaces differ, and zones may not import each other. A library that hardcoded
+	 *  `/lakehouse/catalog/...` would be asserting one zone's routing from inside a shared package. */
+	export type HierarchyHref = (rung: HierarchyRung) => string | null;
+
 	export type ProjectHierarchyProps = {
 		/** The project at the top of the tree — the root rung's label. */
 		project: string;
@@ -29,6 +44,11 @@
 		fetchTables: FetchHierarchyTables;
 		/** Tables drawn per namespace before the view says "+k more" (default 8). */
 		maxTables?: number;
+		/** Makes the graph a MAP rather than a picture. Omit and every rung stays a plain box, which is
+		 *  what it was until 2026-08-16: the one view drawing project › warehouse › namespace › table
+		 *  could not take you to any of them, and sat beside a separate text drill-down with nothing
+		 *  linking the two. */
+		hrefFor?: HierarchyHref;
 	};
 </script>
 
@@ -62,6 +82,7 @@
 		fetchNamespaces,
 		fetchTables,
 		maxTables = 8,
+		hrefFor,
 	}: ProjectHierarchyProps = $props();
 
 	const TIER_H = 130;
@@ -130,6 +151,12 @@
 		const edges: Edge[] = [];
 		let slot = 0;
 		const TIERS = ['project', 'warehouse', 'namespace', 'table'] as const;
+		// `more` and `err` nodes get NO href on purpose — neither names an object you can open, and a
+		// link to nowhere is worse than a plain box.
+		const link = (tier: HierarchyTier, id: string, label: string): Partial<HierarchyData> => {
+			const href = hrefFor?.({ tier, id, label });
+			return href ? { href } : {};
+		};
 		const node = (
 			id: string,
 			label: string,
@@ -165,7 +192,10 @@
 					edges.push({ id: `${nid}-err`, source: nid, target: `${nid}:err` });
 				} else if (entry) {
 					for (const tb of entry.tables) {
-						tableXs.push(node(`t:${ns}$${tb}`, tb, 3, slot++ * SLOT_W));
+						// The table's OBJECT id is qualified (`<ns>$<table>`); its label is the bare name.
+						tableXs.push(
+							node(`t:${ns}$${tb}`, tb, 3, slot++ * SLOT_W, link('table', `${ns}$${tb}`, tb)),
+						);
 						edges.push({ id: `${nid}-${tb}`, source: nid, target: `t:${ns}$${tb}` });
 					}
 					if (entry.more > 0) {
@@ -175,7 +205,7 @@
 						edges.push({ id: `${nid}-more`, source: nid, target: `${nid}:more` });
 					}
 				}
-				nsXs.push(node(nid, ns, 2, centre(tableXs)));
+				nsXs.push(node(nid, ns, 2, centre(tableXs), link('namespace', ns, ns)));
 				edges.push({ id: `${wid}-${ns}`, source: wid, target: nid });
 			}
 			if (namespaces === null) {
@@ -183,10 +213,15 @@
 				nsXs.push(node(eid, 'namespaces unreadable', 2, slot++ * SLOT_W, { err: true }));
 				edges.push({ id: `${wid}-err`, source: wid, target: eid });
 			}
-			warehouseXs.push(node(wid, w.id, 1, centre(nsXs), { detail: `s3://${w.bucket}` }));
+			warehouseXs.push(
+				node(wid, w.id, 1, centre(nsXs), {
+					detail: `s3://${w.bucket}`,
+					...link('warehouse', w.id, w.id),
+				}),
+			);
 			edges.push({ id: `p-${w.id}`, source: 'p', target: wid });
 		}
-		node('p', project, 0, centre(warehouseXs));
+		node('p', project, 0, centre(warehouseXs), link('project', project, project));
 		return { nodes, edges, width: Math.max(slot, 1) * SLOT_W };
 	}
 
