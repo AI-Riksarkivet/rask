@@ -65,6 +65,16 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 		// `/lakehouse/catalog/projects` does not resolve at all any more — this zone owns what is BELOW
 		// a project (warehouses › namespaces › tables), and nothing above it.
 		items: [
+			// HIERARCHY ORDER — project > warehouse > namespace > table, the chain stated just above,
+			// and IDENTICAL to the navbar panel's `DATA_ITEMS`. The two disagreed (Namespaces-first
+			// here, Tables-first there), so the estate answered the same question two different ways
+			// depending on which control you opened — the defect class ruling 140315ed named.
+			{
+				title: 'Warehouses',
+				href: '/lakehouse/catalog/warehouses',
+				match: seg('/lakehouse/catalog/warehouses'),
+				icon: Warehouse,
+			},
 			{
 				title: 'Namespaces',
 				href: '/lakehouse/catalog/namespaces',
@@ -76,12 +86,6 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 				href: '/lakehouse/catalog/tables',
 				match: seg('/lakehouse/catalog/tables'),
 				icon: Database,
-			},
-			{
-				title: 'Warehouses',
-				href: '/lakehouse/catalog/warehouses',
-				match: seg('/lakehouse/catalog/warehouses'),
-				icon: Warehouse,
 			},
 			{
 				// R28: the object browser belongs WITH the catalog that governs it, not beside it as a

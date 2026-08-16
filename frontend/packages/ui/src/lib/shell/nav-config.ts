@@ -230,10 +230,14 @@ export type TopNavEntry = {
 // at the TOP level in the home zone (`/projects`), carried by this bar's own `Projects` entry below;
 // `/lakehouse/catalog/projects` no longer exists.
 const DATA_ITEMS: TopNavItem[] = [
+	// HIERARCHY ORDER — project > warehouse > namespace > table, the chain this zone's own
+	// `nav.ts:60-66` states. It was Tables-first here and Namespaces-first in the sidebar, so the
+	// estate answered the same question two different ways depending on which control you opened —
+	// the exact defect ruling 140315ed named, one level down. The sidebar now matches.
 	{
-		title: 'Tables',
-		href: '/lakehouse/catalog/tables',
-		description: 'The governed table registry.',
+		title: 'Warehouses',
+		href: '/lakehouse/catalog/warehouses',
+		description: 'Storage bindings — one bucket per project.',
 	},
 	{
 		title: 'Namespaces',
@@ -241,9 +245,9 @@ const DATA_ITEMS: TopNavItem[] = [
 		description: 'Medallion namespaces and their maintenance policies.',
 	},
 	{
-		title: 'Warehouses',
-		href: '/lakehouse/catalog/warehouses',
-		description: 'Storage bindings — one bucket per project.',
+		title: 'Tables',
+		href: '/lakehouse/catalog/tables',
+		description: 'The governed table registry.',
 	},
 	{
 		// R28: the object browser was reachable ONLY by typing the URL — the sidebar is area-scoped,
@@ -380,6 +384,14 @@ const PLATFORM_ITEMS: TopNavItem[] = [
  *  zone root IS the overview and rides the panel as its first row (matching exactly, like Media's
  *  Search at /explorer). */
 const WORKSPACE_ITEMS: TopNavItem[] = [
+	// The zone root leads its first column — the same shape `COMPUTE_ITEMS` uses, and for the same
+	// reason: `TopNavGroup` has no root slot (only the SIDEBAR's `ZoneNavRoot` does), so a zone
+	// landing has to be a row of some column or be unreachable from the panel entirely.
+	{
+		title: 'Overview',
+		href: '/lakehouse/',
+		description: "The active project's hierarchy and the warehouses that claim it.",
+	},
 	{
 		title: 'Workbench',
 		href: '/lakehouse/workbench',
@@ -502,7 +514,8 @@ export function mainMenuNav(estateAdmin: boolean, deniedReason?: string): TopNav
 					// leak, and `rowsOf(mainMenuNav(false))` can keep proving it at the DATA level.
 					...SETTINGS_ENTRY,
 					items: undefined,
-					unavailable: deniedReason ?? 'estate-admin only (needs can_observe_events on the FGA root)',
+					unavailable:
+						deniedReason ?? 'estate-admin only (needs can_observe_events on the FGA root)',
 				},
 	];
 }
@@ -580,7 +593,13 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	return [
 		{
 			title: 'Lakehouse',
-			href: '/lakehouse/catalog',
+			// THE ZONE ROOT, not `/lakehouse/catalog`. That path is not a page — `catalog/+page.ts`
+			// 307s into the table list — so this trigger, the estate's primary way into the zone,
+			// walked straight past the Overview #109 built and landed everyone in a table registry.
+			// The zone's own `nav.ts:39-48` records that 307 as the thing #109 removed; the navbar
+			// never adopted it, which is why the Overview read as missing. Trailing slash for the
+			// same reason as `/compute/` below.
+			href: '/lakehouse/',
 			icon: Database,
 			// The whole merged zone — catalog, models, lineage, and (for an admin) operations. No
 			// carve-out: every area is a column of this one trigger.

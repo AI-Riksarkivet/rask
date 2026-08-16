@@ -413,6 +413,9 @@ made seedable — the `open_label.md` waves, folded here as that file retires.**
 - **Two dead P0 scaffolds removed:** `/lakehouse/catalog` and `/lakehouse/admin` rendered "The Data
   zone (P0 scaffold). Routes move here from apps/web in P3." — a 200 that looks intentional and
   teaches nothing. Both now redirect to their first real child, matching the `governance` group.
+  (Correction 2026-08-16: the redirect landed, the FILES did not go — a `+page.ts` needs a leaf
+  component beside it, so both `+page.svelte` remained carrying that same P0 text behind the
+  redirect until an audit found them. They now say what they are.)
 - **The wave's own adversarial audit (3 lenses, 25 findings) — what it caught and what it left.**
   Fixed in the same commit, each with the regression test that was missing: (1) **enforcement was
   vacuous on an empty shape set** — every rule is a per-shape test, so claim+submit with no draft

@@ -47,7 +47,10 @@ describe('topNav', () => {
 				.map((e) => e.title),
 		).toEqual(['Lakehouse', 'Compute']);
 		expect(topNav(false).map((e) => e.href)).toEqual([
-			'/lakehouse/catalog',
+			// The zone ROOT. This was '/lakehouse/catalog' — not a page, a 307 into the table list — so
+			// the estate's primary entrance bypassed the Overview #109 built, which is why that landing
+			// read as missing while it existed.
+			'/lakehouse/',
 			'/compute/',
 			// Trailing slashes are LOAD-BEARING, not cosmetic: each zone's `paths.base` serves the
 			// trailing form, so a bare '/compute' href cost a 308 redirect round-trip on EVERY
@@ -130,9 +133,9 @@ describe('topNav', () => {
 		expect(deniedSettings.items).toBeUndefined();
 		// The reason is caller-supplied when the identity is unresolved: "ask for can_observe_events" is
 		// useless advice to someone who is not signed in, and the point of the reason is the next step.
-		expect(mainMenuNav(false, 'sign in first').find((e) => e.title === 'Settings')!.unavailable).toBe(
-			'sign in first',
-		);
+		expect(
+			mainMenuNav(false, 'sign in first').find((e) => e.title === 'Settings')!.unavailable,
+		).toBe('sign in first');
 		expect(mainMenuNav(true).map((e) => e.href)).toEqual(['/', '/projects', '/settings']);
 		// No zone leaks in, in either identity — this is what catches a zone added to `topNav` and
 		// silently appearing at the estate root too.
@@ -375,7 +378,10 @@ describe('topNav', () => {
 		// namespace › table — so listing "projects" as a row INSIDE one project's catalog described the
 		// lakekeeper API's tenant list, not this product's model. The estate has one project concept,
 		// reached from the switcher, never from a row under one zone's catalog column.
-		expect(groups.Catalog).toEqual(['Tables', 'Namespaces', 'Warehouses', 'Storage']);
+		// HIERARCHY ORDER (project > warehouse > namespace > table) and IDENTICAL to the sidebar's.
+		// The two disagreed — Tables-first here, Namespaces-first in the rail — so the same question
+		// had two answers depending on which control you opened.
+		expect(groups.Catalog).toEqual(['Warehouses', 'Namespaces', 'Tables', 'Storage']);
 		// NO 'Models' COLUMN any more — the registry and experiments routes physically moved to the
 		// MODELS zone, which is its own trigger with its own panel (asserted below). Pinned as an
 		// ABSENCE for the same reason Governance is: a trigger that keeps advertising another zone's

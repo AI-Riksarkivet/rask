@@ -44,7 +44,7 @@
 	// first version of this used `string[]` and swallowed a 403/502 into an empty array — which is
 	// #66's exact shape, an invisible namespace with no error, reintroduced by the fix for it. The
 	// warehouse detail page has always modelled it this way; now both agree.
-	let bound = $state<string[] | null>(null);
+	let bindings = $state<Record<string, string> | null>(null);
 	let lastStatus = $state(0);
 	let settled = $state(false);
 	let busy = $state(false);
@@ -67,7 +67,13 @@
 		} else {
 			lastStatus = res.status;
 		}
-		bound = binds.ok ? Object.keys(binds.data.bindings).sort() : null;
+		// Keep the whole MAP, not just its keys. `fetchEstateBindings` answers
+		// `{bindings: Record<namespace, warehouse_id>}` and this line used to take `Object.keys(...)`,
+		// throwing every value away — so the one read that knows which warehouse holds a namespace
+		// discarded it, and no surface in the zone could answer that question bottom-up. The bind form on
+		// `/catalog/warehouses` calls the binding IMMUTABLE ONCE SET, so it was a permanent fact you
+		// could create and then see from neither end. Same request, same cost.
+		bindings = binds.ok ? binds.data.bindings : null;
 	}
 
 	// Same source as the table registry it groups (this view IS the table list, folded by namespace), so
@@ -75,18 +81,20 @@
 	liveRead(lineageTick, () => load());
 
 	// Group by the namespace segment (before the first `$`); a bare name with no delimiter is its own root.
-	type Row = { ns: string; count: number; stage: StageInfo | null };
+	type Row = { ns: string; count: number; stage: StageInfo | null; warehouse: string | null };
 	const rows = $derived.by((): Row[] => {
 		const m = new Map<string, number>();
 		// Seed with every BOUND namespace at zero, so one holding no tables still gets a row. `null`
 		// (the read failed) seeds nothing and the banner below says so — never silently "none".
-		for (const ns of bound ?? []) m.set(ns, 0);
+		for (const ns of Object.keys(bindings ?? {})) m.set(ns, 0);
 		for (const t of tables ?? []) {
 			const ns = namespaceOfTable(t);
 			m.set(ns, (m.get(ns) ?? 0) + 1);
 		}
 		return [...m.entries()]
-			.map(([ns, count]): Row => ({ ns, count, stage: stageOf(ns) }))
+			// A namespace with no binding shows `—`, not a blank: unbound is a real state (the resolver
+			// falls back to the default root) and rendering it as absence hides it.
+			.map(([ns, count]): Row => ({ ns, count, stage: stageOf(ns), warehouse: bindings?.[ns] ?? null }))
 			.sort((a, b) => a.ns.localeCompare(b.ns));
 	});
 
@@ -175,6 +183,22 @@
 			meta: { headerClass: 'w-28' },
 		},
 		{
+			// WHICH WAREHOUSE HOLDS THIS. The binding arrives in the same `fetchEstateBindings` read that
+			// seeds the empty-namespace rows, so this column costs nothing extra — it was simply thrown
+			// away. Bottom-up was unanswerable in this zone until now: the bind form lives on the
+			// warehouses page and its caption calls the binding immutable once set.
+			id: 'warehouse',
+			accessorFn: (r) => r.warehouse ?? '',
+			header: ({ column }) =>
+				renderComponent(DataTableHeaderButton, {
+					label: 'warehouse',
+					sorted: column.getIsSorted(),
+					onclick: column.getToggleSortingHandler(),
+				}),
+			cell: ({ row }) => renderSnippet(warehouseCell, row.original),
+			meta: { headerClass: 'w-40' },
+		},
+		{
 			id: 'tables',
 			accessorKey: 'count',
 			header: ({ column }) =>
@@ -229,6 +253,16 @@
 {#snippet stageCell(row: Row)}
 	{#if row.stage}<StageBadge info={row.stage} />{:else}<span class="mut">—</span>{/if}
 {/snippet}
+{#snippet warehouseCell(row: Row)}
+	<!-- A link, because the warehouse has a detail page and the whole point is that this rung was
+	     unreachable from here. `—` for unbound, which is a real state (the resolver falls back to the
+	     default root), not missing data. -->
+	{#if row.warehouse}
+		<a class="wh" href={`${base}/catalog/warehouses/${row.warehouse}`} onclick={(e) => e.stopPropagation()}>
+			{row.warehouse}
+		</a>
+	{:else}<span class="mut">—</span>{/if}
+{/snippet}
 {#snippet actionsCell(row: Row)}
 	<button
 		class="drop"
@@ -258,7 +292,7 @@
 
 	<!-- #86: a failed bindings read is its own state. Collapsing it into "no namespaces" is the #66
 	     defect — an empty namespace invisible with nothing said — and this page reintroduced it once. -->
-	{#if bound === null && settled && !unauthorized && !offline}
+	{#if bindings === null && settled && !unauthorized && !offline}
 		<!-- Its OWN class, not `.banner.fail`: that one means "the action you just took failed", this
 		     means "a read this page depends on is unavailable". Sharing a selector made a spec's strict
 		     locator match two elements the moment both could appear. -->
@@ -415,6 +449,13 @@
 		text-decoration: none;
 	}
 	.ns-name:hover {
+		text-decoration: underline;
+	}
+	.wh {
+		color: var(--color-foreground);
+		text-decoration: none;
+	}
+	.wh:hover {
 		text-decoration: underline;
 	}
 	.mut {
