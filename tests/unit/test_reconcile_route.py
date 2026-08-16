@@ -348,3 +348,38 @@ def test_the_reconcile_route_is_reachable_over_http() -> None:
         assert body["trash_purge"]["ran"] is False
     finally:
         routes.reconcile = cast(Any, original)
+
+
+def test_a_PLATFORM_bucket_is_never_reported_as_an_orphan() -> None:
+    """A finding no operator can action keeps the drift report permanently non-clean.
+
+    `orphan_buckets` reports buckets that exist in storage and that no warehouse record claims. The
+    estate creates some for ITSELF — `rask-observability` is the RustFS bucket this chart's own
+    rustfs-mkbucket Job provisions for GreptimeDB's object store — and no warehouse record will ever
+    claim one, because they hold no governed tables.
+
+    MEASURED live 2026-08-16: it sat in orphan_buckets on every tick. Since `report_is_clean` blocks the
+    #79 purge on ANY finding, the purge could not be reached by clearing real drift — only by deleting
+    the observability store. `platform_buckets` defaulted to `sweep_buckets`, which is the set the sweep
+    MAINTAINS and says nothing about infrastructure it does not.
+
+    The declared set comes from `rustfs.buckets`, the same values key the mkbucket Job verifies, so the
+    exemption cannot drift away from what is actually provisioned.
+    """
+    from maintenance.core.config import MaintenanceSettings
+
+    s = MaintenanceSettings(
+        MAINTENANCE_S3_BUCKET="lance-catalog",
+        MAINTENANCE_S3_PLATFORM_BUCKETS="rask-observability,lance-catalog",
+    )
+    assert "rask-observability" in s.platform_buckets, "the declared platform bucket must be exempt"
+    assert "lance-catalog" in s.platform_buckets, "the swept set stays exempt — a maintained bucket is known by definition"
+    assert "rask-observability" not in s.sweep_buckets, "a platform bucket must NOT become something the sweep walks"
+
+
+def test_platform_buckets_defaults_to_the_swept_set_when_undeclared() -> None:
+    """No declaration must not widen the exemption — an undeclared estate keeps the old behaviour."""
+    from maintenance.core.config import MaintenanceSettings
+
+    s = MaintenanceSettings(MAINTENANCE_S3_BUCKET="lance-catalog")
+    assert s.platform_buckets == s.sweep_buckets

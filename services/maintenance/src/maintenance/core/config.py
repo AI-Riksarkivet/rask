@@ -97,6 +97,16 @@ class MaintenanceSettings(BaseSettings):
     # multibase data bases here; per-warehouse buckets are added as they are provisioned.
     s3_extra_buckets: str = Field(default="", alias="MAINTENANCE_S3_EXTRA_BUCKETS")
     s3_region: str = Field(default="us-east-1", alias="MAINTENANCE_S3_REGION")
+    # PLATFORM buckets — infrastructure the estate creates for itself, comma-separated. They hold no
+    # governed tables, so no warehouse record will ever claim them, and `orphan_buckets` would otherwise
+    # report each one as drift on every tick FOREVER — a finding no operator can ever action, on a report
+    # whose whole contract is that a clean run certifies the estate.
+    #
+    # Measured live 2026-08-16: `rask-observability` — the RustFS bucket the chart's OWN mkbucket job
+    # creates for GreptimeDB's object storage — sat in orphan_buckets, so the drift total could not reach
+    # zero by any action short of deleting the observability store. The chart already names this set in
+    # `rustfs.buckets`; this is where it gets told.
+    s3_platform_buckets: str = Field(default="", alias="MAINTENANCE_S3_PLATFORM_BUCKETS")
 
     @property
     def sweep_buckets(self) -> list[str]:
@@ -104,6 +114,17 @@ class MaintenanceSettings(BaseSettings):
         order-stable so a bucket listed twice is swept once (and the report stays deterministic)."""
         extras = [b.strip().removeprefix("s3://").strip("/") for b in self.s3_extra_buckets.split(",")]
         return list(dict.fromkeys([self.s3_bucket, *[b for b in extras if b]]))
+
+    @property
+    def platform_buckets(self) -> list[str]:
+        """Buckets `orphan_buckets` must never report: the swept set plus the declared platform ones.
+
+        The swept set is included because a bucket this service maintains is by definition known to the
+        estate; the declared extras cover infrastructure that holds no governed tables at all and so can
+        never be claimed by a warehouse record.
+        """
+        declared = [b.strip().removeprefix("s3://").strip("/") for b in self.s3_platform_buckets.split(",")]
+        return list(dict.fromkeys([*self.sweep_buckets, *[b for b in declared if b]]))
 
     # --- OpenFGA (READ-ONLY, for the drift reconciler) -----------------------------------------------
     # The reconciler compares three stores: OpenFGA says WHO, the control-root registries say WHAT

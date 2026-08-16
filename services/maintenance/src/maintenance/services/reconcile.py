@@ -773,7 +773,11 @@ async def reconcile(
             secret_key=settings.s3_secret_access_key.get_secret_value(),
         )
 
-    platform = {b for b in (platform_buckets if platform_buckets is not None else settings.sweep_buckets) if b}
+    # `settings.platform_buckets`, not `sweep_buckets`: the swept set alone omits infrastructure the
+    # estate creates for ITSELF and never governs — `rask-observability` (GreptimeDB's object store,
+    # created by the chart's own mkbucket job) was reported as an orphan bucket on every tick, which is a
+    # finding no operator can ever clear and which therefore held the drift total permanently above zero.
+    platform = {b for b in (platform_buckets if platform_buckets is not None else settings.platform_buckets) if b}
     for uri in (resolved_control_root, resolved_namespace_root):
         if (bucket := _bucket_of(uri)) is not None:
             platform.add(bucket)
