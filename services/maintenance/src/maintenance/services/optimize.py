@@ -92,8 +92,11 @@ def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -
     lives under them, and probing them is wasted S3 round-trips on the hot discovery path.
 
     The catalog lays top-level tables out as ``<uuid>_<table_id>/``, but the medallion cascade nests
-    its datasets one level down (``medallion/raw`` …) — without the marker probe the sweep both
-    reported the ``medallion/`` prefix as a failed dataset AND never maintained the real ones under it.
+    its datasets one level down (``medallion/bronze``, ``medallion/silver-media`` …) — without the
+    marker probe the sweep both reported the ``medallion/`` prefix as a failed dataset AND never
+    maintained the real ones under it. (The example said ``medallion/raw`` until 2026-08-16, naming a
+    tier that R23 makes impossible: raw is the external world, and the governed medallion is exactly
+    bronze -> silver -> gold. There is no raw dataset for the sweep to find.)
 
     Returns a :class:`Discovery`, not a bare list, so the depth cut-off cannot be dropped on the floor.
     """

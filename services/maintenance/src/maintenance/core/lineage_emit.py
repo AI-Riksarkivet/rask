@@ -120,7 +120,7 @@ def table_id_from_uri(uri: str) -> str | None:
     """Extract the catalog table id from a dataset URI laid out as ``<uuid>_<table_id>``.
 
     The catalog lays each table out as ``s3://<bucket>/<uuid>_<table_id>/`` (see
-    :func:`~maintenance.services.optimize.discover_dataset_uris`), and ``table_id`` is the canonical lineage
+    :func:`~maintenance.services.optimize.discover_datasets`), and ``table_id`` is the canonical lineage
     ``Dataset`` name == the OpenFGA object id. Splits the last path segment on its **first** ``_`` so a
     table id that itself contains ``_`` survives intact. Returns ``None`` when the segment has no ``_`` (not
     a catalog-laid-out table) so a stray directory never produces a bogus maintenance event.

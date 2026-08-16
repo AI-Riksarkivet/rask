@@ -172,11 +172,27 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   **`services/maintenance`** (renamed from `compaction` — it does four things, not one) —
   `catalog/api/maintenance_mode.py` is read-only maintenance MODE (503 + Retry-After), not this. The
   operations are ONE ordered pass per dataset — **compact → optimize_indices → cleanup**
-  (`maintenance/services/optimize.py:119-199`): compaction obsoletes files, the index optimize folds
-  the new fragments back in, and version reclamation runs last. Read the body, not `compact_one`'s
-  docstring, which states the order wrongly. A policy may skip a STEP
+  (`maintenance/services/optimize.py::compact_one`): compaction obsoletes files, the index optimize
+  folds the new fragments back in, and version reclamation runs last. This is exactly what Lance's own
+  guide prescribes — *"it's recommended to rewrite files before re-building indices"* and
+  *"`compact_files()` followed by `cleanup_old_versions()`"* (`lance_docs/guide.md`). `compact_one`'s
+  docstring now states the order correctly and may be trusted; the warning that used to sit here
+  ("read the body, not the docstring") was itself stale by 2026-08-16. A policy may skip a STEP
   (`cleanup_enabled`/`optimize_indices_enabled`), never reorder them — which is why they are modules
   in one service rather than four services each rescanning every bucket.
+- **A dataset URI encodes its TIER in three different places, and two of them encode it at opposite
+  ends.** `maintenance/services/tiers.py` sizes fragments per tier (bronze 512 / silver 262 144 / gold
+  524 288 rows — bronze rows are ~1.8 MB page images, silver/gold ~2 KB records, so one row count
+  cannot serve all three). Reading the tier from the wrong segment does not error, it returns `None`
+  and silently falls back to Lance's own sizing:
+  `<bucket>/<project>-<tier>/<table>` (nested — tier TRAILS, reduce from the right);
+  `<bucket>/medallion/<tier>` (the cascade — the child IS the namespace, and lanes are `<tier>-<lane>`
+  like `bronze-media` / `gold-htr`, so the tier LEADS, reduce from the left);
+  `<bucket>/<uuid8>_<namespace>$<table>` (the `dir` backend's FLAT layout — namespace and table share
+  ONE directory name, so the tier is in `parts[-1]`, not a parent directory).
+  Until 2026-08-16 only the first was handled, so measured live, EVERY governed tier read as untiered
+  and the per-tier defaults had never once applied. Only `medallion` may promote its child; widening
+  that would let a table NAMED `gold` size itself as gold.
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs on
   its OWN Dapr cron binding (`maintenance-reconcile-cron`), separate from the sweep's — a read-only
   drift report must not inherit the data-rewriting sweep's cadence.
