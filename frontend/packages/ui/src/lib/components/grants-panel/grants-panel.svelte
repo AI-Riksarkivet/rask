@@ -11,7 +11,7 @@
 	// Collapsed by default: one owner-tier round-trip per dataset, with definitive outcomes (the ACL,
 	// 401/403/501) cached and transient failures (offline, 5xx) retried on the next open.
 	import { GatedAction } from '../gated-action/index.js';
-	import { ChevronRight, ShieldCheck } from '@lucide/svelte';
+	import { ChevronRight, ShieldCheck, TriangleAlert } from '@lucide/svelte';
 	import { Select } from '../select/index.js';
 	import Subject from '../identity/subject.svelte';
 
@@ -131,6 +131,23 @@
 		permMap === null || !mgRelation ? true : permMap[`can_grant_${mgRelation}`] === true,
 	);
 	const mayRevoke = $derived(permMap === null ? true : permMap.can_revoke_grant === true);
+
+	// SUBJECTS THIS OBJECT ALREADY GRANTS TO — the only directory available. There is no
+	// subject-enumeration endpoint anywhere in the estate, so nothing can resolve a display name to an
+	// OIDC `sub`; the review's own rows are the sole evidence of what a subject id looks like here.
+	const knownSubjects = $derived(
+		new Set((shown?.access?.grants ?? []).flatMap((g) => g.users)),
+	);
+	// A grant to a subject the store will never match writes a tuple that looks fine and does nothing.
+	// It is NOT an error — `service-ingest` is a real subject on this estate and role/team usersets are
+	// literal by design — so this ADVISES rather than blocks: bare, short, readable, unknown here, and
+	// not a userset. A real OIDC sub is a long opaque blob (`CiQwOGE4Njg0Yi…`).
+	const looksUnresolvable = $derived.by(() => {
+		const u = mgUser.trim();
+		if (!u || u.includes(':') || u.includes('#')) return false; // a userset or an explicit type
+		if (knownSubjects.has(u) || knownSubjects.has(`user:${u}`)) return false; // already a subject here
+		return /^[a-z][a-z0-9._-]{0,30}$/i.test(u); // a plain name, not an opaque sub
+	});
 	const grantReason = $derived(
 		`Granting ${mgRelation || 'a rung'} here needs can_grant_${mgRelation || '<rung>'} on this ${kind} — held by a grant-manager, or by someone holding ${mgRelation || 'that rung'} plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`,
 	);
@@ -312,7 +329,7 @@
 				<div class="sim-form">
 					<input
 						class="mono"
-						placeholder="user (e.g. alice), or role:… / team:…#member"
+						placeholder="OIDC sub, or role:…#assignee / team:…#member"
 						bind:value={simUser}
 						onkeydown={(e) => e.key === 'Enter' && runCheck()}
 					/>
@@ -346,7 +363,7 @@
 				<div class="sim-form">
 					<input
 						class="mono"
-						placeholder="user (e.g. alice), or role:… / team:…#member"
+						placeholder="OIDC sub, or role:…#assignee / team:…#member"
 						bind:value={mgUser}
 					/>
 					<Select
@@ -382,6 +399,25 @@
 						</button>
 					</GatedAction>
 				</div>
+				<!-- The tuple is written for the id EXACTLY as typed, and a store keys on the OIDC `sub`.
+				     Typing a display name therefore writes a grant nobody holds — and the call still
+				     answers 200, so the UI reported success while the grantee stayed denied (reproduced
+				     against the live estate 2026-08-16: "reader granted to user:bob", bob still refused;
+				     the same grant to his sub worked immediately). Advisory, never blocking: literal ids
+				     are legitimate for service accounts (`service-ingest` holds rungs on this estate) and
+				     role/team usersets are literal by design. -->
+				{#if looksUnresolvable}
+					<p class="advice">
+						<TriangleAlert size={12} />
+						<span>
+							Granted exactly as typed. A signed-in user's subject is their OIDC <code>sub</code> —
+							a long opaque id like <code class="mono">CiQwOGE4Njg0Yi…</code>, not a display name —
+							so <code class="mono">{mgUser.trim()}</code> will match nobody unless that is literally
+							the subject id (a service account or a userset). The review above shows the real ids
+							this object already grants to.
+						</span>
+					</p>
+				{/if}
 				{#if mgResultShown}
 					<p
 						class="verdict"
@@ -521,5 +557,17 @@
 	}
 	.verdict.deny {
 		color: var(--fail);
+	}
+	.advice {
+		display: flex;
+		align-items: flex-start;
+		gap: 6px;
+		margin-top: 8px;
+		font-size: 11px;
+		line-height: 1.5;
+		color: var(--color-muted-foreground);
+	}
+	.advice code {
+		font-size: 10px;
 	}
 </style>

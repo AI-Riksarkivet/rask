@@ -55,6 +55,18 @@
 	);
 	const mayRevoke = $derived(permMap === null ? true : permMap.can_revoke_grant === true);
 
+	// Same advisory as `@rask/ui`'s GrantsPanel — the placeholder here taught the same wrong shape.
+	// A tuple is written for the id EXACTLY as typed while a store keys on the OIDC `sub`, so a display
+	// name grants to nobody AND still answers 200. The graph's own nodes are the directory: they carry
+	// the real subject ids this object already grants to.
+	const knownSubjects = $derived(new Set((graph?.nodes ?? []).map((n) => n.id)));
+	const looksUnresolvable = $derived.by(() => {
+		const u = mgUser.trim();
+		if (!u || u.includes(':') || u.includes('#')) return false;
+		if (knownSubjects.has(u) || knownSubjects.has(`user:${u}`)) return false;
+		return /^[a-z][a-z0-9._-]{0,30}$/i.test(u);
+	});
+
 	function rebuild(g: AccessGraph): void {
 		const obj = g.object;
 		const inbound = g.edges.filter((e) => e.target === obj); // grants: subject → obj
@@ -200,7 +212,7 @@
 		<div class="manage">
 			<input
 				class="mono"
-				placeholder="user (e.g. alice), or role:… / team:…#member"
+				placeholder="OIDC sub, or role:…#assignee / team:…#member"
 				bind:value={mgUser}
 			/>
 			<Select
@@ -238,6 +250,13 @@
 					Revoke
 				</button>
 			</GatedAction>
+			{#if looksUnresolvable}
+				<p class="advice">
+					Granted exactly as typed. A signed-in user's subject is their OIDC <code>sub</code> — a long
+					opaque id, not a display name — so <code>{mgUser.trim()}</code> matches nobody unless that is
+					literally the subject id (a service account or a userset).
+				</p>
+			{/if}
 			{#if mgResult}
 				<span class="res" class:ok={mgResult.tone === 'ok'} class:fail={mgResult.tone === 'fail'}
 					>{mgResult.text}</span
@@ -321,5 +340,11 @@
 	}
 	.res.fail {
 		color: var(--fail);
+	}
+	.advice {
+		margin-top: 6px;
+		font-size: 11px;
+		line-height: 1.5;
+		color: var(--color-muted-foreground);
 	}
 </style>
