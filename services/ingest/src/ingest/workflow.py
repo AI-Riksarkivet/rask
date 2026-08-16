@@ -337,6 +337,22 @@ class RunOutcome(BaseModel):
     #: How many entries `errors` WOULD hold unbounded. Equal to `len(errors)` until the cap bites.
     errors_total: int = 0
     status: str = "COMPLETE"
+    #: THE PUBLICATION VERDICT, and it has to be DECLARED to survive.
+    #:
+    #: `finalize_run` has always returned these keys and the pull surface has always rendered them —
+    #: but this is a plain `BaseModel`, so pydantic's default `extra="ignore"` dropped every one of
+    #: them at `emit_terminal`'s `model_validate`. What reached the graph was then byte-identical to a
+    #: run that published, which is worse than silence: the durable record asserted the opposite of
+    #: what happened, and it is the record `RunListResponse` names as the authoritative history.
+    #:
+    #: `published` is TRI-STATE and the third value is load-bearing: `None` means no version existed
+    #: to gate (nothing was committed), which is not a refusal. Collapsing it to `False` would report
+    #: a quality gate that never ran.
+    published: bool | None = None
+    from_version: int | None = None
+    to_version: int | None = None
+    publish_reason: str | None = None
+    publish_error: str | None = None
 
 
 def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[Any, Any, dict[str, Any]]:
@@ -1023,6 +1039,13 @@ def emit_terminal(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None
         project=spec.project,
         dataset=spec.dataset,
         originator=spec.originator,
+        # `outcome.status` is deliberately NOT touched by the verdict. A refused gate is a COMPLETE
+        # run whose DATA was declined, and the medallion's `/bronze-arrival` head fires only on
+        # COMPLETE — flipping it to FAIL would cancel the whole bronze->silver->gold cascade for a
+        # run whose rows are committed and durable.
+        published=outcome.published,
+        publish_reason=outcome.publish_reason,
+        publish_error=outcome.publish_error,
     )
 
 

@@ -170,7 +170,14 @@ def _emitter() -> Any:  # noqa: ANN401 — Emitter
     return build_emitter()
 
 
-def _run(run_id: str, project: str = "", originator: str = "") -> Any:  # noqa: ANN401 — LineageRun, imported lazily to keep this module light
+def _run(
+    run_id: str,
+    project: str = "",
+    originator: str = "",
+    published: bool | None = None,
+    publish_reason: str | None = None,
+    publish_error: str | None = None,
+) -> Any:  # noqa: ANN401 — LineageRun, imported lazily to keep this module light
     """Reconstruct this ingest run's graph run. Same inputs -> same run, in any activity.
 
     `namespace` is keyword-only AND has no default — `job_run()` fills it from `LineageSettings`, and
@@ -186,11 +193,18 @@ def _run(run_id: str, project: str = "", originator: str = "") -> Any:  # noqa: 
         namespace=LineageSettings().namespace,
         run_id=lineage_run_id(run_id),
         emitter=_emitter(),
-        run_facets=_tenant_facet(project, run_id, originator),
+        run_facets=_tenant_facet(project, run_id, originator, published, publish_reason, publish_error),
     )
 
 
-def _tenant_facet(project: str, run_id: str | None = None, originator: str = "") -> dict[str, Any]:
+def _tenant_facet(
+    project: str,
+    run_id: str | None = None,
+    originator: str = "",
+    published: bool | None = None,
+    publish_reason: str | None = None,
+    publish_error: str | None = None,
+) -> dict[str, Any]:
     """The `lance` run facet carrying the tenant this run's write belongs to — the THIRD half of #52.
 
     The cascade head derives its expected namespace from this facet (`ingest_trigger._cascade_project`
@@ -228,6 +242,24 @@ def _tenant_facet(project: str, run_id: str | None = None, originator: str = "")
     # the right answer for a service-token call — an invented placeholder would re-create the defect.
     if originator:
         fields["originator"] = originator
+    # THE PUBLICATION VERDICT. A commit is not a publication (§ D2 D-R1), and until this landed the
+    # emitted COMPLETE could not tell the two apart — a refused quality gate produced an event
+    # byte-identical to a published run, so the graph asserted the opposite of what happened.
+    #
+    # `published` is stamped for True as well as False, on purpose: if only refusals were recorded,
+    # every event predating this change would read as a success, and absence would silently mean two
+    # different things. `None` stays ABSENT because it is the honest third state — no version existed
+    # to gate, so no gate ran, which is not a refusal.
+    #
+    # `from_version`/`to_version` deliberately stay OFF the wire: they answer "what row delta did this
+    # publication cover", which the run's own pull surface already serves, and the question this facet
+    # exists to answer is only whether the data is READY.
+    if published is not None:
+        fields["published"] = published
+    if publish_reason:
+        fields["publish_reason"] = publish_reason
+    if publish_error:
+        fields["publish_error"] = publish_error
     return {LANCE_RUN_FACET: custom_facet(**fields)} if fields else {}
 
 
@@ -253,6 +285,9 @@ class LineageRecorder:
         project: str = "",
         dataset: str = "",
         originator: str = "",
+        published: bool | None = None,
+        publish_reason: str | None = None,
+        publish_error: str | None = None,
     ) -> None:
         """COMPLETE or FAIL — and a COMPLETE must NAME WHAT IT WROTE.
 
@@ -274,7 +309,11 @@ class LineageRecorder:
         outputs = _output_datasets(project, dataset, version, rows)
 
         def emit() -> None:
-            run = _run(run_id, project, originator)
+            # The verdict rides the RUN facet, never the event TYPE: a refused gate is still a
+            # COMPLETE (the run did its job; the DATA was declined), and the medallion cascade head
+            # keys on COMPLETE — so reporting the refusal as a FAIL would cancel bronze->silver->gold
+            # for a run whose rows are committed and durable.
+            run = _run(run_id, project, originator, published, publish_reason, publish_error)
             if event_type == "FAIL":
                 run.fail(f"ingest run {run_id} failed: {errors or 'no detail'}", outputs=outputs)
             else:

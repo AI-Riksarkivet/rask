@@ -168,7 +168,7 @@ def test_a_FAIL_carries_an_errorMessage_facet() -> None:
 
     recorder = _Capture()
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("ingest.lineage._run", lambda _rid, _project="", _originator="": _Run())
+        mp.setattr("ingest.lineage._run", lambda *_a, **_kw: _Run())
         recorder.terminal(run_id="run-42", status="FAILED", version=None, rows=0, errors={"unit-9": "corrupt tiff"}, project="bind86", dataset="pages")
 
     assert recorder.emitted, "a FAILED run emitted no terminal at all — the run leaves a record whichever way it ends"
@@ -294,3 +294,160 @@ def test_the_originator_survives_into_what_notifications_actually_reads() -> Non
         "outputs": [{"namespace": "bind86-bronze", "name": "bind86-bronze$pages"}],
     }
     assert originator_subject(LineageRunEvent.model_validate(event).run) == "alice"
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# The publication VERDICT — a committed-but-refused run must not announce itself as a published one
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+#
+# `finalize_run` already computes the verdict correctly and the PULL surface already renders it
+# ("Committed, but not published — <reason>"). It dies on the way to the PUSH surface: `emit_terminal`
+# re-validates the finalize output through `RunOutcome`, which declares none of the publication keys,
+# and pydantic's default `extra="ignore"` drops them without a word. What reaches the graph is then
+# byte-identical to a run that published — so the durable record, which `RunListResponse` itself names
+# as the authoritative history, cannot tell the two apart.
+
+
+def _refused() -> dict[str, Any]:
+    """The verdict `_publish` really returns for a refused gate — taken from the function, not typed
+    out here, so a change to its keys fails these tests instead of silently bypassing them."""
+    from ingest.runtime import _publish
+
+    class _Spec:
+        project = "bind86"
+        dataset = "pages"
+        run_id = "run-1"
+
+        @property
+        def namespace(self) -> str:
+            from ingest.naming import bronze_namespace_for
+
+            return bronze_namespace_for(self.project)
+
+    class _Catalog:
+        def publish(self, _ns: str, _ds: str, _v: int) -> dict[str, Any]:
+            return {"published": False, "from_version": 3, "to_version": 4, "reason": "quality gate failed: not_null"}
+
+    return _publish(_Catalog(), _Spec(), 4)
+
+
+def test_a_refused_publication_survives_the_RunOutcome_boundary() -> None:
+    """The drop happens HERE, and it is silent: `RunOutcome` is a plain `BaseModel`, so pydantic's
+    default `extra="ignore"` discards every publication key at `workflow.py`'s `model_validate`.
+
+    Asserted on the object the emit path actually builds rather than on the dict `finalize_run`
+    returns — the dict has always been right, which is exactly why nobody noticed."""
+    from ingest.workflow import RunOutcome
+
+    outcome = RunOutcome.model_validate({"committed_version": 4, "rows": 12, "errors": {}, "status": "COMPLETE", **_refused()})
+
+    assert outcome.published is False, "the refusal was dropped crossing the activity boundary"
+    assert outcome.publish_reason and "not_null" in outcome.publish_reason
+
+
+def test_the_lance_facet_carries_a_refused_publication() -> None:
+    """The graph's copy of the verdict. It rides the same `lance` custom facet as `originator`
+    because that facet is `extra="allow"` end to end (`RunFacets.to_openlineage` merges
+    `model_extra`), so a new key reaches the wire with no lineage-kit change."""
+    from ingest.lineage import _tenant_facet
+
+    facet = _tenant_facet("bind86", "run-1", published=False, publish_reason="quality gate failed: not_null")["lance"]
+
+    assert facet["published"] is False
+    assert "not_null" in facet["publish_reason"]
+
+
+def test_a_published_run_says_so_rather_than_staying_silent() -> None:
+    """`True` is stamped too, not just the refusal. A reader must be able to tell "published" from
+    "this producer says nothing about publication" — if only failures were stamped, every event
+    predating this change would read as a success."""
+    from ingest.lineage import _tenant_facet
+
+    assert _tenant_facet("bind86", "run-1", published=True)["lance"]["published"] is True
+
+
+def test_nothing_to_commit_is_not_a_refusal() -> None:
+    """`published=None` is a REAL third state (`runtime.py`: no version to gate, so `_publish` never
+    ran). Collapsing it to `False` would report a gate refusal that never happened — the same class
+    of lie this whole change exists to remove, pointing the other way."""
+    from ingest.lineage import _tenant_facet
+
+    assert "published" not in _tenant_facet("bind86", "run-1", published=None)["lance"]
+
+
+def test_a_refusal_does_not_become_a_FAIL() -> None:
+    """THE CASCADE GUARD, and the reason this is a facet rather than a status change.
+
+    The medallion's `/bronze-arrival` head fires only on `eventType == "COMPLETE"`. Flipping a
+    refused run to FAIL would cancel the entire bronze->silver->gold cascade for a run whose data is
+    committed and durable — and would lie in the other direction, because the RUN did its job. What
+    was refused is the DATA.
+    """
+    calls: list[str] = []
+
+    class _Run:
+        def complete(self, **_: object) -> None:
+            calls.append("complete")
+
+        def fail(self, *_a: object, **_kw: object) -> None:
+            calls.append("fail")
+
+    recorder = _Capture()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("ingest.lineage._run", lambda *_a, **_kw: _Run())
+        recorder.terminal(
+            run_id="run-1",
+            status="COMPLETE",
+            version=4,
+            rows=12,
+            errors={},
+            project="bind86",
+            dataset="pages",
+            published=False,
+            publish_reason="quality gate failed: not_null",
+        )
+
+    assert calls == ["complete"], "a refused publication is a COMPLETE run whose data was declined"
+
+
+def test_the_terminal_emit_forwards_the_verdict_it_was_given() -> None:
+    """The link between the two halves. `terminal()` receives the verdict and must put it on the run
+    it builds — a facet that is correct in isolation reaches nothing if the emit path drops it."""
+    seen: dict[str, Any] = {}
+
+    class _Run:
+        def complete(self, **_: object) -> None:
+            pass
+
+        def fail(self, *_a: object, **_kw: object) -> None:
+            pass
+
+    def _capture(
+        _run_id: str,
+        project: str = "",
+        originator: str = "",
+        published: bool | None = None,
+        publish_reason: str | None = None,
+        publish_error: str | None = None,
+    ) -> _Run:
+        del project, originator  # positional placeholders — this test is about the verdict only
+        seen.update({"published": published, "publish_reason": publish_reason, "publish_error": publish_error})
+        return _Run()
+
+    recorder = _Capture()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("ingest.lineage._run", _capture)
+        recorder.terminal(
+            run_id="run-1",
+            status="COMPLETE",
+            version=4,
+            rows=12,
+            errors={},
+            project="bind86",
+            dataset="pages",
+            published=False,
+            publish_reason="quality gate failed: not_null",
+        )
+
+    assert seen.get("published") is False
+    assert "not_null" in str(seen.get("publish_reason"))
