@@ -256,6 +256,27 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   subtract what is referenced" logic the orphan scan REFUSES to run on these datasets for safety.
   The same root-scoping is what makes cleanup SAFE on a shallow clone (see `SUPPORTED_FOR_GC`) — the
   property that protects the base is the property that strands its garbage.
+- **CHECK THE TRASH RECORD BEFORE TOUCHING BYTES — including when you are "only looking".** The sweep
+  reports `versions_removed: 0` on datasets holding versions far older than the retention, and the
+  reason is almost always the F6(d) exclusion: a recoverably-dropped dataset (`_trash/` record) is
+  frozen until undrop or purge, because the sweep may not rewrite bytes someone can still restore.
+  Diagnosing that count by hand-running `cleanup_old_versions(older_than=7d)` on one of them (done
+  2026-08-16, on `bind86-bronze$converge-proof`) IS the destructive call the exclusion exists to
+  prevent: it removed 5 versions / 7,567 bytes and destroyed time-travel to v1–v4 on an object that
+  was still restorable. The latest version, row count, `published` tag and undrop all survived, so
+  cleanup was working correctly — the sweep was right to decline and the operator was wrong to
+  override it. Tags are not the check; the trash record is.
+- **A medallion tier's maintenance run is emitted only when the sweep does MATERIAL work.**
+  `sweep.py::_did_material_work` gates the emit on `fragments_removed or old_versions_removed`, so a
+  correctly-idle estate records nothing — deliberately, since a 120s cron would otherwise flood the
+  graph with no-op compaction runs. Consequence for verification: a stamped medallion dataset does NOT
+  produce a `(:Run)-[:WROTE]->(:Dataset)` node just by being written and swept. As of 2026-08-16 both
+  halves of the declared-id chain are live (producer stamps `lineage.dataset_id`, sweep prefers it),
+  and the read half is witnessed in AGE for `silver$emitproof` — but no medallion tier has yet been
+  observed emitting, because every sweep since has measured `fragments_removed: 0, versions_removed:
+  0`. That is the gate behaving correctly, not a defect; there is also no product door to set a
+  per-dataset retention policy on a medallion-nested dataset (the policy doors are keyed by catalog
+  table id, and a project record would match the whole bucket), so the emit cannot be forced narrowly.
 - **Five things live in a Lance dataset that a manifest scan does not reach.** Branches (`tree/`),
   multi-base files (`base_paths`), MemWAL shards (`_mem_wal/` — WAL + SSTable datasets, and the spec
   warns that GC'ing WAL files WEAKENS writer fencing, since fencing detects a stalled writer by a
