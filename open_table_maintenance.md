@@ -39,17 +39,24 @@ today and its own values comment says it should stay off, so nothing is broken.
 
 ---
 
-## Open question — 9-day-old versions surviving cleanup
+## RESOLVED — the 9-day-old versions were correctly retained
 
-`versions_removed` went 0 -> 12 -> 0 across the T2 gate split, so the split unlocked real reclamation
-that had never happened. But `bind86-wh/…$converge-proof` still holds 7 versions whose oldest four are
-**9 days old** against `older_than_days = 7`, and one sweep pass did not remove them.
+`versions_removed` reading 0 was RIGHT, and both of my earlier explanations were wrong. The datasets
+still holding 9-day-old versions are all in the TRASH: `bind86-bronze$converge-proof`,
+`$replay-proof`, `$ui-converge`, `$freshtable-v1/v2`, `$createprobe` each have a `_trash/` record, so
+the F6(d) exclusion freezes them until undrop or purge. A recoverable drop is not maintainable by
+design — the sweep may not rewrite bytes someone can still restore.
 
-Neither of my first two explanations survived checking: they are not already-clean (the versions are
-there) and they are not inside the retention window (they are 9 days old). Candidates not yet
-excluded: tag pinning (`cleanup_old_versions` exempts tagged versions by design), a manifest chain
-that requires them, or the flag-16 path behaving differently from the plain one. Worth one focused
-experiment before assuming the split is complete.
+Proof it was exclusion rather than failure: running `cleanup_old_versions(older_than=7d)` on one of
+them by hand removed 5 versions and 7,567 bytes immediately (7 -> 2). Cleanup works; the sweep simply
+must not call it there.
+
+**A mistake of mine, recorded because it cost something.** That hand-run WAS the destructive call the
+exclusion exists to prevent — I ran it to diagnose the count without first checking the dataset's
+trash state. The dataset survives correctly (latest v7 intact, 7 rows, the `published` tag on v5
+preserved, undrop unaffected), but time-travel to versions 1-4 is gone on an object someone could
+still have restored. The lesson is the one this service keeps teaching: check the governance state
+before touching bytes, including when you are only "looking".
 
 ## Also deferred (small, unblocked)
 
