@@ -18,7 +18,7 @@ before trusting it in an incident.
 
 | Artifact | What | Where | Template |
 |---|---|---|---|
-| **pg_dump** (gzip) | the `lineage` DB (AGE graph + events/reads tables) **and** the `openfga` DB (authz tuples) | RustFS S3 `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
+| **pg_dump** (gzip) | the `lineage` DB (AGE graph + events/reads tables), the `openfga` DB (authz tuples) **and** the `daprstate` DB (Dapr state store: inbox read state + workflow/actor instances) | RustFS S3 `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
 | **VolumeSnapshot** | the RustFS data PVC = the **Lance lakehouse** (all medallion + registry data) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
 
 **Not backed up** (accept the loss window or externalize — see [DECISIONS.md "P4/P7"](../DECISIONS.md) and
@@ -34,7 +34,7 @@ the catalog. Restoring one far from the other leaves dangling provenance. **Rest
 RustFS snapshot from the SAME backup window**, and expect the reconcile sweep to converge minor drift
 (storage↔graph) afterward.
 
-## Restore — Postgres (AGE lineage graph + OpenFGA)
+## Restore — Postgres (AGE lineage graph + OpenFGA + Dapr state)
 
 The critical AGE detail: a plain `pg_dump -d lineage` captures `ag_catalog`, the per-graph schema, and the
 label tables, **but the target must have the `age` extension available and loaded**, and the graph catalog
@@ -56,6 +56,28 @@ graph — drop/recreate the DB first.
    ```
    A non-zero Dataset count + the graph name confirms the labels restored, not just the metadata rows.
 6. Repeat 1–4 for `openfga` (no AGE steps — it's plain relational).
+6b. **`daprstate` — restore it LAST, and only after deciding you want it.** Same plain-relational
+   procedure as `openfga` (no AGE steps), but it is the one dump whose restore is a judgement call
+   rather than a reflex, because Dapr owns this schema and the rows describe *in-flight* work:
+
+   - **What is lost without it:** every subject's inbox READ state. The inbox *contents* come back on
+     their own — the notifications reconciler replays lineage's durable `GET /events` — but "which of
+     these have I already seen" lives nowhere else, so skipping this dump marks the entire estate
+     unread for everyone. Dapr workflow instances and actor state are lost with it too; in-flight
+     workflows do not resume.
+   - **Why LAST:** the rows point at work items in the other two databases. Loading Dapr state that is
+     NEWER than the lineage/OpenFGA dumps beside it resurrects actors referencing events the restored
+     lineage DB does not have. Restore all three from the SAME `_backups/pg/<UTC>/` directory — they
+     are dumped in one CronJob run, so a single timestamp directory is internally consistent.
+   - **When to skip it:** if you are restoring far enough back that in-flight work is stale anyway,
+     dropping `daprstate` and letting Dapr recreate its schema is legitimate and safe. Everyone starts
+     with a full unread inbox, which is noisy but not wrong. Say so in the incident notes — an inbox
+     that silently re-alerts on months of history reads as an outage to the people receiving it.
+   - **Check its size before assuming it is small.** Most of `daprstate` is Dapr workflow history, and
+     that grows without bound unless `dapr.workflowStateRetention` is on — measured live 2026-08-10,
+     before retention landed: 1367 instance rows for `dapr.internal.default.ingest.workflow` alone,
+     `count(expiredate) = 0`, oldest 7 days back. Retention now bounds it (7d completed / 30d failed),
+     but a cluster restored from a dump taken with retention OFF carries the whole history.
 7. **App recovery is automatic**: on next boot lineage runs `ensure_graph()` (a no-op if step 4 restored the
    graph) + `ensure_graph_constraints()`, and `/readyz` gates on the graph being queryable — so a
    half-restored graph fails readiness loudly rather than serving silently.
@@ -101,12 +123,17 @@ supported route is logical: dump on the old major → fresh data directory on th
 
 **Procedure** (rehearse it once on a throwaway install before touching a real estate):
 
-1. **Quiesce writers**: `kubectl scale deploy <release>-lineage <release>-openfga --replicas=0`. Governed
-   APIs 503 (authz fail-closed) for the window — expected and the point: the dump you take next is final.
-2. **Take a fresh dump of both DBs**: trigger the backup CronJob out of schedule —
+1. **Quiesce writers**: `kubectl scale deploy <release>-lineage <release>-openfga <release>-notifications --replicas=0`.
+   Governed APIs 503 (authz fail-closed) for the window — expected and the point: the dump you take next is
+   final. `notifications` is in that list because it is the writer of `daprstate` (its `InboxActor`s persist
+   read state through the Dapr state store); leaving it up means dumping a database that is still being
+   written, and the restored inboxes disagree with the lineage dump taken beside them.
+2. **Take a fresh dump of all three DBs**: trigger the backup CronJob out of schedule —
    `kubectl create job --from=cronjob/<release>-pg-backup pg-migrate-dump` (`backup-pg.yaml`; it dumps
-   `lineage` + `openfga` gzipped to `_backups/pg/<UTC>/` on RustFS) — or run the equivalent manual
-   `pg_dump | gzip` per database. Then copy the dumps somewhere off the estate too; don't let the only copy
+   `lineage` + `openfga` + `daprstate` gzipped to `_backups/pg/<UTC>/` on RustFS) — or run the equivalent manual
+   `pg_dump` per database. Manually, do NOT write it as `pg_dump | gzip`: the pipeline reports only gzip's
+   status, so a dump that dies mid-stream leaves a valid gzip and a zero exit — see `backup-pg.yaml` for the
+   form that catches it. Then copy the dumps somewhere off the estate too; don't let the only copy
    fate-share with the cluster you're about to operate on. (Postgres recommends dumping with the *new*
    major's `pg_dump`; if you want that, run a one-off pod on the new image pointed at `<release>-age:5432`
    before cutover.)
@@ -115,8 +142,8 @@ supported route is logical: dump on the old major → fresh data directory on th
    step-2 dumps are your only rollback — verify they exist and gunzip cleanly before proceeding.
 4. **Cut over**: `kubectl scale sts <release>-age --replicas=0`, delete the PVC `data-<release>-age-0`, then
    `helm upgrade` with the new `age.image`. The fresh PVC makes initdb run the `age-postgres.yaml` ConfigMap
-   scripts on the new major: extension, graph + label indexes, and the `openfga` database.
-5. **Restore both dumps** per [Restore — Postgres](#restore--postgres-age-lineage-graph--openfga) above —
+   scripts on the new major: extension, graph + label indexes, and the `openfga` + `daprstate` databases.
+5. **Restore all three dumps** per [Restore — Postgres](#restore--postgres-age-lineage-graph--openfga--dapr-state) above —
    including its "drop/recreate the DB first" rule, which now applies unconditionally: initdb just
    pre-created a fresh `lineage` graph in step 4.
 6. **Prove the round-trip on the new major before re-opening writes**: copy `scripts/age_restore_drill.sh`

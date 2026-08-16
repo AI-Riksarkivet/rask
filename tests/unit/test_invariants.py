@@ -2310,6 +2310,73 @@ def test_every_database_the_age_chart_creates_ALSO_gets_the_age_EXTENSION() -> N
         )
 
 
+def test_every_database_the_age_chart_creates_is_ALSO_in_the_backup_dump_loop() -> None:
+    """A database the chart creates and the backup job does not dump is data nobody knows is unprotected.
+
+    `daprstate` was exactly that. `dapr-statestore.yaml` justifies putting Dapr's state on this Postgres
+    with "already deployed, already backed up (backup-pg.yaml), already monitored" — and the dump loop
+    named only `lineage` and `openfga`. The claim read as a decision that had been checked; nothing
+    checked it. It holds the notifications plane's per-subject inbox READ state, which is the one thing
+    the cron reconciler cannot rebuild from lineage's durable event feed.
+
+    Derived from the initdb scripts rather than listed here, so the next database added to the chart is
+    covered by this gate on the day it lands instead of the day someone remembers.
+    """
+    age_text = (REPO / "chart/templates/age-postgres.yaml").read_text(encoding="utf-8")
+    values = (REPO / "chart/values.yaml").read_text(encoding="utf-8")
+    backup = (REPO / "chart/templates/backup-pg.yaml").read_text(encoding="utf-8")
+
+    # Every `.Values.age.<key>` a CREATE DATABASE names, e.g. `CREATE DATABASE "{{ .Values.age.stateDb }}"`.
+    created = set(re.findall(r'CREATE DATABASE "\{\{ \.Values\.age\.(\w+) \}\}"', age_text))
+    # …plus lineage, whose database is the one initdb makes itself rather than via CREATE DATABASE.
+    created.add("lineageDb")
+    assert len(created) >= 3, f"expected at least three databases, found {created} — the chart changed shape and this gate would pass vacuously"
+
+    dump_loop = re.search(r"for db in ([^;]*); do", backup)
+    assert dump_loop, "backup-pg.yaml no longer has a `for db in ...` loop — this gate cannot see what is dumped"
+    dumped = set(re.findall(r"\.Values\.age\.(\w+)", dump_loop.group(1)))
+
+    missing = created - dumped
+    assert not missing, (
+        f"chart/templates/age-postgres.yaml creates {sorted(created)} but backup-pg.yaml only dumps "
+        f"{sorted(dumped)} — {sorted(missing)} would be lost with the volume and nothing would say so. "
+        f"Add it to the `for db in ...` loop, and to docs/runbooks/RUNBOOK-restore.md, which is where "
+        f"someone looks at 3am."
+    )
+    # …and the values keys must actually resolve, or the loop expands to an empty word and dumps nothing.
+    for key in sorted(created):
+        assert re.search(rf"^  {key}: \S+", values, re.MULTILINE), f"age.{key} is not set in values.yaml"
+
+
+def test_the_backup_job_does_not_hide_a_failed_dump_behind_a_pipe() -> None:
+    """`pg_dump | gzip` reports GZIP's status. The dump container runs `sh`, which in the AGE image is
+    dash — `readlink -f /bin/sh` -> `/usr/bin/dash`, and `set -o pipefail` is NOT SUPPORTED there
+    (both verified 2026-08-16 by running the real image). So `set -e` cannot see the dump fail.
+
+    Measured in that image with a real `pg_dump` pointed at an unreachable host: the piped form printed
+    no error, exited 0, and left a 20-byte gzip — which the upload container then shipped as that day's
+    backup. A backup that fails loudly is an incident; a backup that fails silently is a data-loss event
+    discovered during a restore.
+
+    This gate does not mandate the mechanism, only that the naive pipe is not it.
+    """
+    backup = (REPO / "chart/templates/backup-pg.yaml").read_text(encoding="utf-8")
+    # Comment lines are skipped — the shell block explains this very rule by quoting the bad form, and a
+    # gate that fires on its own rationale teaches people to delete the rationale.
+    piped = [
+        stripped
+        for line in backup.splitlines()
+        if not (stripped := line.strip()).startswith("#") and "pg_dump" in stripped and "| gzip" in stripped and "||" not in stripped
+    ]
+    assert not piped, (
+        "backup-pg.yaml pipes pg_dump straight into gzip:\n  "
+        + "\n  ".join(piped)
+        + "\n\nUnder dash (no pipefail) that reports only gzip's status, so a dump that dies mid-stream "
+        "still exits 0 and a truncated file is uploaded as the backup. Capture pg_dump's own status — "
+        "e.g. `{ pg_dump ... || touch /tmp/.dump-failed ; } | gzip > ...` then fail on the marker."
+    )
+
+
 def _reminders_without_a_failure_policy() -> list[str]:
     """Every `register_reminder(` call that does not state what happens when its callback FAILS.
 

@@ -1,5 +1,5 @@
 {{- if .Values.backups.pgDump.enabled }}
-# pg_dump the lineage + OpenFGA databases (gzip) → the lakehouse S3 under _backups/pg/<date>/.
+# pg_dump the lineage + OpenFGA + Dapr-state databases (gzip) → the lakehouse S3 under _backups/pg/<date>/.
 # SELF-CONTAINED FALLBACK ONLY: when AGE is a CloudNativePG cluster (the rask path), disable this and use
 # CNPG's scheduled backups / PITR instead — they do this better. Reads creds from the infra-tier Secret.
 apiVersion: batch/v1
@@ -37,8 +37,31 @@ spec:
                 - -c
                 - |
                   set -e
-                  for db in {{ .Values.age.lineageDb }} {{ .Values.age.openfgaDb }}; do
-                    pg_dump -h {{ include "lance.ageConnectHost" . }} -p {{ .Values.age.port }} -U {{ .Values.age.user }} -d "$db" | gzip > /dump/"$db".sql.gz
+                  rm -f /tmp/.dump-failed
+                  # THREE databases, not two. `stateDb` (daprstate) is the Dapr state store, and
+                  # dapr-statestore.yaml justifies putting it on this Postgres with "already backed up
+                  # (backup-pg.yaml)" — which was not true of this loop. It holds the notifications
+                  # plane's per-subject InboxActor read state and Dapr workflow/actor instance state.
+                  # The inbox CONTENTS are reconstructible (the cron reconciler replays lineage's durable
+                  # GET /events), but WHICH messages a subject has already read exists nowhere else: losing
+                  # it marks the whole estate unread for everyone, and in-flight workflows do not resume.
+                  for db in {{ .Values.age.lineageDb }} {{ .Values.age.openfgaDb }} {{ .Values.age.stateDb }}; do
+                    # NOT `pg_dump | gzip`. A pipeline reports only the LAST command's status, and this is
+                    # `sh` — dash, where `set -o pipefail` does not exist. So a pg_dump that dies mid-stream
+                    # still leaves a structurally valid gzip and the pipeline exits 0: `set -e` sees a clean
+                    # run and the upload container ships a TRUNCATED dump as that day's backup. That is the
+                    # failure a backup can least afford, because nothing reveals it until a restore.
+                    # Streaming is preserved on purpose (an uncompressed dump of the graph would have to fit
+                    # the emptyDir); the marker file carries pg_dump's real status out of the subshell, and
+                    # lives in /tmp rather than /dump so it can never be uploaded into the backup prefix.
+                    { pg_dump -h {{ include "lance.ageConnectHost" . }} -p {{ .Values.age.port }} -U {{ .Values.age.user }} -d "$db" || touch /tmp/.dump-failed ; } | gzip > /dump/"$db".sql.gz
+                    if [ -f /tmp/.dump-failed ]; then
+                      echo "pg_dump failed for database $db — refusing to upload a partial backup" >&2
+                      exit 1
+                    fi
+                    # Catches the dump file never being written at all. It does NOT catch truncation —
+                    # a truncated gzip is non-empty — which is what the marker above is for.
+                    [ -s /dump/"$db".sql.gz ] || { echo "no dump produced for database $db" >&2; exit 1; }
                   done
               volumeMounts: [{ name: dump, mountPath: /dump }]
           {{- if .Values.security.serviceAccounts.enabled }}
