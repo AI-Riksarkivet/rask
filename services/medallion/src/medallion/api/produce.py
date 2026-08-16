@@ -33,7 +33,7 @@ async def authorize(_: Annotated[None, Depends(authorize_produce)]) -> dict[str,
 async def produce(
     dapr: DaprClientDep,
     settings: SettingsDep,
-    _: Annotated[None, Depends(authorize_produce)],
+    originator: Annotated[str | None, Depends(authorize_produce)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")] = None,
     project: ProjectParam = None,
 ) -> dict[str, str] | JSONResponse:
@@ -62,7 +62,7 @@ async def produce(
     never a silent fallback to the shared root). Absent → today's single-tenant behavior, unchanged.
     """
     try:
-        result = await run_produce(dapr, settings, token=idempotency_key, project=project or "")
+        result = await run_produce(dapr, settings, token=idempotency_key, project=project or "", originator=originator or "")
     except UnresolvableProjectError as exc:
         return JSONResponse(
             status_code=409,

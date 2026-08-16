@@ -559,3 +559,38 @@ def test_a_POLL_that_exhausts_its_retries_reports_ABANDONED() -> None:
     assert "call_activity(report_stage_outcome)" in ctx.actions, "a lost watch reported nothing"
     assert outcome["verdict"] == "abandoned"
     assert "call_activity(publish_stage_ready)" not in ctx.actions, "an unwatched job must not wake the mover"
+
+
+def test_a_stage_FAIL_names_the_human_the_cascade_is_running_for() -> None:
+    """THE CASCADE'S TARGETING DEFECT.
+
+    A mover authors its events with a chart ROLE LITERAL (`MEDALLION_AUTHOR` — `data_eng`, `analyst`,
+    `htr`, `ray`), so the FAIL a failed Ray stage emits addressed an inbox actor named `data_eng`:
+    nobody. The person whose ingest started the cascade was told nothing about the failure of their own
+    run, and only someone who had explicitly opted into watching the project heard anything.
+
+    The originator rides the TRIGGER — the same carrier as `token` and `project` — because by the time a
+    stage runs, the request that started it is long gone; the cascade head is the last place the verified
+    subject exists. `author` is deliberately left alone: the mover really did run the stage, and
+    overwriting attribution to fix targeting trades one wrong answer for another.
+    """
+    from medallion.workflow import _build_stage_fail_event
+
+    spec = StageJobSpec.model_validate(_spec(trigger={"token": "tok-1", "dataset": "pages", "originator": "alice"}))
+    outcome = StageJobOutcome(submission_id="sub", status="FAILED", polls=2, verdict="failed")
+    event = _build_stage_fail_event(spec, outcome, "the Ray stage job sub ended FAILED after 2 poll(s)")
+
+    assert event["run"]["facets"]["lance"]["originator"] == "alice"
+    assert event["run"]["facets"]["author"]["sub"] != "alice", "attribution stays with the mover that ran it"
+
+
+def test_a_stage_FAIL_without_an_originator_is_unchanged() -> None:
+    """Absent is the normal case for a single-tenant estate and for every trigger published before this
+    field existed. It must stay byte-identical, so the field can land at one producer at a time."""
+    from medallion.workflow import _build_stage_fail_event
+
+    spec = StageJobSpec.model_validate(_spec())
+    outcome = StageJobOutcome(submission_id="sub", status="FAILED", polls=2, verdict="failed")
+    event = _build_stage_fail_event(spec, outcome, "reason")
+
+    assert "originator" not in event["run"]["facets"]["lance"]

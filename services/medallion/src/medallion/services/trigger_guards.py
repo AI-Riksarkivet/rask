@@ -105,6 +105,11 @@ class StageTrigger(BaseModel):
     dataset: str | None = None
     namespace: str | None = None
     project: str | None = None
+    #: The HUMAN the cascade is running for, threaded from the head. Unvalidated here for the same
+    #: reason `project` is: it is a claim, checked where it is used. It never authorizes anything —
+    #: the notifications plane re-derives every recipient's visibility at delivery — so a forged one
+    #: can at worst put a row in an inbox whose owner can already see the run's outputs.
+    originator: str | None = None
     from_uri: str | None = None
 
     #: S1: the Ray stage job for this trigger reached SUCCEEDED, so the destination is written and the

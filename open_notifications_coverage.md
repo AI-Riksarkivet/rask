@@ -20,6 +20,40 @@ catalog write in the estate; `ingest/lineage.py:213-215` sets `fields["project"]
 precedent. Rows below that were NOT hand-verified are the agents' claims — check `file:line` before
 acting on one.
 
+## LANDED SINCE THE AUDIT (2026-08-16)
+
+Struck from the register below; the row text is left in place because the *reasoning* is still the
+best statement of what was wrong.
+
+- ~~**catalog stamps `lance` with no `project`** (§2 High, `core/lineage_emit.py:189`)~~ — **FIXED
+  `dac1b688`.** Resolved through the warehouse registry (binding → warehouse → project), NOT by
+  splitting the namespace name: `PROJECT_PATTERN` permits `-` inside a project id, so `acme-bronze`
+  is genuinely ambiguous and a wrong guess notifies the wrong tenant. Measured through the real
+  consumer: audience went `('alice',)` → `('alice', 'bob', 'carol')`.
+- ~~**the annotator emits nothing, so an assignment tells nobody** (§2 High, `members.py` /
+  `tasks.py`)~~ — **FIXED `80d244ab`.** `task_assigned` / `task_unassigned` across the three files the
+  contract requires, plus `annotation_task` on `ControlObjectType`, emitted after the transition and
+  its audit succeed. The audience is the ASSIGNEE, never the manager who clicked; acting on your own
+  task emits nothing.
+- ~~**movers author with a chart role literal, so a failed cascade reaches no human** (§2 High,
+  `chart/values.yaml:926-943`)~~ — **FIXED (item C, this sequence).** A fifth targeting source,
+  `NotificationReason.ORIGINATOR`: the verified subject is captured at `authorize_produce` — the last
+  place it exists — and rides `lance.originator` from the cascade head through the trigger to every
+  stage. `author` is deliberately unchanged, because the mover really did run the stage and
+  overwriting attribution to fix targeting trades one wrong answer for another.
+- ~~**a `user:*` managed-access toggle wrote into an inbox named `*`**~~ — **FIXED `5752cef8`.**
+
+**Also landed, not from the register:** the control emitter was copy-pasted between the catalog and
+maintenance and the annotator would have been the third; it now lives once in `service_kit`
+(`2c397306`), guarded by `test_the_control_emitter_has_exactly_one_implementation`.
+
+**Still open and worth knowing:** `lease_expired` is the annotator edge that most deserves a
+notification and cannot have one — its audience is the PREVIOUS holder and it fires with no principal
+at all (`machines.py` gives it permission `None`). That needs a fifth *audience shape*, not another
+action.
+
+---
+
 **The durable contract distilled from this lives in `.claude/skills/rask-notifications`.** This file
 is the work list; the skill is the rule. Fix a producer named here and delete its row; when the
 register is empty, delete this file.

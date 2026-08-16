@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 
-async def produce(dapr: DaprClient, settings: MedallionSettings, *, token: str | None = None, project: str = "") -> dict[str, str]:
+async def produce(dapr: DaprClient, settings: MedallionSettings, *, token: str | None = None, project: str = "", originator: str = "") -> dict[str, str]:
     """Ingest the bronze dataset and emit its write event (the event-driven cascade head).
 
     With ``compute_enabled`` it FIRST seeds a real ``bronze$events`` Lance dataset (the fake medallion-producer
@@ -77,6 +77,9 @@ async def produce(dapr: DaprClient, settings: MedallionSettings, *, token: str |
     bronze_event = build_run_event(
         operation=settings.producer_operation,
         author=settings.producer_author,
+        # The verified human from `authorize_produce`, carried so a failure LATER in the cascade can still
+        # name them. `author` stays the producer role: it is the truthful answer to "what ran this".
+        originator=originator or None,
         job_namespace=settings.job_namespace,
         inputs=[],  # the dummy seed has no external source; the ingest plane carries its own (R23)
         output_namespace=project_namespace(project, settings.bronze_namespace),

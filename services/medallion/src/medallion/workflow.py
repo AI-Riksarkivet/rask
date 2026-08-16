@@ -376,6 +376,10 @@ def _build_stage_fail_event(spec: StageJobSpec, outcome: StageJobOutcome, reason
         output_name=settings.to_dataset,
         token=spec.token or trigger.get("token"),
         project=trigger.get("project") or None,
+        # THE TRIGGER IS THE CARRIER. By the time a stage fails, the request that started the cascade is
+        # long gone — the head is the last place the verified subject existed, so it rides the trigger
+        # beside `token` and `project` rather than being re-derived from anything here.
+        originator=trigger.get("originator") or None,
         event_type="FAIL",
         error_message=f"{reason} ({outcome.verdict})",
     )

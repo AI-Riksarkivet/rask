@@ -519,3 +519,33 @@ def test_mover_does_not_fail_run_when_only_the_trigger_publish_fails() -> None:
     # Attempts are exactly COMPLETE then the trigger — NO FAIL event (no spurious FAIL for a done run).
     assert [e.get("eventType", "trigger") for e in dapr.attempts] == ["COMPLETE", "trigger"]
     assert not any(e.get("eventType") == "FAIL" for e in dapr.attempts)
+
+
+def test_bronze_arrival_carries_the_originator_onto_the_trigger() -> None:
+    """THE HEAD IS THE LAST PLACE THE HUMAN EXISTS.
+
+    A mover authors with a chart role literal (`data_eng`/`analyst`/`htr`/`ray`), so a failure at silver
+    or gold addressed an inbox nobody can open and the person whose ingest started the run was told
+    nothing. The verified subject cannot be re-derived down there — the HTTP request is long gone — so it
+    rides the trigger beside `token` and `project`, which is the only carrier that survives the hop.
+    """
+    dapr = _FakeDapr()
+    event = _bronze_write_cloudevent()
+    event["data"]["run"]["facets"]["lance"]["originator"] = "alice"
+
+    status = asyncio.run(handle_bronze_arrival(cast(Any, dapr), MedallionSettings(), event))
+
+    assert status == {"status": "SUCCESS"}
+    (trigger,) = dapr.calls
+    assert trigger["data"]["originator"] == "alice"
+
+
+def test_bronze_arrival_without_an_originator_is_byte_identical() -> None:
+    """Absent is every pre-existing publisher and every single-tenant estate. The trigger must be
+    unchanged, so the field can land at one producer at a time without rewriting the contract."""
+    dapr = _FakeDapr()
+
+    asyncio.run(handle_bronze_arrival(cast(Any, dapr), MedallionSettings(), _bronze_write_cloudevent()))
+
+    (trigger,) = dapr.calls
+    assert "originator" not in trigger["data"]

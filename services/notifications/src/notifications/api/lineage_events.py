@@ -90,6 +90,10 @@ class Notifiable(BaseModel):
     delivery: NotificationDelivery
     #: The verified author — v1's whole audience, and still the audience nobody has to opt into.
     author: str
+
+    #: v5 — the human this run is FOR, when the author is a service. Never replaces `author`: a reader
+    #: asking "who ran this" and one asking "whose work was this" want different answers.
+    originator: str | None = None
     #: The tenant this run belongs to, when the producer stamped one. v2's watch lookup key; `None`
     #: means the run reaches its author and no watchers, which is the safe direction.
     project: str | None = None
@@ -128,6 +132,19 @@ def author_subject(run: LineageRun) -> str | None:
     only `sub` costs nothing real and removes the ambiguity entirely.
     """
     return _facet_field(run.facets, AUTHOR_FACET, "sub")
+
+
+def originator_subject(run: LineageRun) -> str | None:
+    """The human a SERVICE-authored run is working on behalf of — `lance.originator`, or `None`.
+
+    Read from the same `lance` facet the tenant rides, and held to the SAME bar as `author.sub`: it is a
+    targeting field, so only a producer that verified the subject may stamp it. The medallion's cascade
+    head carries the sub of the principal who passed `authorize_produce`; nothing derives it from a name.
+
+    `None` for every human-authored run, which is the common case and stays byte-identical — the field
+    can be added one producer at a time without changing anyone else's audience.
+    """
+    return _facet_field(run.facets, LANCE_FACET, "originator")
 
 
 def source_run_id(run: LineageRun) -> str | None:
@@ -199,5 +216,6 @@ def notifiable(event: LineageRunEvent) -> Notifiable | None:
             occurred_at=event.event_time,
         ),
         author=author,
+        originator=originator_subject(event.run),
         outputs=frozenset(outputs),
     )

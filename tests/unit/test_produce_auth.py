@@ -59,7 +59,7 @@ def _run(
     project: str | None = None,
     caller_app_id: str | None = None,
     captured: dict[str, object] | None = None,
-) -> None:
+) -> str | None:
     if app_token is None:
         monkeypatch.delenv("APP_API_TOKEN", raising=False)
     else:
@@ -106,7 +106,9 @@ def test_service_token_allows(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_oidc_admin_allows(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert _run(monkeypatch, app_token="s3cr3t", authz="Bearer good", verifier=_Verifier(), fga_result=True) is None
+    """Allowed = returns without raising. It used to assert `is None` because the gate returned nothing;
+    the subject it now hands back is the cascade's originator, and NOT raising is still the whole claim."""
+    assert _run(monkeypatch, app_token="s3cr3t", authz="Bearer good", verifier=_Verifier(), fga_result=True) == "alice"
 
 
 def test_oidc_nonadmin_is_403(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -457,3 +459,19 @@ def test_a_SERVICE_caller_and_a_DIRECT_caller_are_both_still_allowed(monkeypatch
     """
     assert _run(monkeypatch, app_token="s3cr3t", dapr_token="s3cr3t", caller_app_id="medallion") is None
     assert _run(monkeypatch, app_token="s3cr3t", dapr_token="s3cr3t", caller_app_id=None) is None
+
+
+def test_the_human_path_returns_the_verified_subject(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The door is the LAST place the cascade's originator exists.
+
+    It returned nothing, so a bronze->silver->gold run could never name the person who started it: by
+    the time a later stage fails the request is gone and the mover authors as a chart role literal. The
+    value is a TARGETING hint only — it rides `lance.originator` into the notifications plane, which
+    re-derives every recipient's visibility at delivery — so returning it widens no authorization."""
+    assert _run(monkeypatch, app_token="secret", authz="Bearer t", verifier=_Verifier("alice")) == "alice"
+
+
+def test_the_service_path_names_no_originator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A shared service token authenticates a SERVICE, not a person. `None` rather than a placeholder:
+    an inbox addressed to a role is the defect this whole change exists to remove."""
+    assert _run(monkeypatch, app_token="secret", dapr_token="secret") is None

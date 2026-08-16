@@ -93,6 +93,26 @@ def _cascade_project(event: dict[str, Any]) -> str:
     return ""
 
 
+def _cascade_originator(event: dict[str, Any]) -> str:
+    """The HUMAN whose request produced this bronze write — the ``lance.originator`` run facet, or ``""``.
+
+    The cascade head is the last place a verified subject exists: by the time a silver or gold stage
+    fails, the HTTP request that started it is long gone and the mover authors as a role. Reading it here
+    and putting it on the trigger is what lets a failure five stages later still name the person whose
+    work it was.
+    """
+    run = event.get("run")
+    if isinstance(run, dict):
+        facets = run.get("facets")
+        if isinstance(facets, dict):
+            lance = facets.get("lance")
+            if isinstance(lance, dict):
+                originator = lance.get("originator")
+                if isinstance(originator, str) and originator.strip():
+                    return originator.strip()
+    return ""
+
+
 async def handle_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, event: Any) -> dict[str, str]:
     """Fire the cascade head when a bronze-dataset write arrives; ack-and-ignore everything else.
 
@@ -113,6 +133,9 @@ async def handle_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, e
     trigger = {"token": token, "dataset": dataset, "namespace": settings.bronze_namespace}
     if project:  # #84: PROPAGATE the tenant onto the stage trigger; omitted (byte-identical) when unset
         trigger["project"] = project
+    originator = _cascade_originator(data)
+    if originator:  # the human the whole cascade is for; omitted (byte-identical) when unset
+        trigger["originator"] = originator
     try:
         await dapr_publish.publish_event(
             dapr,

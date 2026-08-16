@@ -428,3 +428,73 @@ async def test_letting_a_blank_subject_reach_the_inbox_would_redeliver_a_permane
     result = await fan_out(_notice(), audience=["   "], visibility=OPEN, open_inbox=lambda subject: plane.open(inbox_actor_id(subject)))
 
     assert result.needs_retry, "a permanent fault, wearing a transient answer"
+
+
+# --------------------------------------------------------------------------------------------------
+# v5 — the ORIGINATOR: the human whose work a service-authored run is doing
+# --------------------------------------------------------------------------------------------------
+
+
+def _cascade_event(*, originator: str | None, author: str = "data_eng") -> dict[str, Any]:
+    """A mover's FAIL, shaped as the medallion really emits one.
+
+    `author` is a ROLE LITERAL from chart values (`data_eng`/`analyst`/`htr`/`ray`), which is the whole
+    problem: it is a truthful statement about who ran the stage and a useless inbox address. The human
+    who started the cascade rides `lance.originator`.
+    """
+    lance: dict[str, Any] = {"operation": "embed_features", "project": "acme"}
+    if originator is not None:
+        lance["originator"] = originator
+    return {
+        "eventType": "FAIL",
+        "eventTime": "2026-08-16T12:00:00+00:00",
+        "run": {"runId": "run-cascade-1", "facets": {"author": {"name": author, "sub": author}, "lance": lance}},
+        "outputs": [{"namespace": "silver", "name": "acme-silver$features"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_failed_cascade_reaches_the_human_who_started_it() -> None:
+    """THE DEFECT. A mover authors with a chart role literal, so a failed bronze->silver->gold run
+    addressed an inbox actor named `data_eng` — nobody. The person whose ingest caused the run was
+    told nothing, and only an explicit project watcher heard anything at all.
+
+    The originator is carried, not substituted: `author` still says the mover ran it, because
+    overwriting attribution to fix targeting would trade one wrong answer for another."""
+    notice = notifiable(LineageRunEvent.model_validate(_cascade_event(originator="alice")))
+    assert notice is not None
+    assert notice.author == "data_eng", "attribution is unchanged — the mover really did run the stage"
+    assert notice.originator == "alice"
+    assert await audience_for(notice) == ("data_eng", "alice")
+
+
+@pytest.mark.asyncio
+async def test_an_originator_is_told_for_that_reason_and_not_as_the_author() -> None:
+    """The reason is stored, never inferred, because a delivery re-check keys on it: "you ran this" and
+    "this ran on your behalf" are different claims, and a row that could not tell them apart could not
+    be re-checked against the right rule later."""
+    plane = _Plane()
+    notice = notifiable(LineageRunEvent.model_validate(_cascade_event(originator="alice")))
+    assert notice is not None
+    await fan_out(notice, audience=await audience_for(notice), visibility=OPEN, open_inbox=plane.open)
+    assert plane.boxes["alice"][0]["reason"] == "originator"
+    assert plane.boxes["data_eng"][0]["reason"] == "author"
+
+
+@pytest.mark.asyncio
+async def test_no_originator_is_the_previous_behaviour_exactly() -> None:
+    """Absent is the common case — every human-authored run — and must stay byte-identical, so the
+    field can be added to one producer at a time without changing anyone else's audience."""
+    notice = notifiable(LineageRunEvent.model_validate(_cascade_event(originator=None)))
+    assert notice is not None
+    assert notice.originator is None
+    assert await audience_for(notice) == ("data_eng",)
+
+
+@pytest.mark.asyncio
+async def test_an_originator_who_is_also_the_author_is_told_once() -> None:
+    """Same dedupe rule the watcher lane already has: the audience is ordered and deduped, so a human
+    who triggered a run that names them as author too gets one row, not two."""
+    notice = notifiable(LineageRunEvent.model_validate(_cascade_event(originator="alice", author="alice")))
+    assert notice is not None
+    assert await audience_for(notice) == ("alice",)

@@ -173,6 +173,7 @@ def build_run_event(
     column_map: list[tuple[str, str, str]] | None = None,
     token: str | None = None,
     project: str | None = None,
+    originator: str | None = None,
     event_type: str = "COMPLETE",
     error_message: str | None = None,
     event_time: str | None = None,
@@ -221,6 +222,11 @@ def build_run_event(
         lance_fields["token"] = token
     if project:
         lance_fields["project"] = project
+    # The HUMAN this run is running for, when `author` is a service. A mover authors with a chart role
+    # literal, which is true and unaddressable; the notifications plane reads this to reach the person
+    # whose cascade it is. Carried, never substituted for `author` — see `NotificationReason.ORIGINATOR`.
+    if originator:
+        lance_fields["originator"] = originator
     if synthetic:
         # Machine-readable, so a consumer filters provenance-only runs DELIBERATELY rather than by
         # inferring it from a missing version facet (which is also what a merely old event looks like).

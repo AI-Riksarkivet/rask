@@ -85,6 +85,11 @@ async def audience_for(notice: Notifiable, *, watchers: WatcherLookup | None = N
     resolver which absorbs its own faults.
     """
     audience = [notice.author]
+    # The human a service-authored run is FOR. Needs no opt-in for the same reason the author needs
+    # none — it is your work — and it is deduped by the same rule, so a run whose author and originator
+    # are the same person yields one row.
+    if notice.originator and notice.originator not in audience:
+        audience.append(notice.originator)
     if watchers is not None and notice.project:
         for subject in await watchers(notice.project):
             if subject not in audience:
@@ -114,7 +119,12 @@ async def fan_out(
     # only one of those could not be re-checked against the right rule later (the `NotificationReason`
     # docstring's own argument). Everything else in the delivery is identical, so this is one field.
     def payload_for(subject: str) -> dict[str, object]:
-        reason = NotificationReason.AUTHOR if subject == notice.author else NotificationReason.WATCH
+        if subject == notice.author:
+            reason = NotificationReason.AUTHOR
+        elif subject == notice.originator:
+            reason = NotificationReason.ORIGINATOR
+        else:
+            reason = NotificationReason.WATCH
         return notice.delivery.model_copy(update={"reason": reason}).model_dump(mode="json")
 
     with _tracer.start_as_current_span("inbox.fanout") as span:

@@ -490,6 +490,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             assertions=[a.model_dump(exclude_none=True) for a in assertions] or None,
             token=token,
             project=project or None,
+            originator=trigger.originator or None,
             # #88 step 6: the run's model identity + build sha, parsed from the ALTO by the HTR
             # lane; empty/None for every other lane, which renders NO facet (byte-parity holds).
             models=(result.models if result else None) or None,
@@ -541,6 +542,8 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             }
             if project:  # #84: PROPAGATE the tenant down the cascade; omitted (byte-identical) when unset
                 next_trigger["project"] = project
+            if trigger.originator:  # the human the cascade is for, carried the whole way down
+                next_trigger["originator"] = trigger.originator
             await dapr_publish.publish_event(
                 dapr,
                 timeout_seconds=settings.publish_timeout_seconds,
@@ -567,6 +570,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                 output_name=to_dataset,
                 token=token,
                 project=project or None,
+                originator=trigger.originator or None,
                 event_type="FAIL",
                 error_message=str(exc),
             )
@@ -601,6 +605,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                 output_name=to_dataset,
                 token=token,
                 project=project or None,
+                originator=trigger.originator or None,
                 event_type="FAIL",
                 error_message=str(exc),
             )
@@ -639,6 +644,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                     output_name=to_dataset,
                     token=token,
                     project=project or None,
+                    originator=trigger.originator or None,
                     event_type="FAIL",
                     error_message=str(exc),
                 )
@@ -686,6 +692,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                 output_name=to_dataset,
                 token=f"{token}:quality-hold",
                 project=project or None,
+                originator=trigger.originator or None,
                 event_type="FAIL",
                 error_message=f"quality gate HELD the promotion into {settings.to_dataset} — downstream was not triggered",
             )

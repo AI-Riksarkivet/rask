@@ -57,6 +57,12 @@ class NotificationReason(StrEnum):
     #: v3 — this subject was NAMED by a governance act (`extra.subject`).
     GRANT_ADDED = "grant_added"
     GRANT_REVOKED = "grant_revoked"
+    #: v5 — the human whose work a SERVICE-authored run is doing. The medallion's movers author with a
+    #: chart role literal (`data_eng`/`analyst`/`htr`/`ray`), which is a truthful statement about who ran
+    #: the stage and a useless inbox address — so a failed cascade reached nobody. Distinct from AUTHOR
+    #: rather than a substitution: the mover really did run it, and overwriting attribution to fix
+    #: targeting would trade one wrong answer for another.
+    ORIGINATOR = "originator"
     #: v4 — annotation work. Same targeting rule as the grant pair (the event NAMES its subject), one
     #: rung down: the audience is the ASSIGNEE, never the manager whose click produced the event.
     TASK_ASSIGNED = "task_assigned"

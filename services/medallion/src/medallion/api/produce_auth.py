@@ -65,8 +65,15 @@ async def authorize_produce(
     # The INVOKING Dapr app-id — what separates "a service called me" from "the public front door
     # called me for a stranger". See `service_kit.governed.dapr_auth.is_public_caller`.
     dapr_caller_app_id: Annotated[str | None, Header()] = None,
-) -> None:
+) -> str | None:
     """Allow EITHER the Dapr app-api-token (service) OR a signed-in project admin (OIDC + can_administer).
+
+    RETURNS the verified subject on the human path, or ``None`` when the caller is a service (or dev-open).
+    It used to return nothing, which is why a cascade this person started could never name them: this door
+    is the LAST place their identity exists — by the time a silver or gold stage fails, the request is
+    gone and the mover authors as a role. The value is only ever a TARGETING hint (it rides
+    ``lance.originator`` into the notifications plane, which re-derives visibility per recipient at
+    delivery); it authorizes nothing, and every authorization decision above is unchanged.
 
     ``project`` (#84) moves the admin gate onto the REQUESTED project — the caller must administer the
     project it produces into, not the fixed configured one; absent → ``produce_admin_project`` exactly as
@@ -74,9 +81,10 @@ async def authorize_produce(
     a tenant, so it may only produce into the configured project — a different requested project is
     refused (403); crossing tenants takes a user bearer, which gets the per-project FGA check."""
     expected = os.environ.get("APP_API_TOKEN")
-    # Dev: no service token configured → open, exactly as require_dapr_token was a no-op.
+    # Dev: no service token configured → open, exactly as require_dapr_token was a no-op. No verified
+    # subject exists on this path, so there is no originator to carry — `None`, never a guess.
     if not expected:
-        return
+        return None
     obj = f"project:{project or settings.produce_admin_project}"
     # Service-to-service path: a matching Dapr app-api-token. The shared token carries NO tenant
     # identity, so it must never be trusted for an arbitrary requested project — that would let any
@@ -100,7 +108,7 @@ async def authorize_produce(
             audit("produce_service_token", DENY, subject=f"service:{dapr_caller_app_id or 'direct'}", resource=obj, reason="cross_project")
             raise PermissionDeniedError("the service token cannot produce into another project; use a project-admin bearer")
         audit("produce_service_token", ALLOW, subject=f"service:{dapr_caller_app_id or 'direct'}", resource=obj)
-        return
+        return None
     # Human path: a signed-in project admin. Only when OIDC is configured + a verifier is wired.
     verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
     if settings.oidc_enabled and verifier is None and authorization:
@@ -119,7 +127,7 @@ async def authorize_produce(
         if fga_client is None:  # OIDC on but FGA unwired → fail closed, never an unauthorized trigger
             raise ServiceUnavailableError("authorization service is not available")
         await _require_admin(fga_client, user=token.sub, obj=obj)
-        return
+        return token.sub
     raise PermissionDeniedError("invalid or missing produce credential")
 
 
