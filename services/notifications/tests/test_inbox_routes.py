@@ -287,3 +287,47 @@ def test_every_inbox_route_refuses_when_the_actor_plane_is_unregistered(client: 
     assert client.get("/notifications/inbox/unread").status_code == 503
     assert client.post("/notifications/inbox/seen", json={"notification_ids": []}).status_code == 503
     assert client.post("/notifications/inbox/dismiss", json={"notification_id": "run-001@FAIL"}).status_code == 503
+
+
+def test_a_control_row_survives_the_render_filter_that_hides_lineage_rows(
+    client: TestClient,
+    inbox: _Inbox,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE UNCLEARABLE BADGE, and the two gates that disagreed to produce it.
+
+    The control lane delivers WITHOUT a visibility check on purpose — being NAMED is the targeting,
+    and after a `grant_revoked` the subject can no longer see the object at all, so a check would drop
+    the one event they most need. Then `get_inbox` re-imposed exactly that check at RENDER, over every
+    row alike. The result, measured live: a subject with two `task_assigned` rows naming
+    `annotation_task:…` objects they hold no grant on saw `unread: 16` beside 14 rows, with the two
+    rows in NEITHER page — a badge that cannot be cleared by reading, because what it counts is never
+    shown.
+
+    Exempting them discloses nothing further. A rendered row carries `object_id` and no other fact
+    about the object (`source_run_id`/`event_seq` are `None` for a control event), and that id is the
+    one the subject was already NAMED against — verbatim the argument `control_events` already makes
+    for skipping the check at delivery. The lineage rows keep the filter, which is what the sibling
+    test above pins: those name a governed DATASET, and a revoked grant must still hide them.
+    """
+    from notifications.api import visibility as visibility_module
+
+    async def _nothing(client_: object, *, user: str, relation: str, objects: list[str], **_: Any) -> dict[str, bool]:
+        return dict.fromkeys(objects, False)
+
+    monkeypatch.setattr(visibility_module.fga, "batch_check", _nothing)
+    client.app.state.fga = object()
+    client.app.state.notifications_settings = get_notifications_settings().model_copy(update={"fga_enabled": True})
+    control = InboxPointer(
+        notification_id="evt-9@TASK_ASSIGNED",
+        reason=NotificationReason.TASK_ASSIGNED,
+        object_id="annotation_task:t-9",
+        occurred_at=NOW,
+    )
+    inbox.rows = [_pointer(1), control]
+
+    body = client.get("/notifications/inbox").json()
+
+    ids = [row["notification_id"] for row in body["notifications"]]
+    assert ids == ["evt-9@TASK_ASSIGNED"], "the control row must survive; the lineage row must not"
+    assert body["unread"] == 2, "the badge still counts the whole inbox — it is not derived from the page"

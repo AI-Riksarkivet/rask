@@ -20,15 +20,16 @@ longer see. So the page is filtered through `can_get_metadata` on the way out �
 lineage read path enforces, asked once per page rather than once per row.
 """
 
-from typing import Annotated
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Query
 
+from notifications.api.control_events import NAMED_ACTIONS
 from notifications.api.cursor import decode_cursor, encode_cursor
 from notifications.api.schemas import DismissResult, InboxFeed, InboxRow, MarkResult, UnreadBadge
 from notifications.api.security import CurrentSubject, VisibilityDep
 from notifications.dependencies import ActorPlaneDep, NotificationsSettingsDep
-from notifications.models import INBOX_PAGE_LIMIT_MAX, InboxDismiss, InboxFilter, InboxMark, InboxPage, InboxQuery
+from notifications.models import INBOX_PAGE_LIMIT_MAX, InboxDismiss, InboxFilter, InboxMark, InboxPage, InboxQuery, NotificationReason
 from notifications.proxies import inbox_for
 
 
@@ -38,6 +39,11 @@ router = APIRouter(prefix="/notifications", tags=["inbox"])
 _STATE_HELP = "`unread` is what the badge counts; `all` is what the panel shows. Neither includes dismissed rows."
 _LIMIT_HELP = "Rows per page; the service's configured default when omitted."
 _CURSOR_HELP = "An opaque cursor from a previous page's `next_cursor`. Hand it back; do not construct one."
+
+
+#: The reasons whose DELIVERY skipped the visibility check, and which therefore skip it at render too.
+#: Derived from the lane's own action set so adding a named action cannot leave the two disagreeing.
+_CONTROL_REASONS: Final[frozenset[NotificationReason]] = frozenset(NotificationReason(action) for action in NAMED_ACTIONS)
 
 
 @router.get("/inbox")
@@ -70,7 +76,24 @@ async def get_inbox(
         after=decode_cursor(cursor) if cursor else None,
     )
     page = InboxPage.model_validate(await inbox_for(subject).page(query.model_dump(mode="json")))
-    allowed = await visibility.visible(subject, {pointer.object_id for pointer in page.pointers})
+    # THE RENDER GATE APPLIES TO THE LINEAGE LANE ONLY, and the exemption is the control lane's own
+    # argument applied one step later. That lane delivers WITHOUT a visibility check on purpose —
+    # being NAMED is the targeting, and after a `grant_revoked` the subject cannot see the object at
+    # all, so a check would drop the one event they most need. Re-imposing it here re-created exactly
+    # what delivery had refused: measured live, two `task_assigned` rows naming `annotation_task:…`
+    # objects the subject held no grant on gave `unread: 16` beside 14 rows, the two in NEITHER page —
+    # a badge that cannot be cleared by reading, because what it counts is never shown.
+    #
+    # It discloses nothing further. `InboxRow` carries `object_id` and no other fact about the object
+    # (`source_run_id`/`event_seq` are None for a control event), and that id is the one the subject
+    # was already named against — verbatim `control_events`' reasoning for skipping the check.
+    #
+    # DERIVED from `NAMED_ACTIONS` rather than restated, so the two cannot drift: a new named action
+    # is exempt here the moment it becomes deliverable there, which is the same edit.
+    governed = {pointer.object_id for pointer in page.pointers if pointer.reason not in _CONTROL_REASONS}
+    allowed = await visibility.visible(subject, governed) | {
+        pointer.object_id for pointer in page.pointers if pointer.reason in _CONTROL_REASONS
+    }
     return InboxFeed(
         # Projected onto the WIRE row, which drops the delivery ledger: what a reader may see is a
         # declared field list, never whatever the storage record happens to carry today.
