@@ -528,9 +528,15 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	  echo ">> HF_TOKEN from $${HF_HOME:-$$HOME/.cache/huggingface}/token (hf auth login)"; \
 	fi; \
 	if [ -z "$$HF_TOKEN" ]; then echo "WARN: no HF token (env, .env, or 'hf auth login') — htrflow Serve will 401 on the gated TrOCR model"; fi; \
+	IMGARGS="--set image.localImages=true"; \
+	LIVE=$$(mktemp); \
+	if $(HELM) get values rask >"$$LIVE" 2>/dev/null && grep -q 'repository:' "$$LIVE"; then \
+	  IMGARGS="-f $$LIVE"; \
+	  echo ">> reusing the LIVE release's image settings ($$(grep -c . "$$LIVE") values) — not imposing localImages"; \
+	fi; \
 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m \
 	  --take-ownership \
-	  --set image.localImages=true \
+	  $$IMGARGS \
 	  -f chart/values-local.yaml \
 	  --set explorer.enabled=$(EXPLORER) \
 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) \

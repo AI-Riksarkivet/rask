@@ -2594,3 +2594,33 @@ def test_stage_run_does_not_RESUBMIT_after_continue_as_new() -> None:
     assert "polls_done" in fields, "StageJobSpec cannot carry the poll count across a turn — the ceiling would never be reached"
     assert fields["submission_id"].default is None, "submission_id must default to None so the FIRST turn submits"
     assert fields["polls_done"].default == 0, "polls_done must default to 0"
+
+
+def test_k3s_up_does_not_REWRITE_the_image_mode_of_a_live_release() -> None:
+    """`make k3s-up` hardcoded an image mode that contradicts the estate it deploys to.
+
+    It passed `--set image.localImages=true`, which renders every image as a BARE `<name>:<tag>` the
+    kubelet must already hold. The live release runs `localImages: false` with
+    `repository: localhost:5000` — the dev registry — so running the documented deploy command would
+    have rewritten the whole fleet to names that resolve to Docker Hub and ImagePullBackOff.
+
+    That is the #135 failure exactly, and the chart's own guard says so: "A bare name resolves to
+    Docker Hub and will ImagePullBackOff." It has been measured twice, once costing 22
+    `kubectl set image` calls to recover.
+
+    The fix is not to flip the flag — a side-loaded estate genuinely wants `localImages=true`. It is
+    to stop ASSUMING: capture what the release already uses and hand it back to helm, so an existing
+    estate keeps its own answer and a fresh one still gets the side-load default.
+    """
+    recipe = MAKEFILE.read_text(encoding="utf-8")
+    start = recipe.index("k3s-up:")
+    body = recipe[start : recipe.index("\nseed-corpus:", start)]
+
+    assert "get values" in body, (
+        "make k3s-up does not read the live release's values before upgrading. Without that it imposes "
+        "an image mode on an estate that may already use a different one — the #135 fleet-wide "
+        "ImagePullBackOff. See this test's docstring."
+    )
+    assert "--set image.localImages=true \\\n" not in body, (
+        "make k3s-up still hardcodes image.localImages=true. That must be a FALLBACK for a release that does not exist yet, never an override of one that does."
+    )
