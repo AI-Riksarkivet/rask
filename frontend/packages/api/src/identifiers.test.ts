@@ -10,15 +10,26 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { DELIMITER, leafSegment, namespacePrefix, parentNamespace } from './identifiers';
+import {
+	DELIMITER,
+	leafSegment,
+	namespacePrefix,
+	parentNamespace,
+	parentNamespaceOrNull,
+} from './identifiers';
 
 describe('parentNamespace', () => {
 	it('takes every segment but the last, matching the backend', () => {
 		expect(parentNamespace('bronze$pages')).toBe('bronze');
 	});
 
-	it('treats a bare name as its own root — the registry rule', () => {
+	it('treats a bare name as its own root — the REGISTRY rule, which the backend does NOT share', () => {
+		// Deliberate divergence, stated rather than blessed in silence. The registry views group a
+		// root-level table under its own name so it still gets a row; `parent_namespace_id` returns
+		// None for the same input ("no parent namespace to inherit from", fga.py:188-190). Harmless as
+		// a grouping key, wrong as an object id — which is what `parentNamespaceOrNull` is for.
 		expect(parentNamespace('pages')).toBe('pages');
+		expect(parentNamespaceOrNull('pages')).toBeNull();
 	});
 
 	it('keeps the WHOLE nested namespace, not just its first segment', () => {
@@ -61,5 +72,25 @@ describe('DELIMITER', () => {
 		// configurable, this constant is the thing that must change with it — and this line is where
 		// they will be told so.
 		expect(DELIMITER).toBe('$');
+	});
+});
+
+describe('parentNamespaceOrNull', () => {
+	it('matches the backend exactly: a parent when there is one, null when there is not', () => {
+		// This is the variant whose output becomes an FGA object id, so it has to agree with
+		// `parent_namespace_id` rather than with the registry's display grouping.
+		expect(parentNamespaceOrNull('acme$bronze$pages')).toBe('acme$bronze');
+		expect(parentNamespaceOrNull('bronze$pages')).toBe('bronze');
+		expect(parentNamespaceOrNull('pages')).toBeNull();
+	});
+
+	it('is what keeps a root-level table from inventing a namespace object', () => {
+		// The concrete regression it guards: the access explorer offered `namespace:<name>` for every
+		// registry entry. For a root-level table that names an object the backend says cannot exist —
+		// the same class as the first-delimiter bug, one rung down.
+		const registry = ['acme$bronze$pages', 'db1$t', 'rootlevel'];
+		const offered = registry.map(parentNamespaceOrNull).filter((n) => n !== null);
+		expect(offered).toEqual(['acme$bronze', 'db1']);
+		expect(offered).not.toContain('rootlevel');
 	});
 });

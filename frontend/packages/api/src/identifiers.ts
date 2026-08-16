@@ -26,6 +26,22 @@
 export const DELIMITER = '$';
 
 /**
+ * OUT OF CONTRACT: the ROOT namespace.
+ *
+ * The catalog represents the root namespace as the bare delimiter — `parse_identifier` maps "empty or
+ * delimiter-only" to the root `[]` (`catalog/core/identifiers.py:59-62`). None of the helpers below
+ * model that: `parentNamespace('$')` is `''`, `leafSegment('$')` is `''`.
+ *
+ * That is a deliberate boundary, not an oversight. Every caller here derives an id from a TABLE or a
+ * NAMESPACE the catalog already named, and the root is neither — no table is registered at the root,
+ * and no UI offers it as an object. Feeding `'$'` to these functions means the caller has a root
+ * identifier in hand and should be branching on it before it gets here.
+ *
+ * Said out loud because this module's whole claim is to be the one place the estate agrees on the
+ * grammar, and a silent omission in that claim is how the next caller gets it wrong.
+ */
+
+/**
  * The namespace containing a table: EVERY segment but the last. A bare name is its own root.
  *
  * `lastIndexOf`, and the difference from `indexOf` is a correctness bug rather than a nicety. The
@@ -41,6 +57,26 @@ export const DELIMITER = '$';
  */
 export function parentNamespace(id: string): string {
 	return id.includes(DELIMITER) ? id.slice(0, id.lastIndexOf(DELIMITER)) : id;
+}
+
+/**
+ * The parent namespace, or `null` when the id has none — the backend's rule EXACTLY.
+ *
+ * `parentNamespace` above returns the id itself for a bare name, which is what the registry views
+ * want (they group a root-level table under its own name so it still gets a row). The backend does
+ * NOT agree: `parent_namespace_id` returns `None` for a single-segment id — "no parent namespace to
+ * inherit from" (`fga.py:188-190`).
+ *
+ * That divergence is harmless while the answer is only a grouping key, and WRONG the moment it
+ * becomes an object id: `namespace:pages` for a root-level table `pages` names an object the
+ * backend's own rule says cannot exist, which is the same defect class as the first-delimiter bug —
+ * offering a check against something the table does not belong to.
+ *
+ * So: use THIS one anywhere the result is handed to authorization, and `parentNamespace` only for
+ * display grouping. Both exist on purpose; picking by accident is what this comment is here to stop.
+ */
+export function parentNamespaceOrNull(id: string): string | null {
+	return id.includes(DELIMITER) ? id.slice(0, id.lastIndexOf(DELIMITER)) : null;
 }
 
 /**

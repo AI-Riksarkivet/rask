@@ -25,7 +25,7 @@ export type StageInfo = {
  */
 import { leafSegment, parentNamespace } from '@rask/api/identifiers';
 
-export { DELIMITER, parentNamespace as namespaceOfTable } from '@rask/api/identifiers';
+export { parentNamespace as namespaceOfTable } from '@rask/api/identifiers';
 
 const STAGE_RE = /^(?:([a-z0-9][a-z0-9_-]*?)-)?(raw|bronze|silver|gold)(-media)?$/;
 

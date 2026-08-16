@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import AccessGraphNode, { type AccessNodeType } from './AccessGraphNode.svelte';
-	import { parentNamespace } from '@rask/api/identifiers';
+	import { parentNamespaceOrNull } from '@rask/api/identifiers';
 	import type { NodeTypes } from '@xyflow/svelte';
 
 	// svelte-flow rule: register node components ONCE at module scope, never inline.
@@ -264,12 +264,17 @@
 
 	const objectOptions = $derived([
 		...registry.map((t) => `table:${t}`),
-		// `parentNamespace`, NOT a split on the first delimiter, which is what this line did. These become
+		// `parentNamespaceOrNull`, NOT a split on the first delimiter, which is what this line did. These become
 		// FGA object ids the user then runs a check against, so for a nested table `acme$bronze$pages` the
 		// old form offered `namespace:acme` — a different object from the real parent `acme$bronze`, and
 		// possibly one that does not exist — while never offering the parent at all. In the one view whose
 		// job is answering "who can do what on THIS object", that is the wrong object.
-		...[...new Set(registry.map(parentNamespace))].map((ns) => `namespace:${ns}`),
+		// The OrNull variant for the same reason one rung down: a ROOT-level table has no parent
+		// namespace at all (`parent_namespace_id` returns None), so offering `namespace:<its own name>`
+		// would invent a second non-existent object right where the first one was removed.
+		...[...new Set(registry.map(parentNamespaceOrNull).filter((ns) => ns !== null))].map(
+			(ns) => `namespace:${ns}`,
+		),
 	]);
 
 	/**
