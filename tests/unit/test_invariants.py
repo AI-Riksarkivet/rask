@@ -2886,3 +2886,36 @@ def test_every_perses_dashboard_is_declared_ONCE_and_is_valid_json() -> None:
             json.loads(document)
         except json.JSONDecodeError as exc:  # noqa: PERF203 — one message per offender is the point
             pytest.fail(f"{name} is not valid JSON, so Perses will skip it at provisioning time: {exc}")
+
+
+def test_every_maintenance_ALERT_names_a_metric_the_service_actually_EMITS() -> None:
+    """AN ALERT ON A SERIES NOBODY WRITES IS INDISTINGUISHABLE FROM AN ESTATE THAT IS HEALTHY.
+
+    vmalert evaluates these against GreptimeDB. A rule whose PromQL names a metric no instrument
+    creates never fires — and never fires is exactly what a working alert looks like, so the mistake is
+    self-concealing and survives review.
+
+    The maintenance group exists because the reverse hole was live until 2026-08-16: seven instruments
+    counted what the sweep ACHIEVED and none counted a failure, so a dataset failing every tick was
+    invisible to anything that could page. Adding the counter without an alert would have closed
+    nothing; adding an alert on a mistyped series would look identical to success.
+
+    Checks the alert's metric names against the OTel instrument names, applying the OTLP->Prometheus
+    convention the other direction: dots become underscores and a counter gains `_total`.
+    """
+    rules = yaml.safe_load((REPO / "chart/alerting/rules.yml").read_text())
+    group = next((g for g in rules["groups"] if g["name"] == "lance-maintenance"), None)
+    assert group is not None, "no lance-maintenance alert group — the sweep's failures can never page"
+
+    source = (REPO / "services/maintenance/src/maintenance/core/metrics.py").read_text()
+    # `create_counter("compaction.datasets.failed", ...)` -> compaction_datasets_failed_total
+    emitted = {f"{name.replace('.', '_')}_total" for name in re.findall(r'create_counter\(\s*"([^"]+)"', source)}
+    assert emitted, "parsed no instruments out of metrics.py — the check would pass vacuously"
+
+    referenced = set()
+    for rule in group["rules"]:
+        referenced |= set(re.findall(r"\b(compaction_[a-z_]+_total|maintenance_[a-z_]+_total)\b", rule["expr"]))
+    assert referenced, "the maintenance alert rules reference no maintenance metric at all"
+
+    phantom = sorted(referenced - emitted)
+    assert phantom == [], f"these alerts query series no instrument emits, so they can never fire: {phantom}"

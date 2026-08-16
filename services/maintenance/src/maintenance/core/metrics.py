@@ -39,6 +39,23 @@ _refused = _meter.create_counter(
 )
 
 
+#: THE FAILURE SERIES, and its absence was the gap. Seven instruments here counted what the sweep
+#: ACHIEVED and not one counted what it could not do, so a dataset failing every tick forever was
+#: indistinguishable from a healthy estate on every surface that can raise an alarm. The error reached
+#: OTel as a span status and one aggregate `maintenance_sweep` log line — and vmalert evaluates PromQL,
+#: so neither can ever page. A real sweep on 2026-08-16 failed on 11 datasets and nothing anywhere said so.
+#:
+#: `error_type` is the STABLE class name (the same value the span carries), never the message: messages
+#: carry URIs and object ids, which would make the series cardinality unbounded. The dataset itself is
+#: deliberately NOT a label for the same reason — "which dataset" is a trace/log question, "is anything
+#: failing, and is it getting worse" is the metric question, and only the second one can page.
+_failed = _meter.create_counter(
+    "compaction.datasets.failed",
+    unit="{dataset}",
+    description="Datasets the maintenance pass could not complete, by stable error class. A refusal is NOT a failure — see compaction.datasets.refused.",
+)
+
+
 #: F6(d) — datasets left alone because they are IN THE TRASH: dropped with a grace window, recoverable,
 #: and therefore frozen. Its own series rather than a fold into `_refused` because the two answer
 #: different questions: refused is "this dataset's LAYOUT defeats us", this is "this dataset's
@@ -146,3 +163,19 @@ def record_refused(datasets: int) -> None:
     silently starts refusing the whole estate must be visible from the FIRST tick after the upgrade
     that caused it, not from whenever someone reads a cron response body."""
     _refused.add(datasets)
+
+
+def record_failed(errors_by_type: dict[str, int]) -> None:
+    """Record this tick's per-dataset FAILURES, keyed by stable error class.
+
+    Emits one point per class rather than a total so "eleven datasets failed" and "one dataset failed
+    eleven ways" are distinguishable, and so a NEW class appearing is visible as a new series rather
+    than as a bump in an existing one.
+
+    Always emits — including zero-valued classes it has seen before is not possible here (the caller
+    only knows this tick's classes), which is exactly why the alert rule keys on `increase()` over a
+    window rather than on the instantaneous value: a series that stops being written must read as
+    "stopped failing", and only a windowed function gives that.
+    """
+    for error_type, count in errors_by_type.items():
+        _failed.add(count, {"error.type": error_type})

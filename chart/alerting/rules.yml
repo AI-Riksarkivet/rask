@@ -183,6 +183,59 @@ groups:
             it should see. A reconciler that is admitted but ungranted runs perfectly and reconciles zero.
             Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
 
+  # T5 — the maintenance sweep's FAILURE surface. Until 2026-08-16 this service had seven metric
+  # instruments and not one counted a failure, so a dataset failing on every tick forever was
+  # indistinguishable from a healthy estate on every surface that can raise an alarm: the error reached
+  # OTel as a span status and one aggregate `maintenance_sweep` log line, and vmalert evaluates PromQL,
+  # so neither could ever page. A real sweep failed on 11 datasets that day and nothing said so.
+  - name: lance-maintenance
+    rules:
+      - alert: MaintenanceDatasetsFailing
+        expr: sum(increase(compaction_datasets_failed_total[30m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "Table maintenance is failing on one or more datasets"
+          description: >-
+            The sweep could not complete one or more datasets. Sustained failure means those datasets
+            accumulate fragments and superseded versions indefinitely while every tick still reports a
+            successful run. Break down by error.type; the per-dataset URI is on the trace span and in
+            the maintenance_sweep log line, deliberately not on the metric (unbounded cardinality).
+
+      # The sweep is the only thing that reclaims storage. It stopping is silent by construction: no
+      # error is raised, the cron simply never fires or the pass dies before completing.
+      - alert: MaintenanceSweepNotCompleting
+        expr: sum(increase(compaction_runs_total[30m])) == 0
+        for: 30m
+        labels:
+          severity: critical
+          service: maintenance
+        annotations:
+          summary: "No table-maintenance sweep has COMPLETED in 30 minutes"
+          description: >-
+            At a 120s cadence roughly fifteen passes should have completed. Either the Dapr cron binding
+            is not delivering or every pass is dying mid-flight — compare with
+            compaction_runs_started_total, whose excess over compaction_runs_total is the lost-pass count.
+
+      # `SUPPORTED` is a whitelist, so a pylance upgrade that introduces a legitimate new manifest flag
+      # makes the sweep refuse datasets it used to maintain — and refusals are NOT errors, so nothing
+      # else in this file would fire. Measured 2026-08-16: 17 refused datasets were exactly the ones
+      # that needed compaction, and the estate looked healthy throughout.
+      - alert: MaintenanceRefusalsRising
+        expr: sum(increase(compaction_datasets_refused_total[1h])) > sum(increase(compaction_datasets_swept_total[1h])) / 2
+        for: 1h
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "More than half of swept datasets are being REFUSED"
+          description: >-
+            The supported-manifest-flag whitelist is rejecting most of the estate, so maintenance is
+            running without maintaining. Usually a pylance upgrade introducing a flag the guard does not
+            know. Check the refusal reasons in the maintenance_sweep log line.
+
   - name: dapr-control-plane
     rules:
       # THE REMINDER FAILURE DOMAIN, which nothing watched.

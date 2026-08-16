@@ -24,6 +24,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
 from maintenance.core.metrics import (
     record_dataset_swept,
+    record_failed,
     record_reclaimed,
     record_refused,
     record_run,
@@ -363,6 +364,16 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     # weight of any counter in this service: `SUPPORTED` is a whitelist, so a rising refusal count
     # after a pylance upgrade is the ONLY signal that maintenance quietly stopped covering the estate.
     record_refused(sum(1 for r in results if r.refused))
+    # The FAILURE series (T5). Everything above counts what the pass achieved; without this a dataset
+    # failing on every tick forever was indistinguishable from a healthy estate on every surface that
+    # can raise an alarm — the error reached OTel as a span status and one aggregate log line, and
+    # vmalert evaluates PromQL, so neither can page. Keyed by the STABLE error class, never the
+    # message, which carries URIs and would make the series unbounded.
+    failures: dict[str, int] = {}
+    for result in results:
+        if result.error is not None:
+            failures[result.error_type or "Unknown"] = failures.get(result.error_type or "Unknown", 0) + 1
+    record_failed(failures)
     return results
 
 
