@@ -274,9 +274,23 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   halves of the declared-id chain are live (producer stamps `lineage.dataset_id`, sweep prefers it),
   and the read half is witnessed in AGE for `silver$emitproof` — but no medallion tier has yet been
   observed emitting, because every sweep since has measured `fragments_removed: 0, versions_removed:
-  0`. That is the gate behaving correctly, not a defect; there is also no product door to set a
-  per-dataset retention policy on a medallion-nested dataset (the policy doors are keyed by catalog
-  table id, and a project record would match the whole bucket), so the emit cannot be forced narrowly.
+  0`. That is the gate behaving correctly, not a defect. Nor can the emit be forced, and the reason is
+  worth more than the verification was: **the medallion tiers are DATA WITHOUT GOVERNANCE.** A policy
+  door does reach them — `set_namespace_policy` builds its path from `settings.root` and
+  `resolve_policy` matches a namespace record by directory prefix (`rel.startswith(path + "/")`), so a
+  record on `medallion` governs `medallion/bronze`; and `retain_versions` alone sets
+  `effective_older_than = None`, which is keep-last-N with no age bound and would sidestep the 7-day
+  `MAINTENANCE_OLDER_THAN_DAYS` wall entirely. What blocks it is AUTHORIZATION, measured live
+  2026-08-16 with a real dex bearer: `POST /v1/namespace/medallion/policy/set` → 403 *"can_delete
+  required on namespace:medallion"*, and `POST /v1/table/bronze$events/policy/set` → 403 *"can_drop
+  required on table:bronze$events"*. Both 403 rather than 404 because the gate runs before existence
+  resolution — and neither object exists: `medallion` is not a catalog namespace (it is absent even
+  from the reconciler's `unbound_namespaces`, which lists `bronze`, `transcripts_v2` and the three
+  `acme-*`), and `bronze$events` is not a registered table. With no namespace record, no table record
+  and no parent tuple, NO principal can hold `can_delete`/`can_drop` there, so no policy, protection or
+  grant can ever be applied to the datasets the cascade writes. Making one possible means creating
+  governance records for live data — the same "bind a legacy namespace" decision `unbound_namespaces`
+  needs — which is a governance change, not a verification step.
 - **Five things live in a Lance dataset that a manifest scan does not reach.** Branches (`tree/`),
   multi-base files (`base_paths`), MemWAL shards (`_mem_wal/` — WAL + SSTable datasets, and the spec
   warns that GC'ing WAL files WEAKENS writer fencing, since fencing detects a stalled writer by a

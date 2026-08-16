@@ -31,15 +31,29 @@ does, and in a fresh estate none can:
   fragments never accumulate toward `BRONZE_TARGET_ROWS` (512).
 - **Version cleanup cannot fire for a week.** `MAINTENANCE_OLDER_THAN_DAYS` defaults to 7 and is
   `ge=1`, so a version written today is not reclaimable today, and 0 is not expressible.
-- **The emit cannot be forced narrowly.** The policy doors (`POST /v1/{table,namespace}/{id}/policy/set`)
-  are keyed by catalog table id; medallion-nested datasets have none. The only record that would match
-  is project-level, which matches by BUCKET and would apply `retain_versions` to all 27 datasets in
-  `lance-catalog`. Not worth a proof.
+- **The one narrow override is unreachable — and this is the real finding.** A retention policy WOULD
+  force it: `set_namespace_policy` builds its path from `settings.root`, `resolve_policy` matches a
+  namespace record by directory prefix (`rel.startswith(path + "/")`), so a record on `medallion`
+  governs `medallion/bronze`; and `retain_versions` alone sets `effective_older_than = None` — keep-
+  last-N with no age bound, sidestepping the 7-day wall. Measured live with a real dex bearer:
 
-So the verification arrives on its own once these versions age past the 7-day retention, or the first
-time an operator shortens retention for that bucket. Until then the tiers stay unverified.
+      POST /v1/namespace/medallion/policy/set   -> 403 can_delete required on namespace:medallion
+      POST /v1/table/bronze$events/policy/set   -> 403 can_drop required on table:bronze$events
 
-*Blocked on: elapsed time (7d from 2026-08-16), not effort. Nothing to implement.*
+  Both 403 rather than 404, because the gate runs before existence resolution — and neither object
+  exists. `medallion` is not a catalog namespace at all (it is absent even from the reconciler's
+  `unbound_namespaces`, which lists `bronze`, `transcripts_v2`, `acme-bronze/silver/gold`), and
+  `bronze$events` is not a registered table.
+
+**So the medallion tiers are DATA WITHOUT GOVERNANCE.** With no namespace record, no table record and
+no parent tuple, no principal can hold `can_delete`/`can_drop` over them — which means no policy, no
+protection and no grant can ever apply to the datasets the cascade writes. T6's verification is
+blocked behind that, not behind a timer. Making it possible means creating governance records for live
+data — the same "bind a legacy namespace" decision `unbound_namespaces` needs, and a governance change
+rather than a verification step. It should be decided on its own merits, not to make a check pass.
+
+*Blocked on: a governance decision (bind the medallion path), or 7 days of elapsed time. Nothing to
+implement in the maintenance service itself.*
 
 ---
 
