@@ -97,9 +97,7 @@ def _capture_submits(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 def _stage_settings() -> MedallionSettings:
     """The submit-path settings every test here uses — Ray on, timings short."""
-    return MedallionSettings.model_validate(
-        {"ray_enabled": True, "compute_enabled": True, "ray_poll_interval_seconds": 0.001, "ray_job_timeout_seconds": 0.05}
-    )
+    return MedallionSettings.model_validate({"ray_enabled": True, "compute_enabled": True, "ray_poll_interval_seconds": 0.001, "ray_job_timeout_seconds": 0.05})
 
 
 def test_stage_submission_carries_the_active_spans_traceparent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -242,11 +240,7 @@ def test_a_submitted_job_carries_WHO_it_is_for_in_ray_metadata(monkeypatch: pyte
     """
     captured = _capture_submits(monkeypatch)
 
-    asyncio.run(
-        ray_submit.submit_stage_job(
-            _stage_settings(), from_uri="a", to_uri="b", stage="silver", token="tok", originator="alice", project="acme"
-        )
-    )
+    asyncio.run(ray_submit.submit_stage_job(_stage_settings(), from_uri="a", to_uri="b", stage="silver", token="tok", originator="alice", project="acme"))
 
     metadata = captured[0]["metadata"]
     assert metadata["rask.originator"] == "alice"
