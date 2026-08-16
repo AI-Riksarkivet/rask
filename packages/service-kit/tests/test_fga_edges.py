@@ -140,7 +140,7 @@ def test_revoke_removes_the_inverse_child_edge_a_read_by_object_cannot_see() -> 
     ``<parent> parent <obj>``, so its USER is the parent object."""
     fake = _ReadDeleteClient([_tuple("user:alice", "owner", "table:ns1$t"), _tuple("namespace:ns1", "parent", "table:ns1$t")])
     removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "table:ns1$t", actor="test", origin="create"))
-    assert removed == 3  # the two read back, plus the inverse edge they imply
+    assert len(removed) == 3  # the two read back, plus the inverse edge they imply
     assert _keys(fake.deleted) == {
         ("user:alice", "owner", "table:ns1$t"),
         ("namespace:ns1", "parent", "table:ns1$t"),
@@ -153,7 +153,7 @@ def test_revoke_skips_the_inverse_edge_for_a_parent_type_that_declares_no_child(
     residue in one direction."""
     fake = _ReadDeleteClient([_tuple("project:acme", "tenant", "annotation_project:labels")])
     removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "annotation_project:labels", actor="test", origin="create"))
-    assert removed == 1
+    assert len(removed) == 1
     assert _keys(fake.deleted) == {("project:acme", "tenant", "annotation_project:labels")}
 
 
@@ -213,3 +213,36 @@ def test_every_parent_type_with_a_child_relation_is_declared_here() -> None:
         f"model.fga declares `child` on {sorted(declares_child)}; _CHILD_EDGE_PARENT_TYPES says "
         f"{sorted(fga._CHILD_EDGE_PARENT_TYPES)} — the inverse edge is silently skipped for the difference"
     )
+
+
+def test_revoke_hands_back_WHO_it_revoked_not_merely_how_many() -> None:
+    """The people whose access was just destroyed are in hand at the moment they are discarded.
+
+    Every destructive door in the estate ends here — a project delete, a warehouse delete, a cascading
+    namespace drop, an overwrite create — and each one revokes every grant on the object and then
+    reports an integer. So the estate knows that fourteen grants vanished and not whose, and the
+    subjects who can no longer see their own data learn it by hitting a 403 in the middle of work:
+    exactly the failure the `grant_revoked` control action exists to prevent.
+
+    A count cannot be fanned out. Returning the tuples costs nothing (they were already read to be
+    deleted) and is what lets a caller name the affected principals.
+
+    Callers wanting the old number take `len(...)`, which is why this is a return-type change rather
+    than a second function: two revoke paths would be two places for the child-edge repair to drift.
+    """
+    fake = _ReadDeleteClient([_tuple("user:alice", "owner", "table:ns1$t"), _tuple("namespace:ns1", "parent", "table:ns1$t")])
+
+    revoked = asyncio.run(fga.revoke_object_tuples(_client(fake), "table:ns1$t", actor="test", origin="create"))
+
+    assert len(revoked) == 3, "the count contract survives as len()"
+    assert _keys(revoked) == {
+        ("user:alice", "owner", "table:ns1$t"),
+        ("namespace:ns1", "parent", "table:ns1$t"),
+        ("table:ns1$t", "child", "namespace:ns1"),
+    }, "including the inverse edge, so a caller sees exactly what was destroyed"
+
+
+def test_revoking_nothing_hands_back_nothing() -> None:
+    """The no-op stays falsy, so `if revoked:` keeps working at every call site."""
+    fake = _ReadDeleteClient([])
+    assert asyncio.run(fga.revoke_object_tuples(_client(fake), "table:ns1$t", actor="test", origin="create")) == []

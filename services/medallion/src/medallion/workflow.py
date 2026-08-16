@@ -248,6 +248,10 @@ def submit_stage(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str:
             stage=spec.stage,
             token=spec.token,
             lineage_json=spec.lineage_json,
+            # The trigger is the carrier for both — see `_build_stage_fail_event`. Passing them here
+            # is what lets a FAILED job be traced back to the person whose cascade it was.
+            originator=str((spec.trigger or {}).get("originator") or ""),
+            project=str((spec.trigger or {}).get("project") or ""),
         )
     )
     return stage_submission_id(spec.stage, spec.token, spec.from_uri, spec.to_uri)

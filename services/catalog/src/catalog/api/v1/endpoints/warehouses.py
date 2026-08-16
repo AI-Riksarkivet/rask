@@ -616,7 +616,7 @@ async def _revoke_tuples(client: OpenFgaClient | None, settings: Settings, token
     removed = await fga.revoke_object_tuples(client, obj, actor=actor, origin="lifecycle_delete")
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": removed})
-    return removed
+    return len(removed)
 
 
 def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]], record: dict[str, str], warehouse_id: str) -> None:

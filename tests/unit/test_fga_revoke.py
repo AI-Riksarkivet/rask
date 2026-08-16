@@ -82,7 +82,7 @@ def test_read_object_tuples_paginates_to_completion() -> None:
 def test_revoke_object_tuples_reads_then_deletes_all() -> None:
     fake = _ReadDeleteClient([([_tuple("user:alice", "owner", "table:t"), _tuple("user:bob", "writer", "table:t")], "")])
     removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "table:t", actor="test", origin="create"))
-    assert removed == 2
+    assert len(removed) == 2
     assert fake.deleted is not None
     assert _keys(fake.deleted) == {
         ("user:alice", "owner", "table:t"),
@@ -93,7 +93,7 @@ def test_revoke_object_tuples_reads_then_deletes_all() -> None:
 def test_revoke_object_tuples_noop_when_no_grants() -> None:
     fake = _ReadDeleteClient([([], "")])
     removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "table:gone", actor="test", origin="create"))
-    assert removed == 0
+    assert len(removed) == 0
     assert fake.deleted == []  # nothing to delete → no write issued at all
 
 
@@ -125,7 +125,7 @@ class _PartialMissingClient:
 def test_per_tuple_delete_tolerates_one_missing_without_losing_the_rest() -> None:
     fake = _PartialMissingClient()
     removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "table:t", actor="test", origin="create"))
-    assert removed == 3  # all three attempted
+    assert len(removed) == 3  # all three attempted
     # The present two are removed; the concurrently-absent one is tolerated — NOT an all-or-nothing loss.
     assert _keys(fake.deleted) == {
         ("user:a", "owner", "table:t"),
@@ -146,7 +146,7 @@ class _MissingDeleteClient:
 def test_delete_is_idempotent_on_already_absent_tuple() -> None:
     # A concurrent revoke (the tuple is already gone) is SUCCESS — the post-condition holds.
     removed = asyncio.run(fga.revoke_object_tuples(_client(_MissingDeleteClient()), "table:t", actor="test", origin="create"))
-    assert removed == 1
+    assert len(removed) == 1
 
 
 class _DownClient:

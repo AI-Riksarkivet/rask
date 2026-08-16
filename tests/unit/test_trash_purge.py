@@ -27,6 +27,7 @@ from collections.abc import Callable, Iterable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pyarrow as pa
@@ -150,13 +151,15 @@ class _Revoker:
         self.count = count
         self.probe = probe
 
-    async def __call__(self, _client: object, obj: str, *, actor: str, origin: str, **_kw: object) -> int:
+    async def __call__(self, _client: object, obj: str, *, actor: str, origin: str, **_kw: object) -> list[SimpleNamespace]:
+        """Hands back WHAT it revoked, mirroring the helper — `count` still sets how many, since these
+        tests are about ORDERING (revoke before delete), not about who held the grants."""
         self.calls.append((obj, actor, origin))
         if self.probe is not None:
             self.bytes_present_at_call.append(self.probe())
         if self.error is not None:
             raise self.error
-        return self.count
+        return [SimpleNamespace(user=f"user:u{i}", relation="owner", object=obj) for i in range(self.count)]
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(fga_module, "revoke_object_tuples", self)

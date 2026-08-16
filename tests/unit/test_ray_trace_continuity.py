@@ -95,6 +95,13 @@ def _capture_submits(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     return captured
 
 
+def _stage_settings() -> MedallionSettings:
+    """The submit-path settings every test here uses — Ray on, timings short."""
+    return MedallionSettings.model_validate(
+        {"ray_enabled": True, "compute_enabled": True, "ray_poll_interval_seconds": 0.001, "ray_job_timeout_seconds": 0.05}
+    )
+
+
 def test_stage_submission_carries_the_active_spans_traceparent(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = _capture_submits(monkeypatch)
     settings = MedallionSettings.model_validate(
@@ -219,3 +226,40 @@ def test_traced_root_is_pinned_identical_across_the_two_jobs() -> None:
     # one side without the other fails here (parity with test_ray_stage_job's deriver pins).
     for helper in ("_extract_trace_parent", "_traced_root"):
         assert inspect.getsource(getattr(stage_job, helper)) == inspect.getsource(getattr(train_job, helper))
+
+
+def test_a_submitted_job_carries_WHO_it_is_for_in_ray_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Ray job carried no identity, so nothing in the compute plane could name a person.
+
+    THE FIELD IS `metadata`, NOT `runtime_env.env_vars`, and the distinction decides the feature. The
+    identity has to be readable from OUTSIDE the job, AFTER it fails — `metadata` is returned by
+    `GET /api/jobs/<id>` and shown in the dashboard, which is exactly the read a failure path makes.
+    `runtime_env.env_vars` configures the PROCESS: recovering it means introspecting the runtime env,
+    and it hands the job code an identity it has no reason to hold.
+
+    The originator rides the trigger already (added with the cascade's ORIGINATOR lane), so this is a
+    field on the submission rather than a new identity to thread.
+    """
+    captured = _capture_submits(monkeypatch)
+
+    asyncio.run(
+        ray_submit.submit_stage_job(
+            _stage_settings(), from_uri="a", to_uri="b", stage="silver", token="tok", originator="alice", project="acme"
+        )
+    )
+
+    metadata = captured[0]["metadata"]
+    assert metadata["rask.originator"] == "alice"
+    assert metadata["rask.project"] == "acme"
+    assert metadata["rask.token"] == "tok"
+    assert "rask.originator" not in captured[0]["runtime_env"]["env_vars"], "identity is not process config"
+
+
+def test_a_submission_with_no_human_behind_it_carries_no_originator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A service-triggered cascade has no person to name, and an empty string is not an identity — the
+    key is omitted so a reader never mistakes '' for someone."""
+    captured = _capture_submits(monkeypatch)
+
+    asyncio.run(ray_submit.submit_stage_job(_stage_settings(), from_uri="a", to_uri="b", stage="silver", token="tok"))
+
+    assert "rask.originator" not in captured[0].get("metadata", {})

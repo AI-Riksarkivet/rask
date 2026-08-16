@@ -56,6 +56,8 @@ async def submit_stage_job(
     stage: str,
     token: str | None,
     lineage_json: str = "",
+    originator: str = "",
+    project: str = "",
 ) -> None:
     """Submit (or re-attach to) the stage transform on the Ray cluster and RETURN — never block.
 
@@ -99,10 +101,25 @@ async def submit_stage_job(
         # trace no longer goes dark at `ray job submit`. Empty when no span is active.
         **rk.trace_env(),
     }
+    # WHO THIS JOB IS FOR, in Ray's own `metadata` — not in `runtime_env.env_vars`, and the distinction
+    # decides whether the feature works at all. The identity has to be readable from OUTSIDE the job
+    # AFTER it fails: `metadata` comes back on `GET /api/jobs/<id>` (and in the dashboard), which is
+    # exactly the read a failure path makes. `env_vars` configures the PROCESS — recovering it means
+    # introspecting the runtime env, and it hands the job code an identity it has no reason to hold.
+    #
+    # Empty values are OMITTED rather than sent blank: a service-triggered cascade has no person behind
+    # it, and `""` is not an identity — a reader must never mistake it for one. Ray's metadata is
+    # `Dict[str, str]`, so every value here is already a string.
+    metadata = {
+        key: value
+        for key, value in (("rask.originator", originator), ("rask.project", project), ("rask.token", token or ""), ("rask.stage", stage))
+        if value
+    }
     body = {
         "entrypoint": settings.ray_entrypoint,
         "submission_id": submission_id,
         "runtime_env": {"env_vars": env_vars},
+        "metadata": metadata,
     }
 
     # SUBMIT-AND-ACK (A13, 2026-08-03) — the stage path no longer blocks on completion.

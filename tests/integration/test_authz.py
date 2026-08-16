@@ -30,6 +30,7 @@ model. The contracts asserted here (owned by the fga / fga_deps / endpoint agent
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -117,6 +118,16 @@ def _stub_create(monkeypatch, *, response: object = None, error: BaseException |
 # --------------------------------------------------------------------------- #
 
 
+
+def _revoked_tuple(user: str = "user:someone", relation: str = "owner", obj: str = "table:db1$users") -> SimpleNamespace:
+    """One tuple in the shape `revoke_object_tuples` hands back.
+
+    It returns WHAT it revoked rather than how many, so a caller can name the principals who just lost
+    access — these suites only assert that the revoke RAN, so the contents are incidental and the shape
+    is what matters."""
+    return SimpleNamespace(user=user, relation=relation, object=obj)
+
+
 def test_read_op_checks_reader_and_allows(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     """CONTRACT: a read op (describe) checks ``can_get_metadata`` (reader rung) and allows."""
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://x")
@@ -169,7 +180,7 @@ def test_rename_is_owner_tier_not_writer(client: TestClient, fake_ns: MagicMock,
     _wire(client)
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
-    revoke, grant = AsyncMock(return_value=1), AsyncMock()
+    revoke, grant = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)]), AsyncMock()
     monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
     monkeypatch.setattr(fga_module, "grant_on_create", grant)
 
@@ -190,7 +201,7 @@ def test_rename_into_unauthorized_destination_namespace_is_denied(client: TestCl
 
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _check)
-    revoke, grant = AsyncMock(return_value=1), AsyncMock()
+    revoke, grant = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)]), AsyncMock()
     monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
     monkeypatch.setattr(fga_module, "grant_on_create", grant)
 
@@ -428,7 +439,7 @@ def test_drop_table_revokes_tuples(client: TestClient, fake_ns: MagicMock, monke
     fake_ns.drop_table.return_value = DropTableResponse()
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
-    revoke = AsyncMock(return_value=1)
+    revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)])
     monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
 
     resp = client.post("/v1/table/db1$users/drop", headers={"Authorization": "Bearer t"})
@@ -443,7 +454,7 @@ def test_deregister_table_revokes_tuples(client: TestClient, fake_ns: MagicMock,
     fake_ns.deregister_table.return_value = DeregisterTableResponse()
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
-    revoke = AsyncMock(return_value=1)
+    revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)])
     monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
 
     resp = client.post("/v1/table/db1$users/deregister", headers={"Authorization": "Bearer t"})
@@ -458,7 +469,7 @@ def test_drop_namespace_revokes_tuples(client: TestClient, fake_ns: MagicMock, m
     fake_ns.drop_namespace.return_value = DropNamespaceResponse()
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
-    revoke = AsyncMock(return_value=1)
+    revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)])
     monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
 
     resp = client.post("/v1/namespace/db1/drop", headers={"Authorization": "Bearer t"})
@@ -499,9 +510,9 @@ def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, 
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
     order: list[str] = []
 
-    async def _revoke(_c: object, obj: str, **_k: object) -> int:
+    async def _revoke(_c: object, obj: str, **_k: object) -> list[SimpleNamespace]:
         order.append(f"revoke:{obj}")
-        return 1
+        return [_revoked_tuple(obj=obj)]
 
     async def _grant(_c: object, **kw: object) -> None:
         order.append(f"grant:{kw['obj_id']}")
@@ -527,9 +538,9 @@ def test_overwrite_by_owner_revokes_prior_grants_then_seeds(client: TestClient, 
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))  # owner → can_drop passes
     order: list[str] = []
 
-    async def _revoke(_c: object, obj: str, **_k: object) -> int:
+    async def _revoke(_c: object, obj: str, **_k: object) -> list[SimpleNamespace]:
         order.append(f"revoke:{obj}")
-        return 1
+        return [_revoked_tuple(obj=obj)]
 
     async def _grant(_c: object, **kw: object) -> None:
         order.append(f"grant:{kw['obj_id']}")
@@ -558,7 +569,7 @@ def test_overwrite_of_existing_table_by_non_owner_is_denied_and_revokes_nothing(
 
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _check)
-    revoke = AsyncMock(return_value=1)
+    revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)])
     grant = AsyncMock()
     monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
     monkeypatch.setattr(fga_module, "grant_on_create", grant)
@@ -579,7 +590,7 @@ def test_plain_create_seeds_without_revoking(client: TestClient, fake_ns: MagicM
     _stub_create(monkeypatch, response=CreateTableResponse(location="s3://b/db1$new", version=1))
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
-    revoke = AsyncMock(return_value=0)
+    revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(0)])
     grant = AsyncMock()
     monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
     monkeypatch.setattr(fga_module, "grant_on_create", grant)
@@ -604,9 +615,9 @@ def test_cascade_drop_namespace_revokes_every_child(client: TestClient, fake_ns:
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
     revoked: list[str] = []
 
-    async def _revoke(_c: object, obj: str, **_k: object) -> int:
+    async def _revoke(_c: object, obj: str, **_k: object) -> list[SimpleNamespace]:
         revoked.append(obj)
-        return 1
+        return [_revoked_tuple(obj=obj)]
 
     monkeypatch.setattr(fga_module, "revoke_object_tuples", _revoke)
 
@@ -627,9 +638,9 @@ def test_restrict_drop_namespace_revokes_only_itself(client: TestClient, fake_ns
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
     revoked: list[str] = []
 
-    async def _revoke(_c: object, obj: str, **_k: object) -> int:
+    async def _revoke(_c: object, obj: str, **_k: object) -> list[SimpleNamespace]:
         revoked.append(obj)
-        return 1
+        return [_revoked_tuple(obj=obj)]
 
     monkeypatch.setattr(fga_module, "revoke_object_tuples", _revoke)
 

@@ -74,7 +74,7 @@ def _world(
     *,
     record: dict[str, str] | None = _RECORD,
     warehouse_records: list[dict[str, str]] | None = None,
-    tuples: int = 0,
+    tuples: list[Any] | None = None,
     revoke_error: Exception | None = None,
 ) -> Any:
     """Patch the registry + FGA seams the delete touches, recording WHAT it did and IN WHICH ORDER."""
@@ -89,16 +89,21 @@ def _world(
         calls.append("delete_record")
         deleted.append(project_id)
 
-    async def _revoke(_client: Any, obj: str, *, actor: str, origin: str, **_kw: Any) -> int:
+    async def _revoke(_client: Any, obj: str, *, actor: str, origin: str, **_kw: Any) -> list[Any]:
         calls.append("revoke")
         revoked.append({"obj": obj, "actor": actor, "origin": origin})
         if revoke_error is not None:
             raise revoke_error
-        return tuples
+        return list(tuples or [])
 
     monkeypatch.setattr(ep.project_registry, "delete_project_record", _delete_record)
     monkeypatch.setattr(ep.fga, "revoke_object_tuples", _revoke)
     return SimpleNamespace(calls=calls, deleted=deleted, revoked=revoked)
+
+
+def _grant(user: str, relation: str, obj: str = "project:acme") -> Any:
+    """One revoked tuple, in the shape `revoke_object_tuples` now hands back."""
+    return SimpleNamespace(user=user, relation=relation, object=obj)
 
 
 def _allow_gate(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
@@ -310,7 +315,7 @@ def test_force_does_not_bypass_the_emptiness_refusal(monkeypatch: pytest.MonkeyP
 
 
 def test_empty_project_is_deleted_and_its_tuples_revoked(monkeypatch: pytest.MonkeyPatch) -> None:
-    world = _world(monkeypatch, tuples=3)
+    world = _world(monkeypatch, tuples=[_grant('user:a', 'admin'), _grant('user:b', 'member'), _grant('team:t', 'team')])
     _allow_gate(monkeypatch)
     control = _Emitter()
     result = _delete("acme", _settings(fga_enabled=True), client=object(), control=control)
@@ -327,7 +332,7 @@ def test_empty_project_is_deleted_and_its_tuples_revoked(monkeypatch: pytest.Mon
 def test_tuples_are_revoked_before_the_record_is_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
     # Order is load-bearing: a revoke that fails (OpenFGA outage → 503) must leave the tenant fully
     # described and re-deletable, never strand grants on a project no API can name any more.
-    world = _world(monkeypatch, tuples=1)
+    world = _world(monkeypatch, tuples=[_grant('user:u0', 'member')])
     _allow_gate(monkeypatch)
     _delete("acme", _settings(fga_enabled=True), client=object())
     assert world.calls == ["revoke", "delete_record"]
@@ -337,7 +342,7 @@ def test_an_openfga_outage_aborts_the_delete_instead_of_reporting_a_half_success
     # The reason the revoke goes first: when it fails there is nothing to half-report. The 503 propagates,
     # the record survives (so the tenant is still named, still administered, still deletable on a retry),
     # nothing is announced on the bus and no compliance row claims a revocation that never happened.
-    world = _world(monkeypatch, tuples=4, revoke_error=ServiceUnavailableError("openfga is unavailable"))
+    world = _world(monkeypatch, tuples=[_grant('user:u0', 'member'), _grant('user:u1', 'member'), _grant('user:u2', 'member'), _grant('user:u3', 'member')], revoke_error=ServiceUnavailableError("openfga is unavailable"))
     _allow_gate(monkeypatch)
     control = _Emitter()
     with pytest.raises(ServiceUnavailableError):
@@ -348,7 +353,7 @@ def test_an_openfga_outage_aborts_the_delete_instead_of_reporting_a_half_success
 
 
 def test_fga_off_still_deletes_the_record_and_reports_zero(monkeypatch: pytest.MonkeyPatch) -> None:
-    world = _world(monkeypatch, tuples=7)
+    world = _world(monkeypatch, tuples=[_grant('user:u0', 'member'), _grant('user:u1', 'member'), _grant('user:u2', 'member'), _grant('user:u3', 'member'), _grant('user:u4', 'member'), _grant('user:u5', 'member'), _grant('user:u6', 'member')])
     _allow_gate(monkeypatch)
     result = _delete("acme", _settings(fga_enabled=False))
     assert result.tuples_revoked == 0  # a fact about an auth-off stack, never a fabricated success
@@ -359,7 +364,7 @@ def test_fga_off_still_deletes_the_record_and_reports_zero(monkeypatch: pytest.M
 
 
 def test_a_real_revoke_is_audited_like_the_create_audits_its_grant(monkeypatch: pytest.MonkeyPatch, audited: list[logging.LogRecord]) -> None:
-    _world(monkeypatch, tuples=2)
+    _world(monkeypatch, tuples=[_grant('user:u0', 'member'), _grant('user:u1', 'member')])
     _allow_gate(monkeypatch)
     _delete("acme", _settings(fga_enabled=True), client=object())
     rows = [r.__dict__ for r in audited if r.__dict__.get("audit.action") == "access_revoke"]
@@ -396,3 +401,43 @@ def test_an_unknown_tenant_and_a_forbidden_one_are_indistinguishable(monkeypatch
         _delete("acme", _settings(fga_enabled=True), client=object())
 
     assert str(absent.value) == str(forbidden.value)
+
+
+def test_deleting_a_project_tells_everyone_who_just_lost_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE PEOPLE ARE IN HAND AT THE MOMENT THEY ARE DISCARDED.
+
+    Retiring a tenant revokes every grant on it — and announced only `project_deleted`, an event that
+    names the project and nobody in it. So the admins and members who could no longer see their own
+    work found out by hitting a 403, which is verbatim the failure `grant_revoked` exists to prevent.
+    The revoke already read those tuples in order to delete them; the only thing missing was saying so.
+
+    STRUCTURAL EDGES ARE NOT PEOPLE. The revoke also removes `team`/`parent`/`child` tuples whose USER
+    is another OBJECT, and announcing those would address an inbox named `team:t`. A principal is
+    `user:<sub>` or a userset (`role:x#assignee`, which the lane now expands); anything else is graph
+    plumbing.
+    """
+    world = _world(
+        monkeypatch,
+        tuples=[_grant("user:alice", "admin"), _grant("user:bob", "member"), _grant("team:writers", "team")],
+    )
+    _allow_gate(monkeypatch)
+    control = _Emitter()
+
+    _delete("acme", _settings(fga_enabled=True), client=object(), control=control)
+
+    revoked = [(e.action, e.extra.get("subject"), e.extra.get("relation")) for e in control.events if e.action == "grant_revoked"]
+    assert revoked == [("grant_revoked", "user:alice", "admin"), ("grant_revoked", "user:bob", "member")]
+    assert any(e.action == "project_deleted" for e in control.events), "the tenant-level event still fires"
+
+
+def test_an_fga_off_delete_announces_no_revocations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No revoke ran, so nobody lost anything — announcing one would be a lie about a change that did
+    not happen, the same rule the audit record already follows here."""
+    world = _world(monkeypatch, tuples=[_grant("user:alice", "admin")])
+    _allow_gate(monkeypatch)
+    control = _Emitter()
+
+    _delete("acme", _settings(fga_enabled=False), client=None, control=control)
+
+    assert [e.action for e in control.events if e.action == "grant_revoked"] == []
+    assert world.revoked == []

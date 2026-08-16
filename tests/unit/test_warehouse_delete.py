@@ -153,9 +153,11 @@ class _FakeStore:
         subject = user if ":" in user else f"user:{user}"
         return (subject, "admin", obj) in self.tuples
 
-    async def revoke(self, _client: object, obj: str, **_kw: object) -> int:
+    async def revoke(self, _client: object, obj: str, **_kw: object) -> list[SimpleNamespace]:
+        """Hands back WHAT it revoked, mirroring the helper: a count cannot be fanned out to the
+        principals who just lost access."""
         self.revoked.append(obj)
-        return 3
+        return [SimpleNamespace(user=f"user:u{i}", relation="owner", object=obj) for i in range(3)]
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(fga_module, "check", self.check)

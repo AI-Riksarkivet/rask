@@ -306,6 +306,16 @@ class DeleteProjectResponse(BaseModel):
     tuples_revoked: int
 
 
+def _is_principal(user: str) -> bool:
+    """True for a subject an inbox can be addressed to — a person or a group of them.
+
+    `user:<sub>` is a person; `role:x#assignee` / `team:y#member` are usersets the notifications lane
+    expands into people. Everything else revoked alongside them is an object-to-object edge (`team`,
+    `parent`, `child`) and names no one.
+    """
+    return user.startswith("user:") or "#" in user
+
+
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: str,
@@ -364,7 +374,7 @@ async def delete_project(
             f"must never be able to destroy its buckets transitively in one request."
         )
 
-    removed = 0
+    removed: list[fga.ClientTuple] = []
     revoked = False
     # Tuples FIRST, record second. A revoke that fails (OpenFGA outage → 503) leaves the tenant fully
     # described and re-deletable; the opposite order would strand grants on a project no API can name any
@@ -390,7 +400,7 @@ async def delete_project(
     await run_in_threadpool(project_registry.delete_project_record, settings.registry_root, so, project_id)
 
     actor = f"user:{token.sub}" if token else None
-    log.info("project_deleted", extra={"project": project_id, "tuples_revoked": removed, "forced": force})
+    log.info("project_deleted", extra={"project": project_id, "tuples_revoked": len(removed), "forced": force})
     if revoked:
         # Mirrors create_project's grant audit, and only when the revoke really ran: an FGA-off stack must
         # not fabricate a compliance record for a revocation that never happened. The revoke is
@@ -403,7 +413,7 @@ async def delete_project(
             resource=f"project:{project_id}",
             grantee="*",
             relation="*",
-            removed=removed,
+            removed=len(removed),
             reason="project_deleted",
         )
     await emit_control(
@@ -413,4 +423,22 @@ async def delete_project(
         object_id=f"project:{project_id}",
         actor=actor,
     )
-    return DeleteProjectResponse(project=project_id, tuples_revoked=removed)
+    # TELL EVERYONE WHO JUST LOST IT. `project_deleted` names the project and nobody in it, so the
+    # admins and members who can no longer see their own work would find out by hitting a 403 — the
+    # failure `grant_revoked` exists to prevent. The revoke already read these tuples in order to
+    # delete them; the only thing missing was saying so.
+    #
+    # STRUCTURAL EDGES ARE NOT PEOPLE: the same call removes `team`/`parent`/`child` tuples whose USER
+    # is another OBJECT, and announcing one would address an inbox named `team:writers`. A principal is
+    # `user:<sub>` or a userset (`role:x#assignee`, which the lane expands); anything else is plumbing.
+    for tup in removed:
+        if _is_principal(tup.user):
+            await emit_control(
+                control,
+                action="grant_revoked",
+                object_type="grant",
+                object_id=f"project:{project_id}",
+                actor=actor,
+                extra={"relation": tup.relation, "subject": tup.user, "reason": "project_deleted"},
+            )
+    return DeleteProjectResponse(project=project_id, tuples_revoked=len(removed))

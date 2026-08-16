@@ -1283,8 +1283,16 @@ async def revoke_object_tuples(
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
-) -> int:
-    """Delete EVERY tuple on ``obj`` — the revoke-on-delete cleanup. Returns the count removed.
+) -> list[ClientTuple]:
+    """Delete EVERY tuple on ``obj`` — the revoke-on-delete cleanup. Returns WHAT was removed.
+
+    **The tuples, not a count, and the difference is who gets told.** Every destructive door in the
+    estate ends here — a project delete, a warehouse delete, a cascading namespace drop, an overwrite
+    create — and each revokes every grant on the object. Returning an integer meant the estate knew
+    that fourteen grants vanished and not whose, so the subjects who could no longer see their own
+    data learned it by hitting a 403 mid-task: the failure `grant_revoked` exists to prevent. The
+    tuples were already read in order to be deleted, so handing them back costs nothing and is what
+    lets a caller name the affected principals. Callers wanting the old number take ``len(...)``.
 
     A dropped/renamed object's grants (owner, the parent edge, AND any later reader/writer/
     validator grants) must not linger: if the id is later reused, those stale tuples would
@@ -1305,7 +1313,7 @@ async def revoke_object_tuples(
         retry_max_backoff_seconds=retry_max_backoff_seconds,
     )
     if not tuples:
-        return 0
+        return []
     # The inverse `child` edge is the ONE tuple about this object that a read by object cannot see:
     # `grant_on_create` stores it as `<obj> child <parent>`, so its OBJECT is the parent and it
     # survives a revoke that only reads `object == obj`. Left behind it is a phantom child — the
@@ -1326,4 +1334,4 @@ async def revoke_object_tuples(
         retry_backoff_seconds=retry_backoff_seconds,
         retry_max_backoff_seconds=retry_max_backoff_seconds,
     )
-    return len(doomed)
+    return doomed

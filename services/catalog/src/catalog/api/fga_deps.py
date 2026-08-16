@@ -948,7 +948,7 @@ async def revoke_ownership(
     actor = token.sub if token is not None else "system:catalog"
     removed = await fga.revoke_object_tuples(client, obj, actor=actor, origin="create")
     if removed:
-        log.info("fga_tuples_revoked", extra={"object": obj, "removed": removed})
+        log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
 
 
 async def seed_ownership_or_compensate(

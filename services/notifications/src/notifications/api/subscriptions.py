@@ -34,6 +34,7 @@ from notifications.api.ingest import ingest_run_event
 from notifications.api.metrics import Lane
 from notifications.api.security import VisibilityDep
 from notifications.api.settings import get_ingress_settings
+from notifications.config import get_notifications_settings
 from notifications.proxies import channel_push, inbox_for, watchers_of
 from service_kit.governed import fga
 
@@ -84,7 +85,11 @@ def register_subscriptions(app: FastAPI) -> None:
         turns that into a RETRY, because an empty answer would read as "this group has no members" and
         silently drop everyone's notification.
         """
-        if client is None or not settings.fga_enabled:
+        # `get_notifications_settings()`, NOT the ingress settings closed over above: the FGA flag
+        # lives on the service settings and `IngressSettings` has never carried one. Reading it off the
+        # wrong object raised AttributeError on the FIRST control event with a userset — invisible to
+        # the unit tests, which inject an expander directly and never build one.
+        if client is None or not get_notifications_settings().fga_enabled:
             return None
 
         async def expand(userset: str) -> tuple[str, ...]:
