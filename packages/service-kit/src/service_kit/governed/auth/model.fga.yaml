@@ -75,6 +75,33 @@ tuples:
   # oskar owns the MANAGED warehouse DIRECTLY (not via project admin). He is the subject C4 was always
   # about and the one the warehouse rung used to miss: the flag is supposed to take his granting away.
   - { user: user:oskar, relation: owner, object: warehouse:beta_bucket }
+  # THE GRANT OPTION inside the managed scope. oskar owns the warehouse AND holds pass_grants — the
+  # combination that kept granting after the owner-tier subtraction landed. pavel is the pure delegate
+  # case (reader + the grant option, no ownership), so the two branches are covered separately and a fix
+  # that only handles owners cannot pass both.
+  - { user: user:oskar, relation: pass_grants, object: warehouse:beta_bucket }
+  - { user: user:pavel, relation: reader, object: warehouse:beta_bucket }
+  - { user: user:pavel, relation: pass_grants, object: warehouse:beta_bucket }
+  # …the same delegate one and two rungs down, where the managed flag arrives through `from parent`.
+  - { user: user:mona, relation: pass_grants, object: namespace:beta_locked }
+  - { user: user:quilla, relation: reader, object: table:beta_locked_records }
+  - { user: user:quilla, relation: pass_grants, object: table:beta_locked_records }
+  # …and an UNMANAGED control, so a blanket subtraction cannot pass.
+  - { user: user:alice, relation: pass_grants, object: namespace:acme_silver }
+  # A SELF-MANAGED namespace: acme_bronze carries its OWN managed_access, under an UNMANAGED warehouse.
+  # This isolates the one thing every other managed fixture conflates — beta_locked inherits its flag
+  # from the warehouse above it, so at that rung `managed_access_inheritance` and
+  # `managed_access_inheritance from parent` evaluate identically and the DIRECTION of the rule cannot
+  # be tested. Here they differ.
+  #
+  # acme_bronze rather than a new namespace on purpose: it is already in the seeded demo estate and has
+  # nothing parented under it, and at this rung a scope's own flag constrains only what is BENEATH it —
+  # so flagging it changes no existing assertion. A new namespace would have to be added to
+  # `scripts/seed_estate.py` (test_seed_estate asserts the fixtures name nothing the real doors cannot
+  # create), and adding one with a table there reds nine seed-sequence assertions that count calls.
+  - { user: "user:*", relation: managed_access, object: namespace:acme_bronze }
+  - { user: user:sam, relation: owner, object: namespace:acme_bronze }
+  - { user: user:sam, relation: pass_grants, object: namespace:acme_bronze }
 
   # grace: an editor-only grant on a standalone (parentless) transaction — may edit properties, NOT commit
   - { user: user:grace, relation: editor, object: transaction:standalone_txn }
@@ -883,3 +910,87 @@ tests:
           can_grant_reader: true
           can_grant_owner: true
           can_set_managed_access: true
+
+  - name: managed access withdraws the GRANT OPTION too — closing the pass_grants bypass
+    check:
+      # THE BUG, at the warehouse. `can_grant_reader` is `manage_grants or (reader and pass_grants)`.
+      # Subtracting from `manage_grants` alone shut the first branch and left the second wide open, so an
+      # owner holding the grant option kept handing out reader/writer/validator inside a scope whose whole
+      # purpose is that only the records manager does that. Measured TRUE before this fix.
+      - user: user:oskar
+        object: warehouse:beta_bucket
+        assertions:
+          can_grant_reader: false
+          can_grant_writer: false
+          can_grant_validator: false
+          can_grant_owner: false
+      # The PURE delegate — reader + grant option, never an owner — so the fix cannot be one that only
+      # looks at ownership.
+      - user: user:pavel
+        object: warehouse:beta_bucket
+        assertions:
+          pass_grants: false
+          can_grant_reader: false
+          can_grant_writer: false
+      # …and pavel keeps the rung he was actually given. What is withdrawn is the right to HAND OUT
+      # access, never access itself.
+      - user: user:pavel
+        object: warehouse:beta_bucket
+        assertions:
+          reader: true
+          can_get_metadata: true
+      # One rung down, where the flag arrives via `from parent`.
+      - user: user:mona
+        object: namespace:beta_locked
+        assertions:
+          pass_grants: false
+          can_grant_reader: false
+          can_grant_writer: false
+      # Two rungs down, on the table.
+      - user: user:quilla
+        object: table:beta_locked_records
+        assertions:
+          pass_grants: false
+          can_grant_reader: false
+      - user: user:quilla
+        object: table:beta_locked_records
+        assertions:
+          reader: true
+      # THE RECORDS MANAGER still grants — she is who the flag centralizes it on, and her authority is a
+      # direct `manage_grants` assignment the subtraction never touches.
+      - user: user:nora
+        object: warehouse:beta_bucket
+        assertions:
+          can_grant_reader: true
+          can_grant_owner: true
+      # THE UNMANAGED CONTROL. alice owns acme_silver, under no managed scope, and holds the grant option
+      # there. Without this the subtraction could be blanket — killing the grant option estate-wide — and
+      # every assertion above would still pass.
+      - user: user:alice
+        object: namespace:acme_silver
+        assertions:
+          pass_grants: true
+          can_grant_reader: true
+          can_grant_writer: true
+
+  - name: the grant option is withdrawn from ABOVE, never from inside — the direction of the rule
+    check:
+      # sam OWNS a namespace that carries its own managed_access flag. He keeps both halves of the grant
+      # axis, because a scope's own flag constrains what is BENEATH it, not the person who set it —
+      # the same "cleared from ABOVE, never from inside" rule `manage_grants` already follows at this
+      # rung via `but not managed_access_inheritance from parent`.
+      #
+      # This is the assertion that makes the direction testable. Every other managed fixture in this
+      # file inherits its flag from the warehouse above, where the bare and `from parent` forms evaluate
+      # identically — so without this case, writing the wrong one of the two changes nothing and the
+      # suite stays green. It did: a mutation swapping them survived until this test existed.
+      - user: user:sam
+        object: namespace:acme_bronze
+        assertions:
+          pass_grants: true
+          manage_grants: true
+          can_grant_reader: true
+      # The downward half — that the flag DOES reach a rung below — is already asserted on mona and
+      # quilla under beta_bucket, so it is not repeated here. This fixture exists for the direction
+      # alone, and stays a single namespace with no table: adding one puts a table into the demo estate
+      # that nine seed-sequence assertions count.

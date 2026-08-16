@@ -144,7 +144,23 @@ type warehouse
     # self-passing — `can_grant_pass_grants` is `manage_grants` alone below, so a delegate cannot mint
     # further delegates and the chain stays one hop deep. Not time-boxable for the same reason `owner`
     # is not: an expiring right to delegate leaves permanent grants behind it.
-    define pass_grants: [user, role#assignee]
+    #
+    # MANAGED ACCESS WITHDRAWS THIS TOO, and it did not until 2026-08-16. Withdrawing it from
+    # `manage_grants` alone left the whole control bypassable: `can_grant_reader` is
+    # `manage_grants or (reader and pass_grants)`, so an owner who ALSO held the grant option kept
+    # granting reader, writer and validator through the second branch after the first was closed.
+    # Measured with the real evaluator before the fix — owner + pass_grants in a managed warehouse:
+    # can_grant_owner false, and can_grant_reader/writer/validator all TRUE. Only the owner-tier
+    # grants were ever actually withdrawn.
+    #
+    # The subtraction is on the ROLE rather than on each `can_grant_*`, because a `can_*` relation is
+    # a permission that COMBINES roles — the assignment logic belongs in the role it qualifies
+    # (skills/openfga design-permissions). One edit, all three `can_grant_*` sites, no chance of
+    # closing two and missing the third.
+    #
+    # Bare `managed_access_inheritance`, matching this rung's `manage_grants` exactly: a warehouse's
+    # parent is a project, which has no managed_access, so the flag here is about THIS warehouse.
+    define pass_grants: [user, role#assignee] but not managed_access_inheritance
     # ---- actions ----
     # UPWARD VISIBILITY: readable if you hold `reader` here, OR if anything beneath you is visible.
     # Without the second clause a grant on one table is unreachable — the grantee can read the table
@@ -258,7 +274,13 @@ type namespace
     # The grant option does NOT cascade — it is deliberately per-object. Inheriting it would mean one
     # `pass_grants` at the warehouse silently made someone a delegate on every table underneath, which
     # is the blanket authority `manage_grants` already expresses honestly.
-    define pass_grants: [user, role#assignee]
+    #
+    # It IS withdrawn by a managed enclosing scope, under exactly the condition that withdraws
+    # `manage_grants` one line up — `from parent`, so the flag set ON this namespace constrains
+    # everything beneath it and not its own owner ("cleared from ABOVE, never from inside"). Using the
+    # bare form here would strip a delegate at the very rung whose owner keeps granting, which is the
+    # same rule pointing two ways.
+    define pass_grants: [user, role#assignee] but not managed_access_inheritance from parent
     # ---- actions ----
     # Upward visibility — same rule and same reason as `warehouse#can_get_metadata`. Recursive through
     # `child: [namespace, ...]`, so a grant nested three namespaces deep lights the whole path to it.
@@ -313,7 +335,9 @@ type table
     # switch would let an owner exempt their own table from the collection's rule, which is the rule's
     # only purpose. It still OBEYS one set above it, through `managed_access_inheritance from parent`.
     define manage_grants: [user, role#assignee] or (owner but not managed_access_inheritance from parent) or manage_grants from parent
-    define pass_grants: [user, role#assignee]
+    # Same withdrawal as the two rungs above; a table has no managed_access of its own, so the scope
+    # that governs it is always its namespace's.
+    define pass_grants: [user, role#assignee] but not managed_access_inheritance from parent
     # ---- actions ----
     define can_get_metadata: reader
     # NOTIFICATION delivery. Identical to `can_get_metadata` on this type — both are bare `reader` —
