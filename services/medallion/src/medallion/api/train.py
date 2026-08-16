@@ -68,8 +68,11 @@ async def train(
     body: TrainRequest,
     dapr: DaprClientDep,
     settings: SettingsDep,
-    _: Annotated[None, Depends(authorize_train)],  # #64: service token OR an admin of the CONFIGURED
-    # project — pinned, a stray ?project= is ignored (single-tenant write; see authorize_train)
+    # #64: service token OR an admin of the CONFIGURED project — pinned, a stray ?project= is ignored
+    # (single-tenant write; see authorize_train). It hands back the verified sub on the human path,
+    # which is the ONLY moment this run is attributable: everything after here is a bus trigger and a
+    # detached Ray job, and the job's own events author as `service-trainer` by design.
+    originator: Annotated[str | None, Depends(authorize_train)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")] = None,
 ) -> dict[str, Any] | JSONResponse:
     """Request a training run: pin feature versions (omitted → LATEST, resolved HERE) and publish the
@@ -85,6 +88,7 @@ async def train(
         features=[f.model_dump() for f in body.features],
         config=body.config,
         token=idempotency_key,
+        originator=originator or "",
     )
     if result.get("status") == "resolve_failed":
         return _problem(422, "ValidationError", f"cannot resolve feature dataset {result['dataset']!r}")

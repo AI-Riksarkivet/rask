@@ -111,9 +111,7 @@ async def submit_stage_job(
     # it, and `""` is not an identity — a reader must never mistake it for one. Ray's metadata is
     # `Dict[str, str]`, so every value here is already a string.
     metadata = {
-        key: value
-        for key, value in (("rask.originator", originator), ("rask.project", project), ("rask.token", token or ""), ("rask.stage", stage))
-        if value
+        key: value for key, value in (("rask.originator", originator), ("rask.project", project), ("rask.token", token or ""), ("rask.stage", stage)) if value
     }
     body = {
         "entrypoint": settings.ray_entrypoint,
@@ -150,6 +148,8 @@ async def submit_train_job(
     token: str,
     registry_uri: str,
     artifact_base: str,
+    originator: str = "",
+    project: str = "",
 ) -> str:
     """SUBMIT-AND-ACK for a TRAINING job (docs/RAY-TRAIN.md D2) — never block on completion.
 
@@ -172,6 +172,12 @@ async def submit_train_job(
                 "MODEL": model,
                 "FEATURES": features_json,
                 "CONFIG": config_json,
+                # The job's OWN copy, because the job emits its own OpenLineage lifecycle (D2: no Dapr
+                # sidecar on Ray pods) and is therefore the only writer that can stamp these onto the
+                # events. `metadata` below serves the opposite need — reading the identity from
+                # OUTSIDE, after a failure — and neither substitutes for the other.
+                "ORIGINATOR": originator,
+                "TRAIN_PROJECT": project,
                 # NOT "TOKEN": lance's object-store env fallback reads a bare TOKEN as the AWS session
                 # token, stamping x-amz-security-token on every S3 request → RustFS 500s (live 2026-07-13).
                 "TRAIN_TOKEN": token,
@@ -214,6 +220,12 @@ async def submit_train_job(
                 **rk.trace_env(),
             }
         },
+        # Ray's own `metadata`, mirroring the stage path: this is what `GET /api/jobs/<id>` returns, so
+        # it is the one place a failure investigated from outside the job can still recover WHO the run
+        # was for — after the pod is gone, when the job emitted nothing because it died before its own
+        # FAIL. Empty values are omitted; `""` must never be read back as an identity. Ray types
+        # metadata as `Dict[str, str]`, which every value here already is.
+        "metadata": {key: value for key, value in (("rask.originator", originator), ("rask.project", project), ("rask.token", token)) if value},
     }
     async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
         try:

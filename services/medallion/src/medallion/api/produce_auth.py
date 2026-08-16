@@ -141,7 +141,7 @@ async def authorize_train(
     # unforwarded caller id would silently restore the bypass on exactly this route while `/produce`
     # looked fixed — the delegation is what makes the two doors one door.
     dapr_caller_app_id: Annotated[str | None, Header()] = None,
-) -> None:
+) -> str | None:
     """The ``/train`` door: the same dual-auth as produce, PINNED to the configured project.
 
     Training writes SINGLE-TENANT state (the model registry under the configured
@@ -149,8 +149,14 @@ async def authorize_train(
     project to select — honoring a caller-supplied ``?project=`` here would let an admin of any OTHER
     project pass the gate while the run still lands in the configured tenant's registry (authorization
     scope must equal write scope). This dependency declares NO ``project`` query param, so a stray
-    ``?project=`` is ignored and the admin check always targets ``produce_admin_project``."""
-    await authorize_produce(
+    ``?project=`` is ignored and the admin check always targets ``produce_admin_project``.
+
+    RETURNS the verified subject, exactly as ``authorize_produce`` does — the delegation covers the
+    RESULT and not merely the checks. It declared ``None`` and discarded the sub the call below had
+    already resolved, which is why the estate's most expensive door was also its most anonymous:
+    training is submit-and-ack, so by the time the job fails there is no request left to ask who
+    wanted it. The value targets and never authorizes; every decision above is unchanged."""
+    return await authorize_produce(
         request,
         settings,
         fga_client,

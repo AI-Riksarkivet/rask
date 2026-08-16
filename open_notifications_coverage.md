@@ -107,6 +107,23 @@ while an unknown reason value arrives on a declared field and carries nothing fo
   not `runtime_env.env_vars`: the identity has to be readable from OUTSIDE the job AFTER it fails, and
   `metadata` comes back on `GET /api/jobs/<id>`. STILL OPEN: the other submitters (`/train`, compute's
   own job door) do not capture a verified sub yet, and nothing reads the metadata back on failure.
+- ~~**the estate's most expensive door was its most anonymous** (§2 High rows: the `/train` door
+  discarding its sub; a TRAIN job failing after hours of GPU; any training run reaching terminal)~~ —
+  **FIXED.** `authorize_train` declared `-> None` and threw away the sub `authorize_produce` had
+  already returned, so five links downstream had nothing to carry: the trigger, the consumer, the Ray
+  submission, the job's env, and the job's own RunEvents. All five now carry it, and the job stamps
+  `lance.originator` + `lance.project` on every event it emits — including the config-parse FAIL, the
+  earliest failure and the one a person most needs. **Not `author`**: the job authenticates as
+  `service-trainer` and `enforce_author` overwrites the author facet with that verified service sub,
+  correctly, so `originator` is the only field on a training event that can name a human and
+  `lance.project` the only one that can reach a watcher. Before this a four-hour training FAIL was
+  dropped by `notifiable()` at rule 2 and reached nobody at all.
+  **Two corrections to the note above.** (a) "compute's own job door" DOES NOT EXIST — every route in
+  `services/compute` is a GET (`routes.py`), so `/train` was the last submitter discarding a sub and
+  §6 #6 is now closed. (b) "nothing reads the metadata back" is moot for the train lane and stays open
+  only for §2 High's compute row: the job emits its OWN lifecycle, so it needs no read-back, while a
+  job that dies before emitting anything is recoverable only by an observer that compute does not
+  have. Giving a read-only service its first emitter is separate work, not wiring.
 
 **DROPPED — §6 #5, ruled 2026-08-16 (`docs/DECISIONS.md`).** A denied mover must NOT emit a lineage
 FAIL: nothing is read and nothing is written, so the event would mint provenance for a non-event, and

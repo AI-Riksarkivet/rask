@@ -131,6 +131,7 @@ async def submit_train_request(
     features: list[dict[str, Any]],
     config: dict[str, Any] | None = None,
     token: str | None = None,
+    originator: str = "",
 ) -> dict[str, Any]:
     """Resolve feature-version pins and publish the training trigger; returns ``{token, features}``.
 
@@ -156,7 +157,13 @@ async def submit_train_request(
                 log.warning("train_resolve_failed", extra={"dataset": dataset, "error": str(exc)})
                 return {"status": "resolve_failed", "dataset": dataset}
         pinned.append({"dataset": dataset, "version": int(version)})
-    payload = {"token": token, "model": model, "features": pinned, "config": config or {}}
+    payload: dict[str, Any] = {"token": token, "model": model, "features": pinned, "config": config or {}}
+    # WHO THIS RUN IS FOR, carried on the trigger because nothing downstream can re-derive it: the
+    # request ends at the 202, the job runs detached for hours, and its own events author as
+    # `service-trainer` (enforce_author overwrites anything else — correctly). OMITTED when there is no
+    # person: a service-triggered run has none, and `""` is not an identity.
+    if originator:
+        payload["originator"] = originator
     try:
         await dapr_publish.publish_event(
             dapr,
@@ -271,6 +278,16 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, fga_c
             token=token,
             registry_uri=registry_uri_for(settings, model),
             artifact_base=artifact_base_for(settings, model),
+            # An untrusted CLAIM off the bus, carried and never trusted — the same posture
+            # `StageTrigger.originator` documents. It authorizes nothing: the notifications plane
+            # re-derives every recipient's visibility at delivery, so the worst a forged value can do
+            # is put a row in the inbox of someone who could already see this run's outputs.
+            originator=str(data.get("originator") or ""),
+            # Training writes SINGLE-TENANT state into the configured project (see `authorize_train`),
+            # so the tenant is a fact about this deployment rather than anything the trigger may claim.
+            # Without it `fanout.py` skips the watcher loop entirely and the run reaches its requester
+            # alone — the third of `notifiable()`'s four rules, and the silent one.
+            project=settings.produce_admin_project,
         )
     except ray_submit.RayJobError as exc:
         log.warning("train_submit_failed", extra={"token": token, "error": str(exc)})

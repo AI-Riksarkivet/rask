@@ -80,6 +80,8 @@ def build_event(
     version: int | None = None,
     progress: tuple[int, int] | None = None,
     error: str | None = None,
+    originator: str = "",
+    project: str = "",
 ) -> dict[str, Any]:
     """One spec-true training ``RunEvent`` (D3): official ``jobType=TRAINING`` facet, per-input
     ``DatasetVersionDatasetFacet`` pins, output version on COMPLETE only — a FAIL keeps a
@@ -89,6 +91,16 @@ def build_event(
     model version whose COMPLETE emit was lost (review 2026-07-11 — without it the models node has
     no source_uri and the B4 sweep can never repair it)."""
     run_facets: dict[str, Any] = {"lance": {"_producer": _PRODUCER, "_schemaURL": _BASE_FACET, "operation": "training", "token": token}}
+    # WHO the run is for, and WHICH tenant's watchers should hear about it. Not `author`: this job
+    # authenticates to the lineage ingest as `service-trainer`, and `enforce_author` OVERWRITES the
+    # author facet with that verified service sub — deliberately, since honouring a producer-supplied
+    # author would let any producer file a row in a named person's inbox. `originator` is the field for
+    # a run authored by a service but run FOR a person; without these two keys a training FAIL is
+    # dropped by `notifiable()` at "no verified author" and reaches nobody at all.
+    if originator:
+        run_facets["lance"]["originator"] = originator
+    if project:
+        run_facets["lance"]["project"] = project
     if progress is not None:
         run_facets["progress"] = {
             "_producer": _PRODUCER,
@@ -462,6 +474,10 @@ def _run_train(model: str, token: str) -> None:
             namespace=namespace,
             features=features,
             registry_uri=registry_uri,
+            # Read HERE, so every emit below carries them — including the config-parse FAIL, which is
+            # the earliest thing that can go wrong and the one a person most needs to hear about.
+            originator=os.environ.get("ORIGINATOR", ""),
+            project=os.environ.get("TRAIN_PROJECT", ""),
             **kw,
         )
 

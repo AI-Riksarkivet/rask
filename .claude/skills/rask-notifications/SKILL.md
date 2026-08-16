@@ -1,6 +1,6 @@
 ---
 name: rask-notifications
-description: How a feature gets a person told — the targeted inbox behind the estate's bell. The four targeting sources (AUTHOR/WATCH/GRANT_ADDED/GRANT_REVOKED), the producer contract for the lineage and control lanes, and the four silent-drop traps that make an emitted event reach nobody. Use when adding a feature whose outcome a person should hear about; when a notification "should have fired" and did not; when adding a `ControlAction` or a `NotificationReason`; when emitting an OpenLineage run event from any service; or when wiring a new service into `lineage.events.v1` / `catalog.control.v1`.
+description: How a feature gets a person told — the targeted inbox behind the estate's bell. The six targeting sources (AUTHOR/ORIGINATOR/WATCH/GRANT_ADDED/GRANT_REVOKED/TASK_ASSIGNED+TASK_UNASSIGNED), the producer contract for the lineage and control lanes, and the four silent-drop traps that make an emitted event reach nobody. Use when adding a feature whose outcome a person should hear about; when a notification "should have fired" and did not; when adding a `ControlAction` or a `NotificationReason`; when emitting an OpenLineage run event from any service; or when wiring a new service into `lineage.events.v1` / `catalog.control.v1`.
 ---
 
 # rask notifications — how a feature gets a person told
@@ -25,9 +25,26 @@ something adjacent.
 | | Question | Source | What you emit |
 | --- | --- | --- | --- |
 | **Q1** | Does a named person cause it, ending in a terminal run over a governed object? | `AUTHOR` | terminal lineage event + verified `author.sub` + ≥1 output |
-| **Q2** | Should people *other than the actor* know, because it is the project's work? | `WATCH` | the same event **plus** `lance.project` |
-| **Q3** | Does it give a specific person access? | `GRANT_ADDED` | `CatalogControlEvent`, `extra.subject` = the principal |
-| **Q4** | Does it take access away from a specific person? | `GRANT_REVOKED` | the same envelope, `action="grant_revoked"` |
+| **Q2** | Does a **service** run it, on a named person's behalf? | `ORIGINATOR` | the same event carrying `lance.originator` = that person's sub |
+| **Q3** | Should people *other than the actor* know, because it is the project's work? | `WATCH` | the same event **plus** `lance.project` |
+| **Q4** | Does it give a specific person access? | `GRANT_ADDED` | `CatalogControlEvent`, `extra.subject` = the principal |
+| **Q5** | Does it take access away from a specific person? | `GRANT_REVOKED` | the same envelope, `action="grant_revoked"` |
+| **Q6** | Does it hand a person a task, or take one back? | `TASK_ASSIGNED` / `TASK_UNASSIGNED` | the same envelope; `extra.subject` is the WORKER, never the manager who clicked |
+
+**Q2 is the one people miss, and it exists because Q1 is unreachable for most long work.** The estate's
+expensive runs — a Ray training job, a medallion stage — execute detached, hours after the request, and
+post their own lineage as a service. `enforce_author` then OVERWRITES the author facet with that
+service's verified sub (trap 2), so the human CANNOT be the author and must not try to be. `originator`
+is the field for a run authored by a service but run FOR a person; it is a TARGETING hint that
+authorizes nothing, because the plane re-derives every recipient's visibility at delivery. The worked
+reference is the `/train` chain (`tests/unit/test_train_originator.py`): five links — door → trigger →
+consumer → Ray submission → the job's own events — and the person is told only if every one carries it.
+
+**Long-running jobs need the identity in TWO places, and they are not interchangeable.** Ray's own
+`metadata` (`rask.originator`, returned by `GET /api/jobs/<id>`) is how an OUTSIDE observer recovers who
+a job was for *after* it died — including a job that died before emitting anything. `runtime_env.env_vars`
+is the job's own copy, for the events it emits itself. Put it in only one and you lose either the
+self-emitted lane or the post-mortem one.
 
 `AUTHOR` needs no registry and no opt-in — you may always be told about your own run
 (`fanout.py:87`). `WATCH` is an explicit `project#member`-gated opt-in: **membership gates watching and
