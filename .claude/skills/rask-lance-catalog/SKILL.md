@@ -245,6 +245,17 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   config-time list goes stale by construction. The orphan scan reads the same registry
   (`_scannable_buckets`), reporting an `IncompleteScan` rather than silently narrowing when it is
   unreadable. Residual: no multi-warehouse run against REAL object storage yet (#80).
+- **A MULTI-BASE dataset leaks, and nothing in Lance reclaims it — upstream-blocked, not a backlog
+  item.** `cleanup_old_versions` is ROOT-SCOPED: it reclaims dead files under the dataset's own root
+  and leaves every non-root base alone. MEASURED on pylance 9.0.0 — a dataset with
+  `target_bases=['cold']` landed a data file in an external base; after an overwrite orphaned it,
+  aggressive cleanup (`older_than=None, delete_unverified=True`) reported `data_files_removed: 2` for
+  the root-owned files and `EXTRA_BASE_DELETED = []` for the external one, which survived. There is no
+  pylance API that reclaims it, so this cannot be fixed in `services/maintenance`; it needs an upstream
+  answer or a bespoke reclaimer that understands `base_paths`, which is exactly the "list the prefix,
+  subtract what is referenced" logic the orphan scan REFUSES to run on these datasets for safety.
+  The same root-scoping is what makes cleanup SAFE on a shallow clone (see `SUPPORTED_FOR_GC`) — the
+  property that protects the base is the property that strands its garbage.
 - **Five things live in a Lance dataset that a manifest scan does not reach.** Branches (`tree/`),
   multi-base files (`base_paths`), MemWAL shards (`_mem_wal/` — WAL + SSTable datasets, and the spec
   warns that GC'ing WAL files WEAKENS writer fencing, since fencing detects a stalled writer by a
