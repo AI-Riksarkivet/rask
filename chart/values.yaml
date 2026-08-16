@@ -858,10 +858,33 @@ medallion:
   # drive: bronze -> silver -> gold, all three COMPLETE in the lineage graph (2026-08-15 20:59). That
   # is the first time the SUCCESS path has ever run; before this only the FAIL path had.
   #
-  # To turn it back on, give the estate a Lance-capable Ray cluster FIRST — either point `rayAddress`
-  # at a `ray-lance` head, or make the unified cluster's image carry pylance at the same version the
-  # workspace writes with (ray-lance.dockerfile calls a version split there "a correctness bug, not a
-  # currency preference"). Do not re-enable it against the HTR image.
+  # HOW TO TURN IT ON, verified end to end 2026-08-16. Give the estate a Lance-capable Ray cluster
+  # FIRST, then enable the lane and point at it IN THE SAME `helm upgrade`:
+  #
+  #     kubectl apply -f deploy/ray-lance-demo.yaml     # after correcting image + S3 for your estate
+  #     ./scripts/helm.sh upgrade rask ./chart -f <live values> \
+  #       --set medallion.ray=true \
+  #       --set-string medallion.rayAddress=http://ray-lance-head:8265
+  #     kubectl rollout restart deploy/rask-bronze-to-silver deploy/rask-silver-to-gold
+  #
+  # THE RESTART IS NOT OPTIONAL AND IT COST TWO FAILED DRIVES TO LEARN. This flag also decides
+  # whether the movers appear in `lance-statestore`'s `scopes` (dapr-statestore.yaml derives them from
+  # `medallion.movers` when `medallion.ray`), and **daprd caches the actor state store at sidecar
+  # start and cannot hot-reload it**. Enabling the lane and the Component in one upgrade races: the
+  # sidecars come up against the OLD scope list and every dispatch fails with
+  # `the state store is not configured to use the actor runtime`, which reads as a missing
+  # `actorStateStore: true` rather than as a stale sidecar. Restart the movers after the Component
+  # settles. For the same reason `kubectl set env MEDALLION_RAY_ENABLED=true` alone can NEVER work —
+  # it moves the flag without moving the scope.
+  #
+  # Do not re-enable against the HTR image (`ray-cluster`): it has no pylance and every job dies
+  # `ModuleNotFoundError: No module named 'lance'`. `ray-lance` carries pylance 9.0.0 + lance_ray and
+  # bakes all four job scripts. With it, the full cascade ran on real Ray — both jobs SUCCEEDED and
+  # bronze -> silver -> gold all COMPLETE, with S1's watcher doing exactly its job
+  # (dispatched_to_workflow -> ray_stage_job_submitted -> job_terminal -> wake the mover).
+  #
+  # Still `false` by default because the chart does not DEPLOY a ray-lance cluster; a default that
+  # points at a cluster the chart does not create is the bug this comment exists to prevent.
   ray: false
   # DERIVED from the RayService this chart renders, not a hardcoded hostname. `ray-lance-head` was the
   # on-kind demo's raw head and does not exist in a KubeRay deployment — measured 2026-08-15, it fails
