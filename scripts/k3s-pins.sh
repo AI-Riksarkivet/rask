@@ -14,6 +14,9 @@ set -euo pipefail
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 OUT="${1:-chart/values-live-pins.yaml}"
 KUBECTL="${KUBECTL:-kubectl}"
+# The staging file is removed on ANY exit, so a refused run leaves neither a truncated $OUT (see the
+# `mv` at the end) nor a half-written sibling for the next reader to mistake for output.
+trap 'rm -f "$OUT.tmp"' EXIT
 
 "$KUBECTL" get deploy,statefulset -o json | python3 -c '
 import json, sys
@@ -77,7 +80,15 @@ sys.stdout.write(
     "# Regenerate after every build+roll; never hand-edit. See #135.\n"
     "image:\n" + block("tags", tags) + block("digests", digests)
 )
-' > "$OUT"
+' > "$OUT.tmp"
+
+# ATOMIC, and the divergence guard is exactly why. `> "$OUT"` truncates the file the instant the shell
+# builds the redirection — BEFORE python runs — so any non-zero exit left the previous, good pins
+# destroyed. The guard added above exits 1 by design on a divergent stem, which turned a deliberate
+# refusal into "your record of what the cluster runs is now an empty file". Committed and pushed once
+# (2026-08-16) before anyone noticed; an upgrade reading a 0-byte pin file supplies no image tags at
+# all. Write to a sibling and move only on success, so a refusal costs nothing.
+mv "$OUT.tmp" "$OUT"
 
 echo ">> wrote $OUT"
 grep -c ':' "$OUT" || true
