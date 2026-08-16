@@ -124,6 +124,15 @@ async def create_namespace(
     # Check(can_get_metadata, warehouse:X) errors instead of answering — taking browsing down for the
     # whole bucket, its owners included. Shape rung, so 400, and before the native call.
     fga_deps.require_namespace_depth(segments, delimiter=settings.delimiter)
+    # …and the id must not still belong to a namespace in the trash. F10 item 4 closed this on the TABLE
+    # doors and left both namespace doors open, though the guard already spoke `kind="namespace"`.
+    # A recoverable drop KEEPS the object's tuples on purpose (the owner is the one caller who needs them
+    # to undrop), so a create at the same id during the grace window wears the dead namespace's readers,
+    # writers and validators. For a namespace it is worse than the table case in a way worth naming: the
+    # #96 cascade trashes a whole SUBTREE, and `undrop` rebuilds it with `mode="exist_ok"` and then
+    # re-registers the trashed TABLES underneath — so the previous tenant's data lands inside the
+    # namespace the new owner now controls. Conflict rung (409), after authz, before the native write.
+    await fga_deps.require_no_live_trash(settings, segments, kind="namespace")
     req = body or CreateNamespaceRequest()
     req.id = reconcile_body_id(segments, req.id)
     response: CreateNamespaceResponse = await run_in_threadpool(native.call, ns, "create_namespace", req)

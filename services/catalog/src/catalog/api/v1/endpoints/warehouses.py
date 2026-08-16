@@ -499,6 +499,13 @@ async def create_warehouse_namespace(
             "orphan its tables — choose a fresh name or migrate the tables first"
         )
 
+    # Same trash guard as the nested door, and this one matters MORE: a warehouse namespace is the ROOT
+    # of a cascade-trashed subtree, so its record is the one `undrop` walks from. Taking the name during
+    # the grace window binds a fresh namespace to this warehouse under an id whose undrop will later
+    # re-register the previous occupant's tables into it. Conflict rung, beside the two collision guards
+    # above and before the native create.
+    await fga_deps.require_no_live_trash(settings, segments, kind="namespace")
+
     ns_conn = _namespace_for_root(request, settings, root_uri)
     req = CreateNamespaceRequest(id=segments)
     adopted = False
