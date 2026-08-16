@@ -732,3 +732,34 @@ async def test_a_transient_failure_still_holds_the_mark() -> None:
     await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
 
     assert memory.seq == 8, "a single failed pass stepped over the row instead of re-offering it"
+
+
+def test_a_cursor_written_by_a_newer_build_is_still_readable() -> None:
+    """THE SECOND INSTANCE of the outage that took the inbox down, in a worse place.
+
+    Observed live, in the same rollback: `ValidationError: 1 validation error for LineageCursor` ->
+    `LineageCursorUnreadable` -> "the stored lineage feed cursor no longer fits its schema". Fields
+    added to this record (`stalls`, `floor`) meet an older build's `extra="forbid"` and the whole
+    cursor is refused — which stops the reconciler, the ingress that exists precisely because the bus
+    alone is provably incomplete.
+
+    Unreadable is DELIBERATELY fatal here, and rightly: reading a corrupt cursor as absent would jump
+    the mark to the newest row and drop every notification in between — an outage becoming silent,
+    permanent data loss. But version skew is not corruption. A rollback and a mixed-version rollout
+    are routine, and treating a field a newer build added as a corrupt cursor turns a routine event
+    into an outage of the whole lane.
+
+    `extra="ignore"` rather than the inbox row's tolerated-value treatment, because the hazards
+    differ: this record is service-internal and single-writer, so an unknown field carries no other
+    subject's data — there is nothing here for `extra="forbid"` to contain.
+    """
+    from notifications.api.reconciler import LineageCursor
+
+    cursor = LineageCursor.model_validate(
+        {
+            "seq": 4200,
+            "updated_at": "2026-08-16T12:00:00Z",
+            "a_field_a_later_build_added": 7,
+        }
+    )
+    assert cursor.seq == 4200, "the high-water mark must survive a field this build cannot name"

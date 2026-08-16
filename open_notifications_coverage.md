@@ -59,6 +59,22 @@ separate defect in the inbox actor's meta/rows persistence, it predates the task
 symptom (a badge you cannot clear by reading, because the row is not listed) is worse than the gap
 this register was opened for.
 
+**FOUND BY RUNNING IT — a persisted-state compatibility class, and it is the sharpest thing in this
+file.** Adding three `NotificationReason` members put rows in the durable actor state that an older
+build could not name; a rollback then produced `ValidationError: 4 validation errors for InboxRows`
+→ `InboxUnreadable` → **503 for the whole inbox**, badge blank, every other notification unreachable.
+The bell fell back to the run feed, which is indistinguishable from "no service configured". The same
+rollback hit `LineageCursor` (`stalls`/`floor` meeting `extra="forbid"`), stopping the reconciler —
+the ingress that exists because the bus alone is provably incomplete.
+
+Fixed where it was proven: `InboxPointer` degrades an unnameable reason to `UNKNOWN`, `LineageCursor`
+takes `extra="ignore"`. `extra="forbid"` on `InboxPointer` deliberately STAYS — an unknown field may
+be another subject's data (`test_inbox_leak_containment` caught a first attempt that relaxed it),
+while an unknown reason value arrives on a declared field and carries nothing foreign.
+
+**Still strict and still this class, each needing its own containment argument before it is touched:
+`InboxMeta`, `InboxRows`, `ChannelPrefs`.** Adding a field to any bricks older readers of that record.
+
 **Still open and worth knowing:** `lease_expired` is the annotator edge that most deserves a
 notification and cannot have one — its audience is the PREVIOUS holder and it fires with no principal
 at all (`machines.py` gives it permission `None`). That needs a fifth *audience shape*, not another

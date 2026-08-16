@@ -127,7 +127,16 @@ class LineageCursor(BaseModel):
     from before this field existed still validates).
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    #: `ignore`, not `forbid`, and the difference is a rollback away from an outage. This record is
+    #: SERVICE-INTERNAL and single-writer, so an unknown field carries no other subject's data —
+    #: there is nothing here for a forbid to contain, and the inbox row's cross-subject argument for
+    #: keeping one does not apply. What a forbid DID do was turn routine version skew into
+    #: `LineageCursorUnreadable`: fields added to this model met an older build and refused the whole
+    #: cursor, stopping the reconciler — the ingress that exists because the bus alone is provably
+    #: incomplete. Unreadable stays fatal for a CORRUPT cursor (reading one as absent would jump the
+    #: mark to the newest row and drop every notification in between); a field a newer build added is
+    #: not corruption.
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     seq: int = Field(ge=0)
     updated_at: datetime

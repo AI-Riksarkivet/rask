@@ -106,6 +106,26 @@ it, and a governance row is checked against no object rule at all, so a reader t
 apart from a run row would have to guess. Note also that `ControlAction` is a wire contract reaching
 the frontend through `docs/catalog-openapi.json` — see `rask-lance-catalog` for the regen step.
 
+**A NEW REASON IS A COMPATIBILITY SURFACE, NOT JUST AN ENUM.** The reason is *stored*, so the moment
+a row carrying it lands in the actor's durable state, every build that reads that state must be able
+to name it. This is not theoretical — it took an inbox down on 2026-08-16: three members were added,
+rows landed, the deployment rolled back, and the older enum turned them into
+`ValidationError: 4 validation errors for InboxRows` → `InboxUnreadable` → **503 for the entire
+inbox**. Not one missing row: the badge went blank and every other notification that subject had
+became unreachable, because list validation is all-or-nothing. The bell then fell back to the run
+feed, which is indistinguishable from "no service configured".
+
+`InboxPointer` now degrades an unnameable reason to `NotificationReason.UNKNOWN` on read, and
+`LineageCursor` takes `extra="ignore"` (it is service-internal and single-writer, so nothing is being
+contained). **`extra="forbid"` on `InboxPointer` deliberately stays** — an unknown *field* may be
+another subject's data, which is a containment guard (`test_inbox_leak_containment`), while an
+unknown *reason value* arrives on a declared field and carries nothing foreign. Those are two hazards
+wearing one symptom; do not "fix" the first by relaxing the second.
+
+Still strict and still this class, unfixed because each needs its own containment argument:
+`InboxMeta`, `InboxRows`, `ChannelPrefs`. Adding a field to any of them bricks older readers of that
+record. A rollback and a mixed-version rollout are both routine.
+
 Adding a `NotificationReason` needs **no frontend change** — but not because the bell ignores it. The
 panel RENDERS the reason as each row's label (verified in a browser: rows read `originator · 1m ago`
 beside older `author` ones). It passes the string straight through rather than switching on a known
