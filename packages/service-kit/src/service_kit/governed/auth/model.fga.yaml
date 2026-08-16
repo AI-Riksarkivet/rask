@@ -96,6 +96,33 @@ tuples:
   - { user: user:olive, relation: reader, object: warehouse:lance_catalog }
   - { user: user:peter, relation: writer, object: table:acme_gold_catalog }
   - { user: user:quincy, relation: viewer, object: annotation_project:labels_2026 }
+  # ---- the DEPTH-CEILING probe (catalog.core.identifiers.MAX_NAMESPACE_DEPTH) ----
+  # A namespace chain exactly as deep as the catalog's create doors allow (MAX_NAMESPACE_DEPTH is an
+  # EXCLUSIVE bound, so the deepest legal tree is one rung shallower than the number). It exists so the ceiling is
+  # pinned against the REAL evaluator rather than asserted in a comment: `can_get_metadata` is recursive
+  # both ways (`reader from parent` down, `can_get_metadata from child` up), and OpenFGA ABANDONS a
+  # resolution that needs too many rewrite rules. Measured 2026-08-16 against this model with
+  # `fga model test`: a chain of 12 answers; at 13 the check stops returning true/false and returns
+  # `Code(2002) Authorization Model resolution required too many rewrite rules`. That is an ERROR, so the
+  # fleet fails closed and browsing 503s for the WHOLE warehouse — laterally, from one deep branch.
+  # Raising MAX_NAMESPACE_DEPTH means extending this chain (a contract test enforces they match), and if
+  # it is raised past what the evaluator can take, these checks go red here instead of in production.
+  - { user: 'namespace:depth_1', relation: child, object: 'warehouse:depth_probe' }
+  - { user: 'project:depth_co', relation: project, object: 'warehouse:depth_probe' }
+  - { user: 'namespace:depth_2', relation: child, object: 'namespace:depth_1' }
+  - { user: 'namespace:depth_1', relation: parent, object: 'namespace:depth_2' }
+  - { user: 'namespace:depth_3', relation: child, object: 'namespace:depth_2' }
+  - { user: 'namespace:depth_2', relation: parent, object: 'namespace:depth_3' }
+  - { user: 'namespace:depth_4', relation: child, object: 'namespace:depth_3' }
+  - { user: 'namespace:depth_3', relation: parent, object: 'namespace:depth_4' }
+  - { user: 'namespace:depth_5', relation: child, object: 'namespace:depth_4' }
+  - { user: 'namespace:depth_4', relation: parent, object: 'namespace:depth_5' }
+  - { user: 'namespace:depth_6', relation: child, object: 'namespace:depth_5' }
+  - { user: 'namespace:depth_5', relation: parent, object: 'namespace:depth_6' }
+  - { user: 'namespace:depth_7', relation: child, object: 'namespace:depth_6' }
+  - { user: 'namespace:depth_6', relation: parent, object: 'namespace:depth_7' }
+  - { user: 'warehouse:depth_probe', relation: parent, object: 'namespace:depth_1' }
+  - { user: 'user:deepest', relation: reader, object: 'namespace:depth_7' }
 
 tests:
   - name: only a ROOT-warehouse (estate) admin can observe the estate-wide control-plane event feed
@@ -782,3 +809,25 @@ tests:
       - user: user:alice # …and in an UNMANAGED scope an owner still controls their own
         object: namespace:acme_silver
         assertions: { can_set_managed_access: true }
+
+  - name: the namespace DEPTH CEILING is inside what OpenFGA can actually resolve (measured, not assumed)
+    check:
+      # The NEGATIVE is the expensive direction — a deny must walk the entire chain before it can say no,
+      # which is exactly the resolution that blows the rewrite budget. If this ever returns N/A instead of
+      # false, the ceiling has been raised past the evaluator and every warehouse with a deep branch is
+      # about to 503 on browse for everyone, its owners included.
+      - user: user:depth_stranger
+        object: warehouse:depth_probe
+        assertions:
+          can_get_metadata: false
+      # …and the POSITIVE proves the chain is genuinely wired end to end, so the negative above is not
+      # passing vacuously off a chain that was never connected. One reader at the deepest legal rung is
+      # visible from the warehouse 7 levels up, and can read down from the top of the chain.
+      - user: user:deepest
+        object: warehouse:depth_probe
+        assertions:
+          can_get_metadata: true
+      - user: user:deepest
+        object: namespace:depth_7
+        assertions:
+          can_get_metadata: true

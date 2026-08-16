@@ -50,7 +50,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.credentials import _has_external_bases
-from catalog.core.identifiers import parse_identifier, reconcile_body_id
+from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import (
     DECLARE_TABLE,
     DEREGISTER_TABLE,
@@ -71,9 +71,10 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/table", tags=["table"])
 
 
-#: How deep the namespace walk goes. The medallion is two levels (namespace + table) and Polaris
-#: allows 16; this bounds a pathological or cyclic tree without pretending to be a real limit.
-_MAX_NAMESPACE_DEPTH = 8
+#: Re-exported, not redefined — the number lives in `catalog.core.identifiers` now that the CREATE
+#: guard depends on it too, and its ceiling is an OpenFGA resolution limit rather than a taste. See
+#: that constant for the measurement.
+_MAX_NAMESPACE_DEPTH = MAX_NAMESPACE_DEPTH
 
 
 def _is_expired(expires_at: str) -> bool:

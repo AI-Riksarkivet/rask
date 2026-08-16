@@ -480,6 +480,13 @@ async def create_warehouse_namespace(
         raise NamespaceAlreadyExistsError(f"namespace {ns_name!r} is already bound to another warehouse")
 
     segments = parse_identifier(ns_name, settings.delimiter)
+    # Depth cap, same ceiling as the nested door. This is NOT dead code just because a warehouse
+    # namespace is "top-level": `_validate_id` permits hyphens and `LANCE_NS_DELIMITER` is
+    # operator-settable, so under a hyphen delimiter one legal 63-char name splits into ~31 segments —
+    # well past the ~13 at which `Check(can_get_metadata, warehouse:X)` stops answering and starts
+    # erroring. Under the default `$` delimiter the name cannot contain the delimiter and this is a
+    # cheap no-op; that is defence in depth, not decoration.
+    fga_deps.require_namespace_depth(segments, delimiter=settings.delimiter)
     # Collision guard (#3-A): a top-level namespace NAME that already exists UNBOUND in the DEFAULT root must
     # not be bound to a warehouse. Binding routes every future <name>$* op to this warehouse's bucket, so the
     # default-root namespace's tables become unreachable via the API (orphaned) — and the positive routing

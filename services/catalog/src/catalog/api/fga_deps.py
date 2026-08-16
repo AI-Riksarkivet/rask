@@ -48,7 +48,7 @@ from openfga_sdk import OpenFgaClient
 from catalog.api.dependencies import SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
-from catalog.core.identifiers import parse_identifier
+from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier
 from catalog.services import native
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
@@ -728,6 +728,43 @@ async def require_no_live_trash(settings: Settings, segments: list[str], *, kind
     # The type-specific AlreadyExists error, not a generic conflict: both map to 409 (spec code 2), and
     # a caller's error handling switches on the CODE, so a table create must fail as a table conflict.
     raise (NamespaceAlreadyExistsError(detail) if kind == "namespace" else TableAlreadyExistsError(detail))
+
+
+def require_namespace_depth(segments: list[str], *, delimiter: str) -> None:
+    """Refuse a namespace nested deeper than the estate's ceiling — a SHAPE rule, so a 400.
+
+    THE CEILING IS AN OPENFGA LIMIT, NOT A PREFERENCE. `warehouse#can_get_metadata` and
+    `namespace#can_get_metadata` are recursive (`can_get_metadata from child`), and OpenFGA abandons a
+    resolution needing too many rewrite rules. Measured against the shipped model with the real
+    evaluator: at roughly 13 levels of nesting, `Check(user, can_get_metadata, warehouse:X)` stops
+    answering true/false and returns `Code(2002) ... too many rewrite rules`.
+
+    That is an ERROR, not a deny, and the fleet fails closed on an unrecognised authz error — so it
+    surfaces as a 503 on the browse path. Worse, it is LATERAL: the positive check short-circuits, so
+    a shallow readable table still resolves, while the NEGATIVE check for any subject on that
+    warehouse errors. One pathological branch — created by a plain `writer`, or by a buggy importer —
+    takes warehouse browsing down for every user of that bucket, its owners included.
+
+    Nothing bounded creation before this. Both read walkers capped at `MAX_NAMESPACE_DEPTH` and the
+    doors did not, so the estate could be driven into a state its own authz model cannot evaluate.
+
+    The comparison is `>=`, IDENTICAL to both walkers'. It is a bound they share, and sharing the
+    number while disagreeing about the operator would put the deepest legal namespace one level past
+    where the walkers stop descending — its tables enumerated by nothing, so a cascade drop would
+    silently leave them behind. That is the F10 item 10 failure with an off-by-one instead of a
+    second literal.
+
+    Refused at the SHAPE rung (`InvalidInputError` -> 400), before any native write, per the create
+    door's order: identity -> shape -> parent exists -> authz -> conflict -> write. A depth violation
+    is a malformed request, not a permission problem, and answering 403 would send the caller looking
+    for a grant that would not help.
+    """
+    if len(segments) >= MAX_NAMESPACE_DEPTH:
+        raise InvalidInputError(
+            f"namespace {delimiter.join(segments)!r} nests {len(segments)} levels deep; the maximum is "
+            f"{MAX_NAMESPACE_DEPTH - 1}. Deeper trees exceed what the authorization model can resolve, "
+            f"which takes metadata reads down for the whole warehouse rather than denying just this one."
+        )
 
 
 def require_warehouse_scoped(segments: list[str], *, delimiter: str, warehouses_enabled: bool) -> None:
