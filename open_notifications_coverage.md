@@ -59,6 +59,17 @@ separate defect in the inbox actor's meta/rows persistence, it predates the task
 symptom (a badge you cannot clear by reading, because the row is not listed) is worse than the gap
 this register was opened for.
 
+- ~~**ingest runs name a SERVICE, never the human** (§6 #10)~~ — **FIXED `e1173173`.** The worst shape
+  in this register, because it LOOKED covered: a row was delivered every run, to an inbox named
+  `service-ingest`. The verified sub is now captured at `authorize_ingest` — the last place a human
+  exists, since everything after is a workflow activity behind a service token — and rides
+  `lance.originator` from `RunSpec` onto the run's START and terminal alike.
+- ~~**a control row was delivered on purpose, then hidden at render**~~ — **FIXED `f1c36ee2`.** Not in
+  the numbered list because it was found by running the estate: the control lane skips the visibility
+  check at delivery by design, and `get_inbox` re-imposed it at render, so `task_assigned` rows were
+  counted but never shown — a badge that could not be cleared by reading. Verified live, bob
+  `unread=15 rows=15`.
+
 **FOUND BY RUNNING IT — a persisted-state compatibility class, and it is the sharpest thing in this
 file.** Adding three `NotificationReason` members put rows in the durable actor state that an older
 build could not name; a rollback then produced `ValidationError: 4 validation errors for InboxRows`
