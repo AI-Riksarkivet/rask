@@ -65,12 +65,19 @@ async def produce(dapr: DaprClient, settings: MedallionSettings, *, token: str |
         if root is None:
             raise UnresolvableProjectError(f"project {project!r} has no active warehouse")
         bronze_uri = f"{root}/medallion/{settings.bronze_namespace}"
+    # The canonical name for the dataset this call writes — emitted as the event's `output_name` AND
+    # stamped onto the dataset itself, from ONE expression so the two can never drift.
+    bronze_dataset_id = project_namespace(project, settings.bronze_dataset)
     result = None
     if settings.compute_enabled and bronze_uri:
         # Fake-Ray ingest: a REAL Lance write of bronze$events (blocking IO → threadpool) → the real version
         # + the measured output statistics (rows + on-disk bytes) the emit records as outputStatistics.
         with tracer.start_as_current_span("medallion.produce") as span:
-            result = await run_in_threadpool(seed_bronze, bronze_uri, settings.storage_options())
+            # DECLARE the canonical name, exactly as every mover does (transform.py). `bronze_uri` is
+            # composed from the NAMESPACE alone, so `medallion/bronze` is both `bronze$events` and
+            # `bronze$pages` — the sweep cannot derive the id and, without this, emits no maintenance
+            # provenance and no per-dataset FAIL event for the cascade HEAD.
+            result = await run_in_threadpool(seed_bronze, bronze_uri, settings.storage_options(), dataset_id=bronze_dataset_id)
             span.set_attribute("lance.version", result.version)
             span.set_attribute("lance.row_count", result.row_count)
             span.set_attribute("lance.size_bytes", result.size_bytes)
@@ -83,7 +90,7 @@ async def produce(dapr: DaprClient, settings: MedallionSettings, *, token: str |
         job_namespace=settings.job_namespace,
         inputs=[],  # the dummy seed has no external source; the ingest plane carries its own (R23)
         output_namespace=project_namespace(project, settings.bronze_namespace),
-        output_name=project_namespace(project, settings.bronze_dataset),
+        output_name=bronze_dataset_id,
         version=result.version if result else 1,
         row_count=result.row_count if result else None,
         size_bytes=result.size_bytes if result else None,

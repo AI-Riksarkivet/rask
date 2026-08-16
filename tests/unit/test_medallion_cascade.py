@@ -103,6 +103,15 @@ def test_cascade_produces_real_data_and_a_correct_lineage_chain(tmp_path: Any) -
     for name, ns in (("bronze$events", "bronze"), ("silver$features", "silver"), ("gold$catalog", "gold")):
         assert by_output[name].output_version(name) == str(lance.dataset(uris[ns]).version)
 
+    # T6: every tier DECLARES its canonical name on the dataset itself, equal to the name the event
+    # emitted. The URI is composed from the NAMESPACE alone (`medallion/bronze` is both `bronze$events`
+    # and `bronze$pages`), so the maintenance sweep cannot derive this — unstamped, that tier gets no
+    # maintenance provenance and no per-dataset FAIL event. The HEAD was unstamped until 2026-08-16
+    # while both movers already declared theirs.
+    for name, ns in (("bronze$events", "bronze"), ("silver$features", "silver"), ("gold$catalog", "gold")):
+        declared = (lance.dataset(uris[ns]).schema.metadata or {}).get(b"lineage.dataset_id")
+        assert declared == name.encode(), f"{ns} did not declare its canonical id: {declared!r}"
+
 
 def test_source_rowid_traces_every_derived_row_back_to_its_exact_bronze_source_row(tmp_path: Any) -> None:
     """#38a ROOT PROVENANCE (re-rooted by R23): every silver/gold row carries ``source_rowid`` = the stable
