@@ -267,8 +267,16 @@ def compact_one(
                 result.index_findings = [f.model_dump() for f in inspect_indices(ds, expected_columns=index_columns)]
                 if result.index_findings:
                     log.warning("maintenance_index_findings", extra={"uri": uri, "findings": len(result.index_findings)})
-        except Exception as exc:
-            log.warning("optimize_indices_skipped", extra={"uri": uri, "error": str(exc)})
+        except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception; see below
+            # This guard already existed and already had the right INTENT — index work is best-effort,
+            # so a dataset with no index, or an unreadable one, must not lose the compaction that just
+            # succeeded. It only caught `Exception`, and `index_stats` PANICS on index types Lance has
+            # no stats implementation for. A pyo3 panic derives from BaseException, so it sailed past
+            # here into the per-dataset capture and turned a REPORT failure into a dataset failure —
+            # discarding `fragments_removed` from a compaction that had already happened.
+            if isinstance(exc, KeyboardInterrupt | SystemExit):
+                raise
+            log.warning("optimize_indices_skipped", extra={"uri": uri, "error": str(exc), "error_type": type(exc).__name__})
         # error_if_tagged_old_versions=False: tagged versions are EXEMPT from GC (they survive until the tag
         # is deleted). The default (True) RAISES once any tag ages past older_than — which, since the catalog
         # creates long-lived promotion tags, would permanently stall GC for that dataset (the raise is caught
@@ -309,7 +317,19 @@ def compact_one(
             result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
         else:
             log.info("cleanup_disabled_by_policy", extra={"uri": uri})
-    except Exception as exc:
+    except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception; see below
+        # `BaseException`, deliberately, and this is the LAST line of defence for the whole sweep.
+        # pylance can PANIC (`pyo3_runtime.PanicException: not yet implemented` out of
+        # `index_stats`), and a pyo3 panic derives from BaseException, so `except Exception` lets it
+        # past. Measured on the live estate 2026-08-16: one panicking index answered the entire sweep
+        # HTTP 500 — every OTHER dataset lost its compaction and version reclamation to one dataset's
+        # unreadable index report.
+        #
+        # This function's contract is per-dataset isolation: `run_sweep` collects a DatasetResult per
+        # uri and reports failures alongside successes. A failure mode that escapes that contract
+        # turns a partial problem into a total outage, which is exactly what happened.
+        if isinstance(exc, KeyboardInterrupt | SystemExit):
+            raise
         result.error = f"maintain: {exc}"
         result.error_type = type(exc).__name__
     return result

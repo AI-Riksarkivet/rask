@@ -386,3 +386,44 @@ def test_a_STABLE_ROW_ID_dataset_falls_back_instead_of_failing_the_sweep(tmp_pat
 
     assert result.error is None, f"a stable-row-id refusal became a sweep error: {result.error}"
     assert result.fragments_removed >= 4, "the fallback compaction did not run, so nothing was reclaimed"
+
+
+class _Panic(BaseException):
+    """Stand-in for `pyo3_runtime.PanicException`, whose defining property is its BASE CLASS.
+
+    pyo3 synthesises that module lazily, so it cannot be imported to catch by type. What matters is
+    that a Rust panic surfaces as a `BaseException` — which is precisely why `except Exception`
+    handlers do not see it.
+    """
+
+
+def test_a_RUST_PANIC_in_index_stats_does_not_kill_the_whole_sweep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One panicking index took down the entire pass, not just its dataset.
+
+    MEASURED on the live estate 2026-08-16, immediately after compaction started working:
+
+        maintenance/services/index_health.py:65 in _stats
+        lance/dataset.py:7359 in index_stats
+        pyo3_runtime.PanicException: not yet implemented
+
+    and the sweep answered HTTP 500. `index_stats` panics on an index type Lance has not implemented
+    stats for; a panic is a `BaseException`, so BOTH guards missed it — `_stats`' own `except
+    Exception` and `compact_one`'s per-dataset capture. The blast radius is the point: index health is
+    a REPORTING step, and a report that cannot be produced for one index must not cost every other
+    dataset its compaction and version reclamation.
+
+    The dataset here is real and already compacted; only `index_stats` is made to panic.
+    """
+    from maintenance.services import index_health
+
+    uri = _fragmented_indexed_dataset(tmp_path)
+
+    def _boom(*_a: object, **_k: object) -> dict[str, object]:
+        raise _Panic("not yet implemented")
+
+    monkeypatch.setattr(index_health, "_stats", _boom)
+
+    result = compact_one(uri, {}, older_than=timedelta(days=7))
+
+    assert result.error is None, f"a panic in a REPORTING step failed the dataset: {result.error}"
+    assert result.fragments_removed >= 4, "compaction was lost to an index-report panic"

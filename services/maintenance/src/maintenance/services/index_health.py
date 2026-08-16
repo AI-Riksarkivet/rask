@@ -63,8 +63,20 @@ class IndexFinding(BaseModel):
 def _stats(ds: Any, name: str) -> dict[str, Any] | None:  # noqa: ANN401 — LanceDataset, no protocol
     try:
         stats = ds.stats.index_stats(name)
-    except Exception as exc:
-        log.warning("index_stats_unreadable", extra={"index": name, "error": str(exc)})
+    except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception; see below
+        # `BaseException`, deliberately. `index_stats` PANICS on index types Lance has no stats
+        # implementation for, and a pyo3 panic surfaces as `pyo3_runtime.PanicException`, which derives
+        # from BaseException — so `except Exception` does not see it. Measured on the live estate
+        # 2026-08-16: `pyo3_runtime.PanicException: not yet implemented` escaped this handler AND
+        # `compact_one`'s per-dataset capture, and answered the sweep with HTTP 500.
+        #
+        # The blast radius is why this is worth the broad catch: index health is a REPORTING step, and
+        # a report that cannot be produced for ONE index must not cost every other dataset in the
+        # estate its compaction and version reclamation. The class cannot be caught by name because
+        # pyo3 synthesises `pyo3_runtime` lazily and it is not importable.
+        if isinstance(exc, KeyboardInterrupt | SystemExit):
+            raise
+        log.warning("index_stats_unreadable", extra={"index": name, "error": str(exc), "error_type": type(exc).__name__})
         return None
     return stats if isinstance(stats, dict) else None
 
