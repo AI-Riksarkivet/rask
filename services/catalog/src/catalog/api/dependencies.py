@@ -18,12 +18,12 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 
 from catalog.core.config import Settings, get_settings
-from catalog.core.control_emit import ControlEmitter, NoopControlEmitter
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import LineageEmitter, NoopEmitter
 from catalog.core.namespace import build_namespace_for_root
 from catalog.core.vending import CredentialVendor, ModeBVendor
 from catalog.services import warehouses
+from service_kit.control_emit import ControlEmitter, NoopControlEmitter
 
 
 log = logging.getLogger(__name__)

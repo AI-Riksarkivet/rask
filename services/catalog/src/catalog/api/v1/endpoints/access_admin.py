@@ -34,7 +34,6 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import SettingsDep, get_control_emitter
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
-from catalog.core.control_emit import emit_control
 from catalog.schemas import (
     AccessCheckBody,
     AccessCheckResult,
@@ -52,6 +51,7 @@ from catalog.schemas import (
     AccessTuplesPage,
     TupleCondition,
 )
+from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 

@@ -60,10 +60,10 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
-from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import CONTROL_ID_RE
 from catalog.services import projects as project_registry
 from catalog.services import warehouses
+from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError

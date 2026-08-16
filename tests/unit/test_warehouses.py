@@ -319,7 +319,8 @@ def _governed_settings(tmp_path: Any) -> Settings:
 
 def _create_as(settings: Settings, sub: str, body: Any) -> Any:
     from catalog.api.v1.endpoints import warehouses as wh_ep
-    from catalog.core.control_emit import NoopControlEmitter
+
+    from service_kit.control_emit import NoopControlEmitter
 
     return asyncio.run(
         wh_ep.create_warehouse(
@@ -334,7 +335,8 @@ def _create_as(settings: Settings, sub: str, body: Any) -> Any:
 
 def _create_project_as(settings: Settings, sub: str, project_id: str) -> Any:
     from catalog.api.v1.endpoints import projects as proj_ep
-    from catalog.core.control_emit import NoopControlEmitter
+
+    from service_kit.control_emit import NoopControlEmitter
 
     return asyncio.run(
         proj_ep.create_project(
@@ -612,7 +614,8 @@ def _serving_settings(tmp_path: Any) -> Settings:
 
 def _create(settings: Settings, body: Any) -> Any:
     from catalog.api.v1.endpoints import warehouses as wh_ep
-    from catalog.core.control_emit import NoopControlEmitter
+
+    from service_kit.control_emit import NoopControlEmitter
 
     # The project must EXIST now (Decision 1) — mint its registry record first, idempotently, so
     # these unit tests keep their real subject (the warehouse record contract) without re-testing

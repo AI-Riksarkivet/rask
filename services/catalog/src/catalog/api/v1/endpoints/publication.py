@@ -29,10 +29,10 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
 )
 from catalog.api.security import CurrentToken
-from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PublishRequest, PublishResult
 from catalog.services import publication
+from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 
 

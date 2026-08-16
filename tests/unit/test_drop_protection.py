@@ -23,9 +23,9 @@ from typing import Any
 import pytest
 from catalog.api import fga_deps
 from catalog.core.config import Settings
-from catalog.core.control_emit import NoopControlEmitter
 from lance_namespace import NamespaceNotEmptyError, TableNotFoundError
 
+from service_kit.control_emit import NoopControlEmitter
 from service_kit.lakehouse import protection
 
 

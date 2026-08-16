@@ -7,8 +7,8 @@ from typing import Annotated, Any
 from fastapi import Depends, Request
 
 from maintenance.core.config import MaintenanceSettings, get_settings
-from maintenance.core.control_emit import ControlEmitter, NoopControlEmitter
 from maintenance.core.lineage_emit import MaintenanceEmitter
+from service_kit.control_emit import ControlEmitter, NoopControlEmitter
 
 
 SettingsDep = Annotated[MaintenanceSettings, Depends(get_settings)]

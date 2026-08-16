@@ -70,8 +70,9 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     ("services/maintenance/src/maintenance/core/lineage_emit.py", "self._topic"): "lineage-bare",
     # CONTROL — a governance refresh hint. `service_kit/control_events.py` declares these best-effort by
     # contract: a consumer re-reads state through the governed path, so a dropped one costs a re-read.
-    ("services/catalog/src/catalog/core/control_emit.py", "self._topic"): "control",
-    ("services/maintenance/src/maintenance/core/control_emit.py", "self._topic"): "control",
+    # ONE row where there were two: the catalog and maintenance copies collapsed into the shared
+    # emitter every producer now imports (see `test_the_control_emitter_has_exactly_one_implementation`).
+    ("packages/service-kit/src/service_kit/control_emit.py", "self._topic"): "control",
     # TRIGGER — an instruction to DO work. Correctly bare: the outbox re-ingests lineage, it never
     # re-fires triggers. Their durability question is a different one, and is DECIDED: the caller-retry
     # idempotency-token contract is the carrier (open_medallion_workflow.md section 11).
@@ -107,6 +108,18 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
 #: This set may shrink. It may not grow.
 _KNOWN_BARE_LINEAGE: Final[frozenset[str]] = frozenset(module for (module, _topic), intent in _PUBLISH_INTENT.items() if intent == "lineage-bare")
 
+#: The PIPE, not a caller. Both forward whatever topic they are handed (`**kwargs`; a `topic_name`
+#: parameter), so neither carries an intent to declare — "lineage" or "control" is a property of the
+#: caller that chose the topic, and stamping one here would assert a classification for every OTHER
+#: caller that happens to flow through. Excluded so the registry keeps meaning "who publishes what",
+#: which is the question it exists to answer.
+_TRANSPORT_MODULES: Final[frozenset[str]] = frozenset(
+    {
+        "packages/service-kit/src/service_kit/dapr_publish.py",
+        "packages/service-kit/src/service_kit/lakehouse/outbox.py",
+    }
+)
+
 _PUBLISH_CALL = re.compile(r"\bpublish_event\(")
 _TOPIC_KWARG = re.compile(r"topic_name=([A-Za-z_][A-Za-z_0-9\.\[\]]*)")
 
@@ -120,8 +133,13 @@ def _observed_publish_sites() -> dict[tuple[str, str], str]:
     dotted form misses that one — which is exactly the shape of the bug this registry replaces.
     """
     observed: dict[tuple[str, str], str] = {}
-    for py in sorted(SERVICES.rglob("*.py")):
-        if "tests" in py.parts:
+    # `packages/` is walked too, and not as a completeness flourish: the control emitter MOVED there when
+    # its third producer appeared, and a scanner rooted only at `services/` would have stopped seeing a
+    # real publish site the moment it became shared. That is precisely this guard's own failure mode —
+    # a publisher nobody classified — reintroduced by the scan's shape rather than by a new caller.
+    roots = (SERVICES, REPO / "packages")
+    for py in sorted(path for root in roots for path in root.rglob("*.py")):
+        if "tests" in py.parts or py.relative_to(REPO).as_posix() in _TRANSPORT_MODULES:
             continue
         lines = py.read_text().splitlines()
         for i, line in enumerate(lines):
@@ -2624,3 +2642,26 @@ def test_k3s_up_does_not_REWRITE_the_image_mode_of_a_live_release() -> None:
     assert "--set image.localImages=true \\\n" not in body, (
         "make k3s-up still hardcodes image.localImages=true. That must be a FALLBACK for a release that does not exist yet, never an override of one that does."
     )
+
+
+def test_the_control_emitter_has_exactly_one_implementation() -> None:
+    """THE THIRD COPY IS THE ONE THAT DOESN'T GET WRITTEN.
+
+    `control_emit` was duplicated between the catalog and maintenance — same Protocol, same Noop/Dapr
+    pair, same fail-open posture, differing only in an OTel meter name. The duplicate was deliberate and
+    its docstring says why: *"maintenance may not import the catalog"*
+    (:func:`test_declared_dependencies`), *"the shared code is the event MODEL"*.
+
+    That reasoning justifies not importing the CATALOG. It never justified a second implementation —
+    `service_kit` already owns the wire model, and it is importable by every service by construction. The
+    annotator emitting `task_assigned` would have been the third copy, and three copies of a fail-open
+    publish path is three places for the swallow-and-count discipline to drift apart.
+
+    Guarded rather than merely fixed: the next producer must reach for the shared module, and a fourth
+    copy fails here instead of passing review.
+    """
+    shared = REPO / "packages/service-kit/src/service_kit/control_emit.py"
+    assert shared.is_file(), "the ONE control emitter belongs in service_kit, beside the event model it publishes"
+
+    strays = sorted(path.relative_to(REPO).as_posix() for path in REPO.glob("services/*/src/*/**/control_emit.py") if "NoopControlEmitter" in path.read_text())
+    assert strays == [], f"control_emit re-implemented per service instead of imported from service_kit: {strays}"

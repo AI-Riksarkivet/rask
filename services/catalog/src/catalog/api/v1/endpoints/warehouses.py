@@ -57,7 +57,6 @@ from catalog.api.dependencies import (
 )
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
-from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import CONTROL_ID_RE, parse_identifier
 from catalog.schemas import (
     CreateWarehouseNamespaceRequest,
@@ -65,6 +64,7 @@ from catalog.schemas import (
     WarehouseResponse,
 )
 from catalog.services import native, warehouses
+from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError

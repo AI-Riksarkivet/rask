@@ -50,7 +50,6 @@ from catalog.api.dependencies import (
 )
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.credentials import _has_external_bases
-from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import (
     DECLARE_TABLE,
@@ -63,6 +62,7 @@ from catalog.core.lineage_emit import (
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, warehouses
+from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import protection, trash
 

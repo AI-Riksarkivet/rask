@@ -12,13 +12,13 @@ import asyncio
 from typing import Any, cast
 
 from catalog.core.control_buffer import ControlEventBuffer
-from catalog.core.control_emit import (
+
+from service_kit.control_emit import (
     DaprControlEmitter,
     NoopControlEmitter,
     emit_control,
     make_control_emitter,
 )
-
 from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent, ControlAction
 
 
@@ -116,7 +116,7 @@ def test_noop_emitter_is_total() -> None:
 
 def test_dapr_emitter_publishes_control_topic() -> None:
     fake = _FakeDapr()
-    em = DaprControlEmitter(cast(Any, fake), pubsub="catalog-control-pubsub", topic=CONTROL_TOPIC, timeout_seconds=5)
+    em = DaprControlEmitter(cast(Any, fake), pubsub="catalog-control-pubsub", topic=CONTROL_TOPIC, timeout_seconds=5, service="catalog")
     e = _evt()
     asyncio.run(em.emit(e))
     assert len(fake.calls) == 1
@@ -128,22 +128,22 @@ def test_dapr_emitter_publishes_control_topic() -> None:
 
 
 def test_dapr_emitter_best_effort_swallows() -> None:
-    em = DaprControlEmitter(cast(Any, _FakeDapr(fail=True)), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=5)
+    em = DaprControlEmitter(cast(Any, _FakeDapr(fail=True)), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=5, service="catalog")
     asyncio.run(em.emit(_evt()))  # a wedged/failing sidecar must NOT raise into the mutation path
 
 
 def test_make_control_emitter_selection() -> None:
     assert isinstance(
-        make_control_emitter(enabled=True, dapr=cast(Any, _FakeDapr()), pubsub="p", timeout_seconds=5),
+        make_control_emitter(enabled=True, dapr=cast(Any, _FakeDapr()), pubsub="p", timeout_seconds=5, service="catalog"),
         DaprControlEmitter,
     )
     # Off, or no sidecar client → the no-op.
     assert isinstance(
-        make_control_emitter(enabled=False, dapr=cast(Any, _FakeDapr()), pubsub="p", timeout_seconds=5),
+        make_control_emitter(enabled=False, dapr=cast(Any, _FakeDapr()), pubsub="p", timeout_seconds=5, service="catalog"),
         NoopControlEmitter,
     )
     assert isinstance(
-        make_control_emitter(enabled=True, dapr=None, pubsub="p", timeout_seconds=5),
+        make_control_emitter(enabled=True, dapr=None, pubsub="p", timeout_seconds=5, service="catalog"),
         NoopControlEmitter,
     )
 
@@ -153,7 +153,7 @@ def test_make_control_emitter_selection() -> None:
 
 def test_emit_control_builds_and_emits() -> None:
     fake = _FakeDapr()
-    em = DaprControlEmitter(cast(Any, fake), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=5)
+    em = DaprControlEmitter(cast(Any, fake), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=5, service="catalog")
     asyncio.run(
         emit_control(
             em,

@@ -22,9 +22,9 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from catalog.core.control_emit import NoopControlEmitter
 from catalog.core.identifiers import parse_identifier
 
+from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga
 
 

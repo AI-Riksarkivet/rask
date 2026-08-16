@@ -17,8 +17,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from maintenance.api import routes
 from maintenance.core.config import MaintenanceSettings
-from maintenance.core.control_emit import NoopControlEmitter
 from pydantic import SecretStr
+
+from service_kit.control_emit import NoopControlEmitter
 
 
 def _settings(**over: Any) -> MaintenanceSettings:

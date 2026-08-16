@@ -25,11 +25,11 @@ from catalog.api.maintenance_mode import maintenance_middleware
 from catalog.api.v1.router import api_router
 from catalog.core.config import get_settings
 from catalog.core.control_buffer import ControlEventBuffer
-from catalog.core.control_emit import make_control_emitter
 from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import build_namespace
 from catalog.core.vending import make_vendor
 from catalog.services import warehouses
+from service_kit.control_emit import make_control_emitter
 from service_kit.governed import fga
 from service_kit.governed.audit import configure_audit
 from service_kit.governed.dapr_auth import assert_app_token_configured
@@ -167,6 +167,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         dapr=dapr_client,
         pubsub=settings.control_pubsub,
         timeout_seconds=settings.control_emit_timeout_seconds,
+        service="catalog",
     )
     # Per-subject user state on the Dapr state store (endpoints/user_state.py). Built unconditionally: it
     # is a client over the local sidecar, so construction is pure and does no I/O — a deployment without a

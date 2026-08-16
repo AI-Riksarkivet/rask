@@ -43,13 +43,13 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
 )
 from catalog.api.security import CurrentToken
-from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, UPDATE, InputPin, InputRef, shape_run_facets
 from catalog.core.lineage_metadata import build_lineage_metadata, inject_into_arrow_stream
 from catalog.core.serialization import dump
 from catalog.schemas import CommitFragmentsRequest, CommitFragmentsResponse
 from catalog.services import dataplane, native
+from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 
 

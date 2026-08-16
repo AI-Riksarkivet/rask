@@ -35,7 +35,6 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import FgaClientDep, SettingsDep, get_control_emitter
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
-from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import (
     AccessCheckRequest,
@@ -51,6 +50,7 @@ from catalog.schemas import (
     MyPermissionsResponse,
     RelationGrants,
 )
+from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 

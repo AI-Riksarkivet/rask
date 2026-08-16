@@ -32,8 +32,8 @@ from fastapi.concurrency import run_in_threadpool
 
 from maintenance.api.routes import router
 from maintenance.core.config import MaintenanceSettings, apply_dapr_secrets, get_settings
-from maintenance.core.control_emit import make_control_emitter
 from maintenance.core.lineage_emit import make_emitter
+from service_kit.control_emit import make_control_emitter
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
@@ -145,6 +145,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         dapr=dapr_client,
         pubsub=settings.control_pubsub,
         timeout_seconds=settings.publish_timeout_seconds,
+        service="maintenance",
     )
     # The reconciler's two read-only clients. Both are OPTIONAL by design: a missing one degrades its
     # categories to UNAVAILABLE-with-a-reason, and the other five still report. Boot must NOT fail on

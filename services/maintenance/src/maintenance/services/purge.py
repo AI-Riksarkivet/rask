@@ -66,10 +66,10 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
-from maintenance.core.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from maintenance.core.metrics import record_trash_purge
 from maintenance.services.base_refs import BaseRefs
 from maintenance.services.reconcile import MANIFEST_DIR, ReconcileReport
+from service_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from service_kit.control_events import ControlAction, ControlObjectType
 from service_kit.governed import fga
 from service_kit.lakehouse import trash, warehouse_records

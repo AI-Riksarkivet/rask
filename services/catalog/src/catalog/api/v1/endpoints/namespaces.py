@@ -41,10 +41,10 @@ from catalog.api.security import CurrentToken
 # them drift apart again the moment one is tuned.
 from catalog.api.v1.endpoints.tables import _MAX_NAMESPACE_DEPTH, _paginate
 from catalog.core.config import Settings
-from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import native, warehouses
+from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import protection, trash
 
