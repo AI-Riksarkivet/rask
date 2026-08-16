@@ -354,3 +354,35 @@ def test_a_missing_dataset_is_an_open_error_not_a_feature_refusal(tmp_path: Path
     result = compact_one(str(tmp_path / "nope.lance"), {}, older_than=timedelta(7))
     assert result.refused is None
     assert result.error is not None and result.error.startswith("open:")
+
+
+def test_a_STABLE_ROW_ID_dataset_falls_back_instead_of_failing_the_sweep(tmp_path: Path) -> None:
+    """Lance refuses `defer_index_remap` in BOTH directions, and only one was handled.
+
+    The fallback was written for datasets WITHOUT stable row ids, whose refusal reads
+    "defer_index_remap requires row_addrs but none were provided" — so it matches on ``row_addrs``.
+    Lance also refuses the OPPOSITE case:
+
+        Invalid user input: defer_index_remap=true is not supported on datasets with stable row IDs:
+        stable row IDs do not require index remapping during compaction, so there is nothing to defer.
+
+    That message contains no ``row_addrs``, so it fell through to `raise` and became a per-dataset
+    sweep error. MEASURED on the live estate 2026-08-16: a real sweep reported
+    `datasets: 31, fragments_removed: 0, errors: 11`, and all eleven were this. The medallion cascade
+    writes "at file format 2.2 with stable row ids", so the datasets the pipeline produces are exactly
+    the ones compaction could never touch — maintenance ran and reclaimed nothing.
+
+    Driven against a REAL stable-row-id dataset rather than a double, so it is Lance's own refusal
+    being handled and the test cannot pass against a message Lance no longer emits.
+    """
+    uri = str(tmp_path / "stable.lance")
+    lance.write_dataset(pa.table({"id": pa.array(range(100), pa.int64())}), uri, enable_stable_row_ids=True)
+    for i in range(4):
+        base = 100 + i * 10
+        lance.write_dataset(pa.table({"id": pa.array(range(base, base + 10), pa.int64())}), uri, mode="append")
+    assert len(lance.dataset(uri).get_fragments()) >= 5
+
+    result = compact_one(uri, {}, older_than=timedelta(days=7))
+
+    assert result.error is None, f"a stable-row-id refusal became a sweep error: {result.error}"
+    assert result.fragments_removed >= 4, "the fallback compaction did not run, so nothing was reclaimed"

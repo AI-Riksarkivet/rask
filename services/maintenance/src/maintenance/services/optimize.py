@@ -220,7 +220,19 @@ def compact_one(
             # (non-deferred) compaction so one such dataset doesn't get reported as a sweep failure. These
             # registry datasets aren't concurrently indexed, so the CommitConflict that defer_index_remap
             # avoids isn't a risk here. Any OTHER error propagates to the outer per-dataset error capture.
-            if "row_addrs" not in str(exc):
+            # MATCH THE PARAMETER, NOT ONE MESSAGE. Lance refuses `defer_index_remap` in BOTH
+            # directions and this only caught one:
+            #   * no stable row ids -> "defer_index_remap requires row_addrs but none were provided"
+            #   * WITH stable row ids -> "defer_index_remap=true is not supported on datasets with
+            #     stable row IDs: ... there is nothing to defer."
+            # The second carries no `row_addrs`, so it re-raised and became a per-dataset sweep error.
+            # Measured on the live estate 2026-08-16: a real sweep reported datasets 31,
+            # fragments_removed 0, errors 11 — every one of them this, because the medallion cascade
+            # writes with stable row ids, so the datasets the pipeline produces were exactly the ones
+            # compaction could never touch. Maintenance ran and reclaimed nothing.
+            # Either refusal means the same thing operationally: this dataset does not want the
+            # deferred remap, so compact without it. Anything else still propagates.
+            if "defer_index_remap" not in str(exc):
                 raise
             log.warning("compact_defer_index_remap_unsupported", extra={"uri": uri, "error": str(exc)})
             metrics = ds.optimize.compact_files(**size_kw)
