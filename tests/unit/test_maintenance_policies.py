@@ -464,7 +464,7 @@ def test_migrating_a_policy_that_does_not_exist_is_a_no_op(tmp_path: Path) -> No
     assert mp.get_policy(root, {}, "table", "bronze$new") is None
 
 
-def test_a_migrated_policy_does_not_leave_the_destination_unconfigured_on_a_partial_failure(tmp_path: Path) -> None:
+def test_a_migrated_policy_does_not_leave_the_destination_unconfigured_on_a_partial_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Destination first, source second — so the recoverable half is the one that keeps config alive.
 
     Same ordering, and the same reasoning, as rename's seed-then-revoke: of the two imperfect failure
@@ -477,16 +477,21 @@ def test_a_migrated_policy_does_not_leave_the_destination_unconfigured_on_a_part
 
     original = mp.delete_policy
 
-    def _spy(control_root: str, storage_options: Any, kind: str, canonical_id: str) -> bool:
+    def _spy(control_root: str, storage_options: dict[str, str], kind: str, canonical_id: str) -> bool:
         # At the moment the source is removed, the destination must ALREADY be readable.
         record = mp.get_policy(control_root, storage_options, "table", "b$t")
         seen.append(None if record is None else record["id"])
         return original(control_root, storage_options, kind, canonical_id)
 
-    mp.delete_policy = _spy  # type: ignore[assignment]
-    try:
-        mp.migrate_policy(root, {}, "table", "a$t", "b$t")
-    finally:
-        mp.delete_policy = original  # type: ignore[assignment]
+    # `monkeypatch.setattr`, not `mp.delete_policy = _spy`. The direct assignment was an
+    # `invalid-assignment` to ty even once `_spy`'s signature matched `delete_policy`'s exactly — ty
+    # rejects rebinding a module-level function attribute, not the types. It had been silenced with
+    # `# type: ignore[assignment]`, which is MYPY's syntax and which ty does not honour, so the
+    # suppression did nothing and the error stayed. Because the ty pre-commit hook runs full-project
+    # with `pass_filenames=false`, that one diagnostic blocked EVERY commit in the repo, for every
+    # concurrent session. `setattr` is a normal call, type-checks cleanly, and undoes itself — so the
+    # try/finally goes too.
+    monkeypatch.setattr(mp, "delete_policy", _spy)
+    mp.migrate_policy(root, {}, "table", "a$t", "b$t")
 
     assert seen == ["b$t"], "the destination must be written BEFORE the source is deleted"
