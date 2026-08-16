@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 
 #: The hard ceiling on one page, shared by the actor's own validation and the route's `le=` bound so
@@ -57,6 +57,10 @@ class NotificationReason(StrEnum):
     #: v3 — this subject was NAMED by a governance act (`extra.subject`).
     GRANT_ADDED = "grant_added"
     GRANT_REVOKED = "grant_revoked"
+    #: The read-path fallback for a reason this build does not have a name for. NEVER written by an
+    #: ingress — `NotificationDelivery` refuses an unknown reason at the door — and reachable only when
+    #: reading back state a NEWER build stored. See `InboxPointer._tolerate_a_newer_vocabulary`.
+    UNKNOWN = "unknown"
     #: v5 — the human whose work a SERVICE-authored run is doing. The medallion's movers author with a
     #: chart role literal (`data_eng`/`analyst`/`htr`/`ray`), which is a truthful statement about who ran
     #: the stage and a useless inbox address — so a failed cascade reached nobody. Distinct from AUTHOR
@@ -116,7 +120,28 @@ class NotificationDelivery(BaseModel):
 
 
 class InboxPointer(NotificationDelivery):
-    """A delivery plus this subject's relationship to it — the stored row."""
+    """A delivery plus this subject's relationship to it — the stored row.
+
+    **READ-TOLERANT, unlike the delivery it extends, and the asymmetry is the point.**
+    `NotificationDelivery` is wire input from an ingress and stays strict: an unknown reason there is a
+    producer/consumer mismatch to fix, and `seen` must remain unspeakable so a forged delivery cannot
+    arrive pre-read. THIS is state the service wrote itself and may read back under an OLDER build —
+    every rollback and every mixed-version rollout does exactly that, which is routine rather than a
+    fault.
+
+    Strict here cost a live outage: three reasons were added, rows carrying them landed in the durable
+    actor state, the deployment rolled back, and the older enum turned them into
+    `ValidationError: 4 validation errors for InboxRows` — surfaced as `InboxUnreadable` and a **503 for
+    the whole inbox**. Not a missing row: the badge went blank and every other notification that
+    subject had became unreachable, because one list validation is all-or-nothing.
+
+    **The tolerance is the REASON VALUE only, and `extra="forbid"` deliberately stays.** They look like
+    one hazard and are not: an unknown FIELD may be another subject's data, which is why the forbid is
+    a containment guard (`test_inbox_leak_containment`) and why drift there must read as UNREADABLE
+    rather than be silently dropped — a filter is something a later route can forget. An unknown reason
+    VALUE arrives on a field this model already declares, carries nothing foreign, and describes this
+    subject's own row. Refusing it protects nobody and costs the inbox.
+    """
 
     seen: bool = False
     dismissed: bool = False
@@ -128,6 +153,18 @@ class InboxPointer(NotificationDelivery):
     #: are already TTL'd and compacted, so the record of "we emailed this" ages out with the thing it
     #: is about. A separate ledger would be new state with no compaction and no reason to ever shrink.
     sent: list[str] = Field(default_factory=list)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _tolerate_a_newer_vocabulary(cls, value: object) -> object:
+        """Degrade a reason this build cannot name, rather than refusing the row that carries it.
+
+        The row still counts, still renders and can still be read or dismissed — the subject simply
+        sees a generic reason for it. That is strictly better than the alternative this replaces,
+        which was losing the entire inbox."""
+        if isinstance(value, str) and value not in set(NotificationReason):
+            return NotificationReason.UNKNOWN
+        return value
 
     @property
     def unread(self) -> bool:
