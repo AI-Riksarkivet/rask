@@ -92,6 +92,12 @@ while an unknown reason value arrives on a declared field and carries nothing fo
   follows the MUTATION, not the request: a re-grant, a revoke of nothing, and a refused revoke all
   emit nothing. The annotator door had no tests at all; it has four.
 
+**DROPPED — §6 #5, ruled 2026-08-16 (`docs/DECISIONS.md`).** A denied mover must NOT emit a lineage
+FAIL: nothing is read and nothing is written, so the event would mint provenance for a non-event, and
+a permanently un-granted mover would emit one per trigger forever — a steady state, which is a metric
+(`_stage_denied`, already present) and not an event. The real gap is a CONTROL-lane action naming the
+cascade's `originator`, which is now addressable. Retained below because the reasoning is the record.
+
 **CORRECTION to §6 #5** (emit the FAIL the siblings emit on `transform.py:279`/`:245`). Two of its
 three claims do not survive contact with the code. First, `transform.py:279`'s silence is DELIBERATE
 and pinned: `test_mover_denied_when_not_authorized` asserts `dapr.calls == []` — "not authorized -> no
