@@ -1,6 +1,6 @@
 <h1 align="center">LA<img src="docs/assets/lagom-peepo.png" alt="" height="42" align="absmiddle">GOM</h1>
 
-<p align="center"><strong>rask</strong> — Riksarkivet's agnostic multimodal AI platform.</p>
+<p align="center"><strong>rask</strong> — an agnostic multimodal AI platform: governed lakehouse + batch processing.</p>
 
 > ⚠️ **Work in progress — don't use.**
 

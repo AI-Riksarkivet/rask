@@ -5,7 +5,7 @@ description: 'runners/htr — the HTR image→ALTO pipeline: Ray Data actor fan-
 
 # rask HTR pipeline (Ray Data + Ray Serve)
 
-Distributed image→ALTO HTR for the Swedish National Archives. A `runner` CLI invocation submits **one Ray Data pipeline** and blocks on `.materialize()`; the GPU stage is fronted by a **persistent Ray Serve** deployment that stays warm across submissions. **A naive edit to the GPU math reintroduces a raylet-killing OOM** — read the rules before touching fractions, pool sizes, or batch.
+Distributed image→ALTO HTR — **ONE example workload on an agnostic multimodal platform, not what rask is.** Everything in this file is scoped to `runners/htr`, a sealed project with its own lockfile; if a rule here needs to hold for the catalog, the cascade, the sweep, lineage or notifications, it is in the wrong file, because those seams must serve audio and video equally. A `runner` CLI invocation submits **one Ray Data pipeline** and blocks on `.materialize()`; the GPU stage is fronted by a **persistent Ray Serve** deployment that stays warm across submissions. **A naive edit to the GPU math reintroduces a raylet-killing OOM** — read the rules before touching fractions, pool sizes, or batch.
 
 ## When to use
 

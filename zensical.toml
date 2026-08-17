@@ -1,7 +1,7 @@
 [project]
 site_name = "rask"
 site_url = "https://ai-riksarkivet.github.io/rask/"
-site_description = "Polyglot monorepo for Riksarkivet HTR + search infrastructure (Rust + Python + Svelte, managed with uv and Bun)."
+site_description = "An agnostic multimodal AI platform: a governed Lance lakehouse and batch processing over any modality (Python + Svelte, managed with uv and Bun)."
 site_author = "AI-Riksarkivet"
 copyright = "Copyright &copy; 2026 AI-Riksarkivet"
 repo_url = "https://github.com/AI-Riksarkivet/rask"
