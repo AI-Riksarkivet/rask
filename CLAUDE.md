@@ -213,29 +213,16 @@ Deployables are just workspace members with a dockerfile: `.docker/<name>.docker
 
 ## Architecture
 
-**`rask` IS A DATA-TYPE-AGNOSTIC MULTIMODAL AI PLATFORM. THE PLATFORM HAS NO CONCEPT OF HTR.** It is a
-governed Lance lakehouse (Lance Namespace catalog + OpenLineage into AGE), durable execution and events
-on Dapr + NATS JetStream, and batch compute on Ray, with lineage and authorization over all of it.
-Anything that reads bytes, writes a governed table and emits lineage fits the same shape — text, image,
-audio, video, embeddings.
+**`rask` is a data-type-agnostic multimodal AI platform: a governed lakehouse plus batch processing.**
+A Lance lakehouse under Lance Namespace (catalog + OpenLineage into AGE), durable execution and events
+on Dapr + NATS JetStream, batch compute on Ray, with lineage and authorization over all of it. Anything
+that reads bytes, writes a governed table and emits lineage fits the same shape.
 
-**HTR is ONE EXAMPLE WORKLOAD that exercises the platform; it is never its identity, and this
-distinction is load-bearing rather than cosmetic.** A modality that leaks into a platform seam makes the
-next modality a second-class citizen: `htr_register.py` shipped registration for the HTR lane alone, so
-that one lane was governed and every other lane wrote UNGOVERNED bytes — the exact opposite of an
-agnostic platform (fixed by generalising it to `catalog_register.py`, whose logic only ever took an id
-and a URI). When you touch a shared seam — the catalog, the medallion cascade, the maintenance sweep,
-lineage, notifications — the test is: *would this still be right for audio, or video, or a modality
-nobody has written yet?* If the answer needs the word "HTR", the code belongs in the workload, not the
-platform. Modality-specific code has exactly two homes: `runners/htr` (sealed, own lockfile) and the
-named HTR stage/schema inside `services/medallion`.
-
-**The platform is not tied to any institution, and never describe it as one's.** It is not "for the
-national archives" or anyone else's; a deployment has tenants, and the platform is agnostic to who they
-are exactly as it is agnostic to what they store. The one place an organisation name legitimately
-appears is an EXTERNAL identifier that is not ours to rename — a Hugging Face model repo
-(`Riksarkivet/trocr-…`), a data-source URL (`lbiiif.riksarkivet.se`), or the GitHub org — never as a
-description of what rask IS.
+**The platform belongs to no institution and knows no modality.** Never describe it as an
+organisation's, and never let a data type into a shared seam — the catalog, the cascade, the sweep,
+lineage, notifications. The test for any of those: *would this still be right for audio?* Modality
+belongs in a sealed `runners/<workload>`; an organisation name is only ever an external identifier
+someone else owns (a model repo, a source URL, the GitHub org), never a description of what rask is.
 
 See `docs/architecture/system-overview.md` for the full diagrams. Key facts that aren't obvious from any
 single file:

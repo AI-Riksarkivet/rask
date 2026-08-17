@@ -1,7 +1,7 @@
 # Architecture Overview
 
-rask is a distributed image-to-ALTO-XML pipeline with a viewer/search front end.
-This section describes the system as it runs today.
+rask is a data-type-agnostic multimodal AI platform: a governed Lance lakehouse plus batch
+processing, with a viewer/search front end. This section describes the system as it runs today.
 
 ## One-paragraph summary
 
