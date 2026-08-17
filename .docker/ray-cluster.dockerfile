@@ -57,6 +57,28 @@ COPY runners/htr    runners/htr
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --project runners/htr --locked --no-editable
 
+# ---- Step 3: the PLATFORM compute trio --------------------------------------
+# THE CLUSTER MUST BE ABLE TO READ THE LAKEHOUSE. Without this the Ray lane is not merely
+# unconfigured, it is impossible: every submitted stage job died `exit 1 / ModuleNotFoundError:
+# No module named 'lance'`, because this image resolves from `runners/htr/uv.lock` and that lock
+# contains no package matching lance (verified: the grep returns nothing). A workload's sealed
+# lock is the right home for torch and htrflow and the wrong home for the platform's own data
+# access — so the trio is installed HERE, beside the workload rather than inside its lock.
+#
+# INSTALLED AFTER `uv sync --locked`, deliberately: that command prunes anything absent from the
+# lock, so a trio installed before it would be silently removed.
+#
+# THE PINS MUST MATCH THE FLEET and `.docker/ray-lance.dockerfile` exactly. This image reads and
+# writes the SAME blob-v2 datasets the medallion services write with the root workspace's pylance,
+# so a version split is a correctness bug rather than a currency preference — measured at pylance
+# 8.0.0 against a 9.0.0-written dataset, the entire row-aligned blob read path was unusable and the
+# descriptor validity mask was wrong, which mis-detects payload presence silently.
+# pyarrow is pinned explicitly because it is the one dependency SHARED with the workload stack;
+# letting the resolver float it is how a Ray job and the fleet end up disagreeing about Arrow.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/venv/bin/python \
+        "lance-ray==0.5.0" "pylance==10.0.0" "pyarrow==25.0.0"
+
 # Optional gated-model fetch step. Uncomment if rask pulls licensed weights at build time.
 # RUN --mount=type=secret,id=hf_token \
 #     HF_TOKEN=$(cat /run/secrets/hf_token) \

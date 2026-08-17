@@ -1785,6 +1785,36 @@ def test_the_actor_state_store_is_scoped_to_the_service_whose_whole_state_it_is(
     )
 
 
+def test_the_ray_cluster_image_can_read_the_lakehouse() -> None:
+    """The deployed Ray image must carry the platform compute trio, at the fleet's pins.
+
+    THE DEFECT THIS CLOSES. `.docker/ray-cluster.dockerfile` resolves from `runners/htr/uv.lock` — a
+    sealed WORKLOAD lock that contains no package matching lance. So every stage job the medallion
+    submitted died `exit 1 / ModuleNotFoundError: No module named 'lance'`, and the Ray lane had to be
+    pinned off to keep the cascade working at all. A workload's lock is the right home for torch and
+    the wrong home for the platform's own data access.
+
+    THE PINS ARE THE POINT, not merely the presence. This image reads and writes the SAME blob-v2
+    datasets the fleet writes, so a version split is a correctness bug: measured at pylance 8.0.0
+    against a 9.0.0-written dataset, the whole row-aligned blob read path raised on every projection
+    and the descriptor validity mask silently mis-reported payload presence. Asserted against
+    `ray-lance.dockerfile` rather than a literal, so the two images cannot drift apart.
+    """
+    cluster = (REPO / ".docker" / "ray-cluster.dockerfile").read_text()
+    lance_img = (REPO / ".docker" / "ray-lance.dockerfile").read_text()
+
+    pins = dict(re.findall(r'"(lance-ray|pylance|pyarrow)==([0-9][^"]*)"', lance_img))
+    assert set(pins) == {"lance-ray", "pylance", "pyarrow"}, (
+        f"ray-lance.dockerfile no longer pins the trio explicitly (found {sorted(pins)}) — this test reads it as the source of truth"
+    )
+    for package, version in sorted(pins.items()):
+        assert f'"{package}=={version}"' in cluster, (
+            f"the deployed Ray image does not install {package}=={version}. Either it cannot read the "
+            f"lakehouse at all (ModuleNotFoundError on every stage job), or it reads it at a DIFFERENT "
+            f"pylance than the fleet writes it with, which corrupts the blob read path silently."
+        )
+
+
 def test_the_ray_lane_is_OFF_until_a_LANCE_CAPABLE_cluster_exists() -> None:
     """The Ray lane may only default ON against a cluster that can actually run the job. None exists.
 
@@ -1809,8 +1839,15 @@ def test_the_ray_lane_is_OFF_until_a_LANCE_CAPABLE_cluster_exists() -> None:
     `compute` stays ON and is asserted here: it is what the in-process lane needs, and the settings
     validator refuses `ray` without it anyway.
 
-    To flip this back, give the estate a Lance-capable Ray cluster FIRST and change this test with the
-    evidence that it exists. Do not re-enable against the HTR image.
+    STEP 0 LANDED 2026-08-17: the image blocker is CLOSED. `.docker/ray-cluster.dockerfile` now
+    installs the platform compute trio (lance-ray / pylance / pyarrow) beside the workload's own lock,
+    pinned to the same versions as `.docker/ray-lance.dockerfile` and the fleet. That capability is
+    pinned by `test_the_ray_cluster_image_can_read_the_lakehouse` below, so it cannot silently regress.
+
+    The lane STAYS OFF here, and this is not conservatism. A capable image is necessary and not
+    sufficient: `ray_submit.py` still ships a fixed env dict that cannot carry a per-lane parameter,
+    so a mover could reach the cluster and still not describe its own work. Flip this when the job env
+    contract exists, and change it with the evidence — not before.
     """
     docs = _rendered_docs()
     movers = [
