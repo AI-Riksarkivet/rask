@@ -774,3 +774,64 @@ class TrashEntry(BaseModel):
     #: in this state — the bytes are present — but it is living on borrowed time: the next clean
     #: purge tick may take it. Surfaced so an owner can tell "you have a week" from "go now".
     expired: bool = False
+
+
+# --------------------------------------------------------------------------- #
+# Transform lanes — a medallion bronze->silver edge, DECLARED as a record
+# --------------------------------------------------------------------------- #
+
+
+class TransformSpecRequest(BaseModel):
+    """Declare one lane. The project comes from the gated PATH, never from here.
+
+    Omitting ``project`` is the security half, not an ergonomic one: a body-supplied project would
+    let an admin of one tenant pass the ``can_administer`` gate on their own project while writing a
+    lane into somebody else's.
+
+    Field semantics — including why an entrypoint must reference a script baked into the image — live
+    on ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates
+    into and the one the mover reads. One definition, two services.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    lane: str
+    from_id: str
+    to_id: str
+    entrypoint: str
+    params: dict[str, str] = Field(default_factory=dict)
+    code_version: str = ""
+
+
+class TransformLaneRequest(BaseModel):
+    """Name one lane — the body of describe/delete."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lane: str
+
+
+class TransformSpecResponse(BaseModel):
+    lane: str
+    project: str
+    from_id: str
+    to_id: str
+    entrypoint: str
+    params: dict[str, str] = Field(default_factory=dict)
+    code_version: str = ""
+
+
+class TransformDeleteResponse(BaseModel):
+    #: ``deleted`` when a record was removed, ``absent`` when there was none. Delete is idempotent, so
+    #: both are 200 — the field is what lets a caller tell "I removed it" from "it was already gone"
+    #: without inferring it from a status code that is the same either way.
+    status: str
+    project: str
+    lane: str
+
+
+class ProjectTransformsResponse(BaseModel):
+    """Every lane declared in one project — the answer to "what actually runs here?"."""
+
+    project: str
+    transforms: list[TransformSpecResponse] = Field(default_factory=list)

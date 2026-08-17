@@ -45,6 +45,16 @@ ControlAction = Literal[
     "warehouse_deleted",
     "policy_set",
     "policy_deleted",
+    # A medallion LANE, declared and undeclared. Governance in the same sense a policy is: the record
+    # names an entrypoint that will EXECUTE on the shared Ray cluster against the tenant's data, so
+    # "who added this lane, and when" is exactly the #41 audit question.
+    #
+    # Deliberately NOT in the notifications plane's `NAMED_ACTIONS`, and the omission is the rule
+    # rather than an oversight: that gate targets on `extra.subject`, and a lane declaration names no
+    # party — it is a catalog mutation, and delivering those recreates the estate-wide feed the inbox
+    # exists to replace. `policy_set` sits on exactly this line for exactly this reason.
+    "transform_set",
+    "transform_deleted",
     "namespace_created",
     "namespace_dropped",
     "table_created",
@@ -119,7 +129,7 @@ ControlAction = Literal[
 #: `annotation_task` is deliberately NOT `table`: a task is a unit of work inside an annotation project,
 #: not a governed lakehouse object, and conflating them would send the console to invalidate a table view
 #: for an assignment that changed no data.
-ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "annotation_task"]
+ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "annotation_task", "transform"]
 
 
 class CatalogControlEvent(BaseModel):

@@ -1,0 +1,186 @@
+"""Transform-spec registry — a lane DECLARED as a governed record instead of a Deployment's env block.
+
+A medallion lane (one bronze->silver edge: read this, run that, write there) used to exist only as
+environment on a mover pod. That makes the lane invisible to governance — nothing can list the lanes,
+review them, or gate who may add one — and it makes an undeclared lane fail deep, at the Ray submit
+seam, where the error names an image rather than the key nobody declared.
+
+This is the same stateless-over-object-store shape as ``maintenance_policies`` and the warehouse
+registry, chosen for the same reason: one service WRITES (the catalog, admin-gated) and a different
+one READS (the medallion mover, which holds no catalog client on its submit path). Both need one
+format, so the format lives here rather than as two copies that drift.
+
+Each spec is one JSON record under ``<control_root>/_transforms/``, keyed by ``(project, lane)`` —
+lanes are per-tenant, so two projects may both declare ``dummy`` without collision.
+
+**The platform validates the SHAPE and never the meaning.** ``params`` are opaque strings forwarded
+to the workload; what they mean belongs to the runner. What the platform does enforce is the handful
+of invariants that are its own business: a safe lane key, string params that cannot collide with the
+``RASK_PARAM_`` namespace, and — the load-bearing one — an entrypoint that is a path BAKED into the
+image. Ray documents ``runtime_env`` as a development convenience, and checking "is this the
+production shape?" at declaration time means an undeclarable lane can never be submitted at all,
+rather than every submit path having to remember.
+
+**NEVER A SECRET.** Same rule as the env channel this replaces: these records are readable by anyone
+who can read the control bucket. A workload needing a credential resolves it from the Dapr secret
+store at boot, never from a param here.
+
+All IO is blocking; callers threadpool it.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import re
+from typing import Any
+
+import pyarrow.fs as pafs
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+
+
+log = logging.getLogger(__name__)
+
+#: Public so tests and operators can name the prefix without re-typing the literal.
+SPECS_PREFIX = "_transforms"
+
+#: The directory a lane's entrypoint MUST live under — the path `.docker/ray-cluster.dockerfile`
+#: bakes its job scripts into. Anything else is either a runtime_env upload (development-only, per
+#: Ray's own docs) or a path the deployed image does not contain, which fails as `exit 2` with
+#: nothing naming the image.
+BAKED_JOBS_DIR = "/home/ray/jobs/"
+
+#: DNS-safe, lowercase, bounded. The lane becomes an object-store key fragment and rides into
+#: identifiers elsewhere; a traversing or shell-shaped name must never reach either.
+LANE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+#: The prefix the submit path adds when forwarding params as env vars. A declared key carrying it
+#: already would either double-prefix or — if a future submit path forgot to re-prefix — escape the
+#: namespace that keeps a lane away from `S3_SECRET` and friends.
+_RESERVED_PARAM_PREFIX = "RASK_PARAM_"
+
+
+class TransformSpec(BaseModel):
+    """One declared lane. Written by the catalog's admin-gated door, read by the mover."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lane: str = Field(description="the lane key, unique within the project")
+    project: str = Field(min_length=1, max_length=64)
+    from_id: str = Field(min_length=1, description="upstream catalog table identifier, e.g. bronze$events")
+    to_id: str = Field(min_length=1, description="downstream catalog table identifier, e.g. silver$dummy")
+    entrypoint: str = Field(description=f"the Ray entrypoint; must reference a script baked under {BAKED_JOBS_DIR}")
+    params: dict[str, str] = Field(default_factory=dict, description="opaque workload parameters; never secrets")
+    code_version: str = Field(default="", max_length=128, description="the image tag this lane is declared against")
+
+    @field_validator("lane")
+    @classmethod
+    def _safe_lane(cls, value: str) -> str:
+        if not LANE_RE.match(value):
+            raise ValueError(f"invalid lane key {value!r}: must match {LANE_RE.pattern}")
+        return value
+
+    @field_validator("entrypoint")
+    @classmethod
+    def _baked_entrypoint(cls, value: str) -> str:
+        # Substring rather than prefix: the entrypoint is a command line ("python /home/ray/jobs/x.py"),
+        # so the path sits after the interpreter.
+        if BAKED_JOBS_DIR not in value:
+            raise ValueError(
+                f"entrypoint {value!r} does not reference a baked job under {BAKED_JOBS_DIR!r}; "
+                "Ray documents runtime_env as development-only, so a lane must name a script the deployed image contains"
+            )
+        return value
+
+    @field_validator("params")
+    @classmethod
+    def _namespaced_params(cls, value: dict[str, str]) -> dict[str, str]:
+        offending = sorted(key for key in value if key.startswith(_RESERVED_PARAM_PREFIX))
+        if offending:
+            raise ValueError(f"param keys {offending} carry the reserved {_RESERVED_PARAM_PREFIX!r} prefix, which the submit path adds")
+        return value
+
+
+def _key(project: str, lane: str) -> str:
+    """A collision-free record key. Both halves are already shape-checked, but the ids are
+    user-supplied, so hash rather than concatenate into a path."""
+    digest = hashlib.sha256(f"{project}:{lane}".encode()).hexdigest()[:24]
+    return f"{SPECS_PREFIX}/{project}-{digest}.json"
+
+
+def put_spec(control_root: str, storage_options: StorageOptions, spec: TransformSpec) -> None:
+    """Persist one lane declaration (overwrite — declaring is idempotent)."""
+    fs, base = fs_and_base(control_root, storage_options)
+    key = _key(spec.project, spec.lane)
+    fs.create_dir(f"{base}/{key}".rsplit("/", 1)[0], recursive=True)
+    with fs.open_output_stream(f"{base}/{key}") as stream:
+        stream.write(spec.model_dump_json().encode("utf-8"))
+
+
+def get_spec(control_root: str, storage_options: StorageOptions, project: str, lane: str) -> TransformSpec | None:
+    """The lane's declaration, or ``None`` when it was never declared.
+
+    ``None`` rather than a default is the whole contract: the caller must be able to tell "nobody
+    declared this" from "this is configured", so an unknown lane can be refused at the door instead
+    of running something for a name that was probably a typo.
+    """
+    fs, base = fs_and_base(control_root, storage_options)
+    try:
+        stream = fs.open_input_stream(f"{base}/{_key(project, lane)}")
+    except FileNotFoundError:
+        return None
+    with stream:
+        raw = stream.readall().decode("utf-8")
+    return _parse(raw, path=_key(project, lane))
+
+
+def delete_spec(control_root: str, storage_options: StorageOptions, project: str, lane: str) -> bool:
+    """Remove one declaration; ``False`` when there was none (delete is idempotent)."""
+    fs, base = fs_and_base(control_root, storage_options)
+    try:
+        fs.delete_file(f"{base}/{_key(project, lane)}")
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def list_specs(control_root: str, storage_options: StorageOptions, project: str | None = None) -> list[TransformSpec]:
+    """Every readable declaration, optionally scoped to one project (unordered).
+
+    One corrupt or unreadable record is SKIPPED with a warning rather than voiding the rest: a
+    listing that silently emptied would read as "this project declares no lanes" while its lanes
+    keep running.
+    """
+    fs, base = fs_and_base(control_root, storage_options)
+    out: list[TransformSpec] = []
+    selector = pafs.FileSelector(f"{base}/{SPECS_PREFIX}", allow_not_found=True, recursive=False)
+    for info in fs.get_file_info(selector):
+        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
+            continue
+        try:
+            with fs.open_input_stream(info.path) as stream:
+                raw = stream.readall().decode("utf-8")
+        except Exception as exc:
+            log.warning("transform_spec_unreadable", extra={"path": info.path, "error": str(exc)})
+            continue
+        spec = _parse(raw, path=info.path)
+        if spec is not None and (project is None or spec.project == project):
+            out.append(spec)
+    return out
+
+
+def _parse(raw: str, *, path: str) -> TransformSpec | None:
+    """Validate a stored record, warning (never raising) on one that no longer fits the model.
+
+    A record written by an older build whose shape has since tightened must not take down the
+    listing — it is reported and skipped, exactly like an unreadable one.
+    """
+    try:
+        payload: Any = json.loads(raw)
+        return TransformSpec.model_validate(payload)
+    except Exception as exc:
+        log.warning("transform_spec_malformed", extra={"path": path, "error": str(exc)})
+        return None

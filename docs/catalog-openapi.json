@@ -2685,6 +2685,8 @@
               "warehouse_deleted",
               "policy_set",
               "policy_deleted",
+              "transform_set",
+              "transform_deleted",
               "namespace_created",
               "namespace_dropped",
               "table_created",
@@ -2743,7 +2745,8 @@
               "policy",
               "namespace",
               "table",
-              "annotation_task"
+              "annotation_task",
+              "transform"
             ],
             "title": "Object Type",
             "type": "string"
@@ -8001,6 +8004,27 @@
         "title": "ProjectResponse",
         "type": "object"
       },
+      "ProjectTransformsResponse": {
+        "description": "Every lane declared in one project \u2014 the answer to \"what actually runs here?\".",
+        "properties": {
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "transforms": {
+            "items": {
+              "$ref": "#/components/schemas/TransformSpecResponse"
+            },
+            "title": "Transforms",
+            "type": "array"
+          }
+        },
+        "required": [
+          "project"
+        ],
+        "title": "ProjectTransformsResponse",
+        "type": "object"
+      },
       "ProjectWarehouse": {
         "description": "One warehouse owned by the project \u2014 the registry facts an estate observer needs at a glance.",
         "properties": {
@@ -9392,7 +9416,7 @@
         "type": "object"
       },
       "StorageRole": {
-        "description": "What a store is FOR.\n\nThe three governed tiers are exactly bronze/silver/gold (R23): the medallion is\nbronze->silver->gold, and RAW is deliberately outside it \u2014 raw is the external world (a IIIF\nendpoint, a drop bucket), never a governed tier. DERIVED covers artefacts produced from a tier\nbut not themselves governed as one (exported ALTO, thumbnails); OBSERVABILITY covers the\ntelemetry store, which is operational rather than archival.",
+        "description": "What a store is FOR.\n\nThe three governed tiers are exactly bronze/silver/gold (R23): the medallion is\nbronze->silver->gold, and RAW is deliberately outside it \u2014 raw is the external world (a IIIF\nendpoint, a drop bucket), never a governed tier. DERIVED covers artefacts produced from a tier\nbut not themselves governed as one (an export, a derived artefact); OBSERVABILITY covers the\ntelemetry store, which is operational rather than archival.",
         "enum": [
           "raw",
           "bronze",
@@ -9662,6 +9686,131 @@
           "manifestSize"
         ],
         "title": "TagContents",
+        "type": "object"
+      },
+      "TransformDeleteResponse": {
+        "properties": {
+          "lane": {
+            "title": "Lane",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "project",
+          "lane"
+        ],
+        "title": "TransformDeleteResponse",
+        "type": "object"
+      },
+      "TransformLaneRequest": {
+        "additionalProperties": false,
+        "description": "Name one lane \u2014 the body of describe/delete.",
+        "properties": {
+          "lane": {
+            "title": "Lane",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lane"
+        ],
+        "title": "TransformLaneRequest",
+        "type": "object"
+      },
+      "TransformSpecRequest": {
+        "additionalProperties": false,
+        "description": "Declare one lane. The project comes from the gated PATH, never from here.\n\nOmitting ``project`` is the security half, not an ergonomic one: a body-supplied project would\nlet an admin of one tenant pass the ``can_administer`` gate on their own project while writing a\nlane into somebody else's.\n\nField semantics \u2014 including why an entrypoint must reference a script baked into the image \u2014 live\non ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates\ninto and the one the mover reads. One definition, two services.",
+        "properties": {
+          "code_version": {
+            "default": "",
+            "title": "Code Version",
+            "type": "string"
+          },
+          "entrypoint": {
+            "title": "Entrypoint",
+            "type": "string"
+          },
+          "from_id": {
+            "title": "From Id",
+            "type": "string"
+          },
+          "lane": {
+            "title": "Lane",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Params",
+            "type": "object"
+          },
+          "to_id": {
+            "title": "To Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lane",
+          "from_id",
+          "to_id",
+          "entrypoint"
+        ],
+        "title": "TransformSpecRequest",
+        "type": "object"
+      },
+      "TransformSpecResponse": {
+        "properties": {
+          "code_version": {
+            "default": "",
+            "title": "Code Version",
+            "type": "string"
+          },
+          "entrypoint": {
+            "title": "Entrypoint",
+            "type": "string"
+          },
+          "from_id": {
+            "title": "From Id",
+            "type": "string"
+          },
+          "lane": {
+            "title": "Lane",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Params",
+            "type": "object"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "to_id": {
+            "title": "To Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lane",
+          "project",
+          "from_id",
+          "to_id",
+          "entrypoint"
+        ],
+        "title": "TransformSpecResponse",
         "type": "object"
       },
       "TrashEntry": {
@@ -15094,6 +15243,324 @@
         ]
       }
     },
+    "/v1/project/{id}/transform/delete": {
+      "post": {
+        "description": "Undeclare one lane (idempotent) \u2014 admin-gated.\n\nIdempotent rather than 422-on-missing, unlike describe: delete states a desired END state, and a\ncaller asking for a lane to be gone is satisfied by it already being gone. Describe asks a\nquestion that has no answer, which is the case that must be refused.",
+        "operationId": "delete_transform_v1_project__id__transform_delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransformLaneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransformDeleteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Transform",
+        "tags": [
+          "transform"
+        ]
+      }
+    },
+    "/v1/project/{id}/transform/describe": {
+      "post": {
+        "description": "One lane's declaration \u2014 admin-gated; **422 naming the key** when the lane is undeclared.",
+        "operationId": "describe_transform_v1_project__id__transform_describe_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransformLaneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransformSpecResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Describe Transform",
+        "tags": [
+          "transform"
+        ]
+      }
+    },
+    "/v1/project/{id}/transform/set": {
+      "post": {
+        "description": "Declare (or re-declare) one lane \u2014 admin-gated; idempotent.\n\nThe spec model does the platform-level validation: a DNS-safe lane key, string params that\ncannot collide with the ``RASK_PARAM_`` namespace, and an entrypoint that references a script\nBAKED into the image. That last one is why declaration is the right place for this check \u2014 Ray\ndocuments ``runtime_env`` as development-only, and a lane that cannot be declared can never be\nsubmitted, whereas a submit-time check has to be remembered by every submit path.\n\nThe platform validates SHAPE and never meaning: what a param does belongs to the workload.",
+        "operationId": "set_transform_v1_project__id__transform_set_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransformSpecRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransformSpecResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Transform",
+        "tags": [
+          "transform"
+        ]
+      }
+    },
     "/v1/projects": {
       "get": {
         "description": "Enumerate the estate's tenants, derived from the warehouse registry. Estate-observer gated.\n\nFail-closed via FGA on the read: a non-estate-observer gets 403, an OpenFGA outage 503, and the gate\nis a no-op only when FGA is off (parity with every ``require_*`` site). ``admins`` degrades to ``[]``\nwhen FGA is off or the ``list_users`` lookup is unavailable \u2014 the registry facts still serve.",
@@ -15469,6 +15936,102 @@
         "summary": "List Project Policies",
         "tags": [
           "policy"
+        ]
+      }
+    },
+    "/v1/projects/{id}/transforms": {
+      "get": {
+        "description": "Every lane declared in this project \u2014 the answer to \"what actually runs here?\".\n\nAdmin-gated like the trio: the same information, and splitting the tier would let an admin be\nshown one record and denied the list of all of them.",
+        "operationId": "list_transforms_v1_projects__id__transforms_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectTransformsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Transforms",
+        "tags": [
+          "transform"
         ]
       }
     },
