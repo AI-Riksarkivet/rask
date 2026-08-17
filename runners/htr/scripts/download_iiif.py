@@ -15,7 +15,7 @@ from pathlib import Path
 
 import httpx
 
-from storage import DEFAULT_IIIF_BASE, build_image_url, file_extension, get_image_ids
+from htr.iiif import DEFAULT_IIIF_BASE, build_image_url, file_extension, get_image_ids
 
 
 logger = logging.getLogger(__name__)

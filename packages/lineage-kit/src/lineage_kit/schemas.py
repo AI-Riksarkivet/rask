@@ -1,6 +1,6 @@
 """Pydantic OpenLineage schemas — THE standard emission shape for all Ray compute (R21).
 
-Every plane that runs on Ray (the medallion movers, the IIIF→bronze producer, the HTR
+Every plane that runs on Ray (the medallion movers, the ingest→bronze producer, the HTR
 pipeline, ``ray_stage``/lance jobs, and online Ray Serve deployments) authors its lineage
 through these models instead of hand-building wire dicts. The models convert to the
 official ``openlineage-python`` ``event_v2`` classes (:meth:`RunEvent.to_openlineage`),

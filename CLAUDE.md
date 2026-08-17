@@ -179,7 +179,7 @@ stores left are the chart-managed lineage (AGE) and OpenFGA databases.)
 Two **language-pure planes** — **don't blur them**. Python lives at the repo root (`packages/` + `services/`); the entire JS/TS estate lives under `frontend/`, its own bun + Turborepo workspace root. (There is deliberately **no Polylith-style `projects/` layer** — it was removed 2026-07; deployables build straight from the root uv workspace via `uv sync --package <name>`, one dockerfile per deployable in `.docker/`.)
 
 - `packages/` — reusable **Python** libraries, **no entrypoints**. uv workspace members.
-  - `packages/storage` — `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`, `iter_keys`, `s3_client`
+  - `packages/storage` — `FSSource/Sink`, `S3Source/Sink`, `iter_keys`, `s3_client`, `build_source`/`build_sink`. **Protocol-agnostic:** a source only every modality can use belongs here; one only a single workload uses belongs in that runner (an IIIF read-through cache lived here until 2026-08-17 with exactly one consumer, and moved to `runners/htr`)
   - `packages/service-kit` — shared **platform library**: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`/`SettingsDep`, the injectable lifespan. Dependency-light (no lancedb/ray/sqlmodel).
   - `packages/ray-kit` — Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, the dashboard service). Used by the `compute` service.
   - `packages/tracker` — pluggable transfer-state tracking (SQLite / Postgres backends)

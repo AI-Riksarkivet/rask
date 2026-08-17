@@ -46,7 +46,10 @@ storage = { path = "../../packages/storage", editable = true }
 htrflow = { git = "https://github.com/AI-Riksarkivet/htrflow.git" }
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-asyncio>=0.25", "moto[s3]>=5.0"]
+# respx: the moved IIIF suites mock HTTPX transports rather than reaching a real endpoint. It is a
+# DEV dep of this runner alone — the root workspace needed it while `storage.iiif` lived there, and a
+# sealed runner must carry its own test deps or its suite silently cannot run.
+dev = ["pytest>=8", "pytest-asyncio>=0.25", "moto[s3]>=5.0", "respx>=0.21"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

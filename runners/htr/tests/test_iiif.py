@@ -19,7 +19,7 @@ def _httpx_mock(handler):
 
 
 def test_get_image_ids_parses_manifest():
-    from storage import get_image_ids
+    from htr.iiif import get_image_ids
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/arkis!A0060198/manifest")
@@ -31,14 +31,14 @@ def test_get_image_ids_parses_manifest():
 
 
 def test_build_image_url_default():
-    from storage import DEFAULT_IIIF_BASE, build_image_url
+    from htr.iiif import DEFAULT_IIIF_BASE, build_image_url
 
     url = build_image_url("A0060198_00001")
     assert url == f"{DEFAULT_IIIF_BASE}/arkis!A0060198_00001/full/max/0/default.jpg"
 
 
 def test_build_image_url_custom_size():
-    from storage import build_image_url
+    from htr.iiif import build_image_url
 
     url = build_image_url(
         "A0060198_00001",
@@ -50,7 +50,7 @@ def test_build_image_url_custom_size():
 
 def test_iiif_cached_source_hits_cache():
     """When the key already exists in S3, read() returns immediately without IIIF call."""
-    from storage import IIIFCachedSource
+    from htr.iiif import IIIFCachedSource
 
     with mock_aws():
         c = boto3.client("s3", region_name="us-east-1")
@@ -74,7 +74,7 @@ def test_iiif_cached_source_hits_cache():
 
 def test_iiif_cached_source_misses_then_writes_through():
     """On cache miss, fetch from IIIF and write to S3."""
-    from storage import IIIFCachedSource
+    from htr.iiif import IIIFCachedSource
 
     with mock_aws():
         c = boto3.client("s3", region_name="us-east-1")
@@ -103,7 +103,7 @@ def test_iiif_cached_source_misses_then_writes_through():
 
 
 def test_iiif_cached_source_keys_iterates_manifests():
-    from storage import IIIFCachedSource
+    from htr.iiif import IIIFCachedSource
 
     with mock_aws():
         c = boto3.client("s3", region_name="us-east-1")
@@ -138,7 +138,7 @@ def test_iiif_cached_source_pickles():
     Uses the production factory pattern (functools.partial wrapping a
     module-level function) — lambdas aren't picklable.
     """
-    from storage import IIIFCachedSource
+    from htr.iiif import IIIFCachedSource
 
     src = IIIFCachedSource(
         batch_ids=["A0060198"],
@@ -155,7 +155,7 @@ def test_iiif_cached_source_pickles():
 
 def test_iiif_cached_source_propagates_non_404_s3_errors():
     """A connection-level S3 failure must not silently fall through to IIIF."""
-    from storage import IIIFCachedSource
+    from htr.iiif import IIIFCachedSource
 
     class _AccessDenied(Exception):
         response: typing.ClassVar[dict] = {"Error": {"Code": "AccessDenied"}}

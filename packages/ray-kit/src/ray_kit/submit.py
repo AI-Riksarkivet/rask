@@ -7,7 +7,7 @@ Serve), and R2 puts ETL there; it cannot do that while the only submitter is ins
 merely happens to have needed one first.
 
 **What moved and what did not.** Of the eight functions in that module, five read no settings at all —
-they are the submitter. The other three (``submit_stage_job``, ``submit_iiif_ingest_job``,
+they are the submitter. The other three (``submit_stage_job``, ``submit_ingest_job``,
 ``submit_train_job``) are workload wrappers that read 9-11 fields of ``MedallionSettings`` each, and they
 stay with their workloads: a wrapper's job is to know which entrypoint and which env its transform needs.
 Only the mechanics move here, and they take explicit arguments rather than a settings object, so no

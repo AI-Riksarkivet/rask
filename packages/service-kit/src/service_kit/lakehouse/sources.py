@@ -1,7 +1,7 @@
 """Provider-agnostic external SOURCE adapters — the ingest seam.
 
 A *source* is anything that yields raw objects to land in the lakehouse: a local directory, an S3/MinIO
-bucket, or — as plugins outside this module — IIIF / GCS / HuggingFace / HCP. The lakehouse ingest needs
+bucket, or — as plugins outside this module — any protocol a workload needs. The lakehouse ingest needs
 only each object's bytes plus a stable source URI (for lineage provenance); the provider client stays
 behind the small ``SourceAdapter`` protocol so no provider code leaks into the pipeline.
 """
@@ -26,7 +26,7 @@ class SourceObject(BaseModel):
 
 
 class SourceAdapter(Protocol):
-    """Yields the objects to ingest. Real providers (IIIF/GCS/HF/HCP) implement this outside the lakehouse."""
+    """Yields the objects to ingest. Real providers (GCS/HF/HCP/a workload's own protocol) implement this outside the lakehouse."""
 
     def iter_objects(self) -> Iterator[SourceObject]: ...
 
@@ -38,7 +38,7 @@ class KeyedSourceAdapter(SourceAdapter, Protocol):
     enumerates first — to slice the work into chunks — and fetches later, in workers. With
     ``iter_objects`` as the only entry point, enumeration reads every object's bytes purely to obtain
     its ``uri`` and then discards them, so an ``n``-object source is transferred TWICE. Against a
-    rate-limited IIIF volume the enumeration step alone is a full download of the volume, doubling
+    rate-limited HTTP source the enumeration step alone can be a full download of the unit, doubling
     the request load on exactly the endpoint the queue's backpressure exists to protect.
 
     Adapters that can list cheaply implement this; :func:`ingest.sources.iter_unit_keys` falls back

@@ -6,7 +6,7 @@ deployments) ONE emission shape and one job→stage→actor parent/child run sea
 
 Offline shape::
 
-    with job_run("htr.ingest", inputs=[("iiif", "riksarkivet")]) as run:
+    with job_run("ingest", inputs=[("s3", "source-bucket")]) as run:
         layout(batch)                      # @stage("layout") — child run, auto-linked
         Actor.remote(lineage_context=run.context.model_dump_json())  # or runtime_env env_vars=run.context.as_env()
 

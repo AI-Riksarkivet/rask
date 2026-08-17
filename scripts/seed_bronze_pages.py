@@ -33,6 +33,7 @@ Run against a forwarded RustFS and a reachable catalog:
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from collections.abc import Iterator
@@ -41,7 +42,98 @@ import httpx
 from medallion.services.ingest import ingest_to_bronze
 
 from service_kit.lakehouse.sources import SourceObject
-from storage import build_image_url, fetch_image, get_image_ids
+
+
+# ── IIIF helpers, INLINE on purpose ──────────────────────────────────────────────
+# This script straddles both planes: it needs `medallion.services.ingest` (root workspace) and a
+# IIIF fetch, and a sealed runner cannot import a platform service. The full read-through cache
+# lives in `runners/htr/src/htr/iiif.py`, owned by the workload that uses it — re-exporting IIIF
+# from `packages/storage` is what put one workload's protocol into every deployment. A second
+# consumer is the signal to build a generic HTTP source behind `build_source`, not to promote
+# these back into a package.
+log = logging.getLogger(__name__)
+
+DEFAULT_IIIF_BASE = "https://iiifintern-ai.ra.se"
+DEFAULT_QUERY_PARAMS = "full/max/0/default.jpg"
+
+
+def get_image_ids(
+    batch_id: str,
+    *,
+    base_url: str = DEFAULT_IIIF_BASE,
+    timeout: float = 60.0,
+    client: httpx.Client | None = None,
+) -> list[str]:
+    """Fetch a IIIF manifest and return sorted image IDs.
+
+    Riksarkivet manifest items have ids of the form
+    `https://iiifintern-ai.ra.se/arkis!A0060198_00001/canvas`; we keep the
+    first 14 chars after the `!` (e.g. `A0060198_00001`).
+    """
+    manifest_url = f"{base_url}/arkis!{batch_id}/manifest"
+    log.info("Fetching manifest: %s", manifest_url)
+
+    if client is None:
+        with httpx.Client(timeout=timeout) as c:
+            resp = c.get(manifest_url)
+            resp.raise_for_status()
+            data = resp.json()
+    else:
+        resp = client.get(manifest_url)
+        resp.raise_for_status()
+        data = resp.json()
+
+    image_ids: list[str] = []
+    for item in data.get("items", []):
+        raw_id = item.get("id", "")
+        if "!" in raw_id:
+            image_ids.append(raw_id.split("!")[1][:14].upper())
+
+    log.info("Found %d images in batch %s", len(image_ids), batch_id)
+    return sorted(image_ids)
+
+
+def build_image_url(
+    image_id: str,
+    *,
+    base_url: str = DEFAULT_IIIF_BASE,
+    query_params: str = DEFAULT_QUERY_PARAMS,
+) -> str:
+    """Build a IIIF Image API URL for a given image ID."""
+    return f"{base_url}/arkis!{image_id}/{query_params}"
+
+
+def file_extension(query_params: str = DEFAULT_QUERY_PARAMS) -> str:
+    """Extract the file extension implied by the IIIF query params."""
+    return "." + query_params.rsplit(".", 1)[-1]
+
+
+def fetch_image(url: str, *, client: httpx.Client, attempts: int = 3, base_delay: float = 1.0) -> bytes:
+    """GET one IIIF image with retry on transient httpx errors and 5xx — the shared reading primitive.
+
+    The IIIF server hands out RST under load (Errno 104 at ~64 concurrent reads); three tries with
+    exponential backoff convert a transient hiccup into a slowdown instead of a pipeline kill. Real 4xx
+    (except 429) raise immediately — those won't get better. Used by both :class:`IIIFCachedSource` (the
+    legacy cache role) and the medallion IIIF→raw producer (the P7a harvest library role).
+    """
+    import time as _time
+
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            resp = client.get(url)
+            resp.raise_for_status()
+            return resp.content
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            if isinstance(exc, httpx.HTTPStatusError):
+                code = exc.response.status_code
+                if code != 429 and 400 <= code < 500:
+                    raise
+            last = exc
+            if i < attempts - 1:
+                _time.sleep(base_delay * (2**i))
+    assert last is not None
+    raise last
 
 
 #: The PUBLIC Riksarkivet IIIF endpoint. The chart defaults to https://iiifintern-ai.ra.se, which

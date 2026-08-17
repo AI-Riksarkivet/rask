@@ -17,8 +17,9 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.logging import RichHandler
 
+from htr.iiif import DEFAULT_IIIF_BASE, IIIFCachedSource
 from runner.pipeline import PIPELINES
-from storage import DEFAULT_IIIF_BASE, IIIFCachedSource, build_sink, build_source, derive_hcp_creds
+from storage import build_sink, build_source, derive_hcp_creds
 
 
 load_dotenv()
