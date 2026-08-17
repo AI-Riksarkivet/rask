@@ -12,7 +12,14 @@
 	import { Card } from '@rask/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
 	import { SortHeader } from '@rask/ui/sort-header';
-	import { ArrowLeft, TriangleAlert, FileText, ChevronRight, RefreshCw } from '@lucide/svelte';
+	import {
+		ArrowLeft,
+		TriangleAlert,
+		Info,
+		FileText,
+		ChevronRight,
+		RefreshCw,
+	} from '@lucide/svelte';
 
 	// THE ONE PATTERN (see lib/remote/compute.remote.ts): the three dashboards
 	// (jobs/tasks/cluster) are cached remote queries read imperatively
@@ -87,6 +94,11 @@
 
 	const nodeMap = $derived(new Map(nodes.map((n) => [n.node_id, n])));
 	const jobTasks = $derived(tasks); // already narrowed server-side
+	// The FAILURE signal, kept apart from the mere presence of `message` — Ray sets that on every
+	// terminal job, success included.
+	const jobFailed = $derived(
+		Boolean(job?.error_type) || job?.status === 'FAILED' || job?.status === 'STOPPED',
+	);
 
 	const sortedTasks = $derived.by(() => {
 		const dir = sortDir === 'asc' ? 1 : -1;
@@ -228,10 +240,24 @@
 				</div>
 
 				{#if job.error_type || job.message}
+					<!-- Ray sends `message` on EVERY terminal job, including "Job finished successfully." —
+					     it is a status line, not an error. Keying the destructive styling on the message's
+					     presence painted a red alert with a warning triangle directly under a green
+					     SUCCEEDED badge, so the page told an operator two opposite things at once. The
+					     failure signal is `error_type`, or a FAILED/STOPPED status. -->
 					<div
-						class="border-destructive/30 bg-destructive/5 text-destructive mx-4 mb-3 flex items-start gap-1.5 rounded-md border p-2 font-mono text-[11px]"
+						class={[
+	'mx-4 mb-3 flex items-start gap-1.5 rounded-md border p-2 font-mono text-[11px]',
+	jobFailed
+		? 'border-destructive/30 bg-destructive/5 text-destructive'
+		: 'border-border/60 bg-muted/40 text-muted-foreground',
+]}
 					>
-						<TriangleAlert class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+						{#if jobFailed}
+							<TriangleAlert class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+						{:else}
+							<Info class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+						{/if}
 						<span class="break-words"
 							>{#if job.error_type}<span class="font-semibold"
 									>{job.error_type}:
