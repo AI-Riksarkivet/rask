@@ -33,6 +33,7 @@ or `make e2e-dummy-lane`.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -54,6 +55,12 @@ PROJECT = os.environ.get("LANCE_E2E_PROJECT", "acme")
 #: The RayService whose ACTIVE cluster runs the job. Not a Deployment name: the chart's Ray runs as a
 #: KubeRay RayService, whose head is a pod inside a RayCluster with a generated suffix.
 RAY_SERVICE = os.environ.get("LANCE_E2E_RAY_SERVICE", "rask-ray")
+#: Where the JOB posts its provenance (in-cluster, from the head pod) and where the TEST reads it
+#: back (port-forwarded). Two different addresses for one service, which is the whole reason they
+#: are separate knobs: the job cannot reach a localhost forward and the test cannot resolve a
+#: cluster DNS name.
+LINEAGE_IN_CLUSTER = os.environ.get("LANCE_E2E_LINEAGE_IN_CLUSTER", "http://rask-lineage:8000")
+LINEAGE_URL = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 
 #: The baked entrypoint. A literal on purpose: the whole claim is that this path exists IN THE IMAGE,
 #: so deriving it from the same config the image is built against would make the test agree with
@@ -61,6 +68,23 @@ RAY_SERVICE = os.environ.get("LANCE_E2E_RAY_SERVICE", "rask-ray")
 BAKED_ENTRYPOINT = "python /home/ray/jobs/ray_dummy_job.py"
 
 LANE = "dummy"
+
+
+def _subject_of(bearer: str) -> str:
+    """The `sub` claim, read from the token WITHOUT verifying it.
+
+    Safe here and only here: this is a test deriving the value it will later assert came back, not
+    a service making an authorization decision. Nothing is trusted on the strength of it, and the
+    token itself is never printed.
+    """
+    if not bearer or bearer.count(".") != 2:
+        return ""
+    payload = bearer.split(".")[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        return str(json.loads(base64.urlsafe_b64decode(payload)).get("sub", ""))
+    except Exception:  # noqa: BLE001 — a malformed fixture token is a skip, not a crash
+        return ""
 
 
 def _headers() -> dict[str, str]:
@@ -292,11 +316,25 @@ def driven() -> Iterator[dict[str, Any]]:
     questions about ONE run, not three runs.
     """
     run = f"{os.getpid()}{uuid.uuid4().hex[:6]}"
+    run_id = f"e2e-{run}"
     base = f"/tmp/e2e-dummy-{run}"
     bronze, silver = f"{base}/bronze.lance", f"{base}/silver.lance"
 
     _exec_on_head(_SEED.format(bronze=bronze))
-    env = {"FROM_URI": bronze, "TO_URI": silver, "RUN_ID": f"e2e-{run}"}
+    # The identity and the provenance target. TO_ID/FROM_ID are CATALOG identifiers, not URIs:
+    # the graph node and the FGA object are keyed by `silver$dummy`, and emitting a storage path
+    # would name a node no grant matches — every recipient HIDDEN rather than denied.
+    env = {
+        "FROM_URI": bronze,
+        "TO_URI": silver,
+        "RUN_ID": run_id,
+        "TO_ID": "silver$dummy",
+        "FROM_ID": "bronze$events",
+        "PROJECT": PROJECT,
+        "ORIGINATOR": _subject_of(ADMIN_TOKEN),
+        "LINEAGE_URL": LINEAGE_IN_CLUSTER,
+        "LINEAGE_TOKEN": ADMIN_TOKEN,
+    }
     logs = []
     for attempt in ("first", "replay"):
         submission = f"e2e-dummy-{run}-{attempt}"
@@ -316,6 +354,7 @@ def driven() -> Iterator[dict[str, Any]]:
         pytest.fail(f"the measure step produced no RESULT line:\n{marker}")
     result: dict[str, Any] = json.loads(marker[at + len("RESULT") :])
     result["first_log"], result["replay_log"] = logs[0], logs[1]
+    result["run_id"] = run_id
     yield result
     _exec_on_head(_CLEANUP.format(base=base), timeout=120)
 
@@ -359,3 +398,57 @@ def test_a_REPLAYED_run_converges_rather_than_duplicating(driven: dict[str, Any]
     assert "Traceback" not in driven["replay_log"], driven["replay_log"][-800:]
     assert driven["silver_rows"] == 64, f"the replay duplicated: {driven['silver_rows']} rows from 64 bronze rows"
     assert driven["silver_version"] >= 2, "the replay did not commit a second version — it may not have run at all"
+
+
+# --- 5 LINEAGE ------------------------------------------------------------------------------------
+
+
+def test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service(driven: dict[str, Any]) -> None:
+    """Condition 5, asserted on the DELIVERED ROW rather than on the emit's acknowledgement.
+
+    That distinction is the whole point. An event the plane cannot target is answered with a SUCCESS
+    ack and then discarded, so a producer asserting "the POST returned 2xx" proves only that it was
+    accepted — never that anything is recoverable, and never that a person could be told. The lane
+    emitted nothing at all until 2026-08-17 while its docstring advertised `LINEAGE_JSON`, and no
+    ack-shaped assertion anywhere would have noticed.
+
+    Four fields, because `notifiable()` drops the event on ANY miss and says nothing:
+    terminal state, a targetable principal, `lance.project`, and an output named as the FGA object.
+    """
+    if not LINEAGE_URL:
+        pytest.skip("set LANCE_E2E_LINEAGE_URL to the port-forwarded lineage service to read events back")
+
+    response = requests.get(f"{LINEAGE_URL.rstrip('/')}/events?limit=200", headers=_headers(), timeout=30)
+    if response.status_code in (401, 403):
+        pytest.skip(f"the lineage feed is governed and this token cannot read it ({response.status_code})")
+    assert response.status_code == 200, response.text
+
+    events = response.json().get("events", [])
+    mine = [e for e in events if e.get("job", "").endswith("silver$dummy") or driven["run_id"] in json.dumps(e)]
+
+    if not mine:
+        # TWO different failures wear one symptom here, and they need opposite answers. The lane
+        # emitting NOTHING is a defect in the lane. The lane emitting and being REFUSED is a missing
+        # deployment grant — the FGA prerequisite every new lineage producer has to ship. Only the
+        # job's own stderr can tell them apart, which is why `emit()` prints the HTTP status.
+        refused = "lineage-emit-failed" in driven["first_log"] and "status=403" in driven["first_log"]
+        assert not refused, (
+            "the lane EMITTED and the ingest REFUSED it (403 can_write_data on the output).\n\n"
+            "This is a missing grant, not a broken lane. `table:silver$dummy` has no parent link, so "
+            "nothing cascades to it — unlike its siblings, which `scripts/seed_medallion_fga.sh` links:\n"
+            "    link namespace:silver 'table:silver$features'\n\n"
+            "The two tuples that are missing:\n"
+            "    namespace:silver  parent  table:silver$dummy\n"
+            "    table:silver$dummy  child  namespace:silver\n\n"
+            "No new IDENTITY grant is needed: `user:service-bronze-to-silver` already holds "
+            "`writer` on the warehouse, and the parent link is what lets that rung reach this table."
+        )
+        pytest.fail(f"the run emitted nothing readable: {driven['run_id']} absent from {len(events)} events")
+
+    terminal = [e for e in mine if e.get("event_type") in ("COMPLETE", "FAIL")]
+    assert terminal, f"no TERMINAL event for this run — START/RUNNING notify nobody: {mine[:2]}"
+
+    row = terminal[-1]
+    assert row["event_type"] == "COMPLETE", f"the run did not complete: {row}"
+    assert row.get("outputs"), "an output-less run names no object and is refused by the plane"
+    assert "silver$dummy" in row["outputs"], f"the output must be named as the FGA object is: {row['outputs']}"
