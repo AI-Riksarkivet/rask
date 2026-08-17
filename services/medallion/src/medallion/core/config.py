@@ -164,16 +164,7 @@ class MedallionSettings(BaseSettings):
     ray_enabled: bool = Field(default=False, alias="MEDALLION_RAY_ENABLED")
     ray_address: str = Field(default="http://ray-lance-head:8265", alias="MEDALLION_RAY_ADDRESS")
     ray_entrypoint: str = Field(default="python /home/ray/jobs/ray_stage_job.py", alias="MEDALLION_RAY_ENTRYPOINT")
-    # The HTR lane's transcribe endpoint (#88 step 3) — the deployed Ray Serve /htrflow route, whose
-    # warm weights the governed lane calls over PLAIN HTTP (the medallion deliberately imports no
-    # Ray). Empty = the lane is not configured; the lane fails loudly rather than guessing a host,
-    # because a guessed default that happens to resolve is how a staging mover transcribes against
-    # the wrong cluster.
-    htrflow_url: str = Field(default="", alias="MEDALLION_HTRFLOW_URL")
-    # One PAGE of blocking GPU/CPU inference, not a metadata call — sized like the runner's own
-    # expectations (minutes on CPU-only Serve), nothing like ray_request_timeout_seconds above.
-    htrflow_timeout_seconds: float = Field(default=600.0, gt=0, alias="MEDALLION_HTRFLOW_TIMEOUT_SECONDS")
-    # Where the HTR lane REGISTERS its gold table (#88 step 5) — the catalog service, and the
+    # Where a mover REGISTERS its output table — the catalog service, and the
     # catalog's own connection root so the location can be expressed RELATIVELY (the dir backend
     # refuses absolute URIs — the #75 lesson). Both empty by default: the lane fails at the
     # register seam naming the env var, never guessing — a gold table the catalog cannot govern
@@ -183,7 +174,7 @@ class MedallionSettings(BaseSettings):
     # Optional bearer for auth-enabled catalogs (mirrors the annotator's MEDIA_CATALOG_TOKEN
     # pattern; the OpenBao/Dapr secret flow is the production source — this is the pinned override).
     catalog_token: str | None = Field(default=None, alias="MEDALLION_CATALOG_TOKEN")
-    # The catalog id delimiter (`gold$htr`) — matches LANCE_DELIMITER's default, same rationale as
+    # The catalog id delimiter (`gold$catalog`) — matches LANCE_DELIMITER's default, same rationale as
     # MAINTENANCE_DELIMITER: a mismatch addresses a DIFFERENT table rather than failing.
     delimiter: str = Field(default="$", alias="MEDALLION_DELIMITER")
     ray_request_timeout_seconds: float = Field(default=10.0, ge=0.1, alias="MEDALLION_RAY_REQUEST_TIMEOUT_SECONDS")

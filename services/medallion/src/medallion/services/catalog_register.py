@@ -7,12 +7,11 @@ the written bytes into a `table:` object: the catalog's register door seeds owne
 every governed read path (the viewer's pages, credentials vending, protection) keys off that
 object.
 
-MODALITY-NEUTRAL BY CONSTRUCTION, and that is the point of the file's name. This shipped as
-`htr_register.register_gold_table`, called only from the HTR stage — so the one lane that had it
-was governed and every other lane wrote ungoverned bytes. Nothing in the logic was ever
-HTR-specific: it takes an id and a URI. Governance belongs to the CASCADE, not to whichever
-workload was built first, or every new modality starts ungoverned by default — the exact opposite
-of an agnostic platform.
+WORKLOAD-NEUTRAL BY CONSTRUCTION, and that is the point of the file's name. This shipped named for
+one workload and called from that workload's stage alone, so the lane built first was governed and
+every other lane wrote ungoverned bytes. Nothing in the logic was ever workload-specific: it takes
+an id and a URI. Governance belongs to the CASCADE, or every new workload starts ungoverned by
+default — the exact opposite of an agnostic platform.
 
 Register — not create-through-the-catalog. The mover owns where it WRITES (the cascade's standing
 rule) and `register_table` exists precisely for data written outside the catalog's own doors.

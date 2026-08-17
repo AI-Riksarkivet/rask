@@ -955,15 +955,20 @@ medallion:
     # namespaces: mover URIs derive from the namespace, so reusing bronze/silver would collide with
     # the events chain's datasets on the same paths.
     - { name: media-to-silver, daprAppId: media-to-silver, fromNamespace: bronze-media, fromDataset: bronze-media$objects, toNamespace: silver-media, toDataset: silver-media$features, operation: derive_media, author: data_eng, subTopic: medallion.media, pubTopic: "", requiredAction: can_create_table, serviceIdentity: "service-media-to-silver", requiredColumns: "id,thumbnail,embedding" }
-    # The GOVERNED HTR lane (#88): bronze pages → the Serve /htrflow HTTP ingress → parsed into the
-    # gold contract (medallion/schemas/htr.py — production-load-bearing since htr_parse's import
-    # guard). Terminal (pubTopic ""). `operation: transcribe_pages` routes transform.py's dispatch
-    # into htr_stage BEFORE the ray branch — the generic stage job knows nothing of Serve/ALTO, so
-    # riding it would be silently wrong; the P7b re-cut distributes this later. requiredAction
-    # can_promote: writing GOLD is the validator-tier privilege, same as silver-to-gold above.
-    # htrflowUrl empty by default = lane deliberately unconfigured until Serve is reachable
-    # in-cluster; the seam fails naming MEDALLION_HTRFLOW_URL rather than guessing a host.
-    - { name: pages-to-gold-htr, daprAppId: pages-to-gold-htr, fromNamespace: bronze, fromDataset: bronze$pages, toNamespace: gold-htr, toDataset: gold$htr, operation: transcribe_pages, author: htr, subTopic: medallion.bronze, pubTopic: "", requiredAction: can_promote, serviceIdentity: "service-pages-to-gold-htr", requiredColumns: "page_key,text,confidences", htrflowUrl: "" }
+    # REMOVED 2026-08-17 — the transcription lane. Its in-process compute lived inside the medallion
+    # (`htr_stage`/`htr_parse`/`htr_transcribe` + an HTR-shaped `schemas/htr.py`) and was dispatched by
+    # a `operation == transcribe_pages` branch in transform.py, so the generic cascade named one
+    # workload in its own control flow. The platform is workload-agnostic: a workload reaches the
+    # cascade as CONFIGURATION — an operation name, requiredColumns, a Ray `stageJob` entrypoint —
+    # never as a code branch.
+    #
+    # The mover row goes with the code, deliberately. Leaving it would route `transcribe_pages` into
+    # the GENERIC transform, which knows nothing of the workload and would write silently wrong gold
+    # — worse than the lane being absent. Re-landing it means a Ray job entrypoint baked into the
+    # ray-cluster image plus `stageJob:` on a mover row; no change to the cascade.
+    #
+    # The lane was already non-functional: `htrflowUrl` shipped empty and the mover dead-lettered
+    # every trigger it received.
 
 # --- Compaction/GC microservice (Dapr cron binding) -----------------------------------------------
 # A bindings.cron component POSTs /<bindingName> on `schedule`; the service compacts small Lance

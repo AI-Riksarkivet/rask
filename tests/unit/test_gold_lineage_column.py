@@ -26,7 +26,7 @@ from dapr.aio.clients import DaprClient
 from lineage_kit.consume import LineageDoc
 from lineage_kit.schemas import RunEvent
 from medallion.core.config import MedallionSettings
-from medallion.schemas.htr import GOLD_CONTRACT_COLUMNS, LINEAGE_COLUMN
+from medallion.schemas.tier import LINEAGE_COLUMN, TIER_COLUMNS
 from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
 
@@ -100,9 +100,12 @@ def test_the_promotion_writes_the_lineage_column_as_lance_json(tmp_path: Any) ->
     assert all(cell for cell in cells)
 
 
-def test_the_lineage_column_is_part_of_the_gold_contract() -> None:
-    # The exporter (P7c) is allowed to rely on it — a field dropped from gold is unrecoverable downstream.
-    assert LINEAGE_COLUMN in GOLD_CONTRACT_COLUMNS
+def test_the_lineage_column_is_part_of_the_tier_contract() -> None:
+    # The exporter (P7c) is allowed to rely on it — a field dropped from a tier is unrecoverable
+    # downstream. Asserted against TIER_COLUMNS, the contract EVERY governed tier carries whatever
+    # workload produced it; it used to be asserted against an HTR-shaped gold contract, which made
+    # a platform guarantee look like one workload's.
+    assert LINEAGE_COLUMN in TIER_COLUMNS
 
 
 def test_the_promotion_indexes_the_run_id_path(tmp_path: Any) -> None:

@@ -34,7 +34,7 @@ from opentelemetry import trace
 from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_refused, record_transition
 from medallion.schemas.events import build_run_event
-from medallion.services import catalog_register, htr_stage
+from medallion.services import catalog_register
 from medallion.services.compute import measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.promotion import promotion_lineage
@@ -377,39 +377,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                     span.set_attribute("lance.lineage.run_id", lineage_doc.run_id)
                     span.set_attribute("lance.lineage.chain_depth", len(lineage_doc.derived_from))
                     use_ray = settings.ray_enabled
-                    # Set by any branch that registered its own output, so the generic
-                    # registration below does not repeat it. A flag rather than an
-                    # `operation == HTR` test on purpose: the generic path must not grow a
-                    # list of modality names.
-                    registered_by_stage = False
-                    if settings.operation == htr_stage.HTR_OPERATION:
-                        # The governed HTR lane (#88 step 4) — dispatched FIRST, before the ray
-                        # branch, deliberately: the generic Ray stage job derives thumbnails and
-                        # knows nothing of Serve or ALTO, so with ray_enabled on it would run
-                        # silently wrong rather than distributed. The P7b re-cut moves this
-                        # transform onto the cluster; until then the span names which compute ran.
-                        span.set_attribute("lance.medallion.compute", "htr_in_process")
-                        result = await run_in_threadpool(
-                            htr_stage.transcribe_stage,
-                            from_uri,
-                            to_uri,
-                            settings.storage_options(),
-                            stage=settings.to_namespace,
-                            lineage=lineage_doc,
-                            htrflow_url=settings.htrflow_url,
-                            timeout_seconds=settings.htrflow_timeout_seconds,
-                            catalog_url=settings.catalog_url,
-                            catalog_root=settings.catalog_root,
-                            table_id=to_dataset,
-                            catalog_token=settings.catalog_token,
-                            delimiter=settings.delimiter,
-                        )
-                        # This stage registers its own output as part of its contract (#88 step 5),
-                        # so the generic registration below must not repeat it. Set AFTER the call
-                        # so a raised RegisterError leaves it false and nothing claims a
-                        # registration that did not happen.
-                        registered_by_stage = True
-                    elif use_ray and not trigger.ray_job_done:
+                    if use_ray and not trigger.ray_job_done:
                         # S1 — DISPATCH, and return. This branch used to submit and then measure on the
                         # very next line, which is the defect `medallion.workflow` exists to close:
                         # `submit_stage_job` returns the instant Ray ACCEPTS the submission, so the
@@ -440,7 +408,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                             extra={"transition": transition, "instance_id": instance_id, "to_uri": to_uri},
                         )
                         return _SUCCESS
-                    elif use_ray:
+                    if use_ray:
                         # The job is TERMINAL-OK — the workflow read SUCCEEDED before re-publishing — so
                         # the destination exists and measuring it is now a question about this run's
                         # output rather than a race with it.
@@ -485,16 +453,14 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                     # false and `describe gold$catalog` = 403, not because permission was denied but
                     # because there was no object there to hold a permission.
                     #
-                    # This used to live inside `htr_stage` alone, so the HTR lane was governed and
-                    # every other lane — the Ray stage job, the in-process transform, and every
-                    # future modality — wrote ungoverned bytes. That is backwards for an agnostic
-                    # platform: a new modality would start ungoverned by DEFAULT and need its own
-                    # bolt-on. The HTR stage still registers internally as part of its own contract
-                    # (#88 step 5), so it is skipped here rather than registered twice.
+                    # ONE registration site, for every lane. This used to live inside a workload's
+                    # own stage module, so the one workload that had it was governed and every other
+                    # lane wrote ungoverned bytes — a new workload would start ungoverned BY DEFAULT
+                    # and need its own bolt-on, which is backwards for an agnostic platform.
                     #
-                    # Failure PROPAGATES (RegisterError) exactly as it does in the HTR lane: a write
-                    # the catalog cannot govern must not report success, and the mover retries.
-                    if not registered_by_stage and to_dataset:
+                    # Failure PROPAGATES (RegisterError): a write the catalog cannot govern must not
+                    # report success, and the mover retries.
+                    if to_dataset:
                         if settings.catalog_url:
                             await run_in_threadpool(
                                 catalog_register.register_stage_output,
@@ -557,8 +523,9 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             token=token,
             project=project or None,
             originator=trigger.originator or None,
-            # #88 step 6: the run's model identity + build sha, parsed from the ALTO by the HTR
-            # lane; empty/None for every other lane, which renders NO facet (byte-parity holds).
+            # The run's model identity + build sha, when the transform declares them. A workload
+            # that identifies its model reports it here; empty/None otherwise, which renders NO
+            # facet (byte-parity holds). The cascade neither knows nor asks which workload ran.
             models=(result.models if result else None) or None,
             commit_sha=result.commit_sha if result else None,
             event_time=event_time,  # the same instant the in-dataset `lineage` document names (R26)

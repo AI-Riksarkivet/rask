@@ -83,7 +83,7 @@ class WriteResult(BaseModel):
     #: read back with ``measure_stage``, or its columnLineage facet silently disappears.
     column_map: list[tuple[str, str, str]] = Field(default_factory=list)
     #: Model identities (``repo@revision``) parsed FROM THE RUN'S OWN ARTEFACT (#88 step 6 — the
-    #: HTR lane reads them out of the ALTO, never from config). Empty for stages that load no
+    #: a transform reads them out of its own output, never from config). Empty for stages that load no
     #: model; the emit renders a ``model`` run facet only when non-empty.
     models: list[str] = Field(default_factory=list)
     #: The runner build's commit, from the same artefact. None when the document carries none.

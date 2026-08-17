@@ -33,7 +33,7 @@ THE SHAPE. `stage_run` submits, polls to a terminal state, and only then publish
 the mover with `ray_job_done` set — at which point the existing handler runs its measure/emit/cascade
 path unchanged, against a dataset that is now actually written. Re-publishing rather than re-hosting
 the handler's 520 lines as activities is deliberate: the post-compute path is the same code on every
-lane (in-process, HTR, Ray), and forking it per lane is how the lanes drift apart.
+lane (in-process, Ray), and forking it per lane is how the lanes drift apart.
 
 DETERMINISM (checked against the dapr-skills Python checklist, DWF-DET-001..015). No wall clock — the
 deadline is derived from `ctx.current_utc_datetime`. No sleep — `ctx.create_timer`. No I/O, no

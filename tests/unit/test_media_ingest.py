@@ -114,7 +114,7 @@ def test_publish_failure_surfaces_as_retryable(monkeypatch: pytest.MonkeyPatch) 
 # an input that read as a GOVERNED dataset called `table:source`, which nobody holds a grant on. Under
 # FGA the whole event is then dropped from `GET /events` for EVERY caller, because the feed shows a row
 # only if the reader can see every dataset it references. The estate's own convention is a URI-shaped
-# namespace: `htr_stage._split_source_uri` documents `iiif://vol/00012.jpg` -> (`iiif://vol`, `00012.jpg`).
+# namespace: the source-uri split convention is `iiif://vol/00012.jpg` -> (`iiif://vol`, `00012.jpg`).
 
 
 def test_each_source_input_is_namespaced_so_it_reads_as_external(monkeypatch: pytest.MonkeyPatch) -> None:

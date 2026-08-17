@@ -329,25 +329,19 @@ spec:
             # the layout/lines + transcribe jobs on the unified cluster; unset = ray_stage_job.py default.
             - { name: MEDALLION_RAY_ENTRYPOINT, value: {{ .stageJob | quote }} }
             {{- end }}
-            {{- if .htrflowUrl }}
-            # #88: the governed HTR lane's transcribe endpoint — the Serve /htrflow HTTP ingress. Set
-            # per-mover (only the transcribe_pages lane needs it); empty = the lane fails loudly at the
-            # seam naming MEDALLION_HTRFLOW_URL rather than guessing a host.
-            - { name: MEDALLION_HTRFLOW_URL, value: {{ .htrflowUrl | quote }} }
-            {{- end }}
             {{- end }}
             {{- end }}
             # WHERE THIS MOVER REGISTERS ITS OUTPUT — on EVERY mover, not just the HTR lane.
             #
-            # These two used to sit inside the `if .htrflowUrl` block above, so only the transcribe
-            # lane could reach the catalog and every other mover wrote bytes the catalog never heard
-            # of: no table record, therefore no FGA object, therefore no grant, retention policy or
+            # These two used to sit behind a per-workload conditional, so only ONE lane could reach
+            # the catalog and every other mover wrote bytes the catalog never heard of: no table
+            # record, therefore no FGA object, therefore no grant, retention policy or
             # deletion-protection could ever name them. Measured on the live estate 2026-08-17,
             # `describe gold$catalog` answered 403 — not permission denied, but no such object.
             #
-            # Worse, the gate meant NO mover had it, because htrflowUrl was itself unset — so the one
-            # lane that had registration built could not use it either. Governance belongs to the
-            # cascade, so the address of the catalog does too.
+            # Worse, that conditional was itself unset, so NO mover had it — not even the lane the
+            # gate was written for. Governance belongs to the cascade, so the catalog's address does
+            # too: unconditional, on every mover.
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.rustfs.bucket | quote }} }
             {{- if $root.Values.medallion.quality }}

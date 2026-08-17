@@ -87,10 +87,9 @@ def _seed_and_ingest(settings: MedallionSettings) -> IngestResult:
 def _split_source_uri(source_uri: str) -> tuple[str, str]:
     """``s3://lake/batch/img.png`` -> (``s3://lake/batch``, ``img.png``).
 
-    The namespace must carry the URI scheme — see the call site. Mirrors
-    `htr_stage._split_source_uri`; kept local rather than imported because that module is the HTR
-    lane's and this is the media lane's, and a shared private helper across two lanes is a coupling
-    neither asked for.
+    The namespace must carry the URI scheme — see the call site. Follows the cascade's source-uri
+    convention, kept local rather than shared: a private helper lifted into a shared module for a
+    second caller is a coupling neither lane asked for.
     """
     base, _, leaf = source_uri.rpartition("/")
     return (base, leaf) if base else ("", source_uri)
@@ -124,7 +123,7 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
         # not — every media event named an input that looked like a governed `table:source`, which
         # nobody holds a grant on, so `GET /events` hid the whole event from EVERY caller under FGA
         # (the feed shows a row only if the reader can see every dataset it references).
-        # Same convention as `htr_stage._split_source_uri`: `iiif://vol/00012.jpg` -> (`iiif://vol`, `00012.jpg`).
+        # The source-uri convention: `iiif://vol/00012.jpg` -> (`iiif://vol`, `00012.jpg`).
         inputs=[_split_source_uri(uri) for uri in result.source_uris],
         output_namespace=settings.media_bronze_namespace,
         output_name=settings.media_bronze_dataset,

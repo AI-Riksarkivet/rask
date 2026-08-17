@@ -233,7 +233,7 @@ def build_run_event(
         lance_fields["synthetic"] = True
     run_facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, **lance_fields)}
     if models:
-        # #88 step 6 — model identity on the RUN, parsed from the run's own artefact (the ALTO),
+        # Model identity on the RUN, parsed from the run's own output artefact by the transform,
         # never from a mover's config: a config states a request, the artefact states what loaded.
         # Absent models render NO facet (the FAIL/synthetic byte-parity below stays intact), and an
         # absent sha is omitted rather than nulled — the serializers' silence-is-honest rule.

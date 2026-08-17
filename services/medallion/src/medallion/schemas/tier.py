@@ -7,7 +7,7 @@ lineage those transitions emit. It does **not** own what the rows mean. A tier r
 
 and ``payload`` is **opaque** — the transform declares its shape, the tier does not.
 
-WHY THIS EXISTS. ``schemas/htr.py`` pinned an HTR-shaped gold contract *inside* the medallion:
+WHY THIS EXISTS. ``schemas/htr.py`` (deleted 2026-08-17) pinned a workload-shaped gold contract *inside* the medallion:
 ``page_key``, ``region_polygons``, ``line_polygons``, ``reading_order``, ``confidences`` — nine of its
 eleven columns describe transcribed page images. That makes the cascade a transcription pipeline
 wearing a lakehouse's name: a second workload cannot use these tiers without bending its data into
@@ -34,7 +34,7 @@ WHAT IS ACTUALLY GENERIC, and why each one earns its place:
     Row-level provenance to the upstream tier's stable ``_rowid``, rooted at bronze. What makes a gold
     row traceable to the bytes it came from without a join through the graph.
 
-NOTE ON THE OLD PIN. ``GOLD_CONTRACT_COLUMNS`` is imported by NOTHING in production — only two unit
+NOTE ON THE OLD PIN. ``GOLD_CONTRACT_COLUMNS`` was imported by NOTHING in production — only two unit
 tests, which assert it equals itself. So the "load-bearing contract" never constrained a writer: no
 mover is checked against it, and a mover that dropped ``confidences`` would fail no gate. Treat it as
 what it is — HTR's declaration of its own payload — not as the tier's schema.
