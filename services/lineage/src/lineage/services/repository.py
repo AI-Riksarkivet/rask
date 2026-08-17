@@ -44,7 +44,7 @@ from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 
 from lineage.core.age import fetch, run_cypher
-from lineage.models import Dataset, RunEvent
+from lineage.models import Dataset, RunEvent, vertex_name_for
 from lineage.schemas import (
     ColumnEdge,
     ColumnGraph,
@@ -534,13 +534,13 @@ class LineageRepository:
             # run grows no stub vertices; the loops below only link edges and never touch Dataset rows.
             plan: dict[str, list[Dataset]] = {}
             for ds in [*event.inputs, *event.outputs]:
-                plan.setdefault(ds.name, []).append(ds)
+                plan.setdefault(ds.vertex_name, []).append(ds)
             stub_ns: dict[str, str] = {}
             if event.is_success:
                 for out in event.outputs:
                     for edge in out.column_edges:
                         if edge["name"] not in plan:
-                            stub_ns.setdefault(edge["name"], edge["namespace"])
+                            stub_ns.setdefault(vertex_name_for(edge["namespace"], edge["name"]), edge["namespace"])
             for name in sorted(plan.keys() | stub_ns.keys()):
                 for ds in plan.get(name, []):
                     await self._merge_dataset(conn, ds)
@@ -551,7 +551,7 @@ class LineageRepository:
                     conn,
                     self._graph,
                     _LINK_READ,
-                    {"rid": event.run.run_id, "name": ds.name},
+                    {"rid": event.run.run_id, "name": ds.vertex_name},
                 )
                 # A PINNED read records which version it consumed (the TRAIN job's feature pins — #115's
                 # reproducibility claim). Unlike the WROTE version this is NOT gated on is_success: a FAILed
@@ -562,19 +562,19 @@ class LineageRepository:
                         conn,
                         self._graph,
                         _SET_READ_VERSION,
-                        {"rid": event.run.run_id, "name": ds.name, "ver": in_version},
+                        {"rid": event.run.run_id, "name": ds.vertex_name, "ver": in_version},
                     )
             for ds in event.outputs:
                 # A failed run keeps a WROTE edge (so producers() shows the attempt) but no version —
                 # it produced no data, so it must not claim to have written a Lance version.
-                await run_cypher(conn, self._graph, _LINK_WROTE, {"rid": event.run.run_id, "name": ds.name})
+                await run_cypher(conn, self._graph, _LINK_WROTE, {"rid": event.run.run_id, "name": ds.vertex_name})
                 version = event.output_version(ds.name) if event.is_success else None
                 if version:
                     await run_cypher(
                         conn,
                         self._graph,
                         _SET_WROTE_VERSION,
-                        {"rid": event.run.run_id, "name": ds.name, "ver": version},
+                        {"rid": event.run.run_id, "name": ds.vertex_name, "ver": version},
                     )
                     # Persist the column schema AT this version onto the same edge (#24 prerequisite):
                     # a successful versioned write's schema is the dataset's schema at that Lance version.
@@ -583,7 +583,7 @@ class LineageRepository:
                             conn,
                             self._graph,
                             _SET_WROTE_SCHEMA,
-                            {"rid": event.run.run_id, "name": ds.name, "schema": json.dumps(ds.fields)},
+                            {"rid": event.run.run_id, "name": ds.vertex_name, "schema": json.dumps(ds.fields)},
                         )
                     # Runtime-measured output statistics (rows + on-disk bytes) onto the same edge — present
                     # only when the compute actually measured the write (a dummy emit omits the facet).
@@ -595,7 +595,7 @@ class LineageRepository:
                             _SET_WROTE_STATS,
                             {
                                 "rid": event.run.run_id,
-                                "name": ds.name,
+                                "name": ds.vertex_name,
                                 "rows": stats[0],
                                 "size": stats[1],
                             },
@@ -610,7 +610,7 @@ class LineageRepository:
                             _SET_WROTE_QUALITY,
                             {
                                 "rid": event.run.run_id,
-                                "name": ds.name,
+                                "name": ds.vertex_name,
                                 "passed": all(a["success"] for a in assertions),
                                 "assertions": json.dumps(assertions),
                             },
@@ -660,10 +660,10 @@ class LineageRepository:
             conn,
             self._graph,
             _MERGE_DATASET,
-            {"name": ds.name, "ns": ds.namespace},
+            {"name": ds.vertex_name, "ns": ds.namespace},
         )
         if ds.source_uri:
-            await run_cypher(conn, self._graph, _SET_DATASET_SRC, {"name": ds.name, "src": ds.source_uri})
+            await run_cypher(conn, self._graph, _SET_DATASET_SRC, {"name": ds.vertex_name, "src": ds.source_uri})
         if ds.tags:
             # Union into the existing set, never overwrite (#49): the node also carries human-curated
             # governance tags now, and a producer refreshing its facet must not wipe them. A user-removed
@@ -673,11 +673,11 @@ class LineageRepository:
             # Facet labels are unvalidated producer strings: one containing the comma JOIN separator
             # would splinter on read and then re-append on every run (unbounded growth — audit
             # 2026-07-16), so commas are stripped here and the merge dedupes order-preservingly.
-            rows = await run_cypher(conn, self._graph, _GET_DATASET_GOVERNANCE, {"name": ds.name}, columns=6)
+            rows = await run_cypher(conn, self._graph, _GET_DATASET_GOVERNANCE, {"name": ds.vertex_name}, columns=6)
             existing = _tags_from(rows[0][0]) if rows else []
             sanitized = [tag.replace(",", "_") for tag in ds.tags]
             merged = list(dict.fromkeys(existing + sanitized))
-            await run_cypher(conn, self._graph, _SET_DATASET_TAGS, {"name": ds.name, "tags": ",".join(merged)})
+            await run_cypher(conn, self._graph, _SET_DATASET_TAGS, {"name": ds.vertex_name, "tags": ",".join(merged)})
 
     async def _ingest_columns(self, conn, event: RunEvent) -> None:
         """Materialise column nodes + field-to-field edges from each output's schema/columnLineage (#24).

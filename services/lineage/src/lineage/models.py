@@ -14,6 +14,18 @@ from pydantic import BaseModel, ConfigDict, Field
 _MODEL = ConfigDict(extra="allow", populate_by_name=True)
 
 
+def vertex_name_for(namespace: str, name: str) -> str:
+    """The `:Dataset` vertex key for a (namespace, name) pair — see :attr:`Dataset.vertex_name`.
+
+    Module-level because the column-lineage upstreams arrive as raw facet dicts rather than `Dataset`
+    models, and the two must derive identity through ONE rule: a second copy of this expression is how
+    a stub vertex ends up under a different key than the node it is meant to be.
+    """
+    from lineage.api.fga_deps import is_external_source
+
+    return f"{namespace}/{name}" if is_external_source(namespace) else name
+
+
 class Dataset(BaseModel):
     """An OpenLineage dataset (a Lance table / source); ``name`` is the catalog id.
 
@@ -35,6 +47,32 @@ class Dataset(BaseModel):
     namespace: str
     name: str
     facets: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def vertex_name(self) -> str:
+        """The `:Dataset` vertex key — bare for a governed table, NAMESPACE-QUALIFIED for an external one.
+
+        **This is a security boundary, not a naming preference.** `enforce_output_authz` exempts inputs
+        whose namespace carries a URI scheme, because an external source has no catalog entry and so no
+        tuple that could ever authorize it — refusing them was unsatisfiable and refused every honest
+        producer permanently. That exemption is safe ONLY IF an unauthorized external reference cannot
+        reach a governed vertex.
+
+        It could. The vertex is MERGEd on `{name}` ALONE (`_MERGE_DATASET`) with the namespace merely
+        SET, so an input `{namespace: "s3://evil", name: "gold$catalog"}` skipped the check and then
+        landed on the REAL `gold$catalog` — rewriting its namespace and `source_uri`, unioning attacker
+        tags into the human-curated governance property, and attaching the forged READ edge the
+        exemption's own docstring called impossible. That docstring asserted this very property ("a
+        different node from the governed `gold / gold$catalog`") while the storage layer did not have
+        it, and the test that claimed to pin it compared its own fixture to a literal — unconditionally
+        true, unable to fail.
+
+        Qualifying makes the property STRUCTURAL rather than heuristic: no name a caller can choose
+        collides, because the discriminator being prefixed is the same one the exemption keys on.
+        Governed vertices are UNCHANGED — their bare catalog id is what every read door, every edge and
+        every stored row already uses, so this is not a migration of governed data.
+        """
+        return vertex_name_for(self.namespace, self.name)
 
     def facet(self, name: str) -> dict[str, Any] | None:
         """The named facet from whichever spec slot the producer used, else ``None``.

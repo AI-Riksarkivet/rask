@@ -174,7 +174,22 @@ async def enforce_output_authz(event: RunEvent, request: Request, settings: Line
     # service-web read identity) could forge READ-edge provenance like "service-web read gold$catalog" into
     # the governed audit graph. `writer ⊇ reader` in model.fga, so movers (writers) and the trainer (reader)
     # still pass; only a claim to have read an unreachable dataset is refused. (bug hunt 2026-07-13)
-    inputs = [d.name for d in event.inputs if d.name and not is_external_source(d.namespace)]
+    # THE AUTHZ SET MUST COVER THE WRITE SET, and it did not.
+    #
+    # `ingest_event` merges dataset vertices from THREE sources: `inputs`, `outputs`, and the column
+    # upstreams inside `outputs[].facets.columnLineage.fields[*].inputFields[]`. Only the first two
+    # were ever checked. So a caller holding `can_write_data` on one sandbox table could name a
+    # GOVERNED table as a column upstream and have the ingest merge that vertex and assert a
+    # `DERIVED_FROM` into it — the governed name never reaching a single FGA check.
+    #
+    # The column upstreams join the INPUT set rather than getting a check of their own: recording
+    # "my column came from yours" is a claim to have READ your column, which is exactly what
+    # `can_get_metadata` on the input side already governs. Same exemption too — an external upstream
+    # has no `table:` object, and (since `vertex_name`) cannot collide with a governed vertex either.
+    column_upstreams = {
+        edge["name"] for out in event.outputs for edge in out.column_edges if edge.get("name") and not is_external_source(str(edge.get("namespace", "")))
+    }
+    inputs = sorted({d.name for d in event.inputs if d.name and not is_external_source(d.namespace)} | column_upstreams)
     if inputs:
         objs = [f"{object_type}:{n}" for n in inputs]
         seen = await fga.batch_check(client, user=token.sub, relation="can_get_metadata", objects=objs)

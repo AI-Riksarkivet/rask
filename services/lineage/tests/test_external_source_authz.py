@@ -158,9 +158,13 @@ async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settin
 
     await enforce_output_authz(event, request, settings, _Principal())
 
-    assert (forged.namespace, forged.name) != ("gold", "gold$catalog"), (
-        "the forged input resolved to the governed node's identity — the exemption WOULD be a laundering path"
-    )
+    # ASSERTED ON THE VERTEX KEY, which is what the docstring above always claimed and what this
+    # assertion never checked: it used to compare `(forged.namespace, forged.name)` — the fixture two
+    # lines up — to a different literal, which is unconditionally true and could not fail. The property
+    # it names was false the whole time (`MERGE (d:Dataset {name:$name})` keys on NAME ALONE), so the
+    # forged input landed on the governed vertex. `vertex_name` is what makes the claim true.
+    governed = _dataset("gold", "gold$catalog")
+    assert forged.vertex_name != governed.vertex_name, "the forged input resolved to the governed node's identity — the exemption IS a laundering path"
 
 
 @pytest.mark.anyio
@@ -255,3 +259,134 @@ def test_a_summary_row_keeps_todays_behaviour() -> None:
     record = _record(inputs=["img.png"], outputs=["bronze-media$objects"], event={})
 
     assert _governed_datasets(record) == {"img.png", "bronze-media$objects"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE GUARANTEE, ASSERTED WHERE IT LIVES — the vertex key, not the pydantic object
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+#
+# `test_a_forged_external_namespace_cannot_launder_a_governed_dataset` above claims in its docstring to
+# assert "the resulting graph identity". It does not. It compares the fixture it just built
+# (`("s3://anything", "gold$catalog")`) to a different literal, which is unconditionally true and can
+# never fail. The guarantee it names was never tested, and it is FALSE:
+#
+#     repository.py:245   MERGE (d:Dataset {name:$name}) SET d.namespace=$ns
+#
+# The vertex is keyed on NAME ALONE and the namespace is overwritten, so a forged external input lands
+# on the governed vertex and rewrites it — the exact laundering the exemption's docstring says is
+# impossible. These tests assert the identity the storage layer actually uses.
+
+
+def test_a_governed_dataset_keeps_its_bare_name_as_its_vertex_identity() -> None:
+    """The half that must NOT change: a governed table's vertex name is its catalog id, which is what
+    every read door (`/datasets/<name>/...`), every edge and every existing row already uses."""
+    from lineage.models import Dataset
+
+    assert Dataset(namespace="gold", name="gold$catalog").vertex_name == "gold$catalog"
+
+
+def test_an_EXTERNAL_dataset_is_a_DIFFERENT_VERTEX_from_a_governed_one_of_the_same_name() -> None:
+    """THE FIX. The exemption is legitimate — an external source has no catalog entry and therefore no
+    tuple that could ever authorize it — but it is only safe if an unauthorized external reference
+    cannot reach a governed vertex. Qualifying the external vertex by its namespace makes that
+    structural rather than heuristic: no name a caller can choose collides."""
+    from lineage.models import Dataset
+
+    forged = Dataset(namespace="s3://anything", name="gold$catalog")
+    governed = Dataset(namespace="gold", name="gold$catalog")
+
+    assert forged.vertex_name != governed.vertex_name, "a forged external input still resolves to the governed vertex — the laundering path is open"
+    assert governed.vertex_name in forged.vertex_name or "s3://anything" in forged.vertex_name, (
+        "the external vertex must remain identifiable, not hashed into noise"
+    )
+
+
+def test_two_external_sources_with_the_same_name_stay_distinct_by_namespace() -> None:
+    """The mirror: qualification must not collapse genuinely different sources onto one node either."""
+    from lineage.models import Dataset
+
+    a = Dataset(namespace="s3://bucket-a", name="run1")
+    b = Dataset(namespace="s3://bucket-b", name="run1")
+
+    assert a.vertex_name != b.vertex_name
+
+
+def test_the_exemption_is_only_reached_by_a_dataset_that_cannot_be_governed() -> None:
+    """`is_external_source` is the discriminator, and it must stay keyed on the URI-scheme convention
+    the naming spec already uses — a bare catalog namespace is never exempt."""
+    from lineage.api.fga_deps import is_external_source
+
+    assert is_external_source("s3://bucket") is True
+    assert is_external_source("iiif://host") is True
+    assert is_external_source("gold") is False
+    assert is_external_source("bind86-bronze") is False
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE AUTHZ SET MUST COVER THE WRITE SET
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+#
+# `enforce_output_authz` authorizes two sets: `event.outputs`, and non-external `event.inputs`.
+# `ingest_event` writes a THIRD: dataset names appearing only inside
+# `outputs[].facets.columnLineage.fields[*].inputFields[]`, which it MERGEs as stub vertices and links
+# `DERIVED_FROM` edges against (`repository.py` — the `stub_ns` pass).
+#
+# So a caller holding `can_write_data` on ONE sandbox table can name a GOVERNED dataset as a column
+# upstream and have the ingest merge that governed vertex and assert a derivation into it — with the
+# governed name never presented to a single FGA check. The gap is not the exemption (these are
+# governed namespaces, not external ones); it is that the check never enumerated this set at all.
+
+
+def _event_with_column_upstream(output: Dataset, up_ns: str, up_name: str) -> RunEvent:
+    """A COMPLETE event whose only reference to `up_name` is inside the columnLineage facet."""
+    return RunEvent.model_validate(
+        {
+            "eventType": "COMPLETE",
+            "eventTime": "2026-08-16T12:00:00Z",
+            "producer": "rask://test",
+            "job": {"namespace": "test", "name": "j"},
+            "run": {"runId": "11111111-2222-4333-8444-555555555555"},
+            "inputs": [],
+            "outputs": [
+                {
+                    "namespace": output.namespace,
+                    "name": output.name,
+                    "facets": {"columnLineage": {"fields": {"ssn": {"inputFields": [{"namespace": up_ns, "name": up_name, "field": "ssn"}]}}}},
+                }
+            ],
+        }
+    )
+
+
+@pytest.mark.anyio
+async def test_a_GOVERNED_column_upstream_is_AUTHORIZED_not_written_blind(settings, request_with) -> None:
+    """The defect: the caller may write `mine$table` and holds nothing on `gold$catalog`, yet naming it
+    as a column upstream makes the ingest merge the governed vertex and assert a derivation into it."""
+    request, _fake = request_with({"table:mine$table"})  # write on the sandbox only
+    event = _event_with_column_upstream(_dataset("mine", "mine$table"), "gold", GOVERNED)
+
+    with pytest.raises(PermissionDeniedError):
+        await enforce_output_authz(event, request, settings, _Principal())
+
+
+@pytest.mark.anyio
+async def test_a_column_upstream_the_caller_CAN_see_passes(settings, request_with) -> None:
+    """The mirror — the check must not refuse a legitimate cross-table derivation, which is the whole
+    point of column lineage."""
+    request, fake = request_with({"table:mine$table", f"table:{GOVERNED}"})
+    event = _event_with_column_upstream(_dataset("mine", "mine$table"), "gold", GOVERNED)
+
+    await enforce_output_authz(event, request, settings, _Principal())
+
+    assert f"table:{GOVERNED}" in fake.asked, "the governed column upstream was never presented to a check"
+
+
+@pytest.mark.anyio
+async def test_an_EXTERNAL_column_upstream_stays_exempt(settings, request_with) -> None:
+    """Same rule as inputs, and for the same reason: an external source has no `table:` object, so
+    authorizing it is unsatisfiable rather than strict. Its vertex is namespace-qualified, so it cannot
+    reach a governed node either way."""
+    request, _fake = request_with({"table:mine$table"})
+    event = _event_with_column_upstream(_dataset("mine", "mine$table"), "s3://raw", "gold$catalog")
+
+    await enforce_output_authz(event, request, settings, _Principal())
