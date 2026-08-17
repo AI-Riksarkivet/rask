@@ -210,8 +210,8 @@ def test_the_lane_is_DECLARED_through_the_admin_gated_catalog_door(catalog: str)
         f"{catalog}/v1/project/{PROJECT}/transform/set",
         json={
             "lane": LANE,
-            "from_id": "bronze$events",
-            "to_id": f"silver${LANE}",
+            "from_id": f"{PROJECT}-bronze$events",
+            "to_id": f"{PROJECT}-silver${LANE}",
             "entrypoint": BAKED_ENTRYPOINT,
             "params": {"embed_dim": "8"},
             "code_version": os.environ.get("LANCE_E2E_CODE_VERSION", "e2e"),
@@ -253,8 +253,8 @@ def test_a_runtime_env_style_entrypoint_CANNOT_be_declared(catalog: str) -> None
         f"{catalog}/v1/project/{PROJECT}/transform/set",
         json={
             "lane": "would-be-devmode",
-            "from_id": "bronze$events",
-            "to_id": "silver$devmode",
+            "from_id": f"{PROJECT}-bronze$events",
+            "to_id": f"{PROJECT}-silver$devmode",
             "entrypoint": "python ./my_local_transform.py",
         },
         headers=_headers(),
@@ -328,8 +328,8 @@ def driven() -> Iterator[dict[str, Any]]:
         "FROM_URI": bronze,
         "TO_URI": silver,
         "RUN_ID": run_id,
-        "TO_ID": "silver$dummy",
-        "FROM_ID": "bronze$events",
+        "TO_ID": f"{PROJECT}-silver$dummy",
+        "FROM_ID": f"{PROJECT}-bronze$events",
         "PROJECT": PROJECT,
         "ORIGINATOR": _subject_of(ADMIN_TOKEN),
         "LINEAGE_URL": LINEAGE_IN_CLUSTER,
@@ -424,7 +424,7 @@ def test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service
     assert response.status_code == 200, response.text
 
     events = response.json().get("events", [])
-    mine = [e for e in events if e.get("job", "").endswith("silver$dummy") or driven["run_id"] in json.dumps(e)]
+    mine = [e for e in events if e.get("job", "").endswith(f"{PROJECT}-silver$dummy") or driven["run_id"] in json.dumps(e)]
 
     if not mine:
         # TWO different failures wear one symptom here, and they need opposite answers. The lane
@@ -434,14 +434,15 @@ def test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service
         refused = "lineage-emit-failed" in driven["first_log"] and "status=403" in driven["first_log"]
         assert not refused, (
             "the lane EMITTED and the ingest REFUSED it (403 can_write_data on the output).\n\n"
-            "This is a missing grant, not a broken lane. `table:silver$dummy` has no parent link, so "
-            "nothing cascades to it — unlike its siblings, which `scripts/seed_medallion_fga.sh` links:\n"
-            "    link namespace:silver 'table:silver$features'\n\n"
-            "The two tuples that are missing:\n"
-            "    namespace:silver  parent  table:silver$dummy\n"
-            "    table:silver$dummy  child  namespace:silver\n\n"
-            "No new IDENTITY grant is needed: `user:service-bronze-to-silver` already holds "
-            "`writer` on the warehouse, and the parent link is what lets that rung reach this table."
+            "This is a missing GRANT, not a broken lane, and the estate already ships the fix:\n"
+            f"    scripts/seed_medallion_fga.sh {PROJECT} <zone-warehouse-id>\n\n"
+            "A tenant cascade targets the project-QUALIFIED namespaces, which inherit NOTHING from the "
+            "estate seed — the movers are correctly denied and the trigger dead-letters (fail-closed). "
+            "That script writes the three groups: the `<p>-<stage>` namespaces parented under the "
+            "tenant's zone warehouse, the mover rungs on the qualified stages, and the table->namespace "
+            "parent links.\n\n"
+            f"This lane needs one link the script does not know about: namespace:{PROJECT}-silver -> "
+            f"table:{PROJECT}-silver$dummy (it seeds $features, the HTR lane's output)."
         )
         pytest.fail(f"the run emitted nothing readable: {driven['run_id']} absent from {len(events)} events")
 
@@ -451,4 +452,4 @@ def test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service
     row = terminal[-1]
     assert row["event_type"] == "COMPLETE", f"the run did not complete: {row}"
     assert row.get("outputs"), "an output-less run names no object and is refused by the plane"
-    assert "silver$dummy" in row["outputs"], f"the output must be named as the FGA object is: {row['outputs']}"
+    assert f"{PROJECT}-silver$dummy" in row["outputs"], f"the output must be named as the FGA object is: {row['outputs']}"
