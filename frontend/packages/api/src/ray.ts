@@ -29,7 +29,21 @@ export const RayJobSchema = v.object({
 	error_type: v.nullable(v.string()),
 	driver_exit_code: v.nullable(v.number()),
 	logs_url: v.nullable(v.string()),
-	metadata: v.record(v.string(), v.string()),
+	// OPTIONAL, because Ray OMITS the key entirely when the submitter set no metadata — and most
+	// submitters do not. Measured against the live cluster 2026-08-17: every `htr_http-chunk-*` job
+	// returned no `metadata` key at all.
+	//
+	// Required, this took the WHOLE BOARD down rather than degrading one row: the payload is parsed as
+	// one document, so a single metadata-less job made `getRayJobs` throw
+	// `ValiError: Invalid key: Expected "metadata" but received undefined` and `/compute/jobs` answered
+	// 500 — no jobs listed, no partial view, and an error naming a field rather than the job that
+	// carried it. Only the medallion's own submit path sets metadata (`rask.originator`,
+	// `rask.project`), so ANY job submitted by a person at the CLI, by another tool, or by a workload
+	// that opted out was enough to blank the operator's only view of the cluster.
+	//
+	// Defaulted to `{}` rather than left undefined so every consumer can read it unconditionally; the
+	// distinction between "no metadata" and "empty metadata" is not one any caller acts on.
+	metadata: v.optional(v.record(v.string(), v.string()), {}),
 });
 export type RayJob = v.InferOutput<typeof RayJobSchema>;
 
