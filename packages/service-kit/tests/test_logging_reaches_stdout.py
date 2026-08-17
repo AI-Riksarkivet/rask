@@ -33,7 +33,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from service_kit import _setup_logging
+from service_kit import setup_logging
 
 
 #: Real module logger names from three different services. Named explicitly rather than generated,
@@ -74,7 +74,7 @@ def _captured(logger_name: str, level: int = logging.WARNING, *, monkeypatch: py
     for name in ("core", "backends"):
         logging.getLogger(name).handlers = []
 
-    _setup_logging()
+    setup_logging()
 
     logging.getLogger(logger_name).log(level, "canary-%s", logger_name)
     for handler in root.handlers:
@@ -102,7 +102,7 @@ def test_ERROR_from_a_service_module_is_never_swallowed(name: str, monkeypatch: 
 def test_the_root_logger_is_configured_at_or_below_INFO() -> None:
     """`log.info` is load-bearing here — `ray_stage_job_submitted` and `transform_spec_set` are INFO,
     and they are how an operator sees that work started at all."""
-    _setup_logging()
+    setup_logging()
     root = logging.getLogger()
 
     assert root.level <= logging.INFO, f"root is at {logging.getLevelName(root.level)}; INFO-level operational logs are discarded"
@@ -111,9 +111,9 @@ def test_the_root_logger_is_configured_at_or_below_INFO() -> None:
 
 def test_setup_is_IDEMPOTENT_so_repeated_app_builds_do_not_duplicate_lines() -> None:
     """`make_service_app` runs it per app, and a test process may build several."""
-    _setup_logging()
+    setup_logging()
     first = len(logging.getLogger().handlers)
-    _setup_logging()
-    _setup_logging()
+    setup_logging()
+    setup_logging()
 
     assert len(logging.getLogger().handlers) == first, "handlers accumulated — each log line would be emitted N times"

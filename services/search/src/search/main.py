@@ -16,6 +16,7 @@ from fastapi import FastAPI
 
 from search.api.v1.router import router as api_router
 from search.core.config import get_search_settings
+from service_kit import setup_logging
 from service_kit.exceptions import register_handlers
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.media.middleware import register_middleware
@@ -52,6 +53,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             except Exception:
                 logger.warning("error closing %s on shutdown", type(resource).__name__)
 
+
+# Application logging, before the app exists — every module here uses getLogger(__name__), and
+# without this they propagate to a root logger with no handlers and are DISCARDED
+# (see service_kit.setup_logging).
+setup_logging()
 
 app = FastAPI(title="lance-media search", lifespan=lifespan)
 register_handlers(app)

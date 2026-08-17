@@ -21,6 +21,7 @@ from annotator.core.config import get_annotator_settings
 from annotator.projects.actor import AnnotationTaskActor
 from annotator.projects.project_actor import AnnotationProjectActor
 from annotator.projects.tenant_actor import TenantProjectsActor
+from service_kit import setup_logging
 from service_kit.control_emit import make_control_emitter, set_process_control_emitter
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
@@ -151,6 +152,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             except Exception:
                 logger.warning("error closing %s on shutdown", type(resource).__name__)
 
+
+# Application logging, before the app exists — every module here uses getLogger(__name__), and
+# without this they propagate to a root logger with no handlers and are DISCARDED
+# (see service_kit.setup_logging).
+setup_logging()
 
 app = FastAPI(title="lance-media annotator", lifespan=lifespan)
 register_handlers(app)

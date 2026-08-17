@@ -3023,3 +3023,39 @@ def test_every_maintenance_ALERT_names_a_metric_the_service_actually_EMITS() -> 
 
     phantom = sorted(referenced - emitted)
     assert phantom == [], f"these alerts query series no instrument emits, so they can never fire: {phantom}"
+
+
+def test_every_service_app_entrypoint_CONFIGURES_LOGGING() -> None:
+    """A module that builds a FastAPI app must configure application logging, or its logs vanish.
+
+    Measured live 2026-08-17: lineage, catalog and both medallion apps each built `FastAPI(...)`
+    directly and none of them called the logging setup, so every `getLogger(__name__)` record in the
+    estate's three largest services propagated to a root logger with no handlers and was DISCARDED.
+    Only uvicorn's own logs (which carry their own handlers) reached stdout.
+
+    What that cost is the reason this gate exists rather than a convention: lineage's durable event
+    feed stopped accepting writes on 2026-08-16 and NOTHING said so for two days, because the failure
+    is deliberately swallowed and reported by a WARNING that went nowhere. A malformed event POSTed to
+    the running ingest returned `{"status":"DROP"}` — the line right after `log.error(...)` — and
+    produced no log line at all.
+
+    `make_service_app` callers are exempt: the factory calls it for them. This checks the modules
+    that bypass the factory, which is exactly the set that regressed.
+    """
+    offenders: list[str] = []
+    for path in sorted(REPO.glob("services/*/src/*/*.py")):
+        text = path.read_text(encoding="utf-8")
+        builds_app = "app = FastAPI(" in text
+        if not builds_app:
+            continue
+        if "setup_logging()" in text or "make_service_app" in text:
+            continue
+        offenders.append(str(path.relative_to(REPO)))
+
+    assert not offenders, (
+        f"these modules build a FastAPI app without configuring logging: {offenders}\n\n"
+        "Call `setup_logging()` from service_kit before building the app, or build it through "
+        "`make_service_app`, which does it for you. Without it every application log record in that "
+        "service is discarded and failures become invisible — the defect that hid a two-day lineage "
+        "feed outage."
+    )

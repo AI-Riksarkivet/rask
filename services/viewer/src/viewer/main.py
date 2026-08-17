@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 
+from service_kit import setup_logging
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.oidc import OIDCVerifier
@@ -85,6 +86,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             except Exception:
                 logger.warning("error closing %s on shutdown", type(resource).__name__)
 
+
+# Application logging, before the app exists — every module here uses getLogger(__name__), and
+# without this they propagate to a root logger with no handlers and are DISCARDED
+# (see service_kit.setup_logging).
+setup_logging()
 
 app = FastAPI(title="lance-media viewer", lifespan=lifespan)
 register_handlers(app)

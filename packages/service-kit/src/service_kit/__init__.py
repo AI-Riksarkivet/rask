@@ -23,7 +23,7 @@ from service_kit.slash import SlashToleranceMiddleware
 from storage import derive_hcp_creds
 
 
-def _setup_logging() -> None:
+def setup_logging() -> None:
     """Send application logs to stdout — configured on the ROOT logger, so every module inherits it.
 
     This used to attach the handler to two logger names, ``core`` and ``backends``, and its docstring
@@ -110,7 +110,7 @@ def make_service_app(
     Serve proxy) is mounted at the root, matching `core.main`. The lifespan
     defaults to the minimal `default_lifespan` unless `lifespan=` is passed.
     """
-    _setup_logging()
+    setup_logging()
     settings = build_settings()
     base_factory: LifespanFactory = lifespan if lifespan is not None else default_lifespan
 

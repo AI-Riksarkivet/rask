@@ -33,6 +33,7 @@ from fastapi.concurrency import run_in_threadpool
 from maintenance.api.routes import router
 from maintenance.core.config import MaintenanceSettings, apply_dapr_secrets, get_settings
 from maintenance.core.lineage_emit import make_emitter
+from service_kit import setup_logging
 from service_kit.control_emit import make_control_emitter
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import assert_app_token_configured
@@ -186,6 +187,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 _docs = get_settings().docs_enabled  # gate /docs + /openapi.json (off in prod), like the catalog
+# Application logging, before the app exists — every module here uses getLogger(__name__), and
+# without this they propagate to a root logger with no handlers and are DISCARDED
+# (see service_kit.setup_logging).
+setup_logging()
+
 app = FastAPI(
     title="Lance table maintenance",
     version="0.1.0",

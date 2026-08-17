@@ -22,6 +22,7 @@ from lineage.api.v1.router import api_router
 from lineage.core.age import make_pool, run_cypher
 from lineage.core.config import apply_dapr_secrets, get_settings
 from lineage.services.repository import LineageRepository
+from service_kit import setup_logging
 from service_kit.governed import fga
 from service_kit.governed.audit import configure_audit
 from service_kit.governed.dapr_auth import assert_app_token_configured
@@ -120,6 +121,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 _docs = get_settings().docs_enabled  # gate /docs + /openapi.json (off in prod), like the catalog
+# Application logging, before the app exists — every module here uses getLogger(__name__), and
+# without this they propagate to a root logger with no handlers and are DISCARDED. That is not
+# hypothetical: it hid a two-day lineage feed outage (see service_kit.setup_logging).
+setup_logging()
+
 app = FastAPI(
     title="Lance Lineage Service",
     version="0.1.0",

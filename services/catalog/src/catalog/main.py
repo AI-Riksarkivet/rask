@@ -29,6 +29,7 @@ from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import build_namespace
 from catalog.core.vending import make_vendor
 from catalog.services import warehouses
+from service_kit import setup_logging
 from service_kit.control_emit import make_control_emitter
 from service_kit.governed import fga
 from service_kit.governed.audit import configure_audit
@@ -199,6 +200,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 _settings = get_settings()
+# Application logging, before the app exists — every module here uses getLogger(__name__), and
+# without this they propagate to a root logger with no handlers and are DISCARDED. That is not
+# hypothetical: it hid a two-day lineage feed outage (see service_kit.setup_logging).
+setup_logging()
+
 app = FastAPI(
     title="Lance Namespace REST Catalog",
     version="1.0.0",

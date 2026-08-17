@@ -25,6 +25,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from medallion.api.events import register_stage_route
 from medallion.core.config import apply_dapr_secrets, get_settings
+from service_kit import setup_logging
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
@@ -98,6 +99,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             with suppress(Exception):
                 await app.state.fga.close()
 
+
+# Application logging, before the app exists — every module here uses getLogger(__name__), and
+# without this they propagate to a root logger with no handlers and are DISCARDED. That is not
+# hypothetical: it hid a two-day lineage feed outage (see service_kit.setup_logging).
+setup_logging()
 
 app = FastAPI(
     title=f"medallion mover ({_settings.from_namespace}->{_settings.to_namespace})",
