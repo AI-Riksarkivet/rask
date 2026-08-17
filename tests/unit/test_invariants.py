@@ -3059,3 +3059,38 @@ def test_every_service_app_entrypoint_CONFIGURES_LOGGING() -> None:
         "service is discarded and failures become invisible — the defect that hid a two-day lineage "
         "feed outage."
     )
+
+
+def test_NO_stray_node_modules_at_the_repo_ROOT() -> None:
+    """The JS plane lives in `frontend/`; a `node_modules` at the repo root shadows it.
+
+    TypeScript resolves a bare specifier by walking UP the directory tree, so it does not stop at the
+    workspace boundary. An install at the repo root is therefore visible to every zone's type-check,
+    and whichever copy it finds first wins.
+
+    Measured 2026-08-17, and it had been mistaken for real repo state long enough to be written down
+    as a "known-red baseline": an orphaned 721 MB root `node_modules` — eslint, prettier,
+    prettier-plugin-svelte and svelte 5.56.3, i.e. the toolchain deleted in the oxlint/oxfmt
+    migration — made `svelte` resolve two ways at once. Every `Snippet` crossing the `@rask/ui`
+    boundary then failed with "Two different types with this name exist, but they are unrelated", for
+    45 errors in lakehouse, 6 in annotator, 6 in home and 2 in models. Moving that directory aside
+    took the estate from 4 failing zones to 22/22 tasks green, changing no tracked file.
+
+    It is invisible to CI (which installs fresh in a container) and invisible to git (`node_modules/`
+    is ignored), so nothing else can report it. There is no root `package.json`, which is the tell:
+    nothing declares these packages, so nothing can legitimately install them there.
+    """
+    stray = REPO / "node_modules"
+    if not stray.exists():
+        return
+
+    entries = sorted(p.name for p in stray.iterdir() if not p.name.startswith("."))
+    raise AssertionError(
+        f"a stray node_modules exists at the repo root ({len(entries)} entries: {entries[:8]}…).\n\n"
+        "The JS/TS plane is `frontend/` and there is no root package.json, so nothing declares these. "
+        "TypeScript walks UP past the workspace when resolving, so this shadows frontend's own "
+        "dependencies — a duplicate `svelte` here makes every Snippet crossing the @rask/ui boundary "
+        "fail as two unrelated types.\n\n"
+        "Remove it (`rm -rf node_modules` at the repo root). It is gitignored, nothing declares it, "
+        "and `tests/e2e` + `frontend/` each carry their own."
+    )
