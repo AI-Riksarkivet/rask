@@ -15,8 +15,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Verify like it ships.** SSR returning 200 is not "working" — exercise the real user
   path (a browser for UI, the actual client for APIs). Assume nothing is fixed until it's
   been observed working end-to-end.
-- **Use the proper workflow.** Non-trivial changes go through the superpowers flow
-  (brainstorm → spec → plan → subagent-driven-dev with reviews + TDD), not ad-hoc edits.
+- **Plan before editing, and test first.** A non-trivial change gets a plan you can state, a RED test
+  that proves the defect, then the fix — not ad-hoc edits. (This used to name the "superpowers flow";
+  that plugin is not installed, so the instruction pointed at nothing. `docs/superpowers/` is dated
+  residue from when it was — do not treat those plans or specs as current.)
 - **No silent scope-cuts.** If you bound coverage, sample, or defer something, say so
   explicitly. Don't let "partially done" read as "done".
 
