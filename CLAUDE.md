@@ -211,9 +211,31 @@ A new Python library/service or a new zone is picked up by the glob — but it *
 
 Deployables are just workspace members with a dockerfile: `.docker/<name>.dockerfile` runs `uv sync --frozen --package <name>` against the **root** `uv.lock` (the deployable set is `gateway`, `compute`, `notifications`, `runner` — the `.docker/compute.dockerfile` image is the compute service; the Ray cluster image is `.docker/ray-cluster.dockerfile`).
 
-## Architecture (image → ALTO XML)
+## Architecture
 
-`rask` is a distributed HTR pipeline for the Swedish National Archives. See `docs/architecture/system-overview.md` for the full diagrams. Key facts that aren't obvious from any single file:
+**`rask` IS A DATA-TYPE-AGNOSTIC MULTIMODAL AI PLATFORM. THE PLATFORM HAS NO CONCEPT OF HTR.** It is a
+governed Lance lakehouse (Lance Namespace catalog + OpenLineage into AGE), durable execution and events
+on Dapr + NATS JetStream, and batch compute on Ray, with lineage and authorization over all of it.
+Anything that reads bytes, writes a governed table and emits lineage fits the same shape — text, image,
+audio, video, embeddings.
+
+**HTR is ONE EXAMPLE WORKLOAD that exercises the platform; it is never its identity, and this
+distinction is load-bearing rather than cosmetic.** A modality that leaks into a platform seam makes the
+next modality a second-class citizen: `htr_register.py` shipped registration for the HTR lane alone, so
+that one lane was governed and every other lane wrote UNGOVERNED bytes — the exact opposite of an
+agnostic platform (fixed by generalising it to `catalog_register.py`, whose logic only ever took an id
+and a URI). When you touch a shared seam — the catalog, the medallion cascade, the maintenance sweep,
+lineage, notifications — the test is: *would this still be right for audio, or video, or a modality
+nobody has written yet?* If the answer needs the word "HTR", the code belongs in the workload, not the
+platform. Modality-specific code has exactly two homes: `runners/htr` (sealed, own lockfile) and the
+named HTR stage/schema inside `services/medallion`.
+
+This file described the estate as "a distributed HTR pipeline for the Swedish National Archives" until
+2026-08-17, which contradicted `README.md` ("The platform is workload-agnostic by design") — and
+CLAUDE.md is the file agents read first.
+
+See `docs/architecture/system-overview.md` for the full diagrams. Key facts that aren't obvious from any
+single file:
 
 - **LANCE ONLY, ALWAYS — a permanent ruling (owner, 2026-08-15), not a current-scope note.** The catalog
   stores Lance tables and **no other format, ever**. A create naming a non-Lance format is refused 400
@@ -226,7 +248,11 @@ Deployables are just workspace members with a dockerfile: `.docker/<name>.docker
   reintroduce exactly the requirement this architecture is built to avoid. Anyone needing Iceberg
   interop should use Polaris or Lakekeeper; it is a road not taken, not a backlog item.
 
-- **Runner is the engine.** `runners/htr` submits one Ray Data pipeline per CLI invocation and blocks on `.materialize()`. It does not run a long-lived service.
+The next four bullets describe **the HTR EXAMPLE WORKLOAD**, not the platform. They are the mechanics of
+one sealed runner and its Serve deployments; nothing here is a platform contract, and a second modality
+would bring its own shapes rather than reuse these. Everything from *No auth* onward is platform again.
+
+- **The HTR runner is that workload's engine.** `runners/htr` submits one Ray Data pipeline per CLI invocation and blocks on `.materialize()`. It does not run a long-lived service.
 - **Ray Serve persists across job submissions.** TrOCR weights stay warm in `/transcribe` (**2 replicas × 0.49 GPU** — `RASK_SERVE_REPLICAS`/`RASK_SERVE_GPU_FRAC`, so `/transcribe` and `/htrflow` co-reside on a 2-GPU pool at 1.96 ≤ 2.0). The pipeline's `TranscribeViaServe` actor is CPU-only and calls Serve synchronously over a handle. `make serve-up` deploys this independently of any job.
 - **Two pipeline shapes:**
   - **Actor-per-stage** — `PageLoader → Layout → Lines → TranscribeViaServe → AltoExport → AltoWriter`. Uses GPU for YOLO regions/lines (0.001 GPU each) and TrOCR via Serve.

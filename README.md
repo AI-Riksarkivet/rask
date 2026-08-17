@@ -16,7 +16,15 @@ S3-compatible storage (RustFS in-cluster).
 **The platform is workload-agnostic by design.** It stores and governs blobs and multimodal data;
 HTR (handwritten-text recognition over archive scans) is the example workload that exercises it, not
 its identity. Anything that reads bytes, writes a governed table and emits lineage fits the same
-shape.
+shape — text, image, audio, video, embeddings.
+
+**The platform itself has no concept of HTR, and that is enforced rather than aspirational.** Modality
+lives in exactly two places: the sealed `runners/htr` project and the named HTR stage/schema inside
+`services/medallion`. It must not leak into a shared seam — the catalog, the medallion cascade, the
+maintenance sweep, lineage, notifications — because a seam that knows one modality makes the next one a
+second-class citizen. That is not hypothetical: registration shipped as `htr_register.py` and served the
+HTR lane alone, so that lane was governed and every other lane wrote **ungoverned** bytes until it was
+generalised. The test for any shared seam is *would this still be right for audio?*
 
 Polyglot monorepo: Python via [uv], JS/TS via [Bun] + Turborepo (oxlint + oxfmt), docs via
 [Zensical], hermetic builds via [Dagger] (`.dagger/` — **every image**, local and CI).
