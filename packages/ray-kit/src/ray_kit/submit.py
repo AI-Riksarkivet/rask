@@ -51,22 +51,38 @@ class RayJobError(RuntimeError):
     """A submitted Ray job failed, was stopped, or did not finish within the timeout."""
 
 
-def submission_id(stage: str, token: str | None, work: str = "") -> str:
-    """A deterministic id per ``(stage, token, work)`` so redelivery re-attaches to the same job.
+def submission_id(stage: str, token: str | None, work: str = "", code: str = "") -> str:
+    """A deterministic id per ``(stage, token, work, code)`` so redelivery re-attaches to the same job.
 
     Idempotency lives HERE rather than in the caller: a trigger delivered twice must not start two jobs,
     and the only thing both deliveries share is what this hashes.
 
-    ``work`` is the job's own identity — for a stage transform, its ``from→to`` URIs. Without it a
+    TWO AXES, and they answer different questions.
+
+    ``work`` is WHAT is being computed — for a stage transform, its ``from→to`` URIs. Without it a
     token-less trigger collapsed EVERY submission of a stage onto one id (``ray-silver-notoken``), and
     ``submit_or_reattach`` read the collision as a successful re-attach — the second transform's work
     silently never ran. The same collapse hid WITH a token whenever one trigger fans out to two tables
-    of the same stage. The token stays visible in the id (operators grep the dashboard by it); the work
-    rides as a short digest so arbitrarily long URIs can't push the id past Ray's limits.
+    of the same stage.
+
+    ``code`` is WHICH BUILD computes it, and it exists because re-attach is only correct while the
+    thing being re-attached to is the same program. During a rolling deploy a redelivered trigger
+    landing on the NEW pod re-attached to a job the OLD pod submitted — old entrypoint, old
+    ``runtime_env``, old transform — and reported success. The run then carried the new build's
+    provenance over the old build's output, which is worse than a failure because nothing is red.
+    Folding the build in means a deploy starts a new job while a plain redelivery still re-attaches.
+
+    Empty ``code`` reproduces the previous id byte-for-byte, so a deployment that does not set it is
+    unchanged rather than silently re-attaching across builds under a new scheme.
+
+    The token stays visible in the id (operators grep the dashboard by it); ``work`` and ``code`` ride
+    as short digests so arbitrarily long URIs and tags cannot push the id past Ray's length limit.
     """
     raw = f"ray-{stage}-{token or 'notoken'}"
     if work:
         raw = f"{raw}-{hashlib.sha256(work.encode()).hexdigest()[:12]}"
+    if code:
+        raw = f"{raw}-{hashlib.sha256(code.encode()).hexdigest()[:8]}"
     return re.sub(r"[^A-Za-z0-9_-]", "-", raw)[:200]
 
 

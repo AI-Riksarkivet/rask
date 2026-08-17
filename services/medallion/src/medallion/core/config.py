@@ -186,6 +186,18 @@ class MedallionSettings(BaseSettings):
     #: (``secrets_from_dapr``), never from an env var and never from here. There is no "just this once"
     #: exemption — a secret in a values file is a leaked secret the moment the repo is cloned.
     ray_job_params: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_RAY_JOB_PARAMS")
+    #: WHICH BUILD is submitting — the second axis of the Ray submission id (B3).
+    #:
+    #: Re-attach is only correct while the thing being re-attached to is the same program. During a
+    #: rolling deploy a redelivered trigger landing on the NEW pod re-attached to a job the OLD pod
+    #: submitted — old entrypoint, old runtime_env, old transform — and reported success. The run then
+    #: carried the new build's provenance over the old build's output, which is worse than a failure
+    #: because nothing anywhere is red.
+    #:
+    #: The chart sets this to the image tag it deployed. EMPTY BY DEFAULT and that is deliberate: an
+    #: empty value reproduces the previous submission id byte-for-byte, so a deployment that has not
+    #: wired it is unchanged rather than quietly re-attaching across builds under a new scheme.
+    ray_code_version: str = Field(default="", alias="MEDALLION_RAY_CODE_VERSION")
     # Where a mover REGISTERS its output table — the catalog service, and the
     # catalog's own connection root so the location can be expressed RELATIVELY (the dir backend
     # refuses absolute URIs — the #75 lesson). Both empty by default: the lane fails at the

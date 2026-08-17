@@ -1785,6 +1785,40 @@ def test_the_actor_state_store_is_scoped_to_the_service_whose_whole_state_it_is(
     )
 
 
+def test_a_ray_SUBMISSION_is_never_pre_gated_on_cluster_capacity() -> None:
+    """B2. Accept-time gates may refuse on unit count, deadline and FGA — NEVER on capacity.
+
+    Custom resource labels are LOGICAL: an autoscaler can satisfy them on demand, and a worker type
+    advertising them may be scaled to zero at submission time. A pre-submission check against a static
+    cluster snapshot therefore rejects work the scheduler would have queued and satisfied — and it
+    fails in the worst direction, because the rejection looks like a capacity problem rather than a
+    bug in the gate.
+
+    rask is on the right side today (`ray_submit.py` POSTs straight to /api/jobs/) and the doc records
+    that it will be tempted off it once bronze->silver starts queueing. This is the gate that notices.
+
+    Scoped to the SUBMIT path only. `ray_kit/dashboard.py` reads /api/cluster_status legitimately — it
+    is the compute service's read-only introspection view, which is a different job from deciding
+    whether to submit.
+    """
+    submit_path = [
+        REPO / "services" / "medallion" / "src" / "medallion" / "services" / "ray_submit.py",
+        REPO / "services" / "medallion" / "src" / "medallion" / "workflow.py",
+        REPO / "packages" / "ray-kit" / "src" / "ray_kit" / "submit.py",
+    ]
+    banned = ("cluster_status", "available_resources", "cluster_resources", "ray.nodes", "/nodes")
+    for path in submit_path:
+        if not path.exists():
+            continue
+        body = path.read_text()
+        for needle in banned:
+            assert needle not in body, (
+                f"{path.name} reads cluster capacity ({needle!r}) on the SUBMIT path. A pre-submission "
+                f"capacity gate refuses work an autoscaler would have satisfied; refuse on unit count, "
+                f"deadline or FGA instead."
+            )
+
+
 def test_the_ray_cluster_image_can_read_the_lakehouse() -> None:
     """The deployed Ray image must carry the platform compute trio, at the fleet's pins.
 

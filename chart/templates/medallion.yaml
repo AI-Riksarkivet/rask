@@ -342,6 +342,12 @@ spec:
             # Worse, that conditional was itself unset, so NO mover had it — not even the lane the
             # gate was written for. Governance belongs to the cascade, so the catalog's address does
             # too: unconditional, on every mover.
+            # B3 — WHICH BUILD submits. Re-attach is only correct while the program is the same one:
+            # during a rolling deploy a redelivered trigger landing on the NEW pod re-attached to a job
+            # the OLD pod submitted (old entrypoint, old runtime_env, old transform) and reported
+            # success, so the run carried the new build's provenance over the old build's output.
+            # Sourced from the image this pod actually runs, so it cannot drift from the code.
+            - { name: MEDALLION_RAY_CODE_VERSION, value: {{ include "lance.catalogImage" $root | quote }} }
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.rustfs.bucket | quote }} }
             {{- if $root.Values.medallion.quality }}

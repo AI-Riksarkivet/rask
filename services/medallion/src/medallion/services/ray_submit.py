@@ -48,14 +48,16 @@ def train_submission_id(token: str) -> str:
     return rk.submission_id("train", token)
 
 
-def stage_submission_id(stage: str, token: str | None, from_uri: str, to_uri: str) -> str:
+def stage_submission_id(stage: str, token: str | None, from_uri: str, to_uri: str, code: str = "") -> str:
     """The stage job's deterministic id, derived in ONE place.
 
     Extracted because S1's workflow has to name the same job twice — once to submit it, once to poll
     it — and a second inline copy of this expression is how the poller ends up watching an id the
-    submitter never used, reporting a healthy job as missing forever.
+    submitter never used, reporting a healthy job as missing forever. ``code`` (B3) must therefore
+    reach BOTH calls or the poller watches an id the submitter never used — the exact defect the
+    extraction exists to prevent, reintroduced through the new axis.
     """
-    return rk.submission_id(stage, token, work=f"{from_uri}\x00{to_uri}")
+    return rk.submission_id(stage, token, work=f"{from_uri}\x00{to_uri}", code=code)
 
 
 async def submit_stage_job(
@@ -84,7 +86,7 @@ async def submit_stage_job(
     # second transform silently never ran. The same collapse hid WITH a token whenever one trigger
     # fans out to two tables of the same stage. from→to IS the transform's identity; a redelivered
     # trigger carries the same pair, so redelivery idempotency is unchanged.
-    submission_id = stage_submission_id(stage, token, from_uri, to_uri)
+    submission_id = stage_submission_id(stage, token, from_uri, to_uri, code=settings.ray_code_version)
     env_vars = {
         "FROM_URI": from_uri,
         "TO_URI": to_uri,
