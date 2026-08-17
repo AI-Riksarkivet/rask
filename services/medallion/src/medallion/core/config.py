@@ -178,6 +178,13 @@ class MedallionSettings(BaseSettings):
     #:
     #: The platform never reads these values and never validates them beyond "it is a JSON object of
     #: strings". Their meaning belongs to the workload, which is the whole point.
+    #:
+    #: NEVER A SECRET. These values come from a chart values file — plaintext, in git, readable by
+    #: anyone who can read the repo or run `helm get values`. A workload that needs a credential (a
+    #: model-hub token, an inference API key) resolves it the SAME way the platform resolves its own S3
+    #: credentials: from the Dapr secret store, fetched at boot through ``fetch_required_secrets``
+    #: (``secrets_from_dapr``), never from an env var and never from here. There is no "just this once"
+    #: exemption — a secret in a values file is a leaked secret the moment the repo is cloned.
     ray_job_params: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_RAY_JOB_PARAMS")
     # Where a mover REGISTERS its output table — the catalog service, and the
     # catalog's own connection root so the location can be expressed RELATIVELY (the dir backend
