@@ -24,17 +24,40 @@ from storage import derive_hcp_creds
 
 
 def _setup_logging() -> None:
-    """Send `core.*` and `backends.*` loggers to stdout (mirrors core.main)."""
+    """Send application logs to stdout — configured on the ROOT logger, so every module inherits it.
+
+    This used to attach the handler to two logger names, ``core`` and ``backends``, and its docstring
+    said why: it "mirrors core.main". That monolith is gone. Every module in every service now uses
+    ``logging.getLogger(__name__)`` — ``lineage.services.consumer``, ``medallion.services.transform``,
+    ``catalog.api.v1.endpoints.tables`` — and NONE of those names sit under ``core.*`` or
+    ``backends.*``. So the handler decorated two trees nobody logs to, every record propagated to a
+    root logger with no handlers, and was discarded. Only uvicorn's own logs (which carry their own
+    handlers) ever reached stdout, which is exactly why the estate looked quiet while it was not.
+
+    Measured live 2026-08-17, before this changed:
+
+    * lineage's durable event feed stopped accepting writes on 2026-08-16 and nothing said so for two
+      days — ``record_event_best_effort`` logs a WARNING and swallows the exception ON PURPOSE (a feed
+      failure must not break the authoritative graph write), so the ack stayed SUCCESS, the metric
+      stayed INGESTED, and ``/events`` silently froze;
+    * a malformed event POSTed to the running ingest answered ``{"status":"DROP"}`` — returned on the
+      single line right after ``log.error("lineage_event_invalid")`` — and emitted no log line at all.
+
+    ``RASK_LOG_LEVEL`` is the volume lever (default INFO). Root-level INFO does make chatty
+    third-party libraries audible; that is the correct trade against losing every application log,
+    and it is one env var to turn down rather than a hardcoded allowlist that goes stale the same way
+    this one did.
+    """
     level = os.environ.get("RASK_LOG_LEVEL", "INFO").upper()
-    for name in ("core", "backends"):
-        logger = logging.getLogger(name)
-        logger.setLevel(level)
-        if not any(h.get_name() == "rask-stdout" for h in logger.handlers):
-            handler = logging.StreamHandler(sys.stdout)
-            handler.set_name("rask-stdout")
-            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s — %(message)s"))
-            logger.addHandler(handler)
-        logger.propagate = False
+    root = logging.getLogger()
+    root.setLevel(level)
+    # Idempotent by handler NAME, not by count: `make_service_app` runs this per app, and a duplicate
+    # handler emits every line twice.
+    if not any(h.get_name() == "rask-stdout" for h in root.handlers):
+        handler = logging.StreamHandler(sys.stdout)
+        handler.set_name("rask-stdout")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s — %(message)s"))
+        root.addHandler(handler)
 
 
 def build_settings() -> Settings:
