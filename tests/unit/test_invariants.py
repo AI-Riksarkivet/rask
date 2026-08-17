@@ -3033,11 +3033,11 @@ def test_every_service_app_entrypoint_CONFIGURES_LOGGING() -> None:
     estate's three largest services propagated to a root logger with no handlers and was DISCARDED.
     Only uvicorn's own logs (which carry their own handlers) reached stdout.
 
-    What that cost is the reason this gate exists rather than a convention: lineage's durable event
-    feed stopped accepting writes on 2026-08-16 and NOTHING said so for two days, because the failure
-    is deliberately swallowed and reported by a WARNING that went nowhere. A malformed event POSTed to
-    the running ingest returned `{"status":"DROP"}` — the line right after `log.error(...)` — and
-    produced no log line at all.
+    What that cost is the reason this gate exists rather than a convention: a malformed event
+    POSTed to the running lineage ingest returned `{"status":"DROP"}` — the line right after
+    `log.error(...)` — and produced no log line at all, verified three times. Every swallowed
+    diagnostic in the estate had the same fate, including the WARNING that is the only signal a
+    best-effort feed write ever failed.
 
     `make_service_app` callers are exempt: the factory calls it for them. This checks the modules
     that bypass the factory, which is exactly the set that regressed.

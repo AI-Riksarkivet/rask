@@ -7,18 +7,16 @@ uses `logging.getLogger(__name__)` — `lineage.services.consumer`, `medallion.s
 So the handler was attached to two trees nobody logs to, every record propagated to a root logger
 with no handlers, and was discarded.
 
-Nothing was red, because the code that logs is never the code that fails. What it cost, measured
-live on 2026-08-17:
+Nothing was red, because the code that logs is never the code that fails. Measured live
+2026-08-17 and verified three times: a malformed event POSTed to the running ingest returned
+`{"status":"DROP"}` — returned on the single line immediately after
+`log.error("lineage_event_invalid")`, so the branch demonstrably ran — and produced no log line
+at all. After the fix the identical request logs it. The medallion mover's workflow-dispatch
+logs were invisible the same way, which is why a running cascade read as an idle one.
 
-* The lineage service's durable event feed stopped accepting writes on 2026-08-16 and NOTHING said
-  so for two days. `record_event_best_effort` catches the exception and logs a WARNING — deliberately,
-  so a feed failure cannot break the authoritative graph write — and that warning went nowhere. The
-  ack stayed SUCCESS, the metric stayed INGESTED, and `/events` and `/runs` silently froze.
-* A malformed event POSTed to the running ingest returned `{"status":"DROP"}` — which is returned on
-  exactly one line, immediately after `log.error("lineage_event_invalid")` — and produced no log line
-  at all. That is the reproduction: the branch demonstrably ran, the error demonstrably vanished.
-* The medallion mover's `ray_stage_job_submitted` / `medallion_stage_workflow_reattach` were equally
-  invisible, which is why a running cascade looked like an idle one.
+The class this closes is the SWALLOWED DIAGNOSTIC: `record_event_best_effort` catches a feed
+write failure by design and reports it with a WARNING that had nowhere to go — so the one signal
+distinguishing a healthy feed from a failing one did not exist.
 
 The fix is what the function already intended: configure the ROOT logger, so `getLogger(__name__)`
 anywhere inherits a handler. These tests pin the property rather than the implementation — a future

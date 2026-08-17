@@ -34,14 +34,20 @@ def setup_logging() -> None:
     root logger with no handlers, and was discarded. Only uvicorn's own logs (which carry their own
     handlers) ever reached stdout, which is exactly why the estate looked quiet while it was not.
 
-    Measured live 2026-08-17, before this changed:
+    Measured live 2026-08-17, and verified three times against the running service:
 
-    * lineage's durable event feed stopped accepting writes on 2026-08-16 and nothing said so for two
-      days — ``record_event_best_effort`` logs a WARNING and swallows the exception ON PURPOSE (a feed
-      failure must not break the authoritative graph write), so the ack stayed SUCCESS, the metric
-      stayed INGESTED, and ``/events`` silently froze;
     * a malformed event POSTed to the running ingest answered ``{"status":"DROP"}`` — returned on the
-      single line right after ``log.error("lineage_event_invalid")`` — and emitted no log line at all.
+      single line immediately AFTER ``log.error("lineage_event_invalid")``, so the branch demonstrably
+      ran — and produced no log line at all. After this fix the identical request logs
+      ``ERROR lineage.services.consumer — lineage_event_invalid``;
+    * the medallion mover's ``ray_stage_job_submitted`` and ``medallion_stage_workflow_reattach`` were
+      equally invisible, which is why a running cascade read as an idle one and its Dapr Workflow had
+      to be found by querying the sidecar rather than by reading a log.
+
+    The class this closes is the swallowed diagnostic: ``record_event_best_effort`` catches a feed
+    write failure by design (it must not break the authoritative graph write) and reports it with a
+    WARNING. That warning had nowhere to go, so the one signal distinguishing "the feed is fine" from
+    "the feed has been failing" did not exist.
 
     ``RASK_LOG_LEVEL`` is the volume lever (default INFO). Root-level INFO does make chatty
     third-party libraries audible; that is the correct trade against losing every application log,
