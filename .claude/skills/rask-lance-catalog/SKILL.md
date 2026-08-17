@@ -321,8 +321,19 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   platform's own settings — `MAINTENANCE_OLDER_THAN_DAYS` (7), `tiers.py`'s per-tier fragment sizing,
   `optimize_indices` — which is why every live summary counts them among its 27 datasets and reports
   `index_findings` for `medallion/{silver,gold}`. What is unavailable is the TENANT-facing layer: a
-  per-dataset policy override, a `_protection/` record, an FGA grant. That is the correct split, since
-  those doors exist to let a tenant govern its own data and this is not tenant data.
+  per-dataset policy override, a `_protection/` record, an FGA grant.
+  **But "no table record" is a STATE, not a law — and the door that fixes it already exists.**
+  `register_table` is precisely for data written outside the catalog's own doors: it turns written
+  bytes into a `table:` object, seeds ownership tuples, and every governed path (protection, trash,
+  credential vending, the FGA doors) keys off that object. It needs no warehouse, which is why it works
+  in the RESERVED bucket — proven by shipped code, not theory: `#88 step 5` registered `gold$htr` from
+  `medallion/services/htr_register.py`, and `#88 step 7` ran that lane live end-to-end. So the reserved
+  bucket blocks the WAREHOUSE route (a tenant claiming platform storage) while leaving the REGISTRATION
+  route open (naming an individual dataset) — two different mechanisms, and conflating them is how you
+  conclude the cascade can never be governed. It can; those tiers simply were never registered.
+  As of 2026-08-17 that is being generalised: `htr_register.py` → `catalog_register.py`, modality-neutral
+  by construction, because the logic only ever took an id and a URI — governance belongs to the CASCADE,
+  not to whichever workload happened to be built first, or every new modality starts ungoverned.
   **And that is DELIBERATE — the platform refuses to let it be fixed that way.** Driven live 2026-08-16:
   `POST /v1/projects` for a `platform` tenant succeeded 200, and the very next call was refused —
   `POST /v1/warehouses {bucket: lance-catalog}` → **400 "bucket 'lance-catalog' is reserved platform
