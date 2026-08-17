@@ -112,16 +112,22 @@ def inspect_indices(
         index_type = str(getattr(index, "index_type", "") or "")
         indexed_columns.update(fields)
 
-        stats = _stats(ds, name)
+        # Don't provoke a panic we already know the answer to. `index_stats` on a JSON index hits an
+        # unimplemented arm in Lance (`lance-index/src/scalar/json.rs:95`, a `todo!()`), and a pyo3 panic
+        # is NOT free: it writes a Rust backtrace to the pod's stderr on every sweep — twice, forever, at
+        # the cron's cadence — and before `_stats` caught BaseException it answered the whole sweep 500.
+        # `describe_indices` already told us the type, so ask only where an answer can exist.
+        # The finding is still UNKNOWN rather than healthy: this reports that the index is UNMONITORED,
+        # which is exactly what it is. When Lance implements these stats, delete this branch — the
+        # generic path below already handles it.
+        stats = None if index_type.strip().lower() == "json" else _stats(ds, name)
         if stats is None:
-            findings.append(
-                IndexFinding(
-                    name=name,
-                    column=column,
-                    index_type=index_type,
-                    note="its statistics could not be read, so its health is UNKNOWN — not the same as healthy",
-                )
+            note = (
+                "pylance exposes no statistics for a JSON index (Lance has no implementation yet), so its health is UNKNOWN — not the same as healthy"
+                if index_type.strip().lower() == "json"
+                else "its statistics could not be read, so its health is UNKNOWN — not the same as healthy"
             )
+            findings.append(IndexFinding(name=name, column=column, index_type=index_type, note=note))
             continue
 
         unindexed_rows = int(stats.get("num_unindexed_rows") or 0)

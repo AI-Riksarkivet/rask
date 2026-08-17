@@ -33,6 +33,8 @@ from pathlib import Path
 
 import lance
 import pyarrow as pa
+import pytest
+from maintenance.services import index_health
 from maintenance.services.index_health import inspect_indices
 
 
@@ -176,3 +178,33 @@ def test_a_dataset_whose_stats_cannot_be_READ_is_reported_not_skipped(tmp_path: 
     findings = inspect_indices(lance.dataset(uri), expected_columns=["does_not_exist"])
 
     assert any(f.column == "does_not_exist" for f in findings)
+
+
+def test_a_JSON_index_is_reported_UNKNOWN_without_ever_calling_stats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`index_stats` on a JSON index panics in Lance (`scalar/json.rs:95`, a `todo!()`), and a pyo3
+    panic writes a Rust backtrace to stderr every single sweep. `describe_indices` already reports the
+    type, so the call is skipped — but the index must still read UNKNOWN, never healthy, because it is
+    genuinely unmonitored.
+
+    The NOT-CALLED half is the whole point: without it the panic returns and this test still passes.
+    """
+    uri = _indexed(tmp_path)
+
+    class _JsonIndex:
+        name = "lineage_run_id_idx"
+        field_names = ("lineage",)
+        index_type = "Json"
+
+    monkeypatch.setattr(lance.LanceDataset, "describe_indices", lambda self: [_JsonIndex()], raising=False)
+
+    called: list[str] = []
+    monkeypatch.setattr(index_health, "_stats", lambda ds, name: called.append(name))
+
+    findings = inspect_indices(lance.dataset(uri))
+
+    assert called == [], f"stats must not be asked of a JSON index — that is the panic: {called}"
+    json_findings = [f for f in findings if f.name == "lineage_run_id_idx"]
+    assert len(json_findings) == 1, findings
+    assert json_findings[0].index_type == "Json"
+    assert "UNKNOWN" in json_findings[0].note
+    assert "JSON index" in json_findings[0].note
