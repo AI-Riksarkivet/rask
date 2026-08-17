@@ -198,6 +198,21 @@ class MedallionSettings(BaseSettings):
     #: empty value reproduces the previous submission id byte-for-byte, so a deployment that has not
     #: wired it is unchanged rather than quietly re-attaching across builds under a new scheme.
     ray_code_version: str = Field(default="", alias="MEDALLION_RAY_CODE_VERSION")
+    #: WHICH DECLARED LANE this mover runs — the name of a ``TransformSpec`` in the catalog.
+    #:
+    #: Set it, and the DECLARED record supplies ``ray_entrypoint``, ``ray_job_params`` and
+    #: ``ray_code_version`` instead of the three settings above: what a lane runs then changes through
+    #: the catalog's admin-gated, audited door rather than by editing this Deployment. That is the
+    #: whole point of the record — a lane that only ever lived in env could not be listed, reviewed or
+    #: gated, and an undeclared one failed at the Ray submit seam with an error naming the image.
+    #:
+    #: EMPTY BY DEFAULT, deliberately, exactly like ``ray_code_version``: an estate that has declared
+    #: nothing behaves byte-for-byte as before rather than quietly running under a new scheme.
+    #:
+    #: Named-but-UNDECLARED is a REFUSAL, never a fallback to the settings above — see
+    #: ``medallion.services.lane``. A fallback would run the old program under the declaration's name
+    #: while an operator believed the record governed it, with nothing anywhere red.
+    lane: str = Field(default="", alias="MEDALLION_LANE")
     # Where a mover REGISTERS its output table — the catalog service, and the
     # catalog's own connection root so the location can be expressed RELATIVELY (the dir backend
     # refuses absolute URIs — the #75 lesson). Both empty by default: the lane fails at the

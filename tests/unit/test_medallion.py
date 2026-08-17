@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -625,3 +626,81 @@ def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkey
     assert env["LINEAGE_JSON"] == "{}", "a lane parameter overwrote the run's provenance document"
     assert env["OTEL_SERVICE_NAME"] != "spoofed"
     assert env["RASK_PARAM_S3_SECRET"] == "stolen"
+
+
+def test_a_DECLARED_lane_overrides_the_charts_entrypoint_and_params(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The declaration governs what runs — otherwise it is a record an admin edits and a mover ignores.
+
+    This is the assertion that makes `TransformSpec` load-bearing rather than decorative: two sources
+    of truth for what a lane runs, with the GOVERNED one winning. The chart's values are deliberately
+    set to different, wrong-looking values here so a pass cannot be a coincidence.
+    """
+    from service_kit.lakehouse import transform_specs
+    from service_kit.lakehouse.transform_specs import TransformSpec
+
+    transform_specs.put_spec(
+        str(tmp_path),
+        {},
+        TransformSpec.model_validate(
+            {
+                "lane": "dummy",
+                "project": "acme",
+                "from_id": "bronze$events",
+                "to_id": "silver$dummy",
+                "entrypoint": "python /home/ray/jobs/ray_dummy_job.py",
+                "params": {"EMBED_DIM": "8"},
+                "code_version": "main-declared",
+            }
+        ),
+    )
+    api = _FakeJobsAPI()
+    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
+    settings = MedallionSettings.model_validate(
+        {
+            "compute_enabled": True,
+            "ray_enabled": True,
+            "to_namespace": "silver",
+            "lane": "dummy",
+            "control_root": str(tmp_path),
+            # The chart's half, all of which the declaration must beat.
+            "ray_entrypoint": "python /home/ray/jobs/ray_stage_job.py",
+            "ray_job_params": {"FROM_THE_CHART": "1"},
+            "ray_code_version": "main-fromchart",
+        }
+    )
+
+    asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
+
+    body = api.posts[0]
+    assert body["entrypoint"] == "python /home/ray/jobs/ray_dummy_job.py", "the DECLARED entrypoint must win"
+    env = body["runtime_env"]["env_vars"]
+    assert env["RASK_PARAM_EMBED_DIM"] == "8"
+    assert "RASK_PARAM_FROM_THE_CHART" not in env, "the chart's params must not leak in alongside the declaration"
+
+
+def test_a_NAMED_but_UNDECLARED_lane_SUBMITS_NOTHING(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The refusal, asserted where it matters: no job reaches the cluster.
+
+    A fallback to `ray_entrypoint` would submit the chart's OLD program under the declaration's name
+    and report success — the mover would look healthy, the lane would look governed, and the wrong
+    transform would run. Better to submit nothing and retry once an admin declares it.
+    """
+    from medallion.services.lane import UndeclaredLaneError
+
+    api = _FakeJobsAPI()
+    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
+    settings = MedallionSettings.model_validate(
+        {
+            "compute_enabled": True,
+            "ray_enabled": True,
+            "to_namespace": "silver",
+            "lane": "never-declared",
+            "control_root": str(tmp_path),
+            "ray_entrypoint": "python /home/ray/jobs/ray_stage_job.py",
+        }
+    )
+
+    with pytest.raises(UndeclaredLaneError, match="never-declared"):
+        asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
+
+    assert api.posts == [], "a job was submitted for a lane nobody declared"

@@ -26,6 +26,7 @@ import os
 import httpx
 
 from medallion.core.config import MedallionSettings
+from medallion.services.lane import resolve_lane_async
 from ray_kit import submit as rk
 
 
@@ -81,12 +82,25 @@ async def submit_stage_job(
     must not produce a governed dataset the in-process path would have stamped. It is provenance, never
     a credential, so echoing it back through the jobs API (which mirrors runtime_env) is harmless.
     """
+    # THE DECLARED LANE, when this mover names one. The record supplies the entrypoint, the workload's
+    # params and the code version; unset lane → `None` and the chart's settings govern exactly as
+    # before. A named-but-undeclared lane RAISES rather than falling back — a fallback would run the
+    # chart's old program under the declaration's name, which is the failure the record exists to
+    # remove. `UndeclaredLaneError` reaches the caller as a submit failure → RETRY, so the work
+    # resumes once an admin declares the lane instead of being dropped.
+    spec = await resolve_lane_async(settings, project=project)
+    entrypoint = spec.entrypoint if spec else settings.ray_entrypoint
+    job_params = spec.params if spec else settings.ray_job_params
+    # The declared code version feeds B3's second axis, so re-declaring a lane against a new image
+    # correctly starts a NEW job rather than re-attaching to the old build's.
+    code_version = spec.code_version if spec else settings.ray_code_version
+
     # The work identity rides in the id: a token-less trigger used to collapse EVERY submission of a
     # stage onto `ray-<stage>-notoken`, and submit_or_reattach read the collision as success — the
     # second transform silently never ran. The same collapse hid WITH a token whenever one trigger
     # fans out to two tables of the same stage. from→to IS the transform's identity; a redelivered
     # trigger carries the same pair, so redelivery idempotency is unchanged.
-    submission_id = stage_submission_id(stage, token, from_uri, to_uri, code=settings.ray_code_version)
+    submission_id = stage_submission_id(stage, token, from_uri, to_uri, code=code_version)
     env_vars = {
         "FROM_URI": from_uri,
         "TO_URI": to_uri,
@@ -121,7 +135,7 @@ async def submit_stage_job(
         # The `RASK_PARAM_` prefix is applied HERE rather than trusted from config, so a lane cannot
         # reach S3_SECRET, LINEAGE_JSON or an OTEL_* key by choosing a colliding name. The platform
         # never reads these values; their meaning belongs to the workload.
-        **{f"RASK_PARAM_{key}": value for key, value in settings.ray_job_params.items()},
+        **{f"RASK_PARAM_{key}": value for key, value in job_params.items()},
     }
     # WHO THIS JOB IS FOR, in Ray's own `metadata` — not in `runtime_env.env_vars`, and the distinction
     # decides whether the feature works at all. The identity has to be readable from OUTSIDE the job
@@ -136,7 +150,7 @@ async def submit_stage_job(
         key: value for key, value in (("rask.originator", originator), ("rask.project", project), ("rask.token", token or ""), ("rask.stage", stage)) if value
     }
     body = {
-        "entrypoint": settings.ray_entrypoint,
+        "entrypoint": entrypoint,
         "submission_id": submission_id,
         "runtime_env": {"env_vars": env_vars},
         "metadata": metadata,
@@ -158,7 +172,10 @@ async def submit_stage_job(
     # makes a redelivered trigger re-attach instead of starting a second job.
     async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
         await rk.submit_or_reattach(client, submission_id, body)
-    log.info("ray_stage_job_submitted", extra={"submission_id": submission_id, "stage": stage})
+    log.info(
+        "ray_stage_job_submitted",
+        extra={"submission_id": submission_id, "stage": stage, "lane": spec.lane if spec else "", "declared": spec is not None},
+    )
 
 
 async def submit_train_job(
