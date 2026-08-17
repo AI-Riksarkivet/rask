@@ -110,6 +110,16 @@ async def submit_stage_job(
         # TRACEPARENT, and the job starts its root span as a child of it — the cascade's distributed
         # trace no longer goes dark at `ray job submit`. Empty when no span is active.
         **rk.trace_env(),
+        # THE WORKLOAD'S OWN PARAMETERS, namespaced. Everything above is the PLATFORM's half of the
+        # contract — where to read, where to write, who to trace as, what provenance to stamp. This is
+        # the other half, and it is the reason a mover row can name a `stageJob` at all: without it the
+        # env dict was fixed, so a second workload either reused the first one's variables or forced a
+        # platform edit.
+        #
+        # The `RASK_PARAM_` prefix is applied HERE rather than trusted from config, so a lane cannot
+        # reach S3_SECRET, LINEAGE_JSON or an OTEL_* key by choosing a colliding name. The platform
+        # never reads these values; their meaning belongs to the workload.
+        **{f"RASK_PARAM_{key}": value for key, value in settings.ray_job_params.items()},
     }
     # WHO THIS JOB IS FOR, in Ray's own `metadata` — not in `runtime_env.env_vars`, and the distinction
     # decides whether the feature works at all. The identity has to be readable from OUTSIDE the job

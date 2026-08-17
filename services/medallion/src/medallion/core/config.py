@@ -164,6 +164,21 @@ class MedallionSettings(BaseSettings):
     ray_enabled: bool = Field(default=False, alias="MEDALLION_RAY_ENABLED")
     ray_address: str = Field(default="http://ray-lance-head:8265", alias="MEDALLION_RAY_ADDRESS")
     ray_entrypoint: str = Field(default="python /home/ray/jobs/ray_stage_job.py", alias="MEDALLION_RAY_ENTRYPOINT")
+    #: THE WORKLOAD'S OWN PARAMETERS — the channel that makes ``ray_entrypoint`` usable.
+    #:
+    #: A per-lane JSON object, forwarded into the job's ``runtime_env.env_vars`` under the
+    #: ``RASK_PARAM_`` prefix. Without it a mover row can name a workload's entrypoint and then has no
+    #: way to configure it: the submit built a FIXED env dict, so a second workload either reused the
+    #: first one's variables or required a platform edit — which is exactly the coupling the agnostic
+    #: ruling forbids.
+    #:
+    #: NAMESPACED ON PURPOSE. The prefix is what keeps this a workload channel rather than a hole in
+    #: the platform: a lane cannot reach ``S3_SECRET``, ``LINEAGE_JSON`` or an ``OTEL_*`` key by
+    #: choosing a colliding name, because every key it supplies is rewritten before it is sent.
+    #:
+    #: The platform never reads these values and never validates them beyond "it is a JSON object of
+    #: strings". Their meaning belongs to the workload, which is the whole point.
+    ray_job_params: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_RAY_JOB_PARAMS")
     # Where a mover REGISTERS its output table — the catalog service, and the
     # catalog's own connection root so the location can be expressed RELATIVELY (the dir backend
     # refuses absolute URIs — the #75 lesson). Both empty by default: the lane fails at the

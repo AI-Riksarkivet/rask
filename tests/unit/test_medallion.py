@@ -14,6 +14,8 @@ import json
 import time
 from typing import Any, cast
 
+import httpx
+import medallion.services.ray_submit as ray_submit
 import medallion.services.transform as mover
 import pytest
 from lineage_kit.consume import LineageDoc
@@ -549,3 +551,77 @@ def test_bronze_arrival_without_an_originator_is_byte_identical() -> None:
 
     (trigger,) = dapr.calls
     assert "originator" not in trigger["data"]
+
+
+class _FakeJobsAPI:
+    """Captures the submitted job body. A fake rather than a mock: the assertion is about the exact
+    `runtime_env.env_vars` dict that reaches Ray, so the shape must survive the round trip."""
+
+    def __init__(self) -> None:
+        self.posts: list[dict[str, Any]] = []
+
+    async def __aenter__(self) -> _FakeJobsAPI:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def get(self, _url: str, **_kw: Any) -> Any:
+        return httpx.Response(404, request=httpx.Request("GET", "http://ray"))
+
+    async def post(self, _url: str, json: dict[str, Any]) -> Any:
+        self.posts.append(json)
+        return httpx.Response(200, json={"submission_id": "sub-1"}, request=httpx.Request("POST", "http://ray"))
+
+
+def test_a_lane_supplies_its_own_parameters_under_a_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A workload configures itself without a platform edit — the other half of `stageJob`.
+
+    Before this, `submit_stage_job` built a FIXED env dict, so a mover row could name a workload's Ray
+    entrypoint and then had no way to configure it: a second workload either reused the first one's
+    variables or required an edit to the platform. That is the coupling the agnostic ruling forbids,
+    and it is why "a workload reaches the platform as configuration" had no mechanism behind it.
+    """
+    api = _FakeJobsAPI()
+    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
+    settings = MedallionSettings.model_validate(
+        {
+            "compute_enabled": True,
+            "ray_enabled": True,
+            "from_uri": "s3://lake/bronze",
+            "to_uri": "s3://lake/silver",
+            "to_namespace": "silver",
+            "ray_job_params": {"MODEL_REVISION": "abc123", "BATCH": "64"},
+        }
+    )
+    asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/bronze", to_uri="s3://lake/silver", stage="silver", token="t"))
+    env = api.posts[0]["runtime_env"]["env_vars"]
+    assert env["RASK_PARAM_MODEL_REVISION"] == "abc123"
+    assert env["RASK_PARAM_BATCH"] == "64"
+
+
+def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE PREFIX IS A GUARD, NOT A CONVENTION.
+
+    The env dict carries the platform's own half of the contract — S3 credentials, the provenance
+    document, the OTLP config the run is traced with. A lane that could name its parameter `S3_SECRET`
+    would overwrite a credential from a values file, so the prefix is applied at the SUBMIT rather than
+    trusted from config: every key a workload supplies is rewritten before it is sent, and the
+    platform's own keys are therefore unreachable by construction.
+    """
+    api = _FakeJobsAPI()
+    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
+    settings = MedallionSettings.model_validate(
+        {
+            "compute_enabled": True,
+            "ray_enabled": True,
+            "s3_secret_access_key": "the-real-secret",
+            "ray_job_params": {"S3_SECRET": "stolen", "LINEAGE_JSON": "forged", "OTEL_SERVICE_NAME": "spoofed"},
+        }
+    )
+    asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
+    env = api.posts[0]["runtime_env"]["env_vars"]
+    assert env["S3_SECRET"] == "the-real-secret", "a lane parameter overwrote a real credential"
+    assert env["LINEAGE_JSON"] == "{}", "a lane parameter overwrote the run's provenance document"
+    assert env["OTEL_SERVICE_NAME"] != "spoofed"
+    assert env["RASK_PARAM_S3_SECRET"] == "stolen"
