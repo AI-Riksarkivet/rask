@@ -45,6 +45,41 @@ the discovered backend carry the task ontology's `output_schema` (see the genera
 seam in `annotator/projects/generation_schema.py`) for vLLM `guided_json` decoding; responses
 are validated and task-filtered on the way back.
 
+## The label is a PURPOSE DISCRIMINATOR, not just a config carrier
+
+Ray Serve is shared platform infrastructure. One cluster will host apps that have nothing to do
+with annotation — a batch scorer a mover calls, an embedding endpoint, a workload's own model
+service — and **the annotator must be able to tell which apps are its business**. That decision
+cannot come from the app's name, its route prefix, or its replica shape; all three are the
+deployer's free choice and none is a contract. It comes from the label, and the rule is one line:
+
+> **`user_config.labeling` present ⇒ this app is an annotation backend. Absent ⇒ it is not, and
+> the annotator must never offer it.**
+
+So the block is doing two jobs and the second one is the load-bearing one: it *describes* the
+contract (`producer` / `returns` / `inputs`), and it *claims* the app for this plane. Read the
+absent case as the important one — a Serve app with no `labeling` block is not
+"unknown-so-maybe", it is **not ours**, and offering it would put a model in an annotator's tool
+bar that was never built to answer a shape request.
+
+**Generalise the key, not the mechanism.** Each consuming plane claims its own apps under its own
+`user_config` key — `labeling` for annotation, a sibling key for whatever the batch or embedding
+planes need — and an app carrying no recognised key belongs to no plane. That keeps Serve a
+neutral host: adding a second consumer needs no change to the annotator's discovery, and no plane
+can accidentally inherit another's deployments. Do NOT reach for a single `purpose: annotation`
+enum instead; the key IS the claim, and a shared enum makes every plane's vocabulary a change to
+one shared list.
+
+**Two things this must not become.** It is not authorization — the label says what an app is FOR,
+never who may call it; that stays with the FGA gate on the annotation task. And it is not a
+health signal — a labelled app that is not `RUNNING` is still not offerable, so the label is
+ANDed with Serve's own status rather than trusted on its own.
+
+*Open:* whether the annotator should surface labelled-but-unhealthy apps as a diagnostic ("this
+is yours and it is down") rather than hiding them. Hiding is the safe default and matches the
+degrade-to-mock posture, but silent absence is the failure mode this estate keeps re-learning —
+see the maintenance sweep's UNKNOWN-vs-healthy rule.
+
 ## Topology and URLs (KubeRay)
 
 Two stable Services per RayService, **both surviving zero-downtime upgrades** (KubeRay
