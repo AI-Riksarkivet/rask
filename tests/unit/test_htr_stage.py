@@ -178,7 +178,7 @@ def test_the_stage_registers_its_gold_table_in_the_catalog(tmp_path: Path) -> No
 def test_a_catalog_refusal_fails_the_stage_after_the_write(tmp_path: Path) -> None:
     """A gold table the catalog cannot govern is #88's defect intact — the stage must RETRY, not
     report a success the estate cannot see."""
-    from medallion.services.htr_register import RegisterError
+    from medallion.services.catalog_register import RegisterError
 
     bronze = _bronze_pages(tmp_path, ["iiif://v/1.jpg"])
     gold = str(tmp_path / "root" / "medallion" / "gold-htr")

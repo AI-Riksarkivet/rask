@@ -34,7 +34,7 @@ from opentelemetry import trace
 from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_refused, record_transition
 from medallion.schemas.events import build_run_event
-from medallion.services import htr_stage
+from medallion.services import catalog_register, htr_stage
 from medallion.services.compute import measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.promotion import promotion_lineage
@@ -377,6 +377,11 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                     span.set_attribute("lance.lineage.run_id", lineage_doc.run_id)
                     span.set_attribute("lance.lineage.chain_depth", len(lineage_doc.derived_from))
                     use_ray = settings.ray_enabled
+                    # Set by any branch that registered its own output, so the generic
+                    # registration below does not repeat it. A flag rather than an
+                    # `operation == HTR` test on purpose: the generic path must not grow a
+                    # list of modality names.
+                    registered_by_stage = False
                     if settings.operation == htr_stage.HTR_OPERATION:
                         # The governed HTR lane (#88 step 4) — dispatched FIRST, before the ray
                         # branch, deliberately: the generic Ray stage job derives thumbnails and
@@ -399,6 +404,11 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                             catalog_token=settings.catalog_token,
                             delimiter=settings.delimiter,
                         )
+                        # This stage registers its own output as part of its contract (#88 step 5),
+                        # so the generic registration below must not repeat it. Set AFTER the call
+                        # so a raised RegisterError leaves it false and nothing claims a
+                        # registration that did not happen.
+                        registered_by_stage = True
                     elif use_ray and not trigger.ray_job_done:
                         # S1 — DISPATCH, and return. This branch used to submit and then measure on the
                         # very next line, which is the defect `medallion.workflow` exists to close:
@@ -465,6 +475,55 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                             # dataset's provenance and its FAIL events.
                             dataset_id=to_dataset,
                         )
+                    # GOVERNANCE IS THE CASCADE'S, NOT ONE LANE'S. Every branch above that WROTE
+                    # converges here (the dispatch branch returned before writing), so this is the
+                    # one place a tier's output can be registered regardless of which compute
+                    # produced it. Registration is what turns written bytes into a `table:` object;
+                    # without it the dataset has no catalog record, so no FGA object, so no tuple
+                    # can name it — and no grant, retention policy or deletion-protection can ever
+                    # apply. Measured on the live estate 2026-08-17: `can_delete namespace:gold` =
+                    # false and `describe gold$catalog` = 403, not because permission was denied but
+                    # because there was no object there to hold a permission.
+                    #
+                    # This used to live inside `htr_stage` alone, so the HTR lane was governed and
+                    # every other lane — the Ray stage job, the in-process transform, and every
+                    # future modality — wrote ungoverned bytes. That is backwards for an agnostic
+                    # platform: a new modality would start ungoverned by DEFAULT and need its own
+                    # bolt-on. The HTR stage still registers internally as part of its own contract
+                    # (#88 step 5), so it is skipped here rather than registered twice.
+                    #
+                    # Failure PROPAGATES (RegisterError) exactly as it does in the HTR lane: a write
+                    # the catalog cannot govern must not report success, and the mover retries.
+                    if not registered_by_stage and to_dataset:
+                        if settings.catalog_url:
+                            await run_in_threadpool(
+                                catalog_register.register_stage_output,
+                                catalog_url=settings.catalog_url,
+                                catalog_root=settings.catalog_root,
+                                table_id=to_dataset,
+                                to_uri=to_uri,
+                                delimiter=settings.delimiter,
+                                token=settings.catalog_token,
+                            )
+                            span.set_attribute("lance.catalog.registered", to_dataset)
+                        else:
+                            # AN UNGOVERNED WRITE IS LOUD, NEVER SILENT. Without a catalog URL this
+                            # mover cannot register, so the bytes land outside governance — which is
+                            # exactly the state the estate was found in on 2026-08-17, and the reason
+                            # it went unnoticed for so long is that nothing said so. It warns rather
+                            # than raising because an unset URL is a DEPLOYMENT gap, not bad data:
+                            # raising would turn a misconfigured chart into a permanently
+                            # dead-lettering cascade, and redelivery cannot set an env var.
+                            #
+                            # The span attribute is the machine-readable half — alert on
+                            # `lance.catalog.ungoverned` being present, and a tier writing outside
+                            # governance pages someone instead of accumulating quietly.
+                            log.warning(
+                                "medallion_stage_output_UNGOVERNED",
+                                extra={"table_id": to_dataset, "to_uri": to_uri, "missing": "MEDALLION_CATALOG_URL"},
+                            )
+                            span.set_attribute("lance.catalog.ungoverned", to_dataset)
+
                     span.set_attribute("lance.version", result.version)
                     span.set_attribute("lance.row_count", result.row_count)
                     span.set_attribute("lance.size_bytes", result.size_bytes)

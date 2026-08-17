@@ -334,15 +334,22 @@ spec:
             # per-mover (only the transcribe_pages lane needs it); empty = the lane fails loudly at the
             # seam naming MEDALLION_HTRFLOW_URL rather than guessing a host.
             - { name: MEDALLION_HTRFLOW_URL, value: {{ .htrflowUrl | quote }} }
-            # #88 step 5: where the lane REGISTERS gold$htr — the catalog service, and the catalog's
-            # own connection root so the location is expressible RELATIVELY (the dir backend refuses
-            # absolute URIs). Set beside htrflowUrl because the lane is all-or-nothing: transcribing
-            # without registering would be #88's defect with extra steps.
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            # WHERE THIS MOVER REGISTERS ITS OUTPUT — on EVERY mover, not just the HTR lane.
+            #
+            # These two used to sit inside the `if .htrflowUrl` block above, so only the transcribe
+            # lane could reach the catalog and every other mover wrote bytes the catalog never heard
+            # of: no table record, therefore no FGA object, therefore no grant, retention policy or
+            # deletion-protection could ever name them. Measured on the live estate 2026-08-17,
+            # `describe gold$catalog` answered 403 — not permission denied, but no such object.
+            #
+            # Worse, the gate meant NO mover had it, because htrflowUrl was itself unset — so the one
+            # lane that had registration built could not use it either. Governance belongs to the
+            # cascade, so the address of the catalog does too.
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.rustfs.bucket | quote }} }
-            {{- end }}
-            {{- end }}
-            {{- end }}
             {{- if $root.Values.medallion.quality }}
             # Validator gate: after the compute write, assert the stage's data is good enough to promote
             # (row_count > 0, key column non-null); a failure emits the dataQualityAssertions facet but does

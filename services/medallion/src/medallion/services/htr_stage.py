@@ -23,7 +23,7 @@ import lance
 import pyarrow as pa
 from lineage_kit.consume import LineageDoc
 
-from medallion.services import htr_parse, htr_register, htr_transcribe
+from medallion.services import catalog_register, htr_parse, htr_transcribe
 from medallion.services.compute import _LINEAGE_COLUMN, WriteResult, _index_lineage, _lineage_column, measure
 from service_kit.lakehouse import blobs
 
@@ -128,7 +128,7 @@ def transcribe_stage(
     # governed (idempotent redelivery). table_id empty = the caller opted out (tests of the pure
     # transform); the MOVER always passes it.
     if table_id:
-        htr_register.register_gold_table(
+        catalog_register.register_stage_output(
             catalog_url=catalog_url,
             catalog_root=catalog_root,
             table_id=table_id,

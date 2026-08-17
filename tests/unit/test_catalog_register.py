@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
-from medallion.services.htr_register import RegisterError, register_gold_table, relative_location
+from medallion.services.catalog_register import RegisterError, register_stage_output, relative_location
 
 
 CATALOG = "http://catalog.test"
@@ -27,7 +27,7 @@ def test_registration_sends_the_relative_location_and_segments() -> None:
     ns = respx.post(f"{CATALOG}/v1/namespace/gold/create").mock(return_value=httpx.Response(200, json={}))
     route = respx.post(f"{CATALOG}/v1/table/gold$htr/register").mock(return_value=httpx.Response(200, json={}))
 
-    register_gold_table(catalog_url=CATALOG, catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/medallion/gold-htr")
+    register_stage_output(catalog_url=CATALOG, catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/medallion/gold-htr")
 
     body = route.calls.last.request.read()
     assert b'"location": "medallion/gold-htr"' in body or b'"location":"medallion/gold-htr"' in body
@@ -43,7 +43,7 @@ def test_a_409_is_already_governed_not_a_failure() -> None:
     respx.post(f"{CATALOG}/v1/namespace/gold/create").mock(return_value=httpx.Response(409, text="exists"))
     respx.post(f"{CATALOG}/v1/table/gold$htr/register").mock(return_value=httpx.Response(409, text="exists"))
 
-    register_gold_table(catalog_url=CATALOG, catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/medallion/gold-htr")
+    register_stage_output(catalog_url=CATALOG, catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/medallion/gold-htr")
 
 
 @respx.mock
@@ -52,12 +52,12 @@ def test_any_other_refusal_fails_the_stage() -> None:
     respx.post(f"{CATALOG}/v1/table/gold$htr/register").mock(return_value=httpx.Response(403, text="denied"))
 
     with pytest.raises(RegisterError, match="HTTP 403"):
-        register_gold_table(catalog_url=CATALOG, catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/medallion/gold-htr")
+        register_stage_output(catalog_url=CATALOG, catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/medallion/gold-htr")
 
 
 def test_an_unset_catalog_url_names_the_env_var() -> None:
     with pytest.raises(RegisterError, match="MEDALLION_CATALOG_URL"):
-        register_gold_table(catalog_url="", catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/x")
+        register_stage_output(catalog_url="", catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/x")
 
 
 @respx.mock
@@ -65,6 +65,6 @@ def test_the_bearer_rides_when_given() -> None:
     respx.post(f"{CATALOG}/v1/namespace/gold/create").mock(return_value=httpx.Response(409, text="exists"))
     route = respx.post(f"{CATALOG}/v1/table/gold$htr/register").mock(return_value=httpx.Response(200, json={}))
 
-    register_gold_table(catalog_url=CATALOG, catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/medallion/gold-htr", token="mover-jwt")
+    register_stage_output(catalog_url=CATALOG, catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/medallion/gold-htr", token="mover-jwt")
 
     assert route.calls.last.request.headers["authorization"] == "Bearer mover-jwt"

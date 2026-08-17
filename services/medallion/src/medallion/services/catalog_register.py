@@ -1,11 +1,18 @@
-"""Registration of the HTR gold table in the catalog (#88 step 5) — the governance half of the write.
+"""Registration of a stage's written dataset in the catalog — the governance half of every write.
 
 The cascade's writes were governed by PATH CONVENTION only: no `register_table` call existed
-anywhere in the medallion, so `gold$htr` would have been a dataset the catalog never heard of —
+anywhere in the medallion, so a tier's output was a dataset the catalog never heard of —
 unprotectable, untrashable, and invisible to the FGA doors #90 gated. Registration is what turns
 the written bytes into a `table:` object: the catalog's register door seeds ownership tuples, and
 every governed read path (the viewer's pages, credentials vending, protection) keys off that
 object.
+
+MODALITY-NEUTRAL BY CONSTRUCTION, and that is the point of the file's name. This shipped as
+`htr_register.register_gold_table`, called only from the HTR stage — so the one lane that had it
+was governed and every other lane wrote ungoverned bytes. Nothing in the logic was ever
+HTR-specific: it takes an id and a URI. Governance belongs to the CASCADE, not to whichever
+workload was built first, or every new modality starts ungoverned by default — the exact opposite
+of an agnostic platform.
 
 Register — not create-through-the-catalog. The mover owns where it WRITES (the cascade's standing
 rule) and `register_table` exists precisely for data written outside the catalog's own doors.
@@ -49,7 +56,7 @@ def relative_location(to_uri: str, catalog_root: str) -> str:
     return to_uri[len(root) + 1 :]
 
 
-def register_gold_table(
+def register_stage_output(
     *,
     catalog_url: str,
     catalog_root: str,
@@ -59,13 +66,13 @@ def register_gold_table(
     token: str | None = None,
     timeout_seconds: float = 30.0,
 ) -> None:
-    """Register the just-written gold dataset as ``table_id``; 409 means already governed.
+    """Register the just-written dataset as ``table_id``; 409 means already governed.
 
     ``catalog_url`` empty raises naming the env var — the same fail-at-the-seam rule as the
     transcribe endpoint: a lane whose output the catalog cannot govern must not report success.
     """
     if not catalog_url:
-        raise RegisterError("MEDALLION_CATALOG_URL is not set — the HTR lane cannot register its gold table")
+        raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot register its output table")
     location = relative_location(to_uri, catalog_root)
     segments = table_id.split(delimiter)
     headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -90,8 +97,8 @@ def register_gold_table(
         # Already registered — every redelivery after the first lands here. The ownership tuples
         # were seeded by the first registration; nothing to do, and saying otherwise would make an
         # idempotent stage look like it failed.
-        log.info("htr_gold_already_registered", extra={"table_id": table_id})
+        log.info("stage_output_already_registered", extra={"table_id": table_id})
         return
     if response.status_code >= 400:
         raise RegisterError(f"catalog refused to register {table_id!r}: HTTP {response.status_code} — {response.text[:300]}")
-    log.info("htr_gold_registered", extra={"table_id": table_id, "location": location})
+    log.info("stage_output_registered", extra={"table_id": table_id, "location": location})
