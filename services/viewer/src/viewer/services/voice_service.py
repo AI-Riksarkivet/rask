@@ -33,7 +33,7 @@ from pydantic import BaseModel
 from service_kit.exceptions import NotFoundError, ServiceUnavailableError, ValidationError
 from service_kit.lancekit import store
 from service_kit.lancekit.predicate import and_, eq, isin, ne
-from service_kit.schemas.voice import (
+from viewer.schemas.voice import (
     VoiceAnchor,
     VoiceIdentityAppearance,
     VoiceIdentityResponse,

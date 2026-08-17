@@ -32,7 +32,7 @@ from pydantic import BaseModel, ConfigDict
 from service_kit.lancekit import store
 from service_kit.media.deps import StateDep
 from service_kit.media.state import dataset_handle
-from service_kit.schemas.graph import (
+from viewer.schemas.graph import (
     CypherResponse,
     EntityClip,
     EntityCooccur,

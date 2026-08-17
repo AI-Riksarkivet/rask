@@ -5,9 +5,15 @@ problem+json handlers, S3 doubled by moto. Pins the wire shapes the lakehouse
 zone's storage.ts mirrors (S3Listing / S3ObjectHead), the 404 mapping, and the
 bucket allowlist rejection.
 
-The fixture deliberately creates ONLY `images-batch`, never `images-batch-alto`:
-the second allowlisted bucket is therefore genuinely absent, which reproduces
-live-proof defect 2 (a Tenant that never provisioned `spec.buckets`) exactly.
+The fixture SUPPLIES its own store registry through `RASK_STORES` rather than
+leaning on a platform default. That is the contract as of 2026-08-17: a
+workload's buckets are deployment configuration, and `service-kit` no longer
+ships any — a platform library asserting that an estate holds page images was
+the platform having an opinion about the workload.
+
+The registry declares two buckets and the fixture creates only the FIRST, so the
+second is genuinely absent — which reproduces live-proof defect 2 (a Tenant that
+never provisioned `spec.buckets`) exactly, as before.
 """
 
 from collections.abc import Iterator
@@ -20,6 +26,17 @@ from viewer.api.v1.endpoints import objects as objects_module
 from viewer.api.v1.endpoints.objects import router as objects_router
 
 from service_kit.exceptions import register_handlers
+
+
+#: The DEPLOYMENT's store registry for this suite. Declared here because `service-kit` ships no
+#: workload buckets any more: a test that needs a bucket supplies it, exactly as a deployment does.
+FIXTURE_STORES = '[{"name": "corpus-raw", "bucket": "corpus-raw", "role": "raw", "description": "Fixture source bucket."}, {"name": "corpus-derived", "bucket": "corpus-derived", "role": "derived", "description": "Fixture bucket deliberately never provisioned."}]'
+
+
+def _use_fixture_stores(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the store registry at this suite's buckets. Needed by every test that builds its own
+    client instead of taking the `client` fixture."""
+    monkeypatch.setenv("RASK_STORES", FIXTURE_STORES)
 
 
 def _app() -> FastAPI:
@@ -37,16 +54,17 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setenv("RASK_S3_ENDPOINT_URL", "")
     monkeypatch.setenv("S3_ENDPOINT_URL", "")
     monkeypatch.setenv("HCP_ENDPOINT", "")
+    _use_fixture_stores(monkeypatch)
 
     import boto3
     from moto import mock_aws
 
     with mock_aws():
         s3 = boto3.client("s3", region_name="us-east-1")
-        s3.create_bucket(Bucket="images-batch")
-        s3.put_object(Bucket="images-batch", Key="VOL/a.jpg", Body=b"hello", ContentType="image/jpeg")
-        s3.put_object(Bucket="images-batch", Key="VOL/sub/b.jpg", Body=b"y")
-        s3.put_object(Bucket="images-batch", Key="top.jpg", Body=b"z")
+        s3.create_bucket(Bucket="corpus-raw")
+        s3.put_object(Bucket="corpus-raw", Key="VOL/a.jpg", Body=b"hello", ContentType="image/jpeg")
+        s3.put_object(Bucket="corpus-raw", Key="VOL/sub/b.jpg", Body=b"y")
+        s3.put_object(Bucket="corpus-raw", Key="top.jpg", Body=b"z")
 
         with TestClient(_app()) as c:
             yield c
@@ -54,8 +72,8 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
 
 def test_list_objects_returns_prefixes_and_objects(client: TestClient) -> None:
     # Root level: one common-prefix folder ("VOL/") and one leaf object ("top.jpg").
-    root = client.get("/api/objects", params={"bucket": "images-batch", "prefix": ""}).json()
-    assert root["bucket"] == "images-batch"
+    root = client.get("/api/objects", params={"bucket": "corpus-raw", "prefix": ""}).json()
+    assert root["bucket"] == "corpus-raw"
     assert root["prefix"] == ""
     assert root["prefixes"] == ["VOL/"]
     assert [o["key"] for o in root["objects"]] == ["top.jpg"]
@@ -63,13 +81,13 @@ def test_list_objects_returns_prefixes_and_objects(client: TestClient) -> None:
     assert root["objects"][0]["last_modified"] is not None
 
     # Under "VOL/": the leaf "VOL/a.jpg" plus the sub-folder "VOL/sub/".
-    vol = client.get("/api/objects", params={"bucket": "images-batch", "prefix": "VOL/"}).json()
+    vol = client.get("/api/objects", params={"bucket": "corpus-raw", "prefix": "VOL/"}).json()
     assert vol["prefixes"] == ["VOL/sub/"]
     assert [o["key"] for o in vol["objects"]] == ["VOL/a.jpg"]
 
 
 def test_head_object_returns_metadata(client: TestClient) -> None:
-    resp = client.get("/api/object", params={"bucket": "images-batch", "key": "VOL/a.jpg"})
+    resp = client.get("/api/object", params={"bucket": "corpus-raw", "key": "VOL/a.jpg"})
     assert resp.status_code == 200
     head = resp.json()
     assert head["key"] == "VOL/a.jpg"
@@ -81,14 +99,14 @@ def test_head_object_returns_metadata(client: TestClient) -> None:
 
 
 def test_head_missing_object_is_problem_404(client: TestClient) -> None:
-    resp = client.get("/api/object", params={"bucket": "images-batch", "key": "VOL/missing.jpg"})
+    resp = client.get("/api/object", params={"bucket": "corpus-raw", "key": "VOL/missing.jpg"})
     assert resp.status_code == 404
     assert resp.headers["content-type"] == "application/problem+json"
     assert resp.json()["status"] == 404
 
 
 def test_download_returns_bytes_with_disposition(client: TestClient) -> None:
-    resp = client.get("/api/object/download", params={"bucket": "images-batch", "key": "VOL/a.jpg"})
+    resp = client.get("/api/object/download", params={"bucket": "corpus-raw", "key": "VOL/a.jpg"})
     assert resp.status_code == 200
     assert resp.content == b"hello"
     assert resp.headers["content-type"].startswith("image/jpeg")
@@ -96,7 +114,7 @@ def test_download_returns_bytes_with_disposition(client: TestClient) -> None:
 
 
 def test_download_missing_object_is_404(client: TestClient) -> None:
-    resp = client.get("/api/object/download", params={"bucket": "images-batch", "key": "nope.bin"})
+    resp = client.get("/api/object/download", params={"bucket": "corpus-raw", "key": "nope.bin"})
     assert resp.status_code == 404
 
 
@@ -127,9 +145,9 @@ def test_unlisted_bucket_is_rejected(client: TestClient) -> None:
 @pytest.mark.parametrize(
     ("path", "params"),
     [
-        ("/api/objects", {"bucket": "images-batch-alto", "prefix": ""}),
-        ("/api/object", {"bucket": "images-batch-alto", "key": "VOL/a.xml"}),
-        ("/api/object/download", {"bucket": "images-batch-alto", "key": "VOL/a.xml"}),
+        ("/api/objects", {"bucket": "corpus-derived", "prefix": ""}),
+        ("/api/object", {"bucket": "corpus-derived", "key": "VOL/a.xml"}),
+        ("/api/object/download", {"bucket": "corpus-derived", "key": "VOL/a.xml"}),
     ],
 )
 def test_a_missing_bucket_is_a_404_naming_the_bucket(client: TestClient, path: str, params: dict[str, str]) -> None:
@@ -140,7 +158,7 @@ def test_a_missing_bucket_is_a_404_naming_the_bucket(client: TestClient, path: s
     assert resp.status_code == 404, f"{path} must degrade to 404 on a missing bucket, got {resp.status_code}"
     assert resp.headers["content-type"] == "application/problem+json"
     detail = resp.json()["detail"]
-    assert "images-batch-alto" in detail, f"the answer must NAME the missing bucket: {detail!r}"
+    assert "corpus-derived" in detail, f"the answer must NAME the missing bucket: {detail!r}"
     assert "bucket not found" in detail, f"the answer must say it is the BUCKET that is missing: {detail!r}"
     assert "rustfs.buckets" in detail, f"the answer must point at the fix: {detail!r}"
 
@@ -148,8 +166,8 @@ def test_a_missing_bucket_is_a_404_naming_the_bucket(client: TestClient, path: s
 def test_a_missing_key_and_a_missing_bucket_do_not_read_the_same(client: TestClient) -> None:
     """The two 404s must be distinguishable — otherwise an unprovisioned store is
     indistinguishable from an empty one, which is the whole failure mode."""
-    missing_key = client.get("/api/object", params={"bucket": "images-batch", "key": "nope.jpg"}).json()["detail"]
-    missing_bucket = client.get("/api/object", params={"bucket": "images-batch-alto", "key": "nope.jpg"}).json()["detail"]
+    missing_key = client.get("/api/object", params={"bucket": "corpus-raw", "key": "nope.jpg"}).json()["detail"]
+    missing_bucket = client.get("/api/object", params={"bucket": "corpus-derived", "key": "nope.jpg"}).json()["detail"]
     assert missing_key.startswith("object not found")
     assert missing_bucket.startswith("bucket not found")
 
@@ -172,11 +190,12 @@ def test_a_body_less_404_still_names_the_bucket(monkeypatch: pytest.MonkeyPatch)
     # Takes the endpoint arg the real `s3_client(endpoint=None)` has always accepted. Routes now pass
     # the STORE's endpoint (raw lives off-warehouse), so a zero-arg stub is narrower than the function
     # it stands in for — and a stub narrower than its subject fails on a change the subject allows.
+    _use_fixture_stores(monkeypatch)
     monkeypatch.setattr(objects_module, "s3_client", lambda _endpoint=None, **_kw: _AwsShapedClient())
     with TestClient(_app()) as c:
-        resp = c.get("/api/object", params={"bucket": "images-batch-alto", "key": "k"})
+        resp = c.get("/api/object", params={"bucket": "corpus-derived", "key": "k"})
     assert resp.status_code == 404
-    assert "bucket not found: images-batch-alto" in resp.json()["detail"]
+    assert "bucket not found: corpus-derived" in resp.json()["detail"]
 
 
 def test_a_real_outage_is_not_disguised_as_a_404(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -194,11 +213,12 @@ def test_a_real_outage_is_not_disguised_as_a_404(monkeypatch: pytest.MonkeyPatch
         def get_paginator(self, _name: str) -> Any:  # noqa: ANN401 — boto3 paginator has no public stub
             raise ConnectionError("Could not connect to the endpoint URL")
 
+    _use_fixture_stores(monkeypatch)
     monkeypatch.setattr(objects_module, "s3_client", lambda _endpoint=None, **_kw: _DeadClient())
     with TestClient(_app(), raise_server_exceptions=False) as c:
         for path, params in (
-            ("/api/objects", {"bucket": "images-batch", "prefix": ""}),
-            ("/api/object", {"bucket": "images-batch", "key": "VOL/a.jpg"}),
-            ("/api/object/download", {"bucket": "images-batch", "key": "VOL/a.jpg"}),
+            ("/api/objects", {"bucket": "corpus-raw", "prefix": ""}),
+            ("/api/object", {"bucket": "corpus-raw", "key": "VOL/a.jpg"}),
+            ("/api/object/download", {"bucket": "corpus-raw", "key": "VOL/a.jpg"}),
         ):
             assert c.get(path, params=params).status_code == 500, f"{path} must not report an outage as a 404"

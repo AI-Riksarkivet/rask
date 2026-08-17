@@ -22,7 +22,7 @@ from service_kit.lancekit import store
 from service_kit.lancekit.predicate import eq
 from service_kit.media.deps import StateDep
 from service_kit.media.state import dataset_handle
-from service_kit.schemas.diarization import DiarizationResponse, SpeakerTurn
+from viewer.schemas.diarization import DiarizationResponse, SpeakerTurn
 
 
 router = APIRouter(prefix="/api/diarization", tags=["diarization"])

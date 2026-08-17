@@ -24,7 +24,7 @@ from service_kit.lancekit import store
 from service_kit.lancekit.topics_meta import NOISE_LABEL
 from service_kit.media.deps import StateDep
 from service_kit.media.state import dataset_handle
-from service_kit.schemas.topics import TopicsResponse
+from viewer.schemas.topics import TopicsResponse
 
 
 router = APIRouter(prefix="/api/topics", tags=["topics"])

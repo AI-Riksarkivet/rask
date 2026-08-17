@@ -1,11 +1,10 @@
 """The storage registry contract — every object store the estate knows, and its ROLE.
 
-R28. Before this, the object browser addressed buckets through a hardcoded two-value union
-(``Literal["images-batch", "images-batch-alto"]``) duplicated by hand in the frontend. Two
-independent copies of a fact that belongs to the catalog, and neither said what either bucket was
-FOR: a reader could not tell that one holds source page images and the other derived ALTO, nor
-which medallion tier a given store backs. Adding a bucket meant editing Python, editing TypeScript,
-and hoping the two stayed in step.
+R28. Before this, the object browser addressed buckets through a hardcoded two-value union of one
+deployment's bucket names, duplicated by hand in the frontend. Two independent copies of a fact that
+belongs to the catalog, and neither said what either bucket was FOR: a reader could not tell which
+held source material and which held derived output, nor which medallion tier a given store backs.
+Adding a bucket meant editing Python, editing TypeScript, and hoping the two stayed in step.
 
 A store is registered WITH A ROLE. The role is the governed fact — it says where a store sits in
 the cascade (external raw, or one of the three governed tiers) — and it is what the UI groups by,
@@ -25,7 +24,7 @@ class StorageRole(StrEnum):
     The three governed tiers are exactly bronze/silver/gold (R23): the medallion is
     bronze->silver->gold, and RAW is deliberately outside it — raw is the external world (a IIIF
     endpoint, a drop bucket), never a governed tier. DERIVED covers artefacts produced from a tier
-    but not themselves governed as one (exported ALTO, thumbnails); OBSERVABILITY covers the
+    but not themselves governed as one (an export, a derived artefact); OBSERVABILITY covers the
     telemetry store, which is operational rather than archival.
     """
 
@@ -81,11 +80,12 @@ class Store(BaseModel):
 
 #: Why `endpoint` exists at all, since every governed tier shares one:
 #:
-#: RAW IS NOT ON THE WAREHOUSE. The medallion tiers live on the RustFS this chart deploys, but the raw
-#: page images live on an external store (HCP) — a different host entirely. Before this field, `Store`
-#: could only say "bucket X on THE configured endpoint", so the object browser asked the warehouse for
-#: `images-batch`, the warehouse correctly answered "no such objects", and a bucket full of images
-#: rendered as an empty store. The data was never missing; the registry could not say where it was.
+#: RAW IS NOT NECESSARILY ON THE WAREHOUSE. The medallion tiers live on the RustFS this chart deploys,
+#: but a deployment's raw material may live on an external store — a different host entirely. Before
+#: this field, `Store` could only say "bucket X on THE configured endpoint", so the object browser
+#: asked the warehouse for a bucket it does not hold, the warehouse correctly answered "no such
+#: objects", and a populated store rendered as empty. The data was never missing; the registry could
+#: not say where it was.
 #:
 #: `None` rather than a required field: the governed tiers genuinely do share the deployment default,
 #: and forcing every entry to repeat it would invite four copies of one value that drift apart.
@@ -106,23 +106,18 @@ class StoreRegistry(BaseModel):
     stores: list[Store]
 
 
-#: The estate's stores when a deployment declares none. These are the buckets rask actually runs
-#: with, so an unconfigured stack behaves exactly as the old hardcoded union did — except the roles
-#: are stated, and the list is data a deployment replaces rather than a Literal a reader edits in
-#: two languages.
+#: The buckets the PLATFORM itself owns — nothing about any workload's data.
+#:
+#: This used to ship two more, ``images-batch`` (harvested page images) and ``images-batch-alto``
+#: (exported ALTO XML), and every deployment inherited them because the chart ships
+#: ``storage.stores: []`` and this is the fallback. A platform library asserting that an estate holds
+#: page images and ALTO is the platform having an opinion about the workload — and it reached every
+#: service, since `service-kit` is imported by all of them.
+#:
+#: A workload's buckets belong in ``RASK_STORES`` for the deployment that has them. The two below
+#: stay because they are infrastructure the platform provisions and reads for itself, not a
+#: statement about what anyone batch-processes.
 DEFAULT_STORES: tuple[Store, ...] = (
-    Store(
-        name="images-batch",
-        bucket="images-batch",
-        role=StorageRole.RAW,
-        description="Source page images, as harvested. External input — never a governed tier.",
-    ),
-    Store(
-        name="images-batch-alto",
-        bucket="images-batch-alto",
-        role=StorageRole.DERIVED,
-        description="ALTO XML exported from the cascade. Produced from a tier, not itself one.",
-    ),
     Store(
         name="lance-catalog",
         bucket="lance-catalog",
