@@ -316,7 +316,13 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   from the reconciler's `unbound_namespaces`, which lists `bronze`, `transcripts_v2` and the three
   `acme-*`), and `bronze$events` is not a registered table. With no namespace record, no table record
   and no parent tuple, NO principal can hold `can_delete`/`can_drop` there, so no policy, protection or
-  grant can ever be applied to the datasets the cascade writes.
+  grant can ever be applied to the datasets the cascade writes. **Read that precisely: they are not
+  UNMAINTAINED, they are un-OVERRIDABLE.** The sweep covers them like everything else under the
+  platform's own settings — `MAINTENANCE_OLDER_THAN_DAYS` (7), `tiers.py`'s per-tier fragment sizing,
+  `optimize_indices` — which is why every live summary counts them among its 27 datasets and reports
+  `index_findings` for `medallion/{silver,gold}`. What is unavailable is the TENANT-facing layer: a
+  per-dataset policy override, a `_protection/` record, an FGA grant. That is the correct split, since
+  those doors exist to let a tenant govern its own data and this is not tenant data.
   **And that is DELIBERATE — the platform refuses to let it be fixed that way.** Driven live 2026-08-16:
   `POST /v1/projects` for a `platform` tenant succeeded 200, and the very next call was refused —
   `POST /v1/warehouses {bucket: lance-catalog}` → **400 "bucket 'lance-catalog' is reserved platform
@@ -325,7 +331,13 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (2026-07-23, "the Mallory scenario's first door") and the reason is exactly the disclosure such a bind
   would create: `provision_bucket` is idempotent on an existing bucket, so the claim would silently
   succeed, make that project the bucket's owner, and let **a later project-policy set govern every
-  tenant's data in the shared catalog bucket**. So "give the medallion path a warehouse" is not an
+  tenant's data in the shared catalog bucket**. The reservation is DEFENCE IN DEPTH across three
+  independent places, so do not assume one check is the whole story: `reserved_bucket_set`
+  (`catalog/core/config.py:112` — the catalog root, the control/registry root, the model registry, every
+  approved multi-base data bucket, and `LANCE_RESERVED_BUCKETS`), the warehouse-create and bucket-claim
+  refusals (`warehouses.py:164`/`:641`), and — for the case where a bad record already exists —
+  `policies.py:372`, which subtracts reserved buckets from the project-policy MATCH set rather than
+  trusting the registry. So "give the medallion path a warehouse" is not an
   unfinished chore — it is a rejected design, and the cascade tiers are ungoverned BY CONSTRUCTION
   because they live in platform storage. The probe project was deleted again (`DELETE /v1/projects/
   platform` → 200, `tuples_revoked: 1`); do not re-create it. If those tiers ever need retention or
