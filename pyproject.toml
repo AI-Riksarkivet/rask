@@ -215,6 +215,7 @@ markers = [
     "cas: object-store conditional-write (CAS) e2e",
     "compaction: compaction/GC sweep e2e",
     "duckdb: duckdb-over-Lance e2e",
+    "dummy_lane: the GPU-free dummy medallion lane, end to end (declare -> baked Ray entrypoint -> silver)",
     "gateway: Dapr service-invocation gateway e2e",
     "governed_union: full governed-union e2e",
     "medallion: medallion-cascade e2e",

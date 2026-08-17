@@ -2694,6 +2694,39 @@ def test_the_ray_image_BAKES_every_job_script_the_medallion_entrypoints_name() -
     )
 
 
+def test_every_ray_job_script_is_BAKED_INTO_SOME_image() -> None:
+    """A job script that no image bakes is a lane that can never run — and nothing said so.
+
+    The sibling gate above only covers scripts named by an entrypoint DEFAULT in
+    `medallion/core/config.py`. That was the whole surface while lanes were configured by env, and it
+    stopped being the whole surface the moment a lane became a declared `TransformSpec`: an operator
+    now names an entrypoint in a record, and the door can validate that the path is under the baked
+    jobs directory but cannot know whether the image actually contains that file.
+
+    Measured 2026-08-17: `scripts/ray_dummy_job.py` had existed for some time, referenced by neither
+    dockerfile. It is the estate's own end-to-end probe — the one thing that proves the lane without a
+    GPU — and it could not have run on any cluster. Nothing was red, because no config default named
+    it and so the sibling gate never looked.
+
+    Union across images on purpose, not per-image: `ray_lance_job.py` is the standalone demo that
+    belongs to the separate ray-lance cluster, and requiring it in the KubeRay image would be wrong.
+    What must never happen is a script baked NOWHERE.
+    """
+    scripts = {path.name for path in (REPO / "scripts").glob("ray_*_job.py")}
+    assert scripts, "no scripts/ray_*_job.py found — the layout changed and this gate is now blind"
+
+    baked = "\n".join((REPO / ".docker" / name).read_text(encoding="utf-8") for name in ("ray-cluster.dockerfile", "ray-lance.dockerfile"))
+    orphans = sorted(name for name in scripts if name not in baked)
+
+    assert not orphans, (
+        f"these Ray job scripts are baked into NO image: {orphans}\n\n"
+        f'A declared lane naming one dies with "can\'t open file" and exit code 2, and the stage '
+        f"reports FAILED with nothing pointing at the image. Either COPY it into /home/ray/jobs/ in "
+        f"the dockerfile whose cluster should run it, or delete the script — a job nothing can "
+        f"execute is dead code, not a spare."
+    )
+
+
 def test_stage_run_is_a_MONITOR_and_uses_continue_as_new() -> None:
     """A poll loop inside one instance grows history without bound; `continue_as_new` resets it.
 

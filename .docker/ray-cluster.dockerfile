@@ -146,7 +146,24 @@ RUN chown app:app /app/deploy_serve.py
 #
 # `--chown` rather than a following `RUN chown`: one layer instead of two, and the ownership is part
 # of the copy rather than a correction to it.
-COPY --chown=app:app scripts/ray_stage_job.py scripts/ray_train_job.py /home/ray/jobs/
+COPY --chown=app:app scripts/ray_stage_job.py scripts/ray_train_job.py scripts/ray_dummy_job.py /home/ray/jobs/
+
+# The DUMMY runner's package, beside its job script — the estate's own end-to-end probe.
+#
+# `python /home/ray/jobs/ray_dummy_job.py` puts that directory on `sys.path[0]`, so
+# `from dummy_runner.job import main` resolves with no PYTHONPATH edit and, more importantly, NO
+# second dependency resolution. That distinction is what keeps this inside the "a workload's
+# awkward dependencies are ITS problem, never a fattened shared image" ruling: `dummy_runner`
+# imports pyarrow and lance and nothing else, and both are already here from the platform compute
+# trio above. A `uv sync --project runners/dummy` would instead resolve a SECOND lock into this
+# image and could quietly move pylance out from under the htr runner — the actual harm the ruling
+# names. A source copy adds no resolvable dependency at all.
+#
+# It is baked rather than shipped via `runtime_env` for the same reason every other job here is:
+# Ray documents runtime_env as development-only, and the whole point of a dummy lane is to exercise
+# the PRODUCTION submission path with a transform that needs no GPU and no model download. A probe
+# that ran differently from the thing it probes would be worth nothing.
+COPY --chown=app:app runners/dummy/src/dummy_runner /home/ray/jobs/dummy_runner
 
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
