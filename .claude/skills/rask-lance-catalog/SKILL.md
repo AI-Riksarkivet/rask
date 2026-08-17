@@ -187,7 +187,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   and silently falls back to Lance's own sizing:
   `<bucket>/<project>-<tier>/<table>` (nested — tier TRAILS, reduce from the right);
   `<bucket>/medallion/<tier>` (the cascade — the child IS the namespace, and lanes are `<tier>-<lane>`
-  like `bronze-media` / `gold-htr`, so the tier LEADS, reduce from the left);
+  like `bronze-<lane>` / `gold-<lane>`, so the tier LEADS, reduce from the left);
   `<bucket>/<uuid8>_<namespace>$<table>` (the `dir` backend's FLAT layout — namespace and table share
   ONE directory name, so the tier is in `parts[-1]`, not a parent directory).
   Until 2026-08-16 only the first was handled, so measured live, EVERY governed tier read as untiered
@@ -326,14 +326,13 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `register_table` is precisely for data written outside the catalog's own doors: it turns written
   bytes into a `table:` object, seeds ownership tuples, and every governed path (protection, trash,
   credential vending, the FGA doors) keys off that object. It needs no warehouse, which is why it works
-  in the RESERVED bucket — proven by shipped code, not theory: `#88 step 5` registered `gold$htr` from
-  `medallion/services/htr_register.py`, and `#88 step 7` ran that lane live end-to-end. So the reserved
-  bucket blocks the WAREHOUSE route (a tenant claiming platform storage) while leaving the REGISTRATION
-  route open (naming an individual dataset) — two different mechanisms, and conflating them is how you
-  conclude the cascade can never be governed. It can; those tiers simply were never registered.
-  As of 2026-08-17 that is being generalised: `htr_register.py` → `catalog_register.py`, modality-neutral
-  by construction, because the logic only ever took an id and a URI — governance belongs to the CASCADE,
-  not to whichever workload happened to be built first, or every new modality starts ungoverned.
+  in the RESERVED bucket — proven by shipped code (`#88`), not theory: a gold tier was registered there
+  and its lane ran live end-to-end. So the reserved bucket blocks the WAREHOUSE route (a tenant claiming
+  platform storage) while leaving the REGISTRATION route open (naming an individual dataset) — two
+  different mechanisms, and conflating them is how you conclude the cascade can never be governed. It
+  can; those tiers simply were never registered. `medallion/services/catalog_register.py` is the seam,
+  and it takes only an id and a URI: registration belongs to the CASCADE, so every lane gets it or the
+  first workload built is the only governed one.
   **And that is DELIBERATE — the platform refuses to let it be fixed that way.** Driven live 2026-08-16:
   `POST /v1/projects` for a `platform` tenant succeeded 200, and the very next call was refused —
   `POST /v1/warehouses {bucket: lance-catalog}` → **400 "bucket 'lance-catalog' is reserved platform

@@ -28,7 +28,7 @@ over their own `core/config.py` settings. See rask-architecture's "Two layouts a
 
 ## The batches/orchestrator plane is gone (P7a)
 
-The reconcile→derive→submit loop, the two-lane prefetch/htr slot model, the
+The reconcile→derive→submit loop, the two-lane prefetch/compute slot model, the
 `batches` table and S3-sync were deleted at the compute-plane cutover
 (lance-ns-merge.md P7a). The pipeline head is now the **ingest plane**
 (`services/ingest`, `:8830`, `.docker/ingest.dockerfile`): `POST /api/ingests` takes a
@@ -46,8 +46,8 @@ that file is the comment explaining why the row's absence is safe (`_pick_route`
 described the row as a surviving deprecation shim, which would have made a call there **502
 rather than 404** — naming a backend as broken instead of the path as absent. The producer's
 remaining doors are exactly `POST /produce`, `POST /ingest-media` and `POST /train`, all
-root-mounted and token-guarded. HTR stages run as event-triggered movers on the unified Ray
-cluster (P7b).
+root-mounted and token-guarded. A workload's stages run as event-triggered movers on the unified
+Ray cluster (P7b) — the cascade is modality-blind, so this is the same shape for every runner.
 
 **Both bronze lanes converge on one topic, so movers must discriminate.** The events
 lane (the producer's `/produce` → `bronze$events`) and the page lane (the ingest

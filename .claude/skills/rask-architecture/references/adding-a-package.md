@@ -86,7 +86,7 @@ auto-discovered (explicit `testpaths`, `--import-mode=importlib`). A test dir
 not listed there simply never runs. Current entries look like
 `services/ingest/tests`, `packages/storage/tests`. (The seven lance-plane services carry
 no `tests/` dir of their own — their coverage lives in the root `tests/unit` +
-`tests/integration` entries, which ARE listed. The sealed `runners/htr` has its OWN
+`tests/integration` entries, which ARE listed. A sealed `runners/<workload>` has its OWN
 testpaths in its own pyproject — the root pytest cannot see it, so `make test` runs it
 separately.)
 

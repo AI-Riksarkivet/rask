@@ -81,4 +81,8 @@ app = make_service_app(
 
 ## Sibling skills
 
-`rask-services-fleet` (the gateway + per-service routing) · `rask-frontend` (zones, data, gates) · `rask-styling` (`@rask/ui`) · `rask-htr-pipeline` (`runners/htr` Ray Data + Serve).
+`rask-services-fleet` (the gateway + per-service routing) · `rask-frontend` (zones, data, gates) · `rask-styling` (`@rask/ui`) · `rask-lance-catalog` (the catalog, governance, maintenance).
+
+A runner's internals are deliberately undocumented here: each `runners/<workload>` is sealed and owns its
+own pipeline, models and GPU packing. There is no per-workload skill — one would make that modality look
+privileged, which is the opposite of how this platform is built.
