@@ -163,6 +163,34 @@ async def enforce_output_authz(event: RunEvent, request: Request, settings: Line
     if token is None:
         raise UnauthenticatedError("authentication required")
     object_type = settings.fga_object_type
+    # MUTATING AN EXISTING RUN IS AUTHORIZED BY THE DATA THAT RUN WROTE.
+    #
+    # `MERGE (r:Run {run_id:$rid})` merges on the run id alone and last-event-wins-SETs `event_type`,
+    # `author`, `producer`, `error_message` and `operation` — and run ids are PUBLIC (`/runs`,
+    # `/events`, `/producers` serve them; the in-repo ones are deterministic UUID5 seeds). Both checks
+    # below are gated on a non-empty list, so an event naming NO dataset used to be authorized having
+    # checked nothing and still rewrote the run: set `operation` to `drop_table` and the reconcile
+    # sweep skips that dataset forever, or set FAIL and serve an invented author to every viewer.
+    #
+    # KEYED ON DATA, NOT IDENTITY, and the difference is not cosmetic. Author equality is the obvious
+    # rule and is wrong here: the HTTP door overwrites the author with the caller's verified sub
+    # (`enforce_author`) while the BUS handler applies neither that nor this check — it is gated only
+    # by the shared Dapr token. One run's events can therefore legitimately carry different authors
+    # depending on the door, and an identity rule would refuse honest traffic. "May you write what this
+    # run wrote" is stable across both.
+    #
+    # A run that does not exist yet returns NO outputs and is created freely — refusing that would
+    # re-break ingest's START event, whose only input is an external prefix it cannot authorize.
+    repository = getattr(request.app.state, "repository", None)
+    if repository is not None and event.run.run_id:
+        prior = await repository.run_output_names(event.run.run_id)
+        if prior:
+            objs = [f"{object_type}:{n}" for n in prior]
+            may = await fga.batch_check(client, user=token.sub, relation="can_write_data", objects=objs)
+            refused = sorted(n for n in prior if not may.get(f"{object_type}:{n}"))
+            if refused:
+                log.info("ingest_run_mutation_denied", extra={"sub": token.sub, "run_id": event.run.run_id, "outputs": refused})
+                raise PermissionDeniedError(f"can_write_data required to amend run {event.run.run_id}: {', '.join(refused)}")
     outputs = [d.name for d in event.outputs if d.name]
     if outputs:
         allowed = await fga.batch_check(client, user=token.sub, relation="can_write_data", objects=[f"{object_type}:{n}" for n in outputs])

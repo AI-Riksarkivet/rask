@@ -390,3 +390,107 @@ async def test_an_EXTERNAL_column_upstream_stays_exempt(settings, request_with) 
     event = _event_with_column_upstream(_dataset("mine", "mine$table"), "s3://raw", "gold$catalog")
 
     await enforce_output_authz(event, request, settings, _Principal())
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# MUTATING AN EXISTING RUN IS AUTHORIZED BY THE DATA THAT RUN WROTE
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+#
+# `MERGE (r:Run {run_id:$rid})` merges on the run id ALONE and last-event-wins-SETs `event_type`,
+# `author`, `producer`, `error_message` and `operation`. Run ids are PUBLIC — `/runs`, `/events` and
+# `/producers` serve them, and the in-repo ones are deterministic UUID5 seeds. Both existing authz
+# blocks are gated on a non-empty list, so an event naming NO dataset is authorized having checked
+# nothing, and still rewrites the run.
+#
+# Two harms, both silent: set `operation` to `drop_table` and the reconcile sweep skips that dataset
+# FOREVER (dropped-ness is derived from the last successful run's operation), so storage loss and
+# contract violations on a live governed table stop being reported; or set `eventType: FAIL` and serve
+# an attacker-chosen author and error to every authorized viewer of `/datasets/<name>/producers`.
+#
+# THE CHECK KEYS ON DATA ENTITLEMENT, NOT ON IDENTITY, and that is the load-bearing choice. Author
+# equality looks like the obvious rule and is WRONG here: the HTTP door overwrites the author with the
+# caller's verified sub (`enforce_author`) while the BUS handler (`on_lineage_event`) applies neither
+# that nor this check — it is gated only by the shared Dapr token. So one run's events can legitimately
+# carry different author strings depending on which door they arrived through, and an identity rule
+# would refuse honest traffic. "May you write what this run wrote" is stable across both doors.
+#
+# A run that does NOT yet exist is untouched by this: creating a run is harmless, and refusing it would
+# re-break the ingest plane's START event, whose only input is an external S3 prefix and which
+# therefore authorizes nothing by design.
+
+
+class _FakeRepo:
+    """Answers the one question the guard asks: what did this run already write?"""
+
+    def __init__(self, outputs_by_run: dict[str, list[str]]) -> None:
+        self._outputs = outputs_by_run
+        self.asked: list[str] = []
+
+    async def run_output_names(self, run_id: str) -> list[str]:
+        self.asked.append(run_id)
+        return list(self._outputs.get(run_id, []))
+
+
+def _with_repo(request, repo: _FakeRepo):
+    request.app.state.repository = repo
+    return request
+
+
+VICTIM_RUN = "11111111-2222-4333-8444-555555555555"
+
+
+def _bare_event(run_id: str) -> RunEvent:
+    """Names no dataset at all — the shape both existing blocks skip."""
+    return RunEvent.model_validate(
+        {
+            "eventType": "COMPLETE",
+            "eventTime": "2026-08-16T12:00:00Z",
+            "producer": "rask://attacker",
+            "job": {"namespace": "test", "name": "j"},
+            "run": {"runId": run_id, "facets": {"lance": {"operation": "drop_table"}}},
+            "inputs": [],
+            "outputs": [],
+        }
+    )
+
+
+@pytest.mark.anyio
+async def test_overwriting_a_run_that_WROTE_a_governed_table_is_refused(settings, request_with) -> None:
+    """The attack: a principal with no grants rewrites a run that wrote `gold$catalog`, flipping its
+    operation to `drop_table` so the reconcile sweep abandons that dataset permanently."""
+    request, _fake = request_with(set())
+    _with_repo(request, _FakeRepo({VICTIM_RUN: [GOVERNED]}))
+
+    with pytest.raises(PermissionDeniedError):
+        await enforce_output_authz(_bare_event(VICTIM_RUN), request, settings, _Principal())
+
+
+@pytest.mark.anyio
+async def test_a_principal_who_MAY_write_that_table_still_may_amend_its_run(settings, request_with) -> None:
+    """The legitimate case this must not cost: the producer that wrote the outputs sends its own
+    terminal event for the same run. Keyed on the data, so it passes through EITHER door."""
+    request, _fake = request_with({f"table:{GOVERNED}"})
+    _with_repo(request, _FakeRepo({VICTIM_RUN: [GOVERNED]}))
+
+    await enforce_output_authz(_bare_event(VICTIM_RUN), request, settings, _Principal())
+
+
+@pytest.mark.anyio
+async def test_a_run_that_does_NOT_yet_exist_is_created_freely(settings, request_with) -> None:
+    """Creating a run is harmless — a vertex with no edges is noise, not forgery — and refusing it
+    would re-break ingest's START event, whose only input is an external prefix it cannot authorize."""
+    request, _fake = request_with(set())
+    _with_repo(request, _FakeRepo({}))
+
+    await enforce_output_authz(_bare_event("99999999-2222-4333-8444-555555555555"), request, settings, _Principal())
+
+
+@pytest.mark.anyio
+async def test_an_EXTERNAL_only_START_still_opens_its_run(settings, request_with) -> None:
+    """The exact event the exemption was created for, driven end to end: an external input, no outputs,
+    a run that does not exist. It must pass, or the ingest plane goes dark again."""
+    request, _fake = request_with(set())
+    _with_repo(request, _FakeRepo({}))
+    event = _event(inputs=[_dataset("s3://raw", "bind86-src/run1")])
+
+    await enforce_output_authz(event, request, settings, _Principal())

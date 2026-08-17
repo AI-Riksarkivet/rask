@@ -112,6 +112,10 @@ _MERGE_RUN: Final = (
 # the outputs), so they are SET in their own conditional statements — never clobbered back to null.
 _SET_RUN_PROGRESS: Final = "MATCH (r:Run {run_id:$rid}) SET r.progress_done=$pd, r.progress_total=$pt RETURN 1"
 _SET_RUN_OUTPUTS: Final = "MATCH (r:Run {run_id:$rid}) SET r.outputs=$outs RETURN 1"
+# What a run has ALREADY recorded writing — the object `enforce_output_authz` authorizes a MUTATION
+# of that run against. Empty (or no row) means the run does not exist yet, which is what keeps a
+# START event able to open a run it cannot authorize.
+_RUN_OUTPUT_NAMES: Final = "MATCH (r:Run {run_id:$rid}) RETURN r.outputs"
 _LIST_RUNS: Final = (
     "MATCH (r:Run) RETURN r.run_id, r.job, r.author, r.event_type, r.progress_done, r.progress_total, "
     "r.error_message, r.started_at, r.event_time, r.events_count, r.outputs, r.operation, r.source_run_id"
@@ -1351,6 +1355,21 @@ class LineageRepository:
             cur = await conn.execute(_OLDEST_EVENT_SEQ)
             row = await cur.fetchone()
         return int(row[0]) if row and row[0] is not None else None
+
+    async def run_output_names(self, run_id: str) -> list[str]:
+        """The datasets this run has ALREADY recorded writing — empty when the run does not exist.
+
+        Read by `enforce_output_authz` to authorize MUTATING an existing run. The empty answer is the
+        load-bearing one: it means "no run to protect", which is what lets a START event open a run it
+        could never authorize (ingest's names only an external S3 prefix).
+        """
+        rows = await fetch(self._pool, self._graph, _RUN_OUTPUT_NAMES, {"rid": run_id}, columns=1)
+        if not rows:
+            return []
+        raw = rows[0][0]
+        if isinstance(raw, str):
+            return [n for n in raw.split(",") if n]
+        return [str(n) for n in raw] if isinstance(raw, list) else []
 
     async def creator(self, name: str) -> Creator:
         """Who created ``name`` — the verified principal on the catalog create event."""
