@@ -316,9 +316,22 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   from the reconciler's `unbound_namespaces`, which lists `bronze`, `transcripts_v2` and the three
   `acme-*`), and `bronze$events` is not a registered table. With no namespace record, no table record
   and no parent tuple, NO principal can hold `can_delete`/`can_drop` there, so no policy, protection or
-  grant can ever be applied to the datasets the cascade writes. Making one possible means creating
-  governance records for live data — the same "bind a legacy namespace" decision `unbound_namespaces`
-  needs — which is a governance change, not a verification step.
+  grant can ever be applied to the datasets the cascade writes.
+  **And that is DELIBERATE — the platform refuses to let it be fixed that way.** Driven live 2026-08-16:
+  `POST /v1/projects` for a `platform` tenant succeeded 200, and the very next call was refused —
+  `POST /v1/warehouses {bucket: lance-catalog}` → **400 "bucket 'lance-catalog' is reserved platform
+  storage (catalog root/registry or a medallion zone bucket) and cannot back a warehouse"**
+  (`catalog/api/v1/endpoints/warehouses.py:166`, `settings.reserved_bucket_set`). The guard is audited
+  (2026-07-23, "the Mallory scenario's first door") and the reason is exactly the disclosure such a bind
+  would create: `provision_bucket` is idempotent on an existing bucket, so the claim would silently
+  succeed, make that project the bucket's owner, and let **a later project-policy set govern every
+  tenant's data in the shared catalog bucket**. So "give the medallion path a warehouse" is not an
+  unfinished chore — it is a rejected design, and the cascade tiers are ungoverned BY CONSTRUCTION
+  because they live in platform storage. The probe project was deleted again (`DELETE /v1/projects/
+  platform` → 200, `tuples_revoked: 1`); do not re-create it. If those tiers ever need retention or
+  protection, the answer is a platform-level mechanism (a maintenance policy keyed on the reserved
+  bucket, or moving the cascade OUT of `lance-catalog` into a tenant warehouse), never a warehouse over
+  the reserved bucket.
 - **Five things live in a Lance dataset that a manifest scan does not reach.** Branches (`tree/`),
   multi-base files (`base_paths`), MemWAL shards (`_mem_wal/` — WAL + SSTable datasets, and the spec
   warns that GC'ing WAL files WEAKENS writer fencing, since fencing detects a stalled writer by a
