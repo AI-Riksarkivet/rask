@@ -153,8 +153,49 @@ tuples:
   - { user: 'namespace:depth_6', relation: parent, object: 'namespace:depth_7' }
   - { user: 'warehouse:depth_probe', relation: parent, object: 'namespace:depth_1' }
   - { user: 'user:deepest', relation: reader, object: 'namespace:depth_7' }
+  # A MOVER'S OWN OUTPUT — the tuple `register_table` writes for itself. Registering calls
+  # `seed_ownership_or_compensate(resource="table")`, so the identity that registered a table is
+  # granted `owner` on it. That is what decides whether a mover can publish what it just wrote, and
+  # nothing in any seed script grants it.
+  - { user: 'user:service-bronze-to-silver', relation: owner, object: 'table:acme_silver$features' }
+  - { user: 'namespace:acme_silver', relation: parent, object: 'table:acme_silver$features' }
+  # The same mover's STANDING grant: writer on the stage it writes into, and nothing above it.
+  - { user: 'user:service-bronze-to-silver', relation: writer, object: 'namespace:acme_silver' }
+  # A table the mover did NOT register — same namespace, no ownership tuple.
+  - { user: 'namespace:acme_silver', relation: parent, object: 'table:acme_silver$foreign' }
+  # The promoting mover: validator on gold, never owner.
+  - { user: 'user:service-silver-to-gold', relation: validator, object: 'namespace:acme_gold' }
 
 tests:
+  - name: a mover can PUBLISH what it registered, and only what it registered
+    # P5 of "movers publish the tag". `publish` is gated at `can_update_tag`, which is OWNER-tier —
+    # strictly above the writer/validator rungs the movers are seeded with. It resolves anyway,
+    # because registering a table grants the registrant `owner` ON THAT TABLE. So no model change and
+    # no new grant are needed, and the scope is exactly right: a mover may move the tag on its own
+    # output and on nothing else.
+    check:
+      - user: user:service-bronze-to-silver
+        object: table:acme_silver$features
+        assertions:
+          can_update_tag: true       # its own output — publishable
+          can_create_tag: true
+          can_read_data: true
+      - user: user:service-bronze-to-silver
+        object: table:acme_silver$foreign
+        assertions:
+          can_update_tag: false      # a table it did not register, in the SAME namespace
+          can_write_data: true       # writer still cascades from the namespace
+      # The separation the model exists to enforce is untouched: owning the table it wrote does not
+      # let a plain writer promote INTO a gated stage, which is gated on the DESTINATION namespace.
+      - user: user:service-bronze-to-silver
+        object: namespace:acme_gold
+        assertions:
+          can_promote: false
+      - user: user:service-silver-to-gold
+        object: namespace:acme_gold
+        assertions:
+          can_promote: true
+
   - name: only a ROOT-warehouse (estate) admin can observe the estate-wide control-plane event feed
     check:
       - user: user:root_admin
@@ -394,12 +435,16 @@ tests:
         assertions: { can_create_namespace: false, can_create_table: false }
 
   - name: who can promote into gold? (list_users) — owners + validators, never plain writers
+    # `service-silver-to-gold` belongs here: `seed_medallion_fga.sh` grants exactly this, and the
+    # enumeration is the check that a plain writer never appears. A mover owning the table it wrote
+    # (see the P5 test above) does not put it in this list — promotion is gated on the DESTINATION
+    # namespace, which no amount of table ownership reaches.
     list_users:
       - object: namespace:acme_gold
         user_filter: [{ type: user }]
         assertions:
           can_promote:
-            users: [user:alice, user:bob, user:carol]
+            users: [user:alice, user:bob, user:carol, user:service-silver-to-gold]
 
   - name: which buckets can the writer dave see? (list_objects) — only acme, by isolation
     list_objects:
