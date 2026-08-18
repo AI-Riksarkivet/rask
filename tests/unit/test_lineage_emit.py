@@ -719,3 +719,59 @@ def test_http_emitter_emit_write_posts_operation_and_version() -> None:
     assert client.posted["job"]["name"] == "merge_insert.a$b"
     assert client.posted["run"]["runId"] == "r-9"
     assert client.posted["outputs"][0]["facets"]["version"]["datasetVersion"] == "4"
+
+
+@pytest.mark.asyncio
+async def test_a_catalog_write_RESOLVES_its_tenant_so_watchers_are_reachable() -> None:
+    """Trap 3, closed at the one place that can close it.
+
+    `lance.project` is what the notifications plane's WATCH fan-out keys on: `fanout.py` skips the
+    watcher loop ENTIRELY when it is None. The catalog had the whole mechanism — a `project` kwarg on
+    every emit, an `is_safe_project` guard, and a registry-backed `project_for` resolver — and not one
+    caller passed it, so no catalog write reached a watcher anywhere in the estate.
+
+    Resolving it HERE rather than at each of the call sites is deliberate: the mapping is mechanical
+    (top namespace → registry binding → tenant), and a per-caller kwarg is a rule every future
+    endpoint has to remember. This is the "one place" version.
+    """
+    client = _CapturingClient()
+    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
+
+    async def _resolver(top_ns: str) -> str | None:
+        return "acme" if top_ns == "acme-bronze" else None
+
+    emitter._project_resolver = _resolver  # noqa: SLF001 — `make_emitter` wires this in production
+
+    await emitter.emit_create(table_id="acme-bronze$events", namespace="acme-bronze", author="alice", version=1)
+
+    lance = client.posted["run"]["facets"]["lance"]
+    assert lance["project"] == "acme", "without this the watcher loop is skipped and every watcher is silently lost"
+
+
+@pytest.mark.asyncio
+async def test_an_EXPLICIT_project_is_not_overridden_by_resolution() -> None:
+    """A caller that knows the tenant beats a lookup — resolution fills a gap, it does not decide."""
+    client = _CapturingClient()
+    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
+
+    async def _resolver(_top_ns: str) -> str | None:
+        return "wrong-tenant"
+
+    emitter._project_resolver = _resolver  # noqa: SLF001
+
+    await emitter.emit_create(table_id="acme-bronze$events", namespace="acme-bronze", author="alice", version=1, project="acme")
+
+    assert client.posted["run"]["facets"]["lance"]["project"] == "acme"
+
+
+@pytest.mark.asyncio
+async def test_an_UNRESOLVABLE_tenant_emits_exactly_as_before() -> None:
+    """Best-effort, like the emit itself: this runs on a COMMITTED write, so a registry blip must cost
+    the watchers their notification, never the caller their request. No resolver → no project key,
+    byte-identical to the pre-existing behaviour."""
+    client = _CapturingClient()
+    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
+
+    await emitter.emit_create(table_id="db$t", namespace="db", author="alice", version=1)
+
+    assert "project" not in client.posted["run"]["facets"]["lance"]

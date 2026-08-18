@@ -136,12 +136,42 @@ async def submit_stage_job(
         # reach S3_SECRET, LINEAGE_JSON or an OTEL_* key by choosing a colliding name. The platform
         # never reads these values; their meaning belongs to the workload.
         **{f"RASK_PARAM_{key}": value for key, value in job_params.items()},
+        # THE JOB'S OWN COPY OF THE IDENTITY — and it is NOT a duplicate of `metadata` below.
+        #
+        # Ray's `metadata` answers "who was this job for?" from OUTSIDE, after the fact, including for
+        # a job that died before emitting anything. This answers it from INSIDE, for the events the
+        # job emits ITSELF — and a stage job does emit its own OpenLineage, because Ray pods carry no
+        # Dapr sidecar. The train path has carried these for exactly this reason since D2.
+        #
+        # This block's absence was invisible in the worst way: the job built its event with no
+        # principal, `notifiable()` discarded it, and the ack was SUCCESS. The comment below used to
+        # justify the omission with "it hands the job code an identity it has no reason to hold" —
+        # true while stage jobs emitted nothing, false the moment one did.
+        #
+        # Empty stays empty: `""` is not an identity, and the emitter drops a blank originator rather
+        # than addressing an inbox actor named "".
+        **({"ORIGINATOR": originator} if originator else {}),
+        **({"PROJECT": project} if project else {}),
+        # WHERE to post, and as WHOM. Without the URL the job's `emit()` returns early and the whole
+        # question is moot; without the service credential a governed ingest answers 401 and the
+        # provenance is lost silently (measured on the train lane, 2026-07-13).
+        **(
+            {
+                "LINEAGE_URL": settings.stage_lineage_url,
+                "LINEAGE_SERVICE_TOKEN": os.environ.get("APP_API_TOKEN", ""),
+                "LINEAGE_SERVICE_ID": settings.fga_service_identity,
+            }
+            if settings.stage_lineage_url
+            else {}
+        ),
     }
     # WHO THIS JOB IS FOR, in Ray's own `metadata` — not in `runtime_env.env_vars`, and the distinction
     # decides whether the feature works at all. The identity has to be readable from OUTSIDE the job
     # AFTER it fails: `metadata` comes back on `GET /api/jobs/<id>` (and in the dashboard), which is
-    # exactly the read a failure path makes. `env_vars` configures the PROCESS — recovering it means
-    # introspecting the runtime env, and it hands the job code an identity it has no reason to hold.
+    # exactly the read a failure path makes. The env_vars copy above serves the OPPOSITE need — the
+    # job stamping its OWN emitted events — and neither substitutes for the other: metadata alone
+    # leaves every self-emitted event unaddressed, env_vars alone loses the identity of a job that
+    # died before emitting.
     #
     # Empty values are OMITTED rather than sent blank: a service-triggered cascade has no person behind
     # it, and `""` is not an identity — a reader must never mistake it for one. Ray's metadata is

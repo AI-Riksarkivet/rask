@@ -84,6 +84,32 @@ def _split_object_id(object_id: str, delimiter: str) -> tuple[str, str] | None:
     return (project, table) if project and table else None
 
 
+#: Principals that name no PERSON. A wildcard is a statement about everyone and therefore about no
+#: one; a userset addresses a group; a bare prefix addresses nothing at all. Carrying any of them
+#: writes into an inbox actor literally named `*` — worse than silence, because it looks delivered.
+_NOT_A_PERSON = frozenset({"", "*", "user:*"})
+
+
+def _publisher(event: dict[str, Any]) -> str:
+    """The verified sub of the person who published, or ``""``.
+
+    The catalog stamps ``actor=f"user:{token.sub}"`` on every ``table_published`` control event
+    (`catalog/api/v1/endpoints/publication.py`), and this head is the LAST place that identity
+    exists: by the time a silver or gold stage fails, the request is gone and the mover authors as a
+    chart role literal (`data_eng`), which addresses an inbox actor named `data_eng` and reaches
+    nobody. Reading it here is what lets a failure two stages later still name the person.
+
+    Only a ``user:`` principal is an address — a userset (`team:x#member`), a service, or the managed
+    -access wildcard is refused rather than carried. It never authorizes anything: the notifications
+    plane re-derives every recipient's visibility at delivery.
+    """
+    actor = event.get("actor")
+    if not isinstance(actor, str) or actor in _NOT_A_PERSON or not actor.startswith("user:"):
+        return ""
+    sub = actor[len("user:") :].strip()
+    return "" if sub in _NOT_A_PERSON or "#" in sub else sub
+
+
 async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) -> dict[str, str]:  # noqa: ANN401 — the Dapr client + settings seams
     """Turn a `table_published` control event into a stage trigger carrying the RANGE.
 
@@ -142,6 +168,12 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
     # Same conditional as the reference head.
     if tenant:
         trigger["project"] = tenant
+    # THE HUMAN THE CASCADE IS FOR. Omitted when absent rather than sent blank, exactly like
+    # `project` above and like the sibling head (`ingest_trigger.py`): `""` is not an identity, and a
+    # present-but-empty originator would be carried all the way to an inbox actor named "".
+    publisher = _publisher(data)
+    if publisher:
+        trigger["originator"] = publisher
 
     try:
         await dapr_publish.publish_event(

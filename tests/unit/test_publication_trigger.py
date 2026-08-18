@@ -48,6 +48,17 @@ def _event(action: str = "table_published", object_id: str = "table:lane$pages",
     return {"data": {"action": action, "object_id": object_id, "event_id": "evt-1", "extra": extra}}
 
 
+def _with_actor(event: dict[str, Any], actor: str | None) -> dict[str, Any]:
+    """Put `actor` where the real envelope carries it — TOP level of `data`, not inside `extra`.
+
+    `CatalogControlEvent` declares `actor` as its own field (`service_kit/control_events.py`), and the
+    catalog fills it with the verified `user:<sub>`. Nesting it under `extra` in a test would let a
+    handler that reads the wrong place pass.
+    """
+    event["data"]["actor"] = actor
+    return event
+
+
 @pytest.mark.asyncio
 async def test_a_publication_triggers_the_cascade_WITH_the_range() -> None:
     """The whole of D-R3 on the wire: the trigger names which rows are new, not merely that some are."""
@@ -256,3 +267,49 @@ async def test_the_FLAT_case_is_byte_identical_to_before() -> None:
 
     assert dapr.published[0]["dataset"] == "bronze$events"
     assert dapr.published[0]["project"] == "acme"
+
+
+@pytest.mark.asyncio
+async def test_the_trigger_carries_the_PUBLISHER_so_the_cascade_can_name_them() -> None:
+    """The person who clicked publish is on the wire, and this head threw them away.
+
+    The catalog stamps `actor=f"user:{token.sub}"` on every `table_published` control event
+    (`publication.py:83`) — a VERIFIED sub, the last place that identity exists. By the time a silver
+    or gold stage fails, the request is long gone and the mover authors as a chart role literal
+    (`data_eng`), which addresses an inbox actor named `data_eng` and reaches nobody.
+
+    So every mover run this head starts — the bronze→silver COMPLETE, the gold promotion, and every
+    FAIL including a quality hold — was undeliverable by construction. The sibling head
+    `ingest_trigger.py:136-138` carries exactly this; the copy was simply missing here.
+    """
+    dapr = _Dapr()
+
+    result = await handle_publication(dapr, _Settings(), _with_actor(_event(), "user:CiQwOGE4Njg0Yi1kYjg4"))
+
+    assert result == {"status": "SUCCESS"}
+    trigger = dapr.published[0]
+    assert trigger["originator"] == "CiQwOGE4Njg0Yi1kYjg4", "the bare sub, not the `user:` prefixed principal"
+
+
+@pytest.mark.asyncio
+async def test_a_SERVICE_publication_carries_no_originator_rather_than_a_fake_one() -> None:
+    """`actor` is None on a service/unauthenticated mutation. Omitted, never sent blank: a
+    present-but-empty originator is not an address, and `transform.py` treats present-and-wrong far
+    more harshly than absent."""
+    dapr = _Dapr()
+
+    await handle_publication(dapr, _Settings(), _event())
+
+    assert "originator" not in dapr.published[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("actor", ["user:*", "user:", "*", "team:acme#member", "service:catalog"])
+async def test_a_NON_PERSONAL_principal_is_DROPPED_not_carried(actor: str) -> None:
+    """Trap 4: a wildcard, a bare prefix, a userset or a service is not an address. Carrying one
+    writes into an inbox actor literally named `*` — worse than silence, because it looks delivered."""
+    dapr = _Dapr()
+
+    await handle_publication(dapr, _Settings(), _with_actor(_event(), actor))
+
+    assert "originator" not in dapr.published[0], f"{actor!r} was carried as if it named a person"

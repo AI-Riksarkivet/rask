@@ -340,6 +340,16 @@ class MedallionSettings(BaseSettings):
     # Dapr sidecar, so the job emits over plain HTTP like medallion_demo). Default = the chart's
     # in-cluster service for the standard `lance-ns` release (same convention as ray_address); set ""
     # to disable emission, e.g. in environments without the lineage service.
+    #: WHERE A STAGE JOB POSTS ITS OWN OpenLineage events.
+    #:
+    #: Ray pods carry no Dapr sidecar, so a job that emits its own provenance must do it over HTTP —
+    #: the same reason `train_lineage_url` exists. The stage lane needed none of this while its jobs
+    #: emitted nothing; the dummy lane emits, and any workload runner may.
+    #:
+    #: EMPTY BY DEFAULT, deliberately: the job's `emit()` returns early on an unset LINEAGE_URL, so an
+    #: estate that has not wired this behaves exactly as before rather than starting to post events at
+    #: a guessed address.
+    stage_lineage_url: str = Field(default="", alias="MEDALLION_STAGE_LINEAGE_URL")
     train_lineage_url: str = Field(default="http://lance-ns-lineage:8000", alias="MEDALLION_TRAIN_LINEAGE_URL")
 
     # --- media ingest head (multimodal §9) — POST /ingest-media lands external media as bronze blobs and

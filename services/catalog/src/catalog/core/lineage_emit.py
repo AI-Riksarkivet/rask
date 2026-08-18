@@ -439,6 +439,10 @@ class _BaseLineageEmitter:
             # merge_insert has always accepted, threaded verbatim.
             inputs=inputs,
             extra_run_facets=extra_run_facets,
+            # DECLARED AND DROPPED until 2026-08-18: this signature accepted `project` and the call
+            # below did not forward it, so a caller that knew its tenant silently lost it and every
+            # created table reached zero watchers. The kwarg existing is what made it invisible.
+            project=project,
         )
 
     async def emit_write(
@@ -457,6 +461,16 @@ class _BaseLineageEmitter:
         extra_run_facets: dict[str, Any] | None = None,
         project: str | None = None,
     ) -> None:
+        # THE TENANT, resolved here rather than at each call site. `lance.project` is what the
+        # notifications WATCH fan-out keys on — `fanout.py` skips the watcher loop ENTIRELY when it is
+        # None — and the whole mechanism existed (this kwarg, `is_safe_project`, a registry-backed
+        # `project_for`) with not one caller passing it. The mapping is mechanical, so a per-caller
+        # kwarg is a rule every future endpoint has to remember and eventually forgets.
+        #
+        # BEST-EFFORT, like the emit itself: this runs on a COMMITTED write, so an unresolvable tenant
+        # costs the watchers their notification and never the caller their request — `project_for`
+        # swallows and returns None, which degrades to exactly the pre-existing behaviour.
+        resolved_project = project or await self.project_for(namespace)
         event = build_write_event(
             table_id=table_id,
             namespace=namespace,
@@ -472,7 +486,7 @@ class _BaseLineageEmitter:
             schema_fields=schema_fields,
             inputs=inputs,
             extra_run_facets=extra_run_facets,
-            project=project,
+            project=resolved_project,
         )
         await self._send(event, operation=operation, table_id=table_id, authorization=authorization)
 

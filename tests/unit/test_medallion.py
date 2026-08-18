@@ -704,3 +704,64 @@ def test_a_NAMED_but_UNDECLARED_lane_SUBMITS_NOTHING(monkeypatch: pytest.MonkeyP
         asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
 
     assert api.posts == [], "a job was submitted for a lane nobody declared"
+
+
+def test_the_stage_job_gets_the_ORIGINATOR_in_its_OWN_env_not_only_ray_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stage job that emits its OWN lineage needs the identity in TWO places, and they are not
+    interchangeable.
+
+    Ray's `metadata` is how an OUTSIDE observer recovers who a job was for AFTER it died — including a
+    job that died before emitting anything. `runtime_env.env_vars` is the job's OWN copy, for the
+    events it emits itself. The stage path sent identity to `metadata` only, and its comment said
+    env_vars "hands the job code an identity it has no reason to hold" — an assumption that stopped
+    being true the moment a stage job emitted its own OpenLineage (the dummy lane does; the train
+    path has always done it, which is why train already carries ORIGINATOR at ray_submit.py:218).
+
+    The consequence is the silent one: the job builds its event with no principal, `notifiable()`
+    discards it, and the ack is SUCCESS. Caught by an audit of every producer, not by any test —
+    the dummy lane only appeared to work because its e2e harness sets ORIGINATOR by hand.
+    """
+    api = _FakeJobsAPI()
+    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
+    settings = MedallionSettings.model_validate({"compute_enabled": True, "ray_enabled": True, "to_namespace": "silver"})
+
+    asyncio.run(
+        ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", originator="alice-sub", project="acme")
+    )
+
+    env = api.posts[0]["runtime_env"]["env_vars"]
+    assert env["ORIGINATOR"] == "alice-sub", "the job cannot name the person in its own events without this"
+    assert env["PROJECT"] == "acme", "no lance.project means zero watchers, silently"
+    # The post-mortem copy must SURVIVE — this is an addition, not a move.
+    assert api.posts[0]["metadata"]["rask.originator"] == "alice-sub"
+    assert api.posts[0]["metadata"]["rask.project"] == "acme"
+
+
+def test_a_service_triggered_stage_sends_NO_blank_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`""` is not an identity. A cascade with no person behind it must send nothing rather than an
+    empty string a reader could mistake for one — the same rule `metadata` already follows."""
+    api = _FakeJobsAPI()
+    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
+    settings = MedallionSettings.model_validate({"compute_enabled": True, "ray_enabled": True, "to_namespace": "silver"})
+
+    asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t"))
+
+    env = api.posts[0]["runtime_env"]["env_vars"]
+    assert env.get("ORIGINATOR", "") == "", "a service-run cascade must not fabricate a principal"
+    assert "rask.originator" not in api.posts[0]["metadata"]
+
+
+def test_the_stage_job_is_told_WHERE_to_post_its_lineage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Identity without an endpoint still emits nothing: the job's `emit()` returns early when
+    LINEAGE_URL is unset. Empty by default, so an estate that has not wired it is unchanged."""
+    api = _FakeJobsAPI()
+    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
+    settings = MedallionSettings.model_validate(
+        {"compute_enabled": True, "ray_enabled": True, "to_namespace": "silver", "stage_lineage_url": "http://rask-lineage:8000"}
+    )
+
+    asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", originator="alice-sub"))
+
+    env = api.posts[0]["runtime_env"]["env_vars"]
+    assert env["LINEAGE_URL"] == "http://rask-lineage:8000"
+    assert "LINEAGE_SERVICE_ID" in env, "the ingest is governed; an unauthenticated POST 401s and the provenance is lost"
