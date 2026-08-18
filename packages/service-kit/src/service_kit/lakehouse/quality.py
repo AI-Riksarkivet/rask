@@ -47,8 +47,16 @@ def assert_quality(
     *,
     key_column: str,
     required_columns: tuple[str, ...] | list[str] = (),
+    version: int | None = None,
 ) -> list[Assertion]:
-    """Run cheap, exact quality assertions on the just-written Lance dataset at ``uri``.
+    """Run cheap, exact quality assertions on the Lance dataset at ``uri``.
+
+    ``version`` names the version to scan; ``None`` means latest, which is right for a caller that
+    just wrote. The publish gate is the caller that is NOT in that position — it tags a specific
+    version while another writer may have committed since — and it used to pass only ``candidate.uri``,
+    so the pin it had just taken was discarded here and the assertions ran against whatever was latest.
+    Both directions were wrong, and the silent one is publishing a DIRTY version because a later clean
+    one exists.
 
     - ``row_count_positive``: the dataset has at least one row (an empty promotion is a silent failure).
     - ``not_null`` on ``key_column``: the identity column has no nulls (a broken join/transform). Skipped
@@ -62,7 +70,7 @@ def assert_quality(
     The tabular checks use ``count_rows`` (with a filter for the null check) so the table is never
     materialised; the blob check reads ONE byte from the first and last rows' payloads per column.
     """
-    ds = lance.dataset(uri, storage_options=storage_options)
+    ds = lance.dataset(uri, version=version, storage_options=storage_options)
     assertions = [Assertion(assertion=ROW_COUNT_POSITIVE, success=ds.count_rows() > 0)]
     if key_column and key_column in ds.schema.names:
         nulls = ds.count_rows(f"{key_column} IS NULL")

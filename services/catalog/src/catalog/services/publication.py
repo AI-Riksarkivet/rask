@@ -177,6 +177,10 @@ def publish(
             storage_options,
             key_column=key_column,
             required_columns=tuple(required_columns),
+            # The pin, carried. Passing only `candidate.uri` dropped it: `assert_quality` re-opened
+            # the dataset bare and scanned `latest`, so this gate answered for a version it was not
+            # publishing — in both directions, and silently in the one that matters.
+            version=version,
         )
 
         if not passed(assertions):

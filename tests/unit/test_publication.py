@@ -164,11 +164,12 @@ def test_the_candidate_is_PINNED_while_the_gate_runs(ns, monkeypatch: pytest.Mon
         *,
         key_column: str,
         required_columns: tuple[str, ...] | list[str] = (),
+        version: int | None = None,
     ) -> list[Assertion]:
         tags = publication.dataplane.list_tags(ns, {}, ListTableTagsRequest(id=TABLE_ID)).tags or {}
         entry = tags.get(PUBLISHING_TAG)
         seen.append(getattr(entry, "version", None) if entry is not None else None)
-        return real(uri, storage_options, key_column=key_column, required_columns=required_columns)
+        return real(uri, storage_options, key_column=key_column, required_columns=required_columns, version=version)
 
     monkeypatch.setattr(publication, "assert_quality", observing)
     _publish(ns, version)
@@ -348,3 +349,27 @@ def test_table_published_is_in_the_control_VOCABULARY() -> None:
     from service_kit.control_events import ControlAction
 
     assert "table_published" in get_args(ControlAction)
+
+
+def test_the_gate_scans_the_version_being_PUBLISHED_not_latest(ns) -> None:  # noqa: ANN001
+    """The silent half of the defect: a dirty version published because a later clean one exists.
+
+    `publish` pins the candidate and its comment says the gate must scan it — "publishing a version
+    nobody checked is the whole failure this prevents" — but it passed only `candidate.uri`, and
+    `assert_quality` re-opened bare. So the gate answered for `latest`.
+
+    Both orderings are asserted. Refusing a clean version is noisy and safe; publishing a dirty one
+    moves the `published` tag onto data with a null key, which is the thing the gate exists to stop.
+    """
+    import catalog.services.publication as publication
+
+    dirty = _write(ns, [1, None, 3])
+    clean = _write(ns, [4, 5, 6])
+
+    refused = publication.publish(ns, {}, table_id=TABLE_ID, version=dirty, key_column="id")
+    assert refused.published is False, "a dirty version was published because latest happened to be clean"
+    assert "not_null" in (refused.reason or "")
+
+    ok = publication.publish(ns, {}, table_id=TABLE_ID, version=clean, key_column="id")
+    assert ok.published is True
+    assert ok.to_version == clean
