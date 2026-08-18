@@ -27,8 +27,10 @@ answer an opaque 400.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 import httpx
+from pydantic import BaseModel, Field
 
 
 log = logging.getLogger(__name__)
@@ -122,3 +124,70 @@ def register_stage_output(
     if response.status_code >= 400:
         raise RegisterError(f"catalog refused to register {table_id!r}: HTTP {response.status_code} — {response.text[:300]}")
     log.info("stage_output_registered", extra={"table_id": table_id, "location": location})
+
+
+class PublishOutcome(BaseModel):
+    """What the catalog decided about a version the mover just wrote.
+
+    A REFUSAL is not an error: the run committed its output and did its job, and it is the DATA that
+    was refused. `failed_assertions` is what the mover needs to decide whether a person should be
+    asked — structural findings are unanswerable, the rest are reviewable.
+    """
+
+    published: bool
+    from_version: int | None = None
+    to_version: int | None = None
+    failed_assertions: list[str] = Field(default_factory=list)
+    accepted: list[str] = Field(default_factory=list)
+
+
+def publish_stage_output(
+    *,
+    catalog_url: str,
+    table_id: str,
+    version: int,
+    key_column: str,
+    required_columns: Sequence[str] = (),
+    accept_assertions: Sequence[str] = (),
+    token: str | None = None,
+    app_token: str | None = None,
+    service_identity: str | None = None,
+    timeout_seconds: float = 30.0,
+) -> PublishOutcome:
+    """Ask the catalog to gate `version` and, if it passes, advance the `published` tag.
+
+    THE OTHER HALF OF REGISTERING. A commit makes the output readable; this is what makes it READY,
+    and it is the catalog's operation so that every writer — this mover, a Ray job, a backfill —
+    publishes identically and meets the same rung and the same assertions.
+
+    It replaces the mover's own gate rather than joining it. Both ran the same checks; the local one
+    withheld only the next TRIGGER, so a refused batch was already committed into the tier and visible
+    to anyone reading `latest`. Only the tag is a boundary.
+
+    Raises on an unreachable or refusing catalog — an outage or a 403 is not a data verdict, and
+    reading one as a quality refusal would report a governance failure as a bad batch.
+    """
+    if not catalog_url:
+        raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot publish its output table")
+    headers = _credential(token=token, app_token=app_token, service_identity=service_identity)
+    body = {
+        "version": version,
+        "key_column": key_column,
+        "required_columns": list(required_columns),
+        "accept_assertions": list(accept_assertions),
+    }
+    with httpx.Client(base_url=catalog_url.rstrip("/"), timeout=timeout_seconds) as client:
+        try:
+            response = client.post(f"/v1/table/{table_id}/publish", json=body, headers=headers)
+        except httpx.HTTPError as exc:
+            raise RegisterError(f"catalog unreachable publishing {table_id!r}: {exc}") from exc
+    if response.status_code >= 400:
+        raise RegisterError(f"catalog refused the publish of {table_id!r}: HTTP {response.status_code} — {response.text[:300]}")
+    payload = response.json()
+    return PublishOutcome(
+        published=bool(payload.get("published")),
+        from_version=payload.get("from_version"),
+        to_version=payload.get("to_version"),
+        failed_assertions=[a["assertion"] for a in payload.get("assertions") or [] if not a.get("success")],
+        accepted=list(payload.get("accepted") or []),
+    )

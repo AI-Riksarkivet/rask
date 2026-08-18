@@ -153,6 +153,9 @@ spec:
               {{- end }}
             {{- end }}
             - { name: MEDALLION_LANE_ROUTES, value: {{ toJson $routes | quote }} }
+            {{- if .Values.medallion.cascadeViaPublish }}
+            - { name: MEDALLION_CASCADE_VIA_PUBLISH, value: "true" }
+            {{- end }}
             {{- if .Values.medallion.qualityReview }}
             # S3/S4 — this app HOSTS `promotion_review` and serves the door that answers it. The
             # movers hold promotions; only this app-id can raise the decision event into the instance,
@@ -380,6 +383,13 @@ spec:
             - { name: MEDALLION_CATALOG_SERVICE_IDENTITY, value: {{ .serviceIdentity | quote }} }
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.rustfs.bucket | quote }} }
+            {{- if $root.Values.medallion.cascadeViaPublish }}
+            # The catalog gates now. `MEDALLION_QUALITY_*` below is deliberately still rendered when
+            # `quality` is on — the mover SKIPS its local gate under this flag rather than the chart
+            # withholding the config, so flipping the flag back restores the old behaviour with no
+            # values change and no redeploy of a different shape.
+            - { name: MEDALLION_CASCADE_VIA_PUBLISH, value: "true" }
+            {{- end }}
             {{- if $root.Values.medallion.quality }}
             # Validator gate: after the compute write, assert the stage's data is good enough to promote
             # (row_count > 0, key column non-null); a failure emits the dataQualityAssertions facet but does

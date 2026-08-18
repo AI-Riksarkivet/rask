@@ -126,6 +126,20 @@ class MedallionSettings(BaseSettings):
     #: Empty means drive nothing. A deployment that declares no lanes has no cascade to wake, and
     #: guessing bronze is the defect this replaces.
     lane_routes: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_LANE_ROUTES")
+    #: Move data by PUBLISHING it, instead of by firing the next-stage trigger.
+    #:
+    #: The two gates ran identical assertions with different consequences: the catalog's withholds the
+    #: `published` TAG, while the mover's withheld only the next TRIGGER — so a refused batch was
+    #: already committed into the tier and visible to anyone reading `latest`. Only the tag is a
+    #: boundary, which is why this replaces the local gate rather than joining it.
+    #:
+    #: With this on, the mover registers, publishes, and stops. The tag move emits `table_published`,
+    #: the publication head routes it to the next lane, and the cascade has ONE trigger and ONE gate.
+    #:
+    #: OPT-IN, because it needs a reachable catalog the mover can authenticate to and `lane_routes`
+    #: declared. An estate missing either would simply stop cascading, and a migration seam is honest
+    #: where a silent fallback would not be. It should die once every estate runs on it.
+    cascade_via_publish: bool = Field(default=False, alias="MEDALLION_CASCADE_VIA_PUBLISH")
     # Ingest ceilings (audit 2026-07-12): the media ingest refuses (400) rather than OOM when a
     # source prefix exceeds these. Defaults generous for the demo; tune per deployment.
     ingest_max_objects: int = Field(default=10_000, alias="MEDALLION_INGEST_MAX_OBJECTS")
@@ -321,6 +335,24 @@ class MedallionSettings(BaseSettings):
             self.s3_secret_access_key.get_secret_value(),
             self.s3_region,
         )
+
+    @model_validator(mode="after")
+    def _publish_driven_cascade_needs_a_writer_and_a_catalog(self) -> Self:
+        """Refuse the combination that would cascade nothing, at boot rather than per event.
+
+        Publishing moves data by advancing the `published` tag on what this stage WROTE. With compute
+        off the mover is a pure lineage emitter and has no output to offer, and with no catalog URL it
+        has nowhere to offer it — in both cases the run would look healthy and the cascade would simply
+        stop. Falling back to the old trigger instead would be the silent fallback this seam exists to
+        avoid; saying so at startup is the honest version.
+        """
+        if self.cascade_via_publish and not (self.compute_enabled and self.catalog_url):
+            missing = [name for name, ok in (("MEDALLION_COMPUTE_ENABLED", self.compute_enabled), ("MEDALLION_CATALOG_URL", bool(self.catalog_url))) if not ok]
+            raise ValueError(
+                f"MEDALLION_CASCADE_VIA_PUBLISH needs {' and '.join(missing)}: the tag move IS the trigger, "
+                "so a stage that writes nothing or cannot reach the catalog would stop the cascade silently"
+            )
+        return self
 
     @model_validator(mode="after")
     def _compute_needs_s3_secret(self) -> Self:

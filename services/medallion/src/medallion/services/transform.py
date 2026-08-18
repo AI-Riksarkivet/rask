@@ -496,7 +496,9 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                     span.set_attribute("lance.version", result.version)
                     span.set_attribute("lance.row_count", result.row_count)
                     span.set_attribute("lance.size_bytes", result.size_bytes)
-                if settings.quality_enabled:
+                # Skipped when the CATALOG gates: running both would answer the same question twice
+                # with different consequences, and the tag is the one that matters.
+                if settings.quality_enabled and not settings.cascade_via_publish:
                     assertions = await run_in_threadpool(
                         assert_quality,
                         to_uri,
@@ -565,12 +567,31 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             topic_name=settings.lineage_topic,
             timeout_seconds=settings.publish_timeout_seconds,
         )
-        # 2. Quality gate: a failed assertion BLOCKS promotion — record it, but do NOT trigger the next
-        # stage, so a bad batch can't cascade. Composes with the FGA gate above (authz AND data-quality).
-        if assertions and not passed(assertions):
+        # 2. PUBLISH what was written, and let the catalog gate it — the tag move is the trigger, so
+        # there is nothing else to fire. A refusal is a normal outcome that names its assertions, and
+        # those become the hold a person may be asked about.
+        if settings.cascade_via_publish and to_dataset and result is not None:
+            outcome = await run_in_threadpool(
+                catalog_register.publish_stage_output,
+                catalog_url=settings.catalog_url,
+                table_id=to_dataset,
+                version=result.version,
+                key_column=settings.quality_key_column,
+                required_columns=settings.required_column_list,
+                token=settings.catalog_token,
+                app_token=settings.app_api_token,
+                service_identity=settings.catalog_service_identity,
+                timeout_seconds=settings.publish_timeout_seconds,
+            )
+            if not outcome.published:
+                quality_blocked = True
+                quality_reasons = outcome.failed_assertions
+        # 3. Quality gate (local): a failed assertion BLOCKS promotion — record it, but do NOT trigger
+        # the next stage, so a bad batch can't cascade. Composes with the FGA gate above.
+        elif assertions and not passed(assertions):
             quality_blocked = True
             quality_reasons = [a.assertion for a in assertions if not a.success]
-        # 3. Trigger the next stage (unless terminal — gold has no pub_topic — or blocked by the gate).
+        # 4. Trigger the next stage (unless terminal — gold has no pub_topic — or blocked by the gate).
         elif settings.pub_topic:
             next_trigger = {
                 "token": token,
