@@ -10,7 +10,7 @@ dependencies = [
     "pydantic-settings>=2.5",
     # [default] is required by the Job Submission SDK (JobSubmissionClient);
     # plain `ray` raises "requires the ray[default] installation" at construction.
-    "ray[default]>=2.56",
+    "ray[default]>=2.57",
     "requests>=2.31",
     "httpx>=0.27",
     # `propagate` only — submit.trace_env lifts the active span into a job's runtime_env so the

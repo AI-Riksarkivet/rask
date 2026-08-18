@@ -2708,7 +2708,8 @@
               "task_unassigned",
               "task_changes_requested",
               "task_dropped",
-              "task_lease_expired"
+              "task_lease_expired",
+              "promotion_review_requested"
             ],
             "title": "Action",
             "type": "string"

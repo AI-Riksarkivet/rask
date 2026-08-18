@@ -18,7 +18,7 @@ dependencies = [
     "huggingface-hub>=0.28",
     "htrflow",
     # --- pipeline + CLI ---
-    "ray[data,default,serve]>=2.56,<2.57",
+    "ray[data,default,serve]>=2.57,<2.58",
     "pillow>=11.0",
     "numpy>=2.0",
     "jinja2>=3.1",

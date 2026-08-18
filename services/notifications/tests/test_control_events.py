@@ -286,3 +286,53 @@ class TestUsersetGrants:
 
         assert result == {"status": "SUCCESS"}
         assert plane.boxes == {}
+
+
+class TestAPromotionHoldReachesItsApprover:
+    """v7 — a held promotion asks a PERSON, and the ask has to arrive.
+
+    The medallion's quality gate could only ever say NO, permanently: a failed assertion returned
+    `_QUALITY_BLOCKED = {"status": "DROP"}` and the run died there. That is right for a corrupt blob
+    pointer and wrong for a promotion that is UNUSUAL rather than broken — a row-count delta outside
+    the expected band, a first promotion of a newly ingested volume. The Dapr
+    external-system-interaction pattern gives those a third answer, but only if the request for a
+    decision actually reaches somebody: a workflow parked on `wait_for_external_event` that nobody
+    was told about is an outage wearing a pause.
+
+    So the reason rides the CONTROL lane, like the grant pair and for the same reason — the event
+    NAMES its subject, and being named IS the targeting. It is deliberately not a lineage row: the
+    hold's lineage FAIL already exists (A18) and says what happened to the DATA; this says what is
+    being asked of a PERSON.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_approver_named_on_the_event_is_the_audience(self) -> None:
+        assert await named_subjects(_event(action="promotion_review_requested", subject="user:alice")) == ("alice",)
+
+    @pytest.mark.asyncio
+    async def test_it_is_a_NAMED_action_or_the_lane_files_it_ignored(self) -> None:
+        from notifications.api.control_events import NAMED_ACTIONS
+
+        assert "promotion_review_requested" in NAMED_ACTIONS, (
+            "not in NAMED_ACTIONS means the ingress files the event IGNORED with a SUCCESS ack — the "
+            "approver is never told and nothing anywhere reports the loss"
+        )
+
+    def test_the_reason_is_nameable_or_EVERY_delivery_raises(self) -> None:
+        """`as_delivery` constructs `NotificationReason(event.action)`; an unnamed action raises on
+        every delivery, not just this one."""
+        delivery = as_delivery(_event(action="promotion_review_requested", subject="user:alice"))
+
+        assert delivery.reason == NotificationReason.PROMOTION_REVIEW_REQUESTED
+        assert delivery.reason.value == "promotion_review_requested", "the value is user-visible — the panel renders it as the row's label"
+
+    @pytest.mark.asyncio
+    async def test_an_unapprovable_hold_names_nobody_rather_than_everybody(self) -> None:
+        """A hold with no named approver is IGNORED, not broadcast.
+
+        The guard is `named_subjects`, not `as_delivery` — the envelope is built either way and the
+        AUDIENCE is what comes back empty, which is what files the event IGNORED with a SUCCESS ack.
+        Pinned so the new action inherits that rule rather than becoming the one governance event
+        that fans out to everybody.
+        """
+        assert await named_subjects(_event(action="promotion_review_requested", subject=None)) == ()

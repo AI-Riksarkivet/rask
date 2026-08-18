@@ -121,6 +121,12 @@ ControlAction = Literal[
     # principal. That is honest rather than limiting: the lane targets on `extra.subject` and never
     # reads `actor` at all.
     "task_lease_expired",
+    # A held PROMOTION asking a person to decide. The medallion's quality gate could only ever say
+    # NO, permanently — right for a corrupt blob pointer, wrong for a promotion that is unusual
+    # rather than broken. The Dapr external-system-interaction pattern gives it a third answer, and
+    # this is how the request reaches somebody: a workflow parked on `wait_for_external_event` that
+    # nobody was told about is an outage wearing a pause.
+    "promotion_review_requested",
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the

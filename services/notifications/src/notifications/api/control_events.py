@@ -40,7 +40,16 @@ log = logging.getLogger(__name__)
 #: `ControlAction` must carry it (or the envelope will not validate) and `NotificationReason` must too,
 #: because `as_delivery` builds `NotificationReason(event.action)` and would raise on every delivery.
 NAMED_ACTIONS: frozenset[str] = frozenset(
-    {"grant_added", "grant_revoked", "task_assigned", "task_unassigned", "task_changes_requested", "task_dropped", "task_lease_expired"}
+    {
+        "grant_added",
+        "grant_revoked",
+        "task_assigned",
+        "task_unassigned",
+        "task_changes_requested",
+        "task_dropped",
+        "task_lease_expired",
+        "promotion_review_requested",
+    }
 )
 
 #: The FGA wildcard principal, which is a grant to EVERYONE and therefore names no one.

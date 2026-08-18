@@ -78,6 +78,11 @@ class NotificationReason(StrEnum):
     #: manager's `reopen`) — from the submitter's side those are one fact.
     TASK_CHANGES_REQUESTED = "task_changes_requested"
     TASK_DROPPED = "task_dropped"
+    #: v7 — a promotion the quality gate HELD, asking a named approver to decide. Governance-lane
+    #: targeting like the grant pair: the event names its subject, so being named IS the targeting.
+    #: Distinct from the hold's own lineage FAIL, which says what happened to the DATA rather than
+    #: what is being asked of a person.
+    PROMOTION_REVIEW_REQUESTED = "promotion_review_requested"
     #: v7 — a self-claimed task whose lease lapsed. The only reason in this family that no person
     #: caused: it is fired by the annotator's own timer, which is exactly why the holder cannot be
     #: expected to notice it.
