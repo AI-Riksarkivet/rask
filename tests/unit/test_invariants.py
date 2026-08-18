@@ -90,6 +90,12 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # lineage — the hold's own lineage FAIL already records what happened to the data; this records
     # what is being asked of a person, and a lost one costs a re-read rather than a committed fact.
     ("services/medallion/src/medallion/workflow.py", "CONTROL_TOPIC"): "control",
+    # The HOLD, handed from the mover that made it to the app that can host the review. A TRIGGER:
+    # it instructs the producer to start a `promotion_review` instance, and losing one leaves the
+    # promotion blocked — the same stalled-cascade failure every other trigger has, and the same
+    # answer (the transform's caller-retry token). Distinct from the CONTROL row above, which is the
+    # notification the started review then sends to a PERSON.
+    ("services/medallion/src/medallion/services/promotion_hold.py", "settings.promotion_topic"): "trigger",
 }
 
 #: The lineage publishes that do NOT go through the outbox. DEFERRED WITH A STATED TRADE, not an oversight.

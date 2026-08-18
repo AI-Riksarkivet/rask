@@ -105,6 +105,13 @@ class MedallionSettings(BaseSettings):
     #: WHO is asked. There is no default: an unset approver blocks rather than promoting, and the
     #: workflow says so in the outcome instead of failing open.
     quality_review_approver: str = Field(default="", alias="MEDALLION_QUALITY_REVIEW_APPROVER")
+    #: Where a mover publishes a promotion it is HOLDING, and where the producer listens for one.
+    #:
+    #: The hold travels over the bus rather than being reviewed in place because the review must be
+    #: ANSWERABLE: `raise_workflow_event` resolves the instance through the calling app's app-id, so
+    #: the workflow has to live in the app that serves the approve route — and that is the producer,
+    #: which already has a gateway row and the dual-auth door. A mover has neither.
+    promotion_topic: str = Field(default="medallion.promotion", alias="MEDALLION_PROMOTION_TOPIC")
     # Ingest ceilings (audit 2026-07-12): the media ingest refuses (400) rather than OOM when a
     # source prefix exceeds these. Defaults generous for the demo; tune per deployment.
     ingest_max_objects: int = Field(default=10_000, alias="MEDALLION_INGEST_MAX_OBJECTS")

@@ -139,6 +139,15 @@ spec:
             # subscriptions park exhausted deliveries here, ERROR-logged by /dlq-event.
             - { name: MEDALLION_DLQ_TOPIC, value: "dlq.medallion-producer" }
             {{- end }}
+            {{- if .Values.medallion.qualityReview }}
+            # S3/S4 — this app HOSTS `promotion_review` and serves the door that answers it. The
+            # movers hold promotions; only this app-id can raise the decision event into the instance,
+            # and only this app has a gateway row. The flag is what starts the workflow runtime here.
+            - { name: MEDALLION_QUALITY_REVIEW_ENABLED, value: "true" }
+            - { name: MEDALLION_QUALITY_REVIEW_HOURS, value: {{ .Values.medallion.qualityReviewHours | quote }} }
+            - { name: MEDALLION_QUALITY_REVIEW_APPROVER, value: {{ .Values.medallion.qualityReviewApprover | quote }} }
+            - { name: MEDALLION_PROMOTION_TOPIC, value: {{ .Values.medallion.promotionTopic | quote }} }
+            {{- end }}
             {{- if .Values.medallion.compute }}
             # Real fake-Ray compute: the producer seeds the BRONZE Lance dataset directly (R23 — so the
             # cascade writes actual versioned data on RustFS). The URI derives from the bronze namespace,
@@ -356,6 +365,16 @@ spec:
             # NOT trigger the next stage. Needs medallion.compute on (it opens the just-written dataset).
             - { name: MEDALLION_QUALITY_ENABLED, value: "true" }
             - { name: MEDALLION_QUALITY_KEY_COLUMN, value: {{ $root.Values.medallion.qualityKeyColumn | quote }} }
+            {{- if $root.Values.medallion.qualityReview }}
+            # A hold becomes a QUESTION rather than a verdict. This mover publishes what its gate saw
+            # and stops; the producer's `promotion_review` splits corrupt (BLOCK) from unusual (ask).
+            # The approver + deadline ride the published spec, so they are read HERE at dispatch — a
+            # workflow body that read them would replay against whatever the value is now.
+            - { name: MEDALLION_QUALITY_REVIEW_ENABLED, value: "true" }
+            - { name: MEDALLION_QUALITY_REVIEW_HOURS, value: {{ $root.Values.medallion.qualityReviewHours | quote }} }
+            - { name: MEDALLION_QUALITY_REVIEW_APPROVER, value: {{ $root.Values.medallion.qualityReviewApprover | quote }} }
+            - { name: MEDALLION_PROMOTION_TOPIC, value: {{ $root.Values.medallion.promotionTopic | quote }} }
+            {{- end }}
             {{- end }}
             {{- if $root.Values.medallion.fgaEnabled }}
             - { name: MEDALLION_FGA_ENABLED, value: "true" }

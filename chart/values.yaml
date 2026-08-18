@@ -904,6 +904,28 @@ medallion:
   # MAY promote; quality decides if the DATA is good enough). Requires medallion.compute. Off by default.
   quality: false
   qualityKeyColumn: id
+  # The quality gate's THIRD answer (S3/S4). With `quality` alone a failed assertion is a permanent
+  # BLOCK — right for a corrupt blob pointer, wrong for a promotion that is UNUSUAL rather than broken
+  # (a batch that legitimately shipped zero rows, a declared column a consumer agreed to drop). Turning
+  # this on routes the second kind to a person instead of ruling on it.
+  #
+  # OFF by default, and the default is the OLD behaviour rather than a weaker one: an estate with
+  # nobody to ask must not park promotions on an external event no one will ever raise.
+  #
+  # Where it runs matters. The mover that holds the promotion publishes it on `promotionTopic`; the
+  # `promotion_review` workflow and the approve door BOTH live in medallion-producer, because
+  # `raise_workflow_event` resolves an instance through the CALLING app's app-id — route and instance
+  # must share a process, and a mover has no gateway row and no Ingress path. Turning this on
+  # therefore also scopes `medallion-producer` on the actor state store (dapr-statestore.yaml); without
+  # that scope the sidecar logs "Workflow engine started" and dispatch fails on every delivery.
+  qualityReview: false
+  # WHO is asked — an OIDC subject. Empty means nobody can be asked, and the review then answers
+  # BLOCKED with "no reachable approver" in the outcome and in lineage, rather than failing open.
+  qualityReviewApprover: ""
+  # How long an ask stays open. An unbounded wait is a workflow that never completes and an operator
+  # who never learns why; on expiry the promotion is EXPIRED, emitted, and not promoted.
+  qualityReviewHours: 72
+  promotionTopic: medallion.promotion
   # Ray TRAIN head (#115): values-wired passthrough for the /train head + the submit-and-ack trainer
   # consumer (both live in the medallion-producer app). Defaults mirror services/medallion/core/config.py so a
   # deployment can retarget topic/entrypoint/identity/registry namespace without an image rebuild.

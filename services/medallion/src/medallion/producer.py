@@ -29,6 +29,8 @@ from fastapi.concurrency import run_in_threadpool
 from medallion.api.bronze_arrival import register_bronze_arrival_route
 from medallion.api.ingest_media import router as ingest_media_router
 from medallion.api.produce import router as produce_router
+from medallion.api.promotions import register_promotion_route
+from medallion.api.promotions import router as promotions_router
 from medallion.api.train import register_train_trigger_route
 from medallion.api.train import router as train_router
 from medallion.core.config import apply_dapr_secrets, get_settings
@@ -92,11 +94,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # Split-horizon (see the catalog twin): in-cluster fetch, public issuer string.
             discovery_overrides=({_oidc.oidc_issuer: _oidc.oidc_discovery_url} if _oidc.oidc_discovery_url else None),
         )
+    # THE WORKFLOW WORKER for `promotion_review` — and the reason this app hosts it at all.
+    # `raise_workflow_event` resolves the instance through the CALLING app's app-id, so the approve
+    # route and the instance must share a process. The gate that holds a promotion runs in a mover,
+    # but a mover is bus-only: no gateway row, no Ingress, nothing a person can POST to. Hosting the
+    # workflow here (beside the door, behind the same dual-auth as /produce) is what makes the ask
+    # answerable; the mover reaches it by publishing, like every other cascade hop.
+    #
+    # Without this the door 404s honestly — which is the correct failure, not a working one.
+    app.state.workflow_runtime = None
+    if get_settings().quality_review_enabled:
+        try:
+            import dapr.ext.workflow as wf
+
+            from medallion.workflow import register
+
+            runtime = wf.WorkflowRuntime()
+            register(runtime)
+            runtime.start()  # its own threads; does not block the event loop
+            app.state.workflow_runtime = runtime
+            log.info("dapr workflow runtime started (promotion review)")
+        except Exception:
+            # Non-fatal, the mover's reasoning: refusing to start because the sidecar is not up yet
+            # turns an ordering blip into a CrashLoopBackOff. A hold that cannot be scheduled RETRYs
+            # at the subscription, where it is visible.
+            log.warning("dapr workflow runtime unavailable — held promotions cannot be reviewed", exc_info=True)
     app.state.startup_complete = True
     try:
         yield
     finally:
         app.state.shutting_down = True
+        if app.state.workflow_runtime is not None:
+            with suppress(Exception):
+                app.state.workflow_runtime.shutdown()
         with suppress(Exception):
             await app.state.dapr.close()
         fga_client = getattr(app.state, "fga", None)
@@ -132,3 +162,7 @@ _dapr_app = register_bronze_arrival_route(app)
 # The Ray TRAIN head (#115a): POST /train + the training-trigger subscription (own topic; submit-and-ack).
 app.include_router(train_router)
 register_train_trigger_route(app, _dapr_app)
+# The quality gate's third answer (S3/S4): a mover that HOLDS a promotion publishes it here, the
+# review workflow runs in this process, and a `can_promote` holder answers it on /promotions/*.
+app.include_router(promotions_router)
+register_promotion_route(app, _dapr_app)

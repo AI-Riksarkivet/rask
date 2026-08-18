@@ -97,6 +97,18 @@ auth:
 {{-     $scopes = append $scopes .daprAppId }}
 {{-   end }}
 {{- end }}
+{{- /* The PRODUCER's app-id, for the same reason and under a different condition. `promotion_review`
+       runs in `producer.py`, not in a mover: the approve route and the workflow instance must share a
+       process because `raise_workflow_event` resolves the instance through the calling app's app-id,
+       and only the producer has a gateway row to serve that route from. It starts a runtime exactly
+       when `medallion.qualityReview` is on (producer.py's lifespan), so that is the gate here — NOT
+       `medallion.ray`, which the producer's runtime does not consult.
+
+       Same invisible failure as above: unscoped, the sidecar still logs "Workflow engine started" and
+       every held promotion fails to dispatch. */}}
+{{- if .Values.medallion.qualityReview }}
+{{-   $scopes = append $scopes .Values.medallion.producer.daprAppId }}
+{{- end }}
 {{- if $scopes }}
 scopes:
 {{- range $scopes | uniq }}

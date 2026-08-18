@@ -154,6 +154,12 @@ def _routes() -> list[Route]:
         # DEPRECATED — the medallion's IIIF head. Retires with the nine-plus-three IIIF files
         # (A12); kept for one deprecation window so the frontend can move to /api/ingest first.
         ("/api/train", "/train", *medallion),
+        # The APPROVE door for a held promotion. It is on the producer rather than on the mover whose
+        # quality gate held it, because `raise_workflow_event` resolves a workflow instance through the
+        # CALLING app's app-id: route and instance must share a process, and a mover is bus-only — no
+        # row here, no Ingress path. Root-mounted like /produce and /train (the producer does not use
+        # `make_service_app`'s prefix), so the rewrite is a literal, not `prefix`-interpolated.
+        ("/api/promotions", "/promotions", *medallion),
         (f"{prefix}/ray", f"{prefix}/ray", *compute),
         (f"{prefix}/projects", f"{prefix}/projects", *controlplane),
         # PREFIX-INTERPOLATED, not the literal "/api/flows", and that is the ingest row's lesson

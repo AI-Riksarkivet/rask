@@ -34,7 +34,7 @@ from opentelemetry import trace
 from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_refused, record_transition
 from medallion.schemas.events import build_run_event
-from medallion.services import catalog_register
+from medallion.services import catalog_register, promotion_hold
 from medallion.services.compute import measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.promotion import promotion_lineage
@@ -279,6 +279,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             return _DROP
 
     quality_blocked = False
+    quality_reasons: list[str] = []
     completed = False  # set once the COMPLETE lineage emit lands — gates the FAIL-on-failure below
     # ONE instant for the whole run: the `lineage` JSONB written into the dataset (R26) and the event
     # published to the graph must name the same eventTime, or the two provenance records disagree on the
@@ -566,6 +567,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
         # stage, so a bad batch can't cascade. Composes with the FGA gate above (authz AND data-quality).
         if assertions and not passed(assertions):
             quality_blocked = True
+            quality_reasons = [a.assertion for a in assertions if not a.success]
         # 3. Trigger the next stage (unless terminal — gold has no pub_topic — or blocked by the gate).
         elif settings.pub_topic:
             next_trigger = {
@@ -739,6 +741,24 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                 topic_name=settings.lineage_topic,
                 timeout_seconds=settings.publish_timeout_seconds,
             )
+        # S3/S4: with review on, the hold becomes a QUESTION rather than a verdict. The mover does
+        # not decide which kind of hold this is — it publishes what the gate saw, and the review
+        # workflow (hosted by the producer, beside the door a person can answer on) splits corrupt
+        # from unusual. A publish that does not land degrades to the permanent BLOCK below, which is
+        # the safe direction: the output is written and the FAIL run is emitted either way.
+        if promotion_hold.review_enabled(settings):
+            spec = promotion_hold.hold_spec(
+                settings,
+                token=token or "",
+                project=project or "",
+                from_namespace=from_namespace,
+                from_dataset=from_dataset,
+                to_namespace=to_namespace,
+                to_dataset=to_dataset,
+                reasons=quality_reasons,
+                originator=trigger.originator or "",
+            )
+            await promotion_hold.publish_hold(dapr, settings, spec)
         return _QUALITY_BLOCKED
     record_transition(transition)
     log.info("medallion_stage_moved", extra={"transition": transition, "token": token, "to": settings.to_dataset})
