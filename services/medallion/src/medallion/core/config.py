@@ -112,6 +112,20 @@ class MedallionSettings(BaseSettings):
     #: the workflow has to live in the app that serves the approve route — and that is the producer,
     #: which already has a gateway row and the dual-auth door. A mover has neither.
     promotion_topic: str = Field(default="medallion.promotion", alias="MEDALLION_PROMOTION_TOPIC")
+    #: SOURCE NAMESPACE -> the topic whose mover consumes it, for the publication head.
+    #:
+    #: The head used to discard the published table's namespace and stamp `bronze_namespace` /
+    #: `bronze_topic` on every trigger, so a silver publication fired a BRONZE trigger that no mover's
+    #: `from_dataset` matched and every non-bronze publication was dropped as another lane's. That is
+    #: what stops `table_published` becoming the single cascade trigger.
+    #:
+    #: Keyed on the namespace rather than the tier: the cascade names lanes (`bronze-media`), and
+    #: reducing one to its tier would merge two cascades onto a topic neither owns. Derived in the
+    #: chart from `medallion.movers[]`, so a lane cannot exist that the head cannot route.
+    #:
+    #: Empty means drive nothing. A deployment that declares no lanes has no cascade to wake, and
+    #: guessing bronze is the defect this replaces.
+    lane_routes: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_LANE_ROUTES")
     # Ingest ceilings (audit 2026-07-12): the media ingest refuses (400) rather than OOM when a
     # source prefix exceeds these. Defaults generous for the demo; tune per deployment.
     ingest_max_objects: int = Field(default=10_000, alias="MEDALLION_INGEST_MAX_OBJECTS")

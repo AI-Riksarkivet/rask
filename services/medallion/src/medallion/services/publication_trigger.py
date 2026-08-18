@@ -66,6 +66,23 @@ def _table_name(object_id: str, delimiter: str) -> str | None:
     return identifier.split(delimiter)[-1] or None
 
 
+def _source_namespace(object_id: str, delimiter: str, project: str) -> str | None:
+    """The published table's own namespace, de-qualified of its tenant — `acme-silver` -> `silver`.
+
+    Sound only because the catalog STATES the project on the event: `PROJECT_PATTERN` permits hyphens,
+    so nothing here could recover `acme` from `acme-silver` by splitting.
+    """
+    if not object_id.startswith("table:"):
+        return None
+    identifier = object_id.removeprefix("table:")
+    if delimiter not in identifier:
+        return None
+    namespace = identifier.rsplit(delimiter, 1)[0]
+    if project and namespace.startswith(f"{project}-"):
+        namespace = namespace[len(project) + 1 :]
+    return namespace or None
+
+
 #: Principals that name no PERSON. A wildcard is a statement about everyone and therefore about no
 #: one; a userset addresses a group; a bare prefix addresses nothing at all. Carrying any of them
 #: writes into an inbox actor literally named `*` — worse than silence, because it looks delivered.
@@ -109,12 +126,20 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
     # head published the CATALOG identifier as the lane once, so `acme$events` was compared against
     # `bronze$events` and every tenant's publication was DROPped as another lane's.
     extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
+    project = str(extra.get("project") or "")
+    # WHICH LANE was published. Undeclared namespaces are acked and driven nowhere: a table outside
+    # the cascade is published all the time, and waking bronze for it fires compute no lane owns.
+    source = _source_namespace(str(data.get("object_id") or ""), DELIMITER, project)
+    topic = settings.lane_routes.get(source or "")
+    if not topic:
+        log.debug("medallion_publication_not_a_lane", extra={"object_id": data.get("object_id"), "source": source})
+        return _SUCCESS
     trigger: dict[str, Any] = {
         "token": str(data.get("event_id") or ""),
         # The LANE, tier-qualified from the medallion's own setting — the same string for every
         # tenant, which is what makes the mover's discriminator work at all.
-        "dataset": f"{settings.bronze_namespace}{DELIMITER}{table}",
-        "namespace": settings.bronze_namespace,
+        "dataset": f"{source}{DELIMITER}{table}",
+        "namespace": source,
         # THE RANGE (D-R3). A consumer resolves it with `_row_created_at_version > from AND <= to`
         # and keeps no bookmark. `from_version` is None on a dataset's first publication, meaning
         # "everything up to `to`" — carried as-is rather than coerced to 0, because "no prior
@@ -127,7 +152,6 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
     }
     # Read, never derived. Absent means a single-tenant estate (or a catalog that predates the field),
     # and omitting it is what the mover reads as "no tenant" — `""` would be refused as garbage.
-    project = str(extra.get("project") or "")
     if project:
         trigger["project"] = project
     # Omitted rather than blank: `""` would be carried to an inbox actor named "".
@@ -140,7 +164,7 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
             dapr,
             timeout_seconds=settings.publish_timeout_seconds,
             pubsub_name=settings.pubsub,
-            topic_name=settings.bronze_topic,
+            topic_name=topic,
             data=json.dumps(trigger),
             data_content_type="application/json",
         )

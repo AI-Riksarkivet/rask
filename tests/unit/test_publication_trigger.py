@@ -30,7 +30,7 @@ def _Settings() -> MedallionSettings:  # noqa: N802 — kept call-compatible wit
     CATALOG identifier was the lane name. A stub that cannot express the thing under test will always
     agree with whatever the code does.
     """
-    return MedallionSettings()
+    return MedallionSettings(MEDALLION_LANE_ROUTES=dict(ROUTES))  # type: ignore[arg-type]
 
 
 class _Dapr:
@@ -44,7 +44,22 @@ class _Dapr:
         self.published.append(json.loads(kwargs["data"]))
 
 
-def _event(action: str = "table_published", object_id: str = "table:lane$pages", **extra: Any) -> dict[str, Any]:
+#: The declared DAG, as the chart derives it from `medallion.movers[]`. The head drives only lanes it
+#: is told about — it used to stamp the bronze topic on every publication regardless of tier.
+ROUTES = {"bronze": "medallion.bronze", "silver": "medallion.silver", "bronze-media": "medallion.media"}
+
+
+def _event(action: str = "table_published", object_id: str = "table:acme-bronze$pages", **extra: Any) -> dict[str, Any]:
+    """A publication as the CATALOG emits it: `<project>-<tier>$<table>`, with the tenant stated.
+
+    The old default was `table:lane$pages`, from when segment 0 was believed to be the tenant. It is
+    the NAMESPACE — `scripts/seed_estate.py` creates `acme-bronze`/`acme-silver`/`acme-gold` — and the
+    project rides `extra.project` because no split can recover it.
+    """
+    if "project" not in extra:
+        extra["project"] = "acme"
+    elif extra["project"] is None:
+        extra.pop("project")  # an estate with no tenant — expressible, not merely absent
     return {"data": {"action": action, "object_id": object_id, "event_id": "evt-1", "extra": extra}}
 
 
@@ -87,9 +102,9 @@ async def test_the_trigger_carries_the_PROJECT_or_the_mover_moves_nothing() -> N
     """
     dapr = _Dapr()
 
-    await handle_publication(dapr, _Settings(), _event(project="lane", from_version=None, to_version=1))
+    await handle_publication(dapr, _Settings(), _event(project="my-team", object_id="table:my-team-silver$features", from_version=None, to_version=1))
 
-    assert dapr.published[0]["project"] == "lane"
+    assert dapr.published[0]["project"] == "my-team"
 
 
 @pytest.mark.asyncio
@@ -185,7 +200,7 @@ async def test_the_lane_name_carries_NO_tenant() -> None:
     """
     dapr = _Dapr()
 
-    await handle_publication(dapr, _Settings(), _event(object_id="table:acme$events", project="acme", from_version=1, to_version=2))
+    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$events", from_version=1, to_version=2))
 
     trigger = dapr.published[0]
     assert "acme" not in trigger["dataset"], f"the tenant leaked into the lane name: {trigger['dataset']}"
@@ -204,7 +219,7 @@ async def test_the_lane_name_is_EXACTLY_what_a_mover_compares_against() -> None:
     dapr = _Dapr()
     settings = _Settings()
 
-    await handle_publication(dapr, settings, _event(object_id="table:acme$events", from_version=1, to_version=2))
+    await handle_publication(dapr, settings, _event(object_id="table:acme-bronze$events", from_version=1, to_version=2))
 
     assert dapr.published[0]["dataset"] == settings.bronze_dataset
 
@@ -215,7 +230,7 @@ async def test_a_DIFFERENT_table_is_a_DIFFERENT_lane() -> None:
     movers subscribed to the same topic, and each must see only its own."""
     dapr = _Dapr()
 
-    await handle_publication(dapr, _Settings(), _event(object_id="table:acme$pages", from_version=1, to_version=2))
+    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$pages", from_version=1, to_version=2))
 
     assert dapr.published[0]["dataset"] == "bronze$pages"
 
@@ -237,7 +252,7 @@ async def test_a_NESTED_namespace_still_names_the_right_lane() -> None:
     dapr = _Dapr()
     settings = _Settings()
 
-    await handle_publication(dapr, settings, _event(object_id="table:acme$bronze$pages", from_version=1, to_version=2))
+    await handle_publication(dapr, settings, _event(object_id="table:acme-bronze$pages", from_version=1, to_version=2))
 
     assert dapr.published[0]["dataset"] == "bronze$pages"
     assert dapr.published[0]["dataset"] != "bronze$bronze$pages"
@@ -258,7 +273,7 @@ async def test_the_project_is_READ_from_the_event_never_derived_from_the_id() ->
     """
     dapr = _Dapr()
 
-    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$pages", project="acme", from_version=1, to_version=2))
+    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$pages", from_version=1, to_version=2))
 
     assert dapr.published[0]["project"] == "acme"
     assert dapr.published[0]["dataset"] == "bronze$pages"
@@ -270,7 +285,7 @@ async def test_an_event_with_no_project_carries_NONE_rather_than_a_guess() -> No
     is what put a non-existent tenant on the wire."""
     dapr = _Dapr()
 
-    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$pages", from_version=1, to_version=2))
+    await handle_publication(dapr, _Settings(), _event(object_id="table:bronze$pages", project=None, from_version=1, to_version=2))
 
     assert "project" not in dapr.published[0]
 
@@ -280,7 +295,7 @@ async def test_the_FLAT_case_is_byte_identical_to_before() -> None:
     """The FLAT `<project>-<tier>$<table>` shape every live table actually has."""
     dapr = _Dapr()
 
-    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$events", project="acme", from_version=1, to_version=2))
+    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$events", from_version=1, to_version=2))
 
     assert dapr.published[0]["dataset"] == "bronze$events"
     assert dapr.published[0]["project"] == "acme"

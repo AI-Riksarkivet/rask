@@ -79,7 +79,9 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # idempotency-token contract is the carrier (open_medallion_workflow.md section 11).
     ("services/medallion/src/medallion/services/ingest_trigger.py", "settings.bronze_topic"): "trigger",
     ("services/medallion/src/medallion/services/media_produce.py", "settings.media_topic"): "trigger",
-    ("services/medallion/src/medallion/services/publication_trigger.py", "settings.bronze_topic"): "trigger",
+    # The variable is now `topic` — resolved per publication from `settings.lane_routes` rather than
+    # fixed to bronze, which is what let a silver publication fire a bronze trigger.
+    ("services/medallion/src/medallion/services/publication_trigger.py", "topic"): "trigger",
     ("services/medallion/src/medallion/services/train.py", "settings.train_topic"): "trigger",
     ("services/medallion/src/medallion/services/transform.py", "settings.pub_topic"): "trigger",
     ("services/medallion/src/medallion/workflow.py", "settings.sub_topic"): "trigger",

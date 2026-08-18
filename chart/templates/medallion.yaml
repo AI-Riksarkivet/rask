@@ -139,6 +139,20 @@ spec:
             # subscriptions park exhausted deliveries here, ERROR-logged by /dlq-event.
             - { name: MEDALLION_DLQ_TOPIC, value: "dlq.medallion-producer" }
             {{- end }}
+            {{- /* SOURCE NAMESPACE -> the topic whose mover consumes it. DERIVED from the declared
+                   DAG, so a mover cannot exist that the publication head is unable to route — which
+                   is what it did before: it stamped the bronze namespace and topic on every trigger,
+                   so a silver publication fired a bronze trigger no mover matched and was dropped.
+
+                   Keyed on the namespace, not the tier: lanes are named (`bronze-media`), and
+                   reducing one to its tier merges two cascades onto a topic neither owns. */}}
+            {{- $routes := dict }}
+            {{- range .Values.medallion.movers }}
+              {{- if and .fromNamespace .subTopic }}
+                {{- $_ := set $routes .fromNamespace .subTopic }}
+              {{- end }}
+            {{- end }}
+            - { name: MEDALLION_LANE_ROUTES, value: {{ toJson $routes | quote }} }
             {{- if .Values.medallion.qualityReview }}
             # S3/S4 — this app HOSTS `promotion_review` and serves the door that answers it. The
             # movers hold promotions; only this app-id can raise the decision event into the instance,

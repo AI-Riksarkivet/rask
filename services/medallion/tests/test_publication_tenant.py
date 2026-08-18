@@ -29,7 +29,8 @@ class _Dapr:
 
 
 def _settings() -> MedallionSettings:
-    return MedallionSettings(MEDALLION_BRONZE_NAMESPACE="bronze", MEDALLION_BRONZE_TOPIC="medallion.bronze")  # type: ignore[arg-type]
+    # The head drives only DECLARED lanes now; without a route it publishes nothing at all.
+    return MedallionSettings(MEDALLION_LANE_ROUTES={"bronze": "medallion.bronze"})  # type: ignore[arg-type]
 
 
 def _event(object_id: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -70,31 +71,36 @@ class TestTheTenantComesFromTheEvent:
 
 class TestItNeverGuesses:
     @pytest.mark.asyncio
-    async def test_an_event_with_NO_project_carries_none(self) -> None:
-        """The single-tenant estate, and the pre-fix catalog during a rolling deploy. Deriving one from
-        `acme-bronze` is what produced a tenant that does not exist."""
-        trigger = await _trigger("table:acme-bronze$pages")
+    async def test_a_projectless_estate_carries_no_tenant(self) -> None:
+        """The single-tenant shape: the namespace is bare, so there is nothing to de-qualify and
+        nothing to invent."""
+        trigger = await _trigger("table:bronze$pages")
 
         assert trigger is not None
         assert "project" not in trigger, f"the head invented a tenant: {trigger.get('project')!r}"
 
     @pytest.mark.asyncio
+    async def test_a_QUALIFIED_namespace_with_no_stated_tenant_routes_NOWHERE(self) -> None:
+        """`acme-bronze` cannot be de-qualified without knowing the project, so it matches no declared
+        lane and the head drives nothing. Stricter than the old behaviour, which guessed `acme-bronze`
+        was the tenant and fired a trigger naming a project no registry knows."""
+        assert await _trigger("table:acme-bronze$pages") is None
+
+    @pytest.mark.asyncio
     async def test_an_EMPTY_project_is_omitted_not_forwarded(self) -> None:
         """`transform.py` treats a present-but-unsafe project as deterministic garbage and DROPs, so
         an empty string would refuse every trigger carrying one."""
-        trigger = await _trigger("table:acme-bronze$pages", {"project": ""})
+        trigger = await _trigger("table:bronze$pages", {"project": ""})
 
         assert trigger is not None
         assert "project" not in trigger
 
     @pytest.mark.asyncio
-    async def test_a_nested_identifier_is_not_split_either(self) -> None:
-        """The shape the old docstring was written for. It is not produced by any door, and honouring
-        it here would keep one guess alive for the sake of a shape that never arrives."""
-        trigger = await _trigger("table:acme$bronze$pages")
-
-        assert trigger is not None
-        assert "project" not in trigger
+    async def test_a_nested_identifier_routes_nowhere_rather_than_being_split(self) -> None:
+        """The shape the old docstring was written for, produced by no door. Its namespace is
+        `acme$bronze`, which matches no declared lane — so the head drives nothing rather than
+        keeping a guess alive for a shape that never arrives."""
+        assert await _trigger("table:acme$bronze$pages") is None
 
 
 class TestTheLaneIsUnchanged:
