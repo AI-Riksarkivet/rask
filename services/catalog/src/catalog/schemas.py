@@ -713,6 +713,12 @@ class PublishRequest(BaseModel):
     #: a derived tier possibly on something else — so the caller names it rather than the gate guessing.
     key_column: str = Field(min_length=1, max_length=128)
     required_columns: list[str] = Field(default_factory=list)
+    #: Failed assertions the caller explicitly accepts — the third answer to a held promotion, where a
+    #: validator judges a finding unusual rather than broken. NAMED, never a blanket `force`: accepting
+    #: one finding must not wave through a second the approver never saw. Structural findings
+    #: (`STRUCTURAL_ASSERTIONS`) are refused however they are named, and a non-empty list additionally
+    #: requires `can_promote` — a rung ABOVE the `can_update_tag` publish itself needs.
+    accept_assertions: list[str] = Field(default_factory=list)
 
 
 class PublishResult(BaseModel):

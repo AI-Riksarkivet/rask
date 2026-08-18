@@ -49,7 +49,7 @@ from pydantic import BaseModel
 
 from catalog.core.namespace import open_dataset
 from catalog.services import dataplane
-from service_kit.lakehouse.quality import Assertion, assert_quality, passed
+from service_kit.lakehouse.quality import STRUCTURAL_ASSERTIONS, Assertion, assert_quality, passed
 
 
 if TYPE_CHECKING:
@@ -92,6 +92,9 @@ class PublicationResult(BaseModel):
     to_version: int
     assertions: list[Assertion] = []
     reason: str | None = None
+    #: Failed assertions a validator explicitly accepted. Empty on every ordinary publish — the field
+    #: means "waved through", never "was asked for".
+    accepted: list[str] = []
 
     @property
     def advanced(self) -> bool:
@@ -146,6 +149,7 @@ def publish(
     version: int,
     key_column: str,
     required_columns: Sequence[str] = (),
+    accept_assertions: Sequence[str] = (),
     tag: str = PUBLISHED_TAG,
 ) -> PublicationResult:
     """Gate `version`, then advance `published` to it. Returns the range the notification should carry.
@@ -195,16 +199,24 @@ def publish(
             version=version,
         )
 
+        accepted: list[str] = []
         if not passed(assertions):
             failed = [a.assertion for a in assertions if not a.success]
-            return PublicationResult(
-                table=candidate.uri,
-                published=False,
-                from_version=previous,
-                to_version=version,
-                assertions=assertions,
-                reason=f"quality gate failed: {', '.join(failed)}",
-            )
+            # An override names EXACTLY what it accepts, so it is a statement about known findings
+            # rather than a blanket force that also waves through whatever appears later. Structural
+            # findings are excluded first and unconditionally: naming one cannot publish it.
+            waved = set(accept_assertions) - STRUCTURAL_ASSERTIONS
+            unaccepted = [name for name in failed if name not in waved]
+            if unaccepted:
+                return PublicationResult(
+                    table=candidate.uri,
+                    published=False,
+                    from_version=previous,
+                    to_version=version,
+                    assertions=assertions,
+                    reason=f"quality gate failed: {', '.join(unaccepted)}",
+                )
+            accepted = sorted(set(failed))
 
         _set_tag(ns, storage_options, table_id, tag, version)
         return PublicationResult(
@@ -213,6 +225,7 @@ def publish(
             from_version=previous,
             to_version=version,
             assertions=assertions,
+            accepted=accepted,
         )
     finally:
         # Suppressed on purpose: a failure to unpin must never mask the publish outcome, and the worst

@@ -32,6 +32,16 @@ NOT_NULL = "not_null"
 BLOB_RESOLVES = "blob_resolves"
 COLUMN_DECLARED = "column_declared"
 
+#: Findings NO approval can wave through: the data is wrong, not merely unusual. A null key means a
+#: broken join or transform; an unresolvable blob pointer means the payload is gone. Neither becomes
+#: correct because somebody signed off.
+#:
+#: SHARED because it is enforced twice, and both points must agree on what "structural" means: the
+#: medallion's review refuses to ASK about these, and the catalog's publish door refuses to ACT on
+#: them — so a caller that bypasses the workflow cannot publish corrupt data either. One definition,
+#: two enforcement points, the same shape `blob_column_resolves` already has.
+STRUCTURAL_ASSERTIONS: frozenset[str] = frozenset({NOT_NULL, BLOB_RESOLVES})
+
 
 class Assertion(BaseModel):
     """One data-quality check on a produced dataset (the OpenLineage ``dataQualityAssertions`` shape)."""

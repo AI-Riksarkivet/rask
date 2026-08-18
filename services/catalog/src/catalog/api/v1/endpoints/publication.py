@@ -26,11 +26,13 @@ from fastapi.concurrency import run_in_threadpool
 
 from catalog.api.dependencies import (
     ControlEmitterDep,
+    FgaClientDep,
     NamespaceDep,
     SettingsDep,
     StorageOptionsDep,
     get_lineage_emitter,
 )
+from catalog.api.fga_deps import require_relation
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PublishRequest, PublishResult
@@ -60,6 +62,7 @@ async def publication_extra(
     from_version: int | None,
     to_version: int | None,
     location: str,
+    accepted: list[str] | None = None,
 ) -> dict[str, Any]:
     """The `table_published` payload: the version RANGE, the vended location, and the TENANT.
 
@@ -74,6 +77,11 @@ async def publication_extra(
     (`LineageEmitter.project_for` swallows), which is what lets this run after the tag has moved.
     """
     extra: dict[str, Any] = {"from_version": from_version, "to_version": to_version, "location": location}
+    # A publication that WAIVED a finding is a different governance fact from a clean one, and the
+    # audit viewer must be able to tell them apart. Omitted when empty so an ordinary publish is
+    # byte-identical to before.
+    if accepted:
+        extra["accepted_assertions"] = list(accepted)
     project = await lineage.project_for(segments[0]) if segments else None
     if project:
         extra["project"] = project
@@ -89,6 +97,7 @@ async def publish_table(
     so: StorageOptionsDep,
     control: ControlEmitterDep,
     lineage: ProjectSourceDep,
+    fga_client: FgaClientDep,
     token: CurrentToken,
 ) -> PublishResult:
     """Gate `version` and, if it passes, advance `published` to it.
@@ -99,6 +108,19 @@ async def publish_table(
     `lance_namespace` typed errors so the shared problem-body handler renders them.
     """
     segments = parse_identifier(id, settings.delimiter)
+    if body.accept_assertions:
+        # A SECOND door, above the router's `can_update_tag`. Publishing is an owner-tier act;
+        # accepting a finding the gate raised is a VALIDATOR's — the rung the model defines for
+        # exactly this ("a plain writer can write within a stage but cannot promote INTO a gated
+        # one"). An override must therefore need more permission than an ordinary publish, not the
+        # same amount.
+        await require_relation(
+            fga_client,
+            settings,
+            token,
+            relation="can_promote",
+            obj=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        )
     result = await run_in_threadpool(
         publication.publish,
         ns,
@@ -107,6 +129,7 @@ async def publish_table(
         version=body.version,
         key_column=body.key_column,
         required_columns=tuple(body.required_columns),
+        accept_assertions=tuple(body.accept_assertions),
     )
     # The NOTIFICATION, and only after the tag actually moved (D-R2). A refused gate announces
     # nothing: there is no new readiness to wake anyone for, and an event on a rejection would train
@@ -131,6 +154,7 @@ async def publish_table(
                 from_version=result.from_version,
                 to_version=result.to_version,
                 location=result.table,
+                accepted=result.accepted,
             ),
         )
 

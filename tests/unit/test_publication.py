@@ -308,10 +308,10 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     settings = Settings()
 
     good = _write(ns, [1, 2, 3])
-    await publish_table("pages", PublishRequest(version=good, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), None)
+    await publish_table("pages", PublishRequest(version=good, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), None, None)
 
     bad = _write(ns, [4, None, 6])
-    await publish_table("pages", PublishRequest(version=bad, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), None)
+    await publish_table("pages", PublishRequest(version=bad, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), None, None)
 
     assert [a["action"] for a in announced] == ["table_published"], "a rejection must announce nothing"
     assert (announced[0]["from_version"], announced[0]["to_version"]) == (None, good)
