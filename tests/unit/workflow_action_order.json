@@ -27,6 +27,19 @@
     "call_activity(emit_terminal)",
     "call_activity(emit_terminal)"
   ],
+  "services/medallion/src/medallion/workflow.py::promotion_review": [
+    "call_activity(resolve_review_policy)",
+    "call_activity(emit_promotion_outcome)",
+    "call_activity(request_approval)",
+    "call_activity(emit_promotion_outcome)",
+    "wait_for_external_event('promotion_decision')",
+    "create_timer(timedelta(hours=spec.approval_hours))",
+    "when_any",
+    "call_activity(emit_promotion_outcome)",
+    "call_activity(emit_promotion_outcome)",
+    "call_activity(publish_promotion)",
+    "call_activity(emit_promotion_outcome)"
+  ],
   "services/medallion/src/medallion/workflow.py::stage_run": [
     "call_activity(submit_stage)",
     "call_activity(report_stage_outcome)",

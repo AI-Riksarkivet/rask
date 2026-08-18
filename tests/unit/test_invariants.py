@@ -83,6 +83,13 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     ("services/medallion/src/medallion/services/train.py", "settings.train_topic"): "trigger",
     ("services/medallion/src/medallion/services/transform.py", "settings.pub_topic"): "trigger",
     ("services/medallion/src/medallion/workflow.py", "settings.sub_topic"): "trigger",
+    # The withheld next-stage trigger, released by an approval. A TRIGGER like every other cascade
+    # publish: losing one stalls the cascade, it does not lose a committed fact.
+    ("services/medallion/src/medallion/workflow.py", "spec.pub_topic"): "trigger",
+    # The ASK: a held promotion telling its approver there is something to decide. CONTROL, not
+    # lineage — the hold's own lineage FAIL already records what happened to the data; this records
+    # what is being asked of a person, and a lost one costs a re-read rather than a committed fact.
+    ("services/medallion/src/medallion/workflow.py", "CONTROL_TOPIC"): "control",
 }
 
 #: The lineage publishes that do NOT go through the outbox. DEFERRED WITH A STATED TRADE, not an oversight.

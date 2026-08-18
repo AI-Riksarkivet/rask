@@ -92,6 +92,19 @@ class MedallionSettings(BaseSettings):
     # When set, the quality gate adds a `column_declared` assertion per name — a promotion that
     # dropped/renamed a declared column is BLOCKED (the write itself still commits; audited FAIL run).
     quality_required_columns: str = Field(default="", alias="MEDALLION_REQUIRED_COLUMNS")
+    #: Turn a quality HOLD into a QUESTION instead of a verdict (S3/S4).
+    #:
+    #: Off by default, and the default is the old behaviour rather than a weaker one: with review
+    #: disabled a held promotion is BLOCKED, exactly as `_QUALITY_BLOCKED` did. An estate with nobody
+    #: to ask must not park promotions on an external event no one will ever raise.
+    quality_review_enabled: bool = Field(default=False, alias="MEDALLION_QUALITY_REVIEW_ENABLED")
+    #: How long an ask stays open before it expires. An unbounded wait is a workflow that never
+    #: completes and an operator who never learns why. Read at DISPATCH and carried on the spec —
+    #: never inside a workflow body, where a changed value would break replay.
+    quality_review_hours: int = Field(default=72, gt=0, alias="MEDALLION_QUALITY_REVIEW_HOURS")
+    #: WHO is asked. There is no default: an unset approver blocks rather than promoting, and the
+    #: workflow says so in the outcome instead of failing open.
+    quality_review_approver: str = Field(default="", alias="MEDALLION_QUALITY_REVIEW_APPROVER")
     # Ingest ceilings (audit 2026-07-12): the media ingest refuses (400) rather than OOM when a
     # source prefix exceeds these. Defaults generous for the demo; tune per deployment.
     ingest_max_objects: int = Field(default=10_000, alias="MEDALLION_INGEST_MAX_OBJECTS")

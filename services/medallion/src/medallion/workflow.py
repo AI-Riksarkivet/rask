@@ -85,6 +85,11 @@ POLL_INTERVAL_SECONDS: Final = 30
 #: the lineage reconciler still catches a job that dies (A13's argument, which stays true).
 MAX_POLLS: Final = 2880
 
+#: Assertion failures that are CORRUPTION rather than a judgement call. A blob pointer that does not
+#: resolve and a null key column are structurally wrong — no approval makes the data right, so nobody
+#: is asked. Every other failure is the archive's call.
+_STRUCTURAL_FAILURES: Final = frozenset({"blob_resolves", "not_null"})
+
 
 class StageJobSpec(BaseModel):
     """What the workflow needs to submit, watch and hand back — nothing more.
@@ -658,10 +663,277 @@ def _publish_train_fail(spec: TrainJobSpec, reason: str) -> None:
     _run_async(_send())
 
 
+# --------------------------------------------------------------------------- #
+# S3/S4 — the quality gate's third answer: a held promotion a person can release
+# --------------------------------------------------------------------------- #
+
+
+class PromotionSpec(BaseModel):
+    """One held promotion, carrying everything needed to resume it (B1: pointers, never payload)."""
+
+    token: str
+    project: str = ""
+    from_namespace: str
+    from_dataset: str
+    to_namespace: str
+    to_dataset: str
+    #: Where the next stage listens; empty means terminal — an approval then records the decision and
+    #: promotes nothing, which is the honest outcome for the last tier.
+    pub_topic: str = ""
+    #: WHICH assertions failed. On the SPEC, set by the caller from the run's own result — never read
+    #: from settings inside the body, where a value could change under a running instance.
+    reasons: list[str] = Field(default_factory=list)
+    #: Who may answer. Resolved at hold time, because by the time this runs there is no request left
+    #: to derive an identity from. Empty means nobody can be asked — which BLOCKS, never promotes.
+    approver: str = ""
+    originator: str = ""
+    approval_hours: int = 72
+
+
+def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[Any, Any, dict[str, Any]]:
+    """Hold a promotion, ask a person, resume the cascade only on an explicit yes.
+
+    A workflow rather than a table and a cron because the wait is hours-to-days and must survive every
+    pod restart in between: an approval is a plan worth resuming, since losing it loses a decision.
+
+    EVERY path that is not an explicit clean verdict or an explicit approval BLOCKS. A held batch that
+    reached promotion by falling off the end of a branch would be the gate failing open, which is
+    worse than the permanent DROP this replaces.
+    """
+    spec = PromotionSpec.model_validate(payload)
+
+    # Resolved by an ACTIVITY, and first: a threshold read in the body changes under a running
+    # instance and makes replay disagree with the original turn.
+    policy = yield ctx.call_activity(resolve_review_policy, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+    verdict = policy.get("verdict", "block")
+
+    if verdict == "block":
+        yield ctx.call_activity(
+            emit_promotion_outcome,
+            input={"spec": spec.model_dump(), "outcome": {"status": "BLOCKED", "reasons": spec.reasons}},
+            retry_policy=ACTIVITY_RETRY,
+        )
+        return {"status": "BLOCKED", "decided_by": None, "reasons": spec.reasons}
+
+    decided_by: str | None = None
+    if verdict == "review":
+        # ASK BEFORE WAITING, and treat an unsendable ask as a refusal: parking on an event nobody was
+        # told about is an outage wearing a pause.
+        asked = yield ctx.call_activity(request_approval, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+        if not asked:
+            yield ctx.call_activity(
+                emit_promotion_outcome,
+                input={"spec": spec.model_dump(), "outcome": {"status": "BLOCKED", "reasons": [*spec.reasons, "no reachable approver"]}},
+                retry_policy=ACTIVITY_RETRY,
+            )
+            return {"status": "BLOCKED", "decided_by": None, "reasons": [*spec.reasons, "no reachable approver"]}
+
+        approval = ctx.wait_for_external_event("promotion_decision")
+        deadline = ctx.create_timer(timedelta(hours=spec.approval_hours))
+        winner = yield wf.when_any([approval, deadline])
+
+        if winner is deadline:
+            yield ctx.call_activity(
+                emit_promotion_outcome,
+                input={"spec": spec.model_dump(), "outcome": {"status": "EXPIRED", "reasons": spec.reasons}},
+                retry_policy=ACTIVITY_RETRY,
+            )
+            return {"status": "EXPIRED", "decided_by": None, "reasons": spec.reasons}
+
+        decision = approval.get_result() or {}
+        decided_by = decision.get("subject")
+        # The DOOR authenticates; this only refuses a decision that names nobody, or one whose subject
+        # is the producing service approving its own output.
+        if not decided_by or decided_by == settings_author_marker(spec) or not decision.get("approved"):
+            status = "REJECTED" if decided_by and decision.get("approved") is False else "BLOCKED"
+            yield ctx.call_activity(
+                emit_promotion_outcome,
+                input={"spec": spec.model_dump(), "outcome": {"status": status, "decided_by": decided_by, "reasons": spec.reasons}},
+                retry_policy=ACTIVITY_RETRY,
+            )
+            return {"status": status, "decided_by": decided_by, "reasons": spec.reasons}
+
+    if spec.pub_topic:
+        yield ctx.call_activity(publish_promotion, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+    yield ctx.call_activity(
+        emit_promotion_outcome,
+        input={"spec": spec.model_dump(), "outcome": {"status": "PROMOTED", "decided_by": decided_by}},
+        retry_policy=ACTIVITY_RETRY,
+    )
+    return {"status": "PROMOTED", "decided_by": decided_by, "reasons": spec.reasons}
+
+
+def settings_author_marker(spec: PromotionSpec) -> str:
+    """The producing identity, which must never approve its own promotion.
+
+    Pure and derived from the spec alone so the workflow body stays deterministic — it reads no
+    settings and no clock.
+    """
+    return f"service:{spec.from_namespace}-to-{spec.to_namespace}"
+
+
+def resolve_review_policy(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
+    """Split a hold into corrupt / unusual / clean, and FAIL CLOSED on anything else.
+
+    `blob_resolves` and a null key column are structural: the data is wrong and no approval makes it
+    right. Review is opt-in per deployment, because an estate with nobody to ask must keep the old
+    behaviour rather than parking promotions on an event no one will raise — and "keep the old
+    behaviour" means BLOCK, which is what the gate did before, not promote.
+    """
+    from medallion.core.config import get_settings
+
+    spec = PromotionSpec.model_validate(payload)
+    settings = get_settings()
+    if not spec.reasons:
+        return {"verdict": "promote", "reasons": []}
+    if any(reason in _STRUCTURAL_FAILURES for reason in spec.reasons):
+        return {"verdict": "block", "reasons": spec.reasons}
+    return {"verdict": "review" if settings.quality_review_enabled else "block", "reasons": spec.reasons}
+
+
+def request_approval(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> bool:
+    """Tell the approver there is something to decide. Returns whether the ask went out.
+
+    Published DIRECTLY rather than through `process_control_emitter()`: the mover never sets a
+    process emitter, so that path is a no-op here and the ask would be silently swallowed — the exact
+    class of defect this feature exists to fix.
+    """
+    from dapr.aio.clients import DaprClient
+
+    from medallion.core.config import get_settings
+    from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
+    from service_kit.dapr_publish import publish_event
+
+    spec = PromotionSpec.model_validate(payload)
+    if not spec.approver:
+        log.warning("medallion_promotion_unapprovable", extra={"dataset": spec.to_dataset, "token": spec.token})
+        return False
+
+    settings = get_settings()
+    event = CatalogControlEvent(
+        action="promotion_review_requested",
+        object_type="table",
+        object_id=f"table:{_qualified(spec.project, spec.to_dataset)}",
+        actor=None,
+        extra={"subject": f"user:{spec.approver}", "reasons": spec.reasons, "project": spec.project, "token": spec.token},
+    )
+
+    async def _publish() -> None:
+        async with DaprClient() as client:
+            await publish_event(
+                client,
+                timeout_seconds=settings.publish_timeout_seconds,
+                pubsub_name=settings.pubsub,
+                topic_name=CONTROL_TOPIC,
+                data=event.model_dump_json(),
+                data_content_type="application/json",
+            )
+
+    try:
+        _run_async(_publish())
+    except Exception:
+        log.exception("medallion_promotion_ask_failed", extra={"dataset": spec.to_dataset, "token": spec.token})
+        return False
+    log.info("medallion_promotion_review_requested", extra={"dataset": spec.to_dataset, "approver": spec.approver})
+    return True
+
+
+def publish_promotion(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
+    """Resume the cascade: the next-stage trigger the gate withheld."""
+    from dapr.aio.clients import DaprClient
+
+    from medallion.core.config import get_settings
+    from service_kit.dapr_publish import publish_event
+
+    spec = PromotionSpec.model_validate(payload)
+    settings = get_settings()
+    trigger: dict[str, Any] = {"token": spec.token, "dataset": spec.to_dataset, "namespace": spec.to_namespace}
+    if spec.project:
+        trigger["project"] = spec.project
+    if spec.originator:
+        trigger["originator"] = spec.originator
+
+    async def _publish() -> None:
+        async with DaprClient() as client:
+            await publish_event(
+                client,
+                timeout_seconds=settings.publish_timeout_seconds,
+                pubsub_name=settings.pubsub,
+                topic_name=spec.pub_topic,
+                data=json.dumps(trigger),
+                data_content_type="application/json",
+            )
+
+    _run_async(_publish())
+    log.info("medallion_promotion_published", extra={"dataset": spec.to_dataset, "topic": spec.pub_topic})
+
+
+def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
+    """Record the decision where the AUDIT lives.
+
+    Workflow history is retention-bounded (7d COMPLETED / 30d FAILED), so it is a cache; lineage is
+    the durable record. A decision surviving only in history is one the estate forgets.
+    """
+    from dapr.aio.clients import DaprClient
+
+    from medallion.core.config import get_settings
+    from medallion.schemas.events import build_run_event
+    from service_kit.lakehouse import outbox
+
+    spec = PromotionSpec.model_validate(payload["spec"])
+    outcome = payload["outcome"]
+    settings = get_settings()
+    approved = outcome["status"] == "PROMOTED"
+    event = build_run_event(
+        operation=settings.operation,
+        author=settings.author,
+        job_namespace=settings.job_namespace,
+        inputs=[(spec.from_namespace, _qualified(spec.project, spec.from_dataset))],
+        output_namespace=spec.to_namespace,
+        output_name=_qualified(spec.project, spec.to_dataset),
+        token=f"{spec.token}:promotion-{outcome['status'].lower()}",
+        project=spec.project or None,
+        originator=spec.originator or None,
+        event_type="COMPLETE" if approved else "FAIL",
+        error_message=None if approved else f"promotion {outcome['status'].lower()}: {', '.join(outcome.get('reasons') or []) or 'quality review'}",
+    )
+    lance = event["run"]["facets"].setdefault("lance", {})
+    lance["promotion_status"] = outcome["status"]
+    if outcome.get("decided_by"):
+        lance["promotion_decided_by"] = outcome["decided_by"]
+
+    async def _publish() -> None:
+        async with DaprClient() as client:
+            await outbox.publish_lineage_with_outbox(
+                client,
+                outbox_uri=settings.lineage_outbox_uri,
+                storage_options=settings.storage_options(),
+                run_id=event["run"]["runId"],
+                event_json=json.dumps(event),
+                pubsub_name=settings.pubsub,
+                topic_name=settings.lineage_topic,
+                timeout_seconds=settings.publish_timeout_seconds,
+            )
+
+    with suppress(Exception):
+        _run_async(_publish())
+
+
+def _qualified(project: str, dataset: str) -> str:
+    """Project-qualify a dataset id, or return it unchanged for a single-tenant run.
+
+    The A18 defect this file already documents: an unqualified name against tenant-qualified grants
+    counts every recipient HIDDEN, so the audience is computed correctly and then discarded whole.
+    """
+    if not project or dataset.startswith(f"{project}-"):
+        return dataset
+    return f"{project}-{dataset}"
+
+
 # The registration tuples live at the END of the module, after every symbol they name. They used to
 # sit mid-file, which worked only for as long as nothing was defined below them — adding the train
 # watcher turned that into a NameError at import, i.e. a service that cannot start.
-WORKFLOWS = (stage_run, train_run)
+WORKFLOWS = (stage_run, train_run, promotion_review)
 
 ACTIVITIES = (
     submit_stage,
@@ -670,4 +942,8 @@ ACTIVITIES = (
     report_stage_outcome,
     poll_train,
     report_train_outcome,
+    resolve_review_policy,
+    request_approval,
+    publish_promotion,
+    emit_promotion_outcome,
 )

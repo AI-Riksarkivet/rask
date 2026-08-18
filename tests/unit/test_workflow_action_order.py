@@ -49,6 +49,7 @@ WORKFLOW_BODIES = (
     ("services/flows/src/flows/workflow.py", "flow_run_workflow"),
     ("services/medallion/src/medallion/workflow.py", "stage_run"),
     ("services/medallion/src/medallion/workflow.py", "train_run"),
+    ("services/medallion/src/medallion/workflow.py", "promotion_review"),
 )
 
 #: The committed snapshot. Regenerate with `RASK_UPDATE_WORKFLOW_SNAPSHOT=1 uv run pytest
