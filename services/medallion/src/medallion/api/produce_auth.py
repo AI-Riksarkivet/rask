@@ -131,6 +131,46 @@ async def authorize_produce(
     raise PermissionDeniedError("invalid or missing produce credential")
 
 
+async def authenticate_subject(
+    request: Request,
+    settings: SettingsDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> str | None:
+    """Verify WHO is calling and return their sub. Authorization is somebody else's job.
+
+    `authorize_produce` fuses the two — it authenticates AND checks `can_administer` on a
+    chart-configured project. That is right for the cascade head, whose whole permission question is
+    "may you trigger this tenant's pipeline", and wrong for any door with a FINER rung. The medallion's
+    promotion review is the case: `can_promote: validator` exists in the model precisely so that a
+    validator who is NOT a project admin can approve a promotion, and reusing the produce gate makes
+    the effective check admin AND validator — locking out the one person the rung was invented for
+    (`open_ingest_design.md` §4 rejects a door gated this way, in those words).
+
+    Declares NO FGA client, deliberately: a dependency that carries one invites the same fusion back.
+
+    There is no dev-open path. `authorize_produce` has one because a produce trigger needs no
+    principal — the sub it returns is a targeting hint. A DECISION is the opposite: the subject is the
+    record of who made it, and an anonymous approval is not an approval. A caller with no verified
+    identity gets `None` and the door refuses.
+    """
+    verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
+    if not authorization:
+        return None
+    if settings.oidc_enabled and verifier is None:
+        # Enabled but unwired (startup/discovery skew) is an auth-layer OUTAGE, not a caller verdict —
+        # the catalog/lineage security invariant, so a valid bearer is not misreported as denied.
+        raise ServiceUnavailableError("authentication is enabled but unavailable")
+    if verifier is None:
+        return None
+    scheme, _, raw = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not raw:
+        raise UnauthenticatedError("malformed bearer")
+    try:
+        return verifier.verify(raw).sub
+    except UnauthenticatedError:
+        raise UnauthenticatedError("invalid token") from None
+
+
 async def authorize_train(
     request: Request,
     settings: SettingsDep,

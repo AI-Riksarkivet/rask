@@ -26,7 +26,7 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError, Tabl
 from pydantic import BaseModel, ValidationError
 
 from medallion.api.dependencies import SettingsDep
-from medallion.api.produce_auth import authorize_produce
+from medallion.api.produce_auth import authenticate_subject
 from medallion.core.config import get_settings
 from medallion.workflow import PromotionSpec, promotion_review
 from service_kit.governed import fga
@@ -211,10 +211,15 @@ async def decide(
     instance_id: str,
     body: DecisionRequest,
     request: Request,
-    # The SAME dual-auth as /produce and /train, for the same reason: one door, one bypass surface.
-    # It hands back the verified sub only on the human path — a service token resolves `None`, and
-    # `decide_promotion` refuses that, so the estate's shared credential cannot approve its own output.
-    subject: Annotated[str | None, Depends(authorize_produce)],
+    # AUTHENTICATION ONLY. The rung for this act is `can_promote: validator`, checked below against
+    # the promotion's own destination — deliberately NOT /produce's `can_administer` on a
+    # chart-configured project, which is coarser AND different, and would lock out exactly the
+    # non-admin validator the rung exists for (open_ingest_design.md §4).
+    #
+    # A service token resolves no subject here, and `decide_promotion` refuses that: the estate's
+    # shared credential cannot approve its own output, and the gateway's daprd-stamped token — the
+    # measured bypass on the sibling /produce door — buys a caller nothing on this route.
+    subject: Annotated[str | None, Depends(authenticate_subject)],
 ) -> dict[str, Any]:
     """Approve or reject a held promotion. 403 without a signed-in `can_promote` holder on the
     destination stage; 404 when this app hosts no live review under that id."""
@@ -225,7 +230,7 @@ async def decide(
 async def show(
     instance_id: str,
     request: Request,
-    subject: Annotated[str | None, Depends(authorize_produce)],
+    subject: Annotated[str | None, Depends(authenticate_subject)],
 ) -> dict[str, Any]:
     """What is being asked, so the approver can answer it: the datasets, the failed assertions, the deadline."""
     wf_client = _client(None)

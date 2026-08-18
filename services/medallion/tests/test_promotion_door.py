@@ -231,3 +231,35 @@ class TestTheDoorAuthorizesAgainstTHISPromotion:
         await decide_promotion(instance_for("tok-1"), approved=True, subject="alice", client=client, authorize=_authorize)
 
         assert gated == [("alice", "namespace:gold")]
+
+
+class TestTheRungIsValidatorNotAdmin:
+    """`can_promote: validator` exists precisely so a non-admin can validate.
+
+    `open_ingest_design.md` §4 rejects a promotion door gated on `can_administer` for exactly this:
+    it is "a coarser and different rung from the `can_promote: validator` rung the model already
+    defines for exactly this act". The route's first draft reused `authorize_produce`, whose FGA half
+    is `can_administer` on the configured project — so the effective gate became admin AND validator,
+    and the one person the rung was invented for could not answer.
+    """
+
+    def test_the_route_does_not_depend_on_the_ADMIN_gate(self) -> None:
+        import inspect
+
+        from medallion.api import promotions
+
+        source = inspect.getsource(promotions)
+        assert "authorize_produce" not in source, (
+            "the decision route must authenticate WITHOUT the can_administer gate; a project validator "
+            "who is not a project admin is exactly who this rung exists for"
+        )
+
+    @pytest.mark.asyncio
+    async def test_authentication_and_authorization_are_separate_steps(self) -> None:
+        """The door proves WHO, the FGA check proves MAY. Fusing them is what lost the rung."""
+        import inspect
+
+        from medallion.api.produce_auth import authenticate_subject
+
+        params = inspect.signature(authenticate_subject).parameters
+        assert "fga_client" not in params, "authentication must not carry an authorization client"
