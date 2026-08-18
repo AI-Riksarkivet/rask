@@ -46,6 +46,7 @@ def hold_spec(
     to_dataset: str,
     reasons: list[str],
     originator: str,
+    version: int = 0,
 ) -> PromotionSpec:
     """Everything the review needs to resume the cascade, resolved at DISPATCH.
 
@@ -67,6 +68,10 @@ def hold_spec(
         approver=settings.quality_review_approver,
         originator=originator,
         approval_hours=settings.quality_review_hours,
+        # The version the hold was taken on. An approval resumes by publishing THIS one — a later
+        # commit may land while the approver decides, and publishing that would ship a version nobody
+        # reviewed.
+        version=version,
     )
 
 

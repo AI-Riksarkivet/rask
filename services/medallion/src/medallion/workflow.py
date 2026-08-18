@@ -688,6 +688,10 @@ class PromotionSpec(BaseModel):
     approver: str = ""
     originator: str = ""
     approval_hours: int = 72
+    #: The version the hold was taken on. The resume must publish THIS one — a later commit may have
+    #: landed while the approver was deciding, and publishing that would ship a version nobody
+    #: reviewed. 0 means the hold predates a tag-driven cascade and can only resume by trigger.
+    version: int = 0
 
 
 def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[Any, Any, dict[str, Any]]:
@@ -838,8 +842,46 @@ def request_approval(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> b
     return True
 
 
+def _resume_publish(
+    *,
+    catalog_url: str,
+    table_id: str,
+    version: int,
+    key_column: str,
+    accept_assertions: list[str],
+    app_token: str,
+    service_identity: str,
+    token: str | None,
+    timeout_seconds: float,
+) -> None:
+    """The tag move an approval resumes with. A seam so the activity is testable without a catalog."""
+    from medallion.services.catalog_register import publish_stage_output
+
+    publish_stage_output(
+        catalog_url=catalog_url,
+        table_id=table_id,
+        version=version,
+        key_column=key_column,
+        accept_assertions=accept_assertions,
+        app_token=app_token,
+        service_identity=service_identity,
+        token=token,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 def publish_promotion(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
-    """Resume the cascade: the next-stage trigger the gate withheld."""
+    """Resume the promotion a person approved.
+
+    Under a tag-driven cascade the resume MOVES THE TAG — the next-stage trigger no longer exists, so
+    firing one would wake nothing. And it cannot be an ordinary re-publish: the version still fails the
+    assertion it failed the first time, so the door would refuse it for exactly the reason the approver
+    just overruled. It publishes with the findings the review ACCEPTED, which is the door built for
+    this — named findings only, and structural ones never.
+
+    Falls back to the trigger when the spec carries no version, which is a hold taken before the
+    cascade moved to publishing. That is a migration case with a real answer, not a silent fallback.
+    """
     from dapr.aio.clients import DaprClient
 
     from medallion.core.config import get_settings
@@ -847,6 +889,20 @@ def publish_promotion(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> 
 
     spec = PromotionSpec.model_validate(payload)
     settings = get_settings()
+    if spec.version and settings.cascade_via_publish:
+        _resume_publish(
+            catalog_url=settings.catalog_url,
+            table_id=spec.to_dataset,
+            version=spec.version,
+            key_column=settings.quality_key_column,
+            accept_assertions=list(spec.reasons),
+            app_token=settings.app_api_token,
+            service_identity=settings.catalog_service_identity,
+            token=settings.catalog_token,
+            timeout_seconds=settings.publish_timeout_seconds,
+        )
+        log.info("medallion_promotion_published", extra={"dataset": spec.to_dataset, "version": spec.version, "accepted": spec.reasons})
+        return
     trigger: dict[str, Any] = {"token": spec.token, "dataset": spec.to_dataset, "namespace": spec.to_namespace}
     if spec.project:
         trigger["project"] = spec.project

@@ -780,6 +780,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                 to_dataset=to_dataset,
                 reasons=quality_reasons,
                 originator=trigger.originator or "",
+                version=result.version if result else 0,
             )
             await promotion_hold.publish_hold(dapr, settings, spec)
         return _QUALITY_BLOCKED
