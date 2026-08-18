@@ -159,6 +159,16 @@ services:
       # emitter and the provenance reader accept under that name. This supplies the missing half, and
       # `services.yaml` adds the same subject to `LINEAGE_SERVICE_SUBJECTS` so the door admits it.
       RASK_LINEAGE_SERVICE_IDENTITY: service-ingest
+      # The CATALOG's service door, the same shape as lineage's above and declared nowhere until now.
+      # `ingest/catalog_service.py` reads this and prefers it over the bearer, for the reason its own
+      # docstring gives: the catalog verifies OIDC JWTs, a JWT expires, and a static string in a
+      # secret store cannot be one — chasing that produced a fail-closed run on a `catalog-token`
+      # secret that never needed to exist. Unset, ingest silently falls back to that bearer.
+      #
+      # `services.yaml` scans this key to build LANCE_SERVICE_SUBJECTS, so the subject the catalog
+      # admits cannot drift from the one ingest claims. Measured on the live cluster: the allowlist
+      # already held `service-ingest` and nothing in the chart had put it there.
+      RASK_CATALOG_SERVICE_IDENTITY: service-ingest
       # Route creation and commits through the CATALOG rather than writing the object store
       # directly. Opt-in by an explicit flag, never inferred from a reachable URL: a catalog that is
       # merely down must fail the run loudly, not silently downgrade to a local write that produces

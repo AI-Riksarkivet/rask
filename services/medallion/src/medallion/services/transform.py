@@ -471,6 +471,8 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                                 to_uri=to_uri,
                                 delimiter=settings.delimiter,
                                 token=settings.catalog_token,
+                                app_token=settings.app_api_token,
+                                service_identity=settings.catalog_service_identity,
                             )
                             span.set_attribute("lance.catalog.registered", to_dataset)
                         else:

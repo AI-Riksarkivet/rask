@@ -55,6 +55,25 @@ def relative_location(to_uri: str, catalog_root: str) -> str:
     return to_uri[len(root) + 1 :]
 
 
+def _credential(*, token: str | None, app_token: str | None, service_identity: str | None) -> dict[str, str]:
+    """The credential a mover presents to the catalog, service door first.
+
+    A service authenticates AS ITSELF — the app token daprd already injects plus the subject it
+    claims — and needs no bearer. The bearer path came first here and was the wrong shape: the
+    catalog verifies OIDC JWTs, a JWT expires, and a static string in a secret store cannot be one.
+    The ingest plane hit this and its fix records the cost — a fail-closed run chasing a
+    `catalog-token` secret that never needed to exist.
+
+    Both halves or neither: the door requires the token AND the identity
+    (`catalog/api/security.py`), and sending one is refused for a reason invisible from this side.
+    A forwarded human bearer stays supported below, because that is a real case a service call
+    simply does not have.
+    """
+    if app_token and service_identity:
+        return {"dapr-api-token": app_token, "x-lance-service-identity": service_identity}
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def register_stage_output(
     *,
     catalog_url: str,
@@ -63,6 +82,8 @@ def register_stage_output(
     to_uri: str,
     delimiter: str = "$",
     token: str | None = None,
+    app_token: str | None = None,
+    service_identity: str | None = None,
     timeout_seconds: float = 30.0,
 ) -> None:
     """Register the just-written dataset as ``table_id``; 409 means already governed.
@@ -74,7 +95,7 @@ def register_stage_output(
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot register its output table")
     location = relative_location(to_uri, catalog_root)
     segments = table_id.split(delimiter)
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    headers = _credential(token=token, app_token=app_token, service_identity=service_identity)
     with httpx.Client(base_url=catalog_url.rstrip("/"), timeout=timeout_seconds) as client:
         # Creates are top-down (the catalog's require_parent guard, live-verified: registering into
         # an absent namespace answers NamespaceNotFound 404) — and the cascade OWNS its tier

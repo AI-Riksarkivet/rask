@@ -243,6 +243,17 @@ class MedallionSettings(BaseSettings):
     # Optional bearer for auth-enabled catalogs (mirrors the annotator's MEDIA_CATALOG_TOKEN
     # pattern; the OpenBao/Dapr secret flow is the production source — this is the pinned override).
     catalog_token: str | None = Field(default=None, alias="MEDALLION_CATALOG_TOKEN")
+    #: The subject this mover claims at the catalog's SERVICE door — a name, never a secret, so it is
+    #: ordinary chart env. Preferred over the bearer above: the catalog verifies OIDC JWTs and a static
+    #: string cannot be one (the lesson `ingest/catalog_service.py` records).
+    #:
+    #: Deliberately NOT `fga_service_identity`, which carries the same value but is rendered only when
+    #: FGA is on. Authentication and authorization are different questions, and coupling them means a
+    #: governed estate running `auth.enabled: true` with FGA off cannot authenticate at all.
+    catalog_service_identity: str = Field(default="", alias="MEDALLION_CATALOG_SERVICE_IDENTITY")
+    #: The Dapr app token, injected by the sidecar from a managed secret — never a chart literal.
+    #: Paired with the identity above; one without the other is refused at a door that cannot say why.
+    app_api_token: str = Field(default="", alias="APP_API_TOKEN")
     # The catalog id delimiter (`gold$catalog`) — matches LANCE_DELIMITER's default, same rationale as
     # MAINTENANCE_DELIMITER: a mismatch addresses a DIFFERENT table rather than failing.
     delimiter: str = Field(default="$", alias="MEDALLION_DELIMITER")

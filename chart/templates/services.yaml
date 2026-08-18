@@ -137,6 +137,28 @@ spec:
             {{- if .Values.auth.enabled }}
             {{- include "lance.governedOidcEnv" (list . "LANCE") | nindent 12 }}
             {{- include "lance.governedFgaEnv" (list . "LANCE") | nindent 12 }}
+            {{- /* THE CATALOG'S SERVICE DOOR, which had no chart wiring at all — the same shape
+                   LINEAGE_SERVICE_SUBJECTS has below, and absent here for no stated reason. The
+                   catalog reads `LANCE_SERVICE_SUBJECTS` (catalog/core/config.py) and every caller
+                   that authenticates as a SERVICE is refused until its subject is listed.
+
+                   Without it a governed estate is broken in a way that reads as a data fault: the
+                   catalog verifies OIDC JWTs, a service has no JWT, so every register 401s and the
+                   medallion's `RegisterError -> _RETRY` redelivers forever. Measured on the live
+                   cluster: the allowlist held `service-ingest` and nothing had put it there.
+
+                   DERIVED from the same `medallion.movers[]` declarations the FGA seeds use, so a
+                   new mover cannot be added with an identity the door never learned. */}}
+            {{- $catalogSubjects := list .Values.medallion.train.trainerIdentity }}
+            {{- range .Values.medallion.movers }}
+              {{- $catalogSubjects = append $catalogSubjects .serviceIdentity }}
+            {{- end }}
+            {{- range $svcName, $svc := .Values.services }}
+              {{- with (get ($svc.env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}
+                {{- $catalogSubjects = append $catalogSubjects . }}
+              {{- end }}
+            {{- end }}
+            - { name: LANCE_SERVICE_SUBJECTS, value: {{ compact $catalogSubjects | uniq | sortAlpha | join "," | quote }} }
             {{- with include "lance.governedFgaPins" (list . "LANCE") }}{{- . | nindent 12 }}{{- end }}
             # #41 compliance audit trail (who/what/outcome for authn/authz/vending) — configurable.
             # hasKey+ternary, NOT `| default`: Sprig's default() treats boolean false as empty (making

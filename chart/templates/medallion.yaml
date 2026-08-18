@@ -357,6 +357,13 @@ spec:
             # success, so the run carried the new build's provenance over the old build's output.
             # Sourced from the image this pod actually runs, so it cannot drift from the code.
             - { name: MEDALLION_RAY_CODE_VERSION, value: {{ include "lance.catalogImage" $root | quote }} }
+            {{- /* The subject this mover claims at the catalog's SERVICE door. A NAME, not a secret,
+                   so it is plain env — the credential is APP_API_TOKEN, which daprd injects from a
+                   managed secret above. Rendered unconditionally and NOT beside
+                   MEDALLION_FGA_SERVICE_IDENTITY, which is gated on fgaEnabled: authentication and
+                   authorization are different questions, and coupling them leaves a governed estate
+                   with FGA off unable to authenticate at all. Same value, so the two cannot drift. */}}
+            - { name: MEDALLION_CATALOG_SERVICE_IDENTITY, value: {{ .serviceIdentity | quote }} }
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.rustfs.bucket | quote }} }
             {{- if $root.Values.medallion.quality }}
