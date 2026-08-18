@@ -87,7 +87,7 @@ async def test_the_trigger_carries_the_PROJECT_or_the_mover_moves_nothing() -> N
     """
     dapr = _Dapr()
 
-    await handle_publication(dapr, _Settings(), _event(from_version=None, to_version=1))
+    await handle_publication(dapr, _Settings(), _event(project="lane", from_version=None, to_version=1))
 
     assert dapr.published[0]["project"] == "lane"
 
@@ -185,7 +185,7 @@ async def test_the_lane_name_carries_NO_tenant() -> None:
     """
     dapr = _Dapr()
 
-    await handle_publication(dapr, _Settings(), _event(object_id="table:acme$events", from_version=1, to_version=2))
+    await handle_publication(dapr, _Settings(), _event(object_id="table:acme$events", project="acme", from_version=1, to_version=2))
 
     trigger = dapr.published[0]
     assert "acme" not in trigger["dataset"], f"the tenant leaked into the lane name: {trigger['dataset']}"
@@ -244,26 +244,43 @@ async def test_a_NESTED_namespace_still_names_the_right_lane() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_NESTED_namespace_still_names_the_top_level_PROJECT() -> None:
-    """The project is the TOP of the hierarchy, not whichever segment happens to sit next to the table.
+async def test_the_project_is_READ_from_the_event_never_derived_from_the_id() -> None:
+    """This asserted the opposite, and the opposite was wrong.
 
-    `project > warehouse > namespace > table`, and the mover needs the project to resolve its tier
-    roots — without it it computes nothing. For `acme$bronze$pages` that is `acme`; the middle
-    segments are tenancy detail this head deliberately discards rather than guesses at.
+    It pinned `table:acme$bronze$pages` -> project `acme`, taking the first segment as the top of the
+    hierarchy. That shape is not what any door produces: a catalog namespace is project-QUALIFIED with
+    a HYPHEN, so the real id is `acme-bronze$pages` and the first segment is the NAMESPACE. The head
+    stamped `project="acme-bronze"` — a tenant no registry knows — on every real publication.
+
+    No split fixes it: `PROJECT_PATTERN` permits `-` inside a project id, so `acme-bronze` is
+    genuinely ambiguous. The catalog resolves it through the warehouse binding and stamps it on the
+    event (`warehouses.project_for_namespace`); this head reads it and derives nothing.
     """
     dapr = _Dapr()
 
-    await handle_publication(dapr, _Settings(), _event(object_id="table:acme$bronze$pages", from_version=1, to_version=2))
+    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$pages", project="acme", from_version=1, to_version=2))
 
     assert dapr.published[0]["project"] == "acme"
+    assert dapr.published[0]["dataset"] == "bronze$pages"
+
+
+@pytest.mark.asyncio
+async def test_an_event_with_no_project_carries_NONE_rather_than_a_guess() -> None:
+    """A single-tenant estate, or a catalog that predates the field during a rolling deploy. Guessing
+    is what put a non-existent tenant on the wire."""
+    dapr = _Dapr()
+
+    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$pages", from_version=1, to_version=2))
+
+    assert "project" not in dapr.published[0]
 
 
 @pytest.mark.asyncio
 async def test_the_FLAT_case_is_byte_identical_to_before() -> None:
-    """The depth fix must not move the case that already worked — every live table is this shape."""
+    """The FLAT `<project>-<tier>$<table>` shape every live table actually has."""
     dapr = _Dapr()
 
-    await handle_publication(dapr, _Settings(), _event(object_id="table:acme$events", from_version=1, to_version=2))
+    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$events", project="acme", from_version=1, to_version=2))
 
     assert dapr.published[0]["dataset"] == "bronze$events"
     assert dapr.published[0]["project"] == "acme"

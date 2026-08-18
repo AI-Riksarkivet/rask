@@ -294,19 +294,29 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
         async def emit(self, event: object) -> None:
             announced.append({"action": getattr(event, "action", None), **dict(getattr(event, "extra", {}) or {})})
 
+    class _Tenant:
+        """The project source. `acme-bronze` is a bound namespace here, so the event names its tenant —
+        the medallion's publication head reads this field rather than splitting the id for it."""
+
+        async def project_for(self, top_ns: str) -> str | None:
+            return "acme" if top_ns == "acme-bronze" else None
+
     # The alias, not the field name — pydantic-settings validates on the env alias.
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "x")
     monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "y")
     settings = Settings()
 
     good = _write(ns, [1, 2, 3])
-    await publish_table("pages", PublishRequest(version=good, key_column="id"), ns, settings, {}, _Emitter(), None)
+    await publish_table("pages", PublishRequest(version=good, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), None)
 
     bad = _write(ns, [4, None, 6])
-    await publish_table("pages", PublishRequest(version=bad, key_column="id"), ns, settings, {}, _Emitter(), None)
+    await publish_table("pages", PublishRequest(version=bad, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), None)
 
     assert [a["action"] for a in announced] == ["table_published"], "a rejection must announce nothing"
     assert (announced[0]["from_version"], announced[0]["to_version"]) == (None, good)
+    # An UNBOUND namespace names no tenant — omitted rather than empty, so the medallion can tell
+    # "single-tenant" from "a tenant named ''". `pages` here has no binding.
+    assert "project" not in announced[0]
 
 
 def test_table_published_is_in_the_control_VOCABULARY() -> None:

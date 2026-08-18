@@ -48,40 +48,22 @@ PUBLISHED_ACTION = "table_published"
 DELIMITER = "$"
 
 
-def _split_object_id(object_id: str, delimiter: str) -> tuple[str, str] | None:
-    """`table:ns$name` -> `(project, table)`, at ANY nesting depth.
+def _table_name(object_id: str, delimiter: str) -> str | None:
+    """The table's own name from `table:<namespace>$<name>` — the LAST segment, at any nesting depth.
 
-    The control event names the object canonically, which is the only identifier every consumer
-    already agrees on. Anything not shaped like a table id is not ours to act on.
-
-    TWO SEGMENTS ARE WANTED AND THEY ARE NOT ADJACENT, which is what the first version got wrong by
-    reaching for `partition`. Catalog namespaces NEST — `namespace#parent: [warehouse, namespace]` in
-    the FGA model, and the create door accepts a nested id up to ``MAX_NAMESPACE_DEPTH`` (8) — so
-    `acme$bronze$pages` is the table `pages` inside the namespace `acme$bronze`:
-
-      * the LANE takes the table's own name, the LAST segment, because the medallion lane is
-        `<tier>$<unqualified-table>` and is the same string for every tenant (`transform.py:109`
-        compares the arrived name against the raw `settings.from_dataset`);
-      * the PROJECT takes the FIRST segment, the top of the hierarchy — a project is the top rung
-        (`project > warehouse > namespace > table`) and the ingest plane creates its namespace there.
-
-    `partition` returned the first segment for BOTH, so at depth 2 the lane became `bronze$pages`
-    and the published trigger read `bronze$bronze$pages` — a lane no mover matches, which
-    `transform.py` DROPs while the run reports nothing. Every live table is flat today, so this was
-    latent rather than firing; the catalog permits the depth through its ordinary door.
-
-    The MIDDLE segments are deliberately discarded: they are tenancy, not tier and not identity.
-    Nothing here needs them, and guessing which of them meant "project" is exactly the conflation
-    this docstring exists to prevent.
+    THE TENANT IS DELIBERATELY NOT DERIVED HERE. This returned `(segments[0], segments[-1])` and
+    called the first half the project, but a catalog namespace is project-QUALIFIED with a hyphen
+    (`acme-bronze`), so for every id the estate actually produces that was the namespace. There is no
+    better split either: `PROJECT_PATTERN` permits `-` inside a project id, so `acme-bronze` is
+    ambiguous between project `acme` and project `acme-bronze`. It arrives on the event instead —
+    `extra.project`, resolved by the catalog through the warehouse binding.
     """
     if not object_id.startswith("table:"):
         return None
     identifier = object_id.removeprefix("table:")
     if delimiter not in identifier:
         return None
-    segments = identifier.split(delimiter)
-    project, table = segments[0], segments[-1]
-    return (project, table) if project and table else None
+    return identifier.split(delimiter)[-1] or None
 
 
 #: Principals that name no PERSON. A wildcard is a statement about everyone and therefore about no
@@ -119,26 +101,13 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
     if data.get("action") != PUBLISHED_ACTION:
         return _SUCCESS  # a governance notice, not a readiness one
 
-    parts = _split_object_id(str(data.get("object_id") or ""), DELIMITER)
-    if parts is None:
+    table = _table_name(str(data.get("object_id") or ""), DELIMITER)
+    if table is None:
         return _SUCCESS
-    # TWO NAMING SYSTEMS MEET HERE, and conflating them is what the first version of this head did.
-    #
-    #   * the CATALOG names a table `<namespace>$<table>`, where the namespace is the TENANT
-    #     (`project > warehouse > namespace`, and the ingest plane creates a namespace per project);
-    #   * the MEDALLION names a lane `<tier>$<lane>` — `bronze$events` — and that name is IDENTICAL
-    #     for every tenant, with the tenant travelling separately in `project`. `transform.py:109`
-    #     compares the arrived name against the RAW `settings.from_dataset` and says so explicitly:
-    #     "the trigger carries the unqualified name for every tenant".
-    #
-    # This head published the CATALOG identifier as the lane, so `acme$events` was compared against
-    # `bronze$events` and every tenant's publication was DROPped as another lane's. It appeared to
-    # work exactly once, in a test whose tenant happened to be NAMED `bronze` and whose table happened
-    # to be named `events` — the two systems' strings collided and nothing was actually translated.
-    # `ingest_trigger._bronze_write_dataset` is the reference: it returns `settings.bronze_dataset`,
-    # never a per-tenant string.
-    tenant, table = parts
-
+    # The LANE is `<tier>$<table>`, the same string for every tenant — `transform.py` compares the
+    # arrived name against the raw `settings.from_dataset`, and the tenant travels separately. This
+    # head published the CATALOG identifier as the lane once, so `acme$events` was compared against
+    # `bronze$events` and every tenant's publication was DROPped as another lane's.
     extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
     trigger: dict[str, Any] = {
         "token": str(data.get("event_id") or ""),
@@ -156,12 +125,11 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
         # that was actually written instead of composing a path of its own (I2).
         "from_uri": extra.get("location"),
     }
-    # The tenant, without which the mover cannot resolve its tier roots and silently skips compute.
-    # OMITTED when empty rather than sent as "": `transform.py` treats a present-but-unsafe project as
-    # deterministic garbage and DROPs, so an empty string would refuse every single-tenant trigger.
-    # Same conditional as the reference head.
-    if tenant:
-        trigger["project"] = tenant
+    # Read, never derived. Absent means a single-tenant estate (or a catalog that predates the field),
+    # and omitting it is what the mover reads as "no tenant" — `""` would be refused as garbage.
+    project = str(extra.get("project") or "")
+    if project:
+        trigger["project"] = project
     # Omitted rather than blank: `""` would be carried to an inbox actor named "".
     publisher = _publisher(data)
     if publisher:

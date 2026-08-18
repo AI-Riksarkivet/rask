@@ -19,7 +19,9 @@ Lance/object-store IO and runs in a threadpool, like every other Lance-touching 
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Annotated, Any, Protocol
+
+from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 
 from catalog.api.dependencies import (
@@ -27,6 +29,7 @@ from catalog.api.dependencies import (
     NamespaceDep,
     SettingsDep,
     StorageOptionsDep,
+    get_lineage_emitter,
 )
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier
@@ -39,6 +42,44 @@ from service_kit.governed import fga
 router = APIRouter(prefix="/v1/table", tags=["publication"])
 
 
+class ProjectSource(Protocol):
+    """The one method `publication_extra` needs. `LineageEmitter` satisfies it and carries the
+    request-scoped binding cache; demanding the whole emitter would ask for six more it does not use."""
+
+    async def project_for(self, top_ns: str) -> str | None: ...
+
+
+#: The lineage emitter, narrowed to the one method this route uses. Same instance, same cache.
+ProjectSourceDep = Annotated[ProjectSource, Depends(get_lineage_emitter)]
+
+
+async def publication_extra(
+    lineage: ProjectSource,
+    segments: list[str],
+    *,
+    from_version: int | None,
+    to_version: int | None,
+    location: str,
+) -> dict[str, Any]:
+    """The `table_published` payload: the version RANGE, the vended location, and the TENANT.
+
+    The tenant is here because the catalog is the only component that can answer it — the binding
+    (namespace → warehouse → project) is a registry read, and `PROJECT_PATTERN` permits `-` inside a
+    project id, so no string rule can recover `acme` from `acme-bronze`. The medallion's publication
+    head took segment 0 and got the namespace instead. Resolved through the emitter so this names the
+    same tenant the lineage facet does, off the same request-scoped cache.
+
+    `project` is OMITTED rather than empty when unresolved: a single-tenant estate has no tenant, and
+    a consumer must be able to tell that from one named "". Resolution cannot raise
+    (`LineageEmitter.project_for` swallows), which is what lets this run after the tag has moved.
+    """
+    extra: dict[str, Any] = {"from_version": from_version, "to_version": to_version, "location": location}
+    project = await lineage.project_for(segments[0]) if segments else None
+    if project:
+        extra["project"] = project
+    return extra
+
+
 @router.post("/{id}/publish")
 async def publish_table(
     id: str,
@@ -47,6 +88,7 @@ async def publish_table(
     settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
+    lineage: ProjectSourceDep,
     token: CurrentToken,
 ) -> PublishResult:
     """Gate `version` and, if it passes, advance `published` to it.
@@ -81,16 +123,15 @@ async def publish_table(
             object_type="table",
             object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
             actor=f"user:{token.sub}" if token is not None else None,
-            extra={
-                "from_version": result.from_version,
-                "to_version": result.to_version,
-                # The RESOLVED location. I2 says a caller names {project, dataset} and the CATALOG
-                # vends the URI — so the catalog, which already has it, hands it over rather than
-                # letting every consumer rebuild it. The movers composed
-                # `{project_root}/medallion/{namespace}` and looked at a path no table has ever been
-                # written to; that is the same rule broken from the other end.
-                "location": result.table,
-            },
+            # I2: the caller names {project, dataset}, the CATALOG vends the URI and the tenant.
+            # Both were rebuilt downstream before this, and the tenant was rebuilt wrongly.
+            extra=await publication_extra(
+                lineage,
+                segments,
+                from_version=result.from_version,
+                to_version=result.to_version,
+                location=result.table,
+            ),
         )
 
     return PublishResult(
