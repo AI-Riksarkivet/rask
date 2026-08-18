@@ -158,8 +158,7 @@ def _input_dataset(ref: InputRef) -> dict[str, Any]:
     return dataset
 
 
-#: Principals that name no PERSON — see `originator` in `build_write_event`. A wildcard is a
-#: statement about everyone and therefore about no one; a bare role is a job title, not an address.
+#: Principals that are not an address: a wildcard names everyone, a role names a job.
 _NOT_A_PERSON = frozenset({"", "*", "user:*", "system", "service", "ray", "data_eng", "analyst"})
 
 
@@ -212,13 +211,8 @@ def build_write_event(
     # could reach the WRONG tenant's watchers, which is a disclosure rather than a miss.
     if project and is_safe_project(project):
         lance_fields["project"] = project
-    # WHO THE RUN IS FOR, when a SERVICE made this write on a person's behalf (Q2 — ORIGINATOR).
-    # `enforce_author` overwrites `author` with the authenticating service's verified sub, so the
-    # human cannot be the author; this is the field that can still name them. A TARGETING hint only —
-    # it authorizes nothing, because the plane re-derives every recipient's visibility at delivery.
-    #
-    # A non-personal principal is DROPPED rather than carried: a role, a wildcard or a userset is not
-    # an address, and carrying one writes into an inbox actor literally named that.
+    # `enforce_author` overwrites `author` with the authenticating service's sub, so a service-made
+    # write can only name its human here. Targeting only — it authorizes nothing.
     if originator and originator not in _NOT_A_PERSON and "#" not in originator and not originator.startswith("user:"):
         lance_fields["originator"] = originator
     # Caller-supplied run facets FIRST (e.g. a `params` training-params facet on a merge), already spec-shaped
@@ -459,9 +453,7 @@ class _BaseLineageEmitter:
             # merge_insert has always accepted, threaded verbatim.
             inputs=inputs,
             extra_run_facets=extra_run_facets,
-            # DECLARED AND DROPPED until 2026-08-18: this signature accepted `project` and the call
-            # below did not forward it, so a caller that knew its tenant silently lost it and every
-            # created table reached zero watchers. The kwarg existing is what made it invisible.
+            # Declared and silently dropped until 2026-08-18 — the kwarg existing is what hid it.
             project=project,
             originator=originator,
         )
@@ -483,15 +475,9 @@ class _BaseLineageEmitter:
         project: str | None = None,
         originator: str | None = None,
     ) -> None:
-        # THE TENANT, resolved here rather than at each call site. `lance.project` is what the
-        # notifications WATCH fan-out keys on — `fanout.py` skips the watcher loop ENTIRELY when it is
-        # None — and the whole mechanism existed (this kwarg, `is_safe_project`, a registry-backed
-        # `project_for`) with not one caller passing it. The mapping is mechanical, so a per-caller
-        # kwarg is a rule every future endpoint has to remember and eventually forgets.
-        #
-        # BEST-EFFORT, like the emit itself: this runs on a COMMITTED write, so an unresolvable tenant
-        # costs the watchers their notification and never the caller their request — `project_for`
-        # swallows and returns None, which degrades to exactly the pre-existing behaviour.
+        # Resolved here rather than per call site: the mapping is mechanical, and a per-caller kwarg
+        # is a rule every future endpoint eventually forgets (none ever passed one). Best-effort —
+        # this runs on a committed write, so an unresolvable tenant costs a notification, not a request.
         resolved_project = project or await self.project_for(namespace)
         event = build_write_event(
             table_id=table_id,

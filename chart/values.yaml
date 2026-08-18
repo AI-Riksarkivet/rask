@@ -842,12 +842,12 @@ medallion:
   # OFF by default again (2026-08-15), and the reason is measured rather than a preference.
   #
   # It was flipped ON so S1's watcher would not be dead code in the shipped configuration. That
-  # argument is still right, but the configuration it produced could never work: `rayAddress` derives
-  # to the chart's KubeRay cluster, whose image is `.docker/ray-cluster.dockerfile` — the HTR/CUDA
-  # image built from `runners/htr`. It carries torch and htrflow and NO pylance, so every stage job
-  # died `ModuleNotFoundError: No module named 'lance'`. Baking the job scripts into that image (which
-  # this session also did, and which stands) only moved the failure from `exit 2 / can't open file` to
-  # `exit 1 / no module`.
+  # argument is still right, and the configuration it produced now works. It could not until
+  # 2026-08-18: `ray-cluster` was built from `runners/htr`'s sealed lock, which carries torch and
+  # htrflow and NO lance, so every stage job died `ModuleNotFoundError: No module named 'lance'`.
+  # That image now builds `packages/ratch` from the ROOT lock — ray + pylance + lance-ray + pyarrow at
+  # the fleet's own versions, and no workload stack at all (verified in the built image: torch,
+  # htrflow, ultralytics and cv2 all absent). The HTR workload moved to `.docker/ray-htr.dockerfile`.
   #
   # The lane is designed against `.docker/ray-lance.dockerfile` — "a thin CPU Ray image for the
   # medallion compute seam: official Ray + the lance-ray Data integration" — deployed by
@@ -877,9 +877,9 @@ medallion:
   # settles. For the same reason `kubectl set env MEDALLION_RAY_ENABLED=true` alone can NEVER work —
   # it moves the flag without moving the scope.
   #
-  # Do not re-enable against the HTR image (`ray-cluster`): it has no pylance and every job dies
-  # `ModuleNotFoundError: No module named 'lance'`. `ray-lance` carries pylance 9.0.0 + lance_ray and
-  # bakes all four job scripts. With it, the full cascade ran on real Ray — both jobs SUCCEEDED and
+  # `ray-cluster` is lance-capable since 2026-08-18 (pylance 10.0.0 + lance_ray from the root lock,
+  # the dummy lane verified running inside the built image). `ray-lance` carries pylance 9.0.0 +
+  # lance_ray and bakes all four job scripts. With it, the full cascade ran on real Ray — both jobs SUCCEEDED and
   # bronze -> silver -> gold all COMPLETE, with S1's watcher doing exactly its job
   # (dispatched_to_workflow -> ray_stage_job_submitted -> job_terminal -> wake the mover).
   #

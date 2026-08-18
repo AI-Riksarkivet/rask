@@ -82,17 +82,11 @@ async def submit_stage_job(
     must not produce a governed dataset the in-process path would have stamped. It is provenance, never
     a credential, so echoing it back through the jobs API (which mirrors runtime_env) is harmless.
     """
-    # THE DECLARED LANE, when this mover names one. The record supplies the entrypoint, the workload's
-    # params and the code version; unset lane → `None` and the chart's settings govern exactly as
-    # before. A named-but-undeclared lane RAISES rather than falling back — a fallback would run the
-    # chart's old program under the declaration's name, which is the failure the record exists to
-    # remove. `UndeclaredLaneError` reaches the caller as a submit failure → RETRY, so the work
-    # resumes once an admin declares the lane instead of being dropped.
+    # A named-but-undeclared lane RAISES rather than falling back: a fallback would run the chart's
+    # old program under the declaration's name. Unset lane keeps the chart settings.
     spec = await resolve_lane_async(settings, project=project)
     entrypoint = spec.entrypoint if spec else settings.ray_entrypoint
     job_params = spec.params if spec else settings.ray_job_params
-    # The declared code version feeds B3's second axis, so re-declaring a lane against a new image
-    # correctly starts a NEW job rather than re-attaching to the old build's.
     code_version = spec.code_version if spec else settings.ray_code_version
 
     # The work identity rides in the id: a token-less trigger used to collapse EVERY submission of a
@@ -136,25 +130,13 @@ async def submit_stage_job(
         # reach S3_SECRET, LINEAGE_JSON or an OTEL_* key by choosing a colliding name. The platform
         # never reads these values; their meaning belongs to the workload.
         **{f"RASK_PARAM_{key}": value for key, value in job_params.items()},
-        # THE JOB'S OWN COPY OF THE IDENTITY — and it is NOT a duplicate of `metadata` below.
-        #
-        # Ray's `metadata` answers "who was this job for?" from OUTSIDE, after the fact, including for
-        # a job that died before emitting anything. This answers it from INSIDE, for the events the
-        # job emits ITSELF — and a stage job does emit its own OpenLineage, because Ray pods carry no
-        # Dapr sidecar. The train path has carried these for exactly this reason since D2.
-        #
-        # This block's absence was invisible in the worst way: the job built its event with no
-        # principal, `notifiable()` discarded it, and the ack was SUCCESS. The comment below used to
-        # justify the omission with "it hands the job code an identity it has no reason to hold" —
-        # true while stage jobs emitted nothing, false the moment one did.
-        #
-        # Empty stays empty: `""` is not an identity, and the emitter drops a blank originator rather
-        # than addressing an inbox actor named "".
+        # The job emits its OWN OpenLineage (no Dapr sidecar on Ray pods), so it needs the identity
+        # here as well as in `metadata` below — that one is read from outside after a failure, this
+        # one is what the job stamps on its own events. Carrying only one loses the other lane.
         **({"ORIGINATOR": originator} if originator else {}),
         **({"PROJECT": project} if project else {}),
-        # WHERE to post, and as WHOM. Without the URL the job's `emit()` returns early and the whole
-        # question is moot; without the service credential a governed ingest answers 401 and the
-        # provenance is lost silently (measured on the train lane, 2026-07-13).
+        # Unset URL => `emit()` returns early; missing credential => a governed ingest 401s and the
+        # provenance is lost silently.
         **(
             {
                 "LINEAGE_URL": settings.stage_lineage_url,
@@ -168,10 +150,7 @@ async def submit_stage_job(
     # WHO THIS JOB IS FOR, in Ray's own `metadata` — not in `runtime_env.env_vars`, and the distinction
     # decides whether the feature works at all. The identity has to be readable from OUTSIDE the job
     # AFTER it fails: `metadata` comes back on `GET /api/jobs/<id>` (and in the dashboard), which is
-    # exactly the read a failure path makes. The env_vars copy above serves the OPPOSITE need — the
-    # job stamping its OWN emitted events — and neither substitutes for the other: metadata alone
-    # leaves every self-emitted event unaddressed, env_vars alone loses the identity of a job that
-    # died before emitting.
+    # exactly the read a failure path makes, which is why it is kept alongside the env_vars copy.
     #
     # Empty values are OMITTED rather than sent blank: a service-triggered cascade has no person behind
     # it, and `""` is not an identity — a reader must never mistake it for one. Ray's metadata is

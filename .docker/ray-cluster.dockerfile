@@ -40,44 +40,33 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# The HTR runner is a SEALED project (runners/htr), deliberately outside the root uv
-# workspace: its model stack (torch/htrflow/ultralytics) must never enter the fleet's
-# resolution. So it builds from its OWN lock, not the root one. `storage` comes along
-# as a path dependency.
-# Step 1: install deps (frozen — first-party sources not yet COPYed).
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=runners/htr/uv.lock,target=runners/htr/uv.lock \
-    --mount=type=bind,source=runners/htr/pyproject.toml,target=runners/htr/pyproject.toml \
-    --mount=type=bind,source=packages/storage,target=packages/storage \
-    uv sync --project runners/htr --frozen --no-install-project --no-editable
-
-# Step 2: COPY sources (bind-mounts from Step 1 are gone), then resolve (locked).
-COPY packages/storage packages/storage
-COPY runners/htr    runners/htr
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --project runners/htr --locked --no-editable
-
-# ---- Step 3: the PLATFORM compute trio --------------------------------------
-# THE CLUSTER MUST BE ABLE TO READ THE LAKEHOUSE. Without this the Ray lane is not merely
-# unconfigured, it is impossible: every submitted stage job died `exit 1 / ModuleNotFoundError:
-# No module named 'lance'`, because this image resolves from `runners/htr/uv.lock` and that lock
-# contains no package matching lance (verified: the grep returns nothing). A workload's sealed
-# lock is the right home for torch and htrflow and the wrong home for the platform's own data
-# access — so the trio is installed HERE, beside the workload rather than inside its lock.
+# The PLATFORM compute environment, from the ROOT workspace lock.
 #
-# INSTALLED AFTER `uv sync --locked`, deliberately: that command prunes anything absent from the
-# lock, so a trio installed before it would be silently removed.
+# `packages/ratch` is the platform's own Ray+Lance package: ray[data,default], pylance, lance-ray,
+# pyarrow and service-kit[lancekit]. Building from the root lock means this image and the fleet
+# resolve the SAME versions by construction — a split between them is a correctness bug, not a
+# currency preference (measured: pylance 8.0.0 against a 9.0.0-written dataset made the whole
+# row-aligned blob read path unusable and mis-detected payload presence silently).
 #
-# THE PINS MUST MATCH THE FLEET and `.docker/ray-lance.dockerfile` exactly. This image reads and
-# writes the SAME blob-v2 datasets the medallion services write with the root workspace's pylance,
-# so a version split is a correctness bug rather than a currency preference — measured at pylance
-# 8.0.0 against a 9.0.0-written dataset, the entire row-aligned blob read path was unusable and the
-# descriptor validity mask was wrong, which mis-detects payload presence silently.
-# pyarrow is pinned explicitly because it is the one dependency SHARED with the workload stack;
-# letting the resolver float it is how a Ray job and the fleet end up disagreeing about Arrow.
+# NO WORKLOAD DEPENDENCIES LIVE HERE. This image previously built from `runners/htr/uv.lock`, so
+# every lane inherited torch and htrflow whether it wanted them or not, and the platform's own
+# `lance` had to be bolted on afterwards with hand-matched pins. A workload's deps belong to the
+# workload (`.docker/ray-htr.dockerfile`, or a per-deployment `runtime_env`), never to the shared
+# base — CLAUDE.md's sealed-runner ruling.
+# Step 1: deps only (first-party sources not yet COPYed).
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/venv/bin/python \
-        "lance-ray==0.5.0" "pylance==10.0.0" "pyarrow==25.0.0"
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=packages,target=packages \
+    --mount=type=bind,source=services,target=services \
+    uv sync --package ratch --frozen --no-install-project --no-editable
+
+# Step 2: COPY sources, then resolve.
+COPY pyproject.toml uv.lock ./
+COPY packages packages
+COPY services services
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --package ratch --locked --no-editable
 
 # Optional gated-model fetch step. Uncomment if rask pulls licensed weights at build time.
 # RUN --mount=type=secret,id=hf_token \
@@ -130,9 +119,6 @@ RUN --network=none --mount=from=builder,source=/opt/uv/python,target=/tmp/uvpy \
     cp -a /tmp/uvpy /opt/uv/python
 RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
     cp -a /tmp/venv /opt/venv
-
-COPY runners/htr/scripts/deploy_serve.py /app/deploy_serve.py
-RUN chown app:app /app/deploy_serve.py
 
 # The medallion Ray lane submits `python /home/ray/jobs/<job>.py` — the defaults of `ray_entrypoint`
 # and `train_entrypoint` in services/medallion/src/medallion/core/config.py. `ray-lance.dockerfile`

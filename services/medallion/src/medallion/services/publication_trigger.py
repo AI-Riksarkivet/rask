@@ -93,15 +93,9 @@ _NOT_A_PERSON = frozenset({"", "*", "user:*"})
 def _publisher(event: dict[str, Any]) -> str:
     """The verified sub of the person who published, or ``""``.
 
-    The catalog stamps ``actor=f"user:{token.sub}"`` on every ``table_published`` control event
-    (`catalog/api/v1/endpoints/publication.py`), and this head is the LAST place that identity
-    exists: by the time a silver or gold stage fails, the request is gone and the mover authors as a
-    chart role literal (`data_eng`), which addresses an inbox actor named `data_eng` and reaches
-    nobody. Reading it here is what lets a failure two stages later still name the person.
-
-    Only a ``user:`` principal is an address — a userset (`team:x#member`), a service, or the managed
-    -access wildcard is refused rather than carried. It never authorizes anything: the notifications
-    plane re-derives every recipient's visibility at delivery.
+    This head is the last place that identity exists — by the time a later stage fails the request is
+    gone and the mover authors as a chart role literal. Only a ``user:`` principal is an address; a
+    userset or wildcard is refused rather than carried.
     """
     actor = event.get("actor")
     if not isinstance(actor, str) or actor in _NOT_A_PERSON or not actor.startswith("user:"):
@@ -168,9 +162,7 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
     # Same conditional as the reference head.
     if tenant:
         trigger["project"] = tenant
-    # THE HUMAN THE CASCADE IS FOR. Omitted when absent rather than sent blank, exactly like
-    # `project` above and like the sibling head (`ingest_trigger.py`): `""` is not an identity, and a
-    # present-but-empty originator would be carried all the way to an inbox actor named "".
+    # Omitted rather than blank: `""` would be carried to an inbox actor named "".
     publisher = _publisher(data)
     if publisher:
         trigger["originator"] = publisher

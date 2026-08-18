@@ -1820,32 +1820,40 @@ def test_a_ray_SUBMISSION_is_never_pre_gated_on_cluster_capacity() -> None:
 
 
 def test_the_ray_cluster_image_can_read_the_lakehouse() -> None:
-    """The deployed Ray image must carry the platform compute trio, at the fleet's pins.
+    """The deployed Ray image must carry the platform compute stack, at the FLEET's versions.
 
-    THE DEFECT THIS CLOSES. `.docker/ray-cluster.dockerfile` resolves from `runners/htr/uv.lock` — a
-    sealed WORKLOAD lock that contains no package matching lance. So every stage job the medallion
-    submitted died `exit 1 / ModuleNotFoundError: No module named 'lance'`, and the Ray lane had to be
-    pinned off to keep the cascade working at all. A workload's lock is the right home for torch and
-    the wrong home for the platform's own data access.
+    THE DEFECT THIS CLOSES. `.docker/ray-cluster.dockerfile` used to resolve from
+    `runners/htr/uv.lock` — a sealed WORKLOAD lock containing no package matching lance. Every stage
+    job the medallion submitted died `exit 1 / ModuleNotFoundError: No module named 'lance'`, and the
+    Ray lane had to be pinned off to keep the cascade working at all.
 
-    THE PINS ARE THE POINT, not merely the presence. This image reads and writes the SAME blob-v2
-    datasets the fleet writes, so a version split is a correctness bug: measured at pylance 8.0.0
-    against a 9.0.0-written dataset, the whole row-aligned blob read path raised on every projection
-    and the descriptor validity mask silently mis-reported payload presence. Asserted against
-    `ray-lance.dockerfile` rather than a literal, so the two images cannot drift apart.
+    THE VERSIONS ARE THE POINT, not merely the presence. This image reads and writes the SAME blob-v2
+    datasets the fleet writes, so a split is a correctness bug: measured at pylance 8.0.0 against a
+    9.0.0-written dataset, the whole row-aligned blob read path raised on every projection and the
+    descriptor validity mask silently mis-reported payload presence.
+
+    WHAT CHANGED, and why this is stricter rather than looser. The trio used to be installed with
+    hand-written pins, and this test compared them against `ray-lance.dockerfile`'s hand-written
+    pins — two literals kept equal by a test. The image now resolves `packages/ratch` (the platform's
+    own Ray+Lance package) from the ROOT lock, so it and the fleet agree BY CONSTRUCTION and there is
+    no pin to drift. So the assertion moves to the mechanism: the image builds from the root lock,
+    and that package really does carry the stack.
     """
-    cluster = (REPO / ".docker" / "ray-cluster.dockerfile").read_text()
-    lance_img = (REPO / ".docker" / "ray-lance.dockerfile").read_text()
+    dockerfile = (REPO / ".docker" / "ray-cluster.dockerfile").read_text()
 
-    pins = dict(re.findall(r'"(lance-ray|pylance|pyarrow)==([0-9][^"]*)"', lance_img))
-    assert set(pins) == {"lance-ray", "pylance", "pyarrow"}, (
-        f"ray-lance.dockerfile no longer pins the trio explicitly (found {sorted(pins)}) — this test reads it as the source of truth"
+    assert "uv sync --package ratch" in dockerfile, (
+        "the deployed Ray image no longer builds the platform package from the root lock. Without it "
+        "the cluster cannot read the lakehouse at all (ModuleNotFoundError on every stage job), or "
+        "reads it at a different pylance than the fleet writes with — which corrupts the blob read "
+        "path silently."
     )
-    for package, version in sorted(pins.items()):
-        assert f'"{package}=={version}"' in cluster, (
-            f"the deployed Ray image does not install {package}=={version}. Either it cannot read the "
-            f"lakehouse at all (ModuleNotFoundError on every stage job), or it reads it at a DIFFERENT "
-            f"pylance than the fleet writes it with, which corrupts the blob read path silently."
+    assert "--frozen" in dockerfile and "--locked" in dockerfile, "the root-lock build must be frozen/locked, or the image can float off the fleet's versions"
+
+    ratch = (REPO / "packages" / "ratch" / "pyproject.toml").read_text()
+    for package in ("pylance", "lance-ray", "pyarrow", "ray["):
+        assert package in ratch, (
+            f"packages/ratch no longer declares {package!r}, so the Ray image would silently stop carrying it. "
+            "This test reads ratch as the definition of the platform compute stack."
         )
 
 
@@ -3093,4 +3101,34 @@ def test_NO_stray_node_modules_at_the_repo_ROOT() -> None:
         "fail as two unrelated types.\n\n"
         "Remove it (`rm -rf node_modules` at the repo root). It is gitignored, nothing declares it, "
         "and `tests/e2e` + `frontend/` each carry their own."
+    )
+
+
+def test_the_shared_ray_image_carries_NO_WORKLOAD_dependencies() -> None:
+    """The cluster base is the PLATFORM's image; a workload's stack belongs to the workload.
+
+    `.docker/ray-cluster.dockerfile` used to build from `runners/htr/uv.lock`, so every lane on the
+    shared cluster inherited torch, htrflow and ultralytics — and the platform's own `lance` had to
+    be bolted on afterwards with hand-matched pins, because that workload lock contains no lance at
+    all. Measured: not one of the three baked job scripts imports htrflow.
+
+    CLAUDE.md's sealed-runner rule states it directly — "a workload's awkward dependencies are ITS
+    problem, isolated by Ray Data / Ray Serve runtime environments, never by fattening a shared
+    image" — and the same file records the owner ruling that this is what keeps the medallion lane
+    shipped off.
+
+    `runners/dummy` is the ONE exception and stays one: it is the estate's own GPU-free probe, it is
+    COPYed as source rather than resolved as a second lock, and it adds no resolvable dependency
+    (pyarrow and lance are already present from the platform package).
+    """
+    # Comment lines stripped first: the file explains IN PROSE why `runners/dummy` is copied rather
+    # than synced, and a scanner that reads its own rationale as a violation is worse than no gate.
+    lines = [ln for ln in (REPO / ".docker/ray-cluster.dockerfile").read_text(encoding="utf-8").splitlines() if not ln.lstrip().startswith("#")]
+
+    resolved = re.findall(r"uv sync[^\n]*--project\s+(runners/\w+)", "\n".join(lines))
+    assert not resolved, (
+        f"the shared ray image resolves a workload lock: {resolved}\n\n"
+        "Put the workload's dependencies in its own image (see .docker/ray-htr.dockerfile) or in a "
+        "per-deployment Ray `runtime_env`, and keep this base agnostic. A second workload must cost "
+        "a sibling dockerfile, never a fatter shared base."
     )
