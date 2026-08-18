@@ -39,6 +39,7 @@ from annotator.projects.project_actor import AnnotationProjectActorInterface
 from service_kit.control_emit import emit_control
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.lakehouse.warehouse_registry import namespace_tiers
 from service_kit.media.deps import StateDep
 from service_kit.media.state import dataset_handle
 
@@ -64,8 +65,16 @@ DEFAULT_TARGET_NAMESPACE: Final[str] = "silver"
 #: and exposing them unauthenticated would let anyone mark another operator's publish succeeded.
 SYSTEM_ONLY_EVENTS: Final[frozenset[str]] = frozenset(e for (_s, e), (_t, p) in PROJECT_EDGES.items() if p is None)
 
-#: Namespaces whose promotion is validator-gated. `silver` and `gold` are medallion stages; a publish
-#: into one crosses the same gate a stage promotion does, so door 3 applies.
+#: TIERS whose promotion is validator-gated. `silver` and `gold` are medallion stages; a publish into
+#: one crosses the same gate a stage promotion does, so door 3 applies. Bronze is deliberately absent:
+#: it is the first governed tier rather than a promotion target, and gating it would demand the
+#: validator rung for an ordinary ingest write.
+#:
+#: MATCHED AGAINST THE NAMESPACE'S TIERS, NOT ITS NAME. This was `namespace in _VALIDATOR_GATED`, an
+#: exact-string test, and every namespace the estate actually has is project-QUALIFIED
+#: (`scripts/seed_estate.py` creates `acme-silver`/`acme-gold`), so it was False for all of them and
+#: door 3 never fired. `target_namespace` is caller-supplied, so this was reachable by naming the
+#: namespace you would have to name anyway — the normal path, not a crafted input.
 _VALIDATOR_GATED: Final[frozenset[str]] = frozenset({"silver", "gold"})
 
 
@@ -173,7 +182,11 @@ async def _authorize_publish(checker: Any, subject: str, project_id: str, namesp
     """
     await _check(checker, subject, "can_publish", f"annotation_project:{project_id}", "project.publish")
     await _check(checker, subject, CREATE_TABLE_RELATION, f"namespace:{namespace}", "project.publish")
-    if namespace in _VALIDATOR_GATED:
+    # An INTERSECTION, so the ambiguous shape fails closed. `namespace_tiers` returns a set rather than
+    # "the" tier because a project may itself contain hyphens: `acme-bronze-gold` is either project
+    # `acme` with a `bronze-gold` lane or project `acme-bronze` promoting into gold, and picking the
+    # leftmost would let the second skip a door it must cross.
+    if namespace_tiers(namespace) & _VALIDATOR_GATED:
         await _check(checker, subject, PROMOTE_RELATION, f"namespace:{namespace}", "project.publish")
 
 

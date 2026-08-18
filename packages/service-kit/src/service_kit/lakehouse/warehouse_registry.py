@@ -94,37 +94,30 @@ def project_namespace(project: str, name: str) -> str:
     return f"{project}-{name}" if project else name
 
 
-def split_project_namespace(qualified: str) -> tuple[str, str]:
-    """The inverse of :func:`project_namespace` — ``"acme-bronze"`` → ``("acme", "bronze")``.
+def namespace_tiers(qualified: str) -> frozenset[str]:
+    """Which governed tiers a namespace name contains, as hyphen-delimited segments.
 
-    LIVES HERE for the reason the composing half does, one paragraph up: a convention two services
-    must agree on cannot live inside one of them. It had no inverse, so every caller that needed to
-    read a project back OUT of an identifier wrote its own — and
-    ``medallion/services/publication_trigger.py`` wrote one that took the first ``$``-segment of a
-    table id as the project. For every namespace the estate actually seeds
-    (``scripts/seed_estate.py`` creates ``acme-bronze``/``acme-silver``/``acme-gold``, and a table id
-    is ``<namespace>$<table>``) that yields ``acme-bronze`` — the QUALIFIED NAMESPACE wearing the
-    project's name. Downstream it names a project no registry knows, so the mover cannot resolve a
-    warehouse root and drops the cascade, and the wrong ``lance.project`` zeroes the notification
-    watcher lane on the way past. Both failures are silent.
+    THE COMPLEMENT of :func:`project_namespace`, and deliberately only its SOUND half. The obvious
+    inverse — recovering the PROJECT — is ruled out by the estate's own canon
+    (``catalog/core/lineage_emit.py``, the ``ProjectResolver`` note): ``PROJECT_PATTERN`` permits
+    hyphens, so ``acme-bronze-silver`` is genuinely ambiguous between project ``acme`` and project
+    ``acme-bronze``, "and guessing wrong notifies the wrong tenant's watchers. The registry binding is
+    the only sound answer." The TIER half carries no such ambiguity because the vocabulary is CLOSED —
+    ``GOVERNED_TIERS`` is exactly bronze/silver/gold (R23) — so membership is a fact rather than a guess.
 
-    **The TIER marks the boundary, not the first hyphen.** ``PROJECT_PATTERN`` permits hyphens
-    (``my-cool-project-silver``), and the cascade names lanes ``<tier>-<lane>``
-    (``acme-bronze-media``), so the project is everything before the first segment that IS a governed
-    tier. Reducing from the right yields the LANE instead — the failure
-    ``maintenance/services/tiers.py`` documents hitting live on ``bronze-pages``.
+    Returns a SET, not "the" tier, because a name may honestly contain more than one and this refuses
+    to pick. That matters where the answer gates an authorization door: a caller asking
+    ``namespace_tiers(ns) & {"silver", "gold"}`` fails CLOSED on the ambiguous shape, which is the
+    direction a gate must fail. Picking the leftmost would let ``acme-bronze-gold`` (project
+    ``acme-bronze``, tier ``gold``) read as bronze and skip a gate it must cross.
 
-    A name carrying no tier segment is NOT split: without a tier there is no boundary to find, and
-    splitting on a hyphen anyway invents a project out of a plain name. A leading tier segment means
-    the single-tenant form (``bronze``, ``bronze-media``) and yields no project — the honest answer,
-    since ``project_namespace("", name)`` returns ``name`` unchanged.
+    Segment-wise, so ``goldfish`` is not gold. Lanes work by construction: the cascade names them
+    ``<tier>-<lane>`` (``acme-gold-htr``, ``chart/values.yaml``), and reading such a name from the RIGHT
+    yields the LANE instead — the failure ``maintenance/services/tiers.py`` documents hitting live on
+    ``bronze-pages``.
     """
-    segments = qualified.split("-")
     tiers = {tier.value for tier in GOVERNED_TIERS}
-    for index, segment in enumerate(segments):
-        if segment in tiers:
-            return "-".join(segments[:index]), "-".join(segments[index:])
-    return "", qualified
+    return frozenset(segment for segment in qualified.split("-") if segment in tiers)
 
 
 def clear_cache() -> None:
