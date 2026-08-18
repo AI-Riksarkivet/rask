@@ -93,6 +93,18 @@ class PublicationResult(BaseModel):
     assertions: list[Assertion] = []
     reason: str | None = None
 
+    @property
+    def advanced(self) -> bool:
+        """Whether the tag actually MOVED — the question a readiness announcement should ask.
+
+        `published` answers "is this version published", which is true again on a replay: re-publishing
+        an already-published version succeeds and changes nothing. Emitting on that announced a second
+        readiness with an empty range, and nothing downstream treats it as empty — `StageTrigger`
+        declares neither version field, and the publication head mints a fresh token, so the
+        instance-id dedupe never engages and a replay buys a full cascade.
+        """
+        return self.published and self.to_version != self.from_version
+
 
 def _tag_version(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], tag: str) -> int | None:
     """The version a tag points at, or None when unset.

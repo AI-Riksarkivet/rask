@@ -116,7 +116,7 @@ async def publish_table(
     # {from, to} straight into `_row_created_at_version > from AND <= to` and keeps no bookmark. A
     # consumer that MISSES this event loses nothing: the `published` tag still answers "what is
     # ready?", which is why the tag is the truth and this is merely the wake-up.
-    if result.published:
+    if result.advanced:
         await emit_control(
             control,
             action="table_published",

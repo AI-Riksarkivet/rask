@@ -373,3 +373,49 @@ def test_the_gate_scans_the_version_being_PUBLISHED_not_latest(ns) -> None:  # n
     ok = publication.publish(ns, {}, table_id=TABLE_ID, version=clean, key_column="id")
     assert ok.published is True
     assert ok.to_version == clean
+
+
+def test_a_REPUBLISH_at_the_same_version_announces_nothing(ns) -> None:  # noqa: ANN001
+    """`published` is not the same question as "did the tag move", and the endpoint asked the wrong one.
+
+    Re-publishing a version that is already published succeeds — the version IS published, so 200 is
+    right — but nothing changed. The endpoint gated its `table_published` emit on `result.published`,
+    so the replay announced a second readiness with `from_version == to_version`: an empty delta.
+
+    Nothing downstream treats that as empty. `StageTrigger` is `extra="ignore"` and declares neither
+    version field, and the publication head mints a fresh token from the event id, so the deterministic
+    instance-id dedupe never engages. One replayed publish therefore buys a full bronze->silver->gold
+    re-run. The shape occurs on the live path: ingest publishes inside a `finalize` activity that Dapr
+    retries up to four times.
+
+    Deliberate re-announcement is a different act and gets its own door (`POST /promote`), rather than
+    being an undocumented side effect of publishing twice.
+    """
+    first = _write(ns, [1, 2, 3])
+
+    r1 = publish(ns, {}, table_id=TABLE_ID, version=first, key_column="id")
+    r2 = publish(ns, {}, table_id=TABLE_ID, version=first, key_column="id")
+
+    assert r1.published is True and r1.advanced is True
+    assert r2.published is True, "the version IS published; re-asking is not an error"
+    assert r2.advanced is False, "the tag did not move, so there is no new readiness to announce"
+
+
+def test_a_real_advance_still_announces(ns) -> None:  # noqa: ANN001
+    """The other half — without it the fix above could be 'never emit' and pass."""
+    v1 = _write(ns, [1, 2, 3])
+    publish(ns, {}, table_id=TABLE_ID, version=v1, key_column="id")
+    v2 = _write(ns, [4, 5, 6])
+
+    assert publish(ns, {}, table_id=TABLE_ID, version=v2, key_column="id").advanced is True
+
+
+def test_a_REFUSED_publish_never_counts_as_an_advance(ns) -> None:  # noqa: ANN001
+    """A failed gate must not announce, and `advanced` is now the single thing the emit reads."""
+    _write(ns, [1, 2, 3])
+    bad = _write(ns, [4, None, 6])
+
+    result = publish(ns, {}, table_id=TABLE_ID, version=bad, key_column="id")
+
+    assert result.published is False
+    assert result.advanced is False
