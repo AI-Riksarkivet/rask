@@ -775,3 +775,42 @@ async def test_an_UNRESOLVABLE_tenant_emits_exactly_as_before() -> None:
     await emitter.emit_create(table_id="db$t", namespace="db", author="alice", version=1)
 
     assert "project" not in client.posted["run"]["facets"]["lance"]
+
+
+@pytest.mark.asyncio
+async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
+    """Q2 — ORIGINATOR — for the catalog's own emits.
+
+    Some catalog writes are made BY a service ON BEHALF OF a person: the annotator's publish saga is
+    the live case, driven from an actor reminder under a dedicated `publisher@rask.internal` service
+    account. `enforce_author` correctly overwrites `author` with that service's verified sub, so the
+    human CANNOT be the author and must not try to be — `lance.originator` is the field for exactly
+    this, and the catalog had no way to carry it.
+
+    It is a TARGETING hint and authorizes nothing: the notifications plane re-derives every
+    recipient's visibility at delivery, so a forged one can at worst put a row in an inbox whose
+    owner can already see the run's outputs.
+    """
+    client = _CapturingClient()
+    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
+
+    await emitter.emit_create(
+        table_id="acme-silver$annotations", namespace="acme-silver", author="service-publisher", version=1, originator="CiQwOGE4Njg0Yi1kYjg4"
+    )
+
+    lance = client.posted["run"]["facets"]["lance"]
+    assert lance["originator"] == "CiQwOGE4Njg0Yi1kYjg4"
+    assert client.posted["run"]["facets"]["author"]["sub"] == "service-publisher", "the service remains the author; originator is additive"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("junk", ["", "*", "user:*", "team:acme#member", "system"])
+async def test_a_NON_PERSONAL_originator_is_DROPPED(junk: str) -> None:
+    """Trap 4. An address must identify a person; a role, a wildcard or a userset is not one, and
+    carrying it writes into an inbox actor literally named that."""
+    client = _CapturingClient()
+    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
+
+    await emitter.emit_create(table_id="db$t", namespace="db", author="svc", version=1, originator=junk)
+
+    assert "originator" not in client.posted["run"]["facets"]["lance"]

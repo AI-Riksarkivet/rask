@@ -158,6 +158,11 @@ def _input_dataset(ref: InputRef) -> dict[str, Any]:
     return dataset
 
 
+#: Principals that name no PERSON — see `originator` in `build_write_event`. A wildcard is a
+#: statement about everyone and therefore about no one; a bare role is a job title, not an address.
+_NOT_A_PERSON = frozenset({"", "*", "user:*", "system", "service", "ray", "data_eng", "analyst"})
+
+
 def build_write_event(
     *,
     table_id: str,
@@ -173,6 +178,7 @@ def build_write_event(
     inputs: list[InputRef] | None = None,
     extra_run_facets: dict[str, Any] | None = None,
     project: str | None = None,
+    originator: str | None = None,
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for any catalog write to a table.
 
@@ -206,6 +212,15 @@ def build_write_event(
     # could reach the WRONG tenant's watchers, which is a disclosure rather than a miss.
     if project and is_safe_project(project):
         lance_fields["project"] = project
+    # WHO THE RUN IS FOR, when a SERVICE made this write on a person's behalf (Q2 — ORIGINATOR).
+    # `enforce_author` overwrites `author` with the authenticating service's verified sub, so the
+    # human cannot be the author; this is the field that can still name them. A TARGETING hint only —
+    # it authorizes nothing, because the plane re-derives every recipient's visibility at delivery.
+    #
+    # A non-personal principal is DROPPED rather than carried: a role, a wildcard or a userset is not
+    # an address, and carrying one writes into an inbox actor literally named that.
+    if originator and originator not in _NOT_A_PERSON and "#" not in originator and not originator.startswith("user:"):
+        lance_fields["originator"] = originator
     # Caller-supplied run facets FIRST (e.g. a `params` training-params facet on a merge), already spec-shaped
     # by shape_run_facets, so the catalog stays un-opinionated about their content. The catalog-OWNED `lance`
     # (operation/version) and `author` facets are stamped AFTER — they always win a name collision, so a
@@ -323,6 +338,7 @@ class LineageEmitter(Protocol):
         inputs: list[InputRef] | None = None,
         extra_run_facets: dict[str, Any] | None = None,
         project: str | None = None,
+        originator: str | None = None,
     ) -> None: ...
 
     async def emit_write(
@@ -340,6 +356,7 @@ class LineageEmitter(Protocol):
         inputs: list[InputRef] | None = None,
         extra_run_facets: dict[str, Any] | None = None,
         project: str | None = None,
+        originator: str | None = None,
     ) -> None: ...
 
 
@@ -363,6 +380,7 @@ class NoopEmitter:
         inputs: list[InputRef] | None = None,
         extra_run_facets: dict[str, Any] | None = None,
         project: str | None = None,
+        originator: str | None = None,
     ) -> None:
         return None
 
@@ -381,6 +399,7 @@ class NoopEmitter:
         inputs: list[InputRef] | None = None,
         extra_run_facets: dict[str, Any] | None = None,
         project: str | None = None,
+        originator: str | None = None,
     ) -> None:
         return None
 
@@ -423,6 +442,7 @@ class _BaseLineageEmitter:
         inputs: list[InputRef] | None = None,
         extra_run_facets: dict[str, Any] | None = None,
         project: str | None = None,
+        originator: str | None = None,
     ) -> None:
         await self.emit_write(
             table_id=table_id,
@@ -443,6 +463,7 @@ class _BaseLineageEmitter:
             # below did not forward it, so a caller that knew its tenant silently lost it and every
             # created table reached zero watchers. The kwarg existing is what made it invisible.
             project=project,
+            originator=originator,
         )
 
     async def emit_write(
@@ -460,6 +481,7 @@ class _BaseLineageEmitter:
         inputs: list[InputRef] | None = None,
         extra_run_facets: dict[str, Any] | None = None,
         project: str | None = None,
+        originator: str | None = None,
     ) -> None:
         # THE TENANT, resolved here rather than at each call site. `lance.project` is what the
         # notifications WATCH fan-out keys on — `fanout.py` skips the watcher loop ENTIRELY when it is
@@ -487,6 +509,7 @@ class _BaseLineageEmitter:
             inputs=inputs,
             extra_run_facets=extra_run_facets,
             project=resolved_project,
+            originator=originator,
         )
         await self._send(event, operation=operation, table_id=table_id, authorization=authorization)
 
