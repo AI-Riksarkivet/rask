@@ -254,7 +254,15 @@ class CatalogServiceClient:
         self.registered.append((self.table_id(namespace, dataset), version, run_id))
         return version, int(body.get("row_count", 0))
 
-    def publish(self, namespace: str, dataset: str, version: int, *, key_column: str = "id") -> dict[str, object]:
+    def publish(
+        self,
+        namespace: str,
+        dataset: str,
+        version: int,
+        *,
+        key_column: str = "id",
+        required_columns: Sequence[str] = (),
+    ) -> dict[str, object]:
         """Ask the catalog to gate `version` and, if it passes, advance the `published` tag.
 
         A commit makes bronze READABLE; this is what makes it READY (§ D2 D-R1). The plane does not
@@ -269,7 +277,11 @@ class CatalogServiceClient:
         import httpx
 
         url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/publish"
-        payload = {"version": version, "key_column": key_column}
+        # `required_columns` adds one `column_declared` assertion each — the breaking-change detector,
+        # which refuses a version that dropped a column a consumer depends on. `PublishRequest` has
+        # always accepted it and no caller sent any, so the door ran two assertions where the
+        # medallion's local gate runs five on the same data.
+        payload: dict[str, object] = {"version": version, "key_column": key_column, "required_columns": list(required_columns)}
         try:
             response = httpx.post(url, json=payload, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except Exception as exc:
