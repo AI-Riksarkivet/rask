@@ -24,6 +24,7 @@ import time
 import pyarrow.fs as pafs
 
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+from service_kit.schemas.storage import GOVERNED_TIERS
 
 
 log = logging.getLogger(__name__)
@@ -91,6 +92,39 @@ def project_namespace(project: str, name: str) -> str:
     convention that two services must agree on cannot live inside one of them.
     """
     return f"{project}-{name}" if project else name
+
+
+def split_project_namespace(qualified: str) -> tuple[str, str]:
+    """The inverse of :func:`project_namespace` — ``"acme-bronze"`` → ``("acme", "bronze")``.
+
+    LIVES HERE for the reason the composing half does, one paragraph up: a convention two services
+    must agree on cannot live inside one of them. It had no inverse, so every caller that needed to
+    read a project back OUT of an identifier wrote its own — and
+    ``medallion/services/publication_trigger.py`` wrote one that took the first ``$``-segment of a
+    table id as the project. For every namespace the estate actually seeds
+    (``scripts/seed_estate.py`` creates ``acme-bronze``/``acme-silver``/``acme-gold``, and a table id
+    is ``<namespace>$<table>``) that yields ``acme-bronze`` — the QUALIFIED NAMESPACE wearing the
+    project's name. Downstream it names a project no registry knows, so the mover cannot resolve a
+    warehouse root and drops the cascade, and the wrong ``lance.project`` zeroes the notification
+    watcher lane on the way past. Both failures are silent.
+
+    **The TIER marks the boundary, not the first hyphen.** ``PROJECT_PATTERN`` permits hyphens
+    (``my-cool-project-silver``), and the cascade names lanes ``<tier>-<lane>``
+    (``acme-bronze-media``), so the project is everything before the first segment that IS a governed
+    tier. Reducing from the right yields the LANE instead — the failure
+    ``maintenance/services/tiers.py`` documents hitting live on ``bronze-pages``.
+
+    A name carrying no tier segment is NOT split: without a tier there is no boundary to find, and
+    splitting on a hyphen anyway invents a project out of a plain name. A leading tier segment means
+    the single-tenant form (``bronze``, ``bronze-media``) and yields no project — the honest answer,
+    since ``project_namespace("", name)`` returns ``name`` unchanged.
+    """
+    segments = qualified.split("-")
+    tiers = {tier.value for tier in GOVERNED_TIERS}
+    for index, segment in enumerate(segments):
+        if segment in tiers:
+            return "-".join(segments[:index]), "-".join(segments[index:])
+    return "", qualified
 
 
 def clear_cache() -> None:
