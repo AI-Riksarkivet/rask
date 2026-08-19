@@ -39,7 +39,7 @@ def _settings(**over: Any) -> MedallionSettings:
         "MEDALLION_QUALITY_REVIEW_APPROVER": "CiQwOGE4",
         "MEDALLION_QUALITY_REVIEW_HOURS": "48",
     }
-    return MedallionSettings(**{**base, **over})  # type: ignore[arg-type]
+    return MedallionSettings(**{**base, **over})
 
 
 class TestWhatTheHoldCarries:

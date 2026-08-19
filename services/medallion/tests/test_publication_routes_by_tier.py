@@ -42,7 +42,7 @@ class _Dapr:
 
 
 def _settings(**over: Any) -> MedallionSettings:
-    return MedallionSettings(MEDALLION_LANE_ROUTES=dict(ROUTES), **over)  # type: ignore[arg-type]
+    return MedallionSettings(MEDALLION_LANE_ROUTES=dict(ROUTES), **over)
 
 
 def _event(object_id: str, project: str | None = "acme") -> dict[str, Any]:
@@ -125,7 +125,7 @@ class TestItDrivesOnlyDeclaredLanes:
         """A deployment that declares no lanes has no cascade to wake, and guessing bronze is the
         defect this replaces."""
         dapr = _Dapr()
-        await handle_publication(dapr, MedallionSettings(), _event("table:acme-silver$features"))  # type: ignore[arg-type]
+        await handle_publication(dapr, MedallionSettings(), _event("table:acme-silver$features"))
         assert dapr.published == []
 
 
@@ -145,4 +145,4 @@ class TestTheDeploymentPath:
         about the path a pod actually takes."""
         monkeypatch.setenv("MEDALLION_LANE_ROUTES", json.dumps(ROUTES))
 
-        assert MedallionSettings().lane_routes == ROUTES  # type: ignore[call-arg]
+        assert MedallionSettings().lane_routes == ROUTES

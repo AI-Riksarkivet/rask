@@ -164,6 +164,9 @@ def test_job_failure_is_recorded_on_the_continued_span(monkeypatch: pytest.Monke
         raise RuntimeError("boom")
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code.name == "ERROR"
+    # Narrowed, not suppressed: a span with no parent is a BROKEN continuity, which is the thing
+    # under test — so the absence has to fail here rather than at attribute access.
+    assert span.parent is not None, "the span lost its remote parent — trace continuity is what this asserts"
     assert f"{span.parent.trace_id:032x}" == "1" * 32
 
 

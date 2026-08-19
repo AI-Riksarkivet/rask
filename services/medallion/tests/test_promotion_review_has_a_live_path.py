@@ -39,7 +39,7 @@ def test_the_dispatch_is_opt_in_and_fails_closed_without_a_reviewer() -> None:
     behaviour has to survive the port too."""
     from medallion.core.config import MedallionSettings
 
-    assert promotion_hold.review_enabled(MedallionSettings()) is False, (  # type: ignore[call-arg]
+    assert promotion_hold.review_enabled(MedallionSettings()) is False, (
         "review must stay opt-in: an estate with nobody to ask keeps the permanent block rather than parking promotions on an event no one will raise"
     )
     assert "promotion_hold.review_enabled" in inspect.getsource(transform), "the hold is dispatched unconditionally — the permanent-block default is gone"
