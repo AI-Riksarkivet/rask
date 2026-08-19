@@ -521,7 +521,11 @@ DEV_ISSUER          ?= http://localhost:8080/dex
 DEV_ORIGIN          ?= http://localhost:8080
 DEV_SESSION_SECRET  ?= dev-session-secret-32-chars-min-ok
 
-k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait for the gateway
+k3s-crds: ## Apply the vendored CRDs the chart deliberately does not package (see chart/.helmignore)
+	@# Server-side apply: the CNPG CRD set exceeds kubectl's client-side annotation limit.
+	kubectl apply --server-side -f chart/crds-bootstrap/
+
+k3s-up: k3s-deps k3s-crds ## Vendor deps, apply CRDs, then install/upgrade the release and wait for the gateway
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ -z "$$HF_TOKEN" ] && [ -r "$${HF_HOME:-$$HOME/.cache/huggingface}/token" ]; then \
 	  HF_TOKEN="$$(cat "$${HF_HOME:-$$HOME/.cache/huggingface}/token")"; \

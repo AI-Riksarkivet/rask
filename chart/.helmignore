@@ -15,3 +15,20 @@ ci/
 *.orig
 *.rej
 *.bak
+
+# THE CNPG CRDs, 1.19 MB in one file — deliberately NOT packaged.
+#
+# Helm stores the whole chart in the release Secret, which Kubernetes caps at 1 MiB. Measured
+# 2026-08-18: revision 34 decoded to 1,046,844 bytes against a 1,048,576 limit — 1.7 KB of headroom —
+# and the next chart edit made every `helm upgrade` fail with "Secret ... is invalid: data: Too long".
+# The estate was one comment away from being undeployable, and had been for days.
+#
+# Moving them out costs nothing that Helm was providing: a `crds/` directory is installed ONCE and
+# never upgraded or deleted by Helm, so it was already not managing their lifecycle. `make k3s-crds`
+# applies them server-side, and `k3s-up` depends on it — which also fixes the upgrade case the
+# `crds/` dir silently did not cover.
+#
+# They stay vendored (not left to the subchart) for the reason values.yaml gives: CNPG ships its CRDs
+# as TEMPLATES, so on a cold install Helm cannot map our `Cluster` CR in the same release. That is why
+# `cloudnative-pg.crds.create` is false, and it still is.
+crds-bootstrap/

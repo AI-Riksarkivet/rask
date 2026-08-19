@@ -4,8 +4,10 @@ rev = "v5.0.0"
 hooks = [
   { id = "trailing-whitespace" },
   { id = "end-of-file-fixer" },
-  # chart/templates are Helm templates ({{ … }}), not parseable as plain YAML
-  { id = "check-yaml", exclude = "^chart/templates/" },
+  # chart/templates are Helm templates ({{ … }}), not parseable as plain YAML.
+  # chart/crds-bootstrap is a VENDORED upstream CRD bundle — legitimately multi-document
+  # (`---`-separated), which this hook rejects by default, and not ours to reformat.
+  { id = "check-yaml", exclude = "^chart/(templates|crds-bootstrap)/" },
   { id = "check-toml" },
   # Lockfiles are legitimately large and MUST be committed — the root uv.lock is already
   # 501 KB and only slips past because this hook checks newly-added files by default.
