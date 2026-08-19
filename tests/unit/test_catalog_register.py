@@ -32,9 +32,15 @@ def test_registration_sends_the_relative_location_and_segments() -> None:
     body = route.calls.last.request.read()
     assert b'"location": "medallion/gold-htr"' in body or b'"location":"medallion/gold-htr"' in body
     assert b'"gold"' in body and b'"htr"' in body  # id as SEGMENTS, split on the delimiter
-    # Creates are top-down (live-verified: register into an absent namespace → 404 require_parent),
-    # so the lane ensures its tier namespace FIRST — the cascade owns its tiers.
-    assert ns.call_count == 1
+    # THE CASCADE DOES NOT OWN ITS TIERS, and this asserted that it did. Measured in-cluster
+    # 2026-08-19, on the first run register ever made: `POST /v1/namespace/gold/create` answers
+    #   400 InvalidInputError: top-level namespace 'gold' must belong to a warehouse ...
+    #   Create it through its warehouse — POST /v1/warehouses/{id}/namespaces
+    # `require_warehouse_scoped` runs BEFORE the existence check, so an already-existing tier answers
+    # 400 rather than the 409 the register path treats as the steady state, and every hop
+    # dead-lettered. A top-level namespace is the warehouse door's to mint; a missing one is an
+    # operator's problem, reported by the register call rather than papered over by the lane.
+    assert ns.call_count == 0
 
 
 @respx.mock

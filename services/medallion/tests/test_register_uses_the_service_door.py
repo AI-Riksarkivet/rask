@@ -67,12 +67,22 @@ class TestTheServiceDoor:
 
     @respx.mock
     def test_the_PARENT_namespace_create_carries_the_same_credential(self) -> None:
-        """Registration is two calls. Authenticating only the second leaves the first 401-ing, and the
-        parent create is what runs FIRST — so the whole thing fails before the register is reached."""
-        ns = respx.post(f"{CATALOG}/v1/namespace/silver/create").mock(return_value=httpx.Response(200, json={}))
-        respx.post(f"{CATALOG}/v1/table/silver$features/register").mock(return_value=httpx.Response(200, json={}))
+        """Registration can be two calls. Authenticating only the second leaves the first 401-ing, and
+        the parent create runs FIRST — so the hop fails before the register is reached.
 
-        _register(app_token="stamped-by-daprd", service_identity="service-bronze-to-silver")
+        Uses a NESTED id, because that is the only shape that still creates a parent: a top-level
+        namespace belongs to the warehouse door, not to this lane."""
+        ns = respx.post(f"{CATALOG}/v1/namespace/acme$silver/create").mock(return_value=httpx.Response(200, json={}))
+        respx.post(f"{CATALOG}/v1/table/acme$silver$features/register").mock(return_value=httpx.Response(200, json={}))
+
+        register_stage_output(
+            catalog_url=CATALOG,
+            catalog_root=ROOT,
+            table_id="acme$silver$features",
+            to_uri=f"{ROOT}/medallion/silver",
+            app_token="stamped-by-daprd",
+            service_identity="service-bronze-to-silver",
+        )
 
         assert ns.calls.last.request.headers["x-lance-service-identity"] == "service-bronze-to-silver"
 
@@ -119,3 +129,40 @@ class TestTheBearerRemainsForTheCaseThatNeedsIt:
         assert "authorization" not in sent
         assert "dapr-api-token" not in sent
         assert "x-lance-service-identity" not in sent
+
+
+class TestItNeverTriesToCreateATopLevelNamespace:
+    """Found in-cluster, on the first run register ever made: the cascade dead-lettered on a 400.
+
+    `register_stage_output` created the parent namespace before registering, treating 409 as the
+    steady state. For a NESTED parent that is right. For a TOP-LEVEL one — `silver`, `gold`, every
+    namespace the cascade actually writes into — the catalog refuses outright:
+
+        400 InvalidInputError: top-level namespace 'silver' must belong to a warehouse ...
+        Create it through its warehouse — POST /v1/warehouses/{id}/namespaces
+
+    The guard runs BEFORE the existence check, so an already-existing namespace answers 400 rather
+    than 409 and the whole hop fails. A mover has no business minting a tenant's top-level namespace;
+    that door is the warehouse's, and a missing one is an operator's problem stated by the register
+    call's own error rather than papered over here.
+    """
+
+    @respx.mock
+    def test_a_TOP_LEVEL_parent_is_not_created(self) -> None:
+        create = respx.post(f"{CATALOG}/v1/namespace/silver/create").mock(return_value=httpx.Response(400, json={}))
+        route = respx.post(f"{CATALOG}/v1/table/silver$features/register").mock(return_value=httpx.Response(200, json={}))
+
+        register_stage_output(catalog_url=CATALOG, catalog_root=ROOT, table_id="silver$features", to_uri=f"{ROOT}/medallion/silver")
+
+        assert not create.called, "the mover tried to mint a top-level namespace the warehouse door owns"
+        assert route.called
+
+    @respx.mock
+    def test_a_NESTED_parent_is_still_created(self) -> None:
+        """The case the create exists for: a namespace inside a tenant's own, which the mover may make."""
+        create = respx.post(f"{CATALOG}/v1/namespace/acme$silver/create").mock(return_value=httpx.Response(200, json={}))
+        respx.post(f"{CATALOG}/v1/table/acme$silver$features/register").mock(return_value=httpx.Response(200, json={}))
+
+        register_stage_output(catalog_url=CATALOG, catalog_root=ROOT, table_id="acme$silver$features", to_uri=f"{ROOT}/medallion/silver")
+
+        assert create.called

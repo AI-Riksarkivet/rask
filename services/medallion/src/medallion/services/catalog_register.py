@@ -103,7 +103,13 @@ def register_stage_output(
         # an absent namespace answers NamespaceNotFound 404) — and the cascade OWNS its tier
         # namespaces, so the lane ensures its parent exists rather than demanding a manual
         # provisioning step nobody documented. 409 = already there, the steady state.
-        parent = delimiter.join(segments[:-1])
+        # A TOP-LEVEL parent is the WAREHOUSE's to create, never this lane's. `require_warehouse_scoped`
+        # refuses one outright — and it runs BEFORE the existence check, so an already-existing `silver`
+        # answers 400, not the 409 this treats as the steady state. Measured in-cluster on the first run
+        # register ever made: every hop dead-lettered on that 400. A missing top-level namespace is an
+        # operator's problem, stated by the register call's own error rather than papered over here.
+        parent_segments = segments[:-1]
+        parent = delimiter.join(parent_segments) if len(parent_segments) > 1 else ""
         if parent:
             try:
                 ns = client.post(f"/v1/namespace/{parent}/create", json={"id": segments[:-1]}, headers=headers)
