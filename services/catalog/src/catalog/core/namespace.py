@@ -88,7 +88,29 @@ def open_dataset(
     if not location:
         raise TableNotFoundError(f"Table not found: {table_id}")
     if branch is None:
-        return lance.dataset(location, storage_options=storage_options, version=version)
+        try:
+            return lance.dataset(location, storage_options=storage_options, version=version)
+        except ValueError as exc:
+            # pylance raises a bare ValueError for BOTH "no dataset here" and "no such version", and
+            # letting either through produced a 500 — which says "the catalog is broken" when the
+            # catalog is fine. Measured live: a table registered at a retired warehouse 500'd every
+            # publish, sending whoever was on call to the wrong system.
+            #
+            # The two are DIFFERENT facts and keep different codes: a missing version is
+            # `TableVersionNotFoundError` (the table is fine, that version is not), a missing dataset
+            # is `TableNotFoundError` — the same error this function already raises when the
+            # registration names no location at all, found one step later.
+            #
+            # The location rides the message, because knowing the table is missing does not tell
+            # anyone which bucket to go and look at.
+            # Same wording and same split as `dataplane.py`, which had this conversion at ONE caller
+            # while every other caller — `publish` among them — leaked the ValueError as a 500. Doing
+            # it here covers them all; the message is kept identical so nothing that already depended
+            # on it moves.
+            message = str(exc).lower()
+            if version is not None and "_versions/" in message and ".manifest" in message:
+                raise TableVersionNotFoundError(f"table version {version} was not found") from exc
+            raise TableNotFoundError(f"table has no readable dataset at its declared location ({location!r})") from exc
     dataset = lance.dataset(location, storage_options=storage_options)
     try:
         return dataset.checkout_version((branch, version))

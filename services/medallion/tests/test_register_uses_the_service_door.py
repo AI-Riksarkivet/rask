@@ -19,8 +19,9 @@ refused for a reason invisible from this side.
 from __future__ import annotations
 
 import httpx
+import pytest
 import respx
-from medallion.services.catalog_register import register_stage_output
+from medallion.services.catalog_register import RegisterError, register_stage_output
 
 
 CATALOG = "http://catalog.test"
@@ -166,3 +167,46 @@ class TestItNeverTriesToCreateATopLevelNamespace:
         register_stage_output(catalog_url=CATALOG, catalog_root=ROOT, table_id="acme$silver$features", to_uri=f"{ROOT}/medallion/silver")
 
         assert create.called
+
+
+class TestA409MustAgreeAboutWHERE:
+    """A 409 means "already registered". It does not mean "registered where you are writing".
+
+    Found live: `silver$features` was registered at `s3://bind86-wh/medallion/silver` — a leftover
+    warehouse — while the mover writes `s3://lance-catalog/medallion/silver`. Register answered 409,
+    the lane logged "already governed" and moved on, and the publish that followed opened the STALE
+    location, found no dataset there and 500'd. The mover had written real rows to a place the
+    catalog did not believe the table lived, and nothing in between noticed.
+
+    A registration that names a different location is a CONFLICT, not a convergence. The lane must
+    not silently adopt it: whoever fixes it needs both paths named, which is what the error carries.
+    """
+
+    @respx.mock
+    def test_a_409_at_the_SAME_location_is_the_steady_state(self) -> None:
+        respx.post(f"{CATALOG}/v1/table/silver$features/register").mock(return_value=httpx.Response(409, json={}))
+        respx.post(f"{CATALOG}/v1/table/silver$features/describe").mock(return_value=httpx.Response(200, json={"location": f"{ROOT}/medallion/silver"}))
+
+        _register()  # every redelivery after the first lands here — must not raise
+
+    @respx.mock
+    def test_a_409_at_a_DIFFERENT_location_refuses_and_names_both(self) -> None:
+        respx.post(f"{CATALOG}/v1/table/silver$features/register").mock(return_value=httpx.Response(409, json={}))
+        respx.post(f"{CATALOG}/v1/table/silver$features/describe").mock(return_value=httpx.Response(200, json={"location": "s3://bind86-wh/medallion/silver"}))
+
+        with pytest.raises(RegisterError) as exc:
+            _register()
+
+        message = str(exc.value)
+        assert "bind86-wh" in message, "the error must name where the catalog thinks the table is"
+        assert "medallion/silver" in message, "and where this stage actually wrote"
+
+    @respx.mock
+    def test_an_UNREADABLE_describe_does_not_invent_agreement(self) -> None:
+        """If the check itself cannot be made, that is not a pass. Treating an unanswerable describe as
+        agreement would restore exactly the silence this closes."""
+        respx.post(f"{CATALOG}/v1/table/silver$features/register").mock(return_value=httpx.Response(409, json={}))
+        respx.post(f"{CATALOG}/v1/table/silver$features/describe").mock(return_value=httpx.Response(500, text="boom"))
+
+        with pytest.raises(RegisterError):
+            _register()

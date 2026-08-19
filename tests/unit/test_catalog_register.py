@@ -45,9 +45,17 @@ def test_registration_sends_the_relative_location_and_segments() -> None:
 
 @respx.mock
 def test_a_409_is_already_governed_not_a_failure() -> None:
-    """Every redelivery after the first lands here — an idempotent stage must not look failed."""
+    """Every redelivery after the first lands here — an idempotent stage must not look failed.
+
+    The 409 is now checked against WHERE the table is registered: "already registered" is not
+    "registered where this stage wrote", and reading one as the other let a mover write real rows to
+    a bucket the catalog did not associate with the table (measured live — `silver$features` at a
+    retired `bind86-wh`). The describe below is the agreeing case; the disagreeing one is pinned in
+    services/medallion/tests/test_register_uses_the_service_door.py.
+    """
     respx.post(f"{CATALOG}/v1/namespace/gold/create").mock(return_value=httpx.Response(409, text="exists"))
     respx.post(f"{CATALOG}/v1/table/gold$htr/register").mock(return_value=httpx.Response(409, text="exists"))
+    respx.post(f"{CATALOG}/v1/table/gold$htr/describe").mock(return_value=httpx.Response(200, json={"location": f"{ROOT}/medallion/gold-htr"}))
 
     register_stage_output(catalog_url=CATALOG, catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/medallion/gold-htr")
 

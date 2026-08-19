@@ -98,6 +98,7 @@ def register_stage_output(
     location = relative_location(to_uri, catalog_root)
     segments = table_id.split(delimiter)
     headers = _credential(token=token, app_token=app_token, service_identity=service_identity)
+    client_kwargs: dict[str, object] = {"base_url": catalog_url.rstrip("/")}
     with httpx.Client(base_url=catalog_url.rstrip("/"), timeout=timeout_seconds) as client:
         # Creates are top-down (the catalog's require_parent guard, live-verified: registering into
         # an absent namespace answers NamespaceNotFound 404) — and the cascade OWNS its tier
@@ -122,9 +123,13 @@ def register_stage_output(
         except httpx.HTTPError as exc:
             raise RegisterError(f"catalog unreachable registering {table_id!r}: {exc}") from exc
     if response.status_code == 409:
-        # Already registered — every redelivery after the first lands here. The ownership tuples
-        # were seeded by the first registration; nothing to do, and saying otherwise would make an
-        # idempotent stage look like it failed.
+        # Already registered — every redelivery after the first lands here. But "already registered"
+        # is not "registered WHERE I am writing", and the difference is invisible from this side.
+        # Measured live: `silver$features` was registered at `s3://bind86-wh/...` (a leftover
+        # warehouse) while the mover wrote to `s3://lance-catalog/...`. The 409 read as convergence,
+        # the publish that followed opened the stale location, found nothing there and 500'd — and
+        # the rows this stage really wrote were governed as living somewhere they did not.
+        _require_same_location(client_kwargs, table_id, location, catalog_root, headers, timeout_seconds)
         log.info("stage_output_already_registered", extra={"table_id": table_id})
         return
     if response.status_code >= 400:
@@ -145,6 +150,40 @@ class PublishOutcome(BaseModel):
     to_version: int | None = None
     failed_assertions: list[str] = Field(default_factory=list)
     accepted: list[str] = Field(default_factory=list)
+
+
+def _require_same_location(
+    client_kwargs: dict[str, object],
+    table_id: str,
+    location: str,
+    catalog_root: str,
+    headers: dict[str, str],
+    timeout_seconds: float,
+) -> None:
+    """Refuse a 409 whose registration points somewhere other than where this stage wrote.
+
+    An unreadable describe is NOT agreement: a check that cannot be made has not passed, and treating
+    it as one restores the exact silence this closes.
+    """
+    base = str(client_kwargs["base_url"])
+    with httpx.Client(base_url=base, timeout=timeout_seconds) as client:
+        try:
+            described = client.post(f"/v1/table/{table_id}/describe", json={}, headers=headers)
+        except httpx.HTTPError as exc:
+            raise RegisterError(f"catalog unreachable verifying where {table_id!r} is registered: {exc}") from exc
+    if described.status_code >= 400:
+        raise RegisterError(
+            f"{table_id!r} is already registered but the catalog would not say where "
+            f"(HTTP {described.status_code}) — refusing to assume it matches {location!r}"
+        )
+    registered = str((described.json() or {}).get("location") or "")
+    expected = f"{catalog_root.rstrip('/')}/{location.lstrip('/')}"
+    if registered.rstrip("/") != expected.rstrip("/"):
+        raise RegisterError(
+            f"{table_id!r} is registered at {registered!r} but this stage wrote {expected!r} — "
+            "the catalog governs a different copy of this table. Re-point the registration (deregister "
+            "then register at the written location) rather than letting the two drift."
+        )
 
 
 def publish_stage_output(
