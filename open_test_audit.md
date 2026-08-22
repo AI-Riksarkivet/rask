@@ -556,6 +556,29 @@ that a Makefile recipe line mentions `runners/<r>` and `pytest` and starts with 
 runners that ship no tests at all**, because it enumerates only runners that already have a `tests/`
 directory.
 
+✅ **FIXED + ENFORCED 2026-08-22** — both halves, and they needed different fixes.
+
+*Being named is not being run.* The two original assertions are satisfied by a leg narrowed until it
+selects nothing, because `wired` is a substring match and the `cd` check is a `startswith` — everything
+after `pytest` was unconstrained. The gate now rejects the narrowing surface directly: no `-k`,
+`--deselect`, `--ignore`, `--lf`/`--stepwise`, and the only sanctioned `-m` expression is `not slow`
+(the one deselection that separates `test` from `test-slow`). Plus a floor that an invoked suite is not
+empty. That floor is **stated as a floor**: it reads the files rather than executing pytest, because
+running the suite for real needs the runner's sealed venv and the root suite must not depend on one
+existing — that dependency is the reason these runners are sealed at all.
+
+*The silence.* Every assertion in the file enumerates `_sealed_runners_with_tests()`, so a runner with no
+`tests/` is invisible to all of them — **seven of nine are**, and the gate reads exactly as green as it
+would if all nine were covered. Same shape as H3's `--continue`: a report that stops early is
+indistinguishable from a clean one. The roster of suite-less runners is now frozen in
+`_RUNNERS_WITHOUT_TESTS`. This deliberately does **not** demand tests from a sealed runner — that is the
+workload's call, and `runners/*` is sealed so those calls stay local — it demands only that the set be
+stated, so a tenth runner arriving with no suite fails here and someone decides on purpose.
+
+Three RED proofs, each restored and verified clean afterwards: `-k no_such_test` on the dummy leg fires
+the narrowing assertion; `-m "not slow and not integration"` on the htr leg fires the mark assertion; a
+tenth runner with a `pyproject.toml` and no `tests/` fires the roster naming `zzprobe`. 9 passed.
+
 ### Smaller gate-reach findings (all confirmed, LOW)
 
 - **`view-transition.test.ts:28`** — the gate whose docstring says "this is the gate that keeps
