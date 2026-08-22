@@ -1075,6 +1075,8 @@ export interface components {
             events: components["schemas"]["EventRecord"][];
             /** Next Cursor */
             next_cursor?: number | null;
+            /** Oldest Seq */
+            oldest_seq?: number | null;
         };
         /**
          * GraphEdge

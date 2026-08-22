@@ -8145,6 +8145,13 @@
       "PublishRequest": {
         "description": "Ask the catalog to gate a committed version and, if it passes, publish it.\n\n`version` is explicit rather than \"whatever is latest\": between a writer's commit and its publish\ncall another writer may have committed, and publishing a version nobody gated is the failure the\ngate exists to prevent. The caller names what it wrote.",
         "properties": {
+          "accept_assertions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Accept Assertions",
+            "type": "array"
+          },
           "key_column": {
             "maxLength": 128,
             "minLength": 1,
@@ -12696,6 +12703,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -17832,6 +17855,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "requestBody": {
@@ -17953,6 +17992,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -18789,6 +18844,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "requestBody": {
@@ -19116,6 +19187,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "requestBody": {
@@ -19240,6 +19327,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "requestBody": {
@@ -19361,6 +19464,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -19594,6 +19713,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "requestBody": {
@@ -19722,6 +19857,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -19854,6 +20005,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -20179,6 +20346,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "responses": {
@@ -20290,6 +20473,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -20856,6 +21055,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "responses": {
@@ -21104,6 +21319,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -21740,6 +21971,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "requestBody": {
@@ -22346,6 +22593,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "requestBody": {
@@ -22572,6 +22835,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "requestBody": {
@@ -22704,6 +22983,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "requestBody": {
@@ -22826,6 +23121,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "requestBody": {
@@ -22947,6 +23258,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -23884,6 +24211,22 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
           }
         ],
         "requestBody": {
@@ -24005,6 +24348,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],

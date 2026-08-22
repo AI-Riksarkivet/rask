@@ -979,6 +979,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/project/{id}/transform/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Transform
+         * @description Undeclare one lane (idempotent) — admin-gated.
+         *
+         *     Idempotent rather than 422-on-missing, unlike describe: delete states a desired END state, and a
+         *     caller asking for a lane to be gone is satisfied by it already being gone. Describe asks a
+         *     question that has no answer, which is the case that must be refused.
+         */
+        post: operations["delete_transform_v1_project__id__transform_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/project/{id}/transform/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Describe Transform
+         * @description One lane's declaration — admin-gated; **422 naming the key** when the lane is undeclared.
+         */
+        post: operations["describe_transform_v1_project__id__transform_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/project/{id}/transform/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Transform
+         * @description Declare (or re-declare) one lane — admin-gated; idempotent.
+         *
+         *     The spec model does the platform-level validation: a DNS-safe lane key, string params that
+         *     cannot collide with the ``RASK_PARAM_`` namespace, and an entrypoint that references a script
+         *     BAKED into the image. That last one is why declaration is the right place for this check — Ray
+         *     documents ``runtime_env`` as development-only, and a lane that cannot be declared can never be
+         *     submitted, whereas a submit-time check has to be remembered by every submit path.
+         *
+         *     The platform validates SHAPE and never meaning: what a param does belongs to the workload.
+         */
+        post: operations["set_transform_v1_project__id__transform_set_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects": {
         parameters: {
             query?: never;
@@ -1083,6 +1155,29 @@ export interface paths {
          *     operation.
          */
         get: operations["list_project_policies_v1_projects__id__policies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{id}/transforms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Transforms
+         * @description Every lane declared in this project — the answer to "what actually runs here?".
+         *
+         *     Admin-gated like the trio: the same information, and splitting the tier would let an admin be
+         *     shown one record and denied the list of all of them.
+         */
+        get: operations["list_transforms_v1_projects__id__transforms_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4386,7 +4481,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "transform_set" | "transform_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "promotion_review_requested";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -4401,7 +4496,7 @@ export interface components {
              * Object Type
              * @enum {string}
              */
-            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "annotation_task";
+            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "annotation_task" | "transform";
             /**
              * Occurred At
              * Format: date-time
@@ -6732,6 +6827,16 @@ export interface components {
             warehouses: components["schemas"]["ProjectWarehouse"][];
         };
         /**
+         * ProjectTransformsResponse
+         * @description Every lane declared in one project — the answer to "what actually runs here?".
+         */
+        ProjectTransformsResponse: {
+            /** Project */
+            project: string;
+            /** Transforms */
+            transforms?: components["schemas"]["TransformSpecResponse"][];
+        };
+        /**
          * ProjectWarehouse
          * @description One warehouse owned by the project — the registry facts an estate observer needs at a glance.
          */
@@ -6790,6 +6895,8 @@ export interface components {
          *     gate exists to prevent. The caller names what it wrote.
          */
         PublishRequest: {
+            /** Accept Assertions */
+            accept_assertions?: string[];
             /** Key Column */
             key_column: string;
             /** Required Columns */
@@ -7301,7 +7408,7 @@ export interface components {
          *     The three governed tiers are exactly bronze/silver/gold (R23): the medallion is
          *     bronze->silver->gold, and RAW is deliberately outside it — raw is the external world (a IIIF
          *     endpoint, a drop bucket), never a governed tier. DERIVED covers artefacts produced from a tier
-         *     but not themselves governed as one (exported ALTO, thumbnails); OBSERVABILITY covers the
+         *     but not themselves governed as one (an export, a derived artefact); OBSERVABILITY covers the
          *     telemetry store, which is operational rather than archival.
          * @enum {string}
          */
@@ -7457,6 +7564,76 @@ export interface components {
              * @description Version number that the tag points to
              */
             version: number;
+        };
+        /** TransformDeleteResponse */
+        TransformDeleteResponse: {
+            /** Lane */
+            lane: string;
+            /** Project */
+            project: string;
+            /** Status */
+            status: string;
+        };
+        /**
+         * TransformLaneRequest
+         * @description Name one lane — the body of describe/delete.
+         */
+        TransformLaneRequest: {
+            /** Lane */
+            lane: string;
+        };
+        /**
+         * TransformSpecRequest
+         * @description Declare one lane. The project comes from the gated PATH, never from here.
+         *
+         *     Omitting ``project`` is the security half, not an ergonomic one: a body-supplied project would
+         *     let an admin of one tenant pass the ``can_administer`` gate on their own project while writing a
+         *     lane into somebody else's.
+         *
+         *     Field semantics — including why an entrypoint must reference a script baked into the image — live
+         *     on ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates
+         *     into and the one the mover reads. One definition, two services.
+         */
+        TransformSpecRequest: {
+            /**
+             * Code Version
+             * @default
+             */
+            code_version: string;
+            /** Entrypoint */
+            entrypoint: string;
+            /** From Id */
+            from_id: string;
+            /** Lane */
+            lane: string;
+            /** Params */
+            params?: {
+                [key: string]: string;
+            };
+            /** To Id */
+            to_id: string;
+        };
+        /** TransformSpecResponse */
+        TransformSpecResponse: {
+            /**
+             * Code Version
+             * @default
+             */
+            code_version: string;
+            /** Entrypoint */
+            entrypoint: string;
+            /** From Id */
+            from_id: string;
+            /** Lane */
+            lane: string;
+            /** Params */
+            params?: {
+                [key: string]: string;
+            };
+            /** Project */
+            project: string;
+            /** To Id */
+            to_id: string;
         };
         /**
          * TrashEntry
@@ -8624,6 +8801,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 model: string;
@@ -9542,6 +9720,123 @@ export interface operations {
             };
         };
     };
+    delete_transform_v1_project__id__transform_delete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransformLaneRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransformDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_transform_v1_project__id__transform_describe_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransformLaneRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransformSpecResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_transform_v1_project__id__transform_set_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransformSpecRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransformSpecResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_projects_v1_projects_get: {
         parameters: {
             query?: never;
@@ -9669,6 +9964,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectPoliciesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_transforms_v1_projects__id__transforms_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectTransformsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10313,6 +10643,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -10353,6 +10684,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -10628,6 +10960,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -10714,6 +11047,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -10754,6 +11088,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -10794,6 +11129,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -10871,6 +11207,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -10911,6 +11248,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -10953,6 +11291,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -11034,6 +11373,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -11070,6 +11410,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -11261,6 +11602,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -11337,6 +11679,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -11507,6 +11850,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -11729,6 +12073,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -11808,6 +12153,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -11850,6 +12196,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -11890,6 +12237,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -11930,6 +12278,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -12268,6 +12617,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -12308,6 +12658,7 @@ export interface operations {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;

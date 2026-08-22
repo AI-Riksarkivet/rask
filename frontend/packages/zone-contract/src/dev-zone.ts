@@ -110,10 +110,16 @@ const DEV_BEARER = 'e2e-token:admin';
  */
 export const ZONE_STACKS: Record<string, ZoneStack> = {
 	home: {
-		mocks: ['e2e/mock-catalog.ts', 'e2e/mock-observability.ts'],
+		mocks: ['e2e/mock-catalog.ts', 'e2e/mock-observability.ts', 'e2e/mock-notifications.ts'],
 		env: (port) => ({
 			CATALOG_API: url(port('MOCK_CATALOG_PORT')),
 			GREPTIME_API: url(port('MOCK_OBS_PORT')),
+			// The BELL. Its remote functions call `${RASK_GATEWAY_URL}/api/notifications/*` from the
+			// SERVER, so this is not something a dev browser can be made to work around — unset, the
+			// default points somewhere nothing is listening and every zone's shell shows a bell that
+			// fails on connection refused instead of an empty inbox. The e2e suite has mocked it all
+			// along; only the dev loop was left reading a dead socket.
+			RASK_GATEWAY_URL: url(port('MOCK_NOTIFICATIONS_PORT')),
 			// The client-side vite proxy target. Left at its default it points at :8001 (the lineage
 			// service), which `make dev-micro` does not start — so every browser-side /api/* call fails
 			// on a connection refused rather than an honest 404. Pointed at the mock it is at least a
@@ -160,6 +166,10 @@ export const ZONE_STACKS: Record<string, ZoneStack> = {
 			ANNOTATOR_API: url(port('MOCK_ANNOTATOR_PORT')),
 			ANNOTATOR_PROJECTS_API: url(port('MOCK_ANNOTATOR_PORT')),
 			SEARCH_API: url(port('MOCK_ANNOTATOR_PORT')),
+			// The corpus-rows by-key door (`fetchCorpusRows`): the bulk grid's similarity view reads
+			// it to associate search hits back onto rows, so without it that view is permanently
+			// empty in the dev loop while passing in e2e.
+			VIEWER_API: url(port('MOCK_ANNOTATOR_PORT')),
 			// See home: the cursor defaults to a dead :8001, and a zone whose cursor never opens
 			// never fires the reads hanging off `liveRead`.
 			LINEAGE_API: url(port('MOCK_ANNOTATOR_PORT')),
