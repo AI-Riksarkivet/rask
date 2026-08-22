@@ -1007,6 +1007,44 @@ Whole modules, packages and settings with zero callers — including one that re
 
 ---
 
+## E13 — the toolchain rule the repository calls non-negotiable is enforced by a ratchet, not yet by zero
+
+*Added 2026-08-22 from the test audit (its finding N1), which found this while fixing M12 and migrated
+it here rather than patching it, because converting the sites is a scope decision.*
+
+`CLAUDE.md` states the docker prohibition three times, escalating each time, and records it being
+violated once: the build-only scoping "was read (2026-08-15) as licence to `docker run` a throwaway
+NATS for a test repro." Until 2026-08-22 **nothing gated it** — while the frontend plane has had
+`toolchain.test.ts` failing the build if ESLint or Prettier reappear the whole time.
+
+**Already done, so this epic starts from a ratchet rather than from zero:** `tests/unit/test_no_docker.py`
+now gates both tiers. Tier 1 (docker BUILDS an image) is absolute and passes with an EMPTY exemption
+list — the estate's hardest clause holds today. Tier 2 (docker CREATES a container) is a shrink-only
+roster: three known sites, two justified bootstrap exemptions.
+
+The two exemptions are permanent and correct: `scripts/dagger-engine.sh` cannot use Dagger to create
+the Dagger engine (a circular dependency, not a violation), and `scripts/k3s-registry.sh` creates the
+registry Dagger pushes to, which must exist before a push can reach it.
+
+**The work: retire the three roster entries.**
+
+| site | what it starts | why it is a scope decision, not a patch |
+| --- | --- | --- |
+| `Makefile:161` `notifications-rig-up` | Mailpit + a counting Slack sink, from `.docker/docker-compose.notifications-channels.yml` | two services plus an inline Python webhook-sink script; converting means retiring the compose file, and `dagger core … as-service up` runs in the FOREGROUND where `docker compose up -d` detaches |
+| `Makefile:463` `rustfs-up` | a local rustfs S3 server for the storage smoke | same foreground/detached UX change; `rustfs-down` disappears with it |
+| `.github/workflows/ci.yml:436` | the per-zone image smoke test | mechanically the easiest, but that file is contended and the smoke needs the image already loaded into a daemon |
+
+The pattern CLAUDE.md prescribes, and no module is needed for an ad-hoc service:
+
+    dagger core container from --address=<img> with-exposed-port --port=<p> \
+      with-default-args --args=<cmd> as-service up --ports=<host>:<p>
+
+**The UX change is the whole decision, and it should be made deliberately.** Every one of these is a
+detached dev convenience today (`up -d`, then the developer keeps working). The Dagger equivalent holds
+a terminal. That is not a reason to keep docker — the rule is not negotiable — but it IS a reason the
+conversion needs an owner's call on the resulting loop, rather than a silent swap that makes three
+familiar targets behave differently one morning.
+
 ## Appendix A — every finding, by scope
 
 The table below is the complete, verified list. `→` names the epic each finding was filed under.

@@ -1435,6 +1435,43 @@ Three-way shell proof, since the discrimination is the whole point:
 The third row matters as much as the second: a fix that failed on a genuine absence would have replaced
 a false green with a false red. `dagger call charts` **exit 0** with the hardened gates.
 
+### N1 — the docker prohibition is enforced by nothing · **NEW, found 2026-08-22 · HIGH**
+
+Found while fixing M12: the adjacent `notifications-rig-up` target runs `docker compose`. A survey
+found **47 docker invocations** across `Makefile`, `scripts/` and `.github/workflows/`.
+
+`CLAUDE.md` states this rule three times, escalating each time, and records it being violated once —
+the build-only scoping "was read (2026-08-15) as licence to `docker run` a throwaway NATS for a test
+repro." **Nothing gated it.** The frontend plane has had `toolchain.test.ts` failing the build if
+ESLint or Prettier reappear the whole time; the rule the repository calls non-negotiable had no test.
+
+✅ **ENFORCED + MIGRATED 2026-08-22.**
+
+*Enforced* — `tests/unit/test_no_docker.py`, two tiers because the rule genuinely has two:
+
+* **Tier 1, docker BUILDS an image.** Absolute, no exceptions, and CLAUDE.md names the files. **It
+  passes with an EMPTY exemption list** — `docker build`/`buildx` appears nowhere. The estate's hardest
+  clause holds today; it simply had nothing keeping it true.
+* **Tier 2, docker CREATES a container.** Three sites, none a bootstrap, kept as a **shrink-only
+  roster** rather than an exemption list — the roster fails if a fourth appears AND fails when one is
+  fixed, forcing the entry deleted rather than left as folklore. Two genuine bootstraps are exempted
+  permanently and by name: you cannot use Dagger to create the Dagger engine, and the registry Dagger
+  pushes to must exist before a push can reach it.
+
+Three RED proofs: a new `docker build` fires tier 1; a fourth container site fires the roster naming
+it; and *fixing* `Makefile:463` while leaving it listed fires with `fixed (delete from
+_KNOWN_VIOLATIONS)`. 5 passed.
+
+What it deliberately does not flag: `docker inspect/load/tag/pull/save` and `command -v docker`. Those
+talk to an existing daemon about images Dagger built — image plumbing, not container creation — and
+`scripts/dagger-image.sh` is the seam CLAUDE.md names as the correct path for exactly that. A gate that
+fired on the sanctioned route is a gate someone deletes.
+
+*Migrated* — the conversion of the three sites is a scope decision, not a patch: every one is a
+DETACHED dev convenience (`up -d`) and `dagger core … as-service up` holds a terminal, so the dev loop
+changes and two compose files retire with it. Written up as **`open_python-audit.md` § E13** with the
+per-site table and the prescribed `dagger core container` pattern. Deleting this audit loses nothing.
+
 ---
 
 ## Part 13 — Two caveats on this audit itself
