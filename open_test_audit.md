@@ -479,6 +479,8 @@ calls it. And the bypass half is worse: **`declare_table` and `register_table` a
 `authenticate` audits both the success and the failure paths. **Eight of the ten — including the
 SUCCESS audit on the service-credential door — can be deleted and the gate still passes.**
 
+
+**ENFORCED 2026-08-22.** `tests/unit/test_invariants.py::test_authentication_outcomes_are_audited`. `assert src.count("audit(") >= 2` over a file holding **ten** audit calls is replaced by a STRUCTURAL check: every `raise`/`return` in `authenticate` must have an unconditional `audit(` earlier in its own block, with exempt outcomes named in `_UNAUDITED_AUTHN_OUTCOMES` rather than absorbed by a floor. Deletable audits: **8 → 0**. RED/GREEN: deleting the service-door SUCCESS audit, the `public_caller` FAILURE audit, or the principal SUCCESS audit each fails the gate; all three passed the old floor. Deliberately NOT a proximity window — nine audits sit one line above their outcome and the tenth is separated by an eleven-line comment, so any window would be tuned to that comment and rot when it was edited (the nav-truth / transport-contract failure). **My first version was too permissive and the RED run caught it:** `audits_in(stmt)` walked whole compound statements, so an `if` that audited and then RAISED marked every later outcome as covered even though that audit never runs on the path reaching them — deleting the service-door audit still passed. Only an unconditional straight-line `audit(...)` now marks a block covered.
 ### H15 — the BFF-caller gate is satisfied by a doc comment · **CONFIRMED, HIGH**
 
 `frontend/packages/zone-contract/src/bff-routes.test.ts:99`. The gate that proves every BFF proxy route

@@ -783,12 +783,70 @@ def test_every_publish_goes_through_the_timeout_wrapper() -> None:
     )
 
 
+#: Outcomes in ``authenticate`` that legitimately emit no audit line, by the reason they are exempt.
+#: An entry here is a claim someone has to justify; a raw count is not.
+_UNAUDITED_AUTHN_OUTCOMES = {
+    "returns None because OIDC is disabled — there is no authentication event to record",
+}
+
+
+def _unaudited_outcomes(func_src: str, name: str) -> list[int]:
+    """Line numbers of every ``raise``/``return`` in ``name`` with no ``audit(`` earlier in its block.
+
+    STRUCTURAL, not a count, and not a line window. The gate this replaced was
+    ``src.count("audit(") >= 2`` over the whole of security.py — a file that holds TEN audit calls, so
+    EIGHT could be deleted (including the SUCCESS audit on the service-credential door) while it stayed
+    green. A floor cannot know what it is missing; it can only know it has not gone to zero.
+
+    "Earlier in its own block" is what the real code looks like: nine of the ten audits sit on the line
+    directly above their outcome, and the tenth (the service-door SUCCESS) is separated from its
+    ``return`` by an eleven-line comment. A proximity window would have to be tuned to that comment and
+    would rot the moment someone edited it — the same bounded-window failure this audit found in
+    nav-truth and transport-contract. Preceding-sibling-in-the-same-block has nothing to tune.
+    """
+    tree = ast.parse(func_src)
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name == name)
+
+    def audits_in(node: ast.AST) -> bool:
+        return any(isinstance(n, ast.Call) and getattr(n.func, "id", "") == "audit" for n in ast.walk(node))
+
+    unaudited: list[int] = []
+
+    def walk_block(body: list[ast.stmt], audited_above: bool) -> None:
+        seen = audited_above
+        for stmt in body:
+            if isinstance(stmt, ast.Raise | ast.Return) and not (seen or audits_in(stmt)):
+                unaudited.append(stmt.lineno)
+            for field in ("body", "orelse", "finalbody"):
+                inner = getattr(stmt, field, None)
+                if isinstance(inner, list):
+                    walk_block(inner, seen)
+            for handler in getattr(stmt, "handlers", []):
+                walk_block(handler.body, seen)
+            # Only an UNCONDITIONAL audit marks the rest of this block as covered. The first version
+            # used `audits_in(stmt)`, which walks a whole compound statement — so an `if` whose body
+            # audits and then RAISES marked every later outcome as audited, although that audit never
+            # runs on the path that reaches them. Deleting the service-door SUCCESS audit still passed.
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call) and getattr(stmt.value.func, "id", "") == "audit":
+                seen = True
+
+    walk_block(fn.body, False)
+    return unaudited
+
+
 def test_authentication_outcomes_are_audited() -> None:
-    """Compliance invariant (#41): ``authenticate`` must audit both the success (who logged in) and the
-    failure (rejected token) paths — authn was entirely unlogged before #41, so brute-force / forged-token
-    attempts were invisible. Grep-provable: the failure + success audit calls must both remain."""
+    """Compliance invariant (#41): EVERY outcome of ``authenticate`` is audited, not merely two of them.
+
+    authn was entirely unlogged before #41, so brute-force and forged-token attempts were invisible.
+    The point of the invariant is that no decision falls off the trail — which a count cannot express.
+    """
     src = (_svc("catalog") / "api" / "security.py").read_text()
-    assert src.count("audit(") >= 2, "authenticate must audit both success and failure (#41 compliance)"
+    unaudited = _unaudited_outcomes(src, "authenticate")
+    assert len(unaudited) == len(_UNAUDITED_AUTHN_OUTCOMES), (
+        f"authenticate() has {len(unaudited)} outcome(s) with no audit call in their own block "
+        f"(lines {unaudited}), but only {len(_UNAUDITED_AUTHN_OUTCOMES)} are documented as exempt: "
+        f"{sorted(_UNAUDITED_AUTHN_OUTCOMES)}. Either audit the new path or justify it here."
+    )
     assert "SUCCESS" in src and "FAILURE" in src
 
 
