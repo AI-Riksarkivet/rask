@@ -44,6 +44,7 @@ from annotator.projects.models import (
     new_id,
 )
 from annotator.projects.ontology import LabelOntology
+from service_kit.lakehouse.warehouse_registry import namespace_for
 
 
 logger = logging.getLogger(__name__)
@@ -247,7 +248,10 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
             # The INSTANT is minted with the token and for the same reason: it is written into
             # every published row, so a per-attempt timestamp would make a retry rewrite the dataset
             # with different values than the attempt it is resuming.
-            requested_ns = str(payload.get("target_namespace") or "silver")
+            # The door resolves this and sends it explicitly. The fallback is for a payload that
+            # names none — and it qualifies by the project's OWN tenant rather than a bare literal,
+            # because an unqualified namespace puts every tenant's labels in one place.
+            requested_ns = str(payload.get("target_namespace") or namespace_for(project.tenant, "silver"))
             if project.pending_publish_id is None:
                 project.pending_publish_id = new_id()
                 project.pending_publish_at = datetime.now(UTC)

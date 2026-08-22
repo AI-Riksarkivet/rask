@@ -75,6 +75,34 @@ def is_safe_project(value: object) -> bool:
     return isinstance(value, str) and _PROJECT_RE.fullmatch(value) is not None
 
 
+def tier_namespace(tier: str) -> str:
+    """The namespace NAME a governed tier writes into — from the same env the medallion reads.
+
+    Not a constant, for the reason `ingest/naming.py::bronze_namespace` already states:
+    ``MEDALLION_<TIER>_NAMESPACE`` is a chart value, and a tier the writer and the cascade head
+    disagree about is a write nothing downstream ever sees.
+    """
+    import os
+
+    return os.getenv(f"MEDALLION_{tier.upper()}_NAMESPACE", tier)
+
+
+def namespace_for(project: str, tier: str) -> str:
+    """The namespace a write for ``project`` into ``tier`` lands in — ``acme-silver``, or ``silver``
+    untenanted.
+
+    LIVES HERE for the same reason :func:`project_namespace` does, and the case that forced it is the
+    same one repeated a tier later: ingest qualifies bronze through this module while the annotator
+    composed the bare literal ``"silver"`` in four places, so with two tenants annotating, both landed
+    in one namespace — one FGA parent, one set of grants, both tenants' labels.
+
+    The ``is_safe_project`` guard is applied HERE rather than by each caller, because applying it on
+    only one side is how a garbage project produces a write that is refused for a reason invisible
+    from the writer.
+    """
+    return project_namespace(project if is_safe_project(project) else "", tier_namespace(tier))
+
+
 def project_namespace(project: str, name: str) -> str:
     """Project-qualify a lineage namespace or dataset name — ``("acme", "bronze")`` → ``"acme-bronze"``.
 

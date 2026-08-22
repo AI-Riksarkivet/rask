@@ -39,7 +39,7 @@ from annotator.projects.project_actor import AnnotationProjectActorInterface
 from service_kit.control_emit import emit_control
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
-from service_kit.lakehouse.warehouse_registry import namespace_tiers
+from service_kit.lakehouse.warehouse_registry import namespace_for, namespace_tiers
 from service_kit.media.deps import StateDep
 from service_kit.media.state import dataset_handle
 
@@ -56,9 +56,10 @@ CREATE_TABLE_RELATION: Final[str] = "can_create_table"
 #: §6.2 door 3 — only when the target namespace is a validator-gated medallion stage.
 PROMOTE_RELATION: Final[str] = "can_promote"
 
-#: Human labels are curated, not raw, so the default target is the tenant warehouse's `silver`
-#: namespace (§6.2). A publish may name another; the doors are checked wherever it points.
-DEFAULT_TARGET_NAMESPACE: Final[str] = "silver"
+#: The TIER human labels are curated into (§6.2) — the NAME is composed per project, because a bare
+#: literal put every tenant's labels in one namespace with one FGA parent and one set of grants.
+#: A publish may name another target; the doors are checked wherever it points.
+DEFAULT_TARGET_TIER: Final[str] = "silver"
 
 #: Project edges caused by the SYSTEM (the publish saga), never by a principal. Refused on the HTTP
 #: surface: `TASK_EDGES`/`PROJECT_EDGES` giving them no permission means "no principal fires this",
@@ -86,7 +87,9 @@ class ProjectEventRequest(BaseModel):
     """
 
     event: str = Field(min_length=1)
-    target_namespace: str = DEFAULT_TARGET_NAMESPACE
+    #: Empty means "the project's default tier", resolved by the door once it has loaded the project
+    #: — the request cannot compose it, because the tenant is on the document rather than in the path.
+    target_namespace: str = ""
 
 
 class PredictionShape(BaseModel):
@@ -210,8 +213,13 @@ async def fire_project_event(project_id: ProjectId, payload: ProjectEventRequest
     except IllegalTransition as exc:
         raise ConflictError(str(exc)) from exc
 
+    # RESOLVED ONCE, BEFORE THE GATE. The door authorizes `namespace:<target>` and the actor pins the
+    # table id from the same string; deriving them separately would let the gate check one object
+    # while the write lands in another, which is worse than the unqualified write this replaces.
+    target = payload.target_namespace or namespace_for(str(current.get("tenant") or ""), DEFAULT_TARGET_TIER)
+
     if payload.event == "publish":
-        await _authorize_publish(checker, subject, project_id, payload.target_namespace)
+        await _authorize_publish(checker, subject, project_id, target)
     elif permission is not None:
         # `annotation_project`, not `project:<tenant>` — that is the type on which model.fga defines
         # can_manage / can_send_items / can_publish. Checking them on the tenant asks for a relation
@@ -222,7 +230,7 @@ async def fire_project_event(project_id: ProjectId, payload: ProjectEventRequest
         # `target_namespace` rides along so the actor can PIN it with the publish token — the saga
         # (which may run after a crash, with no request in sight) reads the authorized target off
         # the project document rather than guessing one. Ignored by every other event.
-        updated = await actor.fire({"event": payload.event, "actor": subject, "target_namespace": payload.target_namespace})
+        updated = await actor.fire({"event": payload.event, "actor": subject, "target_namespace": target})
     except IllegalTransition as exc:
         # The actor's own preconditions — every task terminal, and a non-empty project.
         raise ConflictError(str(exc)) from exc
