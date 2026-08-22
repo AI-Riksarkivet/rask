@@ -248,19 +248,26 @@ frontend loop that runs in a cloud sandbox (claude.ai/code, CI), and it is how C
 `make dev-frontends` filters out. `dev-zone` runs the zone's own `vite dev` instead: one port, no
 proxy, no watcher, safe beside a running composition.
 
-The four zones with mocks are `home`, `lakehouse`, `explorer`, `annotator`.
-**`compute` and `studio` have no `e2e/` and no `test:e2e`** — `dev-zone` still starts them and says so,
-but their `/api` is unmocked, and it is the same gap that leaves them outside every local gate.
-**`models` is the WORST of the three**, and this line claimed the opposite until 2026-08-09: it has no
-`e2e/` directory either, but its `package.json` *does* declare `"test:e2e": "playwright test"` — a
-script that fails the moment anything invokes it. Half of `cb6921b6 fix(models): commit the e2e
-harness's missing package.json half` landed; the harness it was the half of did not.
+The five zones with mocks are `home`, `lakehouse`, `explorer`, `annotator` and — since
+2026-08-22 — `models`. **`compute` and `studio` have no `e2e/` and no `test:e2e`** — `dev-zone` still
+starts them and says so, but their `/api` is unmocked, and it is the same gap that leaves them outside
+every local gate.
+
+**`models` was the worst of the three and is now the best-documented fix of the class.** Its
+`package.json` declared `"test:e2e": "playwright test"` against a directory that did not exist in the
+tracked tree, so CI ran the script over zero files and PASSED — worse than no gate, because it read as
+coverage. `dev-zone.ts` meanwhile already referenced `e2e/mock-upstreams.ts`, a file only present on a
+dev host. Committing the harness (17 specs, one seed-driven mock upstream on 5284) immediately earned
+its first real gate failure: **APP_PORT 5285 was already `home`'s notifications mock**, and because
+`reuseExistingServer` is on locally that is silent ADOPTION — the suite would have driven a real
+server while calling it a mock. Moved to 5298. The lesson generalises: a `test:e2e` script is not a
+gate until something asserts it has files, and a port is not free until the manifest says so.
 
 Four things it deliberately does not give you — none is a bug:
 
 | | |
 |---|---|
-| **Populated data is per zone** | Mocks answer 404 until seeded (by design — a mock with baked-in fixtures cannot tell a live surface from a dead one), so a zone renders EMPTY unless it ships `e2e/dev-seed.ts`. **`lakehouse`, `annotator` and `explorer` have one**, all verified rendering real rows (explorer additionally needed `VIEWER_API` pointed at the mock — its descriptor boot gate rides the `[...path]` catch-all to a dead `:8101` nothing sets, masked in e2e by `page.route`). The launcher announces a zone with none rather than leaving blank ambiguous. |
+| **Populated data is per zone** | Mocks answer 404 until seeded (by design — a mock with baked-in fixtures cannot tell a live surface from a dead one), so a zone renders EMPTY unless it ships `e2e/dev-seed.ts`. **`lakehouse`, `annotator`, `explorer` and `models` have one**, all verified rendering real rows (explorer additionally needed `VIEWER_API` pointed at the mock — its descriptor boot gate rides the `[...path]` catch-all to a dead `:8101` nothing sets, masked in e2e by `page.route`). The launcher announces a zone with none rather than leaving blank ambiguous. |
 | **SEED THE CURSOR OR NOTHING LOADS** | The trap, and it cost a debugging round. Most surfaces read on the **lineage cursor**, not on page load (`liveRead(lineageTick, () => refresh())`). A hydrated browser showed the first two requests are `GET /events?limit=1&summary=true` — contract `LineageProbeSchema` = `{events:[{seq:number}]}` — and `GET /runs`. Unseeded, the cursor never opens, `liveRead` never fires, and the zone requests **nothing** while showing "Loading…": five correct data seeds, empty page. The cursor env also defaults to a dead `:8001`, so a zone's stack must set `LINEAGE_API` to its own mock. **`curl` cannot diagnose this** — no hydration, no mount, no requests; only a real browser shows it. |
 | **`home` is not seedable** | Not a gap in the launcher — a zone decision. Its project gallery is identity-scoped, so under auth-off it answers *"No projects to show — sign-in is not configured on this stack"* **without reading**. Its mock served the seeds correctly; the page declined to ask. Needs a real session, not a fixture. |
 | **Auth is OFF — but mocks still see an identity** | `dev-zone` omits `OIDC_*`, so `locals.authEnabled` is false and the zone forwards **no bearer** — which the mocks 401 by design ("exactly like the real catalog"), so seeded reads would resolve to nothing. The launcher hands the *mocks* `MOCK_DEV_BEARER` out of band; **unset, every mock behaves exactly as under Playwright** (proven: full lakehouse suite, 182 passed, after the patch). For the real governed path — sealed cookie, login-first redirect — run the zone's Playwright suite. |
@@ -368,13 +375,22 @@ ESLint and Prettier are **deleted**. `toolchain.test.ts` enforces three things a
 | `bun --cwd=frontend run check test` | svelte-check + the vitest suites (zone-contract alone is 866, across 16 files) |
 | CI (`.dagger/frontend.go:53`) | `bunx turbo run check check:tsgo test lint fmt:check` |
 
-The zone-contract suite is **21 files and RED at one of them** (re-measured 2026-08-10: 1159 passed,
-1 failed; this line claimed "GREEN — 20 files" on 2026-08-07 and "866 of 866 across 16 files" at #109).
-The single failure is `dev-zone.test.ts` — *"annotator: dev-zone.ts points at every upstream its e2e
-config mocks"*: the annotator's Playwright config mocks `VIEWER_API` and `src/dev-zone.ts` does not
-point the zone at it, so `make dev-zone ZONE=annotator` reads a connection refused where the suite
-reads a mock. It is a real finding about the dev loop, not a flake, and it is unrelated to whatever
-you are changing — check it is still the *only* red before assuming your diff is clean.
+The zone-contract suite is **22 files and GREEN** as of 2026-08-22 (it read "21 files and RED at one
+of them" on 2026-08-10, "GREEN — 20 files" on 2026-08-07, and "866 of 866 across 16 files" at #109 —
+so re-measure rather than trusting this sentence). Three reds closed together that day, and each was
+a real finding rather than a flake:
+
+* `dev-zone.test.ts` × 2 — the annotator's Playwright config mocks `VIEWER_API` and home's mocks
+  `RASK_GATEWAY_URL`, while `src/dev-zone.ts` pointed neither zone at them, so `make dev-zone` read a
+  connection refused where the suite read a mock. Home's was the worse half: the bell's remote
+  functions call `RASK_GATEWAY_URL` SERVER-side, so no dev browser could work around it and every
+  zone's shell showed a bell failing on a dead socket instead of an empty inbox.
+* `generated-client-freshness.test.ts` — `docs/catalog-openapi.json` was 359 lines behind its routes
+  and both generated clients behind their specs. `make openapi` then `bun --cwd=frontend run
+  gen:types` is the fix; the gate names the exact command.
+
+Check the suite is green before assuming your diff is clean, and treat any red as a finding until
+proven otherwise.
 **Do not pin the assertion count here**: `link-targets`
 and `cross-zone-reload` emit one test per anchor they find, so the total tracks how many links the
 estate has and moves between runs — two consecutive green runs measured 954 and 1115. Its guards used to be two counters. **`nav-truth.test.ts`'s is not one any more**, and why it
@@ -393,7 +409,7 @@ assertion below it vacuous while staying green — the opposite failure to a red
 
 | Layer | What | How it runs |
 |---|---|---|
-| Per-zone Playwright | `home`, `lakehouse`, `explorer`, `annotator` each ship `e2e/` + `"test:e2e": "playwright test"`. **Hermetic**, in TWO stand-in styles now: a read the BROWSER makes is mocked with `page.route`; a read the ZONE SERVER makes (every remote function, and a route that builds its own Arrow body) cannot be — those get a **mock upstream**, a tiny seed/ledger Bun server started as a second `webServer` with the dev server's `*_API` pointed at it (`lakehouse/e2e/admin/mock-catalog.ts`, `explorer/e2e/mock-media-services.ts`). Ports are declared once per zone in `e2e/ports.ts` and gated for collisions by `@rask/zone-contract` | `bun --cwd=frontend run test:e2e`, and in CI as *"Playwright e2e — all zones"* with `--concurrency=1` (each zone spins a dev server + chromium; parallel first-compiles blow the startup window, and `lakehouse` runs **two** servers — auth-off and auth-on) |
+| Per-zone Playwright | `home`, `lakehouse`, `explorer`, `annotator` and `models` each ship `e2e/` + `"test:e2e": "playwright test"`. **Hermetic**, in TWO stand-in styles now: a read the BROWSER makes is mocked with `page.route`; a read the ZONE SERVER makes (every remote function, and a route that builds its own Arrow body) cannot be — those get a **mock upstream**, a tiny seed/ledger Bun server started as a second `webServer` with the dev server's `*_API` pointed at it (`lakehouse/e2e/admin/mock-catalog.ts`, `explorer/e2e/mock-media-services.ts`). Ports are declared once per zone in `e2e/ports.ts` and gated for collisions by `@rask/zone-contract` | `bun --cwd=frontend run test:e2e`, and in CI as *"Playwright e2e — all zones"* with `--concurrency=1` (each zone spins a dev server + chromium; parallel first-compiles blow the startup window, and `lakehouse` runs **two** servers — auth-off and auth-on) |
 | `tests/e2e` | A standalone Playwright project with its **own lockfile**, driving a **running deploy** | `make e2e` (`RASK_E2E_BASE_URL`, default `http://localhost`) |
 
 So `make e2e` never touches the zone suites, and the zone suites never touch a real backend. `home`'s `auth.spec.ts` (4 tests) is the MAIN-MENU contract now — Home + Projects and no zone, no Settings, for an anonymous visitor. The cross-zone `data-sveltekit-reload` contract it used to carry moved to the lakehouse and explorer suites, which run INSIDE a zone where the bar exists; `@rask/zone-contract`'s `cross-zone-reload.test.ts` is the static half. A fresh worktree needs `bun install` first — `svelte-package` is not on `PATH` otherwise and `@rask/ui#build` fails with exit 127 before any test runs.

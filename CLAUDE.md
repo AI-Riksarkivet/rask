@@ -88,9 +88,10 @@ make frontend-explorer # one zone alone (frontend-<zone>: lakehouse|explorer|ann
 **`make dev-zone ZONE=<z>` is the leanest loop, and the only one that works with no cluster at all** —
 it starts that zone plus the seed-driven mock upstreams its own Playwright suite uses, so it also runs
 in a cloud sandbox (claude.ai/code) or CI, where Dagger and k3s cannot. Auth is OFF and cross-zone links
-404 because one zone is listening. Populated data needs an `e2e/dev-seed.ts` — **only `lakehouse` has
-one**; other zones render their EMPTY state (the launcher says which). `compute` and `studio` ship no
-mocks at all (no `e2e/`, no `test:e2e`) — they start, but unmocked. Full trap list and the coverage
+404 because one zone is listening. Populated data needs an `e2e/dev-seed.ts` — **`lakehouse`,
+`explorer`, `annotator` and `models` have one**; `home` mocks its upstreams but ships no seed, so it
+renders its EMPTY state (the launcher says which). `compute` and `studio` ship no mocks at all (no
+`e2e/`, no `test:e2e`) — they start, but unmocked. Full trap list and the coverage
 table: `.claude/skills/rask-frontend` § *Develop ONE zone, no cluster*.
 
 **`make frontend-<zone>` does NOT actually isolate a zone**, despite the name: it goes through
