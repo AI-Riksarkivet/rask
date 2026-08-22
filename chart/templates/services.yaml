@@ -149,7 +149,7 @@ spec:
 
                    DERIVED from the same `medallion.movers[]` declarations the FGA seeds use, so a
                    new mover cannot be added with an identity the door never learned. */}}
-            {{- $catalogSubjects := list .Values.medallion.train.trainerIdentity }}
+            {{- $catalogSubjects := list .Values.medallion.train.trainerIdentity .Values.medallion.producer.serviceIdentity }}
             {{- range .Values.medallion.movers }}
               {{- $catalogSubjects = append $catalogSubjects .serviceIdentity }}
             {{- end }}

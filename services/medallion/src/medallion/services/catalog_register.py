@@ -30,6 +30,7 @@ import logging
 from collections.abc import Sequence
 
 import httpx
+import pyarrow as pa
 from pydantic import BaseModel, Field
 
 
@@ -237,3 +238,71 @@ def publish_stage_output(
         failed_assertions=[a["assertion"] for a in payload.get("assertions") or [] if not a.get("success")],
         accepted=list(payload.get("accepted") or []),
     )
+
+
+def ensure_stage_output(
+    *,
+    catalog_url: str,
+    table_id: str,
+    schema: pa.Schema,
+    delimiter: str = "$",
+    token: str | None = None,
+    app_token: str | None = None,
+    service_identity: str | None = None,
+    timeout_seconds: float = 30.0,
+) -> str:
+    """Ask the catalog where this stage's output lives, creating the table if it does not exist yet.
+
+    THE MOVER ASKS INSTEAD OF TELLING, which is rule I2 applied to the write side. `transform.py` says
+    the quiet part: I2 was "read from the consuming end. Only the READ side: the mover still owns where
+    it WRITES." That half is the defect. The mover composed `{root}/medallion/{tier}` — a layout the
+    catalog has never vended — wrote there, and then registered that path. The catalog's binding said
+    somewhere else, so the publish that followed opened the catalog's answer and found nothing.
+
+    The shape is the ingest plane's, which has been doing this correctly all along
+    (`ingest.catalog_service.CatalogServiceClient.ensure`): describe, create when absent, and take the
+    location from the CREATE's own response rather than re-asking a read door — `describe` answers 403
+    for an absent table, so believing it is what made a new table impossible to create at all.
+
+    ``schema`` only has to be A schema, not the output's: the empty table exists so the catalog mints
+    and governs a URI, and the mover's `overwrite` replaces the schema wholesale afterwards. A stage
+    does not know its output schema until it has computed, and does not need to.
+
+    Never falls back to a composed path. A catalog that vends no location is an error — guessing one
+    is precisely the defect this replaces.
+    """
+    if not catalog_url:
+        raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot resolve where to write")
+    headers = _credential(token=token, app_token=app_token, service_identity=service_identity)
+    segments = table_id.split(delimiter)
+    with httpx.Client(base_url=catalog_url.rstrip("/"), timeout=timeout_seconds) as client:
+        try:
+            described = client.post(f"/v1/table/{table_id}/describe", json={}, headers=headers)
+        except httpx.HTTPError as exc:
+            raise RegisterError(f"catalog unreachable resolving {table_id!r}: {exc}") from exc
+        if described.status_code == 200:
+            return _vended(described, table_id)
+
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, schema) as writer:
+            writer.write_table(schema.empty_table())
+        try:
+            created = client.post(
+                f"/v1/table/{table_id}/create",
+                content=sink.getvalue().to_pybytes(),
+                headers={**headers, "Content-Type": "application/vnd.apache.arrow.stream", "x-lance-table-id": delimiter.join(segments)},
+            )
+        except httpx.HTTPError as exc:
+            raise RegisterError(f"catalog unreachable creating {table_id!r}: {exc}") from exc
+        if created.status_code >= 400:
+            raise RegisterError(f"catalog refused to create {table_id!r}: HTTP {created.status_code} — {created.text[:300]}")
+        return _vended(created, table_id)
+
+
+def _vended(response: httpx.Response, table_id: str) -> str:
+    """The location the catalog stated, or an error naming that it stated none."""
+    payload = response.json() or {}
+    location = str(payload.get("table_uri") or payload.get("location") or "")
+    if not location:
+        raise RegisterError(f"the catalog returned no location for {table_id!r} — refusing to compose one, which is the defect this call replaces")
+    return location

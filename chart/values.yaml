@@ -962,6 +962,10 @@ medallion:
     lineageUrl: ""
   producer:
     daprAppId: medallion-producer
+    # The subject the producer claims at the catalog's service door — the same one
+    # `scripts/seed_medallion_fga.sh` grants. Needed for the PROMOTION RESUME, which publishes the
+    # version a held promotion was taken on.
+    serviceIdentity: service-medallion-producer
     # Expose POST /produce through the gateway (the DEMO entry point for the cascade). It carries no
     # auth — a caller could trigger cascades / forge medallion provenance — so values-prod sets it false;
     # the EDGE head then fires only from real bronze ingests via /bronze-arrival. NB this gates only the
