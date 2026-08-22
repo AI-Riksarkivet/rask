@@ -41,6 +41,7 @@ from catalog.api.security import CurrentToken
 # them drift apart again the moment one is tuned.
 from catalog.api.v1.endpoints.tables import _MAX_NAMESPACE_DEPTH, _paginate
 from catalog.core.config import Settings
+from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import native, warehouses
@@ -114,6 +115,10 @@ async def create_namespace(
     body: CreateNamespaceRequest | None = None,
 ) -> CreateNamespaceResponse:
     """Create a namespace via ``create_namespace``, then seed its FGA owner + parent edge."""
+    # LANCE-ONLY (2026-08-15 ruling). A namespace carries no bytes, but its `properties` map is
+    # where a client sets a DEFAULT format for the tables created under it — so accepting one here
+    # would let the ruling be bypassed one level up from the door that enforces it.
+    reject_unsupported_format(body.properties if body else None)
     segments = parse_identifier(id, settings.delimiter)
     # A top-level namespace needs a warehouse to live in. This door cannot name one, so it is refused
     # here and the caller is sent to the warehouse-scoped route; checked BEFORE the native create, so a

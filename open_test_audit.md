@@ -470,6 +470,8 @@ pre-existing ordering flake, not the guard.**
 calls it. And the bypass half is worse: **`declare_table` and `register_table` accept the same
 `properties` and never call it at all.**
 
+
+**ENFORCED + FIXED 2026-08-22 — and the bypass was TWICE as wide as filed.** `tests/unit/test_format_guard.py::test_every_door_that_accepts_properties_calls_the_format_guard` derives the door list from the spec request MODELS rather than listing it, so a new door that accepts `properties` fails on the day it lands. It found **four** unguarded doors, not the two filed: `declare_table`, `register_table`, **`create_namespace`** and **`update_table`** — all four take a `properties` map through models that genuinely carry the field (verified: 17 spec models do, no substring false positives). The guard moved from a module-private helper in `data.py` to `catalog/core/formats.py::reject_unsupported_format` and all four now call it. RED/GREEN: deleting the call from any single door fails the gate naming that door. **My first version of the gate was itself incomplete** — it scanned body-model annotations only, so `create_table`, the door the guard was written for, was invisible (it takes `properties` as a spec-0.9 query param). Found by deleting that call and watching the gate stay green; the gate now covers both shapes. 3,127 passed, ruff + `ty` clean.
 ### H14 — the authn-audit compliance gate is a file-wide substring count · **CONFIRMED, HIGH**
 
 `tests/unit/test_invariants.py:729` is `assert src.count("audit(") >= 2` over the whole of

@@ -43,6 +43,7 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
 )
 from catalog.api.security import CurrentToken
+from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, UPDATE, InputPin, InputRef, shape_run_facets
 from catalog.core.lineage_metadata import build_lineage_metadata, inject_into_arrow_stream
@@ -90,22 +91,8 @@ def _table_exists(ns: LanceNamespace, segments: list[str]) -> bool:
         return False
 
 
-# #78 format-selecting properties an Iceberg / Unity-Catalog client might send, expecting to choose a file
-# format. This catalog stores Lance ONLY (columnar, self-describing, versioned), so honouring them is
-# impossible — echoing them back would let the client believe it got a format it did not.
-_FORMAT_KEYS = ("write.format.default", "data_source_format")
-
-
-def _reject_unsupported_format(properties: object) -> None:
-    """Raise 400 if the create ``properties`` request a non-Lance file format — never a silent no-op."""
-    if not isinstance(properties, dict):
-        return
-    for key in _FORMAT_KEYS:
-        requested = properties.get(key)
-        if requested is not None and str(requested).lower() != "lance":
-            raise InvalidInputError(
-                f"file format {requested!r} ({key}) is not supported — this catalog stores Lance only; format-selecting properties are not silently ignored"
-            )
+# The LANCE-ONLY guard now lives in `catalog.core.formats` — four other doors take the same
+# `properties` map and none of them called it while it was private to this module.
 
 
 @router.post("/{id}/create", response_model_exclude_none=True)
@@ -167,7 +154,7 @@ async def create_table(
         except json.JSONDecodeError as exc:
             raise InvalidInputError(f"table properties is not valid JSON: {exc}") from exc
     # #78 format honesty: reject a client that tries to select another file format (see the helper).
-    _reject_unsupported_format(parsed_properties)
+    reject_unsupported_format(parsed_properties)
     # S4: validate the optional lineage metadata BEFORE the write — a malformed pin/facet is a 4xx,
     # not a committed create whose provenance then silently drops. Same order, same helpers, same
     # forge-guard as merge_insert: a caller who cannot READ the named source must not be able to
@@ -559,6 +546,10 @@ async def update_table(
     authorization: Annotated[str | None, Header()] = None,
 ) -> UpdateTableResponse:
     """Update rows matching a predicate — ``update_table``; emits an UPDATE lineage event."""
+    # LANCE-ONLY (2026-08-15 ruling). An update door is the create door's back way in: a table
+    # made as Lance could otherwise be asked to change format afterwards, and the guard's contract is
+    # that a format-selecting property is never silently ignored — on any door that accepts one.
+    reject_unsupported_format(body.properties)
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     response: UpdateTableResponse = await run_in_threadpool(dataplane.update_table, ns, so, body)

@@ -50,6 +50,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.credentials import _has_external_bases
+from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import (
     DECLARE_TABLE,
@@ -222,6 +223,10 @@ async def declare_table(
 ) -> DeclareTableResponse:
     """Declare a new (empty) table at ``id`` via ``declare_table``, then seed the caller's FGA ownership
     and emit a versionless DECLARE_TABLE marker (the table's first provenance — who reserved it + where)."""
+    # LANCE-ONLY (2026-08-15 ruling). This door takes `properties` through its spec request
+    # model and never checked it, so a non-Lance format could be selected here while the create
+    # door rejected it. Before anything is reserved.
+    reject_unsupported_format(body.properties if body else None)
     segments = parse_identifier(id, settings.delimiter)
     await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
     # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
@@ -519,6 +524,8 @@ async def register_table(
 ) -> RegisterTableResponse:
     """Register an existing table location at ``id`` via ``register_table``, then seed the caller's FGA
     ownership and emit a REGISTER_TABLE marker (who attached it + where)."""
+    # LANCE-ONLY (2026-08-15 ruling) — same bypass as `declare_table`; `body` is required here.
+    reject_unsupported_format(body.properties)
     segments = parse_identifier(id, settings.delimiter)
     await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
     # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
