@@ -126,6 +126,10 @@ tuples:
   - { user: user:olive, relation: reader, object: warehouse:lance_catalog }
   - { user: user:peter, relation: writer, object: table:acme_gold_catalog }
   - { user: user:quincy, relation: viewer, object: annotation_project:labels_2026 }
+  # rita: a DIRECT project member. Every other member in this file arrives via `member from team`, and
+  # `admin` includes that edge — so alice and bob are admins, and no subject existed at the plain-member
+  # rung at all. Without one, `can_administer: admin` could be widened to `member` unnoticed.
+  - { user: user:rita, relation: member, object: project:acme }
   # ---- the DEPTH-CEILING probe (catalog.core.identifiers.MAX_NAMESPACE_DEPTH) ----
   # A namespace chain exactly as deep as the catalog's create doors allow (MAX_NAMESPACE_DEPTH is an
   # EXCLUSIVE bound, so the deepest legal tree is one rung shallower than the number). It exists so the ceiling is
@@ -251,12 +255,65 @@ tests:
           writer: true              # the tuple is live
           can_write_data: true      # what a writer IS entitled to
           can_deregister: false     # owner-only: slips to true if the rung drops to writer
+          # The rest of the table's OWNER tier. `can_deregister` alone was a SAMPLE, and a sample
+          # cannot pin a derivation: measured 2026-08-22, widening `can_drop: owner` to `reader` —
+          # the most destructive op on a table, handed to the lowest rung — left 44/44 tests and
+          # 266/266 checks passing. Every owner-tier action on this type is now named.
+          can_drop: false           # DESTRUCTIVE, and was the widenable one
+          can_restore: false        # rewinds history; strictly above writer by the model's own comment
+          can_create_branch: false  # forking history is privileged
+          can_create_tag: false
+          can_update_tag: false
+          # The GRANT axis (five relations, none of which had an assertion of any kind). A writer
+          # without `pass_grants` can hand out nothing — that is the whole point of splitting
+          # `manage_grants` from the data rungs, and nothing was checking it.
+          can_grant_owner: false
+          can_grant_writer: false
+          can_grant_reader: false
+          can_grant_validator: false
+      # ---- the rungs a mutation sweep found unpinned (2026-08-22) ----
+      # Method: widen each can_* to its type's LOWEST rung and re-run. 47 derivations were already
+      # caught by assertions above; these survived silently, so each is named here with a subject that
+      # HOLDS the low rung (the liveness line proves the tuple, so the negative can never go vacuous).
+      - user: user:olive
+        object: warehouse:lance_catalog
+        assertions:
+          reader: true                        # the tuple is live
+          can_create_namespace: false         # writer-tier: creation is never a reader's
+          can_create_table: false
+          can_create_materialized_view: false
+          can_grant_pass_grants: false        # manage_grants-tier
+      - user: user:carol
+        object: namespace:acme_bronze
+        assertions:
+          reader: true                        # inherited from her warehouse reader grant
+          can_get_metadata: true              # what a reader IS entitled to
+          can_delete: false                   # DESTRUCTIVE and owner-tier; was widenable to reader
+          can_create_namespace: false
+          can_create_table: false
+          can_create_materialized_view: false
+          can_grant_pass_grants: false
+      - user: user:carol
+        object: table:acme_silver_features
+        assertions:
+          reader: true                        # inherited through namespace:acme_silver
+          can_read_data: true                 # what a reader IS entitled to
+          can_write_data: false               # writer-tier; the read/write boundary itself was unpinned
+          can_grant_pass_grants: false
+      - user: user:rita
+        object: project:acme
+        assertions:
+          member: true                        # the tuple is live
+          can_administer: false               # admin-tier: a plain member never administers
+          can_create_warehouse: false
       - user: user:quincy
         object: annotation_project:labels_2026
         assertions:
           viewer: true              # the tuple is live
           can_send_items: false     # annotator-only: slips to true if the rung drops to viewer
           can_annotate: false       # the sibling action on the same rung, same reasoning
+          can_claim: false          # annotator-tier, found unpinned by the 2026-08-22 sweep
+          can_manage: false         # manager-tier, same
   - name: team-owned project admins get full warehouse access (and a team owns MANY projects)
     check:
       - user: user:alice
@@ -398,12 +455,15 @@ tests:
     #   carol     — reader granted on warehouse:acme_bucket directly
     #   dave      — writer on the warehouse (writer implies reader, concentrically)
     #   gina      — member of project:acme, which `warehouse#reader` includes via `member from project`
+    #   rita      — the same edge as gina. Added 2026-08-22 as the plain-member subject that pins
+    #               `project.can_administer: admin` against a widening to `member`; her arrival here
+    #               is not incidental, it re-proves that `member from project` reaches this far.
     list_users:
       - object: namespace:acme_gold
         user_filter: [{ type: user }]
         assertions:
           can_be_notified:
-            users: [user:alice, user:bob, user:carol, user:dave, user:gina]
+            users: [user:alice, user:bob, user:carol, user:dave, user:gina, user:rita]
 
   - name: create-on-parent — create perms are gated on the PARENT object (design-create-on-parent)
     check:

@@ -320,6 +320,8 @@ A permission that quietly gains `reader` is not a syntax error and no assertion 
 to notice. The model tests pin *type names and a sample of allow/deny rows*; they do not pin the
 derivations.
 
+
+**ENFORCED 2026-08-22.** `packages/service-kit/src/service_kit/governed/auth/model.fga.yaml`. Method: a mutation SWEEP — widen every `can_*` to its type's lowest rung, re-run `fga model test`, record which survive. 15 survived silently after the table fix (22 at audit time). All 15 now carry a negative assertion against a subject that HOLDS the low rung, with a liveness line so the negative cannot go vacuous. **Re-swept: 62 widenable derivations tested, 0 still unpinned.** RED/GREEN proof: `table.can_drop: owner -> reader` gave 44/44 + 266/266 before, and `43/44 + 274/275` after, naming `Check(user=user:peter,relation=can_drop,object=table:acme_gold_catalog): expected=false, got=true`. Checks 266 -> 296.
 ### H7 — `NOTIFY_RELATION` can be replaced with a relation that does not exist · **CONFIRMED, HIGH**
 
 `services/notifications/src/notifications/api/visibility.py:60`. Mutating it to `can_be_notifiedX` —
@@ -355,6 +357,8 @@ them are the **`table` rung's whole grant axis** — the finest-grained and by f
 governed object in the estate. The challenger raised this from MEDIUM on reachability grounds:
 `_GRANTABLE_BASE` in `access.py:82` makes every one of them reachable from a real grant call.
 
+
+**ENFORCED 2026-08-22.** Same commit. The `table` rung's five grant relations (`can_grant_owner/writer/reader/validator`, `can_grant_pass_grants`) had no assertion of any kind; all are now pinned against `user:peter`, a writer without `pass_grants`. Covered by the sweep above, which reports 0 unpinned.
 ### M1 — `fga model test` runs in exactly one place, and no `make` target is it · **CONFIRMED, raised to MEDIUM**
 
 The OpenFGA model's evaluation semantics are guarded by a single line: `ci.yml:208`. `make ci` (=
