@@ -291,3 +291,99 @@ groups:
             `dapr.io/control-plane` on the container port named `metrics`). Until this clears,
             DaprSchedulerServingNoSidecars is blind.
             Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+  # ===============================================================================================
+  # RAY. Fifteen rules existed and not one concerned Ray — the plane the entire bronze->silver->gold
+  # cascade runs on.
+  #
+  # THE ORDER MATTERS. The first three fire on rask's OWN series (`ray_control_*`, from
+  # `ray_kit.metrics`), so they work the moment the fleet exports and need no Ray-side scrape at all.
+  # The last two need the `ray-pods` job specified in open_ray_handover.md section 1, which lands on
+  # the EXTERNAL cluster — and RayMetricsMissing is what keeps them honest until it does, because a
+  # rule over an absent series is SILENT, not green. That is the DaprSchedulerMetricsMissing lesson,
+  # applied rather than restated.
+  #
+  # Every Ray counter is ABSENT, not zero, until first recorded: OpenCensus emits no series for a view
+  # with no rows, so `increase()` over a never-fired counter yields an empty vector and the rule simply
+  # does not evaluate. That is why the failure rules are written as `> 0` over increase() (which is
+  # correctly silent when nothing has happened) rather than as `== 0` comparisons, which would be
+  # silent when the EMITTER dies — the inverse, and the worse, failure.
+  # ===============================================================================================
+  - name: ray
+    rules:
+      - alert: RayControlUnreachable
+        expr: sum(increase(ray_control_probes_total{lance_ray_outcome="unreachable"}[10m])) > 0
+        for: 10m
+        labels:
+          severity: critical
+          service: ray
+        annotations:
+          summary: "compute cannot reach Ray — every /api/ray/* route is answering 200 with ok=false"
+          description: >-
+            `ray_control_probes_total{lance_ray_outcome="unreachable"}` is climbing. Because those
+            routes return HTTP 200 regardless, the fleet RED dashboard shows a healthy compute
+            service and 0% errors while the cluster is gone. Check the Ray head and
+            `ray.dashboardUrl`. If the outcome is `unauthorized` instead, this is a Secret, not an
+            outage — see RayControlUnauthorized.
+            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+      - alert: RayControlUnauthorized
+        expr: sum(increase(ray_control_probes_total{lance_ray_outcome="unauthorized"}[10m])) > 0
+        for: 10m
+        labels:
+          severity: critical
+          service: ray
+        annotations:
+          summary: "Ray is refusing compute's credentials — this is a Secret, not an outage"
+          description: >-
+            `ray_control_probes_total{lance_ray_outcome="unauthorized"}` is climbing: Ray answered
+            401/403. Check `RASK_RAY_AUTH_TOKEN` / the `<release>-ray-auth-token` Secret and whether
+            the token was rotated. Do NOT go debugging the node pool — the cluster is up and saying
+            no.
+            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+      - alert: RayJobHistoryGrowing
+        expr: max(ray_control_jobs_known) > 10000
+        for: 15m
+        labels:
+          severity: warning
+          service: ray
+        annotations:
+          summary: "Ray still remembers 20000 jobs — the prune cron is not keeping up"
+          description: >-
+            `GET /api/jobs/` accepts no parameters, so it returns EVERY job Ray has ever seen. At
+            81,155 jobs that response measured 164.7 MB and OOM-killed the compute pod. Check the
+            `compute-prune-jobs-cron` Dapr binding is ticking and that `prune_jobs` is not failing
+            every delete (`PruneResult.failed`).
+            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+      - alert: RayMetricsMissing
+        expr: absent(ray_node_cpu_utilization)
+        for: 15m
+        labels:
+          severity: warning
+          service: ray
+        annotations:
+          summary: "No ray_* metrics for 15m — every Ray cluster alert is blind"
+          description: >-
+            `ray_node_cpu_utilization` has no series, so nothing is scraping Ray's per-node
+            endpoint. Ray metrics are PULL-only and this does not self-heal. Apply the `ray-pods`
+            scrape job in open_ray_handover.md section 1 on the cluster KubeRay runs on. Until it
+            clears, RayWorkerOOMKills and RayServeNoHealthyReplicas cannot fire.
+            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+      - alert: RayWorkerOOMKills
+        expr: sum(increase(ray_memory_manager_worker_eviction_total[15m])) > 0
+        for: 15m
+        labels:
+          severity: critical
+          service: ray
+        annotations:
+          summary: "Ray is OOM-killing workers — cascade stages are dying with no traceback anywhere"
+          description: >-
+            `ray_memory_manager_worker_eviction_total` is climbing: the host ran out of RAM and the
+            kernel killed the worker (driver exit 137). Ray writes the driver log to a file inside
+            the pod that nothing ships, so there is no traceback to find — the FAIL lineage event's
+            errorMessage facet now carries the exit code instead. Reduce the stage's batch size or
+            raise the head/worker memory limit.
+            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
