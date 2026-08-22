@@ -361,6 +361,26 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                 # inherited from the upstream dataset's own `lineage` cell, so a gold row's chain reaches
                 # bronze without a single graph query.
                 upstream = await run_in_threadpool(read_upstream, from_uri, settings.storage_options())
+                # I2, FINALLY ON THE WRITE SIDE. Ask the catalog where this table lives BEFORE
+                # writing, instead of composing a path and telling it afterwards. The composed
+                # `{root}/medallion/{tier}` is a layout the catalog has never vended, so the two
+                # disagreed and the publish that followed opened the catalog's answer and found
+                # nothing. Ordering is the whole change: registering happened AFTER the write, and
+                # asking has to happen before it.
+                #
+                # No catalog URL is the ungoverned dev shape — it keeps its configured URI and the
+                # loud warning below still fires.
+                if settings.catalog_url and to_dataset:
+                    to_uri = await run_in_threadpool(
+                        catalog_register.ensure_stage_output,
+                        catalog_url=settings.catalog_url,
+                        table_id=to_dataset,
+                        schema=upstream.schema,
+                        delimiter=settings.delimiter,
+                        token=settings.catalog_token,
+                        app_token=settings.app_api_token,
+                        service_identity=settings.catalog_service_identity,
+                    )
                 lineage_doc = promotion_lineage(
                     settings,
                     from_namespace=from_namespace,

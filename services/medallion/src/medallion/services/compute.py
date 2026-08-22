@@ -102,6 +102,10 @@ class UpstreamFacts(BaseModel):
     uri: str
     version: int
     chain: list[LineageEdge] = Field(default_factory=list)
+    #: The upstream's Arrow schema, carried so the stage can ask the catalog to mint its output table
+    #: without a second open. Only used on a lane's FIRST run — after that the table exists and the
+    #: catalog just states where — and the stage's own `overwrite` replaces it either way.
+    schema: Any = None
 
 
 def read_upstream(from_uri: str, storage_options: dict[str, str]) -> UpstreamFacts:
@@ -115,7 +119,7 @@ def read_upstream(from_uri: str, storage_options: dict[str, str]) -> UpstreamFac
     if _LINEAGE_COLUMN in ds.schema.names and ds.count_rows():
         cell = ds.to_table(columns=[_LINEAGE_COLUMN], limit=1).column(_LINEAGE_COLUMN)[0].as_py()
         chain = LineageDoc.inherited_chain(cell)
-    return UpstreamFacts(uri=from_uri, version=int(ds.version), chain=chain)
+    return UpstreamFacts(uri=from_uri, version=int(ds.version), chain=chain, schema=ds.schema)
 
 
 def measure(uri: str, storage_options: dict[str, str]) -> WriteResult:
