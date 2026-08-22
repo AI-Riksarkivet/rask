@@ -483,17 +483,12 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                     # report success, and the mover retries.
                     if to_dataset:
                         if settings.catalog_url:
-                            await run_in_threadpool(
-                                catalog_register.register_stage_output,
-                                catalog_url=settings.catalog_url,
-                                catalog_root=settings.catalog_root,
-                                table_id=to_dataset,
-                                to_uri=to_uri,
-                                delimiter=settings.delimiter,
-                                token=settings.catalog_token,
-                                app_token=settings.app_api_token,
-                                service_identity=settings.catalog_service_identity,
-                            )
+                            # NOTHING LEFT TO REGISTER. `ensure_stage_output` above created the table,
+                            # which registered it — and registering again is not merely redundant:
+                            # `register_stage_output` resolves the location against the single
+                            # hardwired MEDALLION_CATALOG_ROOT, while a vended tenant location lives in
+                            # that tenant's warehouse. It would raise AFTER the Lance write committed,
+                            # which is ungoverned bytes plus a retry no redelivery can clear.
                             span.set_attribute("lance.catalog.registered", to_dataset)
                         else:
                             # AN UNGOVERNED WRITE IS LOUD, NEVER SILENT. Without a catalog URL this

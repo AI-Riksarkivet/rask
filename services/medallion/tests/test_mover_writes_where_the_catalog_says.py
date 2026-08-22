@@ -110,3 +110,26 @@ class TestWithoutACatalog:
         asyncio.run(transform.handle_stage(cast("Any", _Dapr()), _settings(upstream, MEDALLION_CATALOG_URL=""), _event()))
 
         assert written and "composed.lance" in written[0]
+
+
+class TestThereIsNothingLeftToRegister:
+    """`ensure_stage_output` CREATES the table, which registers it. Registering again afterwards is
+    not merely redundant — under per-tenant routing it reintroduces the P0 it was part of.
+
+    `register_stage_output` calls `relative_location(to_uri, MEDALLION_CATALOG_ROOT)`, and that root is
+    a single hardwired bucket. The vended location for a tenant lives in that tenant's warehouse —
+    `s3://acme-bucket/<hash>_silver$features` — which is not under it, so the call raises AFTER the
+    Lance write has committed: ungoverned bytes plus a poison retry no redelivery can clear.
+    """
+
+    def test_the_mover_does_not_register_after_asking(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
+        registered: list[Any] = []
+        monkeypatch.setattr(transform.catalog_register, "register_stage_output", lambda **k: registered.append(k))
+        monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "vended.lance"))
+
+        asyncio.run(transform.handle_stage(cast("Any", _Dapr()), _settings(upstream), _event()))
+
+        assert registered == [], (
+            "the mover registered a table the catalog had just created for it — under per-tenant "
+            "routing that call raises on a vended location outside MEDALLION_CATALOG_ROOT"
+        )
