@@ -71,3 +71,28 @@ def test_NO_settings_and_NO_endpoint_stays_off(monkeypatch: object) -> None:
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
 
     assert setup_otel(FastAPI(), "svc-test") is False
+
+
+def test_every_client_transport_the_estate_uses_gets_an_instrumentor(monkeypatch: object) -> None:
+    """The seam's instrumentor list is the FLEET's complete instrumentation — there is no launcher.
+
+    `chart/templates/fleet.yaml` and `controlplane.yaml` run `command: ["uvicorn"]`, not
+    `opentelemetry-instrument`, so unlike the lakehouse half nothing auto-loads the installed
+    entry points. Whatever this function names is all the fleet gets.
+
+    `requests` was the expensive omission. Ray's `JobSubmissionClient` performs every call through it,
+    so `list_jobs` — the call that measured 164.7 MB / 81,155 jobs and OOM-killed the compute pod —
+    and the pruner's per-job DELETE loop carried no client span at all, while the cheap httpx reads
+    did. That does not read as a gap in a trace view; it reads as those calls being instantaneous.
+    """
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    from opentelemetry.instrumentation.requests import RequestsInstrumentor
+
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")  # ty: ignore[unresolved-attribute]
+    assert setup_otel(FastAPI(), "svc-test", _settings(RASK_OTEL_ENABLED=True)) is True
+
+    # `is_instrumented_by_opentelemetry` is the SDK's own flag. Asserting on a patched function's repr
+    # does NOT work — measured: the requests instrumentor leaves `Session.request` identical and wraps
+    # the send path instead, so a repr check passes vacuously in one direction and fails in the other.
+    assert RequestsInstrumentor().is_instrumented_by_opentelemetry, "requests is not instrumented — Ray's Job SDK calls carry no client span"
+    assert HTTPXClientInstrumentor().is_instrumented_by_opentelemetry, "httpx is not instrumented"

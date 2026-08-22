@@ -16,6 +16,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.65b0",
     "opentelemetry-instrumentation-httpx>=0.65b0",
     "opentelemetry-instrumentation-logging>=0.65b0",
+    "opentelemetry-instrumentation-requests>=0.65b0",
 ]
 
 # The governed/lakehouse/lancekit subpackages ported from packages/common (gate 3, R19) carry their

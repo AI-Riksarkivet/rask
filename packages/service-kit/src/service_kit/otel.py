@@ -9,6 +9,7 @@ module only constructs providers + instruments the app; it hardcodes no target.
 from __future__ import annotations
 
 import os
+from contextlib import suppress
 
 from fastapi import FastAPI
 
@@ -84,4 +85,18 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider, meter_provider=meter_provider)
     HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider, meter_provider=meter_provider)
     LoggingInstrumentor().instrument(set_logging_format=True)
+
+    # `requests`, because HTTPX is not the only client in the estate and the uninstrumented half is
+    # the EXPENSIVE half. Ray's `JobSubmissionClient` performs every call through `requests`, which
+    # covers `list_jobs` — the call that measured 164.7 MB / 81,155 jobs and OOM-killed the compute
+    # pod — and the pruner's one-HTTP-DELETE-per-job loop. Without this the trace view is not merely
+    # incomplete but MISLEADING: the cheap httpx reads carry client spans while the costly requests
+    # calls appear instantaneous, so a twenty-minute prune pass and a two-second one look identical.
+    #
+    # Guarded: the fleet's storeless services do not all pull `requests` in, and a missing optional
+    # instrumentor must degrade to "no client spans", never to a service that cannot start.
+    with suppress(ImportError):
+        from opentelemetry.instrumentation.requests import RequestsInstrumentor
+
+        RequestsInstrumentor().instrument(tracer_provider=tracer_provider, meter_provider=meter_provider)
     return True

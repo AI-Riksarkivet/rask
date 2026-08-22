@@ -14,6 +14,7 @@ of bubbling 5xx.
 
 import logging
 import re
+import time
 from http import HTTPStatus
 from urllib.parse import urlencode
 
@@ -25,6 +26,7 @@ from ray.exceptions import AuthenticationError
 from ray.job_submission import JobSubmissionClient
 
 from ray_kit.auth import auth_headers
+from ray_kit.metrics import RayOutcome, classify_ray_error, record_jobs_known, record_probe
 from ray_kit.schemas import (
     ProxyResponse,
     RayActor,
@@ -155,31 +157,63 @@ def build_client(dashboard_url: str) -> JobSubmissionClient | None:
     exactly the previous behavior.
     """
     try:
-        return JobSubmissionClient(address=dashboard_url, headers=auth_headers() or None)
+        client = JobSubmissionClient(address=dashboard_url, headers=auth_headers() or None)
     except RAY_TRANSIENT_ERRORS as exc:
-        log.info(f"Ray dashboard unreachable at {dashboard_url}: {exc}")
+        # CLASSIFY BEFORE DISCARDING. `RAY_TRANSIENT_ERRORS` catches four causes with one `except`,
+        # and this function can only answer `None` — so without the classification a rotated token, a
+        # missing RASK_RAY_AUTH_TOKEN and a scope mistake all reach an operator as the fixed literal a
+        # dead cluster produces ("Ray dashboard unreachable"), sending them to debug KubeRay, the node
+        # pool and networking when the fix is a Secret.
+        #
+        # WARNING, not INFO: this is the estate losing its only window onto Ray. At INFO it was below
+        # the level the fleet's stdout handler emits by default, so the one line naming the real cause
+        # was not merely buried — on a default deployment it was never written.
+        outcome = classify_ray_error(exc)
+        record_probe("build_client", outcome)
+        log.warning(
+            "ray_client_unavailable",
+            extra={"dashboard_url": dashboard_url, "outcome": outcome.value, "error_type": type(exc).__name__, "error": str(exc)[:_ERROR_MSG_MAX_LEN]},
+        )
         return None
+    record_probe("build_client", RayOutcome.OK)
+    return client
 
 
 async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayHealth:
+    # EVERY EXIT RECORDS. This route answers HTTP 200 even when Ray is dead, so the automatic
+    # `http.server.*` series cannot see the failure — a totally dead head renders as 0% error rate on
+    # the RED dashboard. `ray.control.probes{op="health"}` is the only series a rule can fire on.
+    started = time.perf_counter()
     if client is None:
+        record_probe("health", RayOutcome.UNREACHABLE, duration_seconds=time.perf_counter() - started)
         return RayHealth(ok=False, dashboard_url=dashboard_url, error="Ray dashboard unreachable")
     try:
         await to_thread.run_sync(client.get_version)
     except RAY_TRANSIENT_ERRORS as exc:
+        record_probe("health", classify_ray_error(exc), duration_seconds=time.perf_counter() - started)
         return RayHealth(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+    record_probe("health", RayOutcome.OK, duration_seconds=time.perf_counter() - started)
     # get_version() is called purely as a liveness probe (its return is the
     # Jobs-API version, not the cluster Ray version — see RayHealth).
     return RayHealth(ok=True, dashboard_url=dashboard_url, client_ray_version=ray.__version__)
 
 
 async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str, *, max_jobs: int = MAX_JOBS) -> RayJobsPayload:
+    started = time.perf_counter()
     if client is None:
+        record_probe("list_jobs", RayOutcome.UNREACHABLE, duration_seconds=time.perf_counter() - started)
         return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error="Ray dashboard unreachable")
     try:
         details = await to_thread.run_sync(client.list_jobs)
     except RAY_TRANSIENT_ERRORS as exc:
+        record_probe("list_jobs", classify_ray_error(exc), duration_seconds=time.perf_counter() - started)
         return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+    # The call this timing exists for: `GET /api/jobs/` accepts NO parameters, so it always returns
+    # every job Ray has ever seen. Measured at 81,155 jobs / 164.7 MB, which OOM-killed the pod. The
+    # cap below fixed the crash and made the GROWTH invisible; `ray.control.jobs_known` is the series
+    # that shows it coming back, and the duration is the cost of the call that carries it.
+    record_probe("list_jobs", RayOutcome.OK, duration_seconds=time.perf_counter() - started)
+    record_jobs_known(len([d for d in details if d is not None]))
     # SORT AND CAP FIRST, VALIDATE SECOND. The old order — validate every job, then sort — built a
     # `.dict()` copy AND a `RayJob` for every job Ray had ever seen. Measured against the live
     # cluster: 81,155 jobs / 164.7 MB in one response, peaking at 1179 MiB of RSS for a single call
