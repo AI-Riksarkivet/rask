@@ -40,14 +40,15 @@ table in the same commit as the fix; a row without evidence is not done.
 | 5 | Regenerate `docs/catalog-openapi.json` | M26 | ✅ **NO-OP 2026-08-22** — regenerated at `e6a6053b`, `git diff` empty. The drift was against `47dba152`; a concurrent session fixed it. M26's *structural* half (2 of 10 services; the in-repo guard is name-only) stands |
 | 6 | Give `.dagger/charts.go:103` its render arguments | H22 | 🟨 **PARTIAL 2026-08-22** — shared `renderArgs` added; **all 3 invariant gates now PASS** for the first time since 2026-08-04. Running them surfaced 4 defects, all fixed: policy moved `constant`→`exponential` under the dead gate; a service account became unconditional; **2 gates were matching YAML comments, not config** (the M8 class, live). Still red: `prod_render_check.sh` (same `image.repository` guard) and `make alert-rules-check` (bare `promtool` not on PATH — and `.dagger/charts.go:44`'s claim that the Makefile exports `$(LOCALBIN)` on PATH is **false**; `git log -S` finds no such line, ever) |
 | 7 | `assert_all_called=True` on respx | M19b | ✅ **ENFORCED 2026-08-22** — flipped on the global router in `conftest.py`, so it covers all 118 bare `@respx.mock` sites and every future one. **17 of 227 went red**, and the split is the point: 13 were DEAD routes in the register path (M19 — a top-level namespace-create the cascade is ruled never to make, mocked as 200 where the real catalog answers 400), now deleted; 6 were NEGATIVE routes whose uncalled state is the assertion, now declaring themselves via a `respx_allows_unused_routes` fixture. Dead and deliberate are no longer indistinguishable in the source |
+| 8 | Drive the `--continue` gate to GREEN — fix what it unmasked | H3 | ✅ **DONE 2026-08-22** — **74/74 tasks, exit 0, unpiped.** `--continue` turned 1 reported failure into 4; all three newly-visible ones are fixed, and every one was a committed file no session had modified — i.e. defects the fail-fast gate had been hiding, not fresh breakage. (a) `explorer#check:tsgo`, 5 errors: `tsconfig.tsgo.json`'s `include` **replaces** the parent's instead of merging, silently dropping `.svelte-kit/{ambient,env,non-ambient}.d.ts` + `src/app.d.ts`, so `$env/dynamic/private` and the `App.Locals` augmentation had no declarations — 4 config errors wearing the costume of 5 code errors; the 5th was real: `v.optional()` widens a key to `boolean \| undefined`, which `exactOptionalPropertyTypes` refuses, fixed with valibot's purpose-built `v.exactOptional()` rather than by loosening `UserStateEnvelope`. (b) `@rask/zone-contract#check:tsgo`: an unguarded regex capture under `noUncheckedIndexedAccess` — one guard also removed the `as string` the next line used to paper over the same value. (c) `@rask/ui#fmt:check`: 3 files, and `grants-panel.svelte` was the interesting one — `rsvelte-fmt` reformats a multi-statement arrow inside a markup attribute to column 0, and the reason one was there at all is that a `// #72` comment in the `<script>` block had been describing a handler that was moved into the markup, leaving the comment documenting nothing. Naming the handler fixed the orphaned comment and the formatter's bad output together; MCP autofixer clean |
 
 ### Tier 2 — after CI is green
 
 | | item | finding |
 | --- | --- | --- |
-| 8 | Identify the **`F` at 41 %** on the first green `ms-test` | H1 (open thread) |
-| 9 | Drain-state pass over `open_python-audit.md`, then **merge** into one backlog | Part 13 |
-| 10 | Then its waves: E1/E2 → E3/E4 → E5/E6 → E7/E8/E10/E11 → E12 — guard clauses and deletions **last** | that audit's own execution order |
+| 9 | Identify the **`F` at 41 %** on the first green `ms-test` | H1 (open thread) |
+| 10 | Drain-state pass over `open_python-audit.md`, then **merge** into one backlog | Part 13 |
+| 11 | Then its waves: E1/E2 → E3/E4 → E5/E6 → E7/E8/E10/E11 → E12 — guard clauses and deletions **last** | that audit's own execution order |
 
 *Not tracked here:* `TODO.md` at repo root is the product/feature backlog and a different list entirely.
 
@@ -869,6 +870,12 @@ across users on the same host.
 tests that run before any compute test — and never restores it. The estate's last first-party conftest
 doing this.
 
+✅ **FIXED 2026-08-22** — `services/compute/tests/conftest.py` now saves the prior values of
+`RAY_DASHBOARD_URL` and `RASK_API_PREFIX`, sets them only around the single `import compute` that needs
+them, and restores them (deleting the key where there was none). Verified: 7 passed, and a probe in a
+later testpath reports `RAY_DASHBOARD_URL present before=False after=False` — the variable no longer
+outlives the import that needed it.
+
 ### L3 — two OTel tests leave live global exporters installed for the session · **CONFIRMED, LOW**
 
 `packages/service-kit/tests/test_otel.py:18` and `:54` install real SDK Tracer/Meter providers with live
@@ -877,6 +884,25 @@ OTLP exporters aimed at localhost and tear nothing down. For the rest of the pro
 every later outbound HTTPX request in the estate's suite silently gains a `traceparent` header it would
 not otherwise carry. Visible in the CI log as `Transient error HTTPConnectionPool(host='localhost'…)`
 interleaved with the sidecar failures.
+
+✅ **FIXED 2026-08-22** — an autouse fixture in that file now RECORDS every `TracerProvider` /
+`MeterProvider` / `LoggerProvider` constructed during a test and shuts each one down afterwards.
+Recording rather than reading the globals is the whole fix, and the first attempt got it wrong: OTel's
+setters are **set-once** (`set_meter_provider` "can only be done once"), so the global is whatever the
+first `setup_otel` in the process installed, while every later call builds a provider that never becomes
+global — yet still registers its reader in the SDK's class-level `MeterProvider._all_metric_readers`
+WeakSet and still runs its export loop. Measured with a probe asserting no processor or reader is left
+with `_shutdown is False`:
+
+| variant | live exporters surviving the file |
+| --- | --- |
+| no fixture | `BatchSpanProcessor` + 3 × `PeriodicExportingMetricReader` |
+| shutting down the globals (first attempt) | 2 × `PeriodicExportingMetricReader` |
+| recording constructions (shipped) | **none** |
+
+The lesson generalises past OTel: **a teardown that reads a set-once global disarms one object and
+leaves the rest running**, and the log noise it removes (2 lines → 1 in the crude count that nearly
+passed for proof) is far too weak a signal to tell the two apart.
 
 ### L4 — `build_settings()` reads an untracked developer `.env` and writes derived credentials into `os.environ` · **CONFIRMED, LOW**
 

@@ -74,10 +74,6 @@
 	// live on unknown: the gate explains a refusal, it does not invent one from a missing read.
 	const permMap = $derived(perms?.for === dataset ? perms.map : null);
 
-
-
-
-
 	// Every piece of state is keyed by the dataset it belongs to (no cross-dataset bleed, audit
 	// 2026-07-16: a single un-keyed `loading` let one dataset's in-flight review block another's):
 	// the panel is open only for the dataset it was opened on, a review/spinner/failure is shown
@@ -102,15 +98,6 @@
 
 	// #72 manage-access form — grant/revoke a base rung to a subject. Keyed by dataset like the simulator.
 	let mgUser = $state('');
-
-
-
-
-
-
-
-
-
 
 	const open = $derived(openedFor === dataset);
 	const shown = $derived(review?.for === dataset ? review : null);
@@ -198,8 +185,14 @@
 	}
 
 	// #72 grant or revoke a base rung, then re-fetch the review so the change is visible immediately.
-
-
+	// Named rather than inlined into `onmutated=` deliberately: this comment described a handler that
+	// had been moved into the markup, so it documented nothing, and `rsvelte-fmt` reformats a
+	// multi-statement arrow inside a markup attribute to column 0 — which is what made this file the
+	// estate's only `fmt:check` failure.
+	async function refreshAfterMutation() {
+		const refreshed = await client.fetchAccess(kind, dataset);
+		if (refreshed.ok) review = { for: dataset, access: refreshed.data, denied: null };
+	}
 </script>
 
 <div class="grants">
@@ -291,10 +284,7 @@
 					knownSubjects={(shown?.access?.grants ?? []).flatMap((g) => g.users)}
 					grant={(user, relation) => client.grantAccess(kind, dataset, user, relation)}
 					revoke={(user, relation) => client.revokeAccess(kind, dataset, user, relation)}
-					onmutated={async () => {
-						const refreshed = await client.fetchAccess(kind, dataset);
-						if (refreshed.ok) review = { for: dataset, access: refreshed.data, denied: null };
-					}}
+					onmutated={refreshAfterMutation}
 				/>
 			</div>
 		{/if}

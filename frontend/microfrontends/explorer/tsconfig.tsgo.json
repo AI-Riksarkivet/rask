@@ -8,6 +8,16 @@
 		"exactOptionalPropertyTypes": true
 	},
 	"include": [
+		// `include` REPLACES the parent's rather than merging with it, so the four declaration files
+		// `.svelte-kit/tsconfig.json` contributes ($env/*, $app/*) plus `src/app.d.ts` (the `App.Locals`
+		// augmentation) have to be named again here. Without them a test that pulls in a SvelteKit-coupled
+		// module -- `saved-views-store.svelte.test.ts` does, via `vi.mock` -- fails with "Cannot find
+		// module '$env/dynamic/private'" and "Property 'session' does not exist on type 'Locals'", which
+		// look like five code defects and are one config gap.
+		".svelte-kit/ambient.d.ts",
+		".svelte-kit/env.d.ts",
+		".svelte-kit/non-ambient.d.ts",
+		"src/app.d.ts",
 		"src/lib/descriptor.ts",
 		"src/lib/api.ts",
 		"src/lib/utils.ts",

@@ -35,7 +35,12 @@ const DocumentArg = v.object({
  *  three-outcome mapping in `$lib/user-state` owns what a value MEANS, this only vouches for the
  *  envelope around it. */
 const UserStateEnvelopeSchema: v.GenericSchema<unknown, UserStateEnvelope> = v.looseObject({
-	exists: v.optional(v.boolean()),
+	// `exactOptional`, not `optional`, because the zone type-checks under `exactOptionalPropertyTypes`:
+	// `optional` widens the key to `boolean | undefined` (present-but-undefined is allowed), which does
+	// not satisfy `exists?: boolean` under that flag. `exactOptional` models what JSON can actually
+	// deliver — the key is absent or it is a boolean — so the schema matches the envelope instead of the
+	// envelope being loosened to match the schema.
+	exists: v.exactOptional(v.boolean()),
 	value: v.unknown(),
 });
 

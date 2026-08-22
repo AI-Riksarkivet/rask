@@ -119,8 +119,13 @@ function refreshCalls() {
 	for (const { zone, file, text } of FILES) {
 		if (!file.endsWith('.remote.ts')) continue;
 		for (const m of text.matchAll(/(\w+)\(\s*\{[^)]*\}\s*\)\s*\.refresh\(\)/g)) {
-			const keys = keysOfCall(text, m.index + m[1].length);
-			if (keys) found.push({ zone, file, fn: m[1] as string, keys });
+			// `noUncheckedIndexedAccess` types a capture group as `string | undefined` — the group is
+			// non-optional in the pattern, but the type system cannot know that. Guarding once here is
+			// what lets `fn` be used twice below without the `as string` this line used to carry.
+			const fn = m[1];
+			if (!fn) continue;
+			const keys = keysOfCall(text, m.index + fn.length);
+			if (keys) found.push({ zone, file, fn, keys });
 		}
 	}
 	return found;

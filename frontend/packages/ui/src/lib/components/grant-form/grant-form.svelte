@@ -167,8 +167,8 @@
 			<span>
 				Granted exactly as typed. A signed-in user's subject is their OIDC <code>sub</code> — a long
 				opaque id like <code class="mono">CiQwOGE4Njg0Yi…</code>, not a display name — so
-				<code class="mono">{subject.trim()}</code> will match nobody unless that is literally the
-				subject id (a service account or a userset).
+				<code class="mono">{subject.trim()}</code> will match nobody unless that is literally the subject
+				id (a service account or a userset).
 			</span>
 		</p>
 	{/if}

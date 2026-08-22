@@ -67,7 +67,8 @@
 	data.more && 'border-dashed opacity-70',
 	data.err && 'border-destructive text-destructive',
 	// Only a linked rung advertises itself as one. Keyboard reach comes free with the anchor.
-	data.href && 'no-underline transition-colors hover:border-primary hover:bg-primary/5 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
+	data.href &&
+		'no-underline transition-colors hover:border-primary hover:bg-primary/5 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
 )}
 >
 	<Icon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
