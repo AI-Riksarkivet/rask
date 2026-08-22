@@ -122,6 +122,18 @@ def _dedupe_id(task: UnitTask) -> str:
     `chunk_id` is deliberately NOT in the id. It is the enumeration chunk, and a replay re-derives it
     identically today — but including it would make the id depend on how enumeration happened to
     batch, which is not part of a unit's identity.
+
+    THE SEPARATOR IS THE LITERAL FOUR CHARACTERS ``\\x00``, not a NUL byte — the f-string escapes the
+    backslash. Stated because this docstring said otherwise until 2026-08-22 and the difference is
+    not cosmetic: with a real NUL the separator cannot appear in either half, while a literal
+    sequence can, so a key containing the TEXT ``\\x00`` could in principle collide with a different
+    (run_id, key) pair.
+
+    Left as it is, deliberately. Changing the separator changes every id, and an id that changes
+    between a publish and its replay is exactly the double-land JetStream's dedupe window exists to
+    prevent — so the fix would open a real 120-second hole during every rolling deploy to close a
+    collision that needs a source URI containing a literal backslash-x-zero-zero. If the ids are ever
+    revised for another reason, take a NUL byte then.
     """
     import hashlib
 
