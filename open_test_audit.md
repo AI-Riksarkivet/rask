@@ -528,6 +528,34 @@ and NEVER retried: the graph silently forgets it." The FAIL emit is the compensa
 executed by no test **and** it is wrapped in `with suppress(Exception)` at `:676`, so a defect inside it
 produces silence rather than a red.
 
+✅ **FIXED 2026-08-22** — `services/medallion/tests/test_media_drop_fail_emit.py` drives the branch and
+asserts three things, each mutation-proven:
+
+| assertion | RED mutation | caught |
+| --- | --- | --- |
+| a deterministic media failure DROPs | — (pinned as the contract) | — |
+| exactly one FAIL run is recorded | delete the FAIL emit block | ✅ got 0 |
+| the FAIL run carries `lance.originator` | (trap 2 on the failure path) | ✅ |
+| a broken emit is LOGGED, not swallowed | `_best_effort` back to `pass` | ✅ |
+
+**The `suppress` is design, not defect, and the fix keeps it.** All four suppressed sites in
+`transform.py` are best-effort by intent, and the reasons are written at each: *"a graph outage must not
+convert a correct refusal into a retry storm"*, and a FAIL record that cannot be written must not stop
+the DROP that keeps a deterministic failure from re-reading every blob from S3 `maxDeliver` times. What
+was wrong is that `with suppress(Exception)` threw the DIAGNOSIS away with the exception — and these
+blocks ARE the compensating control, so a bug inside one produced exactly the silence the control exists
+to prevent. All four now run under a `_best_effort` context manager that logs and still never re-raises.
+Applied to all four rather than the one M5 names, because the other three are the same shape and a
+half-applied rule is the thing this estate calls sloppy.
+
+A note on driving it: the error is raised from `read_upstream` rather than `transform_stage`. The branch
+is keyed on the exception TYPE, not on where in the stage it arose, and the read is the first thing
+inside the `try` — so the handler is reached without needing a real upstream dataset on disk. The first
+attempt stubbed `read_upstream` to return a bare object and got `RETRY`, which is the honest answer: a
+stub that breaks something else does not exercise the branch you meant.
+
+275 medallion tests pass; ruff + `ty` clean.
+
 ---
 
 ## Part 5 — Gates that report green while measuring less than they claim
@@ -768,8 +796,6 @@ alone. Together they mean no automated check reads that subtree for the rule cla
 
 
 **FIXED 2026-08-22.** Both halves. The CI-scope half is closed by M25 above. The exemption half: `packages/service-kit/src/service_kit/governed/**` went from a 21-rule blanket to the **four rules that actually fire** (`ANN401`, `ANN202`, `C901`, `PERF401`), so the four SECURITY rules it was suppressing on the authorization kernel — `S110`, `S112`, `S324`, `S608` — are live again. RED proof: appending a `try/except/pass` to `governed/fga.py` now fires `S110`; under the old row it did not. The `schemas/**` row was DELETED rather than narrowed — not one of its 21 rules fired, so it suppressed nothing while implying the subtree needed suppressing. Narrowing surfaced four dead `noqa` directives (`RUF100`) the blanket had hidden; removed, keeping their rationale comments. **Scope bound, stated:** the identical 21-rule list appears on 22 other rows. This pass narrows two. `C901` survives on one function (`fga.py::expand_tree`, complexity 17 vs a ceiling of 15) — splitting the authz kernel's tree expansion is a separate commit, not a silent tack-on.
-### M10 — the live auth suite is selected by nothing, and the job named `e2e-auth` does not run it · **CONFIRMED**
-
 ### M10 — the live auth suite is selected by nothing, and the job named `e2e-auth` does not run it · **CONFIRMED**
 
 `tests/e2e-py/test_auth_e2e.py:25` carries only the generic `e2e` marker — **no per-suite marker, no
