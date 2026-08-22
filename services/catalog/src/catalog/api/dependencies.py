@@ -7,7 +7,7 @@ import time
 from collections.abc import Iterable
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     InvalidInputError,
@@ -19,7 +19,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import parse_identifier
-from catalog.core.lineage_emit import LineageEmitter, NoopEmitter
+from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBoundEmitter, is_person_subject
 from catalog.core.namespace import build_namespace_for_root
 from catalog.core.vending import CredentialVendor, ModeBVendor
 from catalog.services import warehouses
@@ -231,10 +231,44 @@ def get_storage_options(settings: SettingsDep) -> dict[str, str]:
 StorageOptionsDep = Annotated[dict[str, str], Depends(get_storage_options)]
 
 
-def get_lineage_emitter(request: Request) -> LineageEmitter:
-    """The lineage emitter built in the app lifespan — a no-op when emission is disabled."""
+#: The longest an originator claim may be. It becomes an inbox actor id, so an unbounded header would
+#: be an unbounded actor name in somebody else's durable state.
+_MAX_ORIGINATOR = 128
+
+
+def originator_hint(raw: str | None) -> str | None:
+    """Reduce a caller-supplied ``x-lance-originator`` header to a person's subject, or ``None``.
+
+    A TARGETING hint and nothing else: it never authorizes, because the notifications plane re-derives
+    every recipient's visibility at delivery, so at worst a forged value puts a row in an inbox whose
+    owner can already see the run's outputs. That is what makes an unverified header sound here — and
+    it is also why the value must still be a PERSON. A userset (``team:acme#member``), a wildcard, a
+    ``user:``-prefixed object id and a role literal each address either everyone or nobody; the estate
+    has written into an inbox actor literally named ``*`` before.
+
+    Dropped rather than coerced, on the same reasoning the project facet uses: an omitted originator
+    reaches the author and no one else, while a repaired one could reach the wrong person.
+    """
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value or len(value) > _MAX_ORIGINATOR:
+        return None
+    return value if is_person_subject(value) else None
+
+
+def get_lineage_emitter(
+    request: Request,
+    x_lance_originator: Annotated[str | None, Header()] = None,
+) -> LineageEmitter:
+    """The lineage emitter built in the app lifespan, bound to THIS request's originator claim.
+
+    The emitter is app-scoped and shared by every concurrent request; the claim is per-request. Binding
+    them in a frozen wrapper keeps the transport shared without letting one caller's identity ride onto
+    another caller's event.
+    """
     emitter = getattr(request.app.state, "lineage_emitter", None)
-    return emitter if emitter is not None else NoopEmitter()
+    return OriginatorBoundEmitter(emitter if emitter is not None else NoopEmitter(), originator_hint(x_lance_originator))
 
 
 LineageEmitterDep = Annotated[LineageEmitter, Depends(get_lineage_emitter)]

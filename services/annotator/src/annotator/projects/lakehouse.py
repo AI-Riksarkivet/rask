@@ -175,6 +175,7 @@ class CatalogPublisher:
         *,
         delimiter: str = "$",
         token: str | None = None,
+        originator: str | None = None,
         timeout: float = 60.0,
         data_api: Any | None = None,
         tag_api: Any | None = None,
@@ -182,6 +183,12 @@ class CatalogPublisher:
         self._delimiter = delimiter
         self._timeout = timeout
         self._headers: dict[str, str] = {"Authorization": f"Bearer {token}"} if token else {}
+        # WHO this publish is for. The token above is the service's credential and the catalog's
+        # `enforce_author` will author every resulting event as that service, so this header is the
+        # only place the human survives. It authorizes nothing — the notifications plane re-derives
+        # visibility per recipient at delivery — which is why it may ride beside a service bearer.
+        if originator:
+            self._headers["x-lance-originator"] = originator
         if data_api is not None and tag_api is not None:
             self._data, self._tags = data_api, tag_api
             return
@@ -191,6 +198,10 @@ class CatalogPublisher:
         client = ApiClient(Configuration(host=base_url, retries=3))
         if token:
             client.set_default_header("Authorization", f"Bearer {token}")
+        # The tag call goes through the generated client, which does not read `self._headers` — wiring
+        # only the create would leave the publish half-attributed.
+        if originator:
+            client.set_default_header("x-lance-originator", originator)
         # Create goes over DIRECT HTTP, not the SDK: the spec-generated `create_table` cannot send
         # our S4 `source`/`source_version` query params (OPEN-WORK §B3), and the pin must travel.
         self._data = _HttpCreateApi(base_url)
@@ -369,6 +380,7 @@ async def run_publish_for(project_id: str) -> PublishOutcome | None:
         settings.catalog_uri,
         delimiter=settings.catalog_delimiter,
         token=token,
+        originator=subject,
     )
     return await run_publish(
         project_handle=project_handle,

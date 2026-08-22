@@ -30,6 +30,7 @@ import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
@@ -159,7 +160,23 @@ def _input_dataset(ref: InputRef) -> dict[str, Any]:
 
 
 #: Principals that are not an address: a wildcard names everyone, a role names a job.
-_NOT_A_PERSON = frozenset({"", "*", "user:*", "system", "service", "ray", "data_eng", "analyst"})
+#: Values that name a role, a machine, or everyone — never one person. `anon` is the estate-wide
+#: ANONYMOUS_SUBJECT (`service_kit.governed.deps`): with OIDC off every verified-subject dependency
+#: resolves to it, so without this entry a dev or auth-off estate would address one shared inbox
+#: actor literally named `anon` on behalf of everybody.
+_NOT_A_PERSON = frozenset({"", "*", "user:*", "anon", "system", "service", "ray", "data_eng", "analyst"})
+
+
+def is_person_subject(value: str | None) -> bool:
+    """Is this value an ADDRESS for one person — the only thing `lance.originator` may carry?
+
+    One definition, used by the run-event builder and by the door that accepts the claim, because the
+    two disagreeing is the whole failure mode: a value the door lets through and the builder drops is
+    a silent miss, and one the builder keeps but the door never sanitized is a row in an inbox actor
+    named after a role, a team, or `*`. Wildcards and usersets are statements about everyone, which
+    address no one; a `user:`-prefixed value is an FGA object id, not a subject.
+    """
+    return bool(value) and value not in _NOT_A_PERSON and "#" not in str(value) and not str(value).startswith("user:")
 
 
 def build_write_event(
@@ -213,7 +230,7 @@ def build_write_event(
         lance_fields["project"] = project
     # `enforce_author` overwrites `author` with the authenticating service's sub, so a service-made
     # write can only name its human here. Targeting only — it authorizes nothing.
-    if originator and originator not in _NOT_A_PERSON and "#" not in originator and not originator.startswith("user:"):
+    if is_person_subject(originator):
         lance_fields["originator"] = originator
     # Caller-supplied run facets FIRST (e.g. a `params` training-params facet on a merge), already spec-shaped
     # by shape_run_facets, so the catalog stays un-opinionated about their content. The catalog-OWNED `lance`
@@ -352,6 +369,95 @@ class LineageEmitter(Protocol):
         project: str | None = None,
         originator: str | None = None,
     ) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class OriginatorBoundEmitter:
+    """One request's ORIGINATOR claim bound to the app-scoped emitter.
+
+    `enforce_author` overwrites `author` with the authenticating service's sub, so a write a service
+    makes FOR a person can only name that person through `lance.originator`. Every layer below already
+    carried the field; nothing above could set it, which made the capability unreachable from any door.
+
+    A wrapper rather than a field on the emitter, because the two have different lifetimes: the emitter
+    is built ONCE in the lifespan and shared by every concurrent request, so a claim stored on it would
+    ride onto a different caller's event — a row in the wrong person's inbox, which is worse than the
+    silence. Frozen and slotted so that is not merely a convention. The transport stays shared; only the
+    binding is per-request.
+
+    An explicitly passed `originator` still wins: a producer that resolved a better answer than the
+    header is not overruled by the door.
+    """
+
+    inner: LineageEmitter
+    originator: str | None
+
+    async def project_for(self, top_ns: str) -> str | None:
+        return await self.inner.project_for(top_ns)
+
+    async def emit_create(
+        self,
+        *,
+        table_id: str,
+        namespace: str,
+        author: str | None,
+        version: int,
+        run_id: str | None = None,
+        authorization: str | None = None,
+        source_uri: str | None = None,
+        schema_fields: SchemaFields | None = None,
+        inputs: list[InputRef] | None = None,
+        extra_run_facets: dict[str, Any] | None = None,
+        project: str | None = None,
+        originator: str | None = None,
+    ) -> None:
+        await self.inner.emit_create(
+            table_id=table_id,
+            namespace=namespace,
+            author=author,
+            version=version,
+            run_id=run_id,
+            authorization=authorization,
+            source_uri=source_uri,
+            schema_fields=schema_fields,
+            inputs=inputs,
+            extra_run_facets=extra_run_facets,
+            project=project,
+            originator=originator or self.originator,
+        )
+
+    async def emit_write(
+        self,
+        *,
+        table_id: str,
+        namespace: str,
+        author: str | None,
+        version: int | None,
+        operation: str,
+        run_id: str | None = None,
+        authorization: str | None = None,
+        source_uri: str | None = None,
+        schema_fields: SchemaFields | None = None,
+        inputs: list[InputRef] | None = None,
+        extra_run_facets: dict[str, Any] | None = None,
+        project: str | None = None,
+        originator: str | None = None,
+    ) -> None:
+        await self.inner.emit_write(
+            table_id=table_id,
+            namespace=namespace,
+            author=author,
+            version=version,
+            operation=operation,
+            run_id=run_id,
+            authorization=authorization,
+            source_uri=source_uri,
+            schema_fields=schema_fields,
+            inputs=inputs,
+            extra_run_facets=extra_run_facets,
+            project=project,
+            originator=originator or self.originator,
+        )
 
 
 class NoopEmitter:
