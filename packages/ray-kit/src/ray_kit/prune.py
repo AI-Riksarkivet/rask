@@ -26,6 +26,11 @@ log = logging.getLogger(__name__)
 #: Spec `JobStatus` values a job cannot leave — the only states `DELETE /api/jobs/{id}` accepts.
 #: PENDING/RUNNING are never candidates: deleting live work is not retention, it is sabotage.
 TERMINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "STOPPED"})
+#: The terminal-BAD subset. These rows are the only durable post-mortem a Ray job leaves: Ray writes
+#: job-driver output to a file inside the container that nothing ships, so once the row is deleted the
+#: question "why did that stage die" has no answer anywhere. STOPPED is included because something
+#: killed the job, and why is asked days later.
+TERMINAL_BAD_STATUSES = frozenset({"FAILED", "STOPPED"})
 
 #: How many failing ids the report samples — enough to see a pattern, small enough to log.
 _FAILED_SAMPLE = 5
@@ -57,6 +62,8 @@ class PruneResult(BaseModel):
 
     total: int
     kept_newest: int
+    #: Terminal-BAD jobs retained by the failure floor, beyond the ordinary recency window.
+    kept_failed: int = 0
     deleted: int = 0
     failed: int = 0
     skipped_active: int = 0
@@ -64,12 +71,24 @@ class PruneResult(BaseModel):
     failed_ids: list[str] = Field(default_factory=list)
 
 
-def prune_jobs(client: JobsClient, *, keep_newest: int) -> PruneResult:
-    """Delete TERMINAL jobs beyond the ``keep_newest`` most recent submissions.
+def prune_jobs(client: JobsClient, *, keep_newest: int, keep_newest_failed: int = 0) -> PruneResult:
+    """Delete TERMINAL jobs beyond the ``keep_newest`` most recent — with a floor under the FAILURES.
 
     The newest ``keep_newest`` are kept regardless of state — they are what an operator is
     looking at. Everything older is deleted only if terminal; active jobs are counted and left
-    alone. A failed delete is counted, sampled into ``failed_ids`` and never raised: retention is
+    alone.
+
+    ``keep_newest_failed`` adds a SECOND, independent window over terminal-bad jobs, and it exists
+    because recency alone deletes exactly the wrong rows. Ray writes job-driver output to a file
+    inside the container that nothing ships, so the job row IS the post-mortem — and sorting purely by
+    ``start_time`` means a busy afternoon of successful jobs pushes every failure past the window and
+    deletes it. Post-mortem then becomes bounded by submission VOLUME rather than by time, which is
+    backwards: the failures are the rows worth keeping. The medallion lane submits one job per stage
+    per trigger against a deployed ``_KEEP`` of 500, so that is an ordinary Tuesday.
+
+    It is a FLOOR, not an exemption: failures beyond ``keep_newest_failed`` are still deleted, because
+    the whole point of retention is bounding the parameterless listing that OOM-killed the pod.
+    ``0`` (the default) reproduces the previous behaviour exactly. A failed delete is counted, sampled into ``failed_ids`` and never raised: retention is
     idempotent and best-effort by design — the next tick retries whatever remains, and one
     undeletable job must not abort the other tens of thousands.
 
@@ -79,11 +98,22 @@ def prune_jobs(client: JobsClient, *, keep_newest: int) -> PruneResult:
     if keep_newest < 0:
         raise ValueError(f"keep_newest must be >= 0, got {keep_newest}")
 
+    if keep_newest_failed < 0:
+        raise ValueError(f"keep_newest_failed must be >= 0, got {keep_newest_failed}")
+
     jobs = client.list_jobs()
     ordered = sorted(jobs, key=lambda j: j.start_time or 0, reverse=True)
     result = PruneResult(total=len(ordered), kept_newest=min(keep_newest, len(ordered)))
 
+    # The failure floor, computed over the SAME ordering so "newest" means the same thing in both
+    # windows. Identity, not submission id: a DRIVER-type job has no submission id (see below), and
+    # keying on one would silently drop every such row out of the floor.
+    spared_failures = {id(job) for job in [j for j in ordered if str(j.status) in TERMINAL_BAD_STATUSES][:keep_newest_failed]}
+    result.kept_failed = len(spared_failures)
+
     for job in ordered[keep_newest:]:
+        if id(job) in spared_failures:
+            continue
         if str(job.status) not in TERMINAL_STATUSES:
             result.skipped_active += 1
             continue

@@ -205,10 +205,81 @@ the estate does not have today.
 
 ## 3. Ray log shipping
 
-**Status:** not started. Tracked as `open_ray_otel.md` §11 slice 8. The rask half is an
-outcome-aware prune; the external half is a log sidecar plus `RAY_LOGGING_CONFIG_ENCODING=JSON`,
-because Ray writes task/actor/driver logs to files inside the pod that a container-stdout tail never
-sees.
+**Status:** rask half **LANDED** — the pruner now keeps a floor of failures, and the chart sets both
+log encodings for the `singleTenant` case. External half: **yours**.
+
+### The problem, split in two — because only one half needs you
+
+Ray has two log planes and they behave differently:
+
+| plane | where it writes | already collected? |
+| --- | --- | --- |
+| **Serve replicas** | **stderr** | **YES** — the Collector's filelog receiver already tails Ray pod stdout/stderr. It has been ingesting them **unparsed**: one body string, no severity, no replica id. |
+| **Core** (driver, tasks, actors) | files under `/tmp/ray/session_*/logs/` **inside the container** | **NO.** Nothing mounts that path and nothing tails it. |
+
+So `RAY_SERVE_LOG_ENCODING=JSON` pays off with no shipper work at all, while the core half needs a
+sidecar. Both env vars are set on the rask-rendered RayService already; replicate them on yours.
+
+### APPLY ON THE RAY CLUSTER
+
+**1. Structure the logs** — on the head container env, and every worker group container:
+
+```yaml
+- { name: RAY_LOGGING_CONFIG_ENCODING, value: "JSON" }   # core: driver, tasks, actors
+- { name: RAY_SERVE_LOG_ENCODING,      value: "JSON" }   # Serve replicas
+```
+
+Must be set **before `import ray`**, which a container env satisfies by construction.
+
+**2. Ship the core logs** — a shared volume plus a log-shipping sidecar, the KubeRay-documented
+pattern:
+
+```yaml
+volumes:
+  - name: ray-logs
+    emptyDir: { sizeLimit: 2Gi }
+containers:
+  - name: ray-head
+    volumeMounts:
+      - { name: ray-logs, mountPath: /tmp/ray }
+  - name: ray-log-agent
+    image: otel/opentelemetry-collector-contrib:0.157.0
+    args: ["--config=/etc/otelcol/agent.yaml"]
+    volumeMounts:
+      - { name: ray-logs, mountPath: /tmp/ray, readOnly: true }
+      - { name: ray-log-agent-config, mountPath: /etc/otelcol, readOnly: true }
+```
+
+The sidecar config is a `filelog` receiver over
+`/tmp/ray/session_latest/logs/**/*.{log,out,err}` with `include_file_path: true`, `start_at: end`, a
+`json_parser` (the records are JSON once step 1 is applied), exporting `otlphttp` to the same
+GreptimeDB as §1. Poll frequently at first: the logs directory does not exist until Ray creates it.
+
+### Three traps
+
+1. **Do NOT use `RAY_LOG_TO_STDERR=1` as the shortcut.** Ray's own docs warn it stops Ray writing log
+   files entirely — which breaks the driver-log reader `ray-kit` uses to serve
+   `/api/ray/jobs/{id}/logs`. You would trade a post-mortem gap for a live-debugging one.
+2. **`RAY_BACKEND_LOG_JSON=1` converts only the Job Supervisor** among the Python system components.
+   The Dashboard, Dashboard Agent, Log Monitor and Autoscaler Monitor stay plain text regardless, so
+   setting it reads as though it structured the lot and does not.
+3. **Consider `RAY_DEDUP_LOGS=0`.** Ray buffers repeated log patterns for five seconds and batches
+   them, which REORDERS records relative to their timestamps in a collected stream.
+
+### What rask already did, so you do not repeat it
+
+The prune cron was deleting failures by recency: `prune_jobs` sorted purely on `start_time`, so a busy
+afternoon of successful jobs pushed every failure past the 500-job window and deleted it — bounding
+post-mortem by submission **volume** rather than by time, on exactly the rows worth keeping. It now
+keeps an independent floor of the newest terminal-bad jobs (`RASK_PRUNE_KEEP_FAILED_JOBS`, default
+100). That is a floor, not an exemption: failures beyond it are still deleted, because bounding the
+parameterless listing is what stopped the OOM in the first place.
+
+### How you know it worked
+
+A Serve replica exception appears in `opentelemetry_logs` with a populated `severity_text` and a
+queryable `deployment`/`replica` field — not as an unparsed body string. For the core half, a
+`job-driver-*.log` line from a medallion stage job is queryable at all.
 
 ---
 

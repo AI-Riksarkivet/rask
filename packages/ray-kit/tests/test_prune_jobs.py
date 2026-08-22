@@ -80,3 +80,49 @@ def test_driver_jobs_without_submission_id_are_skipped() -> None:
 def test_negative_keep_is_a_caller_bug() -> None:
     with pytest.raises(ValueError, match="keep_newest"):
         prune_jobs(_Client([]), keep_newest=-1)
+
+
+def test_a_burst_of_SUCCESSES_does_not_evict_the_FAILURES() -> None:
+    """Retention by recency alone destroys the only post-mortem a failed Ray job leaves behind.
+
+    Ray writes job-driver output to a file inside the container that nothing ships, so the ONLY
+    durable record of why a stage died is the job row itself — readable through the dashboard until
+    this pruner removes it. Sorting purely by `start_time` means a busy afternoon of successful jobs
+    pushes every failure past the keep-window and deletes it, and post-mortem becomes bounded by
+    submission VOLUME rather than by time. That is precisely backwards: the failures are the rows
+    worth keeping.
+
+    `_KEEP` is 500 in the deployed cron, and the medallion lane submits one job per stage per
+    trigger, so this is an ordinary Tuesday rather than a pathological case.
+    """
+    failures = [_job(i, status="FAILED") for i in range(3)]  # oldest
+    successes = [_job(i) for i in range(10, 20)]  # newest
+    client = _Client(failures + successes)
+
+    result = prune_jobs(client, keep_newest=5, keep_newest_failed=5)
+
+    assert not any(d.startswith("job-0") or d in {"job-1", "job-2"} for d in client.deleted), (
+        f"a failed job was deleted by a burst of successes — deleted {client.deleted}"
+    )
+    assert result.kept_failed == 3, f"expected the 3 failures retained, got kept_failed={result.kept_failed}"
+
+
+def test_keeping_failures_does_not_stop_the_pruner_bounding_growth() -> None:
+    """The retention window still has to bound the listing that OOM-killed the pod. Keeping failures
+    is a floor under the post-mortem, not an exemption from retention."""
+    client = _Client([_job(i, status="FAILED") for i in range(20)])
+
+    result = prune_jobs(client, keep_newest=2, keep_newest_failed=3)
+
+    # 20 failures, keep the newest 3 of them -> 17 deleted, not 0.
+    assert result.deleted == 17, f"failures are being kept without bound — deleted {result.deleted}"
+
+
+def test_STOPPED_counts_as_a_failure_worth_keeping() -> None:
+    """A STOPPED job is terminal-bad: someone or something killed it, and why is a question asked
+    days later. It shares the failure floor rather than the ordinary window."""
+    client = _Client([_job(0, status="STOPPED"), *[_job(i) for i in range(10, 20)]])
+
+    prune_jobs(client, keep_newest=2, keep_newest_failed=5)
+
+    assert "job-0" not in client.deleted, "a STOPPED job was pruned as though it were a success"

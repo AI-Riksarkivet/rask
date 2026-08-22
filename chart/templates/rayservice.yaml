@@ -105,6 +105,28 @@ spec:
                 - name: RAY_SERVE_TRACING_SAMPLING_RATIO
                   value: {{ .Values.ray.serveTracingSamplingRatio | default "1.0" | quote }}
                 {{- end }}
+                {{- /* STRUCTURED RAY LOGS. Two separate planes again, and the Serve half is the one
+                     that pays off immediately: Serve replicas default to STDERR, which the Collector's
+                     filelog receiver already tails, so these logs are being ingested UNPARSED right
+                     now — one body string, no severity, no job or replica id to filter on. Setting the
+                     encoding makes them queryable without any shipper work.
+
+                     The CORE half (task/actor/driver) is different: Ray writes those to files under
+                     /tmp/ray inside the container, which nothing mounts and nothing tails, so JSON
+                     alone does not ship them — that needs the log sidecar in open_ray_handover.md
+                     section 3. Set here anyway so the records are structured the moment a shipper
+                     lands, rather than needing a second rollout to become useful.
+
+                     Must be set BEFORE `import ray`, which a container env satisfies by construction.
+                     Two documented traps: the emitted key is `task_func_name`, not the
+                     `task_function_name` the prose promises, and there is no `node_ip_address` field
+                     (it is `node_id`). RAY_BACKEND_LOG_JSON is deliberately NOT set — it converts only
+                     the Job Supervisor among the Python system components, so it buys almost nothing
+                     while reading as though it structured the lot. */}}
+                - name: RAY_LOGGING_CONFIG_ENCODING
+                  value: "JSON"
+                - name: RAY_SERVE_LOG_ENCODING
+                  value: "JSON"
                 {{- /* Ray-container auth env is NOT set here: spec.authOptions above makes the
                      kuberay 1.6+ operator inject RAY_AUTH_MODE/RAY_AUTH_TOKEN into every Ray
                      container itself (SetContainerTokenAuthEnvVars, skip-if-already-set), head

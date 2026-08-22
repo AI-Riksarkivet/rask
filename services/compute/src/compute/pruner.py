@@ -30,6 +30,12 @@ log = logging.getLogger(__name__)
 
 _BINDING = os.environ.get("RASK_PRUNE_BINDING", "compute-prune-jobs-cron")
 _KEEP = int(os.environ.get("RASK_PRUNE_KEEP_JOBS", "500"))
+#: A FLOOR under the failures, independent of the recency window above. Ray writes job-driver output
+#: to a file inside the container that nothing ships, so the job row IS the post-mortem — and recency
+#: alone lets a busy afternoon of successful jobs evict every failure, bounding post-mortem by
+#: submission VOLUME rather than by time. Deliberately far smaller than `_KEEP`: failures are rare in
+#: a healthy estate, and this is a safety net, not a second retention policy.
+_KEEP_FAILED = int(os.environ.get("RASK_PRUNE_KEEP_FAILED_JOBS", "100"))
 
 router = APIRouter()
 
@@ -42,7 +48,7 @@ async def on_prune_cron(client: RayClientDep) -> PruneResult:
     # `cast`: JobSubmissionClient satisfies the protocol structurally, but its Pydantic-v1
     # `JobDetails` fields are invisible to the checker — verified against the real signatures
     # (delete_job(self, job_id: str) -> bool; list_jobs(self) -> List[JobDetails]).
-    result = await run_in_threadpool(prune_jobs, cast(JobsClient, client), keep_newest=_KEEP)
+    result = await run_in_threadpool(prune_jobs, cast(JobsClient, client), keep_newest=_KEEP, keep_newest_failed=_KEEP_FAILED)
     log.info(
         "job retention: total=%d kept=%d deleted=%d failed=%d active=%d",
         result.total,
