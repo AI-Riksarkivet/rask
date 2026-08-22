@@ -531,6 +531,8 @@ collect today. Two suites — and the challenger notes the registry-CAS *and* go
 both candidates — can stop collecting entirely while all four assertions in the gate report green. That
 is the exact failure the constant's own comment says must not exist, at a scale of two.
 
+
+**ENFORCED 2026-08-22.** The hand-maintained `MIN_SUITE_FILES = 24` is gone. Collection must now REPRODUCE the set of `test_*.py` files on disk exactly — no slack, nothing to maintain, and it names the specific suite that stopped collecting instead of reporting a number. The floor had drifted before (its own comment records 22 → 24), so the slack was structural rather than a one-off. Same self-consistency fix nav-truth used when its `> 30` sat under a scanner seeing 80 of 90 hrefs. RED: making one suite fail to import fails the gate; the old floor tolerated losing two.
 ### M8 — the marker gate is satisfied by a comment · **CONFIRMED**
 
 `tests/unit/test_e2e_collection_gate.py:169` greps the **raw text** of `.dagger/*.go`, `scripts/*.sh`,
@@ -538,6 +540,8 @@ is the exact failure the constant's own comment says must not exist, at a scale 
 `make e2e-<suite>` target and leaving a `# TODO: pytest -m media` comment behind satisfies it. The
 `media` marker's site today *is* prose.
 
+
+**ENFORCED 2026-08-22.** The invocation-site scan reads CODE, not prose: `_without_comments()` blanks `//` and `/* */` for Go and `#` for Make/shell/YAML before the `-m <marker>` regex. Proved directly — a marker named only in a Go comment or a Makefile `# TODO` no longer matches, while a real recipe line still does. This mattered concretely: the `media` marker's only match was the prose `pytest -m media` inside the block comment above `E2E_SUITES`. Over-blanking is possible (a `#` inside a shell string) and is the SAFE direction — it can only report a marker as unselected, a false alarm someone reads, never a false pass nobody sees.
 ### M9 — the runner-invocation gate passes on a leg that selects zero tests · **CONFIRMED, LOW**
 
 `tests/unit/test_runner_suites_are_invoked.py:85-95` — written to keep v1's M1 fixed — asserts only
@@ -593,6 +597,8 @@ marker. But:
 So H1's substance — the security-shaped suites run in no lane — is **unchanged**. Only its symptom was
 removed, and the removal satisfied the gate that was supposed to prevent exactly this.
 
+
+**PARTIALLY ENFORCED 2026-08-22, remainder MIGRATED.** The gate half is closed — M7 removed the floor's slack and M8 stopped a comment counting as an invocation site, so a lost suite is now loud at both ends. The other half is NOT a gate defect and is not fixed here: 14 suites still run in no CI lane, and `pytest` exits 0 when every selected test skips. That is H17, already MIGRATED to `open_python-audit.md` E9 as a scope decision — wiring live lanes is infrastructure work, not a test edit, and pretending otherwise would be the 'workaround that makes a gate pass while measuring nothing' this audit is about.
 ### H19 — the ingest DLQ/poison-park suite skips in every CI lane · **CONFIRMED, HIGH**
 
 `services/ingest/tests/test_worker_queue.py:44` is a module-level

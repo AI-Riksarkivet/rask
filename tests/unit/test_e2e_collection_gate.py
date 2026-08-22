@@ -46,12 +46,24 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 E2E_DIR = "tests/e2e-py"
+
+
 # The live-suite count, RAISED to the actual number each time a suite lands (22 at wiring time,
 # 2026-07; 24 since test_maintenance_s3_e2e.py, #80). A floor left behind the real count is a floor
 # with slack in it — the estate had already drifted one suite above 22, so one could have stopped
 # collecting and this gate would still have passed. Grows as suites are added; a DROP below it means
 # a suite stopped being collected, which is exactly the silent loss this gates.
-MIN_SUITE_FILES = 24
+#: DERIVED, not maintained. This was `MIN_SUITE_FILES = 24` against 26 suite files that collect today
+#: — two suites could have stopped collecting entirely while all four assertions here reported green,
+#: which is the exact silent loss this gate exists to prevent, at a scale of two. It had drifted before:
+#: the constant's own comment records being raised 22 -> 24 after the estate grew past it, so the slack
+#: is structural rather than a one-off oversight. A floor cannot know what it is missing; it can only
+#: know it has not reached zero. Counting the files on disk and requiring collection to REPRODUCE that
+#: number has no slack and nothing to maintain — the same self-consistency fix nav-truth used when its
+#: `> 30` floor was found sitting under a scanner that saw 80 of 90 hrefs.
+def _suite_files_on_disk() -> set[str]:
+    return {f"{E2E_DIR}/{p.name}" for p in (REPO_ROOT / E2E_DIR).glob("test_*.py")}
+
 
 # Where pytest is invoked from. Globs rather than a fixed list, so a NEW ci workflow or ops
 # script is gated the day it lands instead of the day someone remembers to add it here.
@@ -106,10 +118,33 @@ def test_e2e_py_collection_finds_all_live_suites():
     )
     assert proc.returncode == 0, f"collecting {E2E_DIR} failed (exit {proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
     suite_files = {line.split("::", 1)[0] for line in proc.stdout.splitlines() if line.startswith(f"{E2E_DIR}/")}
-    assert len(suite_files) >= MIN_SUITE_FILES, (
-        f"only {len(suite_files)} suite files collected from {E2E_DIR} (expected >= {MIN_SUITE_FILES}) — "
-        f"a live suite silently dropped out of collection:\n" + "\n".join(sorted(suite_files))
+    on_disk = _suite_files_on_disk()
+    assert on_disk, f"no test_*.py files found in {E2E_DIR} — the scan root moved and this gate is vacuous"
+    missing = sorted(on_disk - set(suite_files))
+    assert not missing, (
+        f"these live suite files exist in {E2E_DIR} but pytest collected NOTHING from them: {missing}. "
+        "A suite that stops collecting is invisible — every run stays green while its assertions no "
+        "longer exist. Fix the collection error, or delete the file if the suite is genuinely gone."
     )
+
+
+def _without_comments(text: str, suffix: str) -> str:
+    """``text`` with comment bodies blanked, so an invocation site means CODE and not prose.
+
+    The scan matched raw file text, so a marker named in a COMMENT counted as its own invocation site —
+    and the `media` marker's only match today is exactly that: the prose `pytest -m media` inside the
+    block comment above the E2E_SUITES list. Deleting a real `make e2e-<suite>` target and leaving a
+    TODO behind therefore satisfied the assertion that the suite is run by something.
+
+    Line-oriented and per-language, which is enough here because the globs are Make/shell/YAML (`#`) and
+    Go (`//`, `/* */`). A `#` inside a shell string would be over-blanked, but that direction is safe:
+    it can only REMOVE a candidate invocation site, so the gate errs toward reporting a marker as
+    unselected — a false alarm someone reads, never a false pass nobody sees.
+    """
+    if suffix == ".go":
+        text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
+        return "\n".join(line.split("//")[0] for line in text.splitlines())
+    return "\n".join(line.split("#")[0] for line in text.splitlines())
 
 
 def test_every_invoked_pytest_path_exists():
@@ -161,7 +196,7 @@ def test_every_declared_marker_has_an_invocation_site() -> None:
     per_suite = [m for m in declared if m not in {"slow", "e2e"}]
 
     sites = "\n".join(
-        site.read_text(encoding="utf-8", errors="ignore")
+        _without_comments(site.read_text(encoding="utf-8", errors="ignore"), site.suffix)
         for glob in INVOCATION_GLOBS
         if not glob.startswith("tests/")  # a suite naming its own marker is not an invocation of it
         for site in sorted(REPO_ROOT.glob(glob))
