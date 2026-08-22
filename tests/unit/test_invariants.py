@@ -76,7 +76,7 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     ("packages/service-kit/src/service_kit/control_emit.py", "self._topic"): "control",
     # TRIGGER — an instruction to DO work. Correctly bare: the outbox re-ingests lineage, it never
     # re-fires triggers. Their durability question is a different one, and is DECIDED: the caller-retry
-    # idempotency-token contract is the carrier (open_medallion_workflow.md section 11).
+    # idempotency-token contract is the carrier (docs/architecture/medallion-cascade.md, the dropped obligation-carrier ruling).
     ("services/medallion/src/medallion/services/ingest_trigger.py", "settings.bronze_topic"): "trigger",
     ("services/medallion/src/medallion/services/media_produce.py", "settings.media_topic"): "trigger",
     # The variable is now `topic` — resolved per publication from `settings.lane_routes` rather than
@@ -2057,6 +2057,40 @@ def test_the_gpu_coherence_guard_speaks_no_modality() -> None:
     body = (REPO / "chart/templates/gpu-coherence.yaml").read_text(encoding="utf-8")
     for literal in ("htrflow", "TrOCR"):
         assert literal not in body, f"the GPU coherence guard names {literal!r} — the platform knows no workload"
+
+
+def test_the_chart_tells_kuberay_the_ray_version_the_image_actually_ships() -> None:
+    """Three answers in one estate, and the chart held the wrong one.
+
+    `chart/values.yaml` declared `rayVersion: "2.56.1"`; the root `uv.lock` resolves ray 2.57.0, and
+    `packages/ratch` REQUIRES `ray[data,default]>=2.57`. That matters because
+    `.docker/ray-cluster.dockerfile` builds the image with `uv sync --package ratch` FROM THAT LOCK —
+    so the chart was telling the KubeRay operator one version while the container ran another.
+
+    KubeRay uses `rayVersion` for its own compatibility gating (the chart's auth block already notes
+    `>= 2.52.0` is required for `spec.authOptions`), so a stale value is not cosmetic: it is the
+    operator reasoning about a cluster that does not exist. And the drift is silent — nothing compared
+    the two until this test.
+
+    The lock is the source of truth because it is what the image is built from. If they disagree, the
+    chart is the one that is wrong.
+    """
+    import re
+
+    lock = (REPO / "uv.lock").read_text(encoding="utf-8")
+    match = re.search(r'\[\[package\]\]\nname = "ray"\nversion = "([^"]+)"', lock)
+    assert match, "could not find the resolved ray version in uv.lock"
+    resolved = match.group(1)
+
+    values = (REPO / "chart/values.yaml").read_text(encoding="utf-8")
+    declared = re.search(r'^\s*rayVersion:\s*"([^"]+)"', values, re.MULTILINE)
+    assert declared, "chart/values.yaml declares no rayVersion"
+
+    assert declared.group(1) == resolved, (
+        f"chart rayVersion is {declared.group(1)!r} but the image is built from a lock resolving "
+        f"{resolved!r} (.docker/ray-cluster.dockerfile: uv sync --package ratch). KubeRay is being "
+        f"told about a cluster that does not exist."
+    )
 
 
 def _fleet_config(docs: list[dict]) -> dict[str, str]:
