@@ -142,6 +142,51 @@ data:
                   target_label: namespace
                 - source_labels: [__meta_kubernetes_pod_name]
                   target_label: pod
+            # RAY (:8080) — a THIRD job, and it exists because neither job above can ever match a Ray
+            # pod. Both `keep` on a `dapr.io/*` pod annotation at their first relabel step; Ray pods
+            # carry none (`grep -n dapr chart/templates/rayservice.yaml` -> no matches), so every Ray
+            # pod was dropped before any other rule ran. The consequence was total rather than partial:
+            # no ray_tasks/ray_actors by state, no GCS liveness, no OOM-kill counter
+            # (ray_memory_manager_worker_eviction_total), no object-store spill, no ray_serve_* replica
+            # health or latency, no ray_data_* backpressure — on the cluster the whole bronze->silver->
+            # gold cascade runs on. A head that is alive-but-wedged read identically to an idle one.
+            #
+            # There is no PodMonitor alternative: the chart has no prometheus-operator dependency
+            # (Chart.lock), so such an object would be reconciled by nothing.
+            #
+            # THE SELECTOR IS NOT NEW. network-policy.yaml already selects Ray pods by
+            # `ray.io/is-ray-node: "yes"` and records the reason there: "The chart's head template
+            # stamps no labels of its own; KubeRay stamps its `ray.io/is-ray-node` marker on every Ray
+            # pod, so select that (component-label style can't reach operator-created pods)." Keying
+            # this on anything else would be a second, divergent answer to a settled question.
+            #
+            # NOT scraped here, deliberately: the autoscaler (:44217) and dashboard (:44227) ports.
+            # `workerGroupSpecs: []` and there is no in-tree autoscaling, so the autoscaler_* family
+            # (which is namespaced `autoscaler`, NOT `ray_`) has no producer on this cluster. Add the
+            # ports and a second job WITH the worker group, not before it.
+            - job_name: ray-pods
+              scrape_interval: 30s
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces: { names: [{{ .Release.Namespace }}] }
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_label_ray_io_is_ray_node]
+                  action: keep
+                  regex: "yes"
+                - source_labels: [__meta_kubernetes_pod_container_port_name]
+                  action: keep
+                  regex: metrics
+                # Ray's own shipped Grafana panels template `ray_io_cluster` and group Serve/Data by
+                # application+deployment. Carrying the cluster and node-type labels here is what lets a
+                # panel written against Ray's published PromQL work unmodified.
+                - source_labels: [__meta_kubernetes_pod_label_ray_io_cluster]
+                  target_label: ray_io_cluster
+                - source_labels: [__meta_kubernetes_pod_label_ray_io_node_type]
+                  target_label: ray_node_type
+                - source_labels: [__meta_kubernetes_namespace]
+                  target_label: namespace
+                - source_labels: [__meta_kubernetes_pod_name]
+                  target_label: pod
     processors:
       memory_limiter:
         check_interval: 1s

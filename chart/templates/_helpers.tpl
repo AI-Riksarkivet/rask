@@ -228,6 +228,65 @@ dapr.io/config: "lance-tracing"
      standalone", which ignored the release name) and the observability.{greptimePort,dbName,tracePipeline}
      knobs, so the fleet and the lance apps cannot disagree about port/db/pipeline. `hasKey`+`ternary`, not
      `| default`, so an explicit 0 is never swallowed (and the chart-wide invariant test forbids it). */}}
+{{/* OTLP env for the RAY plane (call: include "rask.rayOtelEnv" (list $root "<service.name>")).
+
+     A THIRD rendering, and deliberately not a third source of truth: every value below is derived from
+     `lance.otlpEndpoint` / `lance.otelViaCollector` / `lance.otelEnabled`, the same single derivation
+     the lance plane uses. What differs is only WHICH variables are emitted — `lance.otelEnv` also
+     renders the Python-launcher knobs (OTEL_*_EXPORTER, OTEL_METRIC_EXPORT_INTERVAL,
+     OTEL_PYTHON_FASTAPI_EXCLUDED_URLS), and Ray processes run under no launcher and serve no FastAPI
+     app, so those would be inert config on every Ray pod. Duplicated DATA is the defect; a narrower
+     projection of one derivation is not.
+
+     WHY THIS EXISTS AT ALL. The block it replaces was hand-rolled inside `serveConfigV2.runtime_env`
+     with the release name, db name and trace pipeline as string LITERALS — the exact defect
+     `rask.otelEnv`'s own comment above records having fixed elsewhere ("was hardcoded
+     rask-greptimedb-standalone, which ignored the release name"). Rendered side by side, every other
+     pod said `<release>-otel-collector:4318` and the RayService said `rask-greptimedb-standalone:4000`,
+     a Service the same render does not create.
+
+     AND WHY IT IS CALLED FROM CONTAINER ENV, NOT serveConfigV2. `runtime_env.env_vars` scopes to ONE
+     Serve application's build task and replica actors. It never reaches the ray-head container, GCS,
+     the raylet, the dashboard agent, or the Serve controller/proxy actors. Container env does, and
+     workers inherit the raylet's environment — so one include covers the whole plane and extends to
+     the first workerGroupSpecs entry by adding the same line there.
+
+     Gated on `lance.otelEnabled`, NOT `observability.enabled`: the former is also true when
+     `externalOtlpEndpoint` ships telemetry off-cluster, and the narrower gate silently turned Ray's
+     telemetry off in exactly that posture while every other pod kept exporting.
+
+     The service name is the PLATFORM's, never a workload's — CLAUDE.md: no chart may know a workload's
+     name. The workload rides in Ray Serve's own `application`/`deployment` label values.
+     Pinned by tests/unit/test_invariants.py::test_ray_telemetry_is_release_derived_like_every_other_pods,
+     ::test_the_platform_chart_does_not_name_a_WORKLOAD_in_rays_telemetry_identity and
+     ::test_externalising_telemetry_does_not_silently_drop_ray. */}}
+{{- define "rask.rayOtelEnv" -}}
+{{- $root := index . 0 -}}
+{{- $svc := index . 1 -}}
+{{- $o := $root.Values.observability -}}
+{{- if include "lance.otelEnabled" $root -}}
+{{- $db := (hasKey $o "dbName") | ternary $o.dbName "public" -}}
+{{- $pipeline := (hasKey $o "tracePipeline") | ternary $o.tracePipeline "greptime_trace_v1" -}}
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: "{{ include "lance.otlpEndpoint" $root }}"
+- name: OTEL_EXPORTER_OTLP_PROTOCOL
+  value: "http/protobuf"
+{{- if not (include "lance.otelViaCollector" $root) }}
+{{/* Only the DIRECT-to-GreptimeDB path carries vendor headers; through the Collector the app stays
+     backend-agnostic and the Collector adds them. Traces need the pipeline header, metrics must NOT
+     have it — hence the signal-specific override. */}}
+- name: OTEL_EXPORTER_OTLP_HEADERS
+  value: "x-greptime-db-name={{ $db }}"
+- name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
+  value: "x-greptime-db-name={{ $db }},x-greptime-pipeline-name={{ $pipeline }}"
+{{- end }}
+- name: OTEL_SERVICE_NAME
+  value: {{ $svc | quote }}
+- name: OTEL_RESOURCE_ATTRIBUTES
+  value: {{ printf "service.namespace=rask,deployment.environment.name=%s,service.version=%s" ($o.environment | default $root.Release.Namespace) $root.Chart.AppVersion | quote }}
+{{- end }}
+{{- end -}}
+
 {{- define "rask.otelEnv" -}}
 {{- $root := index . 0 -}}
 {{- $svc := index . 1 -}}

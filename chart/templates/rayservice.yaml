@@ -24,13 +24,15 @@ spec:
                  ConfigMap, so the two can never disagree. */}}
             RASK_SERVE_GPU_FRAC: "{{ include "rask.serveGpuFrac" . }}"
             HF_HUB_DISABLE_IMPLICIT_TOKEN: "0"
-            {{- if .Values.observability.enabled }}
-            OTEL_EXPORTER_OTLP_ENDPOINT: "http://rask-greptimedb-standalone:4000/v1/otlp"
-            OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
-            OTEL_EXPORTER_OTLP_HEADERS: "x-greptime-db-name=public"
-            OTEL_EXPORTER_OTLP_TRACES_HEADERS: "x-greptime-db-name=public,x-greptime-pipeline-name=greptime_trace_v1"
-            OTEL_SERVICE_NAME: "ray-htrflow"
-            {{- end }}
+            {{- /* THE OTEL_* BLOCK MOVED OUT OF HERE (2026-08-22). It was five hand-rolled literals in
+                 this runtime_env — release name, db name and trace pipeline hardcoded — and
+                 `runtime_env.env_vars` scopes to ONE Serve application's build task and replica actors.
+                 So it reached neither the ray-head container, GCS, the raylet, the dashboard agent, nor
+                 the Serve controller/proxy, and named a workload (`ray-htrflow`) as the identity of the
+                 shared Ray plane. It now renders on the head CONTAINER via `rask.rayOtelEnv`, derived
+                 from the same helpers every other pod uses. What stays here is the WORKLOAD's own half
+                 of the contract — replica count, GPU fraction, HF token behaviour — which is exactly
+                 what runtime_env is for. */}}
   rayClusterConfig:
     rayVersion: {{ .Values.ray.rayVersion | quote }}
     {{- if .Values.ray.auth.enabled }}
@@ -68,6 +70,7 @@ spec:
               image: "{{ .Values.ray.image.repository }}:{{ .Values.ray.image.tag }}"
               imagePullPolicy: {{ .Values.ray.image.pullPolicy }}
               env:
+                {{- include "rask.rayOtelEnv" (list $ "ray") | nindent 16 }}
                 {{- /* Ray-container auth env is NOT set here: spec.authOptions above makes the
                      kuberay 1.6+ operator inject RAY_AUTH_MODE/RAY_AUTH_TOKEN into every Ray
                      container itself (SetContainerTokenAuthEnvVars, skip-if-already-set), head
@@ -98,6 +101,16 @@ spec:
                 - {containerPort: 8265, name: dashboard}
                 - {containerPort: 10001, name: client}
                 - {containerPort: 8000, name: serve}
+                {{- /* Ray's Prometheus endpoint. KubeRay injects this containerPort itself, but the
+                     Collector's `ray-pods` job keeps on the port NAME, and a relabel cannot see a port
+                     the rendered pod spec does not advertise — so an operator-injected default would
+                     have produced zero targets with nothing to indicate why. Declared here, the head's
+                     telemetry surface is a property of this manifest rather than of the operator's
+                     defaults, and it is asserted by
+                     tests/unit/test_invariants.py::test_the_ray_head_declares_the_port_its_metrics_are_served_on.
+                     Every future workerGroupSpecs container needs the same entry — workers serve their
+                     own per-node metrics and are scraped by the same job. */}}
+                - {containerPort: 8080, name: metrics}
               resources:
                 requests:
                   {{- toYaml .Values.ray.resources.requests | nindent 18 }}

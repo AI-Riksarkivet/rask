@@ -71,8 +71,15 @@ async def submit_stage_job(
     lineage_json: str = "",
     originator: str = "",
     project: str = "",
-) -> None:
+) -> str:
     """Submit (or re-attach to) the stage transform on the Ray cluster and RETURN — never block.
+
+    Returns THE SUBMISSION ID IT POSTED UNDER, and the caller must use that value rather than
+    re-deriving it. `stage_submission_id` is deterministic, so re-deriving looks equivalent and is
+    not: every argument has to be threaded to both sites, and `code` (the build digest) was added
+    here and not at the watcher, so the watcher polled an id that was never submitted and reported
+    every healthy stage job as `abandoned`. Returning the id removes the second derivation site
+    entirely, which is the only fix that a later axis cannot re-break.
 
     Raises :class:`RayJobError` on a submit failure, which the caller maps to RETRY. Completion is the
     job's own registered commit, not something observed from here.
@@ -185,6 +192,7 @@ async def submit_stage_job(
         "ray_stage_job_submitted",
         extra={"submission_id": submission_id, "stage": stage, "lane": spec.lane if spec else "", "declared": spec is not None},
     )
+    return submission_id
 
 
 async def submit_train_job(

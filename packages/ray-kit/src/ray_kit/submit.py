@@ -35,6 +35,8 @@ from collections.abc import Mapping
 import httpx
 from opentelemetry import propagate
 
+from ray_kit.schemas import RayJobFailure
+
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +86,30 @@ def submission_id(stage: str, token: str | None, work: str = "", code: str = "")
     if code:
         raw = f"{raw}-{hashlib.sha256(code.encode()).hexdigest()[:8]}"
     return re.sub(r"[^A-Za-z0-9_-]", "-", raw)[:200]
+
+
+async def job_failure(client: httpx.AsyncClient, sub_id: str) -> RayJobFailure | None:
+    """Ray's stated CAUSE for ``sub_id`` — ``None`` when the dashboard does not know the job.
+
+    Same endpoint `job_status` already reads, and deliberately a SEPARATE call rather than a widened
+    return from that one. `job_status` is the hot poll: its answer is recorded in Dapr workflow
+    history on every tick, so changing its shape would break replay for in-flight instances, and
+    every poll would carry a traceback it does not need. This runs once, on the terminal-bad path.
+
+    Mirrors `job_status`'s error contract exactly, so the two cannot be reasoned about differently:
+    404 is ``None`` (the job is gone — pruning is by recency, so a failure CAN outlive its record),
+    and a transport or 5xx failure raises, because an unreachable dashboard is not evidence about the
+    job. The caller decides whether a missing cause is fatal; for the stage watcher it is not.
+    """
+    try:
+        response = await client.get(f"/api/jobs/{sub_id}")
+    except httpx.HTTPError as exc:
+        raise RayJobError(f"failed to read failure detail of ray job {sub_id}: {exc}") from exc
+    if response.status_code == 404:
+        return None
+    if response.status_code >= 400:
+        raise RayJobError(f"failed to read failure detail of ray job {sub_id}: HTTP {response.status_code}")
+    return RayJobFailure.model_validate(response.json())
 
 
 def trace_env() -> dict[str, str]:

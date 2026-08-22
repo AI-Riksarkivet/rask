@@ -291,6 +291,68 @@ def test_a_TERMINAL_BAD_job_emits_a_lineage_FAIL(monkeypatch: pytest.MonkeyPatch
     assert "FAILED" in json.dumps(event), "the FAIL must name the Ray status that caused it"
 
 
+def test_a_FAILED_job_carries_RAYS_OWN_REASON_into_the_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The failure that reaches a person must say WHY, not just that it happened.
+
+    Before this, every Ray stage failure in the lineage graph and in an inbox read identically: a
+    submission id, a status and a poll count. Diagnosis meant shelling into a Ray head pod that may
+    already be gone, whose logs nothing ships (open_ray_otel.md section 4). Ray answers `message`,
+    `error_type` and `driver_exit_code` on the SAME response the poll already reads, and
+    `ray_kit.schemas.RayJob` has declared all three since the HTR OOM work — the workflow simply never
+    asked for them. `driver_exit_code` 137 is SIGKILL, i.e. a host-RAM OOM, which is the single most
+    common way a stage dies and the one an operator can act on immediately.
+    """
+    from medallion.workflow import report_stage_outcome
+
+    from ray_kit.schemas import RayJobFailure
+
+    published: list[dict[str, Any]] = []
+    monkeypatch.setattr("medallion.workflow._publish_fail_event", lambda e, _s: published.append(e))
+    monkeypatch.setattr(
+        "medallion.workflow._read_stage_failure",
+        lambda _sub: RayJobFailure(error_type="RuntimeError", message="Job entrypoint command failed with exit code 137", driver_exit_code=137),
+    )
+
+    report_stage_outcome(
+        cast("Any", None),
+        {
+            "spec": _spec(),
+            "outcome": {"submission_id": "ray-silver-tok-1-abc", "status": "FAILED", "polls": 3, "verdict": "failed"},
+        },
+    )
+
+    assert published, "a FAILED Ray job emitted no lineage event"
+    blob = json.dumps(published[0])
+    assert "RuntimeError" in blob, "the FAIL does not name Ray's error type"
+    assert "exit code 137" in blob, "the FAIL does not carry Ray's own message"
+    assert "137" in blob, "the FAIL does not carry the driver exit code — an OOM is indistinguishable from any other failure"
+
+
+def test_the_failure_reason_is_BOUNDED_so_a_traceback_cannot_size_a_lineage_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ray's `message` can be an entire driver traceback, and this string becomes the errorMessage
+    facet on an event published through the claim-check funnel — which WARNs past 64 KiB and REFUSES
+    past 900 KiB (`service_kit/dapr_publish.py`). An unbounded upstream string must not be able to
+    decide the size of a governed event, so it is truncated here rather than at the broker."""
+    from medallion.workflow import _STAGE_FAIL_MESSAGE_CAP, report_stage_outcome
+
+    from ray_kit.schemas import RayJobFailure
+
+    published: list[dict[str, Any]] = []
+    monkeypatch.setattr("medallion.workflow._publish_fail_event", lambda e, _s: published.append(e))
+    monkeypatch.setattr(
+        "medallion.workflow._read_stage_failure", lambda _sub: RayJobFailure(error_type="RuntimeError", message="X" * 50_000, driver_exit_code=1)
+    )
+
+    report_stage_outcome(
+        cast("Any", None),
+        {"spec": _spec(), "outcome": {"submission_id": "sub", "status": "FAILED", "polls": 1, "verdict": "failed"}},
+    )
+
+    reason = published[0]["run"]["facets"]["errorMessage"]["message"]
+    assert len(reason) < _STAGE_FAIL_MESSAGE_CAP + 500, f"the reason grew to {len(reason)} chars — an upstream traceback is sizing a governed event"
+    assert "RuntimeError" in reason, "truncation must not eat the error TYPE, which is the part that classifies the failure"
+
+
 def test_an_ABANDONED_watch_also_reaches_the_graph(monkeypatch: pytest.MonkeyPatch) -> None:
     """The ceiling case. A job still RUNNING when the watch gives up is not a job failure — but it is
     equally invisible, and an operator needs to see that the estate stopped watching something."""
@@ -362,20 +424,73 @@ def test_a_publish_that_EXHAUSTS_its_retries_still_reports() -> None:
 def test_submit_returns_THE_SAME_id_it_submitted_under(monkeypatch: pytest.MonkeyPatch) -> None:
     """The poll watches whatever this returns. If it derives a DIFFERENT id from the one
     `submit_stage_job` used, the poll reads `None` forever, the watch abandons at the ceiling, and a
-    perfectly healthy job is reported as never finishing — with no error anywhere."""
-    from medallion.services import ray_submit
+    perfectly healthy job is reported as never finishing — with no error anywhere.
+
+    THE FAKE MUST NOT RE-DERIVE THE ID. An earlier version of this test built the expected id by
+    calling `stage_submission_id(stage, token, from_uri, to_uri)` itself — the same expression, with
+    the same arguments omitted, as the activity under test. That reproduced the defect on BOTH sides
+    of the assertion, so the test stayed green while every deployed stage job was polled under an id
+    nobody submitted. A fake that answers the question for the code cannot pin the code.
+
+    So the fake returns an OPAQUE id and the assertion is the contract: `submit_stage` returns what
+    the submitter posted, whatever that is. No axis added to the derivation later can defeat this,
+    because the test never derives anything.
+    """
     from medallion.workflow import submit_stage
 
-    submitted: dict[str, str] = {}
+    posted = "ray-silver-tok-1-deadbeefcafe-0badc0de"
 
-    async def _fake_submit(_settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str | None, lineage_json: str = "", **_identity: str) -> None:
-        submitted["id"] = ray_submit.stage_submission_id(stage, token, from_uri, to_uri)
+    async def _fake_submit(_settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str | None, lineage_json: str = "", **_identity: str) -> str:
+        return posted
 
     monkeypatch.setattr("medallion.services.ray_submit.submit_stage_job", _fake_submit)
 
     returned = submit_stage(cast("Any", None), _spec())
 
-    assert returned == submitted["id"], "the poll would watch an id the submitter never used"
+    assert returned == posted, "the poll would watch an id the submitter never used"
+
+
+def test_submit_returns_the_posted_id_when_a_CODE_VERSION_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The live defect, driven through the REAL submitter rather than a fake.
+
+    `MEDALLION_RAY_CODE_VERSION` is rendered on every mover (`chart/templates/medallion.yaml`, outside
+    the `medallion.ray` guard), so `code` is non-empty in every deployed estate — and a non-empty
+    `code` appends a digest to the submission id. An activity that re-derives the id without it names
+    a job that does not exist: the poll 404s, `job_status` answers `None`, and `stage_run` takes the
+    `abandoned` branch on its FIRST poll, emitting a FAIL over a job that is running correctly.
+
+    This asserts against the id ACTUALLY POSTED to the Ray Jobs API, so it fails for the real reason.
+    """
+    import json
+
+    import httpx
+    from medallion.core.config import MedallionSettings
+    from medallion.services import ray_submit
+    from medallion.workflow import submit_stage
+
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            captured.append(json.loads(request.content))
+            return httpx.Response(200, json={"submission_id": "s"})
+        return httpx.Response(200, json={"status": "SUCCEEDED"})
+
+    real_client = httpx.AsyncClient
+
+    def factory(**kwargs: Any) -> httpx.AsyncClient:
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(**kwargs)
+
+    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", factory)
+
+    settings = MedallionSettings.model_validate({"ray_enabled": True, "compute_enabled": True, "ray_code_version": "catalog:main-abc1234"})
+    monkeypatch.setattr("medallion.core.config.get_settings", lambda: settings)
+
+    returned = submit_stage(cast("Any", None), _spec())
+
+    assert captured, "the submitter never reached the Ray Jobs API"
+    assert returned == captured[0]["submission_id"], "the watcher polls an id the submitter never posted — every stage job reports `abandoned`"
 
 
 def test_poll_answers_NONE_for_an_id_the_dashboard_has_not_registered(monkeypatch: pytest.MonkeyPatch) -> None:

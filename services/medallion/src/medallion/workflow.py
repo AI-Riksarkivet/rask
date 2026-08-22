@@ -241,11 +241,16 @@ def submit_stage(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str:
     `(stage, token, from->to)`, so a second execution of this activity finds the first one's job.
     """
     from medallion.core.config import get_settings
-    from medallion.services.ray_submit import stage_submission_id, submit_stage_job
+    from medallion.services.ray_submit import submit_stage_job
 
     spec = StageJobSpec.model_validate(payload)
     settings = get_settings()
-    _run_async(
+    # RETURN WHAT THE SUBMITTER POSTED — never re-derive it. The id is deterministic, so a second
+    # `stage_submission_id(...)` call here reads as equivalent and is not: it has to be handed every
+    # axis the submitter uses, and when `code` (the build digest) was added there and not here, this
+    # activity started naming a job that does not exist. The poll then 404s, `job_status` answers
+    # None, and `stage_run` abandons on its FIRST poll — a fabricated FAIL over a healthy job.
+    return _run_async(
         submit_stage_job(
             settings,
             from_uri=spec.from_uri,
@@ -259,7 +264,6 @@ def submit_stage(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str:
             project=str((spec.trigger or {}).get("project") or ""),
         )
     )
-    return stage_submission_id(spec.stage, spec.token, spec.from_uri, spec.to_uri)
 
 
 def poll_stage(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str | None:
@@ -348,6 +352,21 @@ def report_stage_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) 
         if outcome.verdict == "failed"
         else f"the watch was abandoned after {outcome.polls} poll(s) with the job still {outcome.status or 'UNKNOWN'}"
     )
+    # WHY it failed, not just THAT it did. Ray answers `error_type`, `message` and `driver_exit_code`
+    # on the same response the poll already reads, and `RayJob` has declared all three since the OOM
+    # work — nothing here ever asked. Without them every stage failure in the graph and in a person's
+    # inbox reads identically (an id, a status, a poll count), and diagnosis means a Ray head pod that
+    # may already be gone and whose logs nothing ships. `driver_exit_code` 137 is SIGKILL — a host-RAM
+    # OOM — which is the one cause an operator can act on without reading anything else.
+    #
+    # Only on the `failed` verdict: an ABANDONED watch means the job was still RUNNING, so Ray has no
+    # cause to report and asking for one would invite a misleading answer.
+    if (
+        outcome.verdict == "failed"
+        and (cause := _read_stage_failure(outcome.submission_id)) is not None
+        and (summary := cause.summary(_STAGE_FAIL_MESSAGE_CAP))
+    ):
+        reason = f"{reason} — {summary}"
     with suppress(Exception):
         _publish_fail_event(_build_stage_fail_event(spec, outcome, reason), spec)
 
@@ -362,6 +381,42 @@ def report_stage_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) 
             "to_uri": spec.to_uri,
         },
     )
+
+
+#: How much of Ray's driver message may ride a FAIL event. The message is UNBOUNDED upstream — it can
+#: be an entire driver traceback — and this string becomes the `errorMessage` facet on an event
+#: published through the claim-check funnel, which WARNs past 64 KiB and REFUSES past 900 KiB
+#: (`service_kit/dapr_publish.py`). Bounding it HERE keeps an upstream string from deciding the size of
+#: a governed event, and keeps the refusal a claim-check violation rather than a truncated traceback.
+_STAGE_FAIL_MESSAGE_CAP = 800
+
+
+def _read_stage_failure(submission_id: str) -> Any:
+    """Ray's stated cause for a terminal-bad job, or ``None`` when it cannot be read.
+
+    SUPPRESSED, for the same reason `_publish_fail_event` is: this runs on the failure-reporting path,
+    so an unreachable dashboard raising here would leave the workflow unable to finish reporting a
+    failure — strictly worse than the missing detail it replaces. A cause is an enrichment; the FAIL
+    event goes out either way.
+
+    A separate GET rather than a widened `poll_stage`: that activity's return value is recorded in
+    workflow history on every tick, so changing its shape breaks replay for in-flight instances, and
+    no poll needs a traceback. This costs one extra read, only when a job has actually failed.
+    """
+    import httpx
+
+    from medallion.core.config import get_settings
+    from ray_kit.submit import job_failure
+
+    settings = get_settings()
+
+    async def _read() -> Any:
+        async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
+            return await job_failure(client, submission_id)
+
+    with suppress(Exception):
+        return _run_async(_read())
+    return None
 
 
 def _build_stage_fail_event(spec: StageJobSpec, outcome: StageJobOutcome, reason: str) -> dict[str, Any]:

@@ -1683,6 +1683,137 @@ def _rendered_docs(*set_values: str) -> list[dict]:
     return [doc for doc in yaml.safe_load_all(_helm_template(*set_values)) if isinstance(doc, dict)]
 
 
+def _collector_scrape_jobs(docs: list[dict]) -> list[dict]:
+    """The OTel Collector's prometheus scrape_configs, parsed out of its ConfigMap."""
+    for doc in docs:
+        data = doc.get("data") or {}
+        if doc.get("kind") == "ConfigMap" and "config.yaml" in data and "otlp" in data["config.yaml"]:
+            config = yaml.safe_load(data["config.yaml"])
+            return list(config.get("receivers", {}).get("prometheus", {}).get("config", {}).get("scrape_configs", []))
+    return []
+
+
+def test_ray_pods_are_a_scrape_target() -> None:
+    """Nothing collected a single Ray series, and no rule or panel about Ray could ever have fired.
+
+    The Collector's prometheus receiver had exactly two jobs, `dapr-sidecars` and `dapr-control-plane`,
+    and BOTH `keep` on a `dapr.io/*` pod annotation at the first relabel step. A Ray pod carries
+    neither, so it was dropped before any other rule ran — not "unscraped by oversight" but
+    unreachable by construction. There is no PodMonitor path either: the chart has no
+    prometheus-operator dependency, so such an object would be reconciled by nothing.
+
+    The selector is NOT invented here. `chart/templates/network-policy.yaml` already selects Ray pods
+    by `ray.io/is-ray-node: "yes"` and records why: "The chart's head template stamps no labels of its
+    own; KubeRay stamps its marker on every Ray pod, so select that (component-label style can't reach
+    operator-created pods)." Keying the scrape on anything else would be a second, divergent answer to
+    a question this chart has already answered.
+    """
+    jobs = _collector_scrape_jobs(_rendered_docs())
+    assert jobs, "the Collector renders no prometheus scrape_configs at all"
+
+    ray_jobs = [j for j in jobs if "ray" in str(j.get("job_name", ""))]
+    assert ray_jobs, f"no Ray scrape job — jobs are {[j.get('job_name') for j in jobs]}; every ray_* series is uncollected"
+
+    keeps = [rc for rc in ray_jobs[0].get("relabel_configs", []) if rc.get("action") == "keep"]
+    sources = {src for rc in keeps for src in rc.get("source_labels", [])}
+    assert "__meta_kubernetes_pod_label_ray_io_is_ray_node" in sources, (
+        f"the Ray job does not keep on KubeRay's own pod marker — keeps on {sources}. "
+        "A dapr.io annotation or a component label cannot reach an operator-created pod."
+    )
+
+
+def test_the_ray_head_declares_the_port_its_metrics_are_served_on() -> None:
+    """A scrape job that keeps on a container port NAME needs that port declared, or it matches nothing.
+
+    KubeRay injects the metrics containerPort itself, but the chart's own head template lists only
+    gcs/dashboard/client/serve — so the rendered pod spec advertises no metrics port and a port-name
+    relabel silently produces zero targets. Declaring it here makes the head's telemetry surface a
+    property of the manifest rather than of the operator's default.
+    """
+    docs = _rendered_docs("singleTenant.enabled=true")
+    heads = [d for d in docs if d.get("kind") == "RayService"]
+    assert heads, "no RayService rendered under singleTenant.enabled=true"
+
+    containers = heads[0]["spec"]["rayClusterConfig"]["headGroupSpec"]["template"]["spec"]["containers"]
+    names = {p.get("name") for c in containers for p in (c.get("ports") or [])}
+    assert "metrics" in names, f"the Ray head declares ports {names} — no metrics port, so a port-name scrape matches nothing"
+
+
+def _ray_head_env(docs: list[dict]) -> dict[str, str]:
+    """The Ray head CONTAINER's env — not `serveConfigV2.runtime_env`, which is a different scope."""
+    for doc in docs:
+        if doc.get("kind") == "RayService":
+            containers = doc["spec"]["rayClusterConfig"]["headGroupSpec"]["template"]["spec"]["containers"]
+            return {e["name"]: str(e.get("value", "")) for c in containers for e in (c.get("env") or [])}
+    return {}
+
+
+def test_ray_telemetry_is_release_derived_like_every_other_pods() -> None:
+    """The Ray OTLP block hardcoded the release name while the whole rest of the chart derives it.
+
+    `rask.otelEnv`'s own comment records having fixed exactly this defect elsewhere — "the
+    release-derived Greptime host (was hardcoded "rask-greptimedb-standalone", which ignored the
+    release name)" — and it regressed in a fourth, hand-rolled copy inside `serveConfigV2`. Proven by
+    render before the fix: every other telemetry consumer emitted `release-name-otel-collector:4318`
+    while the RayService emitted `rask-greptimedb-standalone:4000`, i.e. a Service the same render does
+    not create. A release installed under any other name sent Ray telemetry into a DNS name that does
+    not resolve, and the only symptom was an export failure logged inside a Ray worker — which nothing
+    collects.
+    """
+    docs = _rendered_docs("singleTenant.enabled=true")
+    env = _ray_head_env(docs)
+    endpoint = env.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+    assert endpoint, (
+        "the Ray HEAD CONTAINER carries no OTLP endpoint — a serveConfigV2-only block reaches one app's replicas, not the head, GCS, raylet, dashboard or Serve controller"
+    )
+    assert "rask-" not in endpoint, f"Ray's OTLP endpoint {endpoint!r} hardcodes a release name"
+
+    others = {
+        str(e.get("value", ""))
+        for d in docs
+        if d.get("kind") == "Deployment"
+        for c in d["spec"]["template"]["spec"].get("containers", [])
+        for e in (c.get("env") or [])
+        if e.get("name") == "OTEL_EXPORTER_OTLP_ENDPOINT"
+    }
+    assert endpoint in others, f"Ray exports to {endpoint!r} while the rest of the estate exports to {others} — one estate, two backends"
+
+
+def test_the_platform_chart_does_not_name_a_WORKLOAD_in_rays_telemetry_identity() -> None:
+    """`OTEL_SERVICE_NAME: "ray-htrflow"` put one modality's name on the shared Ray plane's identity.
+
+    CLAUDE.md is explicit that no service, schema or chart may know a workload's name: every runner is
+    sealed, and the platform must read the same for audio, text, image and one nobody has written yet.
+    A workload literal here means every span and every metric from the shared cluster arrives labelled
+    as that one workload, which makes per-workload attribution impossible — the identity has to come
+    from the platform, with the workload riding in Serve's own `application`/`deployment` labels.
+    """
+    env = _ray_head_env(_rendered_docs("singleTenant.enabled=true"))
+    service_name = env.get("OTEL_SERVICE_NAME", "")
+
+    assert service_name, "the Ray head declares no OTEL_SERVICE_NAME, so its telemetry lands as unknown_service"
+    assert "htrflow" not in service_name.lower(), f"OTEL_SERVICE_NAME={service_name!r} names a workload in the platform chart"
+
+
+def test_externalising_telemetry_does_not_silently_drop_ray() -> None:
+    """The Ray block gated on `observability.enabled`; the rest of the estate gates on `lance.otelEnabled`.
+
+    `lance.otelEnabled` is true for EITHER `observability.enabled` OR a set `externalOtlpEndpoint`, and
+    its own comment says why: "otherwise externalize silently emits nothing". Ray was on the narrower
+    gate, so the documented production posture — ship OTLP off-cluster, deploy no in-cluster stack —
+    turned Ray's telemetry off while every other pod kept exporting. The gap then reads as "Ray is
+    idle", not as "Ray is uninstrumented".
+    """
+    docs = _rendered_docs(
+        "singleTenant.enabled=true",
+        "observability.enabled=false",
+        "observability.externalOtlpEndpoint=http://otel.observability:4318/v1/otlp",
+    )
+    env = _ray_head_env(docs)
+    assert env.get("OTEL_EXPORTER_OTLP_ENDPOINT"), "externalising telemetry left the Ray head with no OTLP endpoint at all"
+
+
 def _fleet_config(docs: list[dict]) -> dict[str, str]:
     """The fleet ConfigMap — the one carrying `RASK_API_PREFIX` and the gateway's upstream addresses."""
     for doc in docs:

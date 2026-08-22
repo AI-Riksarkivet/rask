@@ -415,6 +415,25 @@ usually fail this review are absent for reasons this doc already argued:
   workflow module has no import-time behaviour — with the literals test-pinned against `ray_kit`'s so
   the duplication cannot drift silently.
 
+**CORRECTION 2026-08-22 — this section's management verdict rested on a distinction that did not
+hold.** The sign-off below justifies having no workflow management surface with *"its three exits are
+already distinguished (`succeeded` / `abandoned` / `unnotified`)"*. In any deployed estate **only
+`abandoned` ever fired**: `submit_stage` re-derived the submission id without `code`, while
+`submit_stage_job` posted it with `code` (`MEDALLION_RAY_CODE_VERSION` is rendered on every mover,
+`chart/templates/medallion.yaml:383`, outside the `medallion.ray` guard). The poll 404'd, `job_status`
+answered `None`, and `stage_run` took the `abandoned` branch on its FIRST poll — a fabricated FAIL over
+a job that was writing its data correctly.
+
+Be precise about the scope of the error. This review's determinism findings stand, and the
+terminal-state literal pin it cites is real and holds. What was missed is a **different** duplication —
+the submission-id derivation — whose own pin (`services/medallion/tests/test_stage_workflow.py`)
+re-derived the id inside its fake and so reproduced the defect on both sides of the assertion. The
+section is not wrong about what it pinned; it reads as though both duplications were covered.
+
+**Fixed 2026-08-22:** `submit_stage_job` now returns the id it posted and `submit_stage` returns that
+value, deleting the second derivation site entirely — the only shape a later axis cannot re-break. The
+test now asserts the posted id rather than a re-derived one. Diagnosis: `open_ray_otel.md` §1.
+
 **The `continue_as_new` carry is the subtle part and it is already correct.** `submission_id` and
 `polls_done` ride the spec (`workflow.py:108-114`) because each turn starts with empty history: without
 them a turn has no memory that `submit_stage` ran, and would resubmit the same stage job once per poll
