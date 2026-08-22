@@ -51,12 +51,18 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     if not enabled:
         return False
 
+    import atexit
+
     from opentelemetry import metrics, trace
+    from opentelemetry._logs import set_logger_provider
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
     from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
     from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
     from opentelemetry.instrumentation.logging import LoggingInstrumentor
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
     from opentelemetry.sdk.metrics import MeterProvider
     from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
     from opentelemetry.sdk.resources import Resource
@@ -82,9 +88,32 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
     metrics.set_meter_provider(meter_provider)
 
+    # Logs: THE THIRD SIGNAL, and the one this seam silently threw away. `LoggingInstrumentor` does
+    # install an OTLP `LoggingHandler`, but with no `logger_provider` argument it binds to the global
+    # `ProxyLoggerProvider`, whose `ProxyLogger` falls back to `_noop_logger`; the handler's `emit`
+    # skips only on `NoOpLogger`, and a proxy is not one. So every record was translated into an OTel
+    # record and then dropped — full cost, no delivery. The provider is passed EXPLICITLY below rather
+    # than relying on `set_logger_provider` having run first, because that global is set-once and a
+    # caller that lost the race would silently re-bind to the proxy.
+    #
+    # This is what emptied the compliance audit trail: `governed/audit.py` puts every field in
+    # `extra={...}`, and the only formatter on that route (`__init__.py`) references no extra key, so an
+    # `ingest_service_token` DENY reached storage as the bare line `... INFO lance.audit - audit`.
+    logger_provider = LoggerProvider(resource=resource)
+    logger_provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
+    set_logger_provider(logger_provider)
+
     FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider, meter_provider=meter_provider)
     HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider, meter_provider=meter_provider)
-    LoggingInstrumentor().instrument(set_logging_format=True)
+    LoggingInstrumentor().instrument(set_logging_format=True, logger_provider=logger_provider)
+
+    # Shutdown hooks, because THE FLEET HAS NO LAUNCHER. `opentelemetry-instrument` registers these
+    # itself; `command: ["uvicorn"]` does not, so all three batch processors would discard whatever sat
+    # in the buffer at exit. That silently loses the most valuable window there is — the records emitted
+    # in the seconds before a crash or a SIGTERM, which is precisely when someone goes looking.
+    atexit.register(tracer_provider.shutdown)
+    atexit.register(meter_provider.shutdown)
+    atexit.register(logger_provider.shutdown)
 
     # `requests`, because HTTPX is not the only client in the estate and the uninstrumented half is
     # the EXPENSIVE half. Ray's `JobSubmissionClient` performs every call through `requests`, which

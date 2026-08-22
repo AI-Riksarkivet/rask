@@ -16,7 +16,29 @@ def test_setup_otel_noop_when_disabled() -> None:
 
 
 def test_setup_otel_wires_when_enabled(monkeypatch: object) -> None:
+    """ "Wired" means ALL THREE signals, and logs were the one this test never checked.
+
+    It asserted the FastAPI flag and stopped, so it stayed green across the entire life of a seam that
+    built a TracerProvider and a MeterProvider and NO LoggerProvider. Repaired rather than supplemented
+    for the same reason as the instrumentor test: a test whose name claims the whole wiring and checks a
+    third of it is worse than no test, because it occupies the slot a real one would take.
+
+    What the gap cost, measured: `LoggingInstrumentor().instrument(...)` DOES install an OTLP
+    `LoggingHandler`, but with no provider argument it binds to the global `ProxyLoggerProvider`, whose
+    `ProxyLogger` falls back to `_noop_logger`. The handler's `emit` skips only on `NoOpLogger` and a
+    `ProxyLogger` is not one — so the fleet translated every log record into an OTel record and then
+    threw it away, paying the full cost for nothing. Root handlers came back as
+    `[('rask-stdout', StreamHandler), (None, LoggingHandler)]` with `get_logger_provider()` a
+    `ProxyLoggerProvider` that has no `force_flush` at all.
+
+    Asserting the GLOBAL is deterministic here even though these providers are set-once per process:
+    every enabled path through `setup_otel` installs the same SDK provider, so whichever test wins the
+    race the answer is identical. The only way this reads a proxy is if no enabled call ever ran — and
+    this test is one.
+    """
     import pytest
+    from opentelemetry._logs import get_logger_provider
+    from opentelemetry.sdk._logs import LoggerProvider
 
     assert isinstance(monkeypatch, pytest.MonkeyPatch)
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
@@ -26,6 +48,13 @@ def test_setup_otel_wires_when_enabled(monkeypatch: object) -> None:
     assert wired is True
     # FastAPI instrumentation marks the app
     assert getattr(app, "_is_instrumented_by_opentelemetry", False) is True
+
+    provider = get_logger_provider()
+    assert isinstance(provider, LoggerProvider), (
+        f"logs are the third signal and it is not wired: get_logger_provider() is {type(provider).__name__}. "
+        "A ProxyLoggerProvider means every record the LoggingHandler translates is handed to a no-op and dropped."
+    )
+    assert hasattr(provider, "force_flush"), "an SDK LoggerProvider force_flushes; a proxy cannot, so nothing survives a crash"
 
 
 def test_an_explicit_OFF_beats_an_ambient_endpoint(monkeypatch: object) -> None:
