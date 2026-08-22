@@ -863,6 +863,33 @@ fixed after it made every seeded route answer HTTP 500 when the payload carried 
 instead of `tmp_path`. Real catalog state accumulates across runs, across **concurrent** runs, and
 across users on the same host.
 
+✅ **FIXED + ENFORCED 2026-08-22** — THREE sites, not one: the audit named
+`tests/integration/conftest.py`, and the same defect sat twice more in `tests/unit/test_user_state.py`
+(`_oidc_settings`'s `"root"` and `app_client`'s `LANCE_REST_ROOT`, which have to agree, so both now take
+`tmp_path`). 290 passed.
+
+Enforced by `tests/unit/test_no_fixed_tmp_roots.py`, and building it produced the more useful finding.
+The first cut flagged every `/tmp/...` literal and caught **eighteen inert ones** — `"/tmp/from"` and
+`"/tmp/to"` handed to a MOCKED mover, `"/tmp/a.lance"` as a URI inside an assertion — none of which
+touch a filesystem. Exempting them one by one would have built exactly the drifting allowlist the gate
+exists to make unnecessary, so the scan now matches **the defect rather than the substring**: the three
+forms that point a real service at a root (`setenv("*_ROOT", ...)`, a `{"root": ...}` mapping, a `root=`
+keyword). Both original defects are written in those forms; a literal that is only ever compared against
+is left alone.
+
+It also parses instead of grepping, and the reason is self-demonstrating: **the fixes leave the old
+paths written down in the comments that explain them**, so a `grep '/tmp/'` gate fires on its own
+justification — and the usual repair for that is a narrower pattern, which is how a gate ends up
+asserting over prose. That is the M8 class this audit found live in `.dagger/charts.go`, where two chart
+gates were matching YAML COMMENTS and passing on configuration that did not exist. Walking the AST means
+`#` comments never enter it; docstrings are the one string form that does, and are skipped explicitly.
+
+Three non-vacuity halves, all derived rather than remembered: the file count is checked against the same
+`rglob` the scan uses (so a testpath that fails to resolve cannot read as a clean estate), the testpaths
+themselves are read out of `pyproject.toml` rather than restated, and a planted-offence test asserts the
+detector catches all three offending forms AND ignores the docstring, the bare literal and the mover
+URI. RED proof: restoring the original `"/tmp/lance-test-root"` fires the gate naming file and line.
+
 ### M23 — a service conftest rewrites the environment for the whole session · **CONFIRMED, LOW**
 
 `services/compute/tests/conftest.py:12-15` assigns `os.environ[...]` and eagerly imports the service at

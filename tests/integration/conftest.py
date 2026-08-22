@@ -9,6 +9,7 @@ lance's actual operations.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -56,12 +57,17 @@ def real_ns_client(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> Iterato
 
 
 @pytest.fixture
-def client(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+def client(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClient]:
     # A local root keeps the lifespan's build_namespace cheap; requests use the
     # injected fake regardless (get_namespace is overridden). monkeypatch.setenv
     # restores the environment on teardown so tests stay order-independent.
+    #
+    # `tmp_path`, not a fixed `/tmp/lance-test-root`: the environment was restored on teardown but the
+    # DIRECTORY was not, so real catalog state accumulated in one path shared across runs, across
+    # concurrent runs, and across users on the same host — which is how a run passes because of what a
+    # previous run left behind. Pinned by tests/unit/test_no_fixed_tmp_roots.py.
     monkeypatch.setenv("LANCE_REST_IMPL", "dir")
-    monkeypatch.setenv("LANCE_REST_ROOT", "/tmp/lance-test-root")
+    monkeypatch.setenv("LANCE_REST_ROOT", str(tmp_path))
     # Object-store credentials are required by Settings; the local-dir backend
     # ignores them, but they must be set for Settings() to construct.
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "test")

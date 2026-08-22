@@ -24,6 +24,7 @@ import asyncio
 import base64
 import json
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -332,7 +333,7 @@ def test_camel_case_survives_the_round_trip() -> None:
 # ── the full app: identity comes from the token, and only from the token ─────────────────────────────
 
 
-def _oidc_settings() -> Settings:
+def _oidc_settings(root: str) -> Settings:
     return Settings.model_validate(
         {
             "oidc_enabled": True,
@@ -341,7 +342,7 @@ def _oidc_settings() -> Settings:
             "s3_access_key_id": "x",
             "s3_secret_access_key": "x",
             "impl": "dir",
-            "root": "/tmp/lance-user-state-test",
+            "root": root,
         }
     )
 
@@ -354,17 +355,22 @@ class _SubjectIsTheToken:
 
 
 @pytest.fixture
-def app_client(monkeypatch: pytest.MonkeyPatch, store: UserStateStore) -> Iterator[TestClient]:
-    """The real catalog app with OIDC on, its user-state store pointed at the stand-in sidecar."""
+def app_client(monkeypatch: pytest.MonkeyPatch, store: UserStateStore, tmp_path: Path) -> Iterator[TestClient]:
+    """The real catalog app with OIDC on, its user-state store pointed at the stand-in sidecar.
+
+    The root is `tmp_path` rather than a fixed `/tmp/lance-user-state-test` — the settings override and
+    the environment variable have to agree, so both take it. See the note in
+    `tests/integration/conftest.py` and the gate in `tests/unit/test_no_fixed_tmp_roots.py`.
+    """
     monkeypatch.setenv("LANCE_REST_IMPL", "dir")
-    monkeypatch.setenv("LANCE_REST_ROOT", "/tmp/lance-user-state-test")
+    monkeypatch.setenv("LANCE_REST_ROOT", str(tmp_path))
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "test")
     monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "test")
     get_settings.cache_clear()
 
     from catalog.main import app
 
-    app.dependency_overrides[get_settings] = _oidc_settings
+    app.dependency_overrides[get_settings] = lambda: _oidc_settings(str(tmp_path))
     app.dependency_overrides[ep.get_user_state_store] = lambda: store
     with TestClient(app) as client:
         client.app.state.oidc = _SubjectIsTheToken()
