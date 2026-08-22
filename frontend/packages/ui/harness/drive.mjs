@@ -13,7 +13,9 @@ const ok = (cond, msg) => {
 	if (!cond) fails.push(msg);
 };
 
-await page.goto('http://localhost:5411/', { waitUntil: 'networkidle' });
+// `domcontentloaded`, not `networkidle` — the shell holds a live stream open, so an idle network never
+// arrives and the wait would time out. Pinned by @rask/zone-contract's no-networkidle gate.
+await page.goto('http://localhost:5411/', { waitUntil: 'domcontentloaded' });
 
 // 1. Closed bell — the count must be legible without opening anything.
 const bell = page.getByRole('button', { name: /Notifications/ });

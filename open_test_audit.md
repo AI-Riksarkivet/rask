@@ -921,6 +921,30 @@ seven route tests now skip against any default estate and `make e2e` exits 0 hav
 The escape hatch the skip message offers is unimplemented: `tests/e2e/playwright.config.ts` has no
 `globalSetup` and no `storageState`.
 
+✅ **FIXED 2026-08-22.** Both halves, and the second one is why the first mattered.
+
+*The run, not the route.* Each route test skipping on an auth bounce is CORRECT and stays — that is
+v1's M3 fix, and an untested surface must not be indistinguishable from a passing one. What that fix
+could not do is speak for the RUN: seven honest skips still add up to a dishonest run, and `make e2e`
+exits 0 having exercised no zone. A single precondition test now asserts the target is reachable and
+not auth-gated, and **fails** rather than skipping. Skipping is the right answer to "this route was not
+covered"; it is the wrong answer to "nothing was covered and nobody will be told".
+
+*The hatch the message offered did not exist.* The skip text tells a reader to "give this suite a
+signed-in storageState" — with no `storageState` and no `globalSetup` in the config, so the advice was
+unfollowable and the suite had no way to run against the estate the chart actually ships. The config
+now honours `RASK_E2E_STORAGE_STATE`, and the failure message names it. Advice a gate gives has to be
+executable, or the gate is telling people to do something impossible and then passing anyway.
+
+**Also closes the `no-networkidle.test.ts:41` gate-reach bullet in *Smaller gate-reach findings*.** That
+gate scanned only `microfrontends/<zone>/e2e`, and three of seven zones ship no `e2e/` at all, so it was
+vacuous for them AND blind to the estate's two other browser-driving trees. Widened to `tests/e2e` and
+`@rask/ui/harness`, it immediately caught two survivors — including `mfe.spec.ts:47`, on the very
+navigation whose result it then asserts. A second fix was needed to catch the second one: the file
+matcher required `.spec`/`.test`/`.e2e` in the name, which a zone's `e2e/` needs (ordinary source sits
+beside its specs) but a DEDICATED browser tree does not — every script in one drives a browser, which is
+how `harness/drive.mjs` kept its wait. Both now use `domcontentloaded`. 9 passed.
+
 Compounding it: the same file still calls `page.goto(route, { waitUntil: 'networkidle' })` at `:47` —
 the wait the estate has ruled can never fire on a page holding a live stream — and the gate that bans
 `networkidle` does not scan `tests/e2e` (Part 5).

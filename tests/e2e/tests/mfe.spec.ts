@@ -33,6 +33,35 @@ const ROUTES = [
 	'/studio/',
 ];
 
+// A RUN THAT COVERED NOTHING MUST NOT EXIT 0.
+//
+// Every route test below correctly SKIPS when the deploy bounces it to auth — an untested surface must
+// not be indistinguishable from a passing one, which is audit M3's fix and stays. What that fix could
+// not do is speak for the RUN: the chart has shipped `auth.enabled: true` by default since 2026-08-06,
+// so on any default estate all seven skip, `make e2e` exits 0, and the estate reports a green browser
+// suite that exercised no zone at all. Seven honest skips still add up to a dishonest run.
+//
+// So the reachability of the target is asserted ONCE, as a failure. Skipping is the right answer for
+// "this particular route was not covered"; it is the wrong answer for "nothing was covered and nobody
+// will be told". The remedy is in the message rather than in a comment, because the previous version
+// offered a remedy that did not exist.
+test('the deploy under test is reachable and not auth-gated', async ({ page }) => {
+	const resp = await page.goto('/', { waitUntil: 'domcontentloaded' });
+	const landed = new URL(page.url());
+	const target = new URL('/', resp?.url() ?? page.url());
+	const bouncedToAuth =
+		landed.origin !== target.origin || /\/dex\/|\/oauth2\/|\/auth\/(login|callback)/.test(landed.pathname);
+
+	expect(
+		bouncedToAuth,
+		`the run bounced to ${page.url()}, so every route test below will skip and this suite will ` +
+			`report success having exercised no zone. Either point RASK_E2E_BASE_URL at an auth-off ` +
+			`install, or set RASK_E2E_STORAGE_STATE to a signed-in Playwright storage state (see ` +
+			`playwright.config.ts). This is a FAILURE and not a skip because a run that covered nothing ` +
+			`must not be indistinguishable from one that covered everything.`,
+	).toBe(false);
+});
+
 for (const route of ROUTES) {
 	test(`hydrates: ${route}`, async ({ page }) => {
 		const appAsset404 = [];
@@ -44,7 +73,13 @@ for (const route of ROUTES) {
 			if (r.url().includes('/_app/') && r.status() >= 400) appAsset404.push(r.url());
 		});
 		page.on('pageerror', (e) => pageErrors.push(String(e)));
-		const resp = await page.goto(route, { waitUntil: 'networkidle' });
+		// `domcontentloaded`, NOT `networkidle`: every zone's shell holds a live `query.live` stream open
+		// for the notification bell, so these apps have no idle network by design — the wait sits until its
+		// own timeout and then reports the product as hanging. The asset/error assertions below do not need
+		// an idle network anyway; they need the page to have loaded and settled, which is what the explicit
+		// `waitForTimeout` after them is for. Pinned by @rask/zone-contract's no-networkidle gate, which
+		// until 2026-08-22 scanned only `microfrontends/<zone>/e2e` and could not see this file at all.
+		const resp = await page.goto(route, { waitUntil: 'domcontentloaded' });
 
 		// A LOGIN REDIRECT MUST NEVER READ AS COVERAGE — this is the whole of audit M3, and it made
 		// every assertion in this file vacuous on an auth-enabled deploy. `page.goto` returns the
