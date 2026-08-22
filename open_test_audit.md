@@ -410,6 +410,8 @@ The test that looks like it covers this —
 `test_medallion_cascade.py::test_project_cascade_routes_into_the_project_warehouse_and_qualifies_lineage`
 — asserts the *routing*, not the *stamp*.
 
+
+**ENFORCED 2026-08-22.** `services/medallion/tests/test_producer_targeting_contract.py::test_every_lineage_emit_stamps_lance_project` — DERIVED over every `build_run_event(` call under `services/medallion` (13 sites), not a listed set, so a new emit site is covered on the day it lands. RED: deleting the mover's stamp fails naming `services/transform.py`. **The derivation also found a site the audit did not have** — `services/media_produce.py` stamps no project — and it is EXEMPT with a reason rather than patched: `ingest_media` takes no project because the media head writes to a configured platform target, and `rask-notifications` records that the door has no `?project=` *"because the media head's target is configured and authorization scope must equal write scope"*. Adding one to reach WATCH would break that invariant, so that lane reaches its author and no watchers BY CONSTRUCTION. Exemptions live in `_PROJECTLESS_EMITS` with the justification inline.
 ### H12 — `POST /produce`'s 503 tail is executed by no test · **CONFIRMED, HIGH, and understated**
 
 `services/medallion/src/medallion/api/produce.py:77-90`. The route's own docstring makes the contract
@@ -423,6 +425,8 @@ and the 202 return **never execute**. The one test that reaches the route assert
 The challenger found it is **three routes, not one** — the identical unguarded 503 branch sits at
 `ingest_media.py:64-75`, whose entire handler body is at 46 % with `37-76` missing.
 
+
+**ENFORCED 2026-08-22.** Same file. Two tests drive the real route function with `run_produce` patched: a `publish_failed` result must answer **503** with `Retry-After: 5` and `application/problem+json`, and its twin asserts a successful produce still returns the 202 body — so the 503 assertion cannot pass by rejecting everything. RED: making the `publish_failed` branch unreachable fails with *"a dropped cascade head must not answer 202 — the run silently never happens"*. The whole branch was previously reported missing by line coverage.
 ### M3 — the mover's `originator` is guarded by nothing · **CONFIRMED, MEDIUM**
 
 `transform.py:550, 623, 651, 686, 725, 773` and `:802` — seven sites, not six. All can be deleted with
