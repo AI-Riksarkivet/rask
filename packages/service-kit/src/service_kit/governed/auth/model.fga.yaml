@@ -512,6 +512,48 @@ tests:
         type: warehouse
         assertions:
           can_get_metadata: [warehouse:acme_bucket]
+      # The isolation claim in this row's own name was only ever half-asserted: naming the ONE bucket
+      # dave sees does not prove another tenant's is excluded unless something enumerates from the
+      # other side. quilla is the beta tenant, and eve has no grants anywhere.
+      # quilla is a READER on `table:beta_locked_records` and enumerates NO warehouse — measured, not
+      # assumed: the first version of this row expected `[warehouse:beta_bucket]` and the model said
+      # `[]`. Visibility cascades DOWN the hierarchy (a warehouse grant reaches its tables) and never
+      # UP, so a table-level grant does not make the parent bucket enumerable. Worth pinning in both
+      # directions: it is the difference between "quilla cannot see acme" (isolation) and "quilla
+      # cannot see the bucket her own table lives in" (the cascade's direction), and only one of those
+      # would survive someone adding a convenience edge upward.
+      - user: user:quilla
+        type: warehouse
+        assertions:
+          can_get_metadata: []
+      - user: user:eve
+        type: warehouse
+        assertions:
+          can_get_metadata: []
+
+  - name: which TABLES can each principal enumerate? (list_objects) — the cross-tenant disclosure control
+    # `list_objects` builds the allow-list behind every table listing the catalog serves, so it IS the
+    # control that stops one tenant seeing another's tables. It had no row over `type: table` at all —
+    # the two rows that existed enumerate warehouses and materialized views. A `check` cannot stand in:
+    # check answers "may this principal read THIS table", and disclosure is about what comes back when
+    # nobody named a table.
+    list_objects:
+      - user: user:ivan # a reader on ONE gold table and nothing else
+        type: table
+        assertions:
+          can_get_metadata: [table:acme_gold_catalog]
+      - user: user:quilla # the BETA tenant — must never enumerate an acme table
+        type: table
+        assertions:
+          can_get_metadata: [table:beta_locked_records]
+      - user: user:dave # a warehouse/namespace WRITER — the recursive upward edge a listing walks
+        type: table
+        assertions:
+          can_get_metadata: [table:acme_silver_features, table:acme_gold_catalog, "table:acme_silver$features", "table:acme_silver$foreign"]
+      - user: user:eve # an outsider enumerates nothing; the empty list is the assertion
+        type: table
+        assertions:
+          can_get_metadata: []
 
   - name: a namespace writer can CREATE and REFRESH a materialized view; a reader can only read it
     check:

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import aiohttp
 import pytest
@@ -303,3 +303,65 @@ def test_write_tuples_single_duplicate_is_still_a_no_op() -> None:
 )
 def test_parent_namespace_id_root_and_nesting(table_id: str, expected: str | None) -> None:
     assert fga.parent_namespace_id(table_id, delimiter="$") == expected
+
+
+class _CapturingList:
+    """Fake client recording the whole ListObjects request, not only the subject.
+
+    `list_objects` is the allow-list behind every table listing the catalog serves, so what it SENDS is
+    the disclosure boundary: the subject decides whose list it is, and the context decides whether a
+    time-boxed grant is inside it.
+    """
+
+    def __init__(self) -> None:
+        self.requests: list[Any] = []
+
+    async def list_objects(self, request: Any) -> object:
+        self.requests.append(request)
+        return SimpleNamespace(objects=["table:acme_gold_catalog"])
+
+
+def test_list_objects_qualifies_a_bare_subject() -> None:
+    """The common case: callers pass the token's bare `sub` and the wrapper prepends `user:`.
+
+    `check` has had this pinned since the 2026-07-20 double-prefix bug; the listing door had the
+    identical hatch and no test, and its failure is quieter — a double-prefixed `user:user:alice`
+    denies every check loudly, but returns an EMPTY LIST here, which renders as "you have no tables".
+    """
+    client = _CapturingList()
+    asyncio.run(fga.list_objects(cast(OpenFgaClient, client), user="alice", relation="can_get_metadata", object_type="table"))
+    assert [r.user for r in client.requests] == ["user:alice"]
+
+
+def test_list_objects_qualify_false_sends_a_userset_verbatim() -> None:
+    """`qualify=False` is what lets the estate-admin explorer ask a USERSET question.
+
+    The wrapper's own docstring states why it must exist: "in THIS model the resource rungs
+    deliberately refuse `team#member` directly (a team reaches data through a role), so the userset
+    question is the one that explains a real grant". Prefixing it would make that question unaskable.
+    """
+    client = _CapturingList()
+    asyncio.run(
+        fga.list_objects(
+            cast(OpenFgaClient, client),
+            user="role:project_admin#member",
+            relation="can_get_metadata",
+            object_type="table",
+            qualify=False,
+        )
+    )
+    assert [r.user for r in client.requests] == ["role:project_admin#member"]
+
+
+def test_list_objects_always_sends_a_condition_context() -> None:
+    """The clock, and why omitting it is worse on a LISTING than on a check.
+
+    The wrapper's docstring: "a listing that omits the clock silently drops every object reachable only
+    through a time-boxed grant, and a short list reads as a correct answer rather than an error." A
+    check that loses its context returns a visible `false`; a listing returns a shorter list, and
+    nothing about a shorter list looks wrong.
+    """
+    client = _CapturingList()
+    asyncio.run(fga.list_objects(cast(OpenFgaClient, client), user="alice", relation="can_get_metadata", object_type="table"))
+    context = client.requests[0].context
+    assert context, "ListObjects was sent with no condition context; time-boxed grants vanish silently"

@@ -386,6 +386,35 @@ it is the control that prevents cross-tenant table disclosure. It has **no `list
 model tests and no unmocked Python test anywhere.** The recursive upward-visibility edge the warehouse
 listing actually enumerates is covered by neither of the two rows that do exist.
 
+✅ **ENFORCED 2026-08-22** — both halves, conforming to `openfga/references/test-list-objects.md`
+(`list_objects` with a `type` and per-relation `assertions`, including the empty-list form it prescribes
+for negative coverage).
+
+*The model.* `ListObjects` assertions went **2 → 8**. The two that existed enumerate warehouses and
+materialized views; there was no row over `type: table` at all, which is the object the disclosure
+control actually guards. A `check` cannot stand in for it: check answers *may this principal read THIS
+table*, and disclosure is about what comes back when nobody named a table. Added: `ivan` (one gold
+table), `dave` (the recursive upward edge a listing walks — four tables), `quilla` (the beta tenant),
+`eve` (`[]`, the empty list IS the assertion). RED proof: adding
+`user:dave → reader → table:beta_locked_records` fails naming the leaked table.
+
+**The model corrected me, and the correction is the better assertion.** The warehouse row's own name
+claims "only acme, by isolation" while asserting only the one bucket dave sees — which does not prove
+another tenant's is excluded unless something enumerates from the other side. I added
+`quilla → [warehouse:beta_bucket]` and the model answered `[]`: visibility cascades DOWN the hierarchy
+and never UP, so quilla's grant on `table:beta_locked_records` does not make the parent bucket
+enumerable. Pinned as `[]` with the reason, because it separates two different facts wearing one result
+— *quilla cannot see acme* (isolation) and *quilla cannot see the bucket her own table lives in* (the
+cascade's direction) — and only the first would survive someone adding a convenience edge upward.
+
+*The Python wrapper.* `test_list_objects_fails_closed_on_network_error` already existed, so the
+outage half was covered. The two that were not: the `qualify` hatch and the condition context, both
+added to `tests/unit/test_fga_resilience.py` (20 passed). The listing door's failure mode is quieter
+than `check`'s in both cases and that is the point — a double-prefixed `user:user:alice` denies every
+check LOUDLY but returns an EMPTY LIST here, which renders as "you have no tables"; and a dropped clock
+returns a SHORTER list, where nothing about a shorter list looks wrong. RED: removing the hatch fails 2
+tests; sending `context=None` fails the clock test by name.
+
 ---
 
 ## Part 4 — The notification traps are unguarded at the producer
