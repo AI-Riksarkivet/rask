@@ -1,3 +1,6 @@
+from collections.abc import Callable, Iterator
+
+import pytest
 from fastapi import FastAPI
 
 from service_kit.config import Settings
@@ -6,6 +9,67 @@ from service_kit.otel import setup_otel
 
 def _settings(**env: bool | str) -> Settings:
     return Settings.model_validate({"RASK_VIEWER_INPUT": "/dev/null", "RASK_VIEWER_OUTPUT": "/dev/null", **env})
+
+
+@pytest.fixture(autouse=True)
+def _restore_otel_globals() -> Iterator[None]:
+    """`setup_otel` installs PROCESS-GLOBAL state, and this file is the only place that calls it for
+    real — so it must hand the process back the way it found it.
+
+    `packages/service-kit/tests` is the third of twenty-one testpaths. Without this, every test in the
+    remaining eighteen ran with a live `BatchSpanProcessor` and `PeriodicExportingMetricReader`
+    retrying against `http://localhost:4318`. The endpoint is captured when the exporter is
+    CONSTRUCTED, so `monkeypatch` putting the variable back at teardown does not disarm it — which is
+    why the estate's suite logs `Failed to export … due to timeout, max retries or shutdown` long
+    after these two tests finish, and why that noise buried a pytest summary line earlier today.
+
+    Same family as the root `conftest.py`'s OTLP strip: harness state crossing a boundary the suite
+    does not control. The strip stops the environment leaking IN; this stops an exporter leaking OUT.
+
+    **IT RECORDS CONSTRUCTION RATHER THAN READING THE GLOBALS, AND THE FIRST VERSION DID NOT.** That
+    version shut down `trace.get_tracer_provider()` / `metrics.get_meter_provider()`, which sounds
+    equivalent and is not, because OTel's setters are SET-ONCE: `set_meter_provider` "can only be done
+    once, a warning will be logged if any further attempt is made". So the global is whatever the
+    FIRST `setup_otel` in the process installed, and every later call builds a provider that never
+    becomes global — while its reader still joins the SDK's class-level
+    `MeterProvider._all_metric_readers` WeakSet and still runs its background export loop. Reading the
+    globals therefore disarms exactly one provider and leaves the rest exporting.
+
+    Measured with a probe asserting no live exporter survives this file (`_shutdown is False` on any
+    processor or reader):
+
+        no fixture:        BatchSpanProcessor live + 3 PeriodicExportingMetricReader live
+        reading globals:   2 PeriodicExportingMetricReader live
+        recording (this):  none
+
+    Shut down rather than swapped, for the same set-once reason: restoring by re-setting the global
+    would log a warning and silently keep the old one.
+    """
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.trace import TracerProvider
+
+    built: list[object] = []
+    originals = [(cls, cls.__init__) for cls in (TracerProvider, MeterProvider, LoggerProvider)]
+
+    def _recording(original: Callable[..., None]) -> Callable[..., None]:
+        def __init__(self: object, *args: object, **kwargs: object) -> None:
+            original(self, *args, **kwargs)
+            built.append(self)
+
+        return __init__
+
+    for cls, original in originals:
+        cls.__init__ = _recording(original)  # ty: ignore[invalid-assignment]
+    try:
+        yield
+    finally:
+        for cls, original in originals:
+            cls.__init__ = original  # ty: ignore[invalid-assignment]
+        for provider in built:
+            shutdown = getattr(provider, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
 
 
 def test_setup_otel_noop_when_disabled() -> None:
