@@ -205,3 +205,35 @@ async def authorize_train(
         project=None,  # the explicit pin: always the configured produce_admin_project
         dapr_caller_app_id=dapr_caller_app_id,
     )
+
+
+async def authorize_ingest_media(
+    request: Request,
+    settings: SettingsDep,
+    fga_client: FgaClientDep,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+) -> str | None:
+    """The ``/ingest-media`` door: the same dual-auth as produce, PINNED like ``/train``.
+
+    The media head's target is CONFIGURED (``media_head_enabled`` reads the source prefix and bronze
+    table off settings), so there is no per-tenant routing for a caller-supplied project to select —
+    declaring one would let an admin of any other project pass the gate while the bytes still land in
+    the configured tenant's bronze. Authorization scope must equal write scope.
+
+    RETURNS the verified subject. That is the whole point of replacing the token-only guard: media
+    ingest is a fire-and-ack that hands the run to the cascade, so the door is the LAST place the
+    requester's identity exists. Without it the media chain's events name a chart role literal, which
+    addresses an inbox actor named after the role and reaches nobody — and ``notifiable()`` acks an
+    untargetable event with a SUCCESS, so nothing reports the silence.
+    """
+    return await authorize_produce(
+        request,
+        settings,
+        fga_client,
+        dapr_api_token=dapr_api_token,
+        authorization=authorization,
+        project=None,  # the explicit pin: the media head's target is configured, not requested
+        dapr_caller_app_id=dapr_caller_app_id,
+    )

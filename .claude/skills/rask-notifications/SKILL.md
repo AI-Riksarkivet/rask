@@ -178,16 +178,27 @@ so it must read as a reason a person would accept; and `notification-center.stor
 1. **A role literal in `author.sub` reaches nobody.** `author_subject()` reads `author.sub` and
    **nothing else** — never `author.name`, never the standard `ownership` facet — because those are
    producer-supplied and honouring them would let any producer put a row in a named person's inbox.
-   The medallion movers author with a chart role literal (`data_eng`/`analyst`/`htr`/`ray`,
-   `chart/values.yaml:926-943`), so a failed cascade addresses an inbox actor named `ray`.
+   The medallion movers author with a chart role literal (`data_eng`/`analyst`, `chart/values.yaml`
+   `medallion.movers[].author`; the producer's is `ray`), so a failed cascade addresses an inbox
+   actor named `ray`. That is not a bug to fix at the mover — `enforce_author` would overwrite a
+   human there anyway (trap 2). The literal is *correct* as the author; what makes the cascade
+   reachable is the ORIGINATOR riding beside it, which is why every trigger payload in the chain
+   re-carries it.
 2. **A service token SUBSTITUTES the author.** If your emit runs behind a service bearer,
    `enforce_author` (`lineage/api/fga_deps.py:96-103`) **overwrites** the facet with that service's
    sub — "never trust the request body" is doing its job, and your human is gone. Carrying the human's
    sub through your own call graph is the only fix.
 3. **No `lance.project` disables WATCH silently.** `fanout.py:88` skips the watcher loop entirely when
-   `project` is `None`. The catalog stamps `lance = {operation, version}` and no project
-   (`catalog/core/lineage_emit.py:189`), which is why no catalog write reaches a watcher anywhere in
-   the estate; `ingest/lineage.py:213-215` is the working precedent.
+   `project` is `None`. The catalog was the estate-wide instance of this — it stamped
+   `lance = {operation, version}` and no project, so no catalog write reached a watcher anywhere.
+   **Closed:** `emit_write_event` now resolves the tenant centrally via `emitter.project_for(segments[0])`
+   (`catalog/core/lineage_emit.py`) rather than at its eight call sites, none of which has a project
+   in scope. Two properties of that fix are the reusable part: resolve the tenant ONCE at the choke
+   point (eight sites is eight chances to derive it differently), and **omit rather than sanitize** a
+   project that fails `is_safe_project` — a project-less run reaches its author and no watchers, while
+   a coerced one could reach the WRONG tenant's watchers, which is disclosure rather than a miss.
+   The residue: `project_for` is best-effort and returns `None` on any failure, so a write whose top
+   segment is not registry-bound still reaches zero watchers, silently and with a SUCCESS ack.
 4. **A non-personal principal is not an address.** `user:*` (managed access) strips to a truthy `*`
    and used to write into an inbox actor literally named `*`; usersets (`team:acme#member`) still do.
    An address must identify a person.
@@ -237,7 +248,10 @@ survives is the shape of what remains, because these classes recur every time a 
 notify somebody.
 
 1. **No identity at the door.** A producer that never captured a verified sub can never name a person,
-   and nothing downstream can repair it. Closed for `/produce`, `/train` and ingest; still open for
+   and nothing downstream can repair it. Closed for `/produce`, `/train`, ingest and — since
+   2026-08-22 — `/ingest-media`, which was token-only and so could resolve no principal at all; it now
+   shares the pinned dual-auth door (`authorize_ingest_media`, no `?project=`, because the media head's
+   target is configured and authorization scope must equal write scope). Still open for
    `services/compute` (`RayJob` has no author field) and the controlplane (the Project CR carries
    `spec.team`, a literal, not a requester). See `docs/DECISIONS.md` — an emitter without an identity
    produces events the plane is *designed* to discard, which reads as coverage and is not.

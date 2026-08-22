@@ -95,7 +95,7 @@ def _split_source_uri(source_uri: str) -> tuple[str, str]:
     return (base, leaf) if base else ("", source_uri)
 
 
-async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str | None = None) -> dict[str, str]:
+async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str | None = None, originator: str | None = None) -> dict[str, str]:
     """Land external media as bronze blobs, emit its lineage, and trigger the media chain.
 
     Returns ``{"status": "media_disabled"}`` when the head isn't configured (the route maps it to 409 —
@@ -132,6 +132,12 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
         source_uri=settings.media_bronze_uri,
         schema_fields=result.fields,  # blob-aware: the graph shows payload:blob at the media head (#24)
         token=token,
+        # `author` is the SERVICE that performed the ingest; `originator` is the person who asked for
+        # it, resolved at the door. They are different lanes on purpose — the ORIGINATOR lane exists
+        # precisely for work a service runs on somebody's behalf. None on a service-to-service call:
+        # the shared token names nobody, and an unattributable run must stay unattributed rather than
+        # address an inbox actor named after a role.
+        originator=originator,
     )
     # Two SEPARATE failure domains (audit): a failed EMIT means no run landed — a retry re-ingests and
     # emits fresh, no duplicate possible. A failed TRIGGER after a landed emit still 503s (the trigger IS
@@ -171,6 +177,12 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
                     "token": token,
                     "dataset": settings.media_bronze_dataset,
                     "namespace": settings.media_bronze_namespace,
+                    # The human the chain is for, threaded past the head. `/produce`'s cascade reads
+                    # this back off the bronze event in `_cascade_originator`; the media head fires its
+                    # own trigger instead, so without it the sub died at bronze and every derive below
+                    # authored as a role literal. Omitted (byte-identical payload) when unset — the
+                    # service path names nobody and must not invent one.
+                    **({"originator": originator} if originator else {}),
                 }
             ),
             data_content_type="application/json",
