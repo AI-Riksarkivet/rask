@@ -5,7 +5,7 @@ Nine lifespans set `app.state.shutting_down`. Before this module exactly one thi
 That is the wrong half for this estate, because the doors that matter are sidecar-delivered: Dapr's
 pub/sub delivery does not consult a readiness probe, so a pod that had begun shutting down kept
 accepting cascade triggers and run submissions, started work it could not finish, and took the run
-down with it. `open_batch_process.md` B6 names it: "the flag exists, nothing reads it on admission".
+down with it. `docs/architecture/batch-processing-invariants.md` B6 names it: "the flag exists, nothing reads it on admission".
 
 §6 of that document rejected the `POST /drain` ENDPOINT — a process-local flag cannot mean "this
 deployment is draining" behind a multi-replica Service — and adopted this half. Nothing here decides

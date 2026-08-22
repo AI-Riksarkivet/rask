@@ -5,7 +5,7 @@ many were denied, how many were quality-blocked — and nothing about how LONG o
 it moved, or how many bytes it wrote. "The silver stage got slower last week" was unanswerable from
 deployed telemetry, on the estate's flagship flow.
 
-`open_batch_process.md` B10 names the second half, and names the Ray stage explicitly:
+`docs/architecture/batch-processing-invariants.md` B10 names the second half, and names the Ray stage explicitly:
 
     Every duration — coordinator activity, Ray stage, commit — uses `time.perf_counter` ... and the
     SAME number lands in the lineage run facet so the graph and the metric cannot disagree.

@@ -185,7 +185,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
     # WALL-CLOCK FROM DELIVERY TO OUTCOME, measured once and used twice. `time.perf_counter` because
     # it is monotonic — a wall clock can step backwards under NTP and yield a negative duration, which
     # a histogram silently discards. The SAME value goes to `build_run_event(duration_seconds=…)` and
-    # to `record_stage_completion(...)`: open_batch_process.md B10 requires the graph and the metric to
+    # to `record_stage_completion(...)`: docs/architecture/batch-processing-invariants.md B10 requires the graph and the metric to
     # carry one number, and computing it twice at two points is how they start disagreeing.
     _t0 = time.perf_counter()
     elapsed_seconds = 0.0

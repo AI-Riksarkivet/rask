@@ -1,6 +1,6 @@
 """B1, generalised: an activity result may carry identifiers and counts, never payloads.
 
-`open_batch_process.md` B1 — "History and events carry identifiers and counts, never payloads."
+`docs/architecture/batch-processing-invariants.md` B1 — "History and events carry identifiers and counts, never payloads."
 Every activity result is persisted into workflow history and replayed on every recovery, so a result
 that carries rows or bytes multiplies into the state store: once as the output, again per dependent,
 again on every replay. The estate has the ceilings (`dapr_publish.MAX_PAYLOAD_BYTES`, ingest's

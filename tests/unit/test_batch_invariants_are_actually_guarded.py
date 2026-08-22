@@ -1,4 +1,4 @@
-"""Four mechanisms from `open_batch_process.md` that work, and that nothing would notice losing.
+"""Four mechanisms from `docs/architecture/batch-processing-invariants.md` that work, and that nothing would notice losing.
 
 Each was audited as PARTIAL for the same reason: the behaviour is real and correct, and no test binds
 it, so the regression that removes it leaves the suite green. That is this estate's signature defect —

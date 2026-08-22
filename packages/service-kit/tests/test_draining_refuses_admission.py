@@ -7,7 +7,7 @@ sidecar-delivered. Dapr's own pub/sub delivery does not consult a readiness prob
 rolling deploy a pod that has begun shutting down keeps accepting cascade triggers and run
 submissions, starts work it cannot finish, and takes the run down with it.
 
-`open_batch_process.md` B6, verbatim: "Refuse new runs while draining — the flag exists, nothing
+`docs/architecture/batch-processing-invariants.md` B6, verbatim: "Refuse new runs while draining — the flag exists, nothing
 reads it on admission." §6 rejected only the `POST /drain` ENDPOINT (a process-local flag cannot mean
 "this deployment is draining" behind a multi-replica Service) and adopted the admission half.
 

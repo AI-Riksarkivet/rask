@@ -78,7 +78,7 @@ def record_stage_completion(transition: str, *, duration_seconds: float, rows: i
     """Record what a completed transition COST — its latency, and what it moved.
 
     ``duration_seconds`` must be a MEASURED ``time.perf_counter`` delta, and the caller must hand the
-    SAME number to ``build_run_event(duration_seconds=…)``. That pairing is `open_batch_process.md`
+    SAME number to ``build_run_event(duration_seconds=…)``. That pairing is `docs/architecture/batch-processing-invariants.md`
     B10, and it exists so the graph and the metric cannot disagree: a derived estimate (the stage
     watcher's ``polls × poll_interval``, say) is plausible, cheap, and produces a number the lineage
     facet does not agree with — leaving a reader no way to tell which of the two is lying.

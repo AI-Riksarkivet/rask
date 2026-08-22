@@ -1,6 +1,6 @@
 """The graph and the metric disagreed about how long a Ray stage took — by orders of magnitude.
 
-`open_batch_process.md` B10: "Monotonic clocks; the same number lands in the lineage facet." The
+`docs/architecture/batch-processing-invariants.md` B10: "Monotonic clocks; the same number lands in the lineage facet." The
 clocks are monotonic. The same number does not land.
 
 On the RAY lane the mover runs twice. Pass 1 submits and returns; the stage then runs on the cluster

@@ -229,7 +229,7 @@ def build_run_event(
     if originator:
         lance_fields["originator"] = originator
     # HOW LONG the run took, measured — the same `time.perf_counter` delta the caller hands to
-    # `record_stage_completion`. B10 (`open_batch_process.md`) requires both places to carry ONE
+    # `record_stage_completion`. B10 (`docs/architecture/batch-processing-invariants.md`) requires both places to carry ONE
     # number so the graph and the metric cannot disagree; it cannot be derived from timestamps here
     # because the medallion emits no START event, so a consumer has only this.
     #
