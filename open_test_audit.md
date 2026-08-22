@@ -38,7 +38,7 @@ table in the same commit as the fix; a row without evidence is not done.
 | 3 | `--continue` on both turbo invocations | H3 | ✅ **DONE 2026-08-22** — `.dagger/frontend.go:53` + `ci.yml`. Measured: 45/61 tasks and 1 failure → **70/74 tasks and 4 failures** |
 | 4 | Commit or delete the `models` e2e harness | v1 H4 | ⬜ **owner decision** — untracked at HEAD; `ci.yml:262-266` documents it as landed |
 | 5 | Regenerate `docs/catalog-openapi.json` | M26 | ✅ **NO-OP 2026-08-22** — regenerated at `e6a6053b`, `git diff` empty. The drift was against `47dba152`; a concurrent session fixed it. M26's *structural* half (2 of 10 services; the in-repo guard is name-only) stands |
-| 6 | Give `.dagger/charts.go:103` its render arguments | H22 | 🟨 **PARTIAL 2026-08-22** — shared `renderArgs` added; **all 3 invariant gates now PASS** for the first time since 2026-08-04. Running them surfaced 4 defects, all fixed: policy moved `constant`→`exponential` under the dead gate; a service account became unconditional; **2 gates were matching YAML comments, not config** (the M8 class, live). Still red: `prod_render_check.sh` (same `image.repository` guard) and `make alert-rules-check` (bare `promtool` not on PATH — and `.dagger/charts.go:44`'s claim that the Makefile exports `$(LOCALBIN)` on PATH is **false**; `git log -S` finds no such line, ever) |
+| 6 | Give `.dagger/charts.go:103` its render arguments | H22 | ✅ **DONE 2026-08-22** — `dagger call charts` **exit 0**, all steps, unpiped (27.4 s, 17 steps). The two follow-ons this row listed as still-red are green too: `make prod-render-check` exit 0 (`NetworkPolicy=12, OpenFGA=3, PDBs=17, spread=11, tiers=3`) and `make alert-rules-check` exit 0 (`20 rules found`) after resolving promtool from PATH-or-`.localbin` rather than assuming a PATH export that `git log -S` proves never existed. Running the repaired gates surfaced 6 further defects, all fixed — including **2 gates matching YAML COMMENTS rather than config** (the M8 class, live) and, once the render worked, L6's latent absence-assertion vacuity becoming reachable |
 | 7 | `assert_all_called=True` on respx | M19b | ✅ **ENFORCED 2026-08-22** — flipped on the global router in `conftest.py`, so it covers all 118 bare `@respx.mock` sites and every future one. **17 of 227 went red**, and the split is the point: 13 were DEAD routes in the register path (M19 — a top-level namespace-create the cascade is ruled never to make, mocked as 200 where the real catalog answers 400), now deleted; 6 were NEGATIVE routes whose uncalled state is the assertion, now declaring themselves via a `respx_allows_unused_routes` fixture. Dead and deliberate are no longer indistinguishable in the source |
 | 8 | Drive the `--continue` gate to GREEN — fix what it unmasked | H3 | ✅ **DONE 2026-08-22** — **74/74 tasks, exit 0, unpiped.** `--continue` turned 1 reported failure into 4; all three newly-visible ones are fixed, and every one was a committed file no session had modified — i.e. defects the fail-fast gate had been hiding, not fresh breakage. (a) `explorer#check:tsgo`, 5 errors: `tsconfig.tsgo.json`'s `include` **replaces** the parent's instead of merging, silently dropping `.svelte-kit/{ambient,env,non-ambient}.d.ts` + `src/app.d.ts`, so `$env/dynamic/private` and the `App.Locals` augmentation had no declarations — 4 config errors wearing the costume of 5 code errors; the 5th was real: `v.optional()` widens a key to `boolean \| undefined`, which `exactOptionalPropertyTypes` refuses, fixed with valibot's purpose-built `v.exactOptional()` rather than by loosening `UserStateEnvelope`. (b) `@rask/zone-contract#check:tsgo`: an unguarded regex capture under `noUncheckedIndexedAccess` — one guard also removed the `as string` the next line used to paper over the same value. (c) `@rask/ui#fmt:check`: 3 files, and `grants-panel.svelte` was the interesting one — `rsvelte-fmt` reformats a multi-statement arrow inside a markup attribute to column 0, and the reason one was there at all is that a `// #72` comment in the `<script>` block had been describing a handler that was moved into the markup, leaving the comment documenting nothing. Naming the handler fixed the orphaned comment and the formatter's bad output together; MCP autofixer clean |
 
@@ -1377,6 +1377,27 @@ The challenger correctly cut it down: two of the four named sites do not have th
 green gate today** — the bare render at `:103` has no `|| true` and kills the run first. So this is a
 **latent hazard at two sites** (`:120`, `:132`), not an active vacuity. It becomes active the moment H22
 is fixed by making step two tolerant rather than by giving the render its arguments.
+
+✅ **FIXED 2026-08-22 — and the trigger the finding predicted is exactly what happened.** H22 *was*
+fixed the right way (the render got its arguments, `renderArgs`), which means the bare render at `:103`
+no longer kills the run first — so the two latent sites became reachable. Filed as latent, closed as
+real, because the thing that was holding them harmless was removed.
+
+Both now render to a FILE before asserting an absence, which puts the render on its own command where
+`set -e` sees its status, plus a `kind: Deployment` probe as the non-vacuity floor — proving the render
+produced a real manifest before anything concludes something is absent from it. Nothing is asserted
+about a document nobody checked exists.
+
+Three-way shell proof, since the discrimination is the whole point:
+
+| shape | input | result |
+| --- | --- | --- |
+| old (`\| grep -c … \|\| true`) | a render producing nothing | **exit 0 — PASSED**, the vacuity |
+| new (file + floor) | a render producing nothing | **exit 1** |
+| new (file + floor) | a real manifest with no NetworkPolicy | **exit 0 — PASSED**, correctly absent |
+
+The third row matters as much as the second: a fix that failed on a genuine absence would have replaced
+a false green with a false red. `dagger call charts` **exit 0** with the hardened gates.
 
 ---
 

@@ -163,7 +163,17 @@ RENDER_ARGS="` + renderArgs + `"
 # lines at the source makes every check below mean what it says — and prevents the mirrored bug, where a
 # "must be present" grep is satisfied by documentation rather than by a rendered field.
 render() { helm template chart $RENDER_ARGS "$@" | grep -v '^[[:space:]]*#'; }
-off=$(render --set networkPolicy.enabled=false | grep -c "kind: NetworkPolicy" || true); [ "$off" = "0" ] || exit 1
+# THE ABSENCE ASSERTIONS RENDER TO A FILE FIRST, and that is the whole point of the extra line.
+# Written as 'off=$(render ... | grep -c "kind: X" || true)', the '|| true' sits OUTSIDE the pipeline, so
+# 'set -euo pipefail' cannot propagate a render failure into the substitution: a render that produces
+# NOTHING makes grep -c print 0 and exit 1, || true swallows the exit, and [ "0" = "0" ] passes. The gate
+# then reports "the toggle correctly rendered no such object" about a chart that rendered no objects at
+# all. Redirecting to a file puts the render on its own command, where set -e sees its status, and the
+# 'kind: Deployment' probe is the non-vacuity floor: it proves the render produced a real manifest before
+# anything concludes something is absent from it.
+render --set networkPolicy.enabled=false > /tmp/np-off.yaml
+grep -q "kind: Deployment" /tmp/np-off.yaml
+off=$(grep -c "kind: NetworkPolicy" /tmp/np-off.yaml || true); [ "$off" = "0" ] || exit 1
 render --set networkPolicy.enabled=true > /tmp/np.yaml
 count=$(grep -c "kind: NetworkPolicy" /tmp/np.yaml); [ "$count" -ge 9 ] || exit 1
 grep -q "default-deny" /tmp/np.yaml
@@ -189,7 +199,17 @@ render() { helm template chart $RENDER_ARGS "$@" | grep -v '^[[:space:]]*#'; }
 # -sa-jobs identity"). Nothing caught the divergence because this gate has not RUN since 2026-08-04 —
 # see Charts() above. Excluding it by name rather than loosening to a count keeps the assertion exact:
 # a SECOND unconditional service account still fails here, which is the property worth having.
-off=$(render | grep -- "-sa-" | grep -vc -- "-sa-dapr-sweep" || true); [ "$off" = "0" ] || exit 1
+# THE ABSENCE ASSERTIONS RENDER TO A FILE FIRST, and that is the whole point of the extra line.
+# Written as 'off=$(render ... | grep -c "kind: X" || true)', the '|| true' sits OUTSIDE the pipeline, so
+# 'set -euo pipefail' cannot propagate a render failure into the substitution: a render that produces
+# NOTHING makes grep -c print 0 and exit 1, || true swallows the exit, and [ "0" = "0" ] passes. The gate
+# then reports "the toggle correctly rendered no such object" about a chart that rendered no objects at
+# all. Redirecting to a file puts the render on its own command, where set -e sees its status, and the
+# 'kind: Deployment' probe is the non-vacuity floor: it proves the render produced a real manifest before
+# anything concludes something is absent from it.
+render > /tmp/sa-off.yaml
+grep -q "kind: Deployment" /tmp/sa-off.yaml
+off=$(grep -- "-sa-" /tmp/sa-off.yaml | grep -vc -- "-sa-dapr-sweep" || true); [ "$off" = "0" ] || exit 1
 render --set security.serviceAccounts.enabled=true --set security.infraContexts.enabled=true > /tmp/sec.yaml
 sa_objects=$(grep -c "kind: ServiceAccount" /tmp/sec.yaml || true); [ "$sa_objects" -ge 16 ] || exit 1
 automount_off=$(grep -c "automountServiceAccountToken: false" /tmp/sec.yaml || true); [ "$automount_off" -ge 16 ] || exit 1
