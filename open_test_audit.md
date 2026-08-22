@@ -551,6 +551,8 @@ by `scripts/e2e_stack.sh:277-284,304-305` (8), `scripts/ray_e2e_stack.sh:158-161
 leaves **46 of the 88 live assertions** — including the medallion cascade proof, the governed-union
 authz proof, the registry-CAS proof and the GPU-free dummy lane — running in no automated lane at all.
 
+
+**MIGRATED 2026-08-22.** Mechanism → `.claude/skills/rask-architecture` § Hard invariants (the globbed-membership vs explicit-`testpaths` asymmetry). Work item → `open_python-audit.md` E9, with the 12-of-26 map and the exit-0-on-all-skip mechanism. Nothing is lost when this file goes.
 ### H18 — v1's H1 was closed cosmetically, and both ends of the gate fail open · **CONFIRMED, HIGH**
 
 v1's H1 produced 13 `make e2e-<suite>` targets (`Makefile:709-734`). They exist and each selects a real
@@ -592,6 +594,8 @@ No `ci.yml` step, no e2e script and no Dagger function ever `cd`s into a runner.
   one — `ruff` is local-only.
 - M9 explains why the estate's own runner gate cannot notice.
 
+
+**MIGRATED 2026-08-22, with one sub-claim REFUTED.** Mechanism → `.claude/skills/rask-architecture` § Hard invariants; work item → `open_python-audit.md` E9. **Refuted:** "no lockfile in six cases" is not a defect. That skill's plane table states a runner carries a `uv.lock` *only where it builds an image* — `assist`, `dummy`, `htr` — and the offline Ray Data runners let Ray install the env via `runtime_env`. My own measurement matches that exactly, so the absence is the documented design. Reading the skill in full is what caught it; the surviving half (seven runners with no tests, 75 test functions in no CI job) stands.
 ### H21 — 14,504 lines of Python have zero tests and no `testpaths` entry · **CONFIRMED, HIGH — and this audit understated it 5.5×**
 
 As filed, this named `services/search` alone. Cross-checking against `open_python-audit.md`'s E9 (which
@@ -620,6 +624,8 @@ pinned a privilege-escalation and a commit-duplication regression while collecte
 in `testpaths` now. Enrolling the three above buys nothing on its own, because there is nothing to
 enroll. That makes this an epic, not a two-line fix.
 
+
+**MIGRATED 2026-08-22.** Mechanism → `.claude/skills/rask-architecture` § Hard invariants, including that the enrolment gate covers `packages/*/tests` and `services/*/tests` but NOT a new top-level `tests/<x>/` — how `tests/e2e-py` was lost once. Work item → `open_python-audit.md` E9 with the per-unit LOC table.
 ### H21b — the authorization subtree is unlinted in CI and carries a 21-rule exemption when it is linted · **HIGH**
 
 Two findings that are only serious together, one from each audit.

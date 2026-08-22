@@ -824,6 +824,40 @@ Sequential awaits over independent I/O, full-table reads to serve one row, and c
 
 Two service suites are on disk and outside `testpaths` — including the two that pin a privilege-escalation and a commit-duplication regression. Three more packages/services have no tests at all.
 
+> **RE-MEASURED 2026-08-22, migrated in from `open_test_audit.md` (H17/H20/H21).** The two enrolment
+> items LANDED — `services/catalog/tests` and `services/lineage/tests` are both in `testpaths` as of
+> 2026-08-09. What remains is the harder half, and it grew:
+>
+> | | state | scale |
+> | --- | --- | --- |
+> | `services/search` | no `tests/` at all, absent from `testpaths` | 2,614 tracked LOC |
+> | `services/viewer` | no *committed* `tests/`, absent from `testpaths` | 4,288 |
+> | `packages/ratch` | no `tests/` at all, absent from `testpaths` | 7,602 |
+> | | | **14,504 lines** |
+>
+> `services/search` is half of what CLAUDE.md says rask IS ("ANNOTATE and SEARCH the data"). Its
+> `frames.py:41 _ranked_or_fallback` runs at 16–33% line coverage and its shape is
+> `try: return rank(scoped=True) / except: pass` → fall through, so **a search plane that has stopped
+> ranking anything returns an empty 200 no test can tell from "no hits"**.
+>
+> **The sealed runners (H20).** Seven of nine (`asr`, `assist`, `diarize`, `insid3`, `kg`, `topics`,
+> `voiceprint`) ship no tests. The 75 test functions that DO exist (56 `htr` + 19 `dummy`) run in **no
+> CI job** — `dagger call test` covers the root testpaths only and says so in its own doc comment;
+> `make test`/`make test-slow` name the runners by hand. *Not* a finding: those seven carrying no
+> `uv.lock`. Per `.claude/skills/rask-architecture`, a runner carries a lock only where it builds an
+> image (`assist`, `dummy`, `htr`) — the offline Ray Data runners let Ray install the env via
+> `runtime_env`. That sub-claim is REFUTED.
+>
+> **The live e2e lanes (H17).** CI executes 12 of the 26 `tests/e2e-py` suites — the 12 named as PATHS
+> by `scripts/e2e_stack.sh`, `scripts/ray_e2e_stack.sh` and `.dagger/e2e.go`. No `run:` line in
+> `ci.yml` names any of the 13 per-suite markers, so 14 suites (46 of the 88 live assertions —
+> including the medallion cascade proof, the governed-union authz proof and the registry-CAS proof)
+> run in no automated lane. The 13 `make e2e-<suite>` targets exist but pytest exits 0 when every
+> selected test skips, so each reports success while executing nothing.
+>
+> The enrolment MECHANISM (why globbed membership and explicit `testpaths` drift apart) is written into
+> `.claude/skills/rask-architecture` § Hard invariants, so it survives this file being drained.
+
 #### The high-severity items in this epic
 
 <details><summary><b>CAT-CORE-03</b> — The catalog's in-service test directory is not in `testpaths`, so the commit-idempotency tests never run in CI <i>(catalog-core, testing, effort S)</i></summary>

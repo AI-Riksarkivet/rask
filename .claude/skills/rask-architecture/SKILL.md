@@ -69,6 +69,23 @@ app = make_service_app(
 - **One lock.** The root `uv.lock` is the only Python lockfile — dev, tests, and every fleet docker image resolve from it (`uv sync --frozen --package <name>`). The sealed `runners/htr` project carries its **own** lock and is invoked via `uv run --project runners/htr runner` (in-cluster the ray image ships the console script on PATH).
 - **`service-kit` keeps a light base.** Base deps are `storage`, `fastapi`, `pydantic`, `pydantic-settings`, `python-dotenv`, **`dapr>=1.18.1`, and 5 OpenTelemetry packages**. The heavy Lance/Ray deps live behind the `[governed]` / `[lakehouse]` / `[lancekit]` extras — keep them there. **Never** add `lancedb`, `ray`, or `sqlmodel` to the base: service-kit is shared by every service including the storeless ones (`gateway` via `setup_otel`, `compute`).
 - **`known-first-party` is stale and is silently drifting.** Root `pyproject.toml:143` lists 7 names; **18** first-party modules exist (7 packages + 11 services). Missing: `annotator, catalog, controlplane, ingest, lineage, lineage_kit, maintenance, medallion, ratch, search, viewer`. Step 4 of `references/adding-a-package.md` is being skipped on every lance-service landing — add the name when you add the member, and ruff's import sorting stays correct.
+- **Membership is globbed; TEST ENROLMENT IS NOT — and the asymmetry is where suites go missing.** A
+  directory dropped into `packages/`/`services/` is a workspace member with no manifest edit, but
+  `[tool.pytest.ini_options] testpaths` is an EXPLICIT list. So a new member's `tests/` runs nowhere until
+  someone adds the path, and the run stays green while it does. Three suites landed green-by-absence this
+  way (`services/catalog`, `services/lineage` — one pinning a privilege escalation, one a commit
+  duplication — enrolled 2026-08-09). `tests/unit/test_invariants.py::test_every_workspace_test_directory_is_in_the_root_testpaths`
+  now gates it in both directions, but ONLY over `packages/*/tests` and `services/*/tests`: a new
+  **top-level** `tests/<x>/` is still ungated, which is exactly how `tests/e2e-py` was lost once.
+  Measured 2026-08-22, still open: `services/search` (2,614 LOC), `services/viewer` (4,288) and
+  `packages/ratch` (7,602) ship **no tests at all** — 14,504 lines the estate cannot regress-test. That is
+  a scope decision, not an oversight; it is tracked in `open_python-audit.md` (E9), not here.
+- **A sealed runner's tests are invisible to the root pytest, and to CI.** `runners/*` is matched by no
+  glob by design, so `make test` names `runners/htr` and `make test-slow` names `htr` + `dummy` — by hand.
+  `dagger call test` runs the root testpaths only and says so in its own doc comment, so the 75 test
+  functions that exist in the runners execute in **no CI job**. Seven of the nine ship no tests at all.
+  A lockfile's absence in those seven is NOT a defect — see the plane table above: a runner carries a
+  `uv.lock` only where it builds an image.
 - **Do not resurrect `viewer` or `control`.** The monolithic `viewer` service was dissolved (2026-06) into the gateway + per-domain services. There is no `control` package. New domain code lands in an existing package or a new one — never a revived monolith.
 - **`viewer` now means the lance media viewer** (`services/viewer`, `:8101`) — the old rask viewer monolith and the `RASK_VIEWER_*` settings are gone.
 
