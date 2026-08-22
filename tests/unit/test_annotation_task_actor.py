@@ -116,6 +116,41 @@ async def _claimed() -> _Actor:
     return actor
 
 
+class _InertProjectProxy:
+    """The project actor, absent. Accepts the one call `_report_state` makes and records nothing."""
+
+    async def TaskStateChanged(self, payload: dict[str, Any]) -> dict[str, Any]:  # noqa: N802 - Dapr wire name
+        return {}
+
+
+@pytest.fixture(autouse=True)
+def _no_live_project_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every transition reports to the project index, so EVERY test here reaches `ActorProxy.create`.
+
+    Two tests below already stub that call because they assert on what the project receives. The other
+    fifty-nine did not, and so ran against the real one — which builds a `DaprHttpClient`, which runs
+    `DaprHealth.wait_for_sidecar()` in its constructor. Nothing failed (`_report_state` swallows, by
+    design and correctly); the whole cost was wall clock, and only on a machine without a sidecar.
+
+    Measured: 61 passed in 0.49 s against a sidecar answering :3500, and in 285.54 s with it
+    unreachable at a 3 s health timeout — a 580x spread with identical results. Dapr's default timeout
+    is 60 s, and `_get_default_factory_instance` caches the factory only after the constructor
+    RETURNS, so a refused handshake caches nothing and every call pays again. In CI that walked the
+    offline suite to 44 % before `--timeout=300` killed the process, which is what kept `ms-test` red
+    and the four `needs: ms-test` e2e lanes skipped.
+
+    Autouse rather than per-test: the reach is a property of `fire()`, so opting in test-by-test is
+    what let fifty-nine of them drift. A test that cares what the project received still overrides
+    this with its own `monkeypatch.setattr` — a later patch wins, and both such tests still pass.
+
+    `test_a_transition_builds_NO_real_dapr_proxy_so_this_file_needs_no_sidecar` is the regression
+    guard: remove this fixture and it goes red.
+    """
+    import dapr.actor
+
+    monkeypatch.setattr(dapr.actor.ActorProxy, "create", classmethod(lambda cls, *a, **k: _InertProjectProxy()))
+
+
 # --------------------------------------------------------------------------------------------------
 # State and the machine
 # --------------------------------------------------------------------------------------------------
@@ -348,6 +383,46 @@ async def test_an_unreachable_project_does_not_fail_the_annotator_s_transition(m
 
     assert out["state"] == TaskState.CLAIMED, "an unreachable project rolled back the annotator's claim"
     assert (await _state(actor))["state"] == TaskState.CLAIMED, "the task's own state was not persisted"
+
+
+@pytest.mark.asyncio
+async def test_a_transition_builds_NO_real_dapr_proxy_so_this_file_needs_no_sidecar(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This module's docstring promises every behaviour here is "provable without a Dapr sidecar".
+    It was not: `fire()` -> `_report_state` -> `typed_proxy` -> the REAL `ActorProxy.create`, whose
+    `DaprHttpClient.__init__` runs `DaprHealth.wait_for_sidecar()` — a `time.sleep` loop bounded by
+    `DAPR_HEALTH_TIMEOUT` (Dapr's default, 60 s).
+
+    Nothing FAILED, which is why it survived: `_report_state` swallows the exception on purpose, and
+    correctly so. The cost was paid in wall clock and only off the author's machine. Measured on a box
+    with a sidecar answering :3500 this file ran in 0.49 s; with the sidecar unreachable and the health
+    timeout dialled down to 3 s it ran in 285.54 s, all 61 tests passing either way. At CI's default of
+    60 s the run reached 44 % before `--timeout=300` killed it, taking the other 56 % of the offline
+    suite — and the four `needs: ms-test` e2e lanes — down with it.
+
+    So the guard cannot be "did it fail" or "was it fast"; it has to be "did it reach". The factory is
+    the honest probe: `_get_default_factory_instance` assigns `cls._default_proxy_factory` only AFTER
+    the constructor returns, so a refused handshake caches nothing and every later call pays again.
+    Reset the cache, drive a plain transition, and assert the constructor was never entered.
+    """
+    import dapr.actor
+    from dapr.actor.client import proxy as _proxy
+
+    built: list[_proxy.ActorProxyFactory] = []
+
+    def _record(self: _proxy.ActorProxyFactory, *_args: object, **_kwargs: object) -> None:
+        """Stand in for the constructor entirely — recording it is the assertion, and NOT calling
+        through is what keeps the probe free of the 60 s handshake it exists to detect."""
+        built.append(self)
+
+    # The cache is a CLASS attribute and a sibling test may have populated it, which would hide the
+    # very construction this asserts. Clear it so the probe measures this call, not the run's history.
+    monkeypatch.setattr(dapr.actor.ActorProxy, "_default_proxy_factory", None)
+    monkeypatch.setattr(_proxy.ActorProxyFactory, "__init__", _record)
+
+    actor = await _seeded()
+    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
+
+    assert not built, "a unit test built a real Dapr proxy factory — it will block on a live sidecar handshake in CI"
 
 
 @pytest.mark.asyncio

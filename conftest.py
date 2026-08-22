@@ -92,3 +92,36 @@ def _no_harness_telemetry() -> None:
     is still writing its report.
     """
     _strip_harness_otlp()
+
+
+@pytest.fixture(autouse=True)
+def _no_dapr_proxy_factory_carryover() -> None:
+    """Clear Dapr's PROCESS-GLOBAL actor-proxy factory before each test, so one test cannot decide
+    another's outcome.
+
+    Same family as the OTLP strip above — harness state leaking across a boundary the suite does not
+    control — but the carrier is a class attribute rather than an env var. `ActorProxy` caches its
+    default factory on the CLASS (`_default_proxy_factory`), and `_get_default_factory_instance`
+    assigns it only after the constructor RETURNS. Two consequences, both observed:
+
+    * A test that successfully builds one leaves it built for the rest of the process. `services/
+      notifications/tests/test_adversarial_inbox.py::test_opening_an_inbox_blocks_the_whole_event_loop_
+      while_it_looks_for_a_sidecar` asserts a `TimeoutError` from that construction, so it fails
+      `DID NOT RAISE` whenever something warmed the cache first. Its result was a function of
+      collection order, which is the definition of a test bug (F.I.R.S.T., Independent).
+    * Where the constructor RAISES — no sidecar — nothing is cached, so every later call pays the full
+      `DAPR_HEALTH_TIMEOUT` again. That is the 60 s-per-call arithmetic behind the CI hang.
+
+    Deliberately NOT patching `DaprHealth.wait_for_sidecar` globally: the adversarial test above exists
+    to prove that handshake blocks the event loop, and a harness that stubbed it would delete the
+    estate's only evidence of a live production defect. Resetting the cache leaves the mechanism intact
+    and only removes the cross-test coupling.
+
+    Cheap by construction: setting one class attribute to `None`. Tests that mock at a higher level
+    (`typed_proxy`, `inbox_for` — thirty of the estate's thirty-one Dapr-touching files) never reach it.
+    """
+    try:
+        from dapr.actor.client.proxy import ActorProxy
+    except ImportError:  # dapr is not installed in every scoped sync (`dagger call test-package`)
+        return
+    ActorProxy._default_proxy_factory = None
