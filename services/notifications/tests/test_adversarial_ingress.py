@@ -477,7 +477,7 @@ async def test_a_row_whose_event_is_garbage_is_dropped_and_the_walk_carries_on(p
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_a_lineage_that_answers_slowly_fails_this_tick_instead_of_stacking_the_next_one(plane: _Plane) -> None:
+async def test_a_lineage_that_answers_slowly_fails_this_tick_instead_of_stacking_the_next_one(plane: _Plane, respx_allows_unused_routes) -> None:
     """The hard budget is `asyncio.timeout`, and what it protects is the CRON: a tick that outlives its
     period is a tick the next delivery lands on top of. The cursor stays put, so nothing is lost."""
 

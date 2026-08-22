@@ -46,7 +46,7 @@ def _ensure(
 
 class TestItTakesTheLocationTheCatalogVends:
     @respx.mock
-    def test_an_existing_table_is_described_not_recreated(self) -> None:
+    def test_an_existing_table_is_described_not_recreated(self, respx_allows_unused_routes) -> None:
         describe = respx.post(f"{CATALOG}/v1/table/silver$features/describe").mock(return_value=httpx.Response(200, json={"location": VENDED}))
         create = respx.post(f"{CATALOG}/v1/table/silver$features/create").mock(return_value=httpx.Response(200, json={}))
 

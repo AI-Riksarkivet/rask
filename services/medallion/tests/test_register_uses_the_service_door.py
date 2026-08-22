@@ -29,7 +29,13 @@ ROOT = "s3://lance-catalog"
 
 
 def _routes() -> respx.Route:
-    respx.post(f"{CATALOG}/v1/namespace/silver/create").mock(return_value=httpx.Response(200, json={}))
+    # ONLY the register call. A `POST /v1/namespace/silver/create` route lived here too, answering 200 —
+    # a call the cascade is ruled never to make (see TestItNeverTriesToCreateATopLevelNamespace below)
+    # and which answers 400 in-cluster, not 200. Six tests carried it and none ever fired it; respx's
+    # `assert_all_called` is off on the bare `@respx.mock` router, so nothing said so. Registering it
+    # actively WEAKENED the file: had the regression returned, the mover would have received a cheerful
+    # 200 from a mock promising something the real catalog refuses. With no route, `assert_all_mocked`
+    # (on by default) raises AllMockedAssertionError the moment that call is made.
     return respx.post(f"{CATALOG}/v1/table/silver$features/register").mock(return_value=httpx.Response(200, json={}))
 
 
@@ -150,12 +156,14 @@ class TestItNeverTriesToCreateATopLevelNamespace:
 
     @respx.mock
     def test_a_TOP_LEVEL_parent_is_not_created(self) -> None:
-        create = respx.post(f"{CATALOG}/v1/namespace/silver/create").mock(return_value=httpx.Response(400, json={}))
+        # No route for the create. Asserting over the RECORDED calls states the same claim without
+        # mocking a door the cascade must not knock on — and `assert_all_mocked` makes the attempt a
+        # hard AllMockedAssertionError rather than a silent 400 this test then has to notice.
         route = respx.post(f"{CATALOG}/v1/table/silver$features/register").mock(return_value=httpx.Response(200, json={}))
 
         register_stage_output(catalog_url=CATALOG, catalog_root=ROOT, table_id="silver$features", to_uri=f"{ROOT}/medallion/silver")
 
-        assert not create.called, "the mover tried to mint a top-level namespace the warehouse door owns"
+        assert not [c for c in respx.calls if "/namespace/" in str(c.request.url)], "the mover tried to mint a top-level namespace the warehouse door owns"
         assert route.called
 
     @respx.mock

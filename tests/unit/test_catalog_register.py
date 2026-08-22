@@ -24,7 +24,6 @@ def test_relative_location_is_derived_or_refused() -> None:
 
 @respx.mock
 def test_registration_sends_the_relative_location_and_segments() -> None:
-    ns = respx.post(f"{CATALOG}/v1/namespace/gold/create").mock(return_value=httpx.Response(200, json={}))
     route = respx.post(f"{CATALOG}/v1/table/gold$htr/register").mock(return_value=httpx.Response(200, json={}))
 
     register_stage_output(catalog_url=CATALOG, catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/medallion/gold-htr")
@@ -40,7 +39,7 @@ def test_registration_sends_the_relative_location_and_segments() -> None:
     # 400 rather than the 409 the register path treats as the steady state, and every hop
     # dead-lettered. A top-level namespace is the warehouse door's to mint; a missing one is an
     # operator's problem, reported by the register call rather than papered over by the lane.
-    assert ns.call_count == 0
+    assert not [c for c in respx.calls if "/namespace/" in str(c.request.url)]
 
 
 @respx.mock
@@ -53,7 +52,6 @@ def test_a_409_is_already_governed_not_a_failure() -> None:
     retired `bind86-wh`). The describe below is the agreeing case; the disagreeing one is pinned in
     services/medallion/tests/test_register_uses_the_service_door.py.
     """
-    respx.post(f"{CATALOG}/v1/namespace/gold/create").mock(return_value=httpx.Response(409, text="exists"))
     respx.post(f"{CATALOG}/v1/table/gold$htr/register").mock(return_value=httpx.Response(409, text="exists"))
     respx.post(f"{CATALOG}/v1/table/gold$htr/describe").mock(return_value=httpx.Response(200, json={"location": f"{ROOT}/medallion/gold-htr"}))
 
@@ -62,7 +60,6 @@ def test_a_409_is_already_governed_not_a_failure() -> None:
 
 @respx.mock
 def test_any_other_refusal_fails_the_stage() -> None:
-    respx.post(f"{CATALOG}/v1/namespace/gold/create").mock(return_value=httpx.Response(409, text="exists"))
     respx.post(f"{CATALOG}/v1/table/gold$htr/register").mock(return_value=httpx.Response(403, text="denied"))
 
     with pytest.raises(RegisterError, match="HTTP 403"):
@@ -76,7 +73,6 @@ def test_an_unset_catalog_url_names_the_env_var() -> None:
 
 @respx.mock
 def test_the_bearer_rides_when_given() -> None:
-    respx.post(f"{CATALOG}/v1/namespace/gold/create").mock(return_value=httpx.Response(409, text="exists"))
     route = respx.post(f"{CATALOG}/v1/table/gold$htr/register").mock(return_value=httpx.Response(200, json={}))
 
     register_stage_output(catalog_url=CATALOG, catalog_root=ROOT, table_id="gold$htr", to_uri=f"{ROOT}/medallion/gold-htr", token="mover-jwt")

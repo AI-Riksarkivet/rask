@@ -38,8 +38,10 @@ harness leaked into the run" and "this test is exercising the enabled path".
 """
 
 import os
+from collections.abc import Iterator
 
 import pytest
+import respx
 
 
 #: The OTLP variables a CI harness may inject. `OTEL_EXPORTER_OTLP_ENDPOINT` is the one Dagger sets
@@ -125,3 +127,57 @@ def _no_dapr_proxy_factory_carryover() -> None:
     except ImportError:  # dapr is not installed in every scoped sync (`dagger call test-package`)
         return
     ActorProxy._default_proxy_factory = None
+
+
+# ── EVERY respx test in the estate ran in the one form that cannot see a dead route ────────────────
+# respx's own default is strict: `MockRouter.__init__` takes assert_all_called=True, assert_all_mocked=True,
+# and `writing-python/references/testing.md` states it as the rule — "every routed call must fire, and
+# every unrouted call raises. That's usually what you want."
+#
+# That is true of the `respx_mock` FIXTURE and of the CALLED decorator form. It is not true of the bare
+# one. `respx.mock` is a module-level MockRouter instance constructed with _assert_all_called = False,
+# and the estate uses `@respx.mock` bare 118 times, the configured form 0 times, and sets the flag
+# explicitly nowhere. So a route registered for a call the code no longer makes was silent everywhere,
+# by construction.
+#
+# Measured when first switched on: 17 of 227 tests across the 16 respx files went red. The largest
+# cluster is the register path, where thirteen tests mocked `POST /v1/namespace/{tier}/create` — a call
+# the cascade is ruled never to make, and which answers 400 in-cluster, not the 200 the mock promised.
+#
+# Flipping the instance rather than editing 118 decorators is deliberate: the configured form
+# `@respx.mock(assert_all_called=...)` builds a NEW router, so module-level `respx.post(...)` inside the
+# test body would register on the global one and the call would raise "not mocked". One instance
+# attribute covers every existing site and every future one.
+#
+# To assert a call is NOT made, do not register a phantom route for it. `assert_all_mocked` is already
+# True, so an unregistered call raises AllMockedAssertionError on its own — and where the intent should
+# be explicit, assert over the recorded calls instead:
+#     assert not [c for c in respx.calls if "/namespace/" in str(c.request.url)]
+respx.mock._assert_all_called = True
+
+
+@pytest.fixture
+def respx_allows_unused_routes() -> Iterator[None]:
+    """Opt OUT of the estate default above, for the one shape where an uncalled route is the POINT.
+
+    Two different things register a route that never fires, and until this fixture existed they were
+    indistinguishable in the source:
+
+    * a DEAD route — the code stopped making that call and nobody removed the mock. Thirteen of these
+      sat in the register path, promising a 200 for a namespace-create the cascade is ruled never to
+      make and the real catalog answers 400. That is what the default catches.
+    * a NEGATIVE route — registered precisely so the test can prove it was NOT called, or prove which
+      SUBSET fired. `test_max_pages_caps_the_FETCHES_not_only_the_result` is the clearest: it registers
+      five image routes and asserts `[True, True, False, False, False]`, so the cap is proven by which
+      routes fired. Deleting the last three would delete the proof.
+
+    Taking this fixture is the declaration that a test is the second kind. It is deliberately a
+    fixture rather than a decorator argument: `@respx.mock(assert_all_called=False)` builds a NEW
+    router, so module-level `respx.post(...)` in the test body would register on the global one and the
+    call would raise "not mocked" — the opt-out would silently change what the test exercises.
+    """
+    respx.mock._assert_all_called = False
+    try:
+        yield
+    finally:
+        respx.mock._assert_all_called = True

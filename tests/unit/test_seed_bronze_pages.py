@@ -69,7 +69,7 @@ def test_it_yields_one_source_object_per_page_with_iiif_provenance(seed: ModuleT
 
 
 @respx.mock
-def test_max_pages_caps_the_FETCHES_not_only_the_result(seed: ModuleType) -> None:
+def test_max_pages_caps_the_FETCHES_not_only_the_result(seed: ModuleType, respx_allows_unused_routes) -> None:
     """A cap applied after fetching would still pull the whole volume — the seed's whole point is that
     three pages cost three requests, not a full harvest that is then sliced."""
     respx.get(f"{BASE}/arkis!{VOLUME}/manifest").mock(return_value=httpx.Response(200, json=_manifest(5)))

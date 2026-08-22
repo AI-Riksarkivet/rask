@@ -232,7 +232,7 @@ def test_a_malformed_fragment_does_not_zero_the_whole_count() -> None:
 
 
 @respx.mock
-def test_an_EXISTING_namespace_is_not_re_created() -> None:
+def test_an_EXISTING_namespace_is_not_re_created(respx_allows_unused_routes) -> None:
     """The defect this probe exists for, pinned.
 
     Where namespaces are warehouse-scoped, `POST /v1/namespace/{id}/create` on an already-bound
@@ -322,7 +322,7 @@ def test_a_409_then_a_403_is_reported_as_an_AUTHORIZATION_gap_on_an_existing_tab
 
 
 @respx.mock
-def test_an_EXISTING_visible_table_is_never_re_created() -> None:
+def test_an_EXISTING_visible_table_is_never_re_created(respx_allows_unused_routes) -> None:
     """The fall-through must not turn every run into a create attempt. A describable table short-circuits
     before the namespace probe, which is also what keeps a run cheap on the common path."""
     respx.post(f"{BASE}/v1/table/bind86-bronze$there/add_columns").mock(return_value=httpx.Response(400, json={"detail": "column etag already exists"}))

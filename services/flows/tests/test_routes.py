@@ -218,7 +218,7 @@ def test_the_durable_lane_takes_over_when_a_scheduler_is_present(client: TestCli
 
 
 @respx.mock
-def test_an_unconfirmed_schedule_refuses_instead_of_running_the_graph_twice(client: TestClient) -> None:
+def test_an_unconfirmed_schedule_refuses_instead_of_running_the_graph_twice(client: TestClient, respx_allows_unused_routes) -> None:
     """`ScheduleUnconfirmed` means the engine may already be running this graph, so the inline lane
     is exactly the wrong answer: the run would execute twice and the caller would hear about the
     inline one. 503 with the derived id is the retryable answer — same key, same run.
