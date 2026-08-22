@@ -530,6 +530,16 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                         required_columns=settings.required_column_list,
                     )
         elapsed_seconds = time.perf_counter() - _t0
+        # B10: ONE duration, resolved BEFORE it is emitted. On the Ray lane this handler runs twice —
+        # pass 1 submits and returns, the stage runs on the cluster for minutes-to-hours, and pass 2 is
+        # the measure-and-emit wake-up. `elapsed_seconds` is pass 2's own wall time, so emitting it put
+        # SECONDS in the graph for a stage that ran for hours, while the metric below already preferred
+        # the watcher's measured span. The graph is the durable audit trail, so the authoritative record
+        # was the wrong one and the metric that matched reality was the one treated as approximate.
+        #
+        # The value existed; it was simply computed after the event that needed it. Resolved here and
+        # read twice, so the two cannot drift apart again.
+        stage_seconds = trigger.ray_duration_seconds if (trigger.ray_job_done and trigger.ray_duration_seconds is not None) else elapsed_seconds
         run_event = build_run_event(
             operation=settings.operation,
             author=settings.author,
@@ -540,7 +550,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             version=result.version if result else 1,
             row_count=result.row_count if result else None,
             size_bytes=result.size_bytes if result else None,
-            duration_seconds=elapsed_seconds,
+            duration_seconds=stage_seconds,
             source_uri=to_uri if result else None,
             schema_fields=result.fields if result else None,
             # Field-to-field column lineage (#1): the compute declares which upstream column each output
@@ -830,7 +840,6 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
     # the wake-up after the job went terminal — so `elapsed_seconds` here covers only the measure and
     # emit, and recording it would report a multi-hour Ray stage as a few seconds. `stage_run` measured
     # the real span from its own deterministic clock and handed it back on the trigger.
-    stage_seconds = trigger.ray_duration_seconds if (trigger.ray_job_done and trigger.ray_duration_seconds is not None) else elapsed_seconds
     record_stage_completion(
         transition,
         duration_seconds=stage_seconds,
