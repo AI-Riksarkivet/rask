@@ -103,6 +103,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #
     # Without this the door 404s honestly — which is the correct failure, not a working one.
     app.state.workflow_runtime = None
+    app.state.workflow_client = None
     if get_settings().quality_review_enabled:
         try:
             import dapr.ext.workflow as wf
@@ -113,6 +114,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             register(runtime)
             runtime.start()  # its own threads; does not block the event loop
             app.state.workflow_runtime = runtime
+            # ONE client for the app, not one per request — the decision door reads it from here.
+            app.state.workflow_client = wf.DaprWorkflowClient()
             log.info("dapr workflow runtime started (promotion review)")
         except Exception:
             # Non-fatal, the mover's reasoning: refusing to start because the sidecar is not up yet

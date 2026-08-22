@@ -58,6 +58,27 @@ class Authorize(Protocol):
     def __call__(self, *, subject: str, obj: str) -> Any: ...
 
 
+class DecisionAccepted(BaseModel):
+    """What the approver gets back. A declared return type validates, filters and documents it —
+    `dict[str, Any]` did none of those and put nothing in the OpenAPI schema."""
+
+    status: str
+    instance_id: str
+    approved: bool
+    dataset: str
+
+
+class PromotionUnderReview(BaseModel):
+    """What is being asked, so the approver can answer it."""
+
+    instance_id: str
+    project: str
+    from_dataset: str
+    to_dataset: str
+    reasons: list[str]
+    approval_hours: int
+
+
 class DecisionRequest(BaseModel):
     """The whole body. WHO decided comes from the verified bearer, never from the caller's JSON."""
 
@@ -220,10 +241,11 @@ async def decide(
     # shared credential cannot approve its own output, and the gateway's daprd-stamped token — the
     # measured bypass on the sibling /produce door — buys a caller nothing on this route.
     subject: Annotated[str | None, Depends(authenticate_subject)],
-) -> dict[str, Any]:
+) -> DecisionAccepted:
     """Approve or reject a held promotion. 403 without a signed-in `can_promote` holder on the
     destination stage; 404 when this app hosts no live review under that id."""
-    return await decide_promotion(instance_id, approved=body.approved, subject=subject or "", authorize=_fga_gate(request))
+    outcome = await decide_promotion(instance_id, approved=body.approved, subject=subject or "", authorize=_fga_gate(request))
+    return DecisionAccepted(**outcome)
 
 
 @router.get("/promotions/{instance_id}")
@@ -231,21 +253,23 @@ async def show(
     instance_id: str,
     request: Request,
     subject: Annotated[str | None, Depends(authenticate_subject)],
-) -> dict[str, Any]:
+) -> PromotionUnderReview:
     """What is being asked, so the approver can answer it: the datasets, the failed assertions, the deadline."""
-    wf_client = _client(None)
+    # From `app.state`, built once in the lifespan. Constructing a client per request re-opens its
+    # connection to the sidecar on every call — the "build it in lifespan, inject it" rule.
+    wf_client = _client(getattr(request.app.state, "workflow_client", None))
     spec = await run_in_threadpool(_live_spec, wf_client, instance_id)
     gate = _fga_gate(request)
     if gate is not None and subject:
         await gate(subject=subject, obj=promotion_object(spec))
-    return {
-        "instance_id": instance_id,
-        "project": spec.project,
-        "from_dataset": spec.from_dataset,
-        "to_dataset": spec.to_dataset,
-        "reasons": spec.reasons,
-        "approval_hours": spec.approval_hours,
-    }
+    return PromotionUnderReview(
+        instance_id=instance_id,
+        project=spec.project,
+        from_dataset=spec.from_dataset,
+        to_dataset=spec.to_dataset,
+        reasons=spec.reasons,
+        approval_hours=spec.approval_hours,
+    )
 
 
 def register_promotion_route(app: FastAPI, dapr_app: DaprApp | None = None) -> DaprApp:
