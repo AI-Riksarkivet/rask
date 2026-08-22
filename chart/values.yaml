@@ -783,7 +783,10 @@ pubsub:
 # /bronze-arrival subscription publishes the first trigger (medallion.bronze). Each mover subscribes to
 # its upstream stage's trigger, emits the transform's lineage (the DERIVED_FROM edge), and publishes the
 # next trigger — one ingest cascades the whole DAG, and Dapr propagates the trace context across every
-# hop. All 4 share the catalog image (different entrypoint).
+# hop. Dapr also EXPORTS a span for each of them as of 2026-08-22 — until then `lance-tracing` named
+# no exporter, so daprd's NullExporter discarded every sidecar span while the context still
+# propagated, which is exactly why this sentence read as true while the traces were not there.
+# All 4 share the catalog image (different entrypoint).
 medallion:
   enabled: true
   port: 8000

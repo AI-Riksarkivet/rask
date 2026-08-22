@@ -2093,6 +2093,60 @@ def test_the_chart_tells_kuberay_the_ray_version_the_image_actually_ships() -> N
     )
 
 
+def test_dapr_sidecar_spans_actually_have_an_exporter() -> None:
+    """THE CRUX. `samplingRate` is a SAMPLING knob, not an enable switch.
+
+    The `lance-tracing` Configuration set `spec.tracing.samplingRate: "1"` and nothing else — no
+    `otel:`, no `zipkin:`, no `stdout: true`. Per the Dapr v1.18.1 contract that pinned by
+    chart/Chart.yaml, a tracing stanza with no exporter registers the NullExporter: every daprd
+    sidecar span is created, sampled at 100%, has its context propagated — and is then discarded by an
+    `ExportSpans` that returns nil. No log line, no error, no metric. It looks exactly like a collector
+    that is down.
+
+    So every Dapr hop in the estate — service invocation, pub/sub publish and delivery, actor calls,
+    input bindings, workflow steps — produced no span anywhere, while three files asserted the
+    opposite (observability.yaml's own comment, chart/values.yaml, docs/MEDALLION.md).
+
+    The stated reason for omitting it was also wrong on its own terms: Dapr's `otel.headers` accepts
+    arbitrary pairs, and more to the point the estate RUNS a Collector whose `otlp` receiver already
+    listens on 4317 and 4318 and which adds GreptimeDB's headers itself. The receiving half was built
+    and idle.
+
+    The suite already had three tests over this object and all three were about the WORKFLOW half —
+    one even asserts `"tracing" not in spec` when telemetry is off, so it knew the stanza existed and
+    still never checked that it could export. There is a render-time `fail` guard against a malformed
+    workflow retention value; there was none against a tracing stanza that exports into a black hole,
+    which is the strictly more total silent failure.
+    """
+    spec = _lance_tracing_config(_helm_template())
+    assert spec is not None, "the lance-tracing Configuration does not render"
+
+    tracing = spec.get("tracing")
+    assert tracing, "no tracing stanza at all — sidecars fall back to Dapr's defaults"
+
+    exporters = {"otel", "zipkin", "stdout"} & set(tracing)
+    assert exporters, (
+        f"tracing is configured with NO exporter (keys: {sorted(tracing)}). samplingRate alone means "
+        "daprd registers a NullExporter: spans are created, sampled and propagated, then dropped "
+        "silently — indistinguishable from a dead collector."
+    )
+
+    if "otel" in exporters:
+        otel = tracing["otel"]
+        assert otel.get("endpointAddress"), "otel.endpointAddress is required by the CRD"
+        # isSecure DEFAULTS TO TRUE upstream. Omitting it against the plaintext in-cluster Collector
+        # makes every sidecar attempt TLS and fail — which fails soft, so it looks like no tracing.
+        assert otel.get("isSecure") is False, f"otel.isSecure must be explicitly false for a plaintext Collector, got {otel.get('isSecure')!r}"
+        assert otel.get("protocol") in {"http", "grpc"}, (
+            f"otel.protocol must be exactly 'http' or 'grpc' — anything else is a fatal daprd startup error, got {otel.get('protocol')!r}"
+        )
+        # Dapr sets NO url path, so `http` posts to <endpoint>/v1/traces while GreptimeDB ingests at
+        # /v1/otlp/v1/traces — a prefix Dapr cannot express. The Collector is the only correct target.
+        assert "greptime" not in str(otel["endpointAddress"]).lower(), (
+            "Dapr cannot express GreptimeDB's /v1/otlp path prefix — point it at the Collector, which adds the headers"
+        )
+
+
 def _fleet_config(docs: list[dict]) -> dict[str, str]:
     """The fleet ConfigMap — the one carrying `RASK_API_PREFIX` and the gateway's upstream addresses."""
     for doc in docs:

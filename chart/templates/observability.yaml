@@ -53,14 +53,40 @@ metadata:
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
 {{- if include "lance.otelEnabled" . }}
-  # There is NO otel exporter here (mirrors rask: the apps export OTLP to the OTel Collector, which
-  # forwards to GreptimeDB; Dapr's own sidecar spans can't carry GreptimeDB's required
-  # db-name/pipeline headers). samplingRate "1" keeps Dapr sampling every request so the W3C trace
-  # context always propagates across the pub/sub boundary — which is what makes the app-level
-  # distributed trace span catalog → (Dapr/NATS) → lineage end to end. Gated on otelEnabled, NOT
-  # observability.enabled: telemetry also ships to an external collector (externalOtlpEndpoint).
+  # CORRECTED 2026-08-22. This block used to say "There is NO otel exporter here … Dapr's own sidecar
+  # spans can't carry GreptimeDB's required db-name/pipeline headers", and concluded the estate still
+  # had an end-to-end trace. Both halves were wrong.
+  #
+  # `samplingRate` is a SAMPLING probability, NOT an enable switch. With no `otel:`, no `zipkin:` and
+  # no `stdout:`, daprd registers its NullExporter: every sidecar span is created, sampled at 100%,
+  # has its context propagated — and is dropped by an `ExportSpans` that returns nil. No log, no
+  # error, no metric. Indistinguishable from a collector that is down. So NO Dapr hop in this estate
+  # had ever produced a span: not service invocation, pub/sub publish or delivery, actor calls, input
+  # bindings or workflow steps.
+  #
+  # The stated reason was false twice over. Dapr's `otel.headers` accepts arbitrary {name,value} (and
+  # secretKeyRef) pairs, so it CAN carry vendor headers — and it does not need to, because this chart
+  # deploys a Collector that adds them itself. That Collector's `otlp` receiver already listened on
+  # 4317 and 4318 and was already wired into the traces pipeline.
+  #
+  # Gated on otelEnabled, NOT observability.enabled: telemetry also ships to an external collector
+  # (externalOtlpEndpoint). Pinned by
+  # tests/unit/test_invariants.py::test_dapr_sidecar_spans_actually_have_an_exporter.
   tracing:
     samplingRate: {{ .Values.observability.samplingRate | quote }}
+{{- with include "lance.daprOtlpTarget" . }}
+    otel:
+      # A BARE host:port. Dapr appends no URL path, so `protocol: http` posts to
+      # `<endpointAddress>/v1/traces` — exactly the Collector's OTLP/HTTP route on 4318.
+      endpointAddress: {{ . | quote }}
+      # LOAD-BEARING: isSecure DEFAULTS TO TRUE upstream. Omit it and every sidecar attempts TLS
+      # against a plaintext in-cluster Collector and fails — which fails soft, so the symptom is
+      # "still no traces" rather than an error anyone sees.
+      isSecure: false
+      # Exactly "http" or "grpc". Anything else is a fatal daprd startup error, not a fallback.
+      protocol: http
+      timeout: "30s"
+{{- end }}
 {{- end }}
 {{- with .Values.dapr.workflowRetention }}
 {{- if .enabled }}

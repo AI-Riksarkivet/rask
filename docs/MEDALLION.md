@@ -220,4 +220,4 @@ make e2e-medallion    # the automated regression test: produce → assert gold d
 The script driver runs the stages in-process, sequentially. The event-driven version makes each stage an
 independently deployable, independently scalable service that reacts to its upstream's completion — the
 real microservices shape: a slow silver stage can't block bronze ingestion, each stage retries on its own
-(Dapr redelivery + idempotent emit), and the whole flow is observable as one trace without any glue code.
+(Dapr redelivery + idempotent emit), and the whole flow is observable as one trace without any glue code. (True since 2026-08-22 and not before: `lance-tracing` set `samplingRate` and named NO exporter, so daprd registered its NullExporter and every sidecar span was created, sampled, propagated — and then dropped.)

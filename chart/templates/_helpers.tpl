@@ -260,6 +260,26 @@ dapr.io/config: "lance-tracing"
      Pinned by tests/unit/test_invariants.py::test_ray_telemetry_is_release_derived_like_every_other_pods,
      ::test_the_platform_chart_does_not_name_a_WORKLOAD_in_rays_telemetry_identity and
      ::test_externalising_telemetry_does_not_silently_drop_ray. */}}
+{{/* The OTLP target for DAPR SIDECARS — a BARE host:port, which is why it cannot reuse
+     `lance.otlpEndpoint`. Dapr sets no URL path of its own: with `protocol: http` it posts to
+     `<endpointAddress>/v1/traces`, while GreptimeDB ingests at `/v1/otlp/v1/traces` — a prefix Dapr
+     has no way to express. Port 4318 (OTLP/HTTP), matching `protocol: http` at the call site: the
+     externalEndpoint values in this chart are HTTP URLs, so deriving a bare host:port from one and
+     then declaring gRPC would point the sidecar at an HTTP listener and fail — caught by rendering
+     the externalize posture rather than by trusting the default one. So the Collector is the only correct target, and that is fine, because the
+     Collector is what adds GreptimeDB's db-name and trace-pipeline headers on behalf of
+     backend-agnostic senders. Its `otlp` receiver already listens on 4317 and 4318 and is already
+     wired into the traces pipeline; the receiving half was built and idle.
+
+     Empty when no Collector is reachable, so the `with` at the call site omits the whole `otel:`
+     block rather than rendering an endpoint that resolves to nothing. */}}
+{{- define "lance.daprOtlpTarget" -}}
+{{- $c := .Values.observability.otelCollector | default dict -}}
+{{- if $c.externalEndpoint -}}{{ $c.externalEndpoint | trimPrefix "https://" | trimPrefix "http://" | trimSuffix "/v1/otlp" | trimSuffix "/" }}
+{{- else if and .Values.observability.enabled $c.enabled -}}{{ include "lance.fullname" . }}-otel-collector:4318
+{{- end -}}
+{{- end -}}
+
 {{- define "rask.rayOtelEnv" -}}
 {{- $root := index . 0 -}}
 {{- $svc := index . 1 -}}
