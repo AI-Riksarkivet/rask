@@ -144,9 +144,21 @@ notifications-rig-up: ## Mailpit + a counting Slack sink, for the channel idempo
 notifications-rig-down: ## tear the channel verify rig down
 	docker compose -f .docker/docker-compose.notifications-channels.yml down -v
 
+# `promtool` is resolved, not assumed. A bare `promtool` had never been on PATH here: `make bootstrap`
+# installs it into .localbin and NOTHING prepends that to PATH — `.dagger/charts.go` asserted in a
+# comment that "the Makefile's `export PATH := $(LOCALBIN):…` prepend" existed, and `git log -S` finds
+# no such line has EVER been in this file. So this target died with "make: promtool: No such file or
+# directory" on any box without a globally-installed promtool, and it died in CI too for a different
+# reason (it is step 7 of charts.go's chain, and step 2 had been failing since 2026-08-04). Nothing has
+# run these alert rules in either place.
+# PATH first, .localbin second, deliberately: inside the Dagger gate container the pinned
+# /usr/local/bin/promtool is on PATH and .localbin is excluded from the mount, so PATH wins there and
+# the pinned binary stays the single source of truth — which is what that charts.go comment MEANT.
 alert-rules-check: ## promtool: the alert rules are valid AND actually fire on synthetic series
-	promtool check rules chart/alerting/rules.yml
-	promtool test rules chart/alerting/rules_test.yml
+	@PROMTOOL=$$(command -v promtool 2>/dev/null || echo $(LOCALBIN)/promtool); \
+	  [ -x "$$PROMTOOL" ] || { echo "!! promtool not found on PATH or in $(LOCALBIN) — run 'make bootstrap'"; exit 1; }; \
+	  "$$PROMTOOL" check rules chart/alerting/rules.yml && \
+	  "$$PROMTOOL" test rules chart/alerting/rules_test.yml
 
 # ---- frontend dead-code + dep gate (knip, repo-wide; see knip.json) ---------
 # Cross-workspace tool — analyses the whole JS graph at once, so it stays a

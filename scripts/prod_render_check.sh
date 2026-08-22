@@ -9,15 +9,26 @@ set -euo pipefail
 
 CHART="${CHART:-chart}"
 
-# values-prod sets auth.enabled AND frontend.oidc.enabled — a governed backend with a UI that can sign
-# in — so templates/{auth-consistency,frontends}.yaml demand the three OIDC values on EVERY render here.
+# Every value the chart's `required` guards demand before it will render at all. values-prod sets
+# auth.enabled AND frontend.oidc.enabled — a governed backend with a UI that can sign in — so
+# templates/{auth-consistency,frontends}.yaml demand the three OIDC values on EVERY render here, and
+# _helpers.tpl demands a registry-qualified image.repository.
 # One array, used by all four helm calls below: adding a fifth without them would fail the whole script
 # at that line with no message (set -e + command substitution), which is how this reached CI red.
 # Dummies on purpose: they satisfy the fail-closed guards and thereby also prove the guards do not block
 # a legitimate prod render — the same reason the appToken/age/rustfs dummies exist.
-OIDC=(--set frontend.oidc.sessionSecret=ci-dummy-session-secret-at-least-32-chars
-      --set frontend.oidc.publicIssuer=https://auth.example.com/dex
-      --set frontend.oidc.publicOrigin=https://lance.example.com)
+#
+# image.repository joined this array on 2026-08-22. It became `required` in 3c909e0a (2026-08-04,
+# "registry required") and NOTHING here supplied it, so all four renders died on the guard and the whole
+# script exited 1 — every run, for 923 commits. It was invisible because `make prod-render-check` is
+# step 6 of .dagger/charts.go's chain and step 2 had been failing on the SAME guard since the same
+# commit: the gate never reached the script that would have reported it. values-prod.yaml deliberately
+# does NOT pin a registry (the deployer supplies theirs), so the check must, exactly as it does for the
+# appToken and the age/rustfs credentials.
+COMMON=(--set frontend.oidc.sessionSecret=ci-dummy-session-secret-at-least-32-chars
+        --set frontend.oidc.publicIssuer=https://auth.example.com/dex
+        --set frontend.oidc.publicOrigin=https://lance.example.com
+        --set image.repository=ghcr.io/example/rask)
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
@@ -26,7 +37,7 @@ helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set dapr.appToken=ci-dummy-token-0000000000 \
   --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass \
-  --set ingress.host=lance.example.com "${OIDC[@]}" > "$OUT"
+  --set ingress.host=lance.example.com "${COMMON[@]}" > "$OUT"
 
 fail() { echo "!! prod-render-check: $*" >&2; exit 1; }
 
@@ -71,7 +82,17 @@ awk '/^# Source:/{src=$0; d=0} /^kind: Deployment$/{if (src ~ /dapr_sentry_deplo
 # so the missing zone PDBs sailed through). NAMED asserts on the PDB documents themselves, not a count.
 pdb=$(grep -c "kind: PodDisruptionBudget" "$OUT" || true)
 pdb_names=$(awk '/^kind: PodDisruptionBudget$/{f=1} f&&/^  name: /{print $2; f=0}' "$OUT")
-for p in catalog lineage gateway openfga web-home web-lakehouse web-media web-annotator; do
+# The zone half is DERIVED from the chart's own `frontend.apps`, not hand-listed. It WAS hand-listed —
+# `web-home web-lakehouse web-media web-annotator` — and by 2026-08-22 that literal named a zone which no
+# longer exists (`media`, retired with the R6/R20 media wave) while omitting FOUR that do (compute,
+# studio, models, explorer). So the assertion could not pass, and the three zones it did cover were the
+# only ones guarded. Nothing noticed for 923 commits because this script is step 6 of .dagger/charts.go's
+# chain and step 2 had been failing since 2026-08-04 — the roster drifted under a gate that never ran.
+# Deriving closes the class: a zone added to or removed from the chart moves this assertion with it.
+# Input-vs-output, not circular: the expected set comes from values.yaml, the actual from the render.
+zones=$(awk '/^  apps:/{f=1;next} f&&/^  [a-zA-Z]/{exit} f&&match($0,/name: [a-z0-9-]+/){print substr($0,RSTART+6,RLENGTH-6)}' "$CHART/values.yaml")
+[ -n "$zones" ] || fail "could not derive frontend.apps from $CHART/values.yaml — the PDB zone assertion would be vacuous"
+for p in catalog lineage gateway openfga $(sed 's/^/web-/' <<<"$zones"); do
   grep -qx "rask-$p" <<<"$pdb_names" \
     || fail "prod is missing the rask-$p PodDisruptionBudget (got: $(tr '\n' ' ' <<<"$pdb_names"))"
 done
@@ -153,7 +174,7 @@ atomic=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
   --set rustfs.enabled=false --set rustfs.externalEndpoint="$EXT_S3" \
-  --set greptimedb-standalone.objectStorage.s3.endpoint="$EXT_S3" "${OIDC[@]}" 2>/dev/null)
+  --set greptimedb-standalone.objectStorage.s3.endpoint="$EXT_S3" "${COMMON[@]}" 2>/dev/null)
 grep -q "rask-rustfs-io" <<<"$atomic" \
   && fail "externalizing RustFS + the greptime endpoint companion still leaks in-cluster rustfs DNS"
 # Negative: rustfs externalized but the greptime companion OMITTED must still show the leak (proves the pairing
@@ -162,7 +183,7 @@ leak=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
   --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
-  --set rustfs.enabled=false --set rustfs.externalEndpoint="$EXT_S3" "${OIDC[@]}" 2>/dev/null)
+  --set rustfs.enabled=false --set rustfs.externalEndpoint="$EXT_S3" "${COMMON[@]}" 2>/dev/null)
 grep -q "rask-rustfs-io" <<<"$leak" \
   || fail "the rustfs-externalize coherence guard is vacuous (expected the greptime leak without the companion override)"
 
@@ -172,7 +193,7 @@ grep -q "rask-rustfs-io" <<<"$leak" \
 eso=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
-  --set externalSecrets.enabled=true "${OIDC[@]}" 2>/dev/null) \
+  --set externalSecrets.enabled=true "${COMMON[@]}" 2>/dev/null) \
   || fail "prod render with externalSecrets.enabled=true FAILED (age.password/rustfs.secretKey should not be required)"
 grep -q "kind: SecretStore" <<<"$eso" || fail "ESO path must render a SecretStore"
 grep -q "kind: ExternalSecret" <<<"$eso" || fail "ESO path must render the ExternalSecret CRs"
