@@ -84,7 +84,24 @@ def test_every_client_transport_the_estate_uses_gets_an_instrumentor(monkeypatch
     so `list_jobs` — the call that measured 164.7 MB / 81,155 jobs and OOM-killed the compute pod —
     and the pruner's per-job DELETE loop carried no client span at all, while the cheap httpx reads
     did. That does not read as a gap in a trace view; it reads as those calls being instantaneous.
+
+    `grpc` and `aiohttp` are the two that decide whether the DAPR plane joins up at all, and they are
+    why this test is being repaired rather than left as it was. Now that `lance-tracing` names an
+    exporter (d5744a9c) the sidecars finally emit spans — but the app->sidecar leg carries no
+    `traceparent` without these, so the sidecar's span ROOTS A NEW TRACE. That fresh id is what gets
+    stamped into the CloudEvent envelope and persisted as `ExecutionStartedEvent.ParentTraceContext`,
+    so every activity, lineage event and notification downstream inherits the orphan. The damage is a
+    severed subtree, not a missing span, and it looks like a sampling problem rather than a missing
+    instrumentor.
+
+      * grpc  — `dapr.aio.clients.DaprClient` rides `grpc.aio` (publish, state, bindings, workflow
+        schedule); `dapr-ext-workflow`'s `DaprWorkflowClient` rides SYNC grpc. BOTH variants are
+        needed: they patch different symbols, and installing one looks configured while doing nothing.
+      * aiohttp — `ActorProxy` -> `DaprActorHttpClient`, i.e. EVERY actor call in the estate, and the
+        `openfga_sdk`, i.e. every authorization check on every governed door.
     """
+    from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
+    from opentelemetry.instrumentation.grpc import GrpcAioInstrumentorClient, GrpcInstrumentorClient
     from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
     from opentelemetry.instrumentation.requests import RequestsInstrumentor
 
@@ -96,3 +113,10 @@ def test_every_client_transport_the_estate_uses_gets_an_instrumentor(monkeypatch
     # the send path instead, so a repr check passes vacuously in one direction and fails in the other.
     assert RequestsInstrumentor().is_instrumented_by_opentelemetry, "requests is not instrumented — Ray's Job SDK calls carry no client span"
     assert HTTPXClientInstrumentor().is_instrumented_by_opentelemetry, "httpx is not instrumented"
+    assert GrpcAioInstrumentorClient().is_instrumented_by_opentelemetry, (
+        "grpc.aio is not instrumented — dapr.aio.clients.DaprClient sends no traceparent, so the sidecar roots a NEW trace"
+    )
+    assert GrpcInstrumentorClient().is_instrumented_by_opentelemetry, "sync grpc is not instrumented — DaprWorkflowClient's schedule call is an orphan"
+    assert AioHttpClientInstrumentor().is_instrumented_by_opentelemetry, (
+        "aiohttp is not instrumented — every ActorProxy call and every OpenFGA check is invisible"
+    )
