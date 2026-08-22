@@ -236,7 +236,7 @@ class TestTheDoorAuthorizesAgainstTHISPromotion:
 class TestTheRungIsValidatorNotAdmin:
     """`can_promote: validator` exists precisely so a non-admin can validate.
 
-    `open_ingest_design.md` §4 rejects a promotion door gated on `can_administer` for exactly this:
+    `docs/architecture/ingest-and-tier-movement.md` §4 rejects a promotion door gated on `can_administer` for exactly this:
     it is "a coarser and different rung from the `can_promote: validator` rung the model already
     defines for exactly this act". The route's first draft reused `authorize_produce`, whose FGA half
     is `can_administer` on the configured project — so the effective gate became admin AND validator,

@@ -1,0 +1,130 @@
+# Ingest, Lance-table sources, incremental runs, and tier movement — the decisions
+
+Migrated from `open_ingest_design.md` on 2026-08-22, when that working plan was retired. A root
+`open_*.md` exists only while work is outstanding; what survives here is what was never outstanding
+work — five decisions, the rulings reached on the parts that were never built, and the two policies
+the plan recorded nowhere else.
+
+The plan carried an evidence convention worth keeping: `path:line` means read from source,
+`(measured <date>)` means observed against a running system, and `UNVERIFIED` means an inference.
+They are not interchangeable, and several rulings below turn on which one a claim was.
+
+---
+
+## The five decisions, as they stand
+
+| Question | Decision | State |
+| --- | --- | --- |
+| **1b** — an existing Lance table as a source | `lance-append` at fragment/row-range grain over UNGOVERNED locations; `lance-register` is the existing catalog door, not an ingest run; **no overwrite mode** | register door **shipped**; the `lance-append` kind **ruled deferred** |
+| **1c** — incremental / CDC | anti-join against bronze itself at enumerate (no new store), triggered by a cron at the outer edge | mechanism **shipped and bounded**; the cron **ruled deferred** |
+| **1d** — what must pre-exist | warehouse + namespace **yes**, table **no** | **shipped**, and the refusal is now pinned on both sides |
+| **2** — "manual push to bronze only" | a **tuple-seeding policy**, not a code change | **ruled**; the policy is recorded below |
+| **3 / 4** — annotator output, tier movement | annotations are DERIVED so silver is correct; readiness is the `published` tag | tenancy **fixed**; the single-trigger flip **blocked** |
+
+---
+
+## What landed
+
+* **1d, the table must NOT pre-exist.** A 403 from `describe` means "try create", not "give up" —
+  before that fix every ingest run that ever succeeded did so against a table someone had already
+  created. CREATE is the authoritative existence oracle rather than a read door, because it is gated
+  on the PARENT's `can_create_table`, which is the estate's create-on-parent rule. Swapping `describe`
+  for `exists` was considered and killed by measurement: `exists` 403s on an absent table too.
+* **1d, the namespace refusal.** A missing warehouse-scoped namespace is refused naming the three
+  admin doors, because ingest is a WRITER — having it provision the chain would make the data plane
+  mint its own `project#admin` tuple. Both halves are pinned now
+  (`services/ingest/tests/test_unit_dedupe_and_namespace_refusal.py`), including that the catalog
+  still emits the prose ingest matches on: this is a cross-service contract held together by a string
+  literal, and rewording it silently degrades the actionable refusal to a generic 400.
+* **1c, the anti-join, and its ceiling.** The mechanism shipped; its stated cost — O(existing rows)
+  per tick — had no bound until `RASK_INGEST_INCREMENTAL_MAX_ROWS`. That ceiling REFUSES and never
+  samples, because truncating an anti-join inverts it: a partial "already have" set makes the run
+  re-land rows bronze already holds.
+* **3, tenancy.** The annotator published every tenant's labels into one bare `silver` namespace. Now
+  derived through `warehouse_registry.namespace_for`, resolved at the DOOR before authorization so
+  the gate checks the object the write lands in.
+* **§6's one critical, `DWF-MGT-003`.** Nothing could stop a live ingest run;
+  `POST /v1/ingests/{run_id}/terminate` closes it, bounded rather than instant and saying so.
+
+---
+
+## Ruled: deferred, with the reason
+
+**1b — the `lance-append` source kind, and its three guards.** Deferred as a feature; the guards go
+with it, since a guard for a kind that does not exist is unreachable code. What 1b actually wanted is
+mostly already available: `POST /v1/table/{id}/register` is the existing catalog door and does the
+whole job — parent check, native register, ownership seeding — so "an existing Lance table becomes
+governed" is solved. What is missing is the INGEST-run form: reading a bounded row range out of an
+ungoverned `.lance` and projecting it into BRONZE_SCHEMA. No workload asks for that today; the
+registered path covers the case the estate has. Its three guards land with it if it is ever built —
+refuse a source that resolves to a catalog table (naming the medallion mover, because copying between
+governed tiers is the cascade's job), refuse a schema that cannot produce BRONZE_SCHEMA at ACCEPT
+rather than hanging, and run a bronze conformance check in front of register.
+
+**1c — the cron trigger.** Deferred, and the ordering turned out to matter. Incremental ingest is
+REACHABLE today: the anti-join runs on every `POST /v1/ingests`, so what the cron adds is automation,
+not capability. Shipping the cron before the ceiling existed would have put an unbounded
+O(existing rows) read on a clock; now that `RASK_INGEST_INCREMENTAL_MAX_ROWS` exists it is safe to add
+when an operator wants it. The plan's companion note — "state plainly in the code that incremental
+ingest is a scheduled poll at the outer boundary and event-driven from bronze inward" — is recorded
+here instead, because the statement had no home while the outer boundary did not exist.
+
+**2 — the frontend `merge_insert` proxy.** Deferred. The RULING (below) is that a manual push uses
+`merge_insert`, not a raw insert, and the catalog's door already accepts it. What is missing is the
+zone-side proxy and a `mergeRows` helper — UI for an operation no surface currently offers.
+
+**3 — FIX 3, the source pin.** REFUTED rather than deferred, and this is the one to read before
+re-opening. FIX 3 says to carry the send's dataset as a catalog-qualified id so `source_pin` resolves.
+It cannot: `ItemSource.where` is the MEDIA-REGISTRY key, validated by `_refuse_unknown_datasets`
+against `state.registry`, whose ids are bare — so qualifying it makes every send refuse at the door.
+And the opposite change was already tried: `source_pin`'s docstring records that sending the bare
+media name made the catalog authorize `table:transcripts_v2`, an object that does not exist, and FGA
+denies before it checks existence, so the ENTIRE publish failed (observed live, 2026-08-03). The
+guard FIX 3 wants removed IS the fix from that day. A real fix resolves the pin server-side from
+registry id to catalog id, or carries a second field — both depend on whether every corpus has a
+catalog node at all, which was never established. Pinned by
+`services/annotator/tests/test_item_source_where_is_the_media_registry_key.py`.
+
+**4 — make `table_published` the single cascade trigger.** BLOCKED, not deferred. The mechanism
+exists behind `medallion.cascadeViaPublish` and the chart says "it should die once every estate runs
+on it", but flipping it is a live-estate change against a cluster whose tiers are not provisioned —
+the same blocker as tier provisioning. Retiring the lane-matching guards is the same change and the
+same blocker. See `docs/architecture/medallion-cascade.md` for why BOTH cascade heads must fire
+meanwhile; that is a ruling, not an interim state.
+
+---
+
+## The two policies this plan was the only record of
+
+**Manual push to bronze — a tuple-seeding policy, not a code change.** Nothing in `fga_deps.py` or the
+model distinguishes a human principal from a service one; every subject is `user:`, and services are
+`user:service-*`. A code-level tier guard would therefore have to INVENT that distinction, and an
+invented one drifts from the tuples that actually decide. So the rule is expressed in tuples:
+
+* grant human principals `writer` on `namespace:<proj>-bronze` — they push there and nowhere else;
+* services keep `can_create_table` / `can_promote` on the silver and gold namespaces, which is what
+  the movers already check as their own identity.
+
+**Status, stated plainly: no seeding path in this repo grants that.** `scripts/seed_estate.py` drives
+the real doors in hierarchy order but seeds no human bronze writer, so the policy is currently
+unexercised rather than enforced or violated. Recording it here is the point — it was written down in
+exactly one place, and that place was a file scheduled for deletion.
+
+**A manual push uses `merge_insert`, not a raw insert** (corrected 2026-08-07):
+`when_not_matched_insert_all()` is native insert-if-not-matched, so a re-push converges instead of
+duplicating. The catalog's door accepts it; only the UI is missing.
+
+---
+
+## The cross-cutting rules worth keeping
+
+* **Delta bookkeeping is data, not state.** §1c's anti-join, §4's `published` tag and the
+  publication `{from_version, to_version}` delta are one ruling applied three times: the answer is
+  computed from the artifact that must be correct anyway, so there is no second store to drift.
+* **One irreversible operation gets exactly one door.** Overwrite is refused as an ingest mode and
+  promotion is refused on the medallion producer, for the same reason — a second, weaker path to a
+  governed operation is drift.
+* **Create-on-parent is the authorization rule.** It is load-bearing wherever the door exists:
+  `register`, the catalog's create doors, and the medallion promotion decision. Two doors the plan
+  named (a watch/schedule door, a table-level promote door) do not exist, so the rule is not yet
+  load-bearing at four sites as the plan claimed.

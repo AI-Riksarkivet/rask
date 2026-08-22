@@ -1,6 +1,6 @@
 """Nothing could stop a live ingest run — `DWF-MGT-003`, the one critical from the 2026-08-16 review.
 
-`open_ingest_design.md` §6: "`api.py` exposes start and status and NO LIFECYCLE CONTROL AT ALL — no
+`docs/architecture/ingest-and-tier-movement.md` §6: "`api.py` exposes start and status and NO LIFECYCLE CONTROL AT ALL — no
 route calls `terminate_workflow`, `pause_workflow` or `resume_workflow`. The only `terminate_workflow`
 in the service is `terminate_chunks`, which the PARENT calls against its own children; there is no path
 by which an operator stops the parent."

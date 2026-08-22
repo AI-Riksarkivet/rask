@@ -235,7 +235,7 @@ async def decide(
     # AUTHENTICATION ONLY. The rung for this act is `can_promote: validator`, checked below against
     # the promotion's own destination — deliberately NOT /produce's `can_administer` on a
     # chart-configured project, which is coarser AND different, and would lock out exactly the
-    # non-admin validator the rung exists for (open_ingest_design.md §4).
+    # non-admin validator the rung exists for (docs/architecture/ingest-and-tier-movement.md §4).
     #
     # A service token resolves no subject here, and `decide_promotion` refuses that: the estate's
     # shared credential cannot approve its own output, and the gateway's daprd-stamped token — the

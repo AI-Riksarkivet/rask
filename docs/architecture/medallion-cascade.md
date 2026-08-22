@@ -142,7 +142,7 @@ count restarted at zero. Anything added to this workflow that must survive a tur
 ### Management: there is no HTTP surface, and that is the design
 
 Unlike ingest — whose missing `terminate` route is a live critical, recorded at
-`open_ingest_design.md` §6 — medallion exposes **no workflow management endpoints**, and none of
+`docs/architecture/ingest-and-tier-movement.md` §6 — medallion exposes **no workflow management endpoints**, and none of
 `DWF-MGT-001`…`015` fires as a defect. The plane is trigger-driven: `transform.py:120` schedules
 `stage_run` from a pub/sub trigger with a deterministic `instance_id`, so Dapr's duplicate-instance
 answer *is* the dedupe (:94), and `transform.py:146` reads state back through `get_workflow_state`.

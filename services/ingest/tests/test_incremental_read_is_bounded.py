@@ -1,6 +1,6 @@
 """The anti-join read every existing bronze row, per tick, with no ceiling.
 
-`open_ingest_design.md` §1c chose the anti-join against bronze itself precisely so incremental
+`docs/architecture/ingest-and-tier-movement.md` §1c chose the anti-join against bronze itself precisely so incremental
 ingest needs no second store — and named its cost in the same breath: **"O(existing rows) per tick,
 not O(new rows)"**. It then said what to do about it: *"Bound it explicitly.
 `RASK_INGEST_INCREMENTAL_MAX_ROWS`, default `0` = unbounded, in the identical shape and with the

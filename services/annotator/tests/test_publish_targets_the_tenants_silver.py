@@ -1,6 +1,6 @@
 """Every tenant's annotations published into ONE shared `silver` namespace.
 
-`open_ingest_design.md` §3 FIX 1: derive the publish target from the tenant, "instead of the bare
+`docs/architecture/ingest-and-tier-movement.md` §3 FIX 1: derive the publish target from the tenant, "instead of the bare
 literal `silver`". The literal is still there — and the comment above it says the opposite of what the
 code does: *"the default target is the tenant warehouse's `silver` namespace"*, over
 `DEFAULT_TARGET_NAMESPACE: Final[str] = "silver"`.

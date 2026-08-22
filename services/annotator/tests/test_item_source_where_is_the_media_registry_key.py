@@ -1,6 +1,6 @@
 """`ItemSource.where` is the MEDIA-REGISTRY id, and catalog-qualifying it would break every send.
 
-`open_ingest_design.md` §3 FIX 3 proposed carrying the send's dataset as a namespace-qualified
+`docs/architecture/ingest-and-tier-movement.md` §3 FIX 3 proposed carrying the send's dataset as a namespace-qualified
 catalog id (`bind86-bronze$pages`) so `source_pin` resolves and the publish's CREATE event gains a
 version-pinned DERIVED_FROM input. The payoff is real — today `source_pin` returns None on every send
 (it requires the delimiter), so the graph cannot answer "which corpus produced these labels".

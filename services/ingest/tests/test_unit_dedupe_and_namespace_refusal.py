@@ -1,4 +1,4 @@
-"""Two mechanisms `open_ingest_design.md` relies on, neither of which was pinned.
+"""Two mechanisms `docs/architecture/ingest-and-tier-movement.md` relies on, neither of which was pinned.
 
 **DWF-ACT-002 — the unit dedupe id.** §6 signs off activity idempotency, and `publish_units` is the
 activity that carries it: JetStream refuses a duplicate `Nats-Msg-Id` inside its dedupe window, so a

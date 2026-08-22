@@ -144,7 +144,7 @@ async def authenticate_subject(
     promotion review is the case: `can_promote: validator` exists in the model precisely so that a
     validator who is NOT a project admin can approve a promotion, and reusing the produce gate makes
     the effective check admin AND validator — locking out the one person the rung was invented for
-    (`open_ingest_design.md` §4 rejects a door gated this way, in those words).
+    (`docs/architecture/ingest-and-tier-movement.md` §4 rejects a door gated this way, in those words).
 
     Declares NO FGA client, deliberately: a dependency that carries one invites the same fusion back.
 
