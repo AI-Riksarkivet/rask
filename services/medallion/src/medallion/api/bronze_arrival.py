@@ -19,6 +19,7 @@ from medallion.api.dlq import register_dlq_route
 from medallion.core.config import get_settings
 from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.publication_trigger import handle_publication
+from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
 
 
@@ -45,11 +46,19 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
         dapr: DaprClientDep,
         config: SettingsDep,
         _: Annotated[None, Depends(require_dapr_token)],
+        drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
     ) -> dict[str, str]:
         """The Dapr subscription route — thin wrapper over the testable :func:`handle_bronze_arrival`.
         ``event`` is typed ``dict`` so FastAPI parses the CloudEvent JSON body (an ``Any`` param → query
         param → 422). Authenticated by the Dapr app-api-token so a forged bronze-arrival event can't drive
-        the cascade."""
+        the cascade.
+
+        B6: while this replica is draining it asks for REDELIVERY rather than handling the event. Dapr's
+        delivery does not consult a readiness probe, so without this a pod that had begun shutting down
+        kept firing cascades it could not finish. RETRY and never DROP — these topics carry no DLQ, so a
+        drop here silently cancels the whole bronze→silver→gold run."""
+        if drain is not None:
+            return drain
         return await handle_bronze_arrival(dapr, config, event)
 
     # THE PUBLICATION HEAD (§ D2 B8). Separate subscription, separate topic, separate signal: this one

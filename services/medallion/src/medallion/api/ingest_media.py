@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from medallion.api.dependencies import DaprClientDep, SettingsDep
 from medallion.api.produce_auth import authorize_ingest_media
 from medallion.services.media_produce import ingest_media as run_ingest_media
+from service_kit.draining import refuse_when_draining
 
 
 router = APIRouter(tags=["media"])
@@ -17,7 +18,14 @@ router = APIRouter(tags=["media"])
 _PROBLEM_JSON = "application/problem+json"
 
 
-@router.post("/ingest-media", status_code=202, response_model=None)  # union with JSONResponse → no model
+@router.post(
+    "/ingest-media",
+    status_code=202,
+    response_model=None,
+    # B6: a draining pod must not START work it cannot finish. 503 + Retry-After rather than a
+    # 4xx — the caller's request is fine, this replica is simply leaving.
+    dependencies=[Depends(refuse_when_draining)],
+)
 async def ingest_media(
     dapr: DaprClientDep,
     settings: SettingsDep,

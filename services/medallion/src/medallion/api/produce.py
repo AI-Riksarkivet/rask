@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from medallion.api.dependencies import DaprClientDep, SettingsDep
 from medallion.api.produce_auth import ProjectParam, authorize_produce
 from medallion.services.produce import produce as run_produce
+from service_kit.draining import refuse_when_draining
 from service_kit.lakehouse.warehouse_registry import UnresolvableProjectError
 
 
@@ -29,7 +30,14 @@ async def authorize(_: Annotated[None, Depends(authorize_produce)]) -> dict[str,
     return {"authorized": True}
 
 
-@router.post("/produce", status_code=202, response_model=None)  # union with JSONResponse → no auto model
+@router.post(
+    "/produce",
+    status_code=202,
+    response_model=None,
+    # B6: a draining pod must not START work it cannot finish. 503 + Retry-After rather than a
+    # 4xx — the caller's request is fine, this replica is simply leaving.
+    dependencies=[Depends(refuse_when_draining)],
+)
 async def produce(
     dapr: DaprClientDep,
     settings: SettingsDep,

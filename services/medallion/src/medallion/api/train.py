@@ -24,6 +24,7 @@ from medallion.services.train import (
     submit_train_request,
     train_head_enabled,
 )
+from service_kit.draining import refuse_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
 
 
@@ -63,7 +64,14 @@ def _problem(status: int, title: str, detail: str) -> JSONResponse:
     )
 
 
-@router.post("/train", status_code=202, response_model=None)  # union with JSONResponse → no auto model
+@router.post(
+    "/train",
+    status_code=202,
+    response_model=None,
+    # B6: a draining pod must not START work it cannot finish. 503 + Retry-After rather than a
+    # 4xx — the caller's request is fine, this replica is simply leaving.
+    dependencies=[Depends(refuse_when_draining)],
+)
 async def train(
     body: TrainRequest,
     dapr: DaprClientDep,
