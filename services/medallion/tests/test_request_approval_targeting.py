@@ -20,14 +20,26 @@ So the return value is load-bearing in both directions — `False` must BLOCK ra
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from dapr.ext.workflow import WorkflowActivityContext
 from medallion import workflow as wf
 
 
 class _StubActivityContext:
     """An activity context. `request_approval` never touches it — pinned by this file passing."""
+
+
+def _ctx() -> WorkflowActivityContext:
+    """The stub, typed as the real context.
+
+    A `cast` rather than a subclass or a `# type: ignore`: `WorkflowActivityContext` takes a live
+    workflow instance to construct, the activity provably never touches the parameter, and `ty` does
+    not honour `type: ignore` anyway — it is another tool's syntax. This is the same shape
+    `test_producer_targeting_contract.py` uses for its unused resolved dependencies.
+    """
+    return cast(WorkflowActivityContext, _StubActivityContext())
 
 
 def _spec(**overrides: Any) -> dict[str, Any]:
@@ -53,8 +65,9 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     on their defining modules rather than on `medallion.workflow` — patching the latter would bind
     nothing and the test would pass while the real client ran.
     """
-    import service_kit.dapr_publish as dapr_publish
     from dapr.aio import clients as dapr_clients
+
+    import service_kit.dapr_publish as dapr_publish
 
     sent: list[dict[str, Any]] = []
 
@@ -75,15 +88,14 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 def test_the_ask_names_the_approver_as_the_subject(published: list[dict[str, Any]]) -> None:
     """Q6's rule: `extra.subject` is the WORKER — here, the person being asked to decide."""
-    assert wf.request_approval(_StubActivityContext(), _spec()) is True
+    assert wf.request_approval(_ctx(), _spec()) is True
 
     assert len(published) == 1, f"expected exactly one control event, got {len(published)}"
     event = json.loads(published[0]["data"])
 
     assert event["action"] == "promotion_review_requested"
     assert event["extra"]["subject"] == "user:alice", (
-        "the subject is the entire targeting for the control lane; anything but `user:<sub>` is filed "
-        "IGNORED with a SUCCESS ack and reaches nobody"
+        "the subject is the entire targeting for the control lane; anything but `user:<sub>` is filed IGNORED with a SUCCESS ack and reaches nobody"
     )
     assert event["object_id"] == "table:acme-catalog", (
         "the object must be project-qualified: an unqualified name against tenant-qualified grants "
@@ -97,13 +109,13 @@ def test_the_control_topic_is_the_one_the_inbox_subscribes_to(published: list[di
     """Publishing a correct event to the wrong topic reaches nobody, and looks identical from here."""
     from service_kit.control_events import CONTROL_TOPIC
 
-    assert wf.request_approval(_StubActivityContext(), _spec()) is True
+    assert wf.request_approval(_ctx(), _spec()) is True
     assert published[0]["topic_name"] == CONTROL_TOPIC
 
 
 def test_no_approver_refuses_the_ask_instead_of_publishing_one_nobody_can_answer(published: list[dict[str, Any]]) -> None:
     """`approver` empty means nobody can be asked. The spec's own comment: that BLOCKS, never promotes."""
-    assert wf.request_approval(_StubActivityContext(), _spec(approver="")) is False
+    assert wf.request_approval(_ctx(), _spec(approver="")) is False
     assert published == [], "an unapprovable promotion must publish nothing at all"
 
 
@@ -115,8 +127,9 @@ def test_a_failed_publish_is_a_refusal_not_a_silent_park(monkeypatch: pytest.Mon
     orchestrator's comment names. Returning False routes it to BLOCKED with "no reachable approver",
     which is a visible outcome.
     """
-    import service_kit.dapr_publish as dapr_publish
     from dapr.aio import clients as dapr_clients
+
+    import service_kit.dapr_publish as dapr_publish
 
     class _Client:
         async def __aenter__(self) -> _Client:
@@ -131,4 +144,4 @@ def test_a_failed_publish_is_a_refusal_not_a_silent_park(monkeypatch: pytest.Mon
     monkeypatch.setattr(dapr_clients, "DaprClient", _Client)
     monkeypatch.setattr(dapr_publish, "publish_event", _boom)
 
-    assert wf.request_approval(_StubActivityContext(), _spec()) is False
+    assert wf.request_approval(_ctx(), _spec()) is False

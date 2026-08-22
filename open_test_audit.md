@@ -476,6 +476,50 @@ reported missing. Two suites *appear* to cover it and each covers the other half
 
 The `extra["subject"]` that **is** the targeting is unverified end to end.
 
+✅ **FIXED 2026-08-22** — `services/medallion/tests/test_request_approval_targeting.py` executes the
+activity for real across all four of its paths, with the Dapr client and `publish_event` patched on
+their DEFINING modules (both are imported inside the function body, so patching `medallion.workflow`
+would bind nothing and the test would pass while the real client ran).
+
+It asserts the two fields that ARE the targeting, and both are mutation-proven rather than merely
+green — the point being that every way of getting them wrong yields a healthy-looking event that
+reaches nobody:
+
+| mutation | caught |
+| --- | --- |
+| `"subject": spec.approver` (drop the `user:` prefix) | ✅ |
+| `object_id=f"table:{spec.to_dataset}"` (unqualified) | ✅ |
+| `return True` from the failed-publish branch | ✅ |
+
+The third is the compensating control the orchestrator's own comment names: *"ASK BEFORE WAITING, and
+treat an unsendable ask as a refusal: parking on an event nobody was told about is an outage wearing a
+pause."* Returning True there would park the workflow on `promotion_decision` for `approval_hours` for
+an ask that never left the process.
+
+**A self-correction worth recording:** my first attempt at that third mutation did not apply — the
+pattern did not match — and the suite stayed green. A mutation that silently fails to apply is
+indistinguishable from a test that does not bite, which is the exact defect class this audit is about.
+Re-applied with an `assert old in s` guard, it fails as it should.
+
+**Additionally ENFORCED** — `tests/unit/test_control_action_three_file_contract.py`, from the skill's
+"a new named action is a THREE-file change". Measuring the three directions corrected a claim I had
+written into its own docstring:
+
+* A missing `NotificationReason` is **already fail-fast, and not via `as_delivery`**: `inbox.py:46`
+  builds `_CONTROL_REASONS` from `NAMED_ACTIONS` at MODULE scope, so the service refuses to import.
+  Verified by mutation — collection dies `ValueError: '...' is not a valid NotificationReason`, exit 2.
+  The skill's 2026-08-16 incident is a ROLLBACK hazard (old code, new data) that no gate here can
+  catch; forward, the import guard holds. My assertion is kept for the named message, not the coverage,
+  and now says so.
+* A missing `NAMED_ACTIONS` entry fails **SILENTLY** and nothing else catches it — IGNORED with a
+  SUCCESS ack, no retry, no error log, producer tests green. RED proof: adding `table_shared_with_user`
+  to `ControlAction` alone fires it by name.
+
+`ControlAction` is a superset (36 actions, 8 targeted): the other 28 are object-lifecycle events, listed
+in `_UNTARGETED_ACTIONS` rather than matched by a `table_*` prefix rule — a prefix would wave through a
+future `table_shared_with_user`, and matching a name shape instead of the fact is the defect class this
+audit keeps finding. 32 passed.
+
 ### M5 — the media DROP path's FAIL emit never runs, inside a `suppress` · **CONFIRMED**
 
 `transform.py:666-704`. The `UnderivableMediaError` branch returns `_DROP`, so Dapr will **not**
