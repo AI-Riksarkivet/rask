@@ -295,6 +295,8 @@ in any dependency field**. `live.test.ts` therefore fails at module load with **
 and has done since it landed on 2026-08-05. It also takes `web-gate` down with it, which is how it
 stayed invisible: the job was already red.
 
+
+**FIXED 2026-08-22.** `@rask/api` now declares `svelte` — `devDependencies: ^5.56.8` + `peerDependencies: ^5.0.0`, matching the convention `@rask/ui`, `@rask/dockview` and `@rask/flow` already use. bun installs in ISOLATED mode, so `packages/api/node_modules` held only its declared deps and `svelte` was not hoisted to `frontend/node_modules` — hence `Cannot find package 'svelte' imported from src/live.svelte.ts` and `src/live.test.ts (0 test)`. **Measured: 11 passed + 1 failed / 89 tests → 12 passed / 99 tests.** Those 10 assertions had not run since 2026-08-05.
 ### H5 — `docs-roster.test.ts` cannot execute in the container it ships in · **CONFIRMED, MEDIUM**
 
 `frontend/packages/zone-contract/src/docs-roster.test.ts:27` shells out to `git ls-files` to derive
@@ -304,6 +306,8 @@ in CI at all** — they pass locally and are structurally absent from the gate.
 
 ---
 
+
+**FIXED 2026-08-22.** `docs-roster.test.ts` no longer shells out to `git ls-files` (verified: no `execFileSync`, no `child_process`, no `'git'` left in the file). It derives the roster from `zoneDirs()` — a directory under `microfrontends/` carrying a `package.json`. That is not merely the git-free substitute but the better definition: the reason it reached for git was to exclude untracked build residue, and residue carries no `package.json`, which is exactly why bun's workspace glob skips it silently. One behavioural change, stated in the file rather than hidden: a scaffolded-but-uncommitted zone now counts — which is the answer R15 wants ("regardless of scaffold status"). 6 passed; 1,256 across zone-contract's 22 files.
 ## Part 3 — The authorization model's own tests cannot see a widening
 
 This is the most serious *coverage* cluster, as opposed to the *execution* cluster above. All four

@@ -15,26 +15,33 @@
  * on: the estate's SHAPE is asserted, not remembered. A zone roster is shape.
  */
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { zoneDirs } from './manifest';
 
 const REPO = join(import.meta.dirname, '../../../..');
 
-/** The zones that actually exist — the directories git tracks under `microfrontends/`. */
+/**
+ * The zones that actually ship — a directory under `microfrontends/` carrying a `package.json`.
+ *
+ * This used to shell out to `git ls-files`, and four of this file's six assertions therefore could
+ * not execute where they matter: the container the frontend gate runs in (`oven/bun:1.3.14-slim`)
+ * ships no `git` binary, and `.dagger/frontend.go` additionally strips `.git` from the copied source.
+ * A gate that throws ENOENT in CI is not a stricter gate, it is an absent one.
+ *
+ * `zoneDirs()` is not merely the git-free substitute, it is the better definition. The reason the old
+ * one reached for git was to exclude untracked build residue — a stale `microfrontends/train/` or
+ * `microfrontends/media/` left on a dev host — and residue has no `package.json`, which is precisely
+ * why bun's workspace glob skips it SILENTLY. So membership-by-manifest already draws the line git was
+ * being asked to draw, and it draws the same one bun, turbo and the image build use.
+ *
+ * The one behavioural difference, stated rather than hidden: a NEW zone that is scaffolded but not yet
+ * committed now counts. That is the answer this file wants — R15 makes a zone's absence from the
+ * roster a defect "regardless of scaffold status".
+ */
 function trackedZones(): string[] {
-	const out = execFileSync('git', ['ls-files', 'frontend/microfrontends'], {
-		cwd: REPO,
-		encoding: 'utf8',
-		maxBuffer: 32 * 1024 * 1024,
-	});
-	const zones = new Set<string>();
-	for (const line of out.split('\n')) {
-		const parts = line.split('/');
-		if (parts.length > 2 && parts[2]) zones.add(parts[2]);
-	}
-	return [...zones].sort();
+	return zoneDirs();
 }
 
 const read = (rel: string) => readFileSync(join(REPO, rel), 'utf8');
