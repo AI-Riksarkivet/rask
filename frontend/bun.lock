@@ -383,6 +383,7 @@
     },
   },
   "patchedDependencies": {
+    "bits-ui@2.18.1": "patches/bits-ui@2.18.1.patch",
     "svelte-adapter-bun@1.0.1": "patches/svelte-adapter-bun@1.0.1.patch",
   },
   "overrides": {

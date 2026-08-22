@@ -1,0 +1,61 @@
+diff --git a/dist/bits/utilities/dismissible-layer/use-dismissable-layer.svelte.js b/dist/bits/utilities/dismissible-layer/use-dismissable-layer.svelte.js
+index 924869bdb3eedccf57345314adb7c1a9b2a12b20..413311013ed34bcf5a17b9365069f21419c927f9 100644
+--- a/dist/bits/utilities/dismissible-layer/use-dismissable-layer.svelte.js
++++ b/dist/bits/utilities/dismissible-layer/use-dismissable-layer.svelte.js
+@@ -16,6 +16,7 @@ export class DismissibleLayerState {
+     opts;
+     #interactOutsideProp;
+     #behaviorType;
++    #behaviorSnapshot;
+     #interceptedEvents = {
+         pointerdown: false,
+     };
+@@ -27,6 +28,13 @@ export class DismissibleLayerState {
+     constructor(opts) {
+         this.opts = opts;
+         this.#behaviorType = opts.interactOutsideBehavior;
++        // rask patch: see use-escape-layer.svelte.js. `getTopMostDismissableLayer`/`isResponsibleLayer`
++        // read `.current` off EVERY registered layer, and a closing layer is INERT before its cleanup
++        // deregisters it — so the map must hold a plain snapshot rather than the reactive prop getter.
++        this.#behaviorSnapshot = { current: opts.interactOutsideBehavior.current };
++        watch(() => opts.interactOutsideBehavior.current, (behavior) => {
++            this.#behaviorSnapshot.current = behavior;
++        });
+         this.#interactOutsideProp = opts.onInteractOutside;
+         this.#onFocusOutside = opts.onFocusOutside;
+         $effect(() => {
+@@ -45,7 +53,7 @@ export class DismissibleLayerState {
+             afterSleep(1, () => {
+                 if (!this.opts.ref.current)
+                     return;
+-                globalThis.bitsDismissableLayers.set(this, this.#behaviorType);
++                globalThis.bitsDismissableLayers.set(this, this.#behaviorSnapshot);
+                 unsubEvents();
+                 unsubEvents = this.#addEventListeners();
+             });
+diff --git a/dist/bits/utilities/escape-layer/use-escape-layer.svelte.js b/dist/bits/utilities/escape-layer/use-escape-layer.svelte.js
+index bb814cedbc7b8bf349d8666e1558daea077c6c53..bc808e356f1429a71448e11084daa568be83c32f 100644
+--- a/dist/bits/utilities/escape-layer/use-escape-layer.svelte.js
++++ b/dist/bits/utilities/escape-layer/use-escape-layer.svelte.js
+@@ -14,9 +14,20 @@ export class EscapeLayerState {
+         this.opts = opts;
+         this.domContext = new DOMContext(this.opts.ref);
+         let unsubEvents = noop;
++        // rask patch: the global layer map must hold a PLAIN VALUE, never a $derived.
++        // `isResponsibleEscapeLayer` iterates every registered layer and reads `.current`. A layer whose
++        // subtree is mid-close is already INERT while still registered (its cleanup has not run yet), so
++        // that read hits `execute_derived` on an inert owner -> Svelte's `derived_inert` warning, once per
++        // registered layer per Escape. Snapshotting through this holder keeps the value live for as long
++        // as the layer's own effects are alive and reads nothing reactive from the map afterwards, which
++        // is exactly the value Svelte would have returned anyway (`derived.v`) minus the warning.
++        const behaviorHolder = { current: opts.escapeKeydownBehavior.current };
++        watch(() => opts.escapeKeydownBehavior.current, (behavior) => {
++            behaviorHolder.current = behavior;
++        });
+         watch(() => opts.enabled.current, (enabled) => {
+             if (enabled) {
+-                globalThis.bitsEscapeLayers.set(this, opts.escapeKeydownBehavior);
++                globalThis.bitsEscapeLayers.set(this, behaviorHolder);
+                 unsubEvents = this.#addEventListener();
+             }
+             return () => {
