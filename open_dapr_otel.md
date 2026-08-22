@@ -204,6 +204,7 @@ from contextlib import suppress
 
 with suppress(ImportError):
     from opentelemetry.instrumentation.grpc import GrpcAioInstrumentorClient, GrpcInstrumentorClient
+
     # dapr.aio.clients.DaprClient rides grpc.aio (dapr/clients/grpc/_channel.py:102,108);
     # dapr-ext-workflow's DaprWorkflowClient rides SYNC grpc. Both, or it looks wired and is not.
     GrpcAioInstrumentorClient().instrument(tracer_provider=tracer_provider)
@@ -211,11 +212,13 @@ with suppress(ImportError):
 
 with suppress(ImportError):
     from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
+
     AioHttpClientInstrumentor().instrument(tracer_provider=tracer_provider)  # ActorProxy + openfga_sdk
 
 with suppress(ImportError):
     from opentelemetry.instrumentation.requests import RequestsInstrumentor
-    RequestsInstrumentor().instrument(tracer_provider=tracer_provider)       # lineage-kit HTTP lane
+
+    RequestsInstrumentor().instrument(tracer_provider=tracer_provider)  # lineage-kit HTTP lane
 ```
 
 `BaseInstrumentor` is a per-class singleton, so this is safe alongside the SDK's own import-time call.
