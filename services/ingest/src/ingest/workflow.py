@@ -131,6 +131,20 @@ class RunLimits(BaseModel):
 
     max_run_hours: float = 0.0
     max_units: int = 0
+    #: How many rows the incremental anti-join may read from bronze before the run is REFUSED.
+    #:
+    #: §1c chose the anti-join so incremental ingest needs no second store, and named its cost in the
+    #: same breath — O(existing rows) per tick, not O(new rows). `enumerate_chunks` materialises every
+    #: id into a set, so on the million-unit harvests this plane advertises that is the whole table in
+    #: memory on every tick, and the activity retries.
+    #:
+    #: REFUSES, never samples. Truncating an anti-join does not degrade it, it INVERTS it: a partial
+    #: "already have" set makes the run treat rows bronze holds as new and re-land every one of them.
+    #: Bounded memory bought with silent duplication is a worse trade than the unbounded read, which
+    #: is why there is no `limit=` at the read site and why breaching this raises the same
+    #: `AntiJoinUnavailable` an unreadable id column does — in both cases the run cannot tell what
+    #: bronze already holds.
+    incremental_max_rows: int = 0
 
     @classmethod
     def from_env(cls) -> RunLimits:
@@ -143,7 +157,21 @@ class RunLimits(BaseModel):
         return cls(
             max_run_hours=float(os.getenv("RASK_INGEST_MAX_RUN_HOURS", "0") or 0),
             max_units=int(os.getenv("RASK_INGEST_MAX_UNITS", "0") or 0),
+            incremental_max_rows=int(os.getenv("RASK_INGEST_INCREMENTAL_MAX_ROWS", "0") or 0),
         )
+
+
+def anti_join_within_ceiling(existing_rows: int, ceiling: int) -> bool:
+    """May a run whose bronze table holds ``existing_rows`` perform the anti-join?
+
+    Zero is unbounded and is the default in code, matching the two ceilings beside it: this plane
+    advertises long harvests, so a live default would kill the legitimate run the ceiling protects.
+
+    Inclusive at the boundary — a ceiling of N allows N rows. An exclusive one refuses a run the
+    operator deliberately sized to fit, which reads as the ceiling being off by one rather than as a
+    policy.
+    """
+    return ceiling <= 0 or existing_rows <= ceiling
 
 
 class DatasetHandle(BaseModel):
@@ -443,7 +471,15 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
             # The ceiling travels WITH the request. It is resolved (`resolve_limits`, above) before
             # this call precisely so the activity can refuse before building a payload the transport
             # cannot carry — see `enumerate_chunks` for why the check below cannot do it alone.
-            input={"spec": spec.model_dump(), "dataset_uri": target.location, "max_units": limits.max_units},
+            input={
+                "spec": spec.model_dump(),
+                "dataset_uri": target.location,
+                "max_units": limits.max_units,
+                # Travels with the request for the same reason `max_units` does: resolved once, in
+                # activity scope, and pinned in history — a ceiling the body re-read would replay
+                # against whatever the deployment says now.
+                "incremental_max_rows": limits.incremental_max_rows,
+            },
             retry_policy=ACTIVITY_RETRY,
         )
         # The enumerated total, published as CUSTOM STATUS so it is readable while the run is still
@@ -876,7 +912,19 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
         import lance
 
         dataset = lance.dataset(uri)
-        existing: set[int] = set(dataset.to_table(columns=["id"]).column("id").to_pylist()) if dataset.count_rows() else set()
+        rows = dataset.count_rows()
+        # BEFORE the read, not after: the point of the ceiling is to avoid materialising the set, so
+        # checking once it is already in memory would enforce nothing. Refusing — never sampling —
+        # because a truncated anti-join INVERTS: a partial "already have" set makes the run treat
+        # rows bronze holds as new and re-land every one of them.
+        if not anti_join_within_ceiling(rows, int(payload.get("incremental_max_rows") or 0)):
+            raise AntiJoinUnavailable(
+                f"{uri} holds {rows} rows, above the {payload.get('incremental_max_rows')}-row "
+                f"RASK_INGEST_INCREMENTAL_MAX_ROWS ceiling. The anti-join reads every id to learn what "
+                f"bronze already has, and it cannot be truncated — a partial answer re-lands rows that "
+                f"are already there. Raise the ceiling, or narrow the source so the run does not need it."
+            )
+        existing: set[int] = set(dataset.to_table(columns=["id"]).column("id").to_pylist()) if rows else set()
     except Exception as exc:
         raise AntiJoinUnavailable(
             f"could not read the `id` column of {uri}, so this run cannot tell which objects bronze already holds. "

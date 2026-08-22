@@ -144,11 +144,13 @@ def test_the_ceilings_are_read_in_ACTIVITY_scope_and_default_to_unbounded(activi
     so a live default would kill the legitimate long run the ceilings exist to protect."""
     monkeypatch.delenv("RASK_INGEST_MAX_RUN_HOURS", raising=False)
     monkeypatch.delenv("RASK_INGEST_MAX_UNITS", raising=False)
-    assert resolve_limits(activity_ctx, SPEC) == {"max_run_hours": 0.0, "max_units": 0}
+    monkeypatch.delenv("RASK_INGEST_INCREMENTAL_MAX_ROWS", raising=False)
+    assert resolve_limits(activity_ctx, SPEC) == {"max_run_hours": 0.0, "max_units": 0, "incremental_max_rows": 0}
 
     monkeypatch.setenv("RASK_INGEST_MAX_RUN_HOURS", "24")
     monkeypatch.setenv("RASK_INGEST_MAX_UNITS", "500")
-    assert resolve_limits(activity_ctx, SPEC) == {"max_run_hours": 24.0, "max_units": 500}
+    monkeypatch.setenv("RASK_INGEST_INCREMENTAL_MAX_ROWS", "1000")
+    assert resolve_limits(activity_ctx, SPEC) == {"max_run_hours": 24.0, "max_units": 500, "incremental_max_rows": 1000}
 
 
 def test_an_EMPTY_env_value_is_unbounded_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,6 +158,7 @@ def test_an_EMPTY_env_value_is_unbounded_not_a_crash(monkeypatch: pytest.MonkeyP
     for a config typo takes its own activity — and with it every run — down."""
     monkeypatch.setenv("RASK_INGEST_MAX_RUN_HOURS", "")
     monkeypatch.setenv("RASK_INGEST_MAX_UNITS", "")
+    monkeypatch.setenv("RASK_INGEST_INCREMENTAL_MAX_ROWS", "")
 
     assert RunLimits.from_env() == RunLimits()
 
@@ -164,10 +167,11 @@ def test_ACCEPT_TIME_limits_on_the_spec_win_over_the_deployment(activity_ctx: Wo
     """The seam that lets a run be pinned to what it was ACCEPTED with rather than to whatever the
     pod that first executed it happened to hold."""
     monkeypatch.setenv("RASK_INGEST_MAX_UNITS", "500")
+    monkeypatch.setenv("RASK_INGEST_INCREMENTAL_MAX_ROWS", "999")
 
-    resolved = resolve_limits(activity_ctx, {**SPEC, "limits": {"max_run_hours": 1.0, "max_units": 9}})
+    resolved = resolve_limits(activity_ctx, {**SPEC, "limits": {"max_run_hours": 1.0, "max_units": 9, "incremental_max_rows": 7}})
 
-    assert resolved == {"max_run_hours": 1.0, "max_units": 9}
+    assert resolved == {"max_run_hours": 1.0, "max_units": 9, "incremental_max_rows": 7}
 
 
 def test_validating_a_workflow_model_reads_NO_env() -> None:
