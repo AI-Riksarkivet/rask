@@ -331,6 +331,8 @@ a relation the model does not define — leaves **769 tests passing, 0 failing**
 In production that fails closed and **silences the entire inbox plane**. The relation that gates every
 notification delivery in the estate is guarded by nothing.
 
+
+**ENFORCED 2026-08-22.** `tests/unit/test_invariants.py::test_every_relation_constant_names_a_relation_the_model_defines`. RED/GREEN: setting `NOTIFY_RELATION = "can_be_notifiedX"` gave **774 passed** before, and now fails naming `services/notifications/.../visibility.py:60 -> NOTIFY_RELATION = 'can_be_notifiedX'`. The gate scans the CONSTANT rather than its call sites, because `NOTIFY_RELATION` is passed POSITIONALLY (`self._filter(subject, names, NOTIFY_RELATION)`) — no `relation=` kwarg exists to pair with an object literal.
 ### H8 — the production `lockRootCreate` posture is untested · **CONFIRMED, HIGH**
 
 `services/catalog/src/catalog/api/fga_deps.py:273-274`. `chart/values-prod.yaml:22` ships
@@ -350,6 +352,8 @@ whitespace-sensitive, so across all of `services/` it resolves **10 distinct (ty
 zero from lineage, notifications, viewer or flows.** Proved by full-suite mutation: a phantom on the
 notifications delivery gate leaves **4,849 tests green**. This is the mechanism behind H7.
 
+
+**PARTIALLY ENFORCED 2026-08-22 — stated honestly.** The new gate above closes the CONSTANT class, which is where the estate's load-bearing relations actually live: 9 constants across notifications, annotator and viewer, all now validated against `model.json`. It reaches the viewer's `READ_DATA`/`READ_METADATA`/`BROWSE_STORAGE` — which carry no `_RELATION` suffix and are declared in `api/security.py` but used as `relation=READ_DATA` from endpoint modules, so a same-file scan found none of them. **Still open:** `_fga_literals()`'s own bounded-window pairing is unchanged, so a relation LITERAL more than four lines from its object literal is still unseen, and a constant imported across a module boundary and passed on is out of reach without dataflow. Both are stated in the gate's docstring rather than papered over.
 ### H10 — the `table` rung's entire grant axis has no assertion · **CONFIRMED, raised to HIGH**
 
 `model.fga:362-382`. Six `can_*` relations carry no assertion of any kind in `model.fga.yaml`; five of

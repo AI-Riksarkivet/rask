@@ -387,6 +387,68 @@ def test_every_fga_relation_in_code_exists_in_the_compiled_model() -> None:
     )
 
 
+def _relation_constants() -> list[tuple[str, str, str]]:
+    """(file:line, CONST_NAME, value) for every module-level `*_RELATION` constant under services/.
+
+    The literal scanner above pairs `relation="X"` with a nearby `obj=f"type:"`, which cannot see a
+    relation held in a CONSTANT and passed POSITIONALLY. That is not a hypothetical shape — it is how
+    the estate's most load-bearing relation is written:
+
+        NOTIFY_RELATION: Final = "can_be_notified"          # visibility.py:60
+        ...
+        await self._filter(subject, names, NOTIFY_RELATION)  # :150, positional
+
+    Measured 2026-08-22: renaming that constant's value to `can_be_notifiedX`, a relation the model
+    does not define, left 774 tests passing. In production `can_be_notified` gates EVERY delivery in
+    the plane and an FGA rejection is fail-closed, so the phantom does not degrade the inbox — it
+    silences it, for every subject, while the suite stays green.
+
+    TWO shapes are collected, because the naming convention alone leaves a hole. `services/viewer`
+    declares `READ_METADATA`, `READ_DATA` and `BROWSE_STORAGE` (api/security.py:38,45,59) and passes
+    them as `relation=READ_DATA` — no `_RELATION` suffix, no string literal, so the literal scanner and
+    a name-only rule both miss all three. So:
+
+    * any module-level constant NAMED `*_RELATION` — the convention, and the only way to reach one
+      passed positionally, as `NOTIFY_RELATION` is; and
+    * any module-level constant RESOLVED from a `relation=<IDENT>` keyword argument in the same file —
+      which catches the viewer's three regardless of what they are called.
+
+    Both stop at the file boundary: a constant imported from elsewhere and passed on is out of reach
+    without dataflow, and is stated here rather than papered over.
+    """
+    found: list[tuple[str, str, str]] = []
+    any_const = re.compile(r"""^([A-Z][A-Z_0-9]*)(?::\s*[A-Za-z]+)?\s*=\s*["']([^"']+)["']""")
+    used_as_relation = re.compile(r"relation=([A-Z][A-Z_0-9]*)")
+    sources = [(py, py.read_text().splitlines()) for py in SERVICES.rglob("*.py") if "/tests/" not in py.as_posix()]
+    # ESTATE-WIDE, not per file. The viewer declares READ_DATA/READ_METADATA/BROWSE_STORAGE in
+    # api/security.py and passes them as `relation=READ_DATA` from its ENDPOINT modules, so a
+    # same-file reference set reached none of the three. Matching by name across the tree can only
+    # over-collect (a same-named constant elsewhere gets validated too), and validating an extra
+    # relation string is harmless; under-collecting is what this gate exists to stop.
+    referenced = {n for _, lines in sources for line in lines for n in used_as_relation.findall(line)}
+    for py, lines in sources:
+        for i, line in enumerate(lines):
+            m = any_const.match(line)
+            if m and (m.group(1).endswith("_RELATION") or m.group(1) in referenced):
+                found.append((f"{py.relative_to(REPO)}:{i + 1}", m.group(1), m.group(2)))
+    return found
+
+
+def test_every_relation_constant_names_a_relation_the_model_defines() -> None:
+    """A `*_RELATION` constant whose value no type defines is a fail-closed outage, not a typo."""
+    model = _model_relations()
+    every_relation = {rel for rels in model.values() for rel in rels}
+    assert every_relation, "the compiled model defined no relations — this gate would pass vacuously"
+
+    constants = _relation_constants()
+    assert constants, "no *_RELATION constants found under services/ — the scan root or the naming convention moved, and this gate is now vacuous"
+    phantom = [f"{loc} -> {name} = {value!r}" for loc, name, value in constants if value not in every_relation]
+    assert not phantom, (
+        "these constants name relations that exist on NO type in the compiled model.json. OpenFGA "
+        f"rejects them at runtime and the check fails CLOSED, so every caller is denied: {phantom}"
+    )
+
+
 def _helm_template(*set_values: str) -> str:
     """Render the chart, skipping the test if helm is not on PATH or in .localbin."""
     import shutil
