@@ -1,12 +1,12 @@
 <script lang="ts">
 	// Drill-in for ONE document: its chunk timeline (the annotatable media units),
 	// each openable in the canvas — or the whole document as a review selection.
-	// Chunks come from the viewer's /api/doc-transcript (ordered, key fields + times
+	// Chunks come from the viewer's /api/doc-chunks (ordered, key fields + times
 	// + body); frames render lazily via /api/chunk-frame and hide themselves when a
 	// chunk has no extracted frame yet.
 	import { onMount } from 'svelte';
 	import { ArrowLeft, ListChecks, Pencil } from '@lucide/svelte';
-	import { getDocTranscript, type DocTranscriptChunk, type Document } from '@rask/explorer-api';
+	import { getDocChunks, type DocChunk, type Document } from '@rask/explorer-api';
 	import type { DatasetView } from '@rask/explorer-api/descriptor';
 	import { Button } from '@rask/ui/button';
 
@@ -33,20 +33,20 @@
 		onback: () => void;
 	} = $props();
 
-	let chunks = $state<DocTranscriptChunk[] | null>(null);
+	let chunks = $state<DocChunk[] | null>(null);
 	let error = $state<string | null>(null);
 
 	const title = $derived(view.title(doc));
-	// Doc-transcript rows carry only the NON-doc identity fields (the backend strips the
+	// Doc-chunk rows carry only the NON-doc identity fields (the backend strips the
 	// doc key — it's the path parameter), so stamp the document's own key back in before
 	// building the media key-path. Found live: without this the key renders as `/0/0`.
-	const keyOf = (chunk: DocTranscriptChunk): string =>
+	const keyOf = (chunk: DocChunk): string =>
 		view.keyPath({ ...chunk, [view.docKeyField]: view.docId(doc) }).join('/');
 
 	// One fetch per opened document — the parent unmounts this picker (back → grid)
 	// before another document can open, so mount-time is the whole lifecycle.
 	onMount(() => {
-		getDocTranscript(view.docId(doc))
+		getDocChunks(view.docId(doc))
 			.then((t) => (chunks = t.chunks))
 			.catch((e: unknown) => (error = e instanceof Error ? e.message : String(e)));
 	});

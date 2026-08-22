@@ -4,11 +4,11 @@
 	import { base } from '$app/paths';
 	import {
 		type Hit,
-		type DocTranscriptChunk,
+		type DocChunk,
 		type DiarTurn,
 		activeView,
 		viewForHit,
-		getDocTranscript,
+		getDocChunks,
 		getDiarization,
 		mediaUrl,
 	} from '@rask/explorer-api';
@@ -16,7 +16,7 @@
 	import { fmtTime, hitKey } from '$lib/utils';
 	import { ChevronRight, Maximize2, Minimize2 } from '@lucide/svelte';
 	import { Button } from '@rask/ui';
-	import TranscriptWindow from './transcript-window.svelte';
+	import ChunkBodyWindow from './chunk-body-window.svelte';
 	import { panesFor, shownTab } from '$lib/pane-capabilities';
 	import ChunkTimeline from './chunk-timeline.svelte';
 	import DiarizationTimeline from './diarization-timeline.svelte';
@@ -62,7 +62,7 @@
 	// `bind:currentTime` on <video> — smooth, auto-cleaned, zero manual loop.
 	let currentTime = $state(0);
 	let duration = $state(0);
-	let docChunks = $state<DocTranscriptChunk[]>([]);
+	let docChunks = $state<DocChunk[]>([]);
 
 	// Bridge-bar tab: which sync view is shown under the video. Default
 	// 'transcript' so existing behaviour (the karaoke window) is unchanged; the
@@ -90,7 +90,7 @@
 		}
 		docChunks = [];
 		let cancelled = false; // supersede guard + leak guard
-		getDocTranscript(viewForHit(h).docId(h))
+		getDocChunks(viewForHit(h).docId(h))
 			.then((doc) => {
 				if (!cancelled) docChunks = doc.chunks;
 			})
@@ -195,7 +195,7 @@
 	// Window of chunks around the playhead. As currentTime crosses into the next
 	// chunk, currentChunkIdx increments → this slice shifts by one (prev drops,
 	// next appears): the recycle behaviour, with zero manual rotation.
-	const windowChunks = $derived.by((): DocTranscriptChunk[] => {
+	const windowChunks = $derived.by((): DocChunk[] => {
 		const cs = docChunks;
 		if (cs.length === 0) return [];
 		const lo = windowStartIdx;
@@ -508,7 +508,7 @@
 								<div
 									class="border-border/70 min-h-0 flex-1 overflow-y-auto border-t text-sm leading-7"
 								>
-									<TranscriptWindow
+									<ChunkBodyWindow
 										chunks={windowChunks}
 										{currentChunkIdx}
 										{windowStartIdx}
@@ -522,7 +522,7 @@
 							<div class="text-muted-foreground p-3 text-xs">Diarization not built for this video.</div>
 						{/if}
 					{:else}
-						<TranscriptWindow
+						<ChunkBodyWindow
 							chunks={windowChunks}
 							{currentChunkIdx}
 							{windowStartIdx}

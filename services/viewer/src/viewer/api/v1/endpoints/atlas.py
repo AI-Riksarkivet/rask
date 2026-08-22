@@ -34,9 +34,9 @@ from service_kit.lancekit.predicate import and_, eq, isin, or_
 from service_kit.lancekit.registry import DatasetHandle, table_dataset
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
+from viewer.api.v1.endpoints.chunks import alignments_binding
 from viewer.api.v1.endpoints.media import FRAME_INDEX_COLUMN
 from viewer.api.v1.endpoints.system import DURATION_COLUMN
-from viewer.api.v1.endpoints.transcripts import alignments_binding
 from viewer.schemas.atlas import ChunkKeys, ChunkRowIds
 from viewer.services.points import build_points
 
@@ -208,11 +208,11 @@ def _attach_frame_captions(handle: DatasetHandle, rows: list[dict[str, Any]]) ->
         logger.warning("frame caption attach failed", exc_info=True)
 
 
-@router.get("/chunk/{doc_id}/{speech_id}/{chunk_id}")
+@router.get("/chunk/{doc_id}/{group_id}/{chunk_id}")
 def atlas_chunk(
     state: StateDep,
     doc_id: str,
-    speech_id: int,
+    group_id: int,
     chunk_id: int,
     dataset: DatasetParam = None,
 ) -> dict[str, Any]:
@@ -225,7 +225,7 @@ def atlas_chunk(
         raise NotFoundError("no row table declared for dataset")
     ds = table_dataset(handle, declared.search.row_table)
     columns = _hit_columns(declared, set(ds.schema.names))
-    where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
+    where = chunk_key_filter(declared, doc_id, (group_id, chunk_id))
     rows = ds.to_table(columns=columns, filter=where).to_pylist()
     if not rows:
         raise NotFoundError("chunk not found")

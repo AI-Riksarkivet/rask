@@ -1,1 +1,1 @@
-"""Viewer service — the read plane (media/blobs, transcripts, atlas, graph, topics, voice)."""
+"""Viewer service — the read plane (media/blobs, chunks, atlas, graph, topics, voice)."""

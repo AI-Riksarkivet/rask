@@ -1,6 +1,6 @@
 """Search endpoints — GET (query string) and POST (multipart, image upload).
 
-Ported from ``backend.search.router`` (minus the doc-transcript /
+Ported from ``backend.search.router`` (minus the doc-chunks /
 chunk-alignments sub-resources, which belong to the media group). Both handlers
 build a :class:`SearchSpec`, short-circuit empty input, and delegate to the
 framework-free :func:`run_search`. The wire shape is unchanged — same paths,

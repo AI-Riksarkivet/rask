@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { activeView, type DocTranscriptChunk } from '@rask/explorer-api';
+	import { activeView, type DocChunk } from '@rask/explorer-api';
 	import { fmtTime, hitKey } from '$lib/utils';
 	import { Play } from '@lucide/svelte';
 	import TranscriptHighlighter from './transcript-highlighter.svelte';
 
 	type Props = {
 		/** The sliding window of chunks around the playing one (≤3). */
-		chunks: DocTranscriptChunk[];
+		chunks: DocChunk[];
 		/** Absolute index (within the whole doc) of the playing chunk. */
 		currentChunkIdx: number;
 		/** Absolute index of `chunks[0]` (the slice `lo`) — lets us flag the

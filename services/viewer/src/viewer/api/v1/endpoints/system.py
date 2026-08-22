@@ -18,7 +18,7 @@ from service_kit.lancekit.introspect import ColumnInfo
 from service_kit.lancekit.registry import table_dataset
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
-from viewer.api.v1.endpoints.transcripts import alignments_binding
+from viewer.api.v1.endpoints.chunks import alignments_binding
 from viewer.schemas.system import ColumnKind, DbFacts, FilterColumn, HealthResponse, VllmPing
 
 

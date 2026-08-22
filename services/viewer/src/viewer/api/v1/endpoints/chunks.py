@@ -1,10 +1,10 @@
-"""Transcript endpoints — whole-document transcript + per-chunk word alignments.
+"""Document-chunk endpoints — a document's ordered chunks + per-chunk alignments.
 
-Ported from the two transcript endpoints of the pre-split ``backend/search/
+Ported from the two body/alignment endpoints of the pre-split ``backend/search/
 router.py``, with the row table, identity keys, time columns, body column, and
 alignments column all resolved from the dataset descriptor: rows come from
 ``declared.search.row_table``, ordering is by ``declared.time.start`` (identity
-keys as tiebreaker), the transcript body is ``declared.display.body``, and the
+keys as tiebreaker), the body column is ``declared.display.body``, and the
 alignments column is the ``alignments`` capability's column part. Sync handlers
 → threadpool (the Lance reads are blocking).
 """
@@ -26,11 +26,11 @@ from service_kit.media.state import dataset_handle
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["transcripts"])
+router = APIRouter(prefix="/api", tags=["chunks"])
 
 
 def alignments_binding(declared: Declared) -> tuple[str, str] | None:
-    """(table, column) of the word-alignments capability, or None when undeclared."""
+    """(table, column) of the alignments capability, or None when undeclared."""
     target = declared.capabilities.get("alignments")
     if not target:
         return None
@@ -38,9 +38,9 @@ def alignments_binding(declared: Declared) -> tuple[str, str] | None:
     return (table, column) if column else None
 
 
-@router.get("/doc-transcript/{doc_id}")
-def doc_transcript(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> dict[str, Any]:
-    """Whole-document, chunk-segmented transcript — ordered by start time. One lazy
+@router.get("/doc-chunks/{doc_id}")
+def doc_chunks(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> dict[str, Any]:
+    """A document's chunks, ordered by declared start time. One lazy
     fetch drives both a clickable chunk timeline and (flattened) the player's
     karaoke track. Chunks with no timing keep ``alignments == []`` (media still
     plays, no karaoke). No vector/_score column is projected, so the plain
@@ -77,15 +77,15 @@ def doc_transcript(doc_id: str, state: StateDep, dataset: DatasetParam = None) -
     return {"doc_id": doc_id, "chunks": rows}
 
 
-@router.get("/chunk-alignments/{doc_id}/{speech_id}/{chunk_id}")
+@router.get("/chunk-alignments/{doc_id}/{group_id}/{chunk_id}")
 def chunk_alignments(
     doc_id: str,
-    speech_id: int,
+    group_id: int,
     chunk_id: int,
     state: StateDep,
     dataset: DatasetParam = None,
 ) -> dict[str, Any]:
-    """Per-word alignments for one chunk — lazy-fetched by the player when a hit is
+    """Per-token alignments for one chunk — lazy-fetched by the player when a hit is
     opened. Search results omit the multi-KB alignments blob (it was ~93% of the
     payload and only the selected hit renders it), so the player fetches the real
     array here on demand. The path params map positionally onto the descriptor's
@@ -101,5 +101,5 @@ def chunk_alignments(
     info = handle.descriptor.tables.get(table)
     if info is None or info.column(column) is None:
         return {"alignments": []}
-    rows = table_dataset(handle, table).to_table(columns=[column], filter=chunk_key_filter(declared, doc_id, (speech_id, chunk_id))).to_pylist()
+    rows = table_dataset(handle, table).to_table(columns=[column], filter=chunk_key_filter(declared, doc_id, (group_id, chunk_id))).to_pylist()
     return {"alignments": parse_alignments_json(rows[0][column]) if rows else []}

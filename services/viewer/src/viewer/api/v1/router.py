@@ -7,6 +7,7 @@ the structural convention, not the URL.
 from fastapi import APIRouter
 
 from viewer.api.v1.endpoints.atlas import router as atlas_router
+from viewer.api.v1.endpoints.chunks import router as chunks_router
 from viewer.api.v1.endpoints.datasets import router as datasets_router
 from viewer.api.v1.endpoints.diarization import router as diarization_router
 from viewer.api.v1.endpoints.graph import router as graph_router
@@ -15,7 +16,6 @@ from viewer.api.v1.endpoints.objects import router as objects_router
 from viewer.api.v1.endpoints.pages import router as pages_router
 from viewer.api.v1.endpoints.system import router as system_router
 from viewer.api.v1.endpoints.topics import router as topics_router
-from viewer.api.v1.endpoints.transcripts import router as transcripts_router
 from viewer.api.v1.endpoints.voice import router as voice_router
 
 
@@ -25,7 +25,7 @@ for r in (
     media_router,
     objects_router,
     pages_router,
-    transcripts_router,
+    chunks_router,
     system_router,
     atlas_router,
     voice_router,

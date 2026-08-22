@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { activeView, type DocTranscriptChunk } from '@rask/explorer-api';
+	import { activeView, type DocChunk } from '@rask/explorer-api';
 	import { hitKey } from '$lib/utils';
 
 	type Props = {
-		chunks: DocTranscriptChunk[];
+		chunks: DocChunk[];
 		duration: number;
 		currentTime: number;
 		activeKey: string | null;
@@ -16,7 +16,7 @@
 
 	// Stable identity for a chunk = the descriptor's row key (matches the
 	// activeKey the parent derives from the opened hit). Built per chunk.
-	const key = (c: DocTranscriptChunk): string => hitKey(c);
+	const key = (c: DocChunk): string => hitKey(c);
 
 	// Chunk time span + label read through the active view (raw row fields are
 	// untyped passthrough) so this stays schema-agnostic.

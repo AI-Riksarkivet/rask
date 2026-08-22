@@ -268,47 +268,47 @@ export async function getChunkAlignments(
 	return data.alignments;
 }
 
-const DocTranscriptChunkSchema = RowSchema;
-export type DocTranscriptChunk = Row;
+const DocChunkSchema = RowSchema;
+export type DocChunk = Row;
 
-const DocTranscriptSchema = v.object({
+const DocChunksSchema = v.object({
 	doc_id: v.string(),
-	chunks: v.array(DocTranscriptChunkSchema),
+	chunks: v.array(DocChunkSchema),
 });
-export type DocTranscript = v.InferOutput<typeof DocTranscriptSchema>;
+export type DocChunks = v.InferOutput<typeof DocChunksSchema>;
 
-// Bounded LRU of in-flight/resolved transcripts (immutable per doc, heavy
+// Bounded LRU of in-flight/resolved chunk sets (immutable per doc, heavy
 // payload) so re-opening any row in the same doc is instant.
-const MAX_DOC_TRANSCRIPTS = 50;
-const docTranscriptCache = new Map<string, Promise<DocTranscript>>();
+const MAX_DOC_CHUNKS = 50;
+const docChunksCache = new Map<string, Promise<DocChunks>>();
 
-/** Whole-document transcript, chunk-segmented + ordered. Lazy-fetched when a
- *  row opens so playback past the selected chunk still has karaoke. */
-export async function getDocTranscript(
+/** A document's chunks, ordered by declared start. Lazy-fetched when a row
+ *  opens so playback past the selected chunk still has its aligned track. */
+export async function getDocChunks(
 	docId: string,
 	fetcher: typeof fetch = fetch,
-): Promise<DocTranscript> {
+): Promise<DocChunks> {
 	const suffix = datasetSuffix();
-	const fetchOnce = async (): Promise<DocTranscript> => {
-		const r = await fetcher(apiUrl(`/api/doc-transcript/${encodeURIComponent(docId)}${suffix}`));
-		return asJson(r, DocTranscriptSchema);
+	const fetchOnce = async (): Promise<DocChunks> => {
+		const r = await fetcher(apiUrl(`/api/doc-chunks/${encodeURIComponent(docId)}${suffix}`));
+		return asJson(r, DocChunksSchema);
 	};
 	if (fetcher !== fetch) return fetchOnce();
 	const cacheKey = `${activeView().id}/${docId}`;
-	const cached = docTranscriptCache.get(cacheKey);
+	const cached = docChunksCache.get(cacheKey);
 	if (cached) {
-		docTranscriptCache.delete(cacheKey);
-		docTranscriptCache.set(cacheKey, cached);
+		docChunksCache.delete(cacheKey);
+		docChunksCache.set(cacheKey, cached);
 		return cached;
 	}
-	const p: Promise<DocTranscript> = fetchOnce().catch((e: unknown) => {
-		if (docTranscriptCache.get(cacheKey) === p) docTranscriptCache.delete(cacheKey);
+	const p: Promise<DocChunks> = fetchOnce().catch((e: unknown) => {
+		if (docChunksCache.get(cacheKey) === p) docChunksCache.delete(cacheKey);
 		throw e;
 	});
-	docTranscriptCache.set(cacheKey, p);
-	if (docTranscriptCache.size > MAX_DOC_TRANSCRIPTS) {
-		const oldest = docTranscriptCache.keys().next().value;
-		if (oldest !== undefined) docTranscriptCache.delete(oldest);
+	docChunksCache.set(cacheKey, p);
+	if (docChunksCache.size > MAX_DOC_CHUNKS) {
+		const oldest = docChunksCache.keys().next().value;
+		if (oldest !== undefined) docChunksCache.delete(oldest);
 	}
 	return p;
 }

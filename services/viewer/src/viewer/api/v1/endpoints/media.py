@@ -200,10 +200,10 @@ def thumbnail(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> Res
     return Response(content=data, media_type=mime, headers={"Cache-Control": "public, max-age=86400"})
 
 
-@router.get("/chunk-frame/{doc_id}/{speech_id}/{chunk_id}")
+@router.get("/chunk-frame/{doc_id}/{group_id}/{chunk_id}")
 def chunk_frame(
     doc_id: str,
-    speech_id: int,
+    group_id: int,
     chunk_id: int,
     state: StateDep,
     frame_idx: Annotated[int, Query(ge=0)] = 0,
@@ -232,7 +232,7 @@ def chunk_frame(
     columns = [FRAME_INDEX_COLUMN] + ([mime_column] if mime_column else [])
     keyed = ds.to_table(
         columns=columns,
-        filter=chunk_key_filter(declared, doc_id, (speech_id, chunk_id)),
+        filter=chunk_key_filter(declared, doc_id, (group_id, chunk_id)),
         with_row_id=True,
     )
     row = next(

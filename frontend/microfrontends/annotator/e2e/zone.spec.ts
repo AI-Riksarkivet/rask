@@ -87,7 +87,7 @@ test.beforeEach(async ({ page }) => {
 	await page.route('**/annotator/api/health', (route) => json(route, HEALTH));
 	await page.route('**/annotator/api/datasets/demo/descriptor', (route) => json(route, DESCRIPTOR));
 	await page.route('**/annotator/api/documents*', (route) => json(route, DOCUMENTS));
-	await page.route(`**/annotator/api/doc-transcript/${DOC}*`, (route) => json(route, TRANSCRIPT));
+	await page.route(`**/annotator/api/doc-chunks/${DOC}*`, (route) => json(route, TRANSCRIPT));
 	await page.route('**/annotator/api/thumbnail/**', (route) =>
 		route.fulfill({ status: 200, contentType: 'image/png', body: PNG }),
 	);
