@@ -488,6 +488,8 @@ has a caller does `sources().filter(f => f.text.includes(pattern))` across the *
 So a **doc comment mentioning the path**, another zone's file, or an e2e mock that fakes the route all
 count as callers. Proved under mutation.
 
+
+**ENFORCED 2026-08-22.** `frontend/packages/zone-contract/src/bff-routes.test.ts`. `sources()` now blanks COMMENT bodies before matching, so a route named in prose no longer counts as its own caller. Deliberately a quote/template/comment state machine, not a regex: `'https://viewer.example/api/annotations'` contains `//`, and a naive line-comment strip would truncate a string literal and could DELETE a real call site — turning a false pass into a false FAILURE. Comment bodies become spaces so offsets still line up. RED/GREEN is asserted on the MECHANISM (6 new `stripComments` tests) rather than end-to-end, and the reason is stated in the test file: proving it through the gate needs a route whose only estate-wide mention is a comment, which is not a state this estate happens to be in — so an end-to-end mutation would prove nothing about the rule that was wrong. Making `stripComments` a no-op fails 2 of the 6. 1,249 tests pass across zone-contract's 22 files; oxlint and oxfmt clean. **Not closed by this:** the audit's sibling claim that an e2e mock or another zone's file can satisfy the caller check still stands — the scan root is unchanged.
 ### H16 — the estate-navbar zone roster is a hand-written literal · **CONFIRMED, MEDIUM**
 
 R15 ("a zone missing from the shared navbar is a defect regardless of scaffold status") is guarded only

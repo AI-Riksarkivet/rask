@@ -48,11 +48,97 @@ function sourceFiles(): string[] {
 	return out;
 }
 
+/**
+ * `source` with every COMMENT body blanked, so a match means CODE and not prose.
+ *
+ * The gate matched raw text, so a doc comment naming a route counted as that route's caller — and the
+ * routes most likely to be mentioned in prose are exactly the interesting ones. A file-level note like
+ * "proxies /api/annotations/tags to the viewer" satisfied the assertion that something calls it.
+ *
+ * A regex strip is not safe here: `'https://example'` contains `//`, and blanking from there would
+ * truncate a string literal and could DELETE a real call site — turning a false pass into a false
+ * failure. So this walks the text tracking quote / template / comment state, exactly like the frame
+ * walk that replaced nav-truth's bounded regex. Comment bodies become spaces rather than being
+ * removed, so every offset (and therefore any future line reporting) still lines up with the original.
+ */
+function stripComments(source: string): string {
+	const out = [...source];
+	let i = 0;
+	while (i < source.length) {
+		const c = source[i];
+		const next = source[i + 1];
+		if (c === '"' || c === "'" || c === '`') {
+			const quote = c;
+			i += 1;
+			while (i < source.length && source[i] !== quote) {
+				if (source[i] === '\\') i += 1;
+				i += 1;
+			}
+			i += 1;
+		} else if (c === '/' && next === '/') {
+			while (i < source.length && source[i] !== '\n') out[i++] = ' ';
+		} else if (c === '/' && next === '*') {
+			const end = source.indexOf('*/', i + 2);
+			const stop = end === -1 ? source.length : end + 2;
+			while (i < stop) {
+				if (source[i] !== '\n') out[i] = ' ';
+				i += 1;
+			}
+		} else {
+			i += 1;
+		}
+	}
+	return out.join('');
+}
+
+describe('stripComments', () => {
+	// The mechanism, asserted directly. The gate's own pass/fail cannot prove this: it would need a
+	// route whose ONLY mention estate-wide is a comment, which is a state the estate does not happen
+	// to be in — so an end-to-end mutation proves nothing about the rule that was actually wrong.
+	it('blanks a path named in a line comment', () => {
+		expect(stripComments('// calls /api/annotations/tags\nconst x = 1;')).not.toContain(
+			'/api/annotations',
+		);
+	});
+
+	it('blanks a path named in a block comment', () => {
+		expect(stripComments('/* proxies /api/annotations to the viewer */')).not.toContain(
+			'/api/annotations',
+		);
+	});
+
+	it('KEEPS a path in a real call site', () => {
+		expect(stripComments("fetch('/api/annotations/tags');")).toContain('/api/annotations/tags');
+	});
+
+	it('keeps a path inside a template literal', () => {
+		expect(stripComments('fetch(`/api/annotations/tags${s}`);')).toContain('/api/annotations/tags');
+	});
+
+	it('does not truncate a URL containing // inside a string', () => {
+		// The reason this is a state machine and not a regex: a naive line-comment strip starting at
+		// `//` would eat the rest of the line and could DELETE a real call site, turning a false pass
+		// into a false failure.
+		const src = "const base = 'https://viewer.example/api/annotations';";
+		expect(stripComments(src)).toContain('/api/annotations');
+		expect(stripComments(src)).toContain('https://viewer.example');
+	});
+
+	it('preserves offsets so line numbers still line up', () => {
+		const src = '// note\nfetch("/api/x");';
+		expect(stripComments(src)).toHaveLength(src.length);
+		expect(stripComments(src).split('\n')).toHaveLength(2);
+	});
+});
+
 /** Cached once: the walk is the same for every route assertion. */
 let cachedSources: { path: string; text: string }[] | null = null;
 function sources(): { path: string; text: string }[] {
 	if (cachedSources === null) {
-		cachedSources = sourceFiles().map((path) => ({ path, text: readFileSync(path, 'utf8') }));
+		cachedSources = sourceFiles().map((path) => ({
+			path,
+			text: stripComments(readFileSync(path, 'utf8')),
+		}));
 		// A gate that searched nothing must SHOUT, not pass: this is the failure mode above.
 		if (cachedSources.length === 0) {
 			throw new Error(
