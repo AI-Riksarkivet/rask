@@ -120,6 +120,12 @@ triage goes.
 
 ### H1 — `tests/unit/test_annotation_task_actor.py` talks to a real Dapr sidecar · **CONFIRMED, HIGH**
 
+✅ **FIXED 2026-08-22** — landed in `493f8e06` (the suite) and `5b5e2a39` (the estate-wide guard), and
+tracked as Tier-1 row 1 above with the measurements. In short: the file went from ~60 minutes to
+**0.36 s / 62 passed** with the sidecar unreachable, and the root `conftest.py` now clears
+`ActorProxy._default_proxy_factory` before each test so one test can no longer decide another's
+outcome. The full offline suite runs 4879 passed, exit 0; ruff and `ty` clean.
+
 This is the single highest-value finding in the audit. It was found independently by two lenses and
 by the main loop, and every number below was measured.
 
