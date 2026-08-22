@@ -1129,6 +1129,38 @@ while every `/api/ingest/*` call 404'd in production.
 test asserts the service strips it. Both green. The gate that claims to catch exactly this drift is a
 hard-coded literal set that cannot fail.
 
+✅ **FIXED + ENFORCED 2026-08-22 — and the resolution is not "make them agree".**
+
+Both suites are green and only one describes the estate: `RayJob` is `extra="ignore"` and does not
+declare `metadata`, so the field the SPA parses is one the service never sends and can only ever be its
+`{}` default.
+
+**The Python side is right, for a reason the frontend test could not see.** Stripping is
+security-motivated: Ray's `JobDetails` carries `runtime_env` (the job's full env — `S3_SECRET` and the
+lineage service token on this estate), and the medallion's own submitter puts **`rask.token`** into the
+metadata dict beside `rask.originator` (`ray_submit.py:166`). Retaining it whole would put a token into
+every jobs-board row. So the asymmetry is deliberate, and it is now RECORDED as one (`_TS_ONLY`, with
+the reason) rather than left to read as drift.
+
+What was false is the SPA test's claim that "the medallion path" delivers it. It cannot: through
+`/api/ray/jobs` the field is stripped, and `GET /api/jobs/<id>` — the endpoint `rask-notifications`
+names for recovering who a dead job was for — is **Ray's own dashboard API**, not a rask route (the
+compute service serves `/jobs` and `/jobs/{id}/logs`, nothing else). Renamed and re-documented.
+
+Enforced by `tests/unit/test_ray_job_wire_parity.py`, which parses BOTH declarations — the Python class
+via `ast`, the valibot object literal via its source — so neither can be restated by hand. Three RED
+proofs, in three directions: a field added to `RayJob` fires "sends fields the SPA does not parse"
+(valibot ignores unknown keys, so it would arrive and reach no surface); a field added to
+`RayJobSchema` fires "parses fields the service never sends" (dead shape, and if required it takes the
+WHOLE payload down, since the response is parsed as one document); and RESOLVING the asymmetry while
+leaving the `_TS_ONLY` note fires "delete the entry", so the explanation cannot outlive the thing it
+explains.
+
+**A second defect found while confirming this one:** `test_rays_runtime_env_and_metadata_do_not_ride_along`
+names metadata in its title and asserted **nothing** about it — only `runtime_env`. Half the claim in
+the name was unchecked, on the model that gets rendered into a lineage event. Assertion added; RED
+proof: flipping `RayJobFailure` to `extra="allow"` now fails it. 49 passed.
+
 ### L2 — the explorer's mock detects its envelope by key presence · **CONFIRMED, LOW**
 
 `explorer/e2e/mock-media-services.ts:71` uses `'status' in h`, the exact form all three sibling mocks

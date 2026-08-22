@@ -88,6 +88,12 @@ async def test_rays_runtime_env_and_metadata_do_not_ride_along() -> None:
     assert failure is not None
     assert "hunter2" not in failure.model_dump_json()
     assert "runtime_env" not in failure.model_dump()
+    # The test's NAME says "and metadata", and until 2026-08-22 nothing here checked it — so half the
+    # claim in the title was unasserted. It matters as much as the other half: the medallion's own
+    # submitter puts `rask.token` into that dict beside `rask.originator` (`ray_submit.py:166`), and
+    # this model is rendered into a lineage event.
+    assert "metadata" not in failure.model_dump()
+    assert "alice" not in failure.model_dump_json()
 
 
 def test_the_summary_keeps_the_TYPE_and_the_CODE_when_it_truncates() -> None:

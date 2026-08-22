@@ -48,7 +48,20 @@ describe('RayJobSchema', () => {
 		expect(v.parse(RayJobSchema, JOB_WITHOUT_METADATA).metadata).toEqual({});
 	});
 
-	it('still carries metadata when the submitter set it — the medallion path', () => {
+	it('tolerates metadata when it is present — which, through rask, it never is', () => {
+		// THIS DOES NOT DESCRIBE `/api/ray/jobs`, and its previous name ("the medallion path") claimed
+		// it did. `ray_kit.schemas.RayJob` is `extra="ignore"` and does not declare `metadata`, so the
+		// compute service strips it from every row and this field can only ever be its `{}` default
+		// there. The two suites asserted opposite things about the same field and both stayed green;
+		// `tests/unit/test_ray_job_wire_parity.py` now ties the two declarations together.
+		//
+		// Stripping is CORRECT and security-motivated rather than an oversight: the medallion's own
+		// submitter puts `rask.token` into that dict (`ray_submit.py:166`) alongside `rask.originator`
+		// and `rask.project`, so retaining it whole would put a token into every jobs-board row.
+		//
+		// The schema still accepts it because this parser is also pointed at Ray's OWN dashboard API,
+		// where the key IS present — `GET /api/jobs/<id>` in `rask-notifications` is Ray's endpoint,
+		// not a rask route: the compute service serves `/jobs` and `/jobs/{id}/logs` and nothing else.
 		const parsed = v.parse(RayJobSchema, {
 			...JOB_WITHOUT_METADATA,
 			metadata: { 'rask.originator': 'alice', 'rask.project': 'acme' },
