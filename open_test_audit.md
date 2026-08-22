@@ -288,6 +288,8 @@ what its name implies. The trivial half of the fix (`rsvelte-fmt .` on the lakeh
 interesting half; the interesting half is that a three-second formatting check is currently load-bearing
 for the entire JS gate.
 
+
+**FIXED 2026-08-22** (commit `d1fa2dd4`, tracker row 3). `--continue` added to both turbo invocations. Measured: 45 of 61 tasks and 1 failure reported → **70 of 74 and 4**. Three of the four real failures were invisible, including `@rask/api#test` collecting zero tests.
 ### H4 — `@rask/api`'s liveness test has never run a single assertion · **CONFIRMED, MEDIUM**
 
 `frontend/packages/api/src/live.svelte.ts:1` imports `svelte`, which `@rask/api` **has never declared
@@ -524,6 +526,8 @@ appends `--set image.localImages=true`. So **all 13 chart-render invariants rend
 and none renders the production registry path.** Two artifacts render the same chart; only one
 exercises the branch production uses, and it is the one that has been red for 923 commits.
 
+
+**FIXED 2026-08-22** (commit `028cb717`). `.dagger/charts.go` now renders the PRODUCTION registry path via a shared `renderArgs`, deliberately *not* `image.localImages=true`: the thirteen pytest invariants all pin the side-load path, so this gate is where the registry path gets covered and the pytest suite keeps the other. Both paths are now rendered by something.
 ### M7 — `MIN_SUITE_FILES` slack grew from one suite to two · **CONFIRMED, LOW→MEDIUM**
 
 `tests/unit/test_e2e_collection_gate.py:54` pins `MIN_SUITE_FILES = 24` against **26** suite files that
@@ -673,6 +677,8 @@ So the estate's authorization kernel is: outside the CI lint gate, and — on th
 *is* linted — exempt from four security rules and the complexity ceiling. Neither half is indefensible
 alone. Together they mean no automated check reads that subtree for the rule classes it most needs.
 
+
+**FIXED 2026-08-22.** Both halves. The CI-scope half is closed by M25 above. The exemption half: `packages/service-kit/src/service_kit/governed/**` went from a 21-rule blanket to the **four rules that actually fire** (`ANN401`, `ANN202`, `C901`, `PERF401`), so the four SECURITY rules it was suppressing on the authorization kernel — `S110`, `S112`, `S324`, `S608` — are live again. RED proof: appending a `try/except/pass` to `governed/fga.py` now fires `S110`; under the old row it did not. The `schemas/**` row was DELETED rather than narrowed — not one of its 21 rules fired, so it suppressed nothing while implying the subtree needed suppressing. Narrowing surfaced four dead `noqa` directives (`RUF100`) the blanket had hidden; removed, keeping their rationale comments. **Scope bound, stated:** the identical 21-rule list appears on 22 other rows. This pass narrows two. `C901` survives on one function (`fga.py::expand_tree`, complexity 17 vs a ceiling of 15) — splitting the authz kernel's tree expansion is a separate commit, not a silent tack-on.
 ### M10 — the live auth suite is selected by nothing, and the job named `e2e-auth` does not run it · **CONFIRMED**
 
 ### M10 — the live auth suite is selected by nothing, and the job named `e2e-auth` does not run it · **CONFIRMED**
@@ -769,6 +775,8 @@ prevent.
 cascade must never make — answering 200/409, statuses the real catalog cannot return for it. **If the
 regression came back, 2 of 13 tests would notice and the other 11 would absorb it.**
 
+
+**FIXED 2026-08-22** (commit `5b5e2a39`). All thirteen dead `POST /v1/namespace/{tier}/create` mocks deleted. `assert_all_mocked` is already on, so the call now raises `AllMockedAssertionError` if it returns — a harder failure than the 200 the mock promised. Nested (`acme$silver`) creates kept: those the cascade does make.
 ### M19b — every respx test in the estate uses the one form where a dead route is not an error · **HIGH**
 
 *Added after the sweep, from `writing-python/references/testing.md` — the reference states the rule the
@@ -803,6 +811,8 @@ Expect the first run to go red in several places — that redness *is* the findi
 violations**. `grep` for `patch(...httpx...)` / `patch.object(httpx...)` / `patch(...AsyncClient.` across
 `packages/`, `services/` and `tests/` returns nothing. The estate mocks at the transport layer throughout.
 
+
+**ENFORCED 2026-08-22** (commit `5b5e2a39`, tracker row 7). `assert_all_called` flipped on the global router in `conftest.py`, covering all 118 bare `@respx.mock` sites and every future one. 17 of 227 went red: 13 dead routes deleted, 6 negative routes now declaring themselves via `respx_allows_unused_routes`.
 ### M20 — the lakehouse's two session-bearing data-plane routes are mocked away everywhere · **CONFIRMED**
 
 `microfrontends/lakehouse/src/routes/capi/v1/table/[id]/query/+server.ts:16-41` and its `insert`
@@ -995,6 +1005,8 @@ And `tests/unit/test_invariants.py:401` cannot substitute, because `_helm_templa
 `--set image.localImages=true` plus the three OIDC values: **all 13 pytest chart-render invariants render
 the side-load path, and none renders the production registry path** (also filed as M6).
 
+
+**FIXED 2026-08-22** (commit `028cb717`). `dagger call charts` exit 0, all five steps, for the first time since 2026-08-04. Six defects behind the dead step were fixed with it — see the tracker row for the list.
 ### M24 — six of fifteen alert rules have no fire-proof, and the semantic gate covers one group of seven · **CONFIRMED**
 
 `chart/alerting/rules.yml:22, 34, 76, 193, 209, 226`. `promtool test rules` evaluates only the cases
@@ -1025,6 +1037,8 @@ and the same to `scripts/ray_stage_job.py`, the CI gate's exact paths print noth
 `make lint` reports both. **The local gate and the merge gate measure different estates, and nothing
 asserts they agree.**
 
+
+**FIXED 2026-08-22.** `.dagger/checks.go` now runs `ruff check .` and `ruff format --check .` — the same estate `make lint` walks — instead of `services tests`. That brought **39,244 tracked lines** onto the merge path: `packages/` 24,580 (all seven first-party libraries, including the authorization kernel), `scripts/` 5,667 (among them the `ray_*_job.py` entrypoints the cluster image BAKES, so production code) and `runners/` 8,997. Switched from `uvx ruff` to `uv run --no-sync ruff` in the same change: `uvx` resolves the LATEST ruff while the Makefile runs the LOCKED one, so widening scope on `uvx` would have traded one divergence for another — the estate has already been bitten by an unpinned `uvx ty` drifting until its hook blocked every commit. Verified: `ruff check .` and `ruff format --check .` both clean at HEAD.
 ### M26 — the OpenAPI contract covers 2 of 10 HTTP services, and its in-repo drift guard is name-only · **CONFIRMED, raised to MEDIUM**
 
 `scripts/gen_openapi.py:33-36`'s `_SERVICES` is a hand-written two-row list (catalog, lineage), while
@@ -1038,6 +1052,8 @@ lines** on `docs/catalog-openapi.json` — the `accept_assertions` property on `
 in-repo guard compares operation names; the CI gate compares bytes; only the CI gate can see it, and the
 CI gate is behind a red job.
 
+
+**PARTIALLY DISPOSED 2026-08-22.** The drift half is a NO-OP — regenerated at HEAD, `git diff` empty (tracker row 5). The STRUCTURAL half stands and is NOT fixed: `_SERVICES` covers 2 of 10 HTTP services, and `test_openapi_contract.py` compares operation NAMES so it passes green on a byte-level drift only `ms-openapi` can see.
 ### M27 — the docs build has no merge-path caller, and it is currently red · **CONFIRMED**
 
 `.github/workflows/docs.yml:14-17` triggers only on `workflow_dispatch` and `release: published` — no

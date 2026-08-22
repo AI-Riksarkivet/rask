@@ -209,7 +209,7 @@ def _secret_bundle(store: str, key: str) -> tuple[tuple[str, str], ...]:
     RAISES — lru_cache never caches exceptions, so the next request retries — and a successful
     bundle is cached until restart: rotating a dedicated credential means a rollout, the same
     trade the viewer already made."""
-    from service_kit.governed.secrets import fetch_dapr_secret  # noqa: PLC0415 - keeps this module import-light
+    from service_kit.governed.secrets import fetch_dapr_secret  # imported here, not at module scope: keeps this module import-light
 
     bundle = fetch_dapr_secret(store, key, retries=1)
     if not bundle:
@@ -324,8 +324,8 @@ def guard_actor_routes(app: FastAPI) -> None:
     Call it immediately after constructing `DaprActor(app)`. It is a no-op for every other path, so a
     service that mounts no actors can call it harmlessly — but there is no reason to.
     """
-    from fastapi.responses import JSONResponse  # noqa: PLC0415 - keeps this module import-light
-    from starlette.middleware.base import BaseHTTPMiddleware  # noqa: PLC0415
+    from fastapi.responses import JSONResponse  # imported here, not at module scope: keeps this module import-light
+    from starlette.middleware.base import BaseHTTPMiddleware
 
     async def _guard(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         if request.url.path.startswith(ACTOR_PATH_PREFIXES):

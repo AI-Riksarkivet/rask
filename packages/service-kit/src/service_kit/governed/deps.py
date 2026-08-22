@@ -109,7 +109,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
         """Resolve the FGA checker — see this module's docstring for the three outcomes."""
         if not settings.fga_enabled:
 
-            async def _open(*, user: str, relation: str, obj: str) -> bool:  # noqa: ARG001
+            async def _open(*, user: str, relation: str, obj: str) -> bool:
                 return True
 
             return _open

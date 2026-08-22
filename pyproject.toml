@@ -123,11 +123,20 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 # scoped exemption travels with them: the governed/lakehouse/lancekit/media/schemas subtrees plus the
 # four flat modules ported to the base (obs, openlineage, dapr_publish, control_events).
 # packages/common is deleted; its per-file-ignores entry died with it.
-"packages/service-kit/src/service_kit/governed/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+# NARROWED 2026-08-22, and this row is now a DEBT LIST rather than a blanket. `governed/` is the
+# AUTHORIZATION KERNEL, and the 21-rule form suppressed four SECURITY rules there — S110
+# (try-except-pass), S112 (try-except-continue), S324 (insecure hash) and S608 (SQL injection) — none
+# of which fires today. Measured rule by rule: only these four have any site at all, so the other
+# seventeen were suppressing nothing while reading as an accepted exemption for the whole subtree.
+# That mattered because the same subtree was ALSO outside the CI lint scope until this commit
+# (.dagger/checks.go linted `services tests` only), so no automated check read the kernel for the
+# rule classes it most needs. Adding a rule back here now requires saying which site needs it.
+"packages/service-kit/src/service_kit/governed/**" = ["ANN401", "ANN202", "C901", "PERF401"]
 "packages/service-kit/src/service_kit/lakehouse/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "packages/service-kit/src/service_kit/lancekit/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "packages/service-kit/src/service_kit/media/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"packages/service-kit/src/service_kit/schemas/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+# `schemas/**` had the same 21-rule row and NOT ONE of them fired under it — a row that suppressed
+# nothing while implying the subtree needed suppressing. Deleted 2026-08-22 rather than narrowed.
 "packages/service-kit/src/service_kit/obs.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "packages/service-kit/src/service_kit/openlineage.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "packages/service-kit/src/service_kit/dapr_publish.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
