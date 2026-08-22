@@ -7,14 +7,26 @@ metadata:
   labels:
     {{- include "rask.componentLabels" (list . "ray") | nindent 4 }}
 spec:
+  {{- /* THE APPLICATION LIST IS VALUES, NOT TEMPLATE. This was a single hardcoded `- name: htrflow`,
+       so the platform chart could express exactly ONE Serve application and knew its name — the
+       strongest form of what CLAUDE.md forbids, because a second workload could not be deployed at
+       all without editing a platform template. A workload must reach the platform as CONFIG.
+
+       `ray.serveApplications` defaults to the single entry that was hardcoded here, so an existing
+       release renders byte-identically and this is not a redeploy. The env below is the PLATFORM's
+       half of the contract — replica count, GPU fraction, HF token behaviour — applied to every
+       application; a workload's own parameters ride `params`, rendered RASK_PARAM_<KEY> so one
+       cannot reach a platform variable by choosing a colliding name (the rule ray_submit already
+       applies to stage jobs). */}}
   serveConfigV2: |
     applications:
-      - name: htrflow
-        import_path: {{ .Values.ray.importPath }}
-        route_prefix: {{ .Values.ray.serveRoutePrefix }}
+      {{- range $app := .Values.ray.serveApplications }}
+      - name: {{ $app.name }}
+        import_path: {{ $app.importPath }}
+        route_prefix: {{ $app.routePrefix }}
         runtime_env:
           env_vars:
-            RASK_SERVE_REPLICAS: "{{ .Values.config.RASK_SERVE_REPLICAS }}"
+            RASK_SERVE_REPLICAS: "{{ $.Values.config.RASK_SERVE_REPLICAS }}"
             {{- /* DERIVED from ray.gpuCount (rask.serveGpuFrac), not passed through: an actor that asks
                  for a GPU fraction on a cluster that advertises no nvidia.com/gpu never becomes
                  healthy, so the RayService stays `Initializing` forever, the operator never creates
@@ -22,7 +34,7 @@ spec:
                  a Running head (live-proof 2026-07-28, defect 3 — it took a manual
                  --set config.RASK_SERVE_GPU_FRAC=0 to get past). The same helper feeds the fleet
                  ConfigMap, so the two can never disagree. */}}
-            RASK_SERVE_GPU_FRAC: "{{ include "rask.serveGpuFrac" . }}"
+            RASK_SERVE_GPU_FRAC: "{{ include "rask.serveGpuFrac" $ }}"
             HF_HUB_DISABLE_IMPLICIT_TOKEN: "0"
             {{- /* THE OTEL_* BLOCK MOVED OUT OF HERE (2026-08-22). It was five hand-rolled literals in
                  this runtime_env — release name, db name and trace pipeline hardcoded — and
@@ -33,6 +45,10 @@ spec:
                  from the same helpers every other pod uses. What stays here is the WORKLOAD's own half
                  of the contract — replica count, GPU fraction, HF token behaviour — which is exactly
                  what runtime_env is for. */}}
+            {{- range $key, $value := ($app.params | default dict) }}
+            {{ printf "RASK_PARAM_%s" $key }}: {{ $value | quote }}
+            {{- end }}
+      {{- end }}
   rayClusterConfig:
     rayVersion: {{ .Values.ray.rayVersion | quote }}
     {{- if .Values.ray.auth.enabled }}

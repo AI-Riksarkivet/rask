@@ -1470,6 +1470,19 @@ ray:
     repository: ray-cluster
     tag: "dev"
     pullPolicy: IfNotPresent
+  # THE SERVE APPLICATIONS THIS DEPLOYMENT RUNS. A list, because the platform must be able to express
+  # more than one — the template used to hardcode a single `- name: htrflow`, so a second workload
+  # could not be deployed without editing a platform template. Naming a workload HERE is correct: this
+  # is a deployment's own configuration, and the chart it configures knows nothing about it.
+  #
+  # `params` is the workload's own half of the contract; each key is rendered as RASK_PARAM_<KEY> so a
+  # workload cannot reach a platform variable by choosing a colliding name.
+  serveApplications:
+    - name: htrflow
+      importPath: "runner.htrflow_service:htrflow_app"
+      routePrefix: "/htrflow"
+  # Kept for the compute zone's route hint and the NOTES output — the FIRST application's prefix.
+  # Not read by the RayService any more; serveApplications above is the source of truth.
   serveRoutePrefix: "/htrflow"
   importPath: "runner.htrflow_service:htrflow_app"
   dashboardPort: 8265

@@ -2017,6 +2017,48 @@ def test_a_ray_dashboard_exists_and_uses_rays_own_promql_correctly() -> None:
         assert f'"{workload}"' not in blob, f"a Ray panel filters on the {workload!r} workload — group by application/deployment instead"
 
 
+def test_the_chart_can_express_a_SECOND_serve_application() -> None:
+    """`serveConfigV2` hardcoded `- name: htrflow`, so the platform chart could express exactly ONE
+    Serve application and knew its name.
+
+    CLAUDE.md is explicit that no service, schema or chart may know a workload's name: every runner is
+    sealed and the platform must read the same for audio, text, image and one nobody has written yet.
+    A single hardcoded application is the strongest form of that violation — a second workload could
+    not be deployed without editing a platform template, which is precisely what "a workload reaches
+    the platform as config" is supposed to prevent.
+    """
+    import yaml as _yaml
+
+    docs = _rendered_docs(
+        "singleTenant.enabled=true",
+        "ray.serveApplications[0].name=alpha",
+        "ray.serveApplications[0].importPath=runner.alpha:app",
+        "ray.serveApplications[0].routePrefix=/alpha",
+        "ray.serveApplications[1].name=beta",
+        "ray.serveApplications[1].importPath=runner.beta:app",
+        "ray.serveApplications[1].routePrefix=/beta",
+    )
+    ray = next((d for d in docs if d.get("kind") == "RayService"), None)
+    assert ray is not None, "no RayService rendered"
+
+    apps = _yaml.safe_load(ray["spec"]["serveConfigV2"])["applications"]
+    names = [a["name"] for a in apps]
+    assert names == ["alpha", "beta"], f"the chart rendered {names} — it cannot express two Serve applications"
+    assert "htrflow" not in _yaml.dump(apps), "a workload literal survived into a render that never asked for it"
+
+
+def test_the_gpu_coherence_guard_speaks_no_modality() -> None:
+    """The render-time `fail` is a PLATFORM guard rail, and it named both a workload and a MODEL.
+
+    An operator on an audio estate hitting a GPU misconfiguration was told about `htrflow` and
+    `TrOCR` — neither of which they run. A platform error that names someone else's modality is worse
+    than a vague one: it sends the reader looking for a component that is not there.
+    """
+    body = (REPO / "chart/templates/gpu-coherence.yaml").read_text(encoding="utf-8")
+    for literal in ("htrflow", "TrOCR"):
+        assert literal not in body, f"the GPU coherence guard names {literal!r} — the platform knows no workload"
+
+
 def _fleet_config(docs: list[dict]) -> dict[str, str]:
     """The fleet ConfigMap — the one carrying `RASK_API_PREFIX` and the gateway's upstream addresses."""
     for doc in docs:

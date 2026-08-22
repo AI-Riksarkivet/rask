@@ -135,7 +135,7 @@ app.kubernetes.io/component: {{ $component }}
 {{- if gt (int .Values.ray.gpuCount) 0 }}true{{- end -}}
 {{- end -}}
 
-{{/* The htrflow Serve actor's GPU fraction, DERIVED — never the raw config value. `config.RASK_SERVE_GPU_FRAC`
+{{/* A Serve replica's GPU fraction, DERIVED — never the raw config value. `config.RASK_SERVE_GPU_FRAC`
      states the intent for a GPU node; on a GPU-less estate it MUST collapse to 0 or Ray Serve waits forever
      for a resource the cluster will never advertise, and the whole RayService (hence the stable head
      Service, hence the compute zone) never comes up. Both render sites include this, so the ConfigMap and

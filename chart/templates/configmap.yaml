@@ -14,7 +14,7 @@ data:
   {{ $k }}: {{ $v | quote }}
   {{- end }}
   {{- end }}
-  # The htrflow Serve actor's GPU fraction, derived from the ONE GPU signal (ray.gpuCount) by
+  # Each Serve replica's GPU fraction, derived from the ONE GPU signal (ray.gpuCount) by
   # rask.serveGpuFrac — the same include the RayService uses, so the two cannot drift.
   RASK_SERVE_GPU_FRAC: {{ include "rask.serveGpuFrac" . | quote }}
   RASK_DAPR_ENABLED: {{ .Values.dapr.sidecars | quote }}

@@ -3,7 +3,7 @@ GPU COHERENCE GUARD — renders no object; it exists to make an incoherent GPU p
 render failure instead of a silent cluster wedge.
 
 `ray.gpuCount` is the chart's ONE GPU signal (see rask.gpuEnabled in _helpers.tpl): the head's
-num-gpus + nvidia.com/gpu limit, the nvidia RuntimeClass, the htrflow Serve actor's GPU fraction
+num-gpus + nvidia.com/gpu limit, the nvidia RuntimeClass, each Serve application's GPU fraction
 and the Kueue nvidia.com/gpu quota all derive from it. The nvidia-device-plugin (and the GPU
 Feature Discovery DaemonSet that ships inside it) is the one consumer that CANNOT: Helm evaluates
 a subchart `condition:` against a static values path and has no way to express `gpuCount > 0`.
@@ -24,5 +24,8 @@ provider's) — so it is a NOTES warning, not a failure.
 {{- /* hasKey first: under `helm upgrade --reuse-values` a stored release may carry no such key, and
      `float64 nil` is 0 — which would fail a legitimate GPU upgrade for the wrong reason. */}}
 {{- if and (include "rask.gpuEnabled" .) (hasKey .Values.config "RASK_SERVE_GPU_FRAC") (eq (float64 .Values.config.RASK_SERVE_GPU_FRAC) 0.0) }}
-{{- fail (printf "rask chart: ray.gpuCount=%v (a GPU estate) but config.RASK_SERVE_GPU_FRAC=%v — the htrflow Serve actor would reserve no GPU and TrOCR would run on CPU while %v GPU(s) sit idle. Set config.RASK_SERVE_GPU_FRAC to the per-replica fraction (e.g. 0.49 for 2 replicas/GPU), or set ray.gpuCount=0 for a deliberate CPU estate." .Values.ray.gpuCount .Values.config.RASK_SERVE_GPU_FRAC .Values.ray.gpuCount) }}
+{{- /* NO MODALITY IN A PLATFORM ERROR. This message named a workload and a MODEL, so an operator on
+     an audio estate hitting a GPU misconfiguration was told about components they do not run — worse
+     than a vague message, because it sends the reader looking for something that is not there. */}}
+{{- fail (printf "rask chart: ray.gpuCount=%v (a GPU estate) but config.RASK_SERVE_GPU_FRAC=%v — every Serve replica would reserve no GPU and run on CPU while %v GPU(s) sit idle. Set config.RASK_SERVE_GPU_FRAC to the per-replica fraction (e.g. 0.49 for 2 replicas/GPU), or set ray.gpuCount=0 for a deliberate CPU estate." .Values.ray.gpuCount .Values.config.RASK_SERVE_GPU_FRAC .Values.ray.gpuCount) }}
 {{- end }}
