@@ -937,6 +937,26 @@ Read what one of them says it proves:
 > "The claim under test is the one no unit test can make: that a run whose AUTHOR is not you still
 > reaches you, on a real Dapr actor plane, because you are named as the human the work is for."
 
+✅ **FIXED + ENFORCED 2026-08-22** — re-verified first: `grep -rl` still returns exactly TWO hits per
+drive today, and the second is this audit file naming them. Nothing else in the repository referenced
+any of the five.
+
+`make notifications-lanes ORIGIN=…` names all five and refuses without an `ORIGIN` rather than silently
+driving localhost. A named target rather than an offline gate because these need a DEPLOYED estate — a
+live Dapr actor plane is precisely what makes them prove something a unit test cannot.
+
+Enforced by `test_every_notification_lane_drive_is_invoked_by_something`, the same rule as the live-suite
+gate above applied to the other kind of live proof, and comment-stripped for the same reason (a drive
+named only in a commented-out recipe is invoked by nothing). RED: deleting the target fires it naming
+all five; GREEN: 8 passed.
+
+**A separate defect found while fixing this one, and it is not M12's:** the adjacent
+`notifications-rig-up` / `-down` targets run **`docker compose`**, which the estate's hardest rule
+forbids outright — "no docker command, for any purpose, including throwaway containers". A survey found
+**18 docker invocations** across `Makefile` and `scripts/`. That is a scope decision spanning legitimate
+bootstrap exceptions (`dagger-engine.sh` cannot use Dagger to create the Dagger engine) and plain
+violations, so it is **MIGRATED**, not patched here — see N1 below.
+
 The ORIGINATOR lane — the targeting source that is *structurally unreachable* from a unit test, and
 whose producer-side field M3 shows is unguarded — is proven only when a human remembers to type
 `node tests/e2e/verify_originator_lane.mjs`.

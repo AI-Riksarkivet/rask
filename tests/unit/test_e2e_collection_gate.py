@@ -320,3 +320,32 @@ def test_every_e2e_target_is_declared_phony() -> None:
         f"  in E2E_SUITES but no recipe: {sorted(declared - recipes)}\n"
         f"  has a recipe but not phony:  {sorted(recipes - declared)}"
     )
+
+
+def test_every_notification_lane_drive_is_invoked_by_something() -> None:
+    """Five drives, tracked and documented, that nothing in the repository named.
+
+    `tests/e2e/verify_*.mjs` prove the claims no unit test can make — one states its own: "that a run
+    whose AUTHOR is not you still reaches you, on a real Dapr actor plane, because you are named as the
+    human the work is for". They are the estate's only end-to-end proof for the ORIGINATOR and TASK
+    targeting sources.
+
+    `grep -rl` found exactly ONE hit for each: its own declaration. They also sit outside playwright's
+    `testDir: './tests'`, so `make e2e` skipped them as well — tracked, documented, and unreachable by
+    every entry point the estate has. `make notifications-lanes` names them now.
+
+    This is the same rule as `test_every_live_suite_is_selected_by_something` above, applied to the
+    other kind of live proof, and it strips comments for the same reason: a drive named only in a
+    commented-out recipe is invoked by nothing.
+    """
+    drives = sorted((REPO_ROOT / "tests" / "e2e").glob("verify_*.mjs"))
+    assert drives, "no verify_*.mjs drives found — the glob is broken, not the estate"
+
+    surfaces = _selection_surfaces()
+    unreferenced = [d.name for d in drives if d.name not in surfaces and d.stem not in surfaces]
+
+    assert not unreferenced, (
+        "these notification-lane drives are named by nothing — no make target, CI job, Dagger function "
+        "or script. They are the only end-to-end proof for their targeting sources, and they run "
+        "nowhere:\n  " + "\n  ".join(unreferenced)
+    )

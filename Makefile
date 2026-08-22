@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-rig-up notifications-rig-down audit go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-lanes notifications-rig-up notifications-rig-down audit go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
 
 help:
 	@echo "Targets:"
@@ -136,6 +136,27 @@ prod-render-check: ## Render values-prod.yaml and assert its HA + security switc
 # message leave the estate per (event, subject, channel) when the broker redelivers? Mailpit shows
 # every message it received; the slack sink COUNTS them, so a duplicate is visible rather than
 # inferred. Point the Dapr bindings at localhost:1025 / http://localhost:9099 while it is up.
+# The notification-lane drives. Five tracked, documented .mjs files proving claims no unit test can
+# make — that a run whose AUTHOR is not you still reaches you because you are named as the human the
+# work is for — and until 2026-08-22 they were referenced by NOTHING: one grep hit each, their own
+# declaration. They also sit outside playwright's `testDir: './tests'`, so `make e2e` skipped them too.
+#
+# A drive nobody can name is a drive nobody runs, and these are the only proof the estate has for the
+# ORIGINATOR and TASK targeting sources end to end. They need a DEPLOYED estate (a live Dapr actor
+# plane), which is why they are a named target rather than part of an offline gate.
+#
+# Pinned by tests/unit/test_e2e_collection_gate.py, which now requires every tests/e2e/verify_*.mjs to
+# have an invocation site — so a sixth drive cannot land unreferenced.
+notifications-lanes: ## The five notification-lane drives vs a deployed estate (ORIGIN=http://…)
+	@test -n "$(ORIGIN)" || { echo "set ORIGIN, e.g. make notifications-lanes ORIGIN=http://localhost:8080"; exit 1; }
+	@for drive in tests/e2e/verify_originator_lane.mjs \
+	              tests/e2e/verify_task_assignment_lane.mjs \
+	              tests/e2e/verify_task_departure_lanes.mjs \
+	              tests/e2e/verify_lease_lapse_lane.mjs \
+	              tests/e2e/verify_notifications_two_users.mjs; do \
+		echo "== $$drive"; ORIGIN=$(ORIGIN) node "$$drive" || exit 1; \
+	done
+
 notifications-rig-up: ## Mailpit + a counting Slack sink, for the channel idempotency drive
 	docker compose -f .docker/docker-compose.notifications-channels.yml up -d
 	@echo "Mailpit UI  : http://localhost:8025"
