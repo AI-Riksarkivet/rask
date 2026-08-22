@@ -974,6 +974,28 @@ assertions at `:41, :48, :51, :57` contradict the current gateway's route table 
 still open, and now **worse**: the `make e2e-gateway` target its docstring cites now *exists*, so
 following the docstring runs three skips and exits 0.
 
+✅ **FIXED 2026-08-22 — and the root cause is one layer below where the finding pointed.**
+
+Re-measured: `make e2e-gateway` collected 3, skipped 3, **exit 0**, exactly as filed. But setting
+`LANCE_E2E_GATEWAY_URL` did not help — the fixture skips a SECOND time on `gateway not reachable`. So
+the suite could not fail for infrastructure reasons at all: against a dead estate and against a healthy
+one it reported the same success. The unset variable was never the whole story; the suite was
+**unfailable**.
+
+Three fixes:
+
+1. **An unreachable CONFIGURED target is now a failure, not a skip.** Unset → skip, because an offline
+   run should not demand a deployed gateway and nobody asked. Set-but-unreachable → fail, because
+   setting the variable IS the request and a request that cannot be served is a failure. Measured:
+   unset gives `3 skipped`; `LANCE_E2E_GATEWAY_URL=http://127.0.0.1:1` gives **3 errors**.
+2. **The stale routes.** The file asserted `/lineage/livez` and `/catalog/readyz`; the gateway
+   registers `("/api/catalog", …)` and `("/api/lineage", …)` at `gateway/__init__.py:144-145` and has
+   **no `/api` catch-all**, so both were aimed at routes that 404. This is the reusable part: an
+   assertion inside a suite that cannot run is invisible twice over — nothing runs it, and nothing
+   fails when the code it describes moves underneath it.
+3. **`make e2e-gateway` requires the URL** rather than skipping into a green, the same shape as
+   `notifications-lanes`. A live drive with no live target is a failed invocation, not a pass.
+
 ### M15 — `home#test:e2e` is red at HEAD independently of everything else · **CONFIRMED, HIGH**
 
 `frontend/microfrontends/home/playwright.config.ts:98-100`. The auth-OFF `chromium` project matches

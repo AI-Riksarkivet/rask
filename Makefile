@@ -781,8 +781,13 @@ e2e-duckdb:         ## DuckDB-over-Lance proof
 	uv run pytest tests/e2e-py -m duckdb -v
 e2e-dummy-lane:     ## The GPU-free dummy medallion lane, end to end
 	uv run pytest tests/e2e-py -m dummy_lane -v
-e2e-gateway:        ## Dapr service-invocation gateway routing proof
-	uv run pytest tests/e2e-py -m gateway -v
+# REQUIRES its target, rather than skipping into a green. Every test in this suite is guarded on
+# LANCE_E2E_GATEWAY_URL, so without it the target collected 3 tests, skipped all 3 and exited 0 — a
+# routing proof that reported success having proved nothing, which is exactly what its docstring
+# invited a reader to trust. A live drive with no live target is a failed invocation, not a pass.
+e2e-gateway:        ## Dapr service-invocation gateway routing proof (needs LANCE_E2E_GATEWAY_URL)
+	@test -n "$(LANCE_E2E_GATEWAY_URL)" || { echo "set LANCE_E2E_GATEWAY_URL, e.g. make e2e-gateway LANCE_E2E_GATEWAY_URL=http://localhost:8888"; exit 1; }
+	LANCE_E2E_GATEWAY_URL=$(LANCE_E2E_GATEWAY_URL) uv run pytest tests/e2e-py -m gateway -v
 e2e-governed-union: ## Full governed-union proof (the estate's widest authz path)
 	uv run pytest tests/e2e-py -m governed_union -v
 e2e-medallion:      ## Medallion bronze→silver→gold cascade proof

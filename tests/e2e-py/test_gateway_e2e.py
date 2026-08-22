@@ -26,13 +26,30 @@ pytestmark = [pytest.mark.e2e, pytest.mark.gateway]
 
 @pytest.fixture(scope="module")
 def gateway() -> str:
+    """Skip when NOBODY ASKED; fail when somebody asked and the estate is not there.
+
+    Both outcomes used to be a skip, and that is why this suite could not fail. Unset variable →
+    3 skips → exit 0, which is right: an offline run should not demand a deployed gateway. But an
+    unreachable gateway with the variable EXPLICITLY set was also 3 skips and exit 0 — so `make
+    e2e-gateway` against a dead estate reported the same success as against a healthy one, and the
+    routing proof could only ever pass. The stale `/lineage/livez` and `/catalog/readyz` assertions
+    this file carried (the gateway serves `/api/lineage` and `/api/catalog`, with no `/api` catch-all)
+    survived precisely there: an assertion inside a suite that cannot run is invisible twice over.
+
+    Setting the variable is a request for the drive. A request that cannot be served is a failure.
+    """
     if not GATEWAY:
         pytest.skip("set LANCE_E2E_GATEWAY_URL (see module docstring)")
+    base = GATEWAY.rstrip("/")
     try:
-        requests.get(f"{GATEWAY.rstrip('/')}/healthz", timeout=5).raise_for_status()
-    except Exception:
-        pytest.skip(f"gateway not reachable at {GATEWAY}")
-    return GATEWAY.rstrip("/")
+        requests.get(f"{base}/healthz", timeout=5).raise_for_status()
+    except Exception as exc:
+        pytest.fail(
+            f"LANCE_E2E_GATEWAY_URL is set to {GATEWAY} but the gateway did not answer /healthz: {exc}. "
+            "This is a FAILURE rather than a skip on purpose — asking for the drive and getting nothing "
+            "is not the same as not asking, and reporting it as a skip made this proof unfailable."
+        )
+    return base
 
 
 def test_gateway_own_health_is_upstream_independent(gateway: str) -> None:
@@ -42,12 +59,20 @@ def test_gateway_own_health_is_upstream_independent(gateway: str) -> None:
 
 
 def test_app_apis_route_through_dapr_service_invocation(gateway: str) -> None:
-    # /lineage/* and /catalog/* are proxied to 127.0.0.1:3500/v1.0/invoke/<app>/method/* — i.e. through
-    # the gateway's OWN Dapr sidecar. A 200 here means the clean URL → Dapr invoke → service hop works.
-    lineage = requests.get(f"{gateway}/lineage/livez", timeout=8)
+    # `/api/lineage/*` and `/api/catalog/*` are proxied to 127.0.0.1:3500/v1.0/invoke/<app>/method/* —
+    # i.e. through the gateway's OWN Dapr sidecar. A 200 here means the clean URL → Dapr invoke →
+    # service hop works.
+    #
+    # THE PREFIX IS `/api/`, AND THIS FILE ASSERTED IT WITHOUT ONE. `gateway/__init__.py:144-145`
+    # registers `("/api/catalog", ...)` and `("/api/lineage", ...)`, and the gateway has NO `/api`
+    # catch-all — an unmatched path 404s. So both requests below were aimed at routes the gateway does
+    # not serve and would have failed against any live estate. Nothing noticed because the whole file
+    # skips (see the module docstring): a stale assertion inside a suite that never runs is invisible
+    # twice over.
+    lineage = requests.get(f"{gateway}/api/lineage/livez", timeout=8)
     assert lineage.status_code == 200 and lineage.json() == {"status": "ok"}
 
-    catalog = requests.get(f"{gateway}/catalog/readyz", timeout=8)
+    catalog = requests.get(f"{gateway}/api/catalog/readyz", timeout=8)
     assert catalog.status_code == 200
 
 
