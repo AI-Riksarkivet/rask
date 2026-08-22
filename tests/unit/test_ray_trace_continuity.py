@@ -16,9 +16,9 @@ Job scripts are standalone files baked into the ray image, so they load here by 
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import importlib.util
-import inspect
 import json
 import re
 from pathlib import Path
@@ -222,11 +222,50 @@ def test_job_no_ops_without_an_otlp_endpoint(monkeypatch: pytest.MonkeyPatch) ->
     assert ran
 
 
-def test_traced_root_is_pinned_identical_across_the_two_jobs() -> None:
-    # The self-contained-job convention's drift-pin: both scripts inline the same helper; a change to
-    # one side without the other fails here (parity with test_ray_stage_job's deriver pins).
-    for helper in ("_extract_trace_parent", "_traced_root"):
-        assert inspect.getsource(getattr(stage_job, helper)) == inspect.getsource(getattr(train_job, helper))
+def _trace_helper_source(script: str) -> str:
+    """The two inlined trace helpers, extracted BY NAME from the file with `ast`.
+
+    Not `inspect.getsource` on an imported module: `ray_dummy_job` cannot be imported outside the Ray
+    image at all — it does `from dummy_runner.job import main`, and `runners/dummy` is a SEALED
+    environment matched by no workspace glob on purpose. Executing it to inspect it would make this
+    pin depend on the seal the repo deliberately maintains.
+
+    Not string-slicing between markers either, which was the first attempt and was wrong: the scripts
+    do not carry the same functions AFTER the helpers, so "up to the next def main" grabbed 8469
+    characters from one file and 3959 from another and reported a drift that did not exist. `ast`
+    addresses the definitions themselves and cannot overshoot.
+    """
+    body = (_SCRIPTS / f"{script}.py").read_text(encoding="utf-8")
+    tree = ast.parse(body)
+    wanted = {"_extract_trace_parent", "_traced_root"}
+    found = {n.name: ast.get_source_segment(body, n) or "" for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name in wanted}
+    missing = wanted - set(found)
+    assert not missing, f"{script} does not inline {sorted(missing)} — the submitter's TRACEPARENT is discarded there"
+    return "\n".join(found[name] for name in sorted(wanted))
+
+
+def test_traced_root_is_pinned_identical_across_ALL_FOUR_jobs() -> None:
+    """The self-contained-job convention's drift-pin, over every baked entrypoint.
+
+    All four scripts INLINE the same helpers rather than importing them, because a job is an ARTEFACT
+    baked into an image and must not depend on the fleet's import graph. Duplication is the accepted
+    cost and this pin is what makes it safe — so it has to cover every copy, not the two it happened
+    to start with. `ray_dummy_job` and `ray_lance_job` had NO copy: the submitter injected TRACEPARENT
+    into the dummy lane and the script discarded it, so the estate's own GPU-free end-to-end prover
+    ran untraced and could not demonstrate the property the production lanes depend on.
+    """
+    reference = _trace_helper_source("ray_stage_job")
+    assert "def _traced_root(" in reference, "the reference block was sliced wrong"
+
+    for script in ("ray_train_job", "ray_dummy_job", "ray_lance_job"):
+        assert _trace_helper_source(script) == reference, f"{script} has drifted from ray_stage_job"
+
+
+def test_the_dummy_lane_CONTINUES_the_trace_it_is_handed() -> None:
+    """The dummy lane is the GPU-free end-to-end prover — declare -> baked entrypoint -> silver. A
+    smoke lane that runs untraced cannot demonstrate the one property the production lanes rely on."""
+    body = (_SCRIPTS / "ray_dummy_job.py").read_text(encoding="utf-8")
+    assert "_traced_root" in body, "the dummy job never opens a root span, so the submitter's TRACEPARENT is discarded"
 
 
 def test_a_submitted_job_carries_WHO_it_is_for_in_ray_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
