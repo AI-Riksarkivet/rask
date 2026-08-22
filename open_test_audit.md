@@ -556,6 +556,7 @@ directory.
 - **`view-transition.test.ts:28`** — the gate whose docstring says "this is the gate that keeps
   [the cross-document at-rule] out" reads **one stylesheet of eleven**, and none of the seven zone
   `app.css` files a person chasing the cross-zone flash would edit. Repo-wide grep finds no second gate.
+  **ENFORCED 2026-08-22:** now scans every AUTHORED stylesheet (11 today) instead of one, with a non-vacuity floor so a moved walk root fails loudly. Build output (`storybook-static/`, `dist/`) is excluded at the walk rather than filtered after — a compiled copy would report a violation no source contains, and the gate's answer would depend on whether someone had run a build. RED: adding `@view-transition` to `studio/src/app.css` now fails naming that file; the one-file version could never see it. 15 passed.
 - **`no-networkidle.test.ts:41`** — scans only `microfrontends/<zone>/e2e`, so the estate's surviving
   `waitUntil: 'networkidle'` calls sit outside it. Three of the seven zones (`compute`, `studio`,
   `models`) have no `e2e/` at HEAD, so the gate is vacuous for them too — up from two in v1.

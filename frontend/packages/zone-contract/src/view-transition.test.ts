@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FRONTEND_ROOT } from './manifest';
@@ -25,9 +25,66 @@ import { FRONTEND_ROOT } from './manifest';
 //
 // A prose comment did not survive one contact with a determined editor. A test does.
 
-const TOKENS = resolve(FRONTEND_ROOT, 'packages/ui/src/lib/styles/tokens.css');
+/**
+ * Every AUTHORED stylesheet in the estate, not just the shared one.
+ *
+ * This gate read exactly `packages/ui/src/lib/styles/tokens.css` — one file of eleven — while its own
+ * docstring claimed to be "the gate that keeps it out". The at-rule is a DOCUMENT-level opt-in, so the
+ * seven zone `app.css` files are precisely where a determined editor would put it back, and none of
+ * them was read. A repo-wide grep finds no second gate anywhere.
+ *
+ * Build output is excluded rather than filtered afterwards: `storybook-static/` and `dist/` carry
+ * COMPILED copies, so a gate that read them would report a violation that no source file contains, and
+ * its answer would depend on whether someone had run a build.
+ */
+function authoredStylesheets(): string[] {
+	const SKIP = new Set([
+		'node_modules',
+		'.svelte-kit',
+		'dist',
+		'build',
+		'storybook-static',
+		'.turbo',
+	]);
+	const out: string[] = [];
+	const walk = (dir: string): void => {
+		for (const e of readdirSync(dir, { withFileTypes: true })) {
+			if (e.isDirectory()) {
+				if (!SKIP.has(e.name)) walk(resolve(dir, e.name));
+			} else if (e.name.endsWith('.css')) {
+				out.push(resolve(dir, e.name));
+			}
+		}
+	};
+	for (const root of ['microfrontends', 'packages']) walk(resolve(FRONTEND_ROOT, root));
+	return out.sort();
+}
 
 describe('cross-document view transitions stay OFF', () => {
+	const sheets = authoredStylesheets();
+
+	it('finds stylesheets to check', () => {
+		// Without this the gate passes vacuously the day the walk root moves — the failure mode the
+		// rest of this suite keeps finding in other scanners.
+		expect(
+			sheets.length,
+			'no authored stylesheets found — this gate would pass vacuously',
+		).toBeGreaterThan(5);
+	});
+
+	it.each(sheets.map((f) => [f.slice(FRONTEND_ROOT.length + 1), f] as const))(
+		'%s declares no @view-transition at-rule',
+		(_rel, file) => {
+			const css = readFileSync(file, 'utf8');
+			// The AT-RULE only. tokens.css's explanatory comment names it in prose, and that comment is
+			// the thing worth keeping — a check that forbade the string would delete its own rationale.
+			expect(css).not.toMatch(/^\s*@view-transition\b/m);
+		},
+	);
+});
+
+describe('the shared stylesheet, in detail', () => {
+	const TOKENS = resolve(FRONTEND_ROOT, 'packages/ui/src/lib/styles/tokens.css');
 	it('the shared stylesheet declares no @view-transition at-rule', () => {
 		const css = readFileSync(TOKENS, 'utf8');
 		// The AT-RULE only. The file's explanatory comment names it in prose, and that comment is the
