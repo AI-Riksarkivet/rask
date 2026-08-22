@@ -712,12 +712,14 @@ e2e-isolation: ## Cross-tenant credential attack vs a deployed vending-enabled s
 # not a CI lane. `make e2e-ci` remains the governed-kind-stack entry point, and wiring the
 # security-shaped ones (governed-union, gateway, cas) into CI is the follow-up — it needs an edit to
 # `.github/workflows/ci.yml`, which a concurrent session is holding.
-E2E_SUITES = cas compaction duckdb dummy-lane gateway governed-union medallion media media-catalog observability user-state ray-batch ray-train
+E2E_SUITES = auth cas compaction duckdb dummy-lane gateway governed-union medallion media media-catalog observability user-state ray-batch ray-train
 .PHONY: $(addprefix e2e-,$(E2E_SUITES))   # declared HERE, not up with the other .PHONY: make
                                           # expands a rule's prerequisites AS IT READS the line,
                                           # so referencing E2E_SUITES before this assignment
                                           # expands to nothing and silently declares no target.
 
+e2e-auth:           ## Live OIDC/FGA authorization proof (Dex + OpenFGA + governed catalog)
+	uv run pytest tests/e2e-py -m auth -v
 e2e-cas:            ## Object-store + registry conditional-write (CAS) proofs
 	uv run pytest tests/e2e-py -m cas -v
 e2e-compaction:     ## Maintenance sweep / compaction / GC proofs

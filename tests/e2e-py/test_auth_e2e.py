@@ -22,7 +22,13 @@ SERVER = os.environ.get("LANCE_E2E_AUTH_SERVER", "")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 FGA = os.environ.get("LANCE_E2E_FGA", "http://localhost:8080")
 
-pytestmark = pytest.mark.e2e
+#: The catalog joins identifier segments with this, NOT a dot. `catalog/core/config.py` defaults it to
+#: `$` and `.docker/docker-compose.yml` sets `LANCE_NS_DELIMITER: "$$"` (compose-escaped `$`). Read from
+#: the environment so the suite follows a stack configured with a different one, rather than asserting
+#: against a delimiter only this file believes in.
+DELIMITER = os.environ.get("LANCE_NS_DELIMITER", "$")
+
+pytestmark = [pytest.mark.e2e, pytest.mark.auth]
 
 
 @pytest.fixture(scope="module")
@@ -106,7 +112,12 @@ def test_oidc_and_openfga_authorization_chain(server: str) -> None:
     # proved nothing: a create gates on the PARENT, never on the object being created, so that grant
     # was inert and the create had already succeeded for an unrelated reason. Creating a CHILD is
     # where the parent check bites — and it is the rung a locked-root estate falls back to anyway.
-    child = "e2ens.e2child"
+    # `e2ens{DELIMITER}e2child`, NOT `e2ens.e2child`. With the real delimiter a dot makes a single
+    # ROOT-level namespace whose name merely contains a dot — so this create gated on the root, the
+    # 403 below could pass for an unrelated reason (a locked root), and the `_grant` on
+    # `namespace:e2ens` that follows was inert against it. That is precisely the defect the comment
+    # above says was removed, reintroduced in a different disguise by the fix that removed it.
+    child = f"e2ens{DELIMITER}e2child"
     assert requests.post(f"{server}/v1/namespace/{child}/create", headers=headers, json={}, timeout=10).status_code == 403
 
     # Grant writer ON THE PARENT → the nested create reaches the backend (200, or 409 if it exists).

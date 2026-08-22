@@ -226,6 +226,7 @@ markers = [
     "slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')",
     "e2e: live end-to-end suites needing a running/deployed stack (deselect with '-m \"not e2e\"'; run via make e2e-ci / the per-suite targets)",
     # per-suite selectors used by the e2e make targets (e.g. `pytest -m media`); all of them ALSO carry e2e
+    "auth: live OIDC/FGA authorization e2e (Dex + OpenFGA + a governed catalog)",
     "cas: object-store conditional-write (CAS) e2e",
     "compaction: compaction/GC sweep e2e",
     "duckdb: duckdb-over-Lance e2e",

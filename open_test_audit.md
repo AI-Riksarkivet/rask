@@ -718,6 +718,40 @@ So the request it expects to be a 403 *nested* create is a **200 root create**, 
 `_grant(..., 'namespace:e2ens')` that follows is inert again — which is precisely the defect the fix's
 own comment says it removed.
 
+✅ **FIXED + ENFORCED 2026-08-22** — both halves, and the first one measured worse than filed.
+
+*Selected by nothing.* Verified by counting invocation sites across the Makefile, CI, `.dagger/*.go` and
+`scripts/*.sh`: `test_auth_e2e.py` had **0**, and it is the estate's ONLY live suite with none — the
+other nine that carry the generic `e2e` marker alone are all invoked BY PATH, so they were never
+orphaned. The audit's framing (a missing per-suite marker) was therefore the symptom; the defect is that
+neither selection mechanism named this file. Worse than filed: `scripts/auth_e2e.sh`, the artifact the
+CI job named `e2e-auth` runs instead, contains **no pytest invocation at all**. The estate's live
+authorization proof was selected by nothing, under a job whose name asserted the opposite. Fixed with an
+`auth` marker, its `pyproject.toml` registration, and an `e2e-auth` make target following the fifteen
+existing per-suite targets exactly; `pytest -m auth` now collects it (1 of 88, and the module holds one
+test).
+
+*The `.` where the delimiter is `$`.* Confirmed against `catalog/core/config.py:29` (default `$`) and
+`.docker/docker-compose.yml` (`LANCE_NS_DELIMITER: "$$"`, compose-escaped). `"e2ens.e2child"` is not a
+child of `e2ens` — it is a single ROOT-level namespace whose name contains a dot. So the create gated on
+the root, the 403 could pass for an unrelated reason (a locked root), and the `_grant` on
+`namespace:e2ens` that follows was inert against it: exactly the defect v1's H2 fix says it removed,
+reintroduced in a different disguise by the fix that removed it. Now `f"e2ens{DELIMITER}e2child"`, with
+the delimiter read from the environment so the suite follows a stack configured differently rather than
+asserting against one only this file believes in.
+
+Enforced by `test_every_live_suite_is_selected_by_something` — DERIVED, not a roster: a suite must have
+either a per-suite marker (which the existing `test_every_declared_marker_has_an_invocation_site` then
+requires a make target for) or a path invocation. It reads the selection surfaces with comments
+STRIPPED, because a suite named only in a commented-out recipe is selected by nothing and a raw
+substring search would call it covered — the same M8 class as the chart gates. RED: removing the
+`e2e-auth` target fires it naming `test_auth_e2e.py`.
+
+A second gate came out of adding the target: `E2E_SUITES` exists only to build the `.PHONY` list, and
+nothing tied it to the recipes — so the sixteenth suite needed an edit in two places and I missed the
+second on the first pass. `test_every_e2e_target_is_declared_phony` now derives both sets from the
+Makefile and compares them. 7 passed; full unit suite 2858 passed, 1 skipped, exit 0.
+
 ### M11 — the standalone browser suite skips every test on any default deploy · **CONFIRMED, HIGH→MEDIUM**
 
 v1's M3 correctly stopped `tests/e2e/tests/mfe.spec.ts` from counting an OIDC bounce as a pass. It did

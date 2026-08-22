@@ -37,6 +37,7 @@ test`, a DIRECTORY reference to the browser suite that legitimately lives there 
 keep passing. A path ending in `.py` is unambiguously a pytest target.
 """
 
+import ast
 import re
 import subprocess
 import sys
@@ -208,4 +209,114 @@ def test_every_declared_marker_has_an_invocation_site() -> None:
         f"or CI job, and the declaration is what makes that invisible: {unselected}. Give each one an "
         "invocation site (the `e2e-<suite>` targets in the Makefile), or delete the declaration and "
         "the marker from its suite."
+    )
+
+
+def _per_suite_markers(path: Path) -> set[str]:
+    """The `pytestmark` marks on a suite module, minus the generic `e2e` every suite carries."""
+    marks: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(getattr(target, "id", "") == "pytestmark" for target in node.targets):
+            continue
+        value = node.value
+        items = value.elts if isinstance(value, ast.List) else [value]
+        marks.update(item.attr for item in items if isinstance(item, ast.Attribute))
+    return marks - {"e2e"}
+
+
+def _selection_surfaces() -> str:
+    """Every file that can select a suite, concatenated with comments stripped.
+
+    Comments are stripped for the reason this audit keeps rediscovering: a gate over configuration must
+    assert over configuration. A suite named only in a commented-out make recipe or a disabled CI step
+    is selected by nothing, and a raw substring search would call it covered.
+    """
+    parts: list[str] = []
+    for rel in ("Makefile", ".github/workflows/ci.yml"):
+        path = REPO_ROOT / rel
+        if path.is_file():
+            parts.append(_without_comments(path.read_text(encoding="utf-8"), path.suffix or path.name))
+    for pattern in (".dagger/*.go", "scripts/*.sh"):
+        for path in sorted(REPO_ROOT.glob(pattern)):
+            parts.append(_without_comments(path.read_text(encoding="utf-8"), path.suffix))
+    return "\n".join(parts)
+
+
+def test_every_live_suite_is_selected_by_something() -> None:
+    """A suite nothing selects runs nowhere — and looks exactly like one that passes.
+
+    `tests/e2e-py` is in `testpaths` so the suites can never vanish from COLLECTION, which is what the
+    gate above pins. Collection is not execution: every offline run deselects them with `-m "not e2e"`,
+    so a live suite runs only when something names it. There are two sanctioned ways, and a suite needs
+    exactly one of them:
+
+    * a per-suite MARKER, which `test_every_declared_marker_has_an_invocation_site` then requires a make
+      target for — this is the documented path (`pyproject.toml`: "per-suite selectors used by the e2e
+      make targets"); or
+    * a PATH invocation, which is how nine of the estate's suites are actually run.
+
+    `test_auth_e2e.py` had neither. It carried the generic `e2e` marker alone and appeared in no
+    Makefile recipe, CI job, Dagger function or script — while a CI job literally named `e2e-auth` ran
+    `scripts/auth_e2e.sh`, which contains no pytest invocation at all. The estate's live authorization
+    proof was therefore selected by nothing, under a job whose name asserted the opposite.
+    """
+    surfaces = _selection_surfaces()
+    marker_targets = set(re.findall(r"-m\s+([a-z_]+)\b", surfaces))
+
+    unselected: list[str] = []
+    for path in sorted((REPO_ROOT / "tests" / "e2e-py").glob("test_*.py")):
+        by_path = path.name in surfaces or path.stem in surfaces
+        by_marker = bool(_per_suite_markers(path) & marker_targets)
+        if not (by_path or by_marker):
+            unselected.append(path.name)
+
+    assert not unselected, (
+        "these live suites are selected by nothing — no per-suite marker with a make target, and no "
+        "path invocation in the Makefile, CI, Dagger or scripts. They collect, they deselect, and they "
+        "never run:\n  " + "\n  ".join(unselected)
+    )
+
+
+def test_the_selection_scan_reaches_the_real_surfaces() -> None:
+    """Non-vacuity: an empty scan would call every suite unselected, not selected — but a scan that read
+    the Makefile and nothing else would silently narrow what counts as coverage."""
+    surfaces = _selection_surfaces()
+    suites = list((REPO_ROOT / "tests" / "e2e-py").glob("test_*.py"))
+
+    assert suites, "no live suites found — the glob is broken, not the estate"
+    assert len(surfaces) > 50_000, f"selection surfaces total {len(surfaces)} chars — files failed to load"
+    assert "e2e-ci" in surfaces, "the Makefile's e2e targets are missing from the scan"
+    assert re.search(r"-m\s+[a-z_]+", surfaces), "no marker invocation found at all — the scan is not reading recipes"
+
+
+def test_every_e2e_target_is_declared_phony() -> None:
+    """`E2E_SUITES` and the `e2e-*:` recipes must name the same set.
+
+    The variable exists only to build the `.PHONY` list, so a target missing from it is a target make
+    will skip the moment a file of that name appears — a failure that is rare, silent, and confusing.
+    Nothing tied the two together, so adding a sixteenth suite meant remembering an edit in a second
+    place; `auth` was added and the variable was missed on the first pass, which is the whole argument
+    for checking it here rather than trusting the next person to remember.
+    """
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+
+    match = re.search(r"^E2E_SUITES\s*=\s*(.+)$", makefile, re.MULTILINE)
+    assert match, "E2E_SUITES is not declared in the Makefile — the .PHONY list covers nothing"
+    declared = set(match.group(1).split())
+    # `e2e-ci`, `e2e-ray-ci` and `e2e-isolation` are entry points, not per-suite proofs: they take
+    # prerequisites (`: bootstrap`) rather than running one marker, which is what distinguishes them.
+    recipes = {
+        name
+        for name, rest in re.findall(r"^e2e-([a-z-]+):(.*)$", makefile, re.MULTILINE)
+        if "bootstrap" not in rest and f"-m {name.replace('-', '_')} " in makefile
+    }
+
+    assert declared, "E2E_SUITES is empty or unparseable — the .PHONY list covers nothing"
+    assert recipes, "no per-suite e2e recipes found — the recipe pattern moved"
+    assert declared == recipes, (
+        f"E2E_SUITES and the e2e-* recipes disagree.\n"
+        f"  in E2E_SUITES but no recipe: {sorted(declared - recipes)}\n"
+        f"  has a recipe but not phony:  {sorted(recipes - declared)}"
     )
