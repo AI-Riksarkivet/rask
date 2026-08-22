@@ -40,9 +40,29 @@ func (m *Rask) frontendBase(src *dagger.Directory) *dagger.Container {
 
 // Frontend runs the frontend job's bun gates as ONE turbo invocation fanned across the workspace graph:
 // svelte-check (check), TypeScript 7 via tsgo (check:tsgo), the unit tests, and lint + fmt:check — which
-// are package tasks now, so they parallelise and cache instead of running once repo-wide. Turbo fails on
-// the first non-zero task, which Dagger surfaces as the container error. The Playwright e2e leg
-// (`test:e2e`) is browser-bound and lives in its own function; it is not part of this hermetic subset.
+// are package tasks now, so they parallelise and cache instead of running once repo-wide. The Playwright
+// e2e leg (`test:e2e`) is browser-bound and lives in its own function; it is not part of this hermetic
+// subset.
+//
+// ── `--continue` IS LOAD-BEARING, and its absence cost the estate a whole gate ────────────────────
+// Turbo fail-fasts by default: the first non-zero task cancels every task not already started. For a
+// BUILD that is right — there is no point compiling against a broken dependency. For a GATE it is
+// exactly wrong, because a gate's job is to report the state of the estate, not to stop at the first
+// bad news.
+//
+// Measured on this workspace, same command, warm cache:
+//
+//	without --continue:  45 of 61 tasks ran, 1 failure reported
+//	with    --continue:  70 of 74 tasks ran, 4 failures reported
+//
+// So three of the four real failures were invisible — including `@rask/api#test`, which has collected
+// ZERO tests since 2026-08-05 (its `live.svelte.ts` imports `svelte`, which `@rask/api` never declared)
+// and was masked the whole time by whichever task happened to fail first. `annotator:test` (422) and
+// `explorer:test` (116) did not run at all. A gate reporting one failure of sixty-one is not a gate; it
+// is a sample.
+//
+// The exit code is unchanged — turbo still exits non-zero if ANY task failed, so Dagger still surfaces
+// the container error and CI still goes red. `--continue` buys completeness of the report, not leniency.
 func (m *Rask) Frontend(
 	ctx context.Context,
 	// +defaultPath="/"
@@ -50,6 +70,6 @@ func (m *Rask) Frontend(
 	src *dagger.Directory,
 ) (string, error) {
 	return m.frontendBase(src).
-		WithExec([]string{"bunx", "turbo", "run", "check", "check:tsgo", "test", "lint", "fmt:check"}).
+		WithExec([]string{"bunx", "turbo", "run", "check", "check:tsgo", "test", "lint", "fmt:check", "--continue"}).
 		Stdout(ctx)
 }

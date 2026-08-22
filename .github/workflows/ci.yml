@@ -278,9 +278,14 @@ jobs:
       # instance, and running every first-compile at once blows the per-server startup window on a
       # 2-core runner. (lakehouse alone runs TWO dev servers — auth-off for three areas, auth-on for
       # admin — each with its own warmup.)
+      #
+      # `--continue` because SERIAL + FAIL-FAST is the worst pairing available: turbo cancels every zone
+      # it has not started, and at --concurrency=1 that is "all the ones after the first failure". The
+      # exit code is unchanged — any failing zone still reds the job — so this buys a complete report,
+      # not leniency. Same reasoning, and the same measurement, as `.dagger/frontend.go`'s Frontend().
       - name: Playwright e2e — 4 of 7 zones (hermetic — /api mocked in-page)
         working-directory: frontend
-        run: bunx turbo run test:e2e --concurrency=1
+        run: bunx turbo run test:e2e --concurrency=1 --continue
 
       - name: Upload Playwright traces on failure
         if: failure()
