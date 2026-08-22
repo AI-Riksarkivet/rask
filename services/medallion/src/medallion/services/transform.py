@@ -35,7 +35,7 @@ from opentelemetry import trace
 from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_refused, record_stage_completion, record_transition
 from medallion.schemas.events import build_run_event
-from medallion.services import catalog_register, promotion_hold
+from medallion.services import catalog_register, promotion_band, promotion_hold
 from medallion.services.compute import measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.promotion import promotion_lineage
@@ -616,6 +616,20 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
         elif assertions and not passed(assertions):
             quality_blocked = True
             quality_reasons = [a.assertion for a in assertions if not a.success]
+        # 3b. The gate's OTHER question (§9.1): is this promotion unusual rather than broken? The
+        # assertions cannot answer it — a batch whose row count doubled passes every one of them — so
+        # before this, exactly the promotion a person should look at was the one promoted silently.
+        #
+        # Gated on review being ENABLED, and that is the whole difference from 3. A failed assertion
+        # blocks with or without a reviewer, because corrupt data is wrong either way. A band breach is
+        # only ever a QUESTION: with nobody to ask there is no honest answer but to promote, and
+        # blocking here would invent a verdict the policy never authorised.
+        elif result is not None and promotion_hold.review_enabled(settings):
+            previous = await run_in_threadpool(promotion_band.previous_row_count, to_uri, settings.storage_options(), version=result.version)
+            band_reasons = promotion_band.review_reasons(row_count=result.row_count, previous_row_count=previous, band=settings.promotion_review_band)
+            if band_reasons:
+                quality_blocked = True
+                quality_reasons = band_reasons
         # 4. Trigger the next stage (unless terminal — gold has no pub_topic — or blocked by the gate).
         elif settings.pub_topic:
             next_trigger = {

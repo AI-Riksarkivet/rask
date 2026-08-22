@@ -411,6 +411,9 @@ spec:
             - { name: MEDALLION_QUALITY_REVIEW_ENABLED, value: "true" }
             - { name: MEDALLION_QUALITY_REVIEW_HOURS, value: {{ $root.Values.medallion.qualityReviewHours | quote }} }
             - { name: MEDALLION_QUALITY_REVIEW_APPROVER, value: {{ $root.Values.medallion.qualityReviewApprover | quote }} }
+            # The band is read HERE, by the mover, for the same reason the approver is: the mover
+            # decides at DISPATCH whether this promotion is unusual. The producer never sees it.
+            - { name: MEDALLION_PROMOTION_REVIEW_BAND, value: {{ $root.Values.medallion.promotionReviewBand | quote }} }
             - { name: MEDALLION_PROMOTION_TOPIC, value: {{ $root.Values.medallion.promotionTopic | quote }} }
             {{- end }}
             {{- end }}

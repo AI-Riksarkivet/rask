@@ -105,6 +105,19 @@ class MedallionSettings(BaseSettings):
     #: WHO is asked. There is no default: an unset approver blocks rather than promoting, and the
     #: workflow says so in the outcome instead of failing open.
     quality_review_approver: str = Field(default="", alias="MEDALLION_QUALITY_REVIEW_APPROVER")
+    #: How far a promotion's row count may move from the previous version before a person is asked —
+    #: §9.1's ±25%, ASSUMED rather than measured (nobody has looked at a real silver->gold delta on a
+    #: live corpus), which is exactly why it is a knob and not a literal. Re-open it with a
+    #: measurement, not an opinion.
+    #:
+    #: This is the half of the gate that catches a promotion which is UNUSUAL rather than broken. The
+    #: assertions cannot: a batch whose row count doubled passes every one of them, so before this it
+    #: was promoted silently and the review machinery never ran.
+    #:
+    #: `ge=0` and not `gt=0` on purpose: zero means "ask about every change", which is a noisy but
+    #: SAFE misconfiguration. The unsafe direction — a value that quietly promotes everything — is the
+    #: failure this setting exists to end, so it is not reachable.
+    promotion_review_band: float = Field(default=0.25, ge=0, alias="MEDALLION_PROMOTION_REVIEW_BAND")
     #: Where a mover publishes a promotion it is HOLDING, and where the producer listens for one.
     #:
     #: The hold travels over the bus rather than being reviewed in place because the review must be
