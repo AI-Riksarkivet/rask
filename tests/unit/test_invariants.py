@@ -1968,6 +1968,55 @@ def test_rays_two_tracing_switches_are_not_cross_wired() -> None:
     )
 
 
+def _perses_dashboards(docs: list[dict]) -> dict[str, dict]:
+    """{key: parsed dashboard} from the Perses ConfigMap."""
+    import json as _json
+
+    for doc in docs:
+        data = doc.get("data") or {}
+        if doc.get("kind") == "ConfigMap" and "fleet-red.json" in data:
+            return {k: _json.loads(v) for k, v in data.items() if k.endswith(".json")}
+    return {}
+
+
+def test_a_ray_dashboard_exists_and_uses_rays_own_promql_correctly() -> None:
+    """Six dashboards existed and not one had a single Ray panel — on the cluster the entire
+    bronze->silver->gold cascade runs on.
+
+    The queries are ported from Ray's own shipped panels rather than invented, because three of its
+    metric shapes are counter-intuitive and each produces a plausible-looking wrong answer:
+
+      * `ray_node_cpu_utilization` is a PERCENT (0-100), not a ratio, so cores-in-use needs
+        `* ray_node_cpu_count / 100`.
+      * object-store CAPACITY lives in `ray_resources{Name="object_store_memory"}`, not in any
+        `ray_node_*` series, so a usage percentage computed from `ray_node_*` alone has no denominator.
+      * `ray_tasks` is a GAUGE and must never be `rate()`d — Ray's own panel pairs `max_over_time`
+        for terminal states with `clamp_min` for live ones, because these gauges are eventually
+        consistent.
+
+    And the agnosticism rule is enforced, not merely intended: `application` and `deployment` are
+    label VALUES that today carry a workload name (chart/values.yaml serveRoutePrefix/importPath), so
+    every Serve panel must GROUP BY them and none may filter on one.
+    """
+    dashboards = _perses_dashboards(_rendered_docs())
+    assert dashboards, "no Perses dashboard ConfigMap rendered"
+
+    ray = dashboards.get("ray.json")
+    assert ray is not None, f"no Ray dashboard — dashboards are {sorted(dashboards)}"
+
+    # `queries` sits on the PANEL spec, beside `plugin` — not inside it. Perses nests the chart plugin
+    # and the query list as siblings, and reading the wrong one yields an empty list rather than an
+    # error, which is how a gate like this passes vacuously.
+    queries = [q["spec"]["plugin"]["spec"]["query"] for panel in ray["spec"]["panels"].values() for q in panel["spec"].get("queries", [])]
+    assert queries, "the Ray dashboard renders no queries"
+    blob = " ".join(queries)
+
+    assert "ray_" in blob, "no ray_* series is queried at all"
+    assert "rate(ray_tasks" not in blob, "ray_tasks is a GAUGE — rate() over it is meaningless"
+    for workload in ("htrflow", "htr", "asr", "diarize", "voiceprint"):
+        assert f'"{workload}"' not in blob, f"a Ray panel filters on the {workload!r} workload — group by application/deployment instead"
+
+
 def _fleet_config(docs: list[dict]) -> dict[str, str]:
     """The fleet ConfigMap — the one carrying `RASK_API_PREFIX` and the gateway's upstream addresses."""
     for doc in docs:

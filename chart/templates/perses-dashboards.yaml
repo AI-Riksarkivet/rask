@@ -413,6 +413,113 @@ data:
         ]
       }
     }
+  ray.json: |
+    {
+      "kind": "Dashboard",
+      "metadata": { "name": "ray", "project": "rask" },
+      "spec": {
+        "display": { "name": "rask Ray — cluster, Serve, Data", "description": "Ray's own series. Every panel groups by application/deployment rather than naming a workload — the platform knows none." },
+        "duration": "1h",
+        "panels": {
+          "nodeCpu": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "CPU cores in use", "description": "ray_node_cpu_utilization is a PERCENT (0-100), not a ratio — hence * ray_node_cpu_count / 100." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (instance) (ray_node_cpu_utilization * ray_node_cpu_count / 100)", "seriesNameFormat": {{ "{{instance}}" | quote }} } } } } ]
+            }
+          },
+          "tasksByState": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Tasks by state", "description": "ray_tasks is a GAUGE and is eventually consistent — never rate() it. max_over_time for terminal states, clamp_min for live ones, which is Ray's own pairing." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (State) (max_over_time(ray_tasks{IsRetry=\"0\",State=~\"FINISHED|FAILED\"}[14d])) or clamp_min(sum by (State) (ray_tasks{IsRetry=\"0\",State!~\"FINISHED|FAILED\"}), 0)", "seriesNameFormat": {{ "{{State}}" | quote }} } } } } ]
+            }
+          },
+          "objectStore": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Object store used (%)", "description": "Capacity lives in ray_resources{Name=\"object_store_memory\"} — there is no ray_node_* denominator for this." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (instance) (ray_object_store_memory) * 100 / clamp_min(sum by (instance) (ray_resources{Name=\"object_store_memory\"}), 1)", "seriesNameFormat": {{ "{{instance}}" | quote }} } } } } ]
+            }
+          },
+          "oomKills": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Worker OOM kills", "description": "A real counter, so increase() is correct here — unlike ray_tasks above. This is the dominant silent cause of a dead stage." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum(increase(ray_memory_manager_worker_eviction_total[15m]))", "seriesNameFormat": "evictions / 15m" } } } } ]
+            }
+          },
+          "serveLatency": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Serve p99 latency (ms)", "description": "Grouped by application + deployment. Those label VALUES carry a workload name today; the panel must never filter on one." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "histogram_quantile(0.99, sum by (application, route, le) (rate(ray_serve_http_request_latency_ms_bucket{route!~\"/-/.*\"}[5m])))", "seriesNameFormat": {{ "{{application}} {{route}}" | quote }} } } } } ]
+            }
+          },
+          "serveReplicas": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Healthy Serve replicas" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (application, deployment) (ray_serve_deployment_replica_healthy)", "seriesNameFormat": {{ "{{application}}/{{deployment}}" | quote }} } } } } ]
+            }
+          },
+          "dataBackpressure": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Ray Data backpressure (fraction of task time)", "description": "The PromQL names are NOT the doc-table names: the docs list num_inputs_received, it registers as data_* and the exporter prepends ray_." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum(increase(ray_data_task_submission_backpressure_time[5m])) / clamp_min(sum(increase(ray_data_num_tasks_submitted[5m])), 1)", "seriesNameFormat": "backpressure s / task" } } } } ]
+            }
+          },
+          "controlPlane": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "compute -> Ray control calls", "description": "rask's OWN series (ray_kit.metrics), so this panel works even before Ray's endpoint is scraped. unauthorized is separated from unreachable on purpose." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (lance_ray_op, lance_ray_outcome) (rate(ray_control_probes_total[5m]))", "seriesNameFormat": {{ "{{lance_ray_op}} {{lance_ray_outcome}}" | quote }} } } } } ]
+            }
+          },
+          "jobsKnown": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Jobs Ray still remembers", "description": "The OOM early warning: GET /api/jobs/ takes no parameters, so it returns every job ever submitted — measured at 81,155 / 164.7 MB. The prune cron bounds it; this shows it coming back." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "max(ray_control_jobs_known)", "seriesNameFormat": "jobs in the dashboard's listing" } } } } ]
+            }
+          }
+        },
+        "layouts": [
+          { "kind": "Grid", "spec": { "display": { "title": "Cluster" }, "items": [
+            { "x": 0,  "y": 0, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/nodeCpu" } },
+            { "x": 8,  "y": 0, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/tasksByState" } },
+            { "x": 16, "y": 0, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/objectStore" } },
+            { "x": 0,  "y": 8, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/oomKills" } },
+            { "x": 8,  "y": 8, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/dataBackpressure" } },
+            { "x": 16, "y": 8, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/jobsKnown" } }
+          ] } },
+          { "kind": "Grid", "spec": { "display": { "title": "Serve + control path" }, "items": [
+            { "x": 0,  "y": 0, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/serveLatency" } },
+            { "x": 8,  "y": 0, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/serveReplicas" } },
+            { "x": 16, "y": 0, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/controlPlane" } }
+          ] } }
+        ]
+      }
+    }
   maintenance.json: |
     {
       "kind": "Dashboard",
