@@ -145,6 +145,18 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         pairs.add((_obj_type(nested[0]), nested[1]))
         top = fga_deps._create_parent_check(resource, ["top_level_child"], root_settings)
         assert top is not None, "fga_lock_root_create must gate a top-level create on the root object"
+        # WHERE it is checked may change; WHICH permission it needs may not. `lockRootCreate` moves the
+        # check from the parent namespace to the root object — it is not a licence to ask for a weaker
+        # relation there. Asserting only `is not None` and that the pair RESOLVES (which is all this
+        # test did until 2026-08-22) cannot tell the tiers apart: `can_get_metadata` resolves on the
+        # root type perfectly well. Measured — swapping this branch to the reader-tier
+        # `can_get_metadata` left 3,125 tests passing, and `chart/values-prod.yaml:22` ships
+        # `lockRootCreate: true` as the ONLY thing stopping any authenticated token from minting
+        # top-level namespaces and tables in production.
+        assert top[1] == nested[1], (
+            f"the locked-root create for {resource!r} asks for {top[1]!r} while the nested create asks "
+            f"for {nested[1]!r} — locking the root must not downgrade the tier it demands"
+        )
         pairs.add((_obj_type(top[0]), top[1]))
 
     # 3. Transactions (parent-scoped for a namespaced id, object-scoped for an opaque one) and the

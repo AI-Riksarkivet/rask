@@ -344,6 +344,8 @@ suite stays green (**3,001 passed**).
 v1's H2 established that the estate has two postures, one per environment. It fixed the test to assert
 the *dev* posture. **Nothing asserts the prod one.**
 
+
+**ENFORCED 2026-08-22.** `tests/unit/test_fga_model_contract.py`. The existing assertion checked that the locked-root pair RESOLVES in the model, never which TIER it is — and `can_get_metadata` resolves on the root type perfectly well, which is why the downgrade was invisible. It now asserts the locked-root relation EQUALS the nested one: `lockRootCreate` moves WHERE the check happens, never WHICH permission it demands. RED/GREEN: the mutant (`return settings.fga_root_object, "can_get_metadata"`) gave **3,125 passed** before, and now fails with *"the locked-root create for 'table' asks for 'can_get_metadata' while the nested create asks for 'can_create_table' — locking the root must not downgrade the tier it demands"*.
 ### H9 — the phantom-relation scanner reaches 10 of the estate's relations · **CONFIRMED, raised to HIGH**
 
 `tests/unit/test_invariants.py:316-342`. `_fga_literals()` is the estate's only repo-wide guard against
