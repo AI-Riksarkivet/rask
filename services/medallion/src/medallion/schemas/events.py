@@ -167,6 +167,7 @@ def build_run_event(
     version: int = 1,
     row_count: int | None = None,
     size_bytes: int | None = None,
+    duration_seconds: float | None = None,
     assertions: list[dict[str, Any]] | None = None,
     source_uri: str | None = None,
     schema_fields: SchemaFields | None = None,
@@ -227,6 +228,17 @@ def build_run_event(
     # whose cascade it is. Carried, never substituted for `author` — see `NotificationReason.ORIGINATOR`.
     if originator:
         lance_fields["originator"] = originator
+    # HOW LONG the run took, measured — the same `time.perf_counter` delta the caller hands to
+    # `record_stage_completion`. B10 (`open_batch_process.md`) requires both places to carry ONE
+    # number so the graph and the metric cannot disagree; it cannot be derived from timestamps here
+    # because the medallion emits no START event, so a consumer has only this.
+    #
+    # `is not None`, never a truthiness check: 0.0 is falsy and a sub-second stage is precisely what
+    # the histogram's lower buckets exist to show. Omitted entirely when unmeasured, which is what
+    # keeps the FAIL wire byte-identical for `tests/unit/test_events_parity.py` — a FAIL wrote
+    # nothing and times nothing.
+    if duration_seconds is not None:
+        lance_fields["duration_seconds"] = duration_seconds
     if synthetic:
         # Machine-readable, so a consumer filters provenance-only runs DELIBERATELY rather than by
         # inferring it from a missing version facet (which is also what a merely old event looks like).

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
@@ -32,7 +33,7 @@ from openfga_sdk import OpenFgaClient
 from opentelemetry import trace
 
 from medallion.core.config import MedallionSettings, project_namespace
-from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_refused, record_transition
+from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_refused, record_stage_completion, record_transition
 from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register, promotion_hold
 from medallion.services.compute import measure_stage, read_upstream, transform_stage
@@ -181,6 +182,13 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
     (``publication_trigger``) always carries the project, because the mover cannot resolve its tiers
     without it. A single-tenant deployment that ever needs a vended location must resolve a root here
     rather than widen the check."""
+    # WALL-CLOCK FROM DELIVERY TO OUTCOME, measured once and used twice. `time.perf_counter` because
+    # it is monotonic — a wall clock can step backwards under NTP and yield a negative duration, which
+    # a histogram silently discards. The SAME value goes to `build_run_event(duration_seconds=…)` and
+    # to `record_stage_completion(...)`: open_batch_process.md B10 requires the graph and the metric to
+    # carry one number, and computing it twice at two points is how they start disagreeing.
+    _t0 = time.perf_counter()
+    elapsed_seconds = 0.0
     transition = f"{settings.from_namespace}->{settings.to_namespace}"
     # VALIDATE-OR-DROP, before a single field is read. Every value on this payload becomes an S3 key
     # prefix, a Lance read URI, a Ray submission id or a lineage graph value, and the BUS is a wider
@@ -521,6 +529,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                         key_column=settings.quality_key_column,
                         required_columns=settings.required_column_list,
                     )
+        elapsed_seconds = time.perf_counter() - _t0
         run_event = build_run_event(
             operation=settings.operation,
             author=settings.author,
@@ -531,6 +540,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             version=result.version if result else 1,
             row_count=result.row_count if result else None,
             size_bytes=result.size_bytes if result else None,
+            duration_seconds=elapsed_seconds,
             source_uri=to_uri if result else None,
             schema_fields=result.fields if result else None,
             # Field-to-field column lineage (#1): the compute declares which upstream column each output
@@ -800,5 +810,18 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             await promotion_hold.publish_hold(dapr, settings, spec)
         return _QUALITY_BLOCKED
     record_transition(transition)
-    log.info("medallion_stage_moved", extra={"transition": transition, "token": token, "to": settings.to_dataset})
+    # Volume is recorded only when the compute MEASURED the write — a stage that committed nothing
+    # reports its latency and no rows/bytes, rather than a zero a reader would take for a real result.
+    # THE RAY LANE'S DURATION IS THE WATCHER'S, NOT THIS HANDLER'S. On the Ray path this is pass 2 —
+    # the wake-up after the job went terminal — so `elapsed_seconds` here covers only the measure and
+    # emit, and recording it would report a multi-hour Ray stage as a few seconds. `stage_run` measured
+    # the real span from its own deterministic clock and handed it back on the trigger.
+    stage_seconds = trigger.ray_duration_seconds if (trigger.ray_job_done and trigger.ray_duration_seconds is not None) else elapsed_seconds
+    record_stage_completion(
+        transition,
+        duration_seconds=stage_seconds,
+        rows=result.row_count if result else None,
+        size_bytes=result.size_bytes if result else None,
+    )
+    log.info("medallion_stage_moved", extra={"transition": transition, "token": token, "to": settings.to_dataset, "duration_seconds": round(stage_seconds, 3)})
     return _SUCCESS

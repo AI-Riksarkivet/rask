@@ -50,6 +50,54 @@ _stage_refused = _meter.create_counter(
 )
 
 
+#: SECOND-scale boundaries, set explicitly because the SDK's default advisory is tuned for
+#: MILLISECOND web latency (its top bucket is 10s) and a medallion stage runs for minutes to hours —
+#: every run would land in `+Inf` and every quantile would read flat. `lineage/core/metrics.py:35-38`
+#: documents having been bitten by exactly this, which is why it is copied rather than rediscovered.
+_STAGE_DURATION_BUCKETS = [1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 1800.0, 3600.0, 7200.0, 21600.0, 86400.0]
+
+_stage_duration = _meter.create_histogram(
+    "medallion.stage.duration",
+    unit="s",
+    description="Wall-clock seconds a completed stage transition took, from dispatch to terminal outcome.",
+    explicit_bucket_boundaries_advisory=_STAGE_DURATION_BUCKETS,
+)
+_stage_rows = _meter.create_counter(
+    "medallion.stage.rows",
+    unit="{row}",
+    description="Rows written by completed stage transitions.",
+)
+_stage_bytes = _meter.create_counter(
+    "medallion.stage.bytes",
+    unit="By",
+    description="Bytes written by completed stage transitions.",
+)
+
+
+def record_stage_completion(transition: str, *, duration_seconds: float, rows: int | None = None, size_bytes: int | None = None) -> None:
+    """Record what a completed transition COST — its latency, and what it moved.
+
+    ``duration_seconds`` must be a MEASURED ``time.perf_counter`` delta, and the caller must hand the
+    SAME number to ``build_run_event(duration_seconds=…)``. That pairing is `open_batch_process.md`
+    B10, and it exists so the graph and the metric cannot disagree: a derived estimate (the stage
+    watcher's ``polls × poll_interval``, say) is plausible, cheap, and produces a number the lineage
+    facet does not agree with — leaving a reader no way to tell which of the two is lying.
+
+    ``rows``/``size_bytes`` are optional because only a MEASURED write knows them; a stage that
+    committed nothing records its latency and no volume, rather than a misleading zero.
+
+    Attributes carry only the bounded ``lance.medallion.transition`` key, exactly like every counter
+    above — per-run ids stay on spans and logs. Rows and bytes are unbounded VALUES, which is fine;
+    it is unbounded LABELS that multiply series.
+    """
+    attrs = {"lance.medallion.transition": transition}
+    _stage_duration.record(duration_seconds, attrs)
+    if rows is not None:
+        _stage_rows.add(rows, attrs)
+    if size_bytes is not None:
+        _stage_bytes.add(size_bytes, attrs)
+
+
 def record_transition(transition: str) -> None:
     """Increment the stage-transition counter for ``transition`` (``"<from>-><to>"``)."""
     _stage_transitions.add(1, {"lance.medallion.transition": transition})

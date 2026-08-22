@@ -117,6 +117,15 @@ class StageJobSpec(BaseModel):
     #: `None`/`0` mean "first turn": submit, then count from there.
     submission_id: str | None = None
     polls_done: int = 0
+    #: When the watch STARTED, as an ISO-8601 string, carried across `continue_as_new` for the same
+    #: reason `polls_done` is: each turn begins with empty history and would otherwise re-stamp it.
+    #:
+    #: NOT `time.perf_counter`, and the difference is load-bearing. `perf_counter` is process-relative
+    #: and monotonic WITHIN one process; a workflow turn can resume in a different pod, so a carried
+    #: counter value would be meaningless there. It is also non-deterministic, which a replayed
+    #: workflow forbids outright (DWF-DET). `ctx.current_utc_datetime` is Dapr's deterministic clock —
+    #: replay-safe, identical on every replay, and the only correct source of time inside a workflow.
+    started_at: str | None = None
 
 
 class StageJobOutcome(BaseModel):
@@ -125,12 +134,35 @@ class StageJobOutcome(BaseModel):
     submission_id: str
     status: str | None = None
     polls: int = 0
+    #: Seconds from the watch starting to this outcome, from the workflow's deterministic clock.
+    #: `None` when the spec predates the field (a mid-rollout instance), never a fabricated 0.0.
+    duration_seconds: float | None = None
     #: `succeeded` | `failed` | `abandoned` | `unnotified` — the workflow's verdict, which is not the
     #: same as Ray's status. `unnotified` is the odd one: the JOB succeeded and the data landed, but the
     #: wake-up publish could not be delivered, so the cascade stopped with healthy data behind it.
     #: status: `abandoned` means the ceiling was hit with the job still RUNNING, which is neither a
     #: success nor a job failure and must not be reported as either.
     verdict: str = "failed"
+
+
+def _watch_seconds(ctx: DaprWorkflowContext, started_at: str) -> float | None:
+    """Seconds from ``started_at`` to now, on the workflow's DETERMINISTIC clock.
+
+    `ctx.current_utc_datetime` is the only legal source of time inside a workflow body: it is fed from
+    recorded history, so every replay computes the same number. A wall clock or `perf_counter` here
+    would return a different value on each replay and make the workflow non-deterministic, which is
+    the `DWF-DET` class of defect that leaves an instance permanently stuck.
+
+    Returns ``None`` rather than a fabricated 0.0 when the stamp is missing or unparseable — an
+    instance that started before this field existed genuinely does not know how long it has run, and a
+    zero would land in the histogram's lowest bucket and read as an instant stage.
+    """
+    from datetime import datetime
+
+    try:
+        return max(0.0, (ctx.current_utc_datetime - datetime.fromisoformat(started_at)).total_seconds())
+    except (TypeError, ValueError):
+        return None
 
 
 def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[Any, Any, dict[str, Any]]:
@@ -148,6 +180,9 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     # FAILED state nobody queries.
     # FIRST TURN ONLY. After a `continue_as_new` the spec carries the id, and re-submitting would start
     # a second Ray job writing the same output dataset.
+    # Stamped on the first turn only, from Dapr's deterministic clock, and carried by the
+    # `continue_as_new` below — see `StageJobSpec.started_at` for why this is not `perf_counter`.
+    started_at = spec.started_at or ctx.current_utc_datetime.isoformat()
     submission_id: str | None = spec.submission_id
     if submission_id is None:
         try:
@@ -185,21 +220,23 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     # STILL RUNNING and budget left: hand the rest to a fresh turn. Everything above is awaited, which
     # matters — `continue_as_new` restarts immediately and DISCARDS any task started but not awaited.
     if not _is_terminal(status) and status is not None and polls < spec.max_polls:
-        ctx.continue_as_new(spec.model_copy(update={"submission_id": submission_id, "polls_done": polls}).model_dump())
+        ctx.continue_as_new(spec.model_copy(update={"submission_id": submission_id, "polls_done": polls, "started_at": started_at}).model_dump())
         return {}
 
     if not _is_terminal(status):
         # The ceiling, with the job still running. Distinct from a failure ON PURPOSE: reporting a
         # slow job as FAILED would have the mover emit a failure for work that may still land, and
         # this estate's recurring defect is exactly that — a state reported as something it is not.
-        outcome = StageJobOutcome(submission_id=submission_id, status=status, polls=polls, verdict="abandoned")
+        outcome = StageJobOutcome(
+            submission_id=submission_id, status=status, polls=polls, verdict="abandoned", duration_seconds=_watch_seconds(ctx, started_at)
+        )
         if not ctx.is_replaying:
             log.warning("medallion_stage_watch_abandoned", extra={"submission_id": submission_id, "status": status, "polls": polls})
         yield ctx.call_activity(report_stage_outcome, input={"spec": spec.model_dump(), "outcome": outcome.model_dump()}, retry_policy=ACTIVITY_RETRY)
         return outcome.model_dump()
 
     verdict = "succeeded" if status == _TERMINAL_OK else "failed"
-    outcome = StageJobOutcome(submission_id=submission_id, status=status, polls=polls, verdict=verdict)
+    outcome = StageJobOutcome(submission_id=submission_id, status=status, polls=polls, verdict=verdict, duration_seconds=_watch_seconds(ctx, started_at))
     if not ctx.is_replaying:
         log.info("medallion_stage_job_terminal", extra={"submission_id": submission_id, "status": status, "polls": polls})
 
@@ -304,6 +341,13 @@ def publish_stage_ready(ctx: WorkflowActivityContext, payload: dict[str, Any]) -
     # than "skip_submit", so a reader of the handler sees the precondition and not the shortcut.
     trigger["ray_job_done"] = True
     trigger["ray_submission_id"] = outcome.submission_id
+    # THE MEASURED SPAN, handed to pass 2 so exactly one place records it. Pass 2's own elapsed time
+    # covers only the measure-and-emit tail, so a multi-hour Ray stage would report as seconds; and
+    # recording in BOTH the watcher and the handler would double-count every Ray stage. Omitted when
+    # unmeasurable (a spec from before this field existed, mid-rollout), and the handler then falls
+    # back to its own clock rather than dropping the stage from the histogram entirely.
+    if outcome.duration_seconds is not None:
+        trigger["ray_duration_seconds"] = outcome.duration_seconds
 
     async def _publish() -> None:
         # `service_kit.dapr_publish.publish_event`, never the SDK call directly: the bare

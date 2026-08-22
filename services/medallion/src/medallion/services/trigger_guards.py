@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 #: A correlation token, as every head that mints one already constrains it: ``Idempotency-Key``'s
@@ -122,6 +122,16 @@ class StageTrigger(BaseModel):
     #: behaviour, not an escalation. What it must NOT do is skip the submit silently, which is why the
     #: handler logs the branch it took.
     ray_job_done: bool = False
+    #: Seconds the RAY WATCH took, measured by `stage_run` from its own deterministic workflow clock
+    #: and handed back on the wake-up trigger. Pass 2 records THIS as the stage duration rather than
+    #: its own elapsed time, which would measure only the measure/emit tail and report a multi-hour
+    #: Ray job as a few seconds. One recording site, one number — recording in both the watcher and
+    #: the handler would double-count every Ray stage in the histogram.
+    #:
+    #: BOUNDED because the trigger is untrusted input: a negative or absurd value is discarded rather
+    #: than recorded, so a malformed payload cannot poison the series. 30 days is far beyond any real
+    #: stage and comfortably above the watch ceiling.
+    ray_duration_seconds: float | None = Field(default=None, ge=0.0, le=2_592_000.0)
     ray_submission_id: str | None = None
 
     #: R26's ONE INSTANT, carried from the dispatch pass to the completed pass. `transform.py` stamps
