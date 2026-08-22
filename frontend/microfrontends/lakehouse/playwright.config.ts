@@ -1,3 +1,6 @@
+import { existsSync, readdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig, devices } from '@playwright/test';
 import {
 	AUTH_OFF,
@@ -29,6 +32,23 @@ import {
 // there. The mock catalog in particular needs a port NO other zone claims, because
 // `reuseExistingServer` is on locally: if something else is already listening, playwright ADOPTS it
 // as the catalog instead of starting the mock, and the admin suite silently drives a real server.
+
+// The auth-OFF areas that ship a warmup, DERIVED from the tree rather than hand-listed. The old
+// literal named `data` — a directory that has not existed since the area merge — and omitted
+// `catalog`, so the heaviest auth-off area ran against exactly the cold Vite cache this project
+// exists to warm, and the config reported nothing at all. A regex over a list of directory names
+// cannot notice that one of them is gone; deriving it can. `admin` is excluded on purpose: it warms
+// the auth-ON server in its own `warmup-admin` project below.
+const E2E_DIR = resolve(dirname(fileURLToPath(import.meta.url)), 'e2e');
+const WARMUP_AREAS = readdirSync(E2E_DIR, { withFileTypes: true })
+	.filter((d) => d.isDirectory() && d.name !== 'admin')
+	.map((d) => d.name)
+	.filter((name) => existsSync(resolve(E2E_DIR, name, 'warmup.setup.ts')))
+	.sort();
+if (WARMUP_AREAS.length === 0) {
+	throw new Error('no e2e/<area>/warmup.setup.ts found — the warmup project would collect nothing');
+}
+const WARMUP_MATCH = new RegExp(`e2e/(${WARMUP_AREAS.join('|')})/warmup\\.setup\\.ts`);
 
 export default defineConfig({
 	testDir: './e2e',
@@ -123,7 +143,7 @@ export default defineConfig({
 		// starve behind the initial compile and time out at 30s in a bundle — flaky counts per run.
 		{
 			name: 'warmup',
-			testMatch: /e2e\/(data|lineage|storage)\/warmup\.setup\.ts/,
+			testMatch: WARMUP_MATCH,
 			use: { baseURL: AUTH_OFF },
 		},
 		{

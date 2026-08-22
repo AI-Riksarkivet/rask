@@ -68,6 +68,12 @@ Bun.serve({
 			seeded.get(`${req.method} ${url.pathname}`);
 		if (hit === undefined) return json({ detail: `unseeded: ${req.method} ${url.pathname}` }, 404);
 		const h = hit as Seeded;
-		return h && typeof h === 'object' && 'status' in h ? json(h.body ?? {}, h.status) : json(hit);
+		// NUMERIC status only. An upstream payload may carry its own `status` FIELD — a health probe, or
+		// Prometheus' `status: "success"` — and key-presence detection turned every such body into
+		// `new Response(body, {status: 'success'})`, which throws RangeError and answers HTTP 500. The
+		// sibling mocks all fixed this after it bit them; this one was missed.
+		return h && typeof h === 'object' && typeof h.status === 'number'
+			? json(h.body ?? {}, h.status)
+			: json(hit);
 	},
 });

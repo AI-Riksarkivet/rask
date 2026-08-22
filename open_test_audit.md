@@ -742,6 +742,8 @@ following the docstring runs three skips and exits 0.
 is therefore collected **a second time**, against the wrong dev server, where all 3 of its tests fail —
 while the `chromium-notifications` project at `:135-138` collects the same files correctly.
 
+
+**FIXED 2026-08-22.** `home/playwright.config.ts` auth-OFF project now matches `/\/e2e\/[^/]+\.spec\.ts$/` — the TOP LEVEL of `e2e/` and nothing below it — instead of `testIgnore: /e2e\/(projects|settings)\//`. Deliberately NOT `|notifications` appended: that hand-list is what drifted, and stating the RULE means the next subdirectory cannot repeat it. Verified by collection: `--project=chromium` now lists 4 tests in `auth.spec.ts` alone, and `--project=chromium-notifications` still lists the 3 `watch-enrolment` tests — so the spec is collected exactly once, by the project whose server can serve it.
 ### M16 — the lakehouse warmup project matches a directory that does not exist · **CONFIRMED**
 
 `frontend/microfrontends/lakehouse/playwright.config.ts:126` is
@@ -749,6 +751,8 @@ while the `chromium-notifications` project at `:135-138` collects the same files
 have `e2e/catalog/`, so `e2e/catalog/warmup.setup.ts` is collected by nothing and the catalog area runs
 against the cold Vite cache the config exists to pre-warm.
 
+
+**FIXED 2026-08-22.** `lakehouse/playwright.config.ts` derives the warmup areas from the tree (`e2e/<area>/warmup.setup.ts`, excluding auth-ON `admin`) instead of the literal `data|lineage|storage` — where `data` had not existed since the area merge and `catalog` was missing. Verified by collection: `--project=warmup` now lists **3** setups (catalog, lineage, storage) where it listed 2, so the heaviest auth-off area is warmed for the first time. Throws if the derived set is empty, so a moved tree fails loudly rather than warming nothing.
 ### M17 — the Postgres tracker backend is exercised by nothing · **CONFIRMED, LOW**
 
 `packages/tracker/tests/test_postgres.py:179-180` gates six integration tests behind a
@@ -768,6 +772,8 @@ Reproduced against the real launcher: `make dev-zone ZONE=lakehouse` renders the
 storage-tier pages as **502 "catalog contract drift"** — the exact broken state the seed file exists to
 prevent.
 
+
+**FIXED 2026-08-22.** Proven against the zone's own valibot, not by reading: the OLD warehouse seed fails `WarehouseSchema` with exactly three issues — `bucket` missing, `root_uri` missing, `serving` boolean where a string is required — and the new one parses. Also removed two seeds for endpoints that cannot be reached: the catalog's namespace router mounts `/{id}/…` subpaths ONLY (no bare `GET /v1/namespace`), and the mock DERIVES `/v1/stores/tiers` from `STORES` as `{role: Store[]}`, so a flat `{tiers: [...]}` seed shadowed the real shape. Both verified in source before deleting.
 ### M19 — eleven register-path tests mock a call the estate ruled must never happen · **CONFIRMED**
 
 `services/medallion/tests/test_register_uses_the_service_door.py:32` (and `test_catalog_register.py:56,
@@ -846,6 +852,8 @@ fixed after it made every seeded route answer HTTP 500 when the payload carried 
 
 ---
 
+
+**FIXED 2026-08-22.** `explorer/e2e/mock-media-services.ts` detects its envelope by `typeof h.status === 'number'` instead of `'status' in h`, matching the sibling mocks that already fixed this. Key-presence turned any upstream payload carrying its own `status` FIELD (a health probe, Prometheus' `status: "success"`) into `new Response(body, {status: 'success'})` — a RangeError answered as HTTP 500. `Seeded` already declared `status?: number`, so no type change was needed.
 ## Part 8 — Test infrastructure
 
 ### M22 — the integration client fixture writes to a fixed shared path · **CONFIRMED, raised to MEDIUM**

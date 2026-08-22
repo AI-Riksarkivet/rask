@@ -96,8 +96,15 @@ export default defineConfig({
 		{ name: 'warmup', testMatch: /e2e\/warmup\.setup\.ts/, use: { baseURL: AUTH_OFF } },
 		{
 			name: 'chromium',
-			testMatch: /\.spec\.ts$/,
-			testIgnore: /e2e\/(projects|settings)\//,
+			// AUTH-OFF owns the TOP LEVEL of e2e/ and nothing below it. Every subdirectory is an auth-ON
+			// surface with its own project (projects/, settings/, notifications/), so the old
+			// `testIgnore: /e2e\/(projects|settings)\//` had to be extended BY HAND for each new one —
+			// and it was not. `e2e/notifications/watch-enrolment.spec.ts` was therefore collected here
+			// too, against the auth-OFF server, where all 3 of its tests fail, while
+			// `chromium-notifications` runs the same file correctly against the auth-ON one. Matching
+			// only `e2e/<file>.spec.ts` states the RULE instead of listing its exceptions, so the next
+			// subdirectory to land cannot repeat it.
+			testMatch: /\/e2e\/[^/]+\.spec\.ts$/,
 			use: { ...devices['Desktop Chrome'], baseURL: AUTH_OFF },
 			dependencies: ['warmup'],
 		},

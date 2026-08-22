@@ -34,17 +34,30 @@ export const CATALOG_SEED: Record<string, unknown> = {
 	'GET /v1/table': {
 		tables: ['bronze$page_images', 'silver$lines', 'silver$features_daily', 'gold$htr_alto'],
 	},
-	'GET /v1/namespace': { namespaces: ['bronze', 'silver', 'gold'] },
+	// NO `GET /v1/namespace`. The catalog mounts that router with `/{id}/…` subpaths ONLY
+	// (namespaces.py:55 and every decorator below it) — there is no bare list route, so a seed for it
+	// is a body nothing can ever request. A seed that cannot be reached looks authoritative and does
+	// nothing, which is the state this file's own header warns is worse than an absent seed.
+	//
+	// `WarehouseResponse` verbatim. `bucket` and `root_uri` are REQUIRED by this zone's own
+	// WarehouseSchema (warehouses.remote.ts:22-30) and `serving` is a tier NAME, not a boolean. The
+	// previous body carried `name`, `storage_uri` and `serving: true` — three fields the catalog never
+	// returns and two the schema demands were missing — so valibot answered 502 "catalog contract
+	// drift" and `make dev-zone ZONE=lakehouse` rendered the warehouses page broken. A seed is a
+	// CONTRACT claim; getting it wrong is not a cosmetic fixture problem.
 	'GET /v1/warehouses': [
 		{
-			id: 'wh-dev',
+			id: 'acme-wh',
 			project: 'acme',
-			name: 'dev',
-			serving: true,
-			storage_uri: 's3://rask-dev/warehouse',
+			bucket: 'rask-wh',
+			root_uri: 's3://rask-wh',
+			serving: 'gold',
+			status: 'active',
 		},
 	],
-	'GET /v1/stores/tiers': { tiers: ['bronze', 'silver', 'gold'] },
+	// NO `GET /v1/stores/tiers` either: the mock DERIVES it from STORES and serves the real grouped
+	// shape (`{role: Store[]}`, admin/mock-catalog.ts:187-191). A flat `{tiers: [...]}` seed would
+	// shadow the correct shape with one the catalog never sends.
 };
 
 /** The runs the LINEAGE mock serves — the navbar bell's feed and the lineage run board.
