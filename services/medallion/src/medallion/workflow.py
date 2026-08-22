@@ -1,6 +1,6 @@
 """S1 — the stage transform as a Dapr Workflow, so the MEASURE waits for the JOB.
 
-THE DEFECT THIS CLOSES (`open_medallion_workflow.md` §7 S1, `transform.py:333`). The Ray branch of
+THE DEFECT THIS CLOSES (the cascade design record, `docs/architecture/medallion-cascade.md`; `transform.py:333`). The Ray branch of
 `handle_stage` reads:
 
     await submit_stage_job(...)                    # returns the instant Ray accepts the submission

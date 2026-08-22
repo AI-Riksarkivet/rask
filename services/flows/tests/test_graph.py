@@ -208,7 +208,7 @@ def test_the_bounds_are_ARITHMETICALLY_consistent_with_the_payload_cap_and_the_s
     # `TaskHubGrpcWorker(...)` without `channel_options`, so `get_grpc_channel` merges only
     # `DEFAULT_GRPC_KEEPALIVE_OPTIONS` — keepalive settings and no `grpc.max_*_message_length` at all,
     # leaving grpc's 4 MiB default. Read out of dapr 1.18.3 in `.venv`, and independently reproduced
-    # against a real grpc server (`RESOURCE_EXHAUSTED ... 5242880 vs 4194304`, open_medallion_workflow.md).
+    # against a real grpc server (`RESOURCE_EXHAUSTED ... 5242880 vs 4194304`, docs/architecture/medallion-cascade.md).
     # It is not raisable from config: nothing in the runtime plumbs channel options through.
     grpc_default_max_message_bytes = 4 * 1024 * 1024
     worst_case_raw = MAX_NODE_FAN_IN * MAX_PAYLOAD_CHARS

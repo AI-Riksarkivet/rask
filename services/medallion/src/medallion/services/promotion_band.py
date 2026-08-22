@@ -1,7 +1,7 @@
 """Is this promotion UNUSUAL? — the quality gate's missing question.
 
-The assertions answer "is it broken". They cannot answer "is it strange", and `open_medallion_workflow.md`
-§4 is about the gap between those two: a promotion whose row count doubled passes every assertion there
+The assertions answer "is it broken". They cannot answer "is it strange", and the cascade design record
+(`docs/architecture/medallion-cascade.md`) is about the gap between those two: a promotion whose row count doubled passes every assertion there
 is, so before this module it was promoted silently and the review machinery never ran.
 
 §9.1 decided the policy (2026-08-15): a row-count delta outside ±25%, plus every first promotion of a

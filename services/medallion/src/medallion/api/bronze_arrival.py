@@ -65,15 +65,32 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
     # fires on the catalog's `table_published` — the moment the quality gate passed a version and the
     # `published` tag moved — and carries the {from_version, to_version} range onto the stage trigger.
     #
-    # It does not replace `/bronze-arrival` in this commit. Both heads publish the same
-    # `medallion.bronze` trigger, and a table that emits BOTH signals CASCADES TWICE — there is no
-    # token de-duplication in the movers (a comment here claimed one until 2026-08-08; transform.py
-    # only reads the token into logs/lineage run-ids, and the two heads mint incompatible tokens
-    # anyway). Accepted because the stage write is overwrite-convergent (the
+    # IT DOES NOT REPLACE `/bronze-arrival`, AND RETIRING EITHER HEAD IS NOT THE FIX. This comment
+    # said the opposite until 2026-08-22 — "the real fix is retiring one head" — and that was ruled
+    # against: `docs/architecture/medallion-cascade.md` § "the two cascade heads are distinct events,
+    # and both must fire". The two triggers do not describe the same work. This one fires on a table
+    # being PUBLISHED and carries a {from_version, to_version} RANGE; `/bronze-arrival` fires on a
+    # bronze WRITE reaching COMPLETE, names the dataset actually written, and has no concept of a
+    # range. Unifying their tokens would collide two legitimate cascades onto one deterministic
+    # instance_id, and Dapr would answer the second schedule as a duplicate — silently dropping one
+    # of two pieces of work that must both happen.
+    #
+    # The two heads mint incompatible tokens by design (this one from the control event's `event_id`,
+    # the other from the bronze-write run's `lance.token` facet), so the deterministic-instance dedupe
+    # never engages between them, and there is no token de-duplication in the movers either — a
+    # comment here claimed one until 2026-08-08; `transform.py` only reads the token into logs and
+    # lineage run-ids. That is the intended shape: the token distinguishes EVENTS, while
+    # `stage_submission_id` distinguishes WORK, and merging the two questions is the defect.
+    #
+    # A table that genuinely emits both signals for the same dataset does pay duplicate compute, which
+    # is survivable rather than correct-by-luck: the stage write is overwrite-convergent (the
     # single-flight `_write_lock` plus deterministic content make the second pass a same-bytes
-    # overwrite), at the cost of duplicate compute and duplicate lineage Runs per hop. The real fix
-    # is retiring one head so the `published` tag is the single trigger — open_ingest_design.md §4;
-    # do NOT "restore" dedupe by scoping movers to the state store without reading that first.
+    # overwrite). What WOULD be a real duplicate is a future head publishing a trigger whose dataset
+    # AND range match another's — and that one the instance_id correctly dedupes on its own.
+    #
+    # Do NOT "restore" dedupe by scoping movers to the state store: an adversarial review found the
+    # key is not unique per legitimate message on a mover's own topic, so deploying it halts every
+    # distributed cascade.
     if settings.control_pubsub:
 
         @dapr_app.subscribe(

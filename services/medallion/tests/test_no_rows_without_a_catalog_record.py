@@ -1,6 +1,6 @@
 """S5's defect is unreachable, and this pins the property that makes it so.
 
-`open_medallion_workflow.md` §7 filed S5 as "compensation — the saga for a promotion that lands rows
+the retired plan `open_medallion_workflow.md` (its rulings now live in `docs/architecture/medallion-cascade.md`) §7 filed S5 as "compensation — the saga for a promotion that lands rows
 then fails to register — today that leaves gold rows with no catalog record."
 
 That state is no longer reachable, and NOT because a saga was built. It was closed by REORDERING: the

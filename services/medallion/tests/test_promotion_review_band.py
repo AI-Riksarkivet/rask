@@ -1,7 +1,7 @@
 """A promotion can be UNUSUAL without being broken, and nothing was looking.
 
 The quality gate answers on assertions: a null key, an unresolvable blob pointer, a zero row count.
-Those are corruption, and blocking them is right. But `open_medallion_workflow.md` §4 names the case
+Those are corruption, and blocking them is right. But the retired plan `open_medallion_workflow.md` (its rulings now live in `docs/architecture/medallion-cascade.md`) §4 names the case
 the archive actually has — "a row-count delta outside the expected band ... a first promotion of a
 newly ingested volume" — and observes that today those are "either auto-promoted (if no assertion
 covers them) or dropped forever (if one does). There is no third answer."

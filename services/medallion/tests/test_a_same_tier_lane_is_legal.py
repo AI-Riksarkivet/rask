@@ -1,6 +1,6 @@
 """A silver→silver derivation needs no code — and this pins the property that makes that true.
 
-`open_medallion_workflow.md` filed S6 as "silver→silver derivations, once S1's shape has run in
+the retired plan `open_medallion_workflow.md` (its rulings now live in `docs/architecture/medallion-cascade.md`) filed S6 as "silver→silver derivations, once S1's shape has run in
 anger", and §5's table reads "Not yet. Same shape as bronze→silver; adopt after that lands."
 
 Read as outstanding WORK that is wrong, and worth stating plainly: the mover is a namespace-PAIR
