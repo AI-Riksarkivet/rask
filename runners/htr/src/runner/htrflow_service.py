@@ -278,23 +278,12 @@ def _build_in_memory_document(image_bytes: bytes, name: str = "page") -> object:
     return InMemoryDocument(image_bytes, image_name=name)
 
 
-def _init_otel() -> None:
-    if not os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
-        return
-    from opentelemetry import trace
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-    if isinstance(trace.get_tracer_provider(), TracerProvider):
-        return  # already initialised
-    provider = TracerProvider(resource=Resource.create({"service.name": os.getenv("OTEL_SERVICE_NAME", "ray-htrflow")}))
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-    trace.set_tracer_provider(provider)
-
-
-_init_otel()
+# TRACING IS THE PLATFORM'S, NOT THIS RUNNER'S. A private `_init_otel()` used to build a
+# TracerProvider here — inert twice over: no span is opened anywhere under runners/, so it produced
+# none, and its env guard made it a no-op in every process the chart does not hand OTEL_* to. It also
+# defaulted the service name to this workload, putting one modality's name on the shared Ray plane.
+# `service_kit.ray_tracing` now owns both hooks (core + Serve), wired from the chart. See
+# open_ray_otel.md section 6.
 
 htrflow_app = HTRFlowDeployment.bind()
 

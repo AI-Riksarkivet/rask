@@ -1876,6 +1876,40 @@ def test_externalising_telemetry_does_not_silently_drop_ray() -> None:
     assert env.get("OTEL_EXPORTER_OTLP_ENDPOINT"), "externalising telemetry left the Ray head with no OTLP endpoint at all"
 
 
+def test_rays_two_tracing_switches_are_not_cross_wired() -> None:
+    """Ray has TWO tracing planes with DIFFERENT contracts, and swapping them fails SILENTLY.
+
+    The core hook (`rayStartParams.tracing-startup-hook`) takes no arguments and returns None — it
+    sets the global provider. The Serve hook (`RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH`) takes no
+    arguments and RETURNS a list of SpanProcessor, because Serve builds the provider itself. Point
+    either env at the other's function and Serve catches the resulting error, logs "the proxy/replica
+    will continue running", and keeps serving — nothing goes unhealthy and no span is ever produced.
+
+    Also pins HEAD-ONLY for the core hook: it is persisted to GCS internal KV by
+    `start_head_processes()` and read from there by every connecting process, so the same key on a
+    workerGroupSpec is a no-op that reads like configuration.
+    """
+    docs = _rendered_docs("singleTenant.enabled=true")
+    ray = next((d for d in docs if d.get("kind") == "RayService"), None)
+    assert ray is not None, "no RayService rendered under singleTenant.enabled=true"
+
+    head = ray["spec"]["rayClusterConfig"]["headGroupSpec"]
+    assert head["rayStartParams"].get("tracing-startup-hook") == "service_kit.ray_tracing:setup_tracing", (
+        f"core tracing hook is {head['rayStartParams'].get('tracing-startup-hook')!r} — Ray Core emits no spans without it"
+    )
+
+    env = {e["name"]: str(e.get("value", "")) for c in head["template"]["spec"]["containers"] for e in (c.get("env") or [])}
+    assert env.get("RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH") == "service_kit.ray_tracing:serve_span_processors", (
+        "the Serve exporter path is wrong — a gateway-originated trace dies at the Serve door, silently"
+    )
+    assert env["RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH"] != head["rayStartParams"]["tracing-startup-hook"], (
+        "the two hooks are CROSS-WIRED: Serve needs a function returning list[SpanProcessor], the core hook returns None"
+    )
+    assert float(env.get("RAY_SERVE_TRACING_SAMPLING_RATIO", "0.01")) > 0.01, (
+        "Serve trace sampling is at or below the upstream default of 0.01 — a ten-request smoke test yields zero spans and reads as broken"
+    )
+
+
 def _fleet_config(docs: list[dict]) -> dict[str, str]:
     """The fleet ConfigMap — the one carrying `RASK_API_PREFIX` and the gateway's upstream addresses."""
     for doc in docs:

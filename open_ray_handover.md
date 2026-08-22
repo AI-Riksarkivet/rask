@@ -136,9 +136,70 @@ nothing.
 
 ## 2. Ray distributed tracing — the Serve switch first
 
-**Status:** not started. Tracked as `open_ray_otel.md` §11 slice 7. This section will be filled in
-when that slice is worked; the rask half is a new `service_kit.ray_tracing` module, and the external
-half is two `rayStartParams` / container-env entries.
+**Status:** rask half **LANDED** — `service_kit.ray_tracing` exists and the chart wires both switches
+for the `singleTenant` case. External half: **yours**.
+
+### Wire the Serve switch first — it is the higher-value one
+
+Ray has **two independent tracing planes**, configured in different places, and neither is on:
+
+| | Where it is set | What it gives |
+| --- | --- | --- |
+| **Ray Core** | `headGroupSpec.rayStartParams: {tracing-startup-hook: …}` | PRODUCER/CONSUMER spans on `.remote()` |
+| **Ray Serve** | `RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH` env | proxy → router → replica spans, **honouring an inbound `traceparent`** |
+
+**Do Serve first.** It is the segment that joins a gateway-originated trace to the model call, and
+Ray's own monitoring documentation never mentions the switch exists. Core tracing is documented
+upstream as Alpha and *"no longer under active development"*, and Ray Data / Train / Tune contribute
+**zero** spans of their own — so its payoff is generic per-task spans named after Ray's internal
+functions, not dataset or operator spans.
+
+### APPLY ON THE RAY CLUSTER
+
+The functions already exist in the image: `packages/ratch` depends on `service-kit[lancekit]` and
+`.docker/ray-cluster.dockerfile` installs ratch, so `service_kit` is importable in every Ray Python
+process. No new dependency, no image change.
+
+**On the head container env (and every worker group container — replicas are scheduled anywhere):**
+
+```yaml
+- name: RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH
+  value: "service_kit.ray_tracing:serve_span_processors"
+- name: RAY_SERVE_TRACING_SAMPLING_RATIO
+  value: "1.0"
+```
+
+**On the head's `rayStartParams` — HEAD ONLY:**
+
+```yaml
+rayStartParams:
+  tracing-startup-hook: "service_kit.ray_tracing:setup_tracing"
+```
+
+Both need the OTLP env from §1's exporter block to be present on the same containers, since the hooks
+read `OTEL_EXPORTER_OTLP_ENDPOINT` from the process environment.
+
+### Four traps, each of which costs a day
+
+1. **The two contracts DIFFER and must not be copy-pasted.** `setup_tracing` takes no arguments and
+   returns `None` — it sets the global provider. `serve_span_processors` takes no arguments and
+   **returns a list of `SpanProcessor`** — Serve builds the provider. Point either env at the other's
+   function and it fails **soft**: Serve catches the error, logs *"the proxy/replica will continue
+   running"*, nothing goes unhealthy, and no span is ever produced.
+2. **`RAY_SERVE_TRACING_SAMPLING_RATIO` defaults to `0.01`.** One request in a hundred. A ten-request
+   smoke test against the default yields **zero spans** and reads as "tracing is broken".
+3. **`tracing-startup-hook` on a worker group is a silent no-op.** The hook is persisted to GCS
+   internal KV by `start_head_processes()` and every connecting process reads it from there — that is
+   the entire propagation mechanism. Setting it per-worker looks like configuration and does nothing.
+4. **Verify by observing spans, never by checking health.** Both planes fail soft by design. Query
+   `opentelemetry_traces` for a span whose service name matches `OTEL_SERVICE_NAME`; a healthy pod
+   proves nothing.
+
+### How you know it worked
+
+A request through the gateway to a Serve route produces a trace containing **both** the gateway's
+span and a Serve proxy/replica span, joined by one `trace_id`. That single joined trace is the thing
+the estate does not have today.
 
 ---
 

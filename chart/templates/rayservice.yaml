@@ -56,6 +56,19 @@ spec:
       rayStartParams:
         dashboard-host: "0.0.0.0"
         num-gpus: "{{ .Values.ray.gpuCount }}"
+        {{- if include "lance.otelEnabled" . }}
+        {{- /* Ray CORE tracing. HEAD ONLY, and that is not a simplification: the hook is persisted to
+             GCS internal KV by `start_head_processes()` and every Python process that connects reads
+             it from there — that IS the propagation mechanism, so the same key on a workerGroupSpec
+             is a silent no-op.
+
+             The honest ceiling, so nobody over-invests: upstream documents core tracing as Alpha and
+             "no longer under active development", and Ray Data / Train / Tune contribute ZERO spans
+             of their own. The payoff is generic per-task spans, not dataset or operator spans. The
+             job-level continuity that actually matters is already built by hand — ray_kit.trace_env
+             injects TRACEPARENT and the job scripts parent on it. */}}
+        tracing-startup-hook: "service_kit.ray_tracing:setup_tracing"
+        {{- end }}
       template:
         spec:
           {{- /* The nvidia RuntimeClass exists only on a GPU estate (runtimeclass.yaml renders it under
@@ -71,6 +84,27 @@ spec:
               imagePullPolicy: {{ .Values.ray.image.pullPolicy }}
               env:
                 {{- include "rask.rayOtelEnv" (list $ "ray") | nindent 16 }}
+                {{- if include "lance.otelEnabled" . }}
+                {{- /* Ray SERVE tracing — a SEPARATE switch from the core hook above, with a DIFFERENT
+                     contract: this import path must return a list of SpanProcessor (Serve builds the
+                     provider), while the core hook returns None and sets it. Cross-wiring them fails
+                     SOFT — Serve catches the bad import, logs "the proxy/replica will continue
+                     running", and nothing goes unhealthy — so verify by observing spans in
+                     `opentelemetry_traces`, never by checking health.
+
+                     This is the higher-value half of the two: Serve honours an INBOUND traceparent,
+                     so it is what joins a gateway-originated trace to the model call. Ray's own
+                     monitoring docs never mention the switch exists.
+
+                     Container env, not serveConfigV2: replicas are scheduled wherever, and every
+                     future workerGroupSpecs container needs these two lines too. */}}
+                - name: RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH
+                  value: "service_kit.ray_tracing:serve_span_processors"
+                {{- /* DEFAULT IS 0.01 — one request in a hundred. A ten-request smoke test against the
+                     upstream default produces zero spans and reads as "tracing is broken". */}}
+                - name: RAY_SERVE_TRACING_SAMPLING_RATIO
+                  value: {{ .Values.ray.serveTracingSamplingRatio | default "1.0" | quote }}
+                {{- end }}
                 {{- /* Ray-container auth env is NOT set here: spec.authOptions above makes the
                      kuberay 1.6+ operator inject RAY_AUTH_MODE/RAY_AUTH_TOKEN into every Ray
                      container itself (SetContainerTokenAuthEnvVars, skip-if-already-set), head
