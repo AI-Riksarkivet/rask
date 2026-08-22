@@ -265,6 +265,52 @@ describe('zone-root hrefs keep their trailing slash', () => {
 	}
 });
 
+describe('R15: every zone has a SHELL navbar entry', () => {
+	// The other direction, and the one nothing checked. The block below proves every navbar href goes
+	// somewhere real; this proves every zone is REACHABLE from the navbar at all.
+	//
+	// R15 — "a zone missing from the shared navbar is a defect regardless of scaffold status" — was
+	// guarded only by a hand-written six-title array in `@rask/ui`'s own nav-config.test.ts, whose
+	// comment claims "a zone scaffolded without an entry fails here". It would not: a new zone
+	// directory changes nothing that array can see, and a literal cannot notice an absence. The estate
+	// has already paid for this class once — the roster in `rask-frontend` listed `train` and omitted
+	// `models` after the swap, and cost a wrong estate-wide audit.
+	//
+	// Derived from the FILESYSTEM (zoneDirs -> a directory carrying a package.json, the same rule bun's
+	// workspace glob uses), never from git: `docs-roster.test.ts` makes 4 of its 6 assertions depend on
+	// a `git` binary, and the container the frontend gate runs in (oven/bun:1.3.14-slim) has none while
+	// .dagger/frontend.go also strips `.git` from the copied source. A git-derived roster here would be
+	// a gate that cannot execute where it matters.
+	const shellHrefs = new Set(
+		scanLeaves(readFileSync(SHELL_NAV, 'utf8'), 'shell')
+			.map((l) => l.href)
+			.filter((h) => h.startsWith('/')),
+	);
+	// `home` is the catch-all at base '' — it owns `/`, `/projects` and `/settings`, which belong to the
+	// ESTATE bar rather than the in-project one, so it has no `/home` entry by design.
+	const inProjectZones = zoneDirs().filter((z) => z !== 'home');
+
+	it('finds zones and navbar hrefs to compare', () => {
+		expect(
+			inProjectZones.length,
+			'zoneDirs() found no zones — this gate would pass vacuously',
+		).toBeGreaterThan(0);
+		expect(
+			shellHrefs.size,
+			'the shell nav scan found no hrefs — this gate would pass vacuously',
+		).toBeGreaterThan(0);
+	});
+
+	it.each(inProjectZones)('%s is reachable from the estate navbar', (zone) => {
+		const reachable = [...shellHrefs].some((h) => h === `/${zone}` || h.startsWith(`/${zone}/`));
+		expect(
+			reachable,
+			`the ${zone} zone ships but the estate navbar links to nothing under /${zone}, so it is ` +
+				`unreachable from every other zone (R15). Add an entry to @rask/ui's nav-config.ts.`,
+		).toBe(true);
+	});
+});
+
 describe('every SHELL navbar href resolves to a real route', () => {
 	// The estate navbar (`@rask/ui`'s nav-config.ts) renders in all seven zones — and sat outside
 	// every resolution gate: `link-targets` deliberately checks only a link's FIRST segment, which is

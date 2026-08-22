@@ -497,6 +497,8 @@ by a **hand-written six-title array** inside `@rask/ui`'s own test (`nav-config.
 anywhere compares the estate navbar against the zone directories — yet the test's own comment claims
 "a zone scaffolded without an entry fails here." It would not.
 
+
+**ENFORCED 2026-08-22.** `frontend/packages/zone-contract/src/nav-truth.test.ts` gains *"R15: every zone has a SHELL navbar entry"* — the direction nothing checked. `nav-truth` already proved every navbar href resolves to a real route (nav → routes); this proves every zone is reachable from the navbar at all (zone → nav). The roster is DERIVED via `zoneDirs()` (a directory carrying a `package.json`, the same rule bun's workspace glob uses), so a scaffolded zone changes the gate's input. RED/GREEN: creating `frontend/microfrontends/auditzone/` fails with *"the auditzone zone ships but the estate navbar links to nothing under /auditzone"*, while `@rask/ui`'s hand-written array passed all 23 of its tests on the same tree — which is the finding, demonstrated. Filesystem, never `git ls-files`: H5 established the CI container has no `git` binary and `.dagger/frontend.go` strips `.git`, so a git-derived roster would be a gate that cannot run where it matters. 1,256 tests across 22 files; oxlint + oxfmt clean. The `@rask/ui` literal is left in place — it asserts ORDER and tier, which the derived gate deliberately does not.
 ### M6 — `.dagger/charts.go` renders a config the chart refuses, and the pytest renders can't see it · **CONFIRMED**
 
 `ms-charts` fails with:
