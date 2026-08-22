@@ -445,6 +445,27 @@ Why it matters: the mover authors with a **chart role literal** (`MEDALLION_AUTH
 `lance.originator`, carried from `/produce`'s verified sub through `/bronze-arrival`, is the **only**
 way a failed cascade run reaches the human who started it. That is trap 2, and nothing holds it.
 
+✅ **ENFORCED 2026-08-22** — premise re-measured first: deleting one `originator=` stamp from
+`transform.py` left **217 medallion tests passing**, so the field was held by nothing, exactly as filed.
+
+Gate: `test_every_published_lineage_emit_stamps_originator` in
+`services/medallion/tests/test_producer_targeting_contract.py`, beside the `lance.project` gate and in
+the same exemption-with-a-reason shape. It walks the AST for every `build_run_event(` call under
+`medallion/` and requires an `originator=` keyword. RED with the stamp deleted (**exit 1**, naming
+`services/transform.py`); GREEN with it (**exit 0**).
+
+The scan found a **tenth site the finding did not name** — `services/promotion.py:50` — and it is
+legitimately exempt, which is worth recording because it is the distinction the gate has to make:
+`promotion_lineage` never PUBLISHES its event, it projects one into the `LineageDoc` written beside the
+dataset, so it never reaches `notifiable()` and has no audience to target. A provenance document answers
+*what produced this dataset*, which is not *who should hear about it*. Exempted with that reason rather
+than by narrowing the scan, so the claim stays visible.
+
+Non-vacuity is about REACH, not count: an exemption list is only as honest as the scan feeding it, and a
+walk that stopped resolving files would report zero unstamped sites and read as a fully-targeted estate.
+`test_the_targeting_scan_sees_every_hop_of_the_cascade` pins that the head, the movers and the workflow
+are all still reached, and that the mover module carries several emits rather than one.
+
 ### M4 — `request_approval` is executed by no test · **CONFIRMED**
 
 `services/medallion/src/medallion/workflow.py:816-842`. The sole producer of

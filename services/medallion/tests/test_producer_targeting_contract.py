@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 import pytest
 from dapr.aio.clients import DaprClient
@@ -43,14 +43,43 @@ _PROJECTLESS_EMITS = {
 }
 
 
-def _emit_sites() -> list[tuple[str, int, bool]]:
-    """(file, line, stamps_project) for every `build_run_event(` call under medallion."""
-    out: list[tuple[str, int, bool]] = []
+class EmitSite(NamedTuple):
+    """One `build_run_event(` call and which targeting fields it stamps."""
+
+    file: str
+    line: int
+    project: bool
+    originator: bool
+
+
+#: Emit sites that legitimately carry no `originator=`, by the reason they are exempt — same contract
+#: as `_PROJECTLESS_EMITS`: an entry is a claim someone has to justify.
+_ORIGINATORLESS_EMITS = {
+    "services/promotion.py": (
+        "`promotion_lineage` does not PUBLISH this event. It builds one only to project it into the "
+        "`LineageDoc` written beside the dataset, so the event never reaches `notifiable()` and has no "
+        "audience to target. A provenance document answers 'what produced this dataset', which is a "
+        "different question from 'who should hear about it' — see rask-notifications' closing line: "
+        "'a fact that names a principal and touches no data is never lineage', and its converse here."
+    ),
+}
+
+
+def _emit_sites() -> list[EmitSite]:
+    """Every `build_run_event(` call under medallion, with the targeting fields it carries."""
+    out: list[EmitSite] = []
     for py in sorted(SRC.rglob("*.py")):
         for node in ast.walk(ast.parse(py.read_text())):
             if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "build_run_event":
-                rel = py.relative_to(SRC).as_posix()
-                out.append((rel, node.lineno, any(k.arg == "project" for k in node.keywords)))
+                stamped = {k.arg for k in node.keywords}
+                out.append(
+                    EmitSite(
+                        file=py.relative_to(SRC).as_posix(),
+                        line=node.lineno,
+                        project="project" in stamped,
+                        originator="originator" in stamped,
+                    )
+                )
     return out
 
 
@@ -59,7 +88,7 @@ def test_every_lineage_emit_stamps_lance_project() -> None:
     sites = _emit_sites()
     assert sites, "no build_run_event call sites found — the scan root moved and this gate is vacuous"
 
-    unstamped = sorted({rel for rel, _, stamped in sites if not stamped})
+    unstamped = sorted({site.file for site in sites if not site.project})
     assert unstamped == sorted(_PROJECTLESS_EMITS), (
         f"these medallion emit sites do not stamp `lance.project`: {unstamped}. fanout.py skips the "
         "watcher loop entirely when it is None, so the run still reaches its author and silently "
@@ -97,3 +126,50 @@ async def test_a_successful_produce_still_answers_the_202_body(monkeypatch: pyte
     response: Any = await produce_route.produce(dapr=cast(DaprClient, _UNUSED), settings=cast(MedallionSettings, _UNUSED), originator=None)
 
     assert response == {"status": "produced", "token": "tok", "dataset": "bronze$events"}
+
+
+def test_every_published_lineage_emit_stamps_originator() -> None:
+    """Trap 2, at the producer — and the mover is the case the trap was written for.
+
+    `rask-notifications` states it plainly: a service token SUBSTITUTES the author, so
+    `enforce_author` overwrites the facet with the service's own sub and "your human is gone".
+    The medallion movers author with a chart ROLE LITERAL (`MEDALLION_AUTHOR` = `data_eng` /
+    `analyst` / `ray`), so `author_subject()` addresses an inbox actor named `data_eng` — nobody. The
+    literal is *correct* as the author; what makes a failed cascade reachable by the person who
+    started it is `lance.originator` riding beside it, carried from `/produce`'s verified sub through
+    `/bronze-arrival` and down every hop.
+
+    So this is the only field that can reach that human, and until 2026-08-22 nothing held it:
+    deleting one of the mover's stamps left **217 medallion tests passing**. That is the shape the
+    skill warns about — the plane acks an event it cannot target with SUCCESS, so the loss is reported
+    by nothing, at the producer or anywhere downstream.
+    """
+    sites = _emit_sites()
+    assert sites, "no build_run_event call sites found — the scan root moved and this gate is vacuous"
+
+    unstamped = sorted({site.file for site in sites if not site.originator})
+    assert unstamped == sorted(_ORIGINATORLESS_EMITS), (
+        f"these medallion emit sites do not stamp `lance.originator`: {unstamped}. The mover authors "
+        "with a chart role literal, so without it a failed cascade run reaches an inbox actor named "
+        "after a ROLE and never reaches the person who started it. Stamp it, or justify the omission "
+        "in _ORIGINATORLESS_EMITS."
+    )
+
+
+def test_the_targeting_scan_sees_every_hop_of_the_cascade() -> None:
+    """Non-vacuity, and specifically about REACH rather than count.
+
+    Both gates above are exemption-list shaped, and an exemption list is only as honest as the scan
+    that feeds it: a walk that stopped resolving files would report zero unstamped sites and read as a
+    fully-targeted estate. So this pins that the scan still reaches the three modules the cascade
+    actually flows through — the head, the movers and the workflow — rather than a bare total.
+    """
+    sites = _emit_sites()
+    files = {site.file for site in sites}
+
+    assert len(sites) >= 8, f"only {len(sites)} emit sites found — the cascade has more hops than that"
+    for expected in ("services/produce.py", "services/transform.py", "workflow.py"):
+        assert expected in files, f"the scan no longer reaches {expected} — it is a cascade hop with emits"
+    assert sum(1 for s in sites if s.file == "services/transform.py") >= 4, (
+        "the mover module should carry several emits (one per stage outcome); the scan is seeing too few"
+    )
