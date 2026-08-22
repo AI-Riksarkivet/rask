@@ -379,6 +379,25 @@ The OpenFGA model's evaluation semantics are guarded by a single line: `ci.yml:2
 executed. Given Part 0, "runs only in CI" is currently a synonym for "runs when ms-authz happens to be
 one of the four green jobs."
 
+✅ **FIXED 2026-08-22** — `make fga-test`, wired into `make check` so the default developer gate covers
+it. `fga` is already pinned into `.localbin` by `make bootstrap`, so the target needs no new tooling;
+it resolves the binary from PATH or `.localbin` the same way `alert-rules-check` now resolves promtool.
+
+**It carries BOTH halves of that CI step, and the second is the one that makes the first mean
+anything.** The model exists in three copies and only one is what the app loads: `model.fga` is
+authored, `model.fga.yaml` is what `fga model test` evaluates, and `model.json` is what the service
+reads at runtime. Testing the yaml while shipping the json is how a tested model and a deployed model
+drift apart in silence — so the target also transforms the authored `.fga` and diffs it against the
+committed `.json`.
+
+Verified both ways: `make fga-test` exits 0 and reports 45 tests / 296 checks / 8 ListObjects / 2
+ListUsers. RED — editing `schema_version` in `model.json` exits **2** with `model.json drifted from
+model.fga` and the exact diff.
+
+Scope stated: this does not remove the CI copy at `ci.yml:208`, so the two definitions now coexist. CI
+should call the make target rather than repeat it, but `.github/workflows/ci.yml` is held by a
+concurrent session in this tree and committing its hunks alongside mine is forbidden here.
+
 ### M2 — `fga.list_objects` is exercised by no test · **CONFIRMED**
 
 `model.fga.yaml:450`. `list_objects` builds the allow-list behind every table listing in the catalog —

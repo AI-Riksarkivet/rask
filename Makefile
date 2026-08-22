@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-rig-up notifications-rig-down audit scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-rig-up notifications-rig-down audit scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
 
 help:
 	@echo "Targets:"
@@ -166,7 +166,28 @@ alert-rules-check: ## promtool: the alert rules are valid AND actually fire on s
 knip:
 	bun --cwd=frontend run knip
 
-check: fmt lint typecheck knip
+check: fmt lint typecheck knip fga-test
+
+# The authorization model's OWN suite, plus the drift check between its three copies. Both halves lived
+# ONLY in `.github/workflows/ci.yml`, so `make ci` could be fully green on a machine where the model's
+# evaluation semantics had never been evaluated — and "runs only in CI" is a synonym for "runs when
+# that job happens to be one of the green ones". Wired into `check` so the default developer gate
+# covers it; `fga` is already pinned into .localbin by `make bootstrap`.
+#
+# THE MODEL EXISTS IN THREE COPIES and only one of them is what the app loads: `model.fga` is authored,
+# `model.fga.yaml` is what `fga model test` evaluates, and `model.json` is what the service reads at
+# runtime. Testing the yaml while shipping the json is how a tested model and a deployed model drift
+# apart in silence, so the transform-and-diff is not optional decoration — it is the half that makes
+# the other half mean anything.
+fga-test: ## The OpenFGA model's own suite + the three-copy drift check
+	@AUTH=packages/service-kit/src/service_kit/governed/auth; \
+	FGA=$$(command -v fga 2>/dev/null || echo $(LOCALBIN)/fga); \
+	test -x "$$FGA" || { echo "fga not found — run 'make bootstrap'"; exit 1; }; \
+	"$$FGA" model test --tests $$AUTH/model.fga.yaml; \
+	"$$FGA" model transform --file $$AUTH/model.fga > $(LOCALBIN)/model.transformed.json; \
+	jq -S . $(LOCALBIN)/model.transformed.json > $(LOCALBIN)/model.a.json; \
+	jq -S . $$AUTH/model.json > $(LOCALBIN)/model.b.json; \
+	diff -u $(LOCALBIN)/model.b.json $(LOCALBIN)/model.a.json || { echo "model.json drifted from model.fga"; exit 1; }
 
 ci: check test
 
