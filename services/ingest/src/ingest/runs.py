@@ -214,6 +214,14 @@ _RUNTIME_STATUS: dict[str, RunStatus] = {
 }
 
 
+class WorkflowTerminator(Protocol):
+    """Stops a live run. A Protocol for the same reason the two beside it are: the route must be
+    exercisable without a sidecar, or the one door that stops a runaway harvest is the door nothing
+    tests."""
+
+    def terminate(self, run_id: str) -> bool: ...
+
+
 class WorkflowRunReader(Protocol):
     """Reads a run's live state from the workflow engine. A Protocol so the API needs no sidecar in
     tests."""

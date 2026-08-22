@@ -38,6 +38,7 @@ from ingest.runs import (
     ScheduleUnavailable,
     WorkflowRunReader,
     WorkflowStarter,
+    WorkflowTerminator,
     is_redrivable,
     merge_workflow_state,
     record_from_workflow_state,
@@ -97,6 +98,20 @@ class IngestAccepted(BaseModel):
     )
 
 
+class TerminateAccepted(BaseModel):
+    """The 202 body for a termination.
+
+    202 and not 200, and the wording is load-bearing: terminate stops further SCHEDULING and does not
+    stop an in-flight activity, so a `drain_chunk` mid-fetch runs to completion. An operator reading
+    this is usually deciding whether to ALSO go revoke a credential or narrow a bucket policy, and
+    "stopped" would be a lie at exactly that moment.
+    """
+
+    run_id: str
+    status: str = "TERMINATING"
+    detail: str = "termination requested — further scheduling stops, but work already in flight may still complete, so this is not immediate"
+
+
 def get_store(request: Request) -> RunStore:
     return request.app.state.run_store
 
@@ -113,6 +128,16 @@ def get_reader(request: Request) -> WorkflowRunReader | None:
     and it failing precisely then would be the worst possible time.
     """
     return getattr(request.app.state, "workflow_reader", None)
+
+
+def get_terminator(request: Request) -> WorkflowTerminator:
+    """The engine terminator, built in the lifespan.
+
+    REQUIRED, unlike the reader. A status read degrades to the accepted record when daprd is down, but
+    a termination that silently did nothing would tell an operator the run is stopping while it keeps
+    committing — the one answer worse than an error here.
+    """
+    return request.app.state.workflow_terminator
 
 
 async def _mark_scheduled(store: RunStore, record: RunRecord) -> None:
@@ -454,3 +479,53 @@ async def get_ingest(
         publish_reason=record.publish_reason,
         publish_error=record.publish_error,
     )
+
+
+@router.post("/ingests/{run_id}/terminate", status_code=status.HTTP_202_ACCEPTED, response_model=TerminateAccepted)
+async def terminate_ingest(
+    run_id: str,
+    request: Request,
+    store: Annotated[RunStore, Depends(get_store)],
+    terminator: Annotated[WorkflowTerminator, Depends(get_terminator)],
+    reader: Annotated[WorkflowRunReader | None, Depends(get_reader)],
+    settings: AuthSettingsDep,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    # The INVOKING Dapr app-id. Without it the door cannot tell a service from the public front
+    # door invoking on a stranger's behalf — see `auth.public_callers`.
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+) -> TerminateAccepted:
+    """Stop a live ingest run (DWF-MGT-003).
+
+    The service exposed start and status and no lifecycle control at all, so a run that was WRONG
+    rather than broken could not be stopped: it held its JetStream subject and its per-run durable and
+    kept committing. Neither thing that looked like a brake was one — `max_units` refuses at
+    ENUMERATION, before the fan-out, and `max_run_hours` is a deadline whose in-code default is
+    0 = unbounded, opted into only by the chart at 24h.
+
+    BOUNDED, NOT INSTANT. Terminate is recursive by default so it reaches the chunk children, but it
+    stops further SCHEDULING and does not stop an in-flight activity — a `drain_chunk` mid-fetch runs
+    to completion. The 202 body says so, because an operator here is usually deciding whether to also
+    revoke a credential.
+    """
+    # The run is resolved BEFORE the gate, because the gate needs the run's own project: authorization
+    # scope must equal write scope, exactly as `create_ingest` states it. Checking a configured project
+    # instead would let an admin of project A stop project B's harvest.
+    record = await store.get(run_id)
+    if record is None:
+        # The store is process-local, so a pod restart loses every accepted record while the workflows
+        # keep executing durably. Rebuild from the engine's own copy of the POST body rather than
+        # answering 404 for a run that is demonstrably still working — the same recovery `get_ingest`
+        # performs, and it matters more here: this is the door someone reaches for to stop a runaway.
+        engine_state = await asyncio.to_thread(reader.state, run_id) if reader is not None else None
+        record = record_from_workflow_state(run_id, engine_state)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no ingest run {run_id!r}")
+
+    await authorize_ingest(request, settings, record.project, dapr_api_token, authorization, dapr_caller_app_id)
+
+    # `DaprWorkflowClient` is synchronous. Awaiting it inline would block the event loop for every
+    # other request on this worker — the same reason `get_ingest` reads state through a thread.
+    await asyncio.to_thread(terminator.terminate, run_id)
+    logger.info("ingest_run_termination_requested", extra={"run_id": run_id, "project": record.project})
+    return TerminateAccepted(run_id=run_id)

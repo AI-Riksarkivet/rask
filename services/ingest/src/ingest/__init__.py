@@ -49,6 +49,7 @@ def create_app() -> FastAPI:
     app.state.run_store = InMemoryRunStore()
     app.state.workflow_starter = _DaprWorkflowStarter()
     app.state.workflow_reader = _DaprWorkflowReader()
+    app.state.workflow_terminator = _DaprWorkflowTerminator()
     app.state.provenance_reader = LineageProvenanceReader()
     # The authz/authn clients the ingest door needs. Wired here rather than lazily inside the
     # dependency because `authorize_ingest` FAILS CLOSED on a missing client — a lazily-absent client
@@ -298,6 +299,31 @@ class _DaprWorkflowStarter:
             if isinstance(exc, _sidecar_error_types()):
                 raise ScheduleUnavailable(str(exc) or type(exc).__name__) from exc
             raise
+
+
+class _DaprWorkflowTerminator:
+    """Stops a live run, for `POST /v1/ingests/{id}/terminate` (DWF-MGT-003).
+
+    Before this seam existed the service exposed start and status and no lifecycle control at all, so
+    a run that was WRONG rather than broken — pointed at the wrong prefix, or enumerating a bucket
+    somebody meant to narrow — could not be stopped. It held its JetStream subject and its per-run
+    durable and kept committing. Neither `max_units` (which refuses at enumeration, before the
+    fan-out) nor `max_run_hours` (a deadline, whose in-code default is 0 = unbounded) is a brake.
+
+    BOUNDED, NOT INSTANT, and the route says so. Terminate is recursive by default so it reaches the
+    chunk children, but it stops further SCHEDULING — an in-flight activity such as a `drain_chunk`
+    mid-fetch runs to completion. That is the same SDK limit `terminate_chunks` documents.
+
+    A class rather than a bare call so it can be replaced in tests, matching the starter and reader
+    beside it: the alternative is a route that cannot be exercised without a sidecar.
+    """
+
+    def terminate(self, run_id: str) -> bool:
+        """True when the engine accepted the termination; False when it had nothing to stop."""
+        import dapr.ext.workflow as wf
+
+        wf.DaprWorkflowClient().terminate_workflow(run_id)
+        return True
 
 
 class _DaprWorkflowReader:
