@@ -1336,6 +1336,27 @@ load-bearing claims refuted — `.dagger/go.mod` *is* enumerated by osv-scanner 
 `gofmt -l` gate**, and `gofmt -l .` over `.dagger` reports two tracked hand-written files unformatted
 today (`images.go`, `main.go`).
 
+✅ **FIXED + ENFORCED 2026-08-22** — `dagger call go-fmt` (`.dagger/checks.go`), reachable as
+`make go-fmt` under the same one-definition contract as `make audit`. The two files are formatted;
+gofmt's changes are entirely doc-comment indentation, which is what gofmt has normalized since 1.19.
+
+**It runs in a container, and that is not a convenience.** There is no Go toolchain on the developer
+PATH here, and the repository rule is absolute — every container goes through Dagger, no exceptions,
+including one-off tooling. So the gate ships with a paired writer, `dagger call go-fmt-fixed export
+--path=.dagger`, because a gate whose only remedy is "install a toolchain" is a gate people work
+around, and the Python plane has had both halves (`make fmt` / `ruff format --check`) the whole time.
+This was never a policy decision about Go; it was a plane nobody pointed a gate at.
+
+One detail worth keeping: `gofmt -l` prints the offenders and **exits 0 either way**, so wrapping it in
+a container step proves nothing on its own — the same shape as a piped command masking its status,
+which this audit already caught once in its own evidence. The step turns a non-empty list into exit 1.
+RED: appending a misindented doc comment to `main.go` gives **exit 1** naming the file; GREEN prints
+`gofmt: clean`.
+
+Scope stated: `make go-fmt` sits beside `audit`/`scan-config` rather than inside `check`, matching the
+estate's existing split for engine-dependent gates, so it is not yet on the merge path — that needs a
+`.github/workflows/ci.yml` edit, and that file is held by a concurrent session in this tree.
+
 *Recording the refutation matters more than the survivor here.* "The plane that implements the gates is
 itself ungated" is a seductive claim and it is mostly wrong — but H22 and M24 are real, and they are what
 the seductive version was reaching for.

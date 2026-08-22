@@ -2,7 +2,7 @@
 //
 // Functions live in sibling .go files by concern:
 //   - test.go     : the offline pytest suite (the app-DB pg legs died at P7a —
-//                   the batches table and its Alembic lineage are gone)
+//     the batches table and its Alembic lineage are gone)
 //
 // All callable via `dagger call <kebab-case-name>`.
 package main

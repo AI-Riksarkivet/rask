@@ -10,9 +10,9 @@
 // and `dagger call image` produces the same layers `docker buildx build` does. Nothing here reimplements
 // a build; it changes who drives it.
 //
-//   dagger call image --name=gateway
-//   dagger call image --name=gateway publish --address=172.17.0.1:5000/gateway:dev
-//   dagger call zone-image --zone=lakehouse publish --address=…
+//	dagger call image --name=gateway
+//	dagger call image --name=gateway publish --address=172.17.0.1:5000/gateway:dev
+//	dagger call zone-image --zone=lakehouse publish --address=…
 //
 // ── The one host requirement ────────────────────────────────────────────────────────────────────
 // Dagger's engine runs in a container, so `localhost:5000` inside it is the ENGINE, not the host

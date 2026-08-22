@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-rig-up notifications-rig-down audit scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-rig-up notifications-rig-down audit go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
 
 help:
 	@echo "Targets:"
@@ -202,6 +202,17 @@ ci: check test
 #             NAME is the .docker/<stem>.dockerfile stem; ZONE is a frontend/microfrontends/ dir.
 audit:
 	dagger call audit
+
+# The Go plane's formatting gate. `.dagger/` implements every CI gate in this estate and nothing
+# checked its own formatting — `gofmt -l` reported two tracked hand-written files unformatted. Same
+# contract as `audit` above: one definition, `make go-fmt` == `dagger call go-fmt`.
+#
+# It runs in a container because there is NO Go toolchain on the developer PATH here, and the
+# repository rule is absolute: every container goes through Dagger. `go-fmt-fixed` is the write half —
+# `dagger call go-fmt-fixed export --path=.dagger` — because a gate with no paired fixer is a gate
+# people work around, and here the only alternative would be installing a toolchain.
+go-fmt: ## gofmt gate over the .dagger Go plane (fix: dagger call go-fmt-fixed export --path=.dagger)
+	dagger call go-fmt
 
 scan-config:
 	dagger call scan-config
