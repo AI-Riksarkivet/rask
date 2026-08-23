@@ -265,7 +265,7 @@ def _index_lineage(uri: str, storage_options: dict[str, str]) -> None:
 log = logging.getLogger(__name__)
 
 
-def _existing_row_count(uri: str, storage_options: dict[str, str]) -> int | None:
+def existing_row_count(uri: str, storage_options: dict[str, str]) -> int | None:
     """Rows at ``uri`` right now, or ``None`` when there is nothing there yet.
 
     ``None`` on any failure, deliberately: it means "no comparable predecessor", which the promotion
@@ -311,7 +311,7 @@ def transform_stage(
     """
     ds = lance.dataset(from_uri, storage_options=storage_options)
     # BEFORE the overwrite: what the destination holds now is the band's only honest comparison point.
-    previous_rows = _existing_row_count(to_uri, storage_options)
+    previous_rows = existing_row_count(to_uri, storage_options)
     out, blob_payloads = _carry_forward(ds, stage)
     out = derive_artifacts(out, blob_payloads)
     if lineage is not None:

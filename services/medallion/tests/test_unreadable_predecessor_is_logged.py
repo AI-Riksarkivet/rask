@@ -16,13 +16,13 @@ from __future__ import annotations
 import logging
 
 import pytest
-from medallion.services.compute import _existing_row_count
+from medallion.services.compute import existing_row_count
 from medallion.services.promotion_band import previous_row_count
 
 
 def test_an_unreadable_destination_returns_none_and_says_why(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING):
-        assert _existing_row_count("s3://nonexistent-bucket-xyz/nothing.lance", {}) is None
+        assert existing_row_count("s3://nonexistent-bucket-xyz/nothing.lance", {}) is None
     assert caplog.records, "the read failed and nothing said so — 'ask' is indistinguishable from 'blind'"
 
 

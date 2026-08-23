@@ -122,6 +122,22 @@ class StageTrigger(BaseModel):
     #: behaviour, not an escalation. What it must NOT do is skip the submit silently, which is why the
     #: handler logs the branch it took.
     ray_job_done: bool = False
+    #: Rows the DESTINATION held before the Ray job was dispatched — pass 1's answer to a question
+    #: pass 2 can no longer ask. The Ray job writes out-of-process, so by the time the mover measures,
+    #: the predecessor is gone and `WriteResult.previous_row_count` is None; the band then reads that
+    #: as FIRST_PROMOTION and asks about EVERY Ray promotion, forever. Carried here for the same
+    #: reason `event_time` is (R26): pass 1 owns a fact pass 2 needs and hands it forward.
+    #:
+    #: A CLAIM like every other field, and harmless if forged: the worst a wrong value does is ask
+    #: when it should not, or fail to ask when it should — never promote something the assertions
+    #: would have blocked, which is a separate and stricter gate.
+    #:
+    #: Deliberately NOT derived from `version - 1` at measure time. That arithmetic is wrong for this
+    #: writer: the data lands in one commit and the lineage index in a SECOND, so the reported version
+    #: is N+1 and `version - 1` is the commit that already holds the new rows. It was silently wrong in
+    #: production — 8 -> 200 and 200 -> 1000 both published without asking, because the delta was
+    #: structurally zero.
+    pre_row_count: int | None = None
     #: Seconds the RAY WATCH took, measured by `stage_run` from its own deterministic workflow clock
     #: and handed back on the wake-up trigger. Pass 2 records THIS as the stage duration rather than
     #: its own elapsed time, which would measure only the measure/emit tail and report a multi-hour

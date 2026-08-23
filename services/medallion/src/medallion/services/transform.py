@@ -38,7 +38,7 @@ from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_refused, record_stage_completion, record_transition
 from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register, promotion_band, promotion_hold
-from medallion.services.compute import measure_stage, read_upstream, transform_stage
+from medallion.services.compute import existing_row_count, measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.gate_decision import GateOutcome, gate_decision
 from medallion.services.promotion import promotion_lineage
@@ -87,6 +87,7 @@ def _dispatch_stage_workflow(
     lineage_json: str,
     trigger: StageTrigger,
     event_time: str | None = None,
+    pre_row_count: int | None = None,
 ) -> str:
     """Schedule `stage_run` for this trigger and return its instance id (S1).
 
@@ -111,6 +112,11 @@ def _dispatch_stage_workflow(
     carried = trigger.model_dump()
     if event_time is not None:
         carried["event_time"] = event_time
+    # The destination's row count BEFORE the job writes — see `StageTrigger.pre_row_count`. Injected
+    # like `event_time` and for the same reason: pass 2 cannot observe it, because the write it would
+    # be comparing against has already happened by the time it runs.
+    if pre_row_count is not None:
+        carried["pre_row_count"] = pre_row_count
     spec = StageJobSpec(
         from_uri=from_uri,
         to_uri=to_uri,
@@ -433,6 +439,11 @@ async def handle_stage(
                         # apply to it.
                         span.set_attribute("lance.medallion.compute", "ray")
                         span.set_attribute("lance.medallion.ray_phase", "dispatched")
+                        # MEASURED HERE, before the job is submitted, because this is the last moment
+                        # the predecessor exists. `existing_row_count` answers None for an absent or
+                        # unreadable destination, which the band reads as FIRST_PROMOTION and asks about
+                        # — the same safe direction it takes everywhere else.
+                        pre_rows = await run_in_threadpool(existing_row_count, to_uri, settings.storage_options())
                         instance_id = _dispatch_stage_workflow(
                             settings,
                             from_uri=from_uri,
@@ -441,6 +452,7 @@ async def handle_stage(
                             lineage_json=lineage_doc.to_json(),
                             trigger=trigger,
                             event_time=event_time,
+                            pre_row_count=pre_rows,
                         )
                         log.info(
                             "medallion_stage_dispatched_to_workflow",
@@ -628,11 +640,20 @@ async def handle_stage(
             # lane, whose job writes out-of-process and is measured only after it finished. The band
             # reads that as FIRST_PROMOTION and ASKS, which is this module's stated policy for an
             # unknown history ("a dataset we cannot read the history of gets a person's attention
-            # instead of a silent promote") and the safe direction. Carrying the pre-dispatch count on
-            # the Ray trigger would let that lane compare properly; until then it asks.
+            # instead of a silent promote") and the safe direction.
+            #
+            # The RAY lane no longer relies on that fallback. Pass 1 measures the destination in the
+            # last moment the predecessor exists and hands the count forward on the trigger
+            # (`StageTrigger.pre_row_count`), so that lane compares like any other and asks only when
+            # a promotion is genuinely unusual — instead of on every single run.
+            # The WRITER's observation first; the trigger's carried count only when the writer had
+            # none. That ordering matters: in-process writes observe the predecessor directly and are
+            # authoritative, while `pre_row_count` is pass 1's older reading of the same thing. Both
+            # absent is still FIRST_PROMOTION, so an unreadable destination keeps asking.
+            previous_rows = promotion_band.resolve_previous_row_count(observed=result.previous_row_count, carried=trigger.pre_row_count)
             band_reasons = promotion_band.review_reasons(
                 row_count=result.row_count,
-                previous_row_count=result.previous_row_count,
+                previous_row_count=previous_rows,
                 band=settings.promotion_review_band,
             )
         # ASK THE CATALOG'S GATE BEFORE DECIDING — but ONLY when the band would hold. The publish IS
