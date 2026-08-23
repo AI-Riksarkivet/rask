@@ -108,6 +108,12 @@ export default defineConfig({
 				// (and has since been deleted with `/models/pipeline`). Removed rather than kept as
 				// harmless — an env pointing a mock at an upstream no code calls reads as coverage.
 				GREPTIME_API: MOCK_OBS,
+				// The GATEWAY, for the promotions surface. Pointed at the same seed-driven mock for the
+				// reason the comment above gives: paths never collide, and this one is `/api/promotions/*`,
+				// which nothing else here serves. It must be set even though `gatewayJSON` has a default —
+				// that default is `localhost:8888`, a real port on a dev host, so an unset var would let a
+				// spec silently read a LIVE gateway and call it hermetic.
+				RASK_GATEWAY_URL: MOCK_OBS,
 				NATS_MONITOR_API: MOCK_OBS,
 				// The dead-subscription detector's expectation list is SERVER env now (the jetstream port
 				// computes missing = expected − bound). Fixed here; the streams spec's fixtures either
