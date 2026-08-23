@@ -234,7 +234,7 @@ data:
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                   "query": "max(outbox_depth)", "seriesNameFormat": "depth (events)" } } } },
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "max(outbox_oldest_age)", "seriesNameFormat": "oldest age (s)" } } } },
+                  "query": "max(outbox_oldest_age_seconds)", "seriesNameFormat": "oldest age (s)" } } } },
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                   "query": "sum(rate(outbox_publish_failed_total[5m]))", "seriesNameFormat": "publish failed /s" } } } }
               ]
@@ -680,6 +680,142 @@ data:
                 { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/schedulingLatency" } },
                 { "x": 0, "y": 16, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/orchestrationTurns" } },
                 { "x": 12, "y": 16, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/pendingActorCalls" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  storage.json: |
+    {
+      "kind": "Dashboard",
+      "metadata": { "name": "storage", "project": "rask" },
+      "spec": {
+        "display": { "name": "rask Storage \u2014 the object store under the lakehouse", "description": "lance_object_store_* has been emitted by five services and read by nothing. Every Lance read and write goes through here, so an S3 stall presents as a slow cascade with no cause anywhere else." },
+        "duration": "6h",
+        "panels": {
+          "requests": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Requests by operation", "description": "Grouped by operation and base \u2014 never by object key, which is unbounded." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (operation) (rate(lance_object_store_requests_total[5m]))", "seriesNameFormat": {{ "{{operation}}" | quote }} } } } } ]
+            }
+          },
+          "errors": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Errors by operation", "description": "`or vector(0)` on purpose: this counter is only created when something fails, so without it a healthy estate renders NO DATA \u2014 indistinguishable from a broken panel." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (operation) (rate(lance_object_store_errors_total[5m])) or vector(0)", "seriesNameFormat": {{ "{{operation}}" | quote }} } } } } ]
+            }
+          },
+          "latency": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Request latency p95", "description": "The bucket series is `..._bucket_total`, NOT `..._bucket` \u2014 the exporter appends _total here. A panel on the conventional name finds nothing, which is the same class of defect as the outbox phantom." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "histogram_quantile(0.95, sum by (le, operation) (rate(lance_object_store_request_duration_seconds_bucket_total[5m])))", "seriesNameFormat": {{ "{{operation}}" | quote }} } } } } ]
+            }
+          },
+          "inflight": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "In-flight requests", "description": "A gauge. Climbing while the request rate is flat is the object store applying backpressure." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (service_name) (lance_object_store_in_flight_requests)", "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
+            }
+          }
+        },
+        "layouts": [
+          {
+            "kind": "Grid",
+            "spec": {
+              "display": { "title": "Object store" },
+              "items": [
+                { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/requests" } },
+                { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/errors" } },
+                { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/latency" } },
+                { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/inflight" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  messaging.json: |
+    {
+      "kind": "Dashboard",
+      "metadata": { "name": "messaging", "project": "rask" },
+      "spec": {
+        "display": { "name": "rask Messaging \u2014 pub/sub, cron and service invocation", "description": "Every series here is already collected and was read by nothing: publish failures, undeliverable drops, five cron bindings and the per-upstream latency the estate otherwise lacks." },
+        "duration": "6h",
+        "panels": {
+          "egress": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Publishes by topic and outcome", "description": "success=false is a publish that never reached the bus. Nothing read this before, so a failing producer was invisible unless someone noticed the consumer had gone quiet." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (topic, success) (rate(dapr_component_pubsub_egress_count_total[5m]))", "seriesNameFormat": {{ "{{topic}} success={{success}}" | quote }} } } } } ]
+            }
+          },
+          "ingress": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Deliveries by process_status", "description": "`drop` is an ACK: Dapr neither redelivers nor dead-letters it, and the app records nothing. It is the one delivery outcome that leaves no other trace." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (topic, process_status) (rate(dapr_component_pubsub_ingress_count_total[5m]))", "seriesNameFormat": {{ "{{topic}} {{process_status}}" | quote }} } } } } ]
+            }
+          },
+          "cron": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Cron binding ticks", "description": "Five rendered bindings, all measured and previously read by nobody. The sidecar's counter survives an app that is crash-looping, which a first-party tick counter would not." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (component, success) (rate(dapr_component_input_binding_count_total[15m]))", "seriesNameFormat": {{ "{{component}} success={{success}}" | quote }} } } } } ]
+            }
+          },
+          "invocation": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Service invocation p95 by caller", "description": "The per-upstream latency the estate otherwise lacks: src_app_id -> app_id, with the response status." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "histogram_quantile(0.95, sum by (le, src_app_id, app_id) (rate(dapr_runtime_service_invocation_res_recv_latency_ms_bucket[5m])))", "seriesNameFormat": {{ "{{src_app_id}} -> {{app_id}}" | quote }} } } } } ]
+            }
+          },
+          "silentLoss": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Silent data loss", "description": "Two counters that record UNRECOVERABLE loss and are read by no alert and no other panel. Both carry `or vector(0)`: they only ever increment on loss, so without it a healthy estate renders NO DATA \u2014 and a silent-loss counter that is itself silent reads as coverage." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(increase(outbox_events_poison_dropped_total[1h])) or vector(0)", "seriesNameFormat": {{ "outbox poison dropped" | quote }} } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(increase(notifications_feed_gaps_total[1h])) or vector(0)", "seriesNameFormat": {{ "lineage feed pruned below cursor" | quote }} } } } }
+              ]
+            }
+          }
+        },
+        "layouts": [
+          {
+            "kind": "Grid",
+            "spec": {
+              "display": { "title": "Messaging" },
+              "items": [
+                { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/egress" } },
+                { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/ingress" } },
+                { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/cron" } },
+                { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/invocation" } },
+                { "x": 0, "y": 16, "width": 24, "height": 8, "content": { "$ref": "#/spec/panels/silentLoss" } }
               ]
             }
           }

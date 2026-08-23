@@ -3851,6 +3851,61 @@ def test_every_first_party_ALERT_names_a_metric_the_service_actually_EMITS(group
     )
 
 
+def test_every_PANEL_query_names_a_series_some_instrument_emits() -> None:
+    """The other half of the phantom-series defect: alerts were gated, 34 panel queries were not.
+
+    A dashboard panel naming a metric no instrument creates renders an empty chart, and an empty chart
+    is what a quiet system looks like — so the mistake survives review exactly as it did for
+    `outbox_oldest_age`, which read `> 300` on a series that has never existed.
+
+    FIRST-PARTY NAMES ONLY. `dapr_*`, `ray_*` and the SDK's `http_*` families come from the sidecar,
+    the Ray dashboard and the auto-instrumentation; this repo creates none of them and cannot check
+    them from source. Their absence is a deployment fact, not a spelling one.
+
+    Applies the same OTLP->Prometheus rules the alert gate learned: dots become underscores, a counter
+    gains `_total`, and a declared UCUM unit is APPENDED — so an instrument with `unit="s"` is only
+    ever queryable as `..._seconds`. Verified against the live store while this was written: the
+    object-store histogram really is `..._bucket_total`, and a panel on the conventional `_bucket`
+    would have found nothing.
+    """
+    sources = [path for paths in _ALERT_GROUP_SOURCES.values() for path in paths]
+    sources += [
+        "services/flows/src/flows/metrics.py",
+        "services/ingest/src/ingest/metrics.py",
+        "packages/service-kit/src/service_kit/bus_metrics.py",
+    ]
+    emitted: set[str] = set()
+    for path in sources:
+        text = (REPO / path).read_text()
+        for name, tail in re.findall(r'create_(?:counter|up_down_counter|histogram|observable_gauge)\(\s*"([^"]+)"(.*?)\)', text, re.DOTALL):
+            base = name.replace(".", "_")
+            unit = re.search(r'unit\s*=\s*"([^"]*)"', tail)
+            suffix = _UCUM_SUFFIX.get(unit.group(1)) if unit else None
+            base = f"{base}_{suffix}" if suffix else base
+            # Histograms reach PromQL through their derived series, and this estate's exporter appends
+            # `_total` to those too — measured: lance_object_store_request_duration_seconds_bucket_total.
+            emitted |= {base, f"{base}_total"} | {f"{base}_{part}{tot}" for part in ("bucket", "count", "sum") for tot in ("", "_total")}
+    assert emitted, "parsed no instruments — this gate would pass vacuously"
+
+    prefixes = sorted({name.split("_")[0] for name in emitted})
+    pattern = re.compile(r"\b((?:" + "|".join(prefixes) + r")_[A-Za-z0-9_]+)\b")
+
+    rendered = _helm_template("observability.enabled=true")
+    phantom: set[str] = set()
+    for doc in yaml.safe_load_all(rendered):
+        if not doc or doc.get("kind") != "ConfigMap":
+            continue
+        for key, value in (doc.get("data") or {}).items():
+            if not key.endswith(".json") or not isinstance(value, str):
+                continue
+            phantom |= set(pattern.findall(value)) - emitted
+
+    assert not phantom, (
+        f"these dashboard panels query first-party series no instrument emits, so they render empty: {sorted(phantom)}. "
+        f"The instruments create {sorted(emitted)[:12]}... — remember a declared unit is APPENDED to the name."
+    )
+
+
 def test_every_service_app_entrypoint_CONFIGURES_LOGGING() -> None:
     """A module that builds a FastAPI app must configure application logging, or its logs vanish.
 
