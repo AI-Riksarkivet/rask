@@ -449,6 +449,20 @@ resources:
   default:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
+  # THE COLLECTOR, which named no tier and therefore silently ran on `default` — 50m CPU — while being
+  # the sole path for every Dapr sidecar's metrics, every infra pod's logs and the whole estate's three
+  # signals. Measured 2026-08-23: 45m against a 50m request, i.e. 90% of its request with ~10% headroom.
+  # Converging the fleet's OTel env onto this Collector takes it from 10 producers to 16, so this tier is
+  # that change's own blast radius rather than an adjacent nicety.
+  #
+  # RAISE REQUESTS, NOT THE MEMORY LIMIT. `memory_limiter.limit_mib: 400` is hardcoded in
+  # templates/otel-collector.yaml and does not track this tier, so a 1Gi limit would buy headroom the
+  # Collector refuses to use — it still sheds telemetry at 400 MiB. At 512Mi the limiter sits at ~78% of
+  # the limit, which is upstream's guidance, and requests == limits gives the pod Guaranteed QoS for
+  # memory, which is what you want under a fixed soft limiter.
+  otel-collector:
+    requests: { cpu: 300m, memory: 512Mi }
+    limits: { cpu: "1", memory: 512Mi }
   # RUSTFS — the object store under the whole lakehouse, and the one component for which the app
   # default was actively wrong. It named no tier, so it inherited `default`'s 512Mi and was
   # OOMKilled 33 times on a dev estate while sitting at 370Mi IDLE (~72% of its ceiling doing

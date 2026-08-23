@@ -284,6 +284,29 @@ dapr.io/config: "lance-tracing"
 {{- end -}}
 {{- end -}}
 
+{{/* THE single OTel resource identity for every pod in this chart — fleet, lakehouse and Ray.
+     Call: {{ include "rask.otelResourceAttrs" $root }}
+
+     ONE derivation, because two had drifted. The fleet emitted
+     `service.namespace=rask,deployment.environment=<Release.Namespace>` while the lakehouse and Ray
+     emitted `service.namespace=lance-ns,deployment.environment.name=<observability.environment>,
+     service.version=<chart>` — ZERO key overlap, so any cross-plane filter, join or dashboard variable
+     silently saw one half of the estate. Measured 2026-08-23: GreptimeDB had already materialised both
+     as separate physical columns in `opentelemetry_traces`, with 265,978 of 347,924 spans in a 3-hour
+     window invisible to a query written against the other name.
+
+     `deployment.environment` was RENAMED to `deployment.environment.name` in OTel semconv v1.27.0 and
+     the old key is marked deprecated. Only the new key is emitted — NOT both. A dual-write is a
+     permanent band-aid with no removal trigger, it breaks nothing here (nothing in this repo queries
+     the old name), and it would not close the seam anyway: the historical column already exists.
+
+     `service.version` is the CHART version, not the running image tag — it answers "which chart
+     rendered this pod", not "which build emitted this span". */}}
+{{- define "rask.otelResourceAttrs" -}}
+{{- $o := .Values.observability -}}
+{{- printf "service.namespace=rask,deployment.environment.name=%s,service.version=%s" ($o.environment | default .Release.Namespace) .Chart.AppVersion -}}
+{{- end -}}
+
 {{- define "rask.rayOtelEnv" -}}
 {{- $root := index . 0 -}}
 {{- $svc := index . 1 -}}
@@ -307,7 +330,7 @@ dapr.io/config: "lance-tracing"
 - name: OTEL_SERVICE_NAME
   value: {{ $svc | quote }}
 - name: OTEL_RESOURCE_ATTRIBUTES
-  value: {{ printf "service.namespace=rask,deployment.environment.name=%s,service.version=%s" ($o.environment | default $root.Release.Namespace) $root.Chart.AppVersion | quote }}
+  value: {{ include "rask.otelResourceAttrs" $root | quote }}
 {{- end }}
 {{- end -}}
 
@@ -315,28 +338,41 @@ dapr.io/config: "lance-tracing"
 {{- $root := index . 0 -}}
 {{- $svc := index . 1 -}}
 {{- $o := $root.Values.observability -}}
-{{- if $o.enabled -}}
-{{- $port := (hasKey $o "greptimePort") | ternary $o.greptimePort 4000 -}}
+{{/* GATED ON `lance.otelEnabled`, NOT on `observability.enabled`. The narrow gate meant the chart's own
+     documented prod posture — ship OTLP off-cluster, deploy no in-cluster stack — rendered ZERO OTEL_*
+     on the entire request-serving fleet while the lakehouse plane kept exporting. `rask-gateway`'s
+     container came back as literally `env: null`. Nothing announced it: `setup_otel` returns False,
+     every pod stays Ready, and since the gateway is the estate's only edge, every trace the lakehouse
+     did emit was rootless. The identical defect was found and fixed for RAY alone in August 2026; the
+     fleet was left behind and pinned by nothing. */}}
+{{- if include "lance.otelEnabled" $root -}}
 {{- $db := (hasKey $o "dbName") | ternary $o.dbName "public" -}}
 {{- $pipeline := (hasKey $o "tracePipeline") | ternary $o.tracePipeline "greptime_trace_v1" -}}
+{{/* The fleet's `setup_otel` is opt-in on this flag, unlike the lakehouse pods which are launched under
+     `opentelemetry-instrument` and need none. It MUST stay paired with the endpoint: drop it and
+     setup_otel returns False while every OTEL_* var below still renders. */}}
 - name: RASK_OTEL_ENABLED
   value: "true"
+{{/* One endpoint derivation for the whole chart. This used to hardcode direct-to-GreptimeDB, so the
+     fleet bypassed the Collector entirely and got none of its k8sattributes enrichment. */}}
 - name: OTEL_EXPORTER_OTLP_ENDPOINT
-  value: "http://{{ include "lance.greptimeHost" $root }}:{{ $port }}/v1/otlp"
+  value: "{{ include "lance.otlpEndpoint" $root }}"
 - name: OTEL_EXPORTER_OTLP_PROTOCOL
   value: "http/protobuf"
-# Generic headers apply to metrics (and anything without a signal-specific
-# override): db-name only — GreptimeDB ingests OTLP metrics with no pipeline.
+{{- if not (include "lance.otelViaCollector" $root) }}
+{{/* Only the DIRECT-to-GreptimeDB path carries vendor headers; through the Collector the app stays
+     backend-agnostic and the Collector adds them. Traces need the pipeline header, metrics must NOT
+     have it — hence the signal-specific override. Unconditional headers were only ever correct because
+     the endpoint above was hardcoded direct. */}}
 - name: OTEL_EXPORTER_OTLP_HEADERS
   value: "x-greptime-db-name={{ $db }}"
-# Traces additionally need GreptimeDB's trace pipeline; signal-specific
-# headers override the generic ones for traces only.
 - name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
   value: "x-greptime-db-name={{ $db }},x-greptime-pipeline-name={{ $pipeline }}"
+{{- end }}
 - name: OTEL_SERVICE_NAME
   value: {{ $svc | quote }}
 - name: OTEL_RESOURCE_ATTRIBUTES
-  value: {{ printf "service.namespace=rask,deployment.environment=%s" $root.Release.Namespace | quote }}
+  value: {{ include "rask.otelResourceAttrs" $root | quote }}
 {{- end }}
 {{- end -}}
 
@@ -576,7 +612,7 @@ observability.greptimePort renders :4000 instead of a portless, silently-broken 
 {{- $c := $o.otelCollector | default dict -}}
 {{- $gp := (hasKey $o "greptimePort") | ternary $o.greptimePort 4000 -}}
 {{- if $c.externalEndpoint -}}{{ $c.externalEndpoint }}
-{{- else if $c.enabled -}}http://{{ include "lance.fullname" . }}-otel-collector:4318
+{{- else if and $o.enabled $c.enabled -}}http://{{ include "lance.fullname" . }}-otel-collector:4318
 {{- else if $o.externalOtlpEndpoint -}}{{ $o.externalOtlpEndpoint }}
 {{- else -}}http://{{ include "lance.greptimeHost" . }}:{{ $gp }}/v1/otlp{{- end -}}
 {{- end -}}
@@ -585,14 +621,15 @@ plain OTLP and the Collector adds GreptimeDB's db-name/pipeline headers; only th
 carry those headers on the app side. */ -}}
 {{- define "lance.otelViaCollector" -}}
 {{- $c := .Values.observability.otelCollector | default dict -}}
-{{- if or $c.externalEndpoint $c.enabled -}}true{{- end -}}
+{{- if or $c.externalEndpoint (and .Values.observability.enabled $c.enabled) -}}true{{- end -}}
 {{- end -}}
 {{/* Whether the apps should carry the OTel SDK wiring (instrument + otelEnv + the lance-tracing Dapr config).
 Decoupled from `observability.enabled`: that flag deploys the IN-CLUSTER stack (GreptimeDB/OTel Collector/Perses), but
 telemetry must also flow when it's OFF and `externalOtlpEndpoint` ships OTLP to an external collector (the OTel
 operator path) — otherwise externalize silently emits nothing. Non-empty string = on (helm `if` truthiness). */}}
 {{- define "lance.otelEnabled" -}}
-{{- if or .Values.observability.enabled .Values.observability.externalOtlpEndpoint -}}true{{- end -}}
+{{- $c := .Values.observability.otelCollector | default dict -}}
+{{- if or .Values.observability.enabled .Values.observability.externalOtlpEndpoint $c.externalEndpoint -}}true{{- end -}}
 {{- end -}}
 {{- define "lance.vaultAddr" -}}
 {{- if .Values.openbao.externalAddr -}}{{ .Values.openbao.externalAddr }}{{- else -}}http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }}{{- end -}}
@@ -717,7 +754,7 @@ filter deleted every crash log and every daprd line on 10 pods — measured 2026
 {{/* Don't trace the k8s probe endpoints — they're hit every 10s and bury real request spans (otel
 signals.md § Exclude noisy endpoints). Launcher-driven instrumentation → the env var is the only lever. */}}
 - { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, value: "/livez,/readyz,/metrics" }
-- { name: OTEL_RESOURCE_ATTRIBUTES, value: "service.namespace=lance-ns,deployment.environment.name={{ $o.environment | default "kind" }},service.version={{ $root.Chart.AppVersion }}" }
+- { name: OTEL_RESOURCE_ATTRIBUTES, value: "{{ include "rask.otelResourceAttrs" $root }}" }
 {{- end -}}
 
 

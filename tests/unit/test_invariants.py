@@ -24,6 +24,7 @@ import pathlib
 import re
 from pathlib import Path
 from typing import Any, Final
+from urllib.parse import urlparse
 
 import pytest
 import yaml
@@ -1878,6 +1879,139 @@ def _ray_head_env(docs: list[dict]) -> dict[str, str]:
     return {}
 
 
+EXTERNALISED: Final = (
+    "observability.enabled=false",
+    "observability.externalOtlpEndpoint=http://otel.observability:4318/v1/otlp",
+)
+TELEMETRY_POSTURES: Final = [
+    pytest.param(("observability.enabled=true",), id="in-cluster"),
+    pytest.param(EXTERNALISED, id="externalised"),
+]
+
+
+def _otlp_exporters(docs: list[dict]) -> dict[str, str]:
+    """Every rendered container that exports OTLP, keyed `<workload>/<container>`.
+
+    Covers the RayService head too — its containers hang off `rayClusterConfig`, not `spec.template`,
+    which is exactly why a loop written over Deployments silently stops covering Ray.
+    """
+    out: dict[str, str] = {}
+    for doc in docs:
+        name = (doc.get("metadata") or {}).get("name", "?")
+        if doc.get("kind") in {"Deployment", "StatefulSet", "DaemonSet"}:
+            spec = doc["spec"]["template"]["spec"]
+        elif doc.get("kind") == "RayService":
+            spec = doc["spec"]["rayClusterConfig"]["headGroupSpec"]["template"]["spec"]
+        else:
+            continue
+        for container in spec.get("containers", []):
+            for env in container.get("env") or []:
+                if env.get("name") == "OTEL_EXPORTER_OTLP_ENDPOINT":
+                    out[f"{name}/{container['name']}"] = str(env.get("value", ""))
+    return out
+
+
+def test_externalising_telemetry_does_not_silently_drop_ANY_pod() -> None:
+    """The estate-wide twin of the Ray test below, and the reason that one was not enough.
+
+    `lance.otelEnabled` is true for EITHER `observability.enabled` OR a set `externalOtlpEndpoint`.
+    `rask.otelEnv` gated on `observability.enabled` alone, so the chart's own documented prod posture
+    — ship OTLP off-cluster, deploy no in-cluster stack (`values-prod.yaml`) — rendered ZERO `OTEL_*`
+    on the entire request-serving fleet while the lakehouse plane kept exporting. `rask-gateway`'s
+    container came back as literally `env: null`.
+
+    Nothing announced it: `setup_otel` returns False, every pod stays Ready, and because the gateway is
+    the estate's only edge, every trace the lakehouse DID emit was rootless. The gap reads as "those
+    services are idle".
+
+    Asserted as a SET DIFFERENCE between two postures rather than a property of one render — that is
+    what stops a future author narrowing it back to a single subject, which is precisely how the Ray
+    version came to exist while six fleet workloads sat on the old gate unpinned.
+    """
+    default = set(_otlp_exporters(_rendered_docs("observability.enabled=true", "singleTenant.enabled=true")))
+    externalised = set(_otlp_exporters(_rendered_docs(*EXTERNALISED, "singleTenant.enabled=true")))
+
+    dropped = sorted(default - externalised)
+    assert not dropped, (
+        "externalising telemetry turned these containers' OTLP exporter OFF while the rest of the estate kept exporting:\n  "
+        + "\n  ".join(dropped)
+        + "\n\nGate them on `lance.otelEnabled` (observability.enabled OR externalOtlpEndpoint), not on "
+        "`observability.enabled` alone."
+    )
+
+
+@pytest.mark.parametrize("posture", TELEMETRY_POSTURES)
+def test_no_pod_exports_to_a_service_the_render_does_not_create(posture: tuple[str, ...]) -> None:
+    """An OTLP endpoint naming an in-cluster Service that the SAME render omits is a silent total loss.
+
+    `lance.otlpEndpoint` preferred the in-cluster Collector whenever `otelCollector.enabled` (default
+    true), but the Collector only renders under `and $o.enabled $c.enabled`. So with telemetry
+    externalised, ten lakehouse pods were aimed at `<release>-otel-collector:4318` — a Service the same
+    render does not create — and the operator's chosen `externalOtlpEndpoint` was discarded entirely.
+
+    It fails loudly nowhere. The SDK retries a refused connection with in-process exponential backoff,
+    which is the exact pathology `otel.py`'s docstring records costing ~2.7s per unit test in CI.
+
+    Only BARE hostnames are checked: a dotted name is an FQDN or an off-cluster host and is the
+    operator's business, not this chart's.
+    """
+    docs = _rendered_docs(*posture, "singleTenant.enabled=true")
+    services = {d["metadata"]["name"] for d in docs if d.get("kind") == "Service"}
+
+    dangling = []
+    for who, endpoint in sorted(_otlp_exporters(docs).items()):
+        host = (urlparse(endpoint).hostname or "").strip()
+        if not host or "." in host:
+            continue
+        if host not in services:
+            dangling.append(f"{who} -> {endpoint}")
+
+    assert not dangling, (
+        "these containers export OTLP to an in-cluster Service the SAME render does not create:\n  "
+        + "\n  ".join(dangling)
+        + f"\n\nServices this render DOES create: {sorted(services)}\n"
+        "The endpoint branch must share the Collector's own render gate, or it promises a backend that was never deployed."
+    )
+
+
+def test_the_estate_emits_ONE_otel_resource_attribute_schema() -> None:
+    """Two resource schemas means every cross-plane query silently sees half the estate.
+
+    The fleet emitted `service.namespace=rask,deployment.environment=<ns>` while the lakehouse and Ray
+    emitted `service.namespace=lance-ns,deployment.environment.name=<env>,service.version=<ver>` — zero
+    key overlap. `deployment.environment` was RENAMED to `deployment.environment.name` in OTel semconv
+    v1.27.0 and the old key is marked deprecated, so the fleet was also emitting the dead name.
+
+    This is not theoretical: GreptimeDB has already materialised both as separate physical columns in
+    `opentelemetry_traces`, so a filter, join or dashboard variable written against either name is
+    blind to the other plane's spans.
+
+    Asserted on the KEY SET, not the values — `service.name` legitimately differs per pod; the schema
+    must not.
+    """
+    docs = _rendered_docs("observability.enabled=true", "singleTenant.enabled=true")
+
+    schemas: dict[frozenset[str], list[str]] = {}
+    for doc in docs:
+        name = (doc.get("metadata") or {}).get("name", "?")
+        if doc.get("kind") in {"Deployment", "StatefulSet", "DaemonSet"}:
+            spec = doc["spec"]["template"]["spec"]
+        elif doc.get("kind") == "RayService":
+            spec = doc["spec"]["rayClusterConfig"]["headGroupSpec"]["template"]["spec"]
+        else:
+            continue
+        for container in spec.get("containers", []):
+            for env in container.get("env") or []:
+                if env.get("name") != "OTEL_RESOURCE_ATTRIBUTES":
+                    continue
+                keys = frozenset(pair.split("=", 1)[0] for pair in str(env.get("value", "")).split(",") if "=" in pair)
+                schemas.setdefault(keys, []).append(f"{name}/{container['name']}")
+
+    assert schemas, "no workload declares OTEL_RESOURCE_ATTRIBUTES — this gate would pass vacuously"
+    rendered = "\n  ".join(f"{sorted(keys)} <- {sorted(who)}" for keys, who in schemas.items())
+    assert len(schemas) == 1, f"the estate emits more than one OTel resource-attribute schema, so no cross-plane query can see all of it:\n  {rendered}"
+
+
 def test_ray_telemetry_is_release_derived_like_every_other_pods() -> None:
     """The Ray OTLP block hardcoded the release name while the whole rest of the chart derives it.
 
@@ -1907,7 +2041,7 @@ def test_ray_telemetry_is_release_derived_like_every_other_pods() -> None:
         for e in (c.get("env") or [])
         if e.get("name") == "OTEL_EXPORTER_OTLP_ENDPOINT"
     }
-    assert endpoint in others, f"Ray exports to {endpoint!r} while the rest of the estate exports to {others} — one estate, two backends"
+    assert others == {endpoint}, f"Ray exports to {endpoint!r} while the rest of the estate exports to {others} — one estate, two backends"
 
 
 def test_the_platform_chart_does_not_name_a_WORKLOAD_in_rays_telemetry_identity() -> None:
@@ -1927,7 +2061,14 @@ def test_the_platform_chart_does_not_name_a_WORKLOAD_in_rays_telemetry_identity(
 
 
 def test_externalising_telemetry_does_not_silently_drop_ray() -> None:
-    """The Ray block gated on `observability.enabled`; the rest of the estate gates on `lance.otelEnabled`.
+    """The Ray block gated on `observability.enabled`, and so did the whole FLEET — undetected until 2026-08-23.
+
+    That second half is why this test was not enough on its own. Its premise used to read "the rest of
+    the estate gates on `lance.otelEnabled`", which was simply untrue of `rask.otelEnv`; stating it as
+    settled is what let six fleet workloads sit on the narrow gate, pinned by nothing, while this test
+    passed. `test_externalising_telemetry_does_not_silently_drop_ANY_pod` is now the estate-wide gate,
+    and this one survives because the Ray head's containers live under `rayClusterConfig` — a spec path
+    a Deployment loop silently misses.
 
     `lance.otelEnabled` is true for EITHER `observability.enabled` OR a set `externalOtlpEndpoint`, and
     its own comment says why: "otherwise externalize silently emits nothing". Ray was on the narrower
@@ -3806,7 +3947,8 @@ def test_the_ray_head_image_the_CHART_CONFIGURES_ships_the_tracing_hook_module()
         )
 
 
-def test_every_pod_that_exports_otlp_logs_is_labelled_as_such() -> None:
+@pytest.mark.parametrize("posture", TELEMETRY_POSTURES)
+def test_every_pod_that_exports_otlp_logs_is_labelled_as_such(posture: tuple[str, ...]) -> None:
     """The label and the exporter are two halves of one decision, and nothing held them together.
 
     `lance.dev/logs: otlp` tells the Collector "this pod's stdout is a DUPLICATE — drop the file-tailed
@@ -3825,9 +3967,16 @@ def test_every_pod_that_exports_otlp_logs_is_labelled_as_such() -> None:
     Mechanical and drift-proof: `OTEL_EXPORTER_OTLP_ENDPOINT` is rendered by exactly `rask.otelEnv` and
     `lance.otelEnv`, so a new workload is covered the day it is added rather than the day someone
     remembers this test.
+
+    PARAMETRISED OVER THE POSTURE, because pinning only the healthy one is how this test missed a live
+    defect it was written to catch. It originally rendered `observability.enabled=true` alone; under
+    the chart's documented EXTERNALISE posture the six fleet pods carried the "my logs are already
+    exported, drop the file-tailed copy" label while `rask.otelEnv` rendered no exporter at all — the
+    exact `labelled=True, exports_otlp=False` direction this test's own message calls "the pod goes
+    dark while every pipeline reports healthy".
     """
     offenders = []
-    for doc in _rendered_docs("observability.enabled=true"):
+    for doc in _rendered_docs(*posture):
         if doc.get("kind") not in {"Deployment", "StatefulSet", "DaemonSet"}:
             continue
         template = doc["spec"]["template"]
