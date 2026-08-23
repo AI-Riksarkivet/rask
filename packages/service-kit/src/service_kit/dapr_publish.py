@@ -25,6 +25,8 @@ import asyncio
 import logging
 from typing import Any
 
+from service_kit.bus_metrics import record_refusal
+
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +58,10 @@ async def publish_event(publisher: Any, *, timeout_seconds: float, **kwargs: Any
     """
     size = _payload_bytes(kwargs.get("data"))
     if size > MAX_PAYLOAD_BYTES:
+        # Counted because this aborts BEFORE the gRPC call: no client span, no sidecar span, and no
+        # `dapr_component_pubsub_egress_count_total` row. Every free surface that can see a publish
+        # failure sits downstream of a call this branch never makes.
+        record_refusal(str(kwargs.get("topic_name", "?")), "oversize")
         raise ValueError(
             f"event payload is {size} bytes (> {MAX_PAYLOAD_BYTES}): events carry POINTERS, never "
             f"data (claim-check invariant, docs/DATA-CONTRACT.md) — topic "

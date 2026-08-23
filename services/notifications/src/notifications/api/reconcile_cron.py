@@ -28,6 +28,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
 
+from notifications.api.metrics import PassOutcome, record_feed_gap, record_pass
 from notifications.api.reconciler import LineageCursorStore, LineageFeedClient, ReconcileResult, reconcile
 from notifications.api.security import VisibilityDep
 from notifications.api.settings import get_ingress_settings
@@ -99,6 +100,7 @@ async def on_reconcile_cron(feed: FeedClientDep, cursor: CursorStoreDep, visibil
     settings = get_ingress_settings()
     if _reconcile_lock.locked():
         log.warning("lineage_feed_tick_skipped_overlap")
+        record_pass(PassOutcome.SKIPPED)
         return ReconcileResult(skipped=True)
     async with _reconcile_lock:
         # `reconcile()` raises `LineageFeedBudgetExceeded` (a domain error → 503) when its own budget
@@ -125,6 +127,11 @@ async def on_reconcile_cron(feed: FeedClientDep, cursor: CursorStoreDep, visibil
             "gapped": result.gapped,
         },
     )
+    record_pass(PassOutcome.COMPLETED)
+    if not result.gapped:
+        # The reconciler already added 1 when gapped; this creates the series on tick 1 so an alert over
+        # it can evaluate before the first loss rather than reading "no data" forever.
+        record_feed_gap(0)
     return result
 
 

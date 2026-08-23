@@ -26,6 +26,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from notifications.api import metrics as notifications_metrics
 from notifications.api import reconcile_cron
 from notifications.api.ingest import DAPR_SUCCESS
 from notifications.api.reconciler import (
@@ -260,6 +261,8 @@ def test_an_overlapping_tick_is_skipped_rather_than_run_twice(wired: tuple[TestC
     """
     client, feed, cursor = wired
     monkeypatch.setattr(reconcile_cron, "_reconcile_lock", _NeverFreeLock())
+    recorded = _CounterDouble()
+    monkeypatch.setattr(notifications_metrics, "_feed_passes", recorded)
 
     response = client.post(f"/{BINDING}")
 
@@ -267,6 +270,79 @@ def test_an_overlapping_tick_is_skipped_rather_than_run_twice(wired: tuple[TestC
     assert response.json()["skipped"] is True
     assert feed.calls == [], "the skipped tick still walked the feed"
     assert cursor.writes == []
+    assert recorded.by_outcome("skipped") == 1, (
+        "the overlap branch is not counted, so a lane whose passes permanently outrun their 30s period is "
+        "indistinguishable from a healthy one on EVERY PromQL surface — and PromQL is the only surface vmalert "
+        f"can page from. The skip answers HTTP 200, so dapr_component_input_binding_count_total records "
+        f'success="true" and the FastAPI span looks clean. Recorded: {recorded.calls}'
+    )
+
+
+class _CounterDouble:
+    """Stands in for a module-level OTel counter.
+
+    A counter-double rather than an in-memory MeterProvider on purpose: `MeterProvider` is process-global
+    and set-once, and every metrics module here binds its instruments at import via a module-level
+    `metrics.get_meter(...)`. Injecting a real provider would mean adding a rebinding hook to each module —
+    more machinery than the counters under test.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, dict[str, str]]] = []
+
+    def add(self, amount: int, attributes: dict[str, str] | None = None) -> None:
+        self.calls.append((amount, dict(attributes or {})))
+
+    def by_outcome(self, outcome: str) -> int:
+        return sum(amount for amount, attrs in self.calls if attrs.get("lance.notifications.outcome") == outcome)
+
+    def outcomes(self) -> set[str]:
+        return {attrs["lance.notifications.outcome"] for _, attrs in self.calls if "lance.notifications.outcome" in attrs}
+
+
+def test_a_completed_tick_is_counted_and_BOTH_pass_outcomes_have_a_series(
+    wired: tuple[TestClient, _FakeFeed, _FakeCursor], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ratio alert needs a denominator that exists before the first skip.
+
+    `sum(rate(...{outcome="skipped"})) / sum(rate(...))` reads "no data" — not zero — until BOTH series
+    have been created, and a rule that cannot evaluate is indistinguishable from one that evaluates green.
+    So a completed tick records `completed`=1 AND `skipped`=0, which is the convention lineage's own
+    reconciler already states: adding 0 CREATES the series.
+    """
+    client, _feed, _cursor = wired
+    recorded = _CounterDouble()
+    monkeypatch.setattr(notifications_metrics, "_feed_passes", recorded)
+
+    assert client.post(f"/{BINDING}").status_code == 200
+
+    assert recorded.by_outcome("completed") == 1, f"a completed tick is not counted at all: {recorded.calls}"
+    assert recorded.outcomes() == {"completed", "skipped"}, (
+        "both pass outcomes must get a series from the first tick, or the skip-ratio alert reads no-data "
+        f"until the first skip ever happens. Saw: {recorded.outcomes()}"
+    )
+
+
+def test_a_clean_pass_still_emits_the_gap_counter_so_the_SERIES_EXISTS(
+    wired: tuple[TestClient, _FakeFeed, _FakeCursor], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`notifications.feed.gaps` counts unread lineage rows destroyed by a prune — unrecoverable loss.
+
+    It is declared, wired, and has NEVER created a table: it is only ever incremented on loss, so until the
+    first gap the series does not exist and any alert over it reads "no data" forever. A silent-data-loss
+    counter that is itself silent is worse than none — it reads as coverage.
+    """
+    client, _feed, _cursor = wired
+    recorded = _CounterDouble()
+    monkeypatch.setattr(notifications_metrics, "_feed_gaps", recorded)
+
+    assert client.post(f"/{BINDING}").status_code == 200
+
+    assert recorded.calls, (
+        "a clean pass records nothing, so notifications_feed_gaps_total never comes into existence — verified "
+        "absent from the live store's information_schema.tables"
+    )
+    assert sum(amount for amount, _ in recorded.calls) == 0, f"a clean pass must add 0, not a gap: {recorded.calls}"
 
 
 def test_a_pass_that_outruns_its_budget_answers_503_not_500(wired: tuple[TestClient, _FakeFeed, _FakeCursor], monkeypatch: pytest.MonkeyPatch) -> None:

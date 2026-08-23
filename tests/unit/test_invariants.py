@@ -725,6 +725,16 @@ def test_medallion_never_re_types_the_catalog_control_topic() -> None:
     )
 
 
+#: Both publish guards scan these roots. `services/` alone left the SHARED plane unguarded — see
+#: `test_the_publish_guards_scan_the_PACKAGES_plane_too`.
+_PUBLISH_SCAN_ROOTS: Final = (SERVICES, REPO / "packages")
+
+
+def _publish_scan_files() -> list[Path]:
+    """Every first-party Python file the publish guards below inspect."""
+    return [py for root in _PUBLISH_SCAN_ROOTS for py in root.rglob("*.py")]
+
+
 def _inline_topic_publishes() -> list[str]:
     """Every `dapr_publish.publish_event(...)` call site whose `topic_name` is an (f-)string literal —
     or that has no `topic_name` kwarg in view at all — instead of a named settings field / constant.
@@ -735,7 +745,7 @@ def _inline_topic_publishes() -> list[str]:
     """
     offenders: list[str] = []
     literal_re = re.compile(r"topic_name\s*=\s*f?[\"']")
-    for py in SERVICES.rglob("*.py"):
+    for py in _publish_scan_files():
         lines = py.read_text().splitlines()
         for i, line in enumerate(lines):
             if "dapr_publish.publish_event(" not in line:
@@ -766,13 +776,30 @@ def _direct_publish_event_calls() -> list[str]:
     wrapper = SERVICE_KIT / "dapr_publish.py"
     direct_re = re.compile(r"(?<!dapr_publish)\.publish_event\(")
     offenders: list[str] = []
-    for py in SERVICES.rglob("*.py"):
+    for py in _publish_scan_files():
         if py == wrapper:
             continue
         for i, line in enumerate(py.read_text().splitlines()):
             if direct_re.search(line):
                 offenders.append(f"{py.relative_to(REPO)}:{i + 1}")
     return offenders
+
+
+def test_the_publish_guards_scan_the_PACKAGES_plane_too() -> None:
+    """Both publish guards iterated `services/` only, so the shared plane was unguarded.
+
+    Two publish sites live under `packages/` (`lakehouse/control_emit.py`, `lakehouse/outbox.py`). They are
+    compliant today — which is exactly why nothing noticed the hole: a direct `client.publish_event(` or an
+    inline `topic_name="literal"` added under `packages/` (or a new shared emitter) would ship green,
+    reopening the unbounded-SDK-call hang the wrapper exists to close.
+
+    Asserted on the SCANNED SET rather than on the offender list, because an offender list is empty in both
+    the guarded and the unguarded case — that is the shape that let this survive.
+    """
+    scanned = {str(p.relative_to(REPO)) for p in _publish_scan_files()}
+
+    for expected in ("packages/service-kit/src/service_kit/control_emit.py", "packages/service-kit/src/service_kit/lakehouse/outbox.py"):
+        assert expected in scanned, f"the publish guards never look at {expected} — the packages plane is unguarded. Scanned {len(scanned)} files."
 
 
 def test_every_publish_goes_through_the_timeout_wrapper() -> None:

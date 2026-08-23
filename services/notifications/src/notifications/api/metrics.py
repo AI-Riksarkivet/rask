@@ -62,6 +62,20 @@ class Outcome(StrEnum):
     RETRIED = "retried"
 
 
+class PassOutcome(StrEnum):
+    """What became of one reconcile TICK.
+
+    Closed, and deliberately DISJOINT from `Outcome`, which is about one EVENT. A tick is not an event,
+    and merging the vocabularies would make `outcome="skipped"` queryable against the ingress counter
+    where it can never occur — a query that returns nothing and reads as "this never happens".
+    """
+
+    #: The pass ran to completion (whatever it found).
+    COMPLETED = "completed"
+    #: The overlap branch: a previous pass still held the lock, so this delivery did nothing.
+    SKIPPED = "skipped"
+
+
 _meter = metrics.get_meter("lance.notifications")
 
 _ingress_events = _meter.create_counter(
@@ -78,6 +92,11 @@ _dlq_parked = _meter.create_counter(
     "notifications.dlq.parked",
     unit="{delivery}",
     description="Deliveries DEAD-LETTERED — parked after the sidecar's retry schedule was exhausted.",
+)
+_feed_passes = _meter.create_counter(
+    "notifications.feed.passes",
+    unit="{pass}",
+    description="Reconcile ticks by outcome. `skipped` is the overlap branch, which answers HTTP 200 and is therefore invisible in Dapr's binding counter.",
 )
 _feed_gaps = _meter.create_counter(
     "notifications.feed.gaps",
@@ -111,12 +130,35 @@ def record_dead_letter(app_label: str) -> None:
     _dlq_parked.add(1, {"lance.notifications.app": app_label})
 
 
-def record_feed_gap() -> None:
+def record_pass(outcome: PassOutcome) -> None:
+    """Count one reconcile tick, and CREATE BOTH SERIES on the first one.
+
+    Every other member is added with 0 deliberately. The alert over this counter is a ratio —
+    `skipped / total` — and a ratio whose denominator does not exist yet evaluates to "no data", which
+    vmalert cannot distinguish from a rule that evaluated green. Adding 0 creates the series, which is
+    the convention lineage's own reconciler already records ("adding 0 CREATES the series").
+
+    Why this counter exists at all, given Dapr already counts binding ticks: the overlap branch returns
+    HTTP 200, so `dapr_component_input_binding_count_total` records `success="true"` and the FastAPI span
+    looks clean. A lane whose passes permanently outrun their period is, on every free surface,
+    indistinguishable from a healthy one — and `NotificationsReconcilerStalled` concedes in its own
+    description that it cannot separate stalled from idle.
+    """
+    for member in PassOutcome:
+        _feed_passes.add(1 if member is outcome else 0, {"lance.notifications.outcome": member.value})
+
+
+def record_feed_gap(count: int = 1) -> None:
     """Count one pass that found the feed pruned below this lane's cursor.
 
     Unlabelled by design. The fact is estate-wide (this service holds ONE cursor) and the only useful
     question is "is this happening at all, and how often" — which is the alertable shape. A seq number
     would be unbounded cardinality on a counter for no gain: the seqs are already in the ERROR log
     beside it, where an operator investigating a fired alert goes next.
+
+    `count` exists so a CLEAN pass can add 0. This counter is only ever incremented on loss, so until the
+    first gap ever occurred the series did not exist and any alert over it read "no data" forever — a
+    silent-data-loss counter that is itself silent, which reads as coverage. Verified absent from the live
+    store's `information_schema.tables` before this changed.
     """
-    _feed_gaps.add(1)
+    _feed_gaps.add(count)

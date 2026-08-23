@@ -226,11 +226,19 @@ Dapr accepts the W3C `traceparent` metadata OTel injects (its `grpc-trace-bin` �
 fallback), so no app-side header plumbing is needed. Add one test asserting
 `grpc.aio.insecure_channel` is patched after `setup_otel(..., otel_enabled=True)`.
 
+> **RE-MEASURED 2026-08-23, AFTER slices 2/3/6 DEPLOYED (helm rev 44) — THE THREE BULLETS BELOW ARE
+> LARGELY OBSOLETE.** They were written against a pre-slice-2 estate. Live traces now show one unbroken
+> tree: HTTP door -> FGA -> publish -> bus -> 3-way fan-out -> actor invoke -> actor state. The sidecar
+> already emits `CallActor/InboxActor/Deliver` under the EXACT name bullet 2 proposes; the publish hop
+> carries two spans (grpc instrumentor + sidecar) with `messaging.system`/`messaging.destination.name`
+> already populated; and the FGA hop has aiohttp CLIENT spans in both planes plus the SDK's own
+> `fga_client_request_duration_milliseconds_*`. See §10b for what actually survived.
+
 **Then give the hops names the estate owns**, so a future missing instrumentor degrades to
 "unparented span" rather than "no span":
 
 - `dapr_publish.publish_event` (`service_kit/dapr_publish.py:49-70`) is the **single funnel for all
-  15 publish sites** and emits no span, no counter, no histogram. One `PRODUCER` span +
+  13 Dapr publish sites** (11 under `services/`, 2 under `packages/`; raw JetStream publishes bypass it by invariant I3) and emits no span, no counter, no histogram. One `PRODUCER` span +
   `messaging.*` attributes there covers the whole bus.
 - `TypedActorProxy.__getattr__` (`notifications/proxies.py:70-107`) already holds `actor_type` and
   the wire method name — wrap the invoke in a `CLIENT` span named `CallActor/{actor_type}/{method}`.
@@ -483,7 +491,7 @@ The instrument inventory itself is **good** (see §9). The problem is downstream
 | 15 `dapr_runtime_workflow_*` families | nothing |
 | `dapr_component_pubsub_egress_count{success="false"}` / `ingress_count{process_status="drop"}` | nothing — **publish failures and undeliverable drops are invisible** |
 | `dapr_runtime_service_invocation_res_recv_latency_ms_*{app_id,src_app_id,status}` | nothing — this is the per-upstream gateway latency the estate lacks |
-| `dapr_component_input_binding_count_total` | nothing — **6 cron bindings, none measured** |
+| `dapr_component_input_binding_count_total` | nothing — **5 rendered cron bindings, all measured; the gap is that nothing READS the series** |
 | sentry cert expiry, placement health, `dapr_runtime_component_init_fail_total` | nothing (the control-plane scrape job was added for one metric and the rest ride in unused) |
 | `lance_object_store_*` (S3/RustFS latency, errors, throttles) — already emitted by 5 services | nothing |
 | 19 first-party instruments incl. `notifications_feed_gaps_total` and `outbox_events_poison_dropped_total` — **two silent data-loss counters** | neither panel nor alert |
@@ -598,7 +606,7 @@ Each slice is independently shippable and independently verifiable.
 | **4** | `spec.metrics` + `spec.logging.apiLogging` | `chart/templates/observability.yaml` | S | **Stops publishing user subjects as metric labels.** Arguably slice 1 |
 | **5** | Narrow the log-drop filter; `log-as-json`; filelog parser chain | `otel-collector.yaml`, `_helpers.tpl` (+ fix the false comment at `:697-702`) | M | Recovers crash logs on 10 pods and gives the whole file-tailed tier a severity |
 | **6** | Converge `rask.otelEnv` onto `lance.otlpEndpoint`/`lance.otelEnabled`; one resource-attribute helper; reorder `lance.otlpEndpoint` | `_helpers.tpl`, `tests/unit/test_invariants.py` | M | Closes both §8 dark configurations, both resource schemas, and the k8sattributes gap in one edit |
-| **7** | Spans + metrics at the four unnamed seams: publish funnel, actor proxy, FGA check, cron ticks | `dapr_publish.py`, `proxies.py`, `governed/fga.py`, `reconcile_cron.py` | M | Domain names that survive a future missing instrumentor |
+| **7** | **MOSTLY RULED OUT — see §10b.** 3 of 4 seams are already covered by the sidecar + slice 2; what survived is 7a (the cron overlap-skip + the gap series) and 7b (the pre-I/O publish refusal) | `notifications/api/{metrics,reconcile_cron}.py`, `service_kit/bus_metrics.py`, `dapr_publish.py` | S+XS | see §10b |
 | **8** | **RESPECIFIED — see §10a.** Eight slices (8.0, 8a–8g); two are CORRECTNESS bugs, one is blocked on a measurement | `flows/`, `ingest/`, `medallion/`, `perses-dashboards.yaml`, `alerting/` | — | see §10a |
 | **9** | Alert correctness: `absent()` guards, the `outbox_oldest_age` name, generalise the name gate | `chart/alerting/`, `test_invariants.py` | S | Land regardless of how `open_alert.md` resolves |
 | **10** | Dashboards for what is already collected: storage, workflows, pub/sub health, cron, control plane | `perses-dashboards.yaml` | M | Zero instrumentation cost — the series exist today |
@@ -875,6 +883,47 @@ The estate has never run a `chunk_run`, `train_run` or `promotion_review` to com
 2. **8b — the FAIL emits are suppressed without a trace.** A lineage or NATS outage destroys every workflow failure in the window, and afterwards nothing indicates a gap exists. `report_stage_outcome`'s own docstring promises *"THE FAILURE REACHES THE GRAPH, not just this log line"* — when the suppress fires, the `log.error` at `:417` still prints identically, so the log asserts a graph write that never happened.
 
 Both are provable in unit tests **today**, with no cluster, and both have an existing green test asserting the adjacent-but-wrong thing (`test_train_workflow.py:134`; `test_stage_workflow.py:373`). Repair those rather than adding parallel ones.
+
+---
+
+## 10b. Slice 7, re-measured after slices 2/3/6 deployed
+
+**3 of the 4 seams are RULED OUT.** An 11-agent verification against the live estate (helm rev 44) found
+the audit's premise stale on every one: it was written before the grpc + aiohttp instrumentors (slice 2)
+and the Collector convergence (slice 6) landed.
+
+| Proposed | Already emitted by | Ruling |
+| --- | --- | --- |
+| a `CallActor/{actor_type}/{method}` CLIENT span in `proxies.py` | the sidecar, **verbatim that name** (`CallActor/InboxActor/Deliver`, `CallActor/WatchIndexActor/ListWatchers`, carrying `dapr.actor`), plus an aiohttp span whose URL already holds actor type + wire method | **CUT** — it would be the third span on a one-hop call |
+| a PRODUCER span + `messaging.*` in `dapr_publish.py` | the grpc instrumentor AND the sidecar, 1:1 per service; `messaging.system` / `messaging.destination.name` are already materialised columns | **CUT** — a third span, sitting between two existing ones |
+| a publish counter + histogram | `dapr_component_pubsub_egress_count_total{success,topic}` + `_latencies_*`, plus three first-party duplicates already in code | **CUT** |
+| FGA "no span and no counter" | aiohttp CLIENT spans in both planes, `http_client_duration_milliseconds_*`, the SDK's own `fga_client_request_duration_milliseconds_*`, and `governed/audit.py`'s ALLOW/DENY rows | **CUT** — the cite is wrong too: `:103` is a comment |
+| a cron tick counter | `dapr_component_input_binding_count_total{component,success}` + `_latencies_*`; the binding span is the trace ROOT parenting the FastAPI span; and since slice 3 the whole `ReconcileResult` lands as queryable structured fields | **CUT** — a rask-side counter would be strictly WORSE: it dies with the app, the sidecar's survives a crash loop |
+
+**What survived, and shipped:**
+
+- **7a, the cron overlap-skip.** The overlap branch returns HTTP **200**, so Dapr's binding counter records
+  `success="true"` and the FastAPI span looks clean. A lane whose passes permanently outrun their 30s
+  period is indistinguishable from a healthy one on every PromQL surface — the only surface vmalert can
+  page from. `NotificationsReconcilerStalled` concedes in its own description that it cannot separate
+  stalled from idle. Now counted by `notifications.feed.passes`, with **both** outcomes given a series on
+  the first tick so a ratio alert can evaluate before the first skip ever occurs.
+- **7a, the gap series.** `notifications.feed.gaps` was declared, wired, and had **never created a table**
+  — verified absent from the live store's `information_schema.tables`. Only ever incremented on loss, so
+  until the first gap it read "no data" forever: a silent-data-loss counter that is itself silent reads as
+  coverage. A clean pass now adds 0.
+- **7b, the pre-I/O publish refusal.** The claim-check guard raises BEFORE the gRPC call, so there is no
+  span, no egress row and no latency sample — every free surface that can see a publish failure sits
+  downstream of a call this branch never makes. Now `bus.publish.refused{topic,reason}`, named `bus.*`
+  rather than `dapr.*` so it cannot masquerade as a sidecar metric.
+- **7b, the guard scope.** Both publish invariants scanned `services/` only, leaving the shared plane
+  unguarded — a direct `.publish_event(` under `packages/` would have shipped green.
+
+**Still open from this seam, deliberately NOT carried on the refuted justification:** nothing READS
+`dapr_component_input_binding_count_total` or `dapr_component_pubsub_egress_count_total` in any panel or
+alert (slice 10 owns dashboards over already-collected series), and no series separates an FGA `allow`
+from a `deny` — both are HTTP 200. That is an authorization-visibility item and needs re-justifying from
+scratch.
 
 ---
 

@@ -29,13 +29,31 @@ class _Publisher:
         self.published.append(kwargs)
 
 
-def test_oversize_payload_raises_before_any_io() -> None:
-    # ASSERTS: >900KiB → ValueError naming the claim-check rule; the sidecar is NEVER called.
+def test_oversize_payload_raises_before_any_io_AND_IS_COUNTED(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ASSERTS: >900KiB → ValueError naming the claim-check rule; the sidecar is NEVER called — AND the
+    refusal is counted.
+
+    "Before any I/O" is exactly why it needs its own counter. No gRPC call happens, so there is no client
+    span, no sidecar span, and no `dapr_component_pubsub_egress_count_total` row: every free surface that
+    can see a publish failure is downstream of a call this branch never makes. Of the 13 sites that reach
+    this funnel, 2 happen to count a refusal themselves and 11 count nothing — they log and swallow, or
+    return a retry sentinel. This is the only invisible failure at the funnel.
+    """
+    from service_kit import bus_metrics
+
+    recorded: list[tuple[int, dict[str, str]]] = []
+    monkeypatch.setattr(bus_metrics, "_refused", type("C", (), {"add": lambda _s, n, a=None: recorded.append((n, dict(a or {})))})())
+
     publisher = _Publisher()
     huge = "x" * (dapr_publish.MAX_PAYLOAD_BYTES + 1)
     with pytest.raises(ValueError, match="POINTERS"):
         asyncio.run(dapr_publish.publish_event(publisher, timeout_seconds=5, topic_name="medallion.bronze", data=huge))
     assert publisher.published == []
+
+    assert recorded, "the claim-check refusal is not counted — and it aborts before the gRPC call, so nothing downstream can see it"
+    _amount, attrs = recorded[0]
+    assert attrs.get("lance.bus.reason") == "oversize", f"the refusal reason is not labelled: {attrs}"
+    assert attrs.get("lance.bus.topic") == "medallion.bronze", f"the topic is not labelled: {attrs}"
 
 
 def test_large_payload_warns_but_still_publishes(caplog: pytest.LogCaptureFixture) -> None:
