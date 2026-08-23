@@ -104,6 +104,36 @@ class PartitionOf(Protocol):
     def __call__(self, spec: SourceSpec, key: str) -> str | None: ...
 
 
+@runtime_checkable
+class FetcherFactory(Protocol):
+    """How this kind turns one unit KEY into bytes, when a URI scheme cannot say it.
+
+    `ingest.fetch` resolves a key by SCHEME and must never learn about sources — that separation is
+    the reason the module exists, and its docstring already names this hook as the escape hatch:
+    "where per-source behaviour genuinely differs … it belongs to that source's ADAPTER, which can
+    supply its own `Fetcher`". Until this existed the hook was documented and unwired, so a kind
+    whose keys are not scheme-resolvable URIs enumerated its units and then failed EVERY fetch —
+    measured on `lance-append`, whose `<uri>#fragment=<id>` keys fell through to the local-dir
+    branch and were refused as being outside RASK_INGEST_LOCAL_ROOT (2026-08-23).
+
+    Returning None — not registering one — is the ordinary case: `s3://` and `https://` keys need
+    nothing here, and `drain_chunk_units` falls back to the scheme-resolved `UriFetcher`.
+    """
+
+    def __call__(self) -> Fetcher: ...
+
+
+@runtime_checkable
+class Fetcher(Protocol):
+    """Structurally identical to `ingest.worker.Fetcher`, declared here to keep the import one-way.
+
+    `worker` imports from `sources`; re-importing it back would make the cycle that `TYPE_CHECKING`
+    blocks elsewhere in this file exist at runtime.
+    """
+
+    async def fetch(self, key: str) -> bytes: ...
+
+
 class _Registration(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
@@ -112,6 +142,7 @@ class _Registration(BaseModel):
     lineage_input: LineageTwin
     descriptor: SourceDescriptor
     partition_of: PartitionOf | None = None
+    fetcher: FetcherFactory | None = None
 
 
 _REGISTRY: dict[str, _Registration] = {}
@@ -126,6 +157,7 @@ def register(
     description: str | None = None,
     options: Sequence[SourceOption] = (),
     partition_of: PartitionOf | None = None,
+    fetcher: FetcherFactory | None = None,
 ) -> None:
     """Register a source kind. Called at import time by the adapter modules themselves.
 
@@ -142,6 +174,7 @@ def register(
         lineage_input=lineage_input,
         descriptor=SourceDescriptor(kind=kind, label=label or kind, description=description, options=list(options)),
         partition_of=partition_of,
+        fetcher=fetcher,
     )
 
 
@@ -177,6 +210,19 @@ def partition_key_for(spec: SourceSpec, key: str) -> str | None:
     if reg is None or reg.partition_of is None:
         return None
     return reg.partition_of(spec, key)
+
+
+def fetcher_for(kind: str) -> Fetcher | None:
+    """This kind's own `Fetcher`, or None to use the scheme-resolved default.
+
+    Unknown kinds answer None rather than raising: an older build's chunk can name a kind this
+    process no longer registers, and the honest response is the default fetcher, not a crash in the
+    drain activity.
+    """
+    reg = _REGISTRY.get(kind)
+    if reg is None or reg.fetcher is None:
+        return None
+    return reg.fetcher()
 
 
 def registered_kinds() -> list[str]:

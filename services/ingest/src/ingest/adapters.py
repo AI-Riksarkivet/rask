@@ -17,6 +17,7 @@ else, which is the drift this design exists to prevent.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -165,6 +166,59 @@ def _lance_append_lineage(spec: SourceSpec) -> LineageInput:
     return LineageInput(namespace="lance", name=str(spec.options.get("uri") or ""))
 
 
+class LanceFragmentFetcher:
+    """Read ONE fragment of a Lance dataset and return its rows as an Arrow IPC stream.
+
+    This kind's keys are `<uri>#fragment=<id>`, which is not a fetchable URI: the path names a
+    DATASET (a directory), and the unit is a fragment inside it. `ingest.fetch.UriFetcher` resolves
+    by scheme and has no scheme to resolve here — it fell through to the `file`/`""` branch, which
+    read the path as a blob and refused it as outside RASK_INGEST_LOCAL_ROOT. Enumeration therefore
+    succeeded and every fetch failed, which is why the run reported COMPLETE_WITH_ERRORS with
+    `units_total: 3, units_done: 0` and "nothing to commit".
+
+    The confinement is re-checked HERE, not trusted from accept time. A unit key crosses the queue
+    and can be replayed by a later build, so the worker must not assume the root that admitted it is
+    still the root configured now — the same reason `probe()` does not stand in for a fetch-time
+    check. It is the identical call the accept door makes, so a key that was legal at accept and is
+    illegal now fails closed rather than reading whatever it currently points at.
+    """
+
+    async def fetch(self, key: str) -> bytes:
+        return await asyncio.to_thread(self._read, key)
+
+    @staticmethod
+    def _read(key: str) -> bytes:
+        import lance
+        import pyarrow as pa
+
+        uri, marker, raw = key.partition("#fragment=")
+        if not marker:
+            raise ValueError(f"lance-append unit key is missing its fragment marker: {key!r}")
+        try:
+            fragment_id = int(raw)
+        except ValueError:
+            raise ValueError(f"lance-append unit key has a non-numeric fragment id: {key!r}") from None
+
+        dataset = lance.dataset(confine_to_lance_root(uri))
+        for fragment in dataset.get_fragments():
+            if fragment.fragment_id == fragment_id:
+                table = fragment.to_table()
+                break
+        else:
+            # PERMANENT, not transient: fragment ids are stable, so an id this dataset does not have
+            # will not appear on a retry. Compaction can RETIRE one, which is exactly this case.
+            raise FileNotFoundError(f"fragment {fragment_id} is not in {uri!r} (retired by compaction, or never existed)")
+
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, table.schema) as writer:
+            writer.write_table(table)
+        return sink.getvalue().to_pybytes()
+
+
+def _lance_append_fetcher() -> LanceFragmentFetcher:
+    return LanceFragmentFetcher()
+
+
 def _lance_append_partition(spec: SourceSpec, key: str) -> str | None:
     """Every fragment of one dataset shares its dataset — the folder rule has no analogue here.
 
@@ -294,6 +348,7 @@ def register_builtin_sources() -> None:
             build=_lance_append,
             lineage_input=_lance_append_lineage,
             partition_of=_lance_append_partition,
+            fetcher=_lance_append_fetcher,
             label="Lance dataset",
             description="Every fragment of an ungoverned .lance dataset, each landed as one bronze row carrying its rows as Arrow IPC.",
             options=[

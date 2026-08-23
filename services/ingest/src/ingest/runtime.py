@@ -276,8 +276,10 @@ async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
     corrupt TIFF becomes a tracked error and a DLQ entry here, rather than a poisoned row that fails
     months later at read time in someone else's job.
     """
+    from ingest.adapters import register_builtin_sources
     from ingest.fetch import UriFetcher
     from ingest.queue import WorkQueue
+    from ingest.sources import fetcher_for
     from ingest.validation import PayloadValidator
     from ingest.worker import Worker
 
@@ -293,7 +295,12 @@ async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
         # Re-reading would let a rolling restart change fragment size under a live fan-out, so two
         # chunks of one run could write different layouts and the operator would have no record of
         # which numbers the run actually used.
-        worker = Worker(queue, UriFetcher(), PayloadValidator(), name=chunk.chunk_id, sizing=chunk.sizing)
+        # THIS KIND'S fetcher if it registered one, else the scheme-resolved default. The chunk
+        # already carries `kind` (it is what `publish_chunk_units` asks the adapter for a partition
+        # key with), so selecting here puts no new source knowledge on the wire and none at all in
+        # `ingest.fetch` — which resolves schemes and must never learn about sources.
+        register_builtin_sources()
+        worker = Worker(queue, fetcher_for(chunk.kind) or UriFetcher(), PayloadValidator(), name=chunk.chunk_id, sizing=chunk.sizing)
         outcome = await worker.drain_chunk(chunk.run_id, chunk.chunk_id, chunk.expected_units, chunk.dataset_uri)
         # BOUNDED HERE, at the first point the result becomes workflow history. The map is keyed by
         # UNIT, so a chunk whose every key is corrupt carries one entry per page — and this dict is

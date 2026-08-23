@@ -117,6 +117,13 @@ spec:
                  file cannot call the helper because it cannot template at all. Deriving it here means
                  the ingest plane follows the bucket every other tier follows, including a rename. */}}
             - { name: RASK_INGEST_WAREHOUSE, value: "s3://{{ include "lance.stageBucket" (list $root $root.Values.medallion.producer.bronzeNamespace) }}/ingest" }
+            {{- /* The CATALOG's own root, so the `lance-append` source can refuse a governed dataset.
+                 `confine_to_lance_root` reads it as `if governed and _under(...)` — so when it is UNSET
+                 the governed check does not fail closed, it is SKIPPED, and an operator who points
+                 RASK_INGEST_LANCE_ROOT at the lakehouse bucket gets a second, unlineaged copy path
+                 between governed tiers with no error. Measured unset on the deployed ingest pod
+                 2026-08-23. Same expression as services.yaml's catalog row, deliberately. */}}
+            - { name: LANCE_REST_ROOT, value: "s3://{{ $root.Values.rustfs.bucket }}" }
             {{- end }}
             {{- /* APP_API_TOKEN — ONE render site, TWO reasons a fleet service needs it, and they are
                  not the same reason. This block used to sit NESTED inside `if $svc.lanceWriter` above,

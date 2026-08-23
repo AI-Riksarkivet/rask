@@ -162,6 +162,14 @@ services:
       # nothing in the chart hinted that such a setting existed. local-dir is a fixture source;
       # s3-prefix and iiif are the production ones and need nothing here.
       RASK_INGEST_LOCAL_ROOT: ""
+      # The ONE dataset root the `lance-append` source may read — same shape, same reasoning and the
+      # same empty default as RASK_INGEST_LOCAL_ROOT above: `options.uri` is caller-supplied and
+      # reaches a reader that scans whatever it is pointed at, so unset REFUSES the kind rather than
+      # leaving it unconfined. Present-but-empty so the knob is discoverable: the adapter shipped
+      # with no chart row at all, which made `lance-append` unreachable in-cluster — every call
+      # answered "lance-append is not enabled here" and nothing hinted the setting existed. That is
+      # the exact failure the local-dir comment above records, repeated.
+      RASK_INGEST_LANCE_ROOT: ""
       RASK_LINEAGE_ENDPOINT: http://rask-lineage:8000
       RASK_LINEAGE_URL: http://rask-lineage:8000
       # WHO this plane is at the lineage door. Without it, on an auth-enabled estate, the ingest
