@@ -2,7 +2,7 @@
 
 **Working plan, 2026-08-17.** Delete this file when the decision below is made and executed.
 
-**The one-line state:** `chart/values.yaml:2176` says `alerting.enabled: false`. Twenty-three alert
+**The one-line state:** `chart/values.yaml:2176` says `alerting.enabled: false`. Twenty-nine alert
 rules exist, are valid, are proven to fire against synthetic series — and are evaluated by nothing.
 Nobody is paged for anything, ever.
 
@@ -33,7 +33,7 @@ That is not a gap in the sense of "missing work". Everything except the decision
 | `make alert-rules-drill` | **NEW.** Replays every rule against a REAL GreptimeDB and asserts each evaluates. This is the half promtool cannot do: it checks the LANGUAGE the production engine accepts, not the logic. Skips with no reachable datasource |
 | `chart/templates/alerting.yaml` | renders vmalert + Alertmanager + both ConfigMaps |
 | `alerting.vmalertImage` / `alertmanagerImage` | pinned (`vmalert:v1.106.1`, `alertmanager:v0.28.0`) |
-| Telemetry itself | **NOT healthy — corrected 2026-08-23.** Collector and Perses are up, but `rask-greptimedb-standalone-0` is at **restartCount 13, OOMKilled**, still looping at the raised 8Gi ceiling. This row previously read "running 19 days", which was uptime measured on a pod that had been restarting throughout. It sharpens the case rather than weakening it: the one store that would hold the evidence for any alert is itself the thing failing unwatched. **Four rules now cover it** (`GreptimeDBRestarting`, `GreptimeDBMemoryHigh`, `GreptimeDBDown`, `GreptimeDBMetricsMissing`), fed by a new `greptimedb` scrape job in the collector — it was scraped by NOTHING before, and no `kube_*`/`container_*` series exist anywhere in the estate, so all 13 OOMKills were invisible by construction. Those rules still evaluate nowhere until the decision below is made |
+| Telemetry itself | **Healthy as of 2026-08-23 17:23Z, after being the problem.** It spent that day OOMKilling — 13 times, restartCount 13 — because three of GreptimeDB's memory limits were the literal string `"unlimited"`. Bounding the engine (`chart/values.yaml` `greptimedb-standalone.configToml`) ended it; the pod now runs at restartCount 0. The episode is the argument, not a counter-argument: for a whole day the one store that would hold the evidence for any alert was failing, and nothing paged. Four GreptimeDB rules now exist — and evaluate nowhere, which is this document's point |
 
 So the rules are written, tested, templated and imaged. The estate collects telemetry and draws
 dashboards. The only thing absent is the component that turns a series into a page.
@@ -41,12 +41,12 @@ dashboards. The only thing absent is the component that turns a series into a pa
 ## 2. Why the OTel Collector cannot be that component
 
 Raised repeatedly as the obvious answer, so here is the measurement rather than the argument. Of the
-15 rules:
+29 rules:
 
 - **all carry a `for:` window** (0m–1h; every one but `GreptimeDBRestarting`, which is deliberately
   `for: 0m` because one restart is already the event) — "sustained", which needs memory of prior evaluations.
 - **most use `rate()` or `increase()` over a range** — which needs stored history to query.
-- **eight fire on ABSENCE** (`== 0` over a window, or `absent()`) — up from four, because the two
+- **nine fire on ABSENCE** (`== 0` over a window, or `absent()`) — up from four, because the two
   composites named below were each split into a condition rule and an absence rule.
 
 That last group is decisive and is not a configuration problem. A Collector pipeline is driven *by
@@ -89,7 +89,7 @@ taken, the template should `required` that value so an empty receiver fails the 
 an extra moving piece the owner has twice said they do not want.
 
 **B. GreptimeDB Enterprise.** Alerting collapses into the database already running; rules become SQL;
-vmalert and its ConfigMap are deleted. Costs a licence, and the 15 PromQL rules must be rewritten as
+vmalert and its ConfigMap are deleted. Costs a licence, and the 29 PromQL rules must be rewritten as
 SQL triggers — mechanical, but not free, and `rules_test.yml`'s synthetic-series proof does not carry
 over.
 
@@ -100,7 +100,7 @@ the `alerting:` values block and `make alert-rules-check`. Record it in `docs/DE
 
 ## 5. Why leaving it as-is is the worst of the three
 
-Fifteen rules that evaluate nowhere is the same failure mode as every defect closed in this session:
+Twenty-nine rules that evaluate nowhere is the same failure mode as every defect closed in this session:
 **a thing that reads as coverage and is not.** Someone finding `chart/alerting/rules.yml` and
 `make alert-rules-check` green will reasonably conclude the estate alerts on reconciler stalls and
 dead-lettering. It does not. Either half of that should be made true — turn it on, or take it out.

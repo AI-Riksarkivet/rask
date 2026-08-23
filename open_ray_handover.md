@@ -253,9 +253,11 @@ functions, not dataset or operator spans.
 
 ### APPLY ON THE RAY CLUSTER
 
-The functions already exist in the image: `packages/ratch` depends on `service-kit[lancekit]` and
-`.docker/ray-cluster.dockerfile` installs ratch (`uv sync --package ratch`, lines 62/69), so
-`service_kit` is importable in every Ray Python process. No new dependency, no image change.
+The functions are meant to be in the image already: `packages/ratch` depends on `service-kit[lancekit]`
+and `.docker/ray-cluster.dockerfile` installs ratch (`uv sync --package ratch`, lines 62/69), so an image
+built from current `main` has `service_kit` importable in every Ray Python process — no new dependency
+and no dockerfile change. **That is a statement about the dockerfile, not about the image you are
+running.** Verify yours before applying anything below.
 
 > **CHECK THIS ON YOUR IMAGE BEFORE APPLYING — the claim above is about the dockerfile, not about
 > whatever you are running.** Verified 2026-08-23 on rask's own head pod, and it was FALSE there:
@@ -355,7 +357,7 @@ Ray has two log planes and they behave differently:
 
 | plane | where it writes | already collected? |
 | --- | --- | --- |
-| **Serve replicas** | **stderr** | **YES** — the Collector's filelog receiver already tails Ray pod stdout/stderr. It has been ingesting them **unparsed**: one body string, no severity, no replica id. |
+| **Serve replicas** | **stderr** | **UNVERIFIED — do not build on this.** The theory is that filelog already tails Ray pod stdout/stderr, unparsed. Measured 2026-08-23 on rask's head pod: **zero** rows from any Ray pod reached the store in a 6h window (against 1,110,457 rows total), and the pod had emitted 28 stdout lines in six days. That cluster's Serve app is idle, so it may simply have had nothing to log — but nobody has seen a Serve replica line arrive. |
 | **Core** (driver, tasks, actors) | files under `/tmp/ray/session_*/logs/` **inside the container** | **NO.** Nothing mounts that path and nothing tails it. |
 
 So `RAY_SERVE_LOG_ENCODING=JSON` pays off with no shipper work at all, while the core half needs a

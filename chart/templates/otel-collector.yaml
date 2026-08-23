@@ -376,13 +376,14 @@ data:
     service:
       extensions: [health_check, file_storage]
       pipelines:
-        {{- /* THE WORKFLOW KEEPALIVE IS NOT FILTERED. `/TaskHubSidecarService/Hello` is the engine's
-               health ping to its own sidecar: measured at roughly 3,980 spans in three hours, about the
-               ninth-largest span source in the estate, and carrying no information anyone reads.
-               Dropping it is a `filter/drop_keepalive` processor in this pipeline, not app work.
-               Left undone deliberately rather than missed: two audits measured its share of the grpc
-               scope 40 points apart, so whoever takes it should RE-MEASURE first instead of trusting
-               either figure. */}}
+        {{- /* THE WORKFLOW KEEPALIVE IS FILTERED, by `filter/drop_keepalive` in the traces pipeline
+               below. `/TaskHubSidecarService/Hello` is the engine's health ping to its own sidecar and
+               carries nothing anyone reads. Two earlier audits put its share of the grpc scope 40
+               points apart, so it was re-measured before acting rather than taken on trust: 3,828 spans
+               in three hours, the ninth-largest span name in the estate.
+               Worth knowing for proportion — it was never the big one. The kubelet probe spans fixed in
+               the same change were 31,916 over the same window, and those are excluded at the SDK
+               (`rask.otelEnv`'s OTEL_PYTHON_FASTAPI_EXCLUDED_URLS) because the app owns them. */}}
         traces:
           receivers: [otlp]
           processors: [memory_limiter, k8sattributes, filter/drop_keepalive, batch]

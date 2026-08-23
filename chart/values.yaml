@@ -2209,8 +2209,11 @@ greptimedb-standalone:
   # BOUNDING IS NOT SHRINKING, and the direction of failure is the point. With these set, an
   # oversized scan fails ITS OWN QUERY (`scan_memory_on_exhausted = "fail"`, the default) instead of
   # taking the process down and losing every log, metric and trace the estate holds. One loud failure
-  # beats a silent hole in the record — doubly so here, because the Collector declares no
-  # `sending_queue`, so whatever was in flight at each OOM was dropped rather than retried.
+  # beats a silent hole in the record. That mattered more when this was written than it does now: the
+  # Collector had no `sending_queue`, so anything in flight at each OOM was simply lost. It has one as
+  # of ebcb7f68 (persistent, backed by the `file_storage` extension), so a rejected write is now queued
+  # and retried rather than dropped — which makes the fail-the-query direction chosen here safer than
+  # it was, not less necessary.
   #
   # SIZING against the 8Gi limit below. Worst case sums to ~6.3GiB, leaving real headroom:
   #   caches ~1.31GiB + write-buffer reject 1GiB + query 2GiB + scan 1GiB + compaction 1GiB.
@@ -2269,14 +2272,18 @@ greptimedb-standalone:
   # ~26%, so the cost of being generous here is nil next to the cost of a blind estate. Revisit with a
   # real high-water measurement once it has survived a busy period without restarting.
   #
-  # IT HAS NOT. Re-measured 2026-08-23: restartCount **12**, lastState OOMKilled, exit 137, most recent
-  # at 15:00:05Z. 8Gi did not stop the loop, it slowed it — so read the paragraph above as the reasoning
-  # that led here, not as a resolution. Two consequences worth knowing before trusting this store:
-  #   * Every restart is a hole in the estate's logs, metrics AND traces at once, and the only thing
-  #     that could report the hole is the thing that died. `chart/alerting/rules.yml` carries 23 rules
-  #     and NONE on GreptimeDB or the Collector, so nothing pages on this today.
-  #   * The Collector's OTLP exporters declare no `sending_queue` (see otel-collector.yaml), so
-  #     whatever was in flight at each OOM was dropped rather than retried.
+  # IT HAD NOT, AND THEN IT DID. The paragraph above was written while the loop was still running:
+  # 8Gi alone did not stop it (13 OOMKills on 2026-08-23, the last at 15:34:13Z). What stopped it was
+  # bounding the engine — the `configToml` block above — after which the pod has run at restartCount 0
+  # with no prior termination. Two things that were true of the loop and are worth keeping, because
+  # they are why the bound is written the way it is:
+  #   * Every restart was a hole in the estate's logs, metrics AND traces at once, and the only thing
+  #     that could report the hole is the thing that died. That blind spot is now covered:
+  #     `chart/alerting/rules.yml` carries 29 rules including four GreptimeDB ones (Restarting,
+  #     MemoryHigh, Down, MetricsMissing, added in f6af38bf) — though they evaluate nowhere until
+  #     `alerting.enabled` is turned on, which is a separate open decision (see open_alert.md).
+  #   * Whatever was in flight at each OOM was dropped rather than retried, because the Collector had
+  #     no `sending_queue`. It has one now (ebcb7f68).
   # Raising the ceiling again is the obvious move and is probably still not the answer: nothing has
   # measured WHICH subsystem allocates (mito compaction vs OTLP ingest burst vs parquet preload), and
   # a limit raised without that is a guess with a bigger number. Bounding query memory
