@@ -110,4 +110,76 @@ def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
         else:
             refusal = f" [read door answered {resp.status_code}: {resp.text[:200]}]"
         time.sleep(3)
-    pytest.fail(f"{gold} cascade did not complete within 60s (upstream={upstream}, runs {before}->{_run_count(lineage)}, expected >= {before + 3}){refusal}")
+    pytest.fail(
+        f"{gold} cascade did not complete within 60s (upstream={upstream}, runs {before}->{_run_count(lineage)}, "
+        f"expected >= {before + 3}){refusal}{_projectless_diagnosis(lineage, upstream)}"
+    )
+
+
+def _projectless_diagnosis(lineage: str, upstream: list[str]) -> str:
+    """Name the INVOCATION fault when the shape of the failure is that fault's signature.
+
+    Same reason `refusal` exists one block up: a live drive that cannot tell "it did not happen" from
+    "you may not look" sends the next reader after the wrong bug. This is the third such case, and the
+    only one that is not about the estate at all — it is about how the test was invoked.
+
+    With `medallion.cascadeViaPublish` on, the cascade is driven by `publication_trigger`, which ALWAYS
+    carries a project because "the mover cannot resolve its tiers without it". So a PROJECTLESS produce
+    against a publish-driven estate publishes silver and gold never fires — and the bare run-count
+    message reports that as a broken cascade, which is what it did on the drive that produced
+    `runs 131->133, expected >= 134` against a cascade working perfectly for a tenant.
+
+    The signature is specific enough to name: no `LANCE_E2E_PROJECT`, and SILVER reached bronze while
+    gold reached nothing. A genuinely broken cascade does not stop cleanly at exactly that boundary,
+    and a tenant drive cannot produce it at all. Anything else gets no hint rather than a guess —
+    a wrong diagnosis is worse than none, because it is the one the next reader will follow.
+    """
+    if PROJECT or upstream:
+        return ""
+    try:
+        silver = _qualified("silver", "features")
+        resp = requests.get(f"{lineage}/datasets/{silver}/upstream", headers=_LINEAGE_HEADERS, timeout=8)
+        reached = resp.status_code == 200 and _qualified("bronze", "events") in [ref["name"] for ref in resp.json().get("related", [])]
+    except requests.RequestException:
+        return ""
+    return projectless_hint(project=PROJECT, gold_upstream=upstream, silver_reached=reached)
+
+
+def projectless_hint(*, project: str, gold_upstream: list[str], silver_reached: bool) -> str:
+    """The decision, separated from the read that feeds it, so every branch is reachable in a test.
+
+    Same reason `gate_decision` was extracted from `run_stage`: a diagnosis that can only be exercised
+    by standing up a cluster and driving it wrong is a diagnosis nobody re-checks — and this one exists
+    precisely for the person who is already having a bad time.
+    """
+    if project or gold_upstream or not silver_reached:
+        return ""
+    return (
+        "\n  DIAGNOSIS: silver completed and gold never fired, with no LANCE_E2E_PROJECT set. On an estate "
+        "with medallion.cascadeViaPublish ON, the cascade is driven by publication_trigger, which always "
+        "carries a project — a projectless produce publishes silver and stops. Re-run with "
+        "LANCE_E2E_PROJECT=<tenant>. This is an invocation fault, not a broken cascade."
+    )
+
+
+def test_the_projectless_signature_is_named() -> None:
+    """Silver reached, gold empty, no project — the one shape that IS the invocation fault."""
+    assert "LANCE_E2E_PROJECT" in projectless_hint(project="", gold_upstream=[], silver_reached=True)
+
+
+def test_a_tenant_drive_gets_no_hint() -> None:
+    """A drive that named a project cannot be suffering this fault, so guessing would mislead."""
+    assert projectless_hint(project="acme", gold_upstream=[], silver_reached=True) == ""
+
+
+def test_a_cascade_that_did_not_even_reach_silver_gets_no_hint() -> None:
+    """Stopping BEFORE silver is a different failure; naming this one would send the reader wrong.
+
+    A wrong diagnosis is worse than none, because it is the one the next reader will follow.
+    """
+    assert projectless_hint(project="", gold_upstream=[], silver_reached=False) == ""
+
+
+def test_a_partially_reached_gold_gets_no_hint() -> None:
+    """Any gold upstream at all means the cascade DID fire — a slow run, not a projectless one."""
+    assert projectless_hint(project="", gold_upstream=["bronze$events"], silver_reached=True) == ""

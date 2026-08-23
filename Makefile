@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-lanes notifications-rig audit tracker-postgres smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit tracker-postgres smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
 
 help:
 	@echo "Targets:"
@@ -192,6 +192,14 @@ alert-rules-check: ## promtool: the alert rules are valid AND actually fire on s
 	  [ -x "$$PROMTOOL" ] || { echo "!! promtool not found on PATH or in $(LOCALBIN) — run 'make bootstrap'"; exit 1; }; \
 	  "$$PROMTOOL" check rules chart/alerting/rules.yml && \
 	  "$$PROMTOOL" test rules chart/alerting/rules_test.yml
+
+# promtool is PROMETHEUS. Production is vmalert -> GreptimeDB, and the two do not accept the same
+# PromQL: two rules shipped that promtool called SUCCESS and GreptimeDB answered 400/500, so they
+# could never fire and nothing reported it. This replays every rule against the real engine.
+# Exit 2 (no datasource) is a SKIP so a laptop without a cluster is not a red build — which means it
+# is the k3s/CI run that actually proves anything. Run it before shipping a rule change.
+alert-rules-drill: ## replay every alert rule against a REAL GreptimeDB (skips with no cluster)
+	@uv run python scripts/alert_rules_drill.py; s=$$?; [ $$s -eq 1 ] && exit 1 || exit 0
 
 # ---- frontend dead-code + dep gate (knip, repo-wide; see knip.json) ---------
 # Cross-workspace tool — analyses the whole JS graph at once, so it stays a
@@ -876,7 +884,7 @@ e2e-governed-union: ## Full governed-union proof (the estate's widest authz path
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_FGA)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_FGA=$(LANCE_E2E_FGA) uv run pytest tests/e2e-py -m governed_union -v
-e2e-medallion:      ## Medallion bronze→silver→gold cascade proof (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL)
+e2e-medallion:      ## Medallion bronze→silver→gold cascade proof (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL; also LANCE_E2E_PROJECT on a cascadeViaPublish estate, or gold never fires)
 	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-medallion needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-medallion needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_PROJECT=$(LANCE_E2E_PROJECT) LANCE_E2E_DAPR_TOKEN=$(LANCE_E2E_DAPR_TOKEN) uv run pytest tests/e2e-py -m medallion -v
