@@ -161,6 +161,9 @@
 								</span>
 							{/if}
 							<div class="flex gap-2 pt-1">
+								<!-- The other direction of the same link. A declaration is only useful next to what
+								     it produced, and this zone already watches those runs. -->
+								<Button variant="outline" size="sm" href="/compute/jobs">Runs</Button>
 								<Button variant="outline" size="sm" onclick={() => edit(spec)}>Edit</Button>
 								<GatedAction allowed={!busy} action="Delete" reason="A write is already in flight.">
 									<Button variant="destructive" size="sm" onclick={() => remove(spec.lane)}>
