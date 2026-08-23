@@ -134,9 +134,40 @@ def as_delivery(event: CatalogControlEvent) -> NotificationDelivery:
         notification_id=f"{event.event_id}@{event.action.upper()}",
         reason=NotificationReason(event.action),
         object_id=event.object_id,
-        source_run_id=None,
+        source_run_id=_review_instance(event),
         occurred_at=event.occurred_at,
     )
+
+
+#: The one action whose producer runs a door of its own that a row should reach.
+_REVIEW_ACTION: Final = "promotion_review_requested"
+
+
+def _review_instance(event: CatalogControlEvent) -> str | None:
+    """The promotion review this row is about, as its detail door names it — or ``None``.
+
+    WHY THIS EXISTS. A held promotion is answered at ``GET /promotions/{instance_id}`` and its
+    decision door, and telling a validator they are needed without telling them WHERE is barely
+    better than not telling them. ``request_approval`` stamps ``extra.token``; this projection
+    dropped it, so the row named a table and linked nowhere.
+
+    WHY ``source_run_id`` AND NOT A NEW FIELD. The field's contract already is "the producer's OWN
+    run id, which is what its detail doors answer to" — for this action that is the review instance,
+    exactly. And :class:`InboxPointer` is ``extra="forbid"`` deliberately: a row carrying a NEW field
+    lands in durable actor state, and a build that predates it answers the whole inbox 503 rather
+    than skipping one row (measured 2026-08-16). Reusing a declared field costs nothing on rollback.
+
+    Scoped to one action on purpose. Other lanes stamp unrelated things under ``extra``, and a
+    blanket ``extra.get("token")`` would put a grant's correlation id in a field that promises a
+    detail door — a link to nowhere is worse than no link.
+    """
+    if event.action != _REVIEW_ACTION:
+        return None
+    token = event.extra.get("token") if isinstance(event.extra, dict) else None
+    # The mover derives the instance the same way (`medallion.api.promotions.instance_for`). Recomputed
+    # rather than shared: the two services publish across a bus and must not import each other, and the
+    # shape is pinned on both sides by tests.
+    return f"promotion-{token}" if isinstance(token, str) and token.strip() else None
 
 
 async def ingest_control_event(raw: object, *, open_inbox: InboxOpener, expand: UsersetExpander | None = None) -> dict[str, str]:

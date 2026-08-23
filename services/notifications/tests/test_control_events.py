@@ -336,3 +336,69 @@ class TestAPromotionHoldReachesItsApprover:
         that fans out to everybody.
         """
         assert await named_subjects(_event(action="promotion_review_requested", subject=None)) == ()
+
+
+# ---------------------------------------------------------------------------
+# The promotion review's DEEP LINK.
+#
+# A held promotion is answered at `GET /promotions/{instance_id}` and its decision door — the whole
+# reason the inbox row exists is to send a validator there. `workflow.request_approval` stamps
+# `extra.token`, but `as_delivery` built its pointer from notification_id/reason/object_id alone, so
+# the token was dropped and the row named a TABLE with no way to reach the review. A person told they
+# are needed, and not told where, is barely better than not being told.
+#
+# Carried on `source_run_id` rather than a new field, and that is the load-bearing choice: the field's
+# own contract is "the producer's OWN run id, which is what its detail doors answer to", which is
+# exactly this; and `InboxPointer` is `extra="forbid"` on purpose, so ADDING a field is a
+# compatibility surface — a row carrying one lands in durable actor state and an older reader answers
+# the whole inbox 503 (measured 2026-08-16). Reusing a declared field costs nothing on rollback.
+
+
+def _promotion_event(token: str | None) -> CatalogControlEvent:
+    extra: dict[str, object] = {"subject": "user:alice", "reasons": ["row_count_delta"], "project": "acme"}
+    if token is not None:
+        extra["token"] = token
+    return CatalogControlEvent.model_validate(
+        {
+            "event_id": "evt-1",
+            "action": "promotion_review_requested",
+            "object_type": "table",
+            "object_id": "table:acme-silver$features",
+            "actor": "system:medallion",
+            "occurred_at": "2026-08-23T18:00:00+00:00",
+            "extra": extra,
+        }
+    )
+
+
+def test_a_promotion_review_carries_its_instance_id() -> None:
+    """The row must name the review, not only the table, or it cannot link anywhere."""
+    delivery = as_delivery(_promotion_event("tok-1"))
+    assert delivery.source_run_id == "promotion-tok-1"
+
+
+def test_a_promotion_review_without_a_token_still_delivers() -> None:
+    """A producer that omits the token is a coverage gap, never a dropped notification.
+
+    Being told late where to go beats not being told at all, so the pointer still lands — it simply
+    has no deep link.
+    """
+    delivery = as_delivery(_promotion_event(None))
+    assert delivery.source_run_id is None
+    assert delivery.reason is NotificationReason.PROMOTION_REVIEW_REQUESTED
+
+
+def test_a_non_promotion_action_is_untouched() -> None:
+    """The grant lane must keep its existing shape — this change is scoped to one action."""
+    grant = CatalogControlEvent.model_validate(
+        {
+            "event_id": "evt-2",
+            "action": "grant_added",
+            "object_type": "project",
+            "object_id": "project:acme",
+            "actor": "user:bob",
+            "occurred_at": "2026-08-23T18:00:00+00:00",
+            "extra": {"subject": "user:alice", "relation": "member", "token": "not-a-review"},
+        }
+    )
+    assert as_delivery(grant).source_run_id is None
