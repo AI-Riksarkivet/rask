@@ -507,3 +507,52 @@ def test_a_demo_identity_is_seeded_as_its_oidc_subject_and_a_persona_stays_liter
     # Only the SUBJECT side: a userset or an object type is never a principal to remap.
     assert seed_estate.remap_subject("role:validators#assignee", subs) == "role:validators#assignee"
     assert seed_estate.remap_subject("team:eng", subs) == "team:eng"
+
+
+# --------------------------------------------------------------------------- #
+# Adoption — the fourth meaning of 409
+# --------------------------------------------------------------------------- #
+
+
+def test_by_default_a_namespace_create_does_not_ask_to_adopt() -> None:
+    """Adopting a namespace whose bytes are already in the bucket is the hazard the binding guards
+    exist for, so it is never the default: a typo'd create must not inherit a stranger's data."""
+    recorded: list[httpx.Request] = []
+    assert _run(recorded) == 0
+    bodies = [_body(request) for request in recorded if _layer(request) == "namespace"]
+    assert bodies, "no namespace creates recorded"
+    assert all("adopt_existing" not in body or body["adopt_existing"] is False for body in bodies), bodies
+
+
+def test_adopt_existing_asks_the_catalog_to_converge_the_unbound_namespace() -> None:
+    """The FOURTH meaning of 409, and the one this script could not converge.
+
+    `POST /v1/warehouses/{id}/namespaces` answers `NamespaceAlreadyExistsError` for four states, not the
+    three listed beside BINDING_REFUSALS: converged, bound elsewhere, taken in the default root — and
+    the namespace whose BYTES are already at THIS warehouse's root while its binding was never written.
+    That last one was observed on the live estate 2026-08-23: the acme tiers existed as directories, the
+    bindings map held no entry for them, so routing fell through to the default root and every table
+    declare answered `NamespaceNotFoundError` for a namespace whose create had just said "already
+    exists". The run reported converged and then failed two tables.
+
+    It is not convergence and it is not a takeover; it is the bytes-first migration mid-flight, and the
+    catalog's own door for it is `adopt_existing`, which runs the binding + FGA trailer the state is
+    missing. Opt-in, because the hazard guards it does NOT relax are the whole reason it is a flag.
+    """
+    recorded: list[httpx.Request] = []
+    assert _run(recorded, argv=["--catalog", "http://catalog", "--adopt-existing"]) == 0
+    bodies = [_body(request) for request in recorded if _layer(request) == "namespace"]
+    assert bodies, "no namespace creates recorded"
+    assert all(body.get("adopt_existing") is True for body in bodies), bodies
+
+
+def test_adoption_never_relaxes_the_takeover_guards() -> None:
+    """`adopt_existing` converges bytes at THIS warehouse's root; a name bound ELSEWHERE stays a failure."""
+
+    def refuse(request: httpx.Request) -> tuple[int, object] | None:
+        if _layer(request) == "namespace":
+            return 409, _problem("NamespaceAlreadyExistsError", "namespace 'acme-gold' is already bound to another warehouse", 2)
+        return None
+
+    recorded: list[httpx.Request] = []
+    assert _run(recorded, refuse, argv=["--catalog", "http://catalog", "--adopt-existing"]) == 1

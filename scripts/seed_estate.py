@@ -113,10 +113,16 @@ DEX_SUBS: Mapping[str, str] = MappingProxyType(
 CONVERGED: Mapping[int, tuple[str, str]] = MappingProxyType({409: ("converged", "already exists")})
 #: Phrases that turn a TOLERATED status back into a failure.
 #:
-#: ``POST /v1/warehouses/{id}/namespaces`` answers 409 for three different things, all of them the SAME
+#: ``POST /v1/warehouses/{id}/namespaces`` answers 409 for FOUR different things, all of them the SAME
 #: ``NamespaceAlreadyExistsError`` (spec code 2): the namespace is already here (convergence — the normal
-#: re-run), the name is already bound to ANOTHER warehouse, or it already exists unbound in the default
-#: root. The last two are the binding guards refusing a takeover, and swallowing them is the ghost this
+#: re-run), the name is already bound to ANOTHER warehouse, it already exists unbound in the default
+#: root, or — observed live 2026-08-23 — its BYTES are already at THIS warehouse's root while its binding
+#: was never written. That fourth state reads as convergence here and is not: routing falls through to
+#: the default root, so every table declare then answers ``NamespaceNotFoundError`` for a namespace whose
+#: create just said "already exists" (measured: the acme tiers converged and two tables failed). It is
+#: the bytes-first migration mid-flight, and ``--adopt-existing`` is the door for it — the catalog runs
+#: the binding + FGA trailer the state is missing, without relaxing either guard below.
+#: The MIDDLE two are the binding guards refusing a takeover, and swallowing them is the ghost this
 #: script exists to stop making at its worst: the run would then declare tables into a bucket it does not
 #: own and write ``namespace:<name>#validator`` onto another tenant's namespace, and report success. Same
 #: class and same code, so the guard's own wording is the only discriminator there is — pinned against the
@@ -334,7 +340,7 @@ def _warehouse_body(project: Project, warehouse: Warehouse) -> dict[str, object]
     return body
 
 
-def plan(estate: Estate, subs: Mapping[str, str], *, delimiter: str = DELIMITER) -> list[Step]:
+def plan(estate: Estate, subs: Mapping[str, str], *, delimiter: str = DELIMITER, adopt_existing: bool = False) -> list[Step]:
     """The estate description flattened into calls, LAYER BY LAYER: projects, warehouses, namespaces,
     tables, then grants.
 
@@ -374,7 +380,7 @@ def plan(estate: Estate, subs: Mapping[str, str], *, delimiter: str = DELIMITER)
             # /v1/namespace/{id}/create refuses one outright (it cannot name a warehouse to bind it to),
             # so a namespace created there would have nowhere for its bytes to land.
             path=f"/v1/warehouses/{warehouse.id}/namespaces",
-            body={"namespace": namespace.name},
+            body={"namespace": namespace.name, **({"adopt_existing": True} if adopt_existing else {})},
             key=f"namespace:{namespace.name}",
             parent=f"warehouse:{warehouse.id}",
             tolerate=CONVERGED,
@@ -614,6 +620,15 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
     parser.add_argument("--timeout", type=float, default=30.0, help="per-request timeout in seconds (default 30)")
     parser.add_argument("--dry-run", action="store_true", help="print the calls in order, make none of them")
     parser.add_argument("--map", action="append", default=[], metavar="NAME=SUB", help="override a demo identity's OIDC subject (repeatable)")
+    parser.add_argument(
+        "--adopt-existing",
+        action="store_true",
+        help=(
+            "converge a namespace whose BYTES are already in this warehouse's bucket but whose binding was "
+            "never written (the bytes-first migration mid-flight). Off by default: adopting is the hazard "
+            "the binding guards exist for, and it never relaxes them."
+        ),
+    )
     args = parser.parse_args(argv)
 
     subs = dict(DEX_SUBS)
@@ -624,7 +639,7 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
             return 1
         subs[name] = sub
 
-    steps = plan(DEMO_ESTATE, subs, delimiter=args.delimiter)
+    steps = plan(DEMO_ESTATE, subs, delimiter=args.delimiter, adopt_existing=args.adopt_existing)
     print(f"  {len(steps)} steps against {args.catalog}")
     print(f"  identities mapped to their OIDC subject: {', '.join(sorted(subs))}")
     print(f"  bearer: {'yes' if args.token else 'NO — assuming an auth-off stack'}")
