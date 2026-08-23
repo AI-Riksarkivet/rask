@@ -123,7 +123,9 @@
 			<p class="text-destructive text-sm">
 				{lanes.current.status === 403
 					? 'You do not hold `can_administer` on this project, so its lanes cannot be listed. This is a denial, not an empty estate.'
-					: (lanes.current.detail ?? `Could not list lanes (${lanes.current.status}).`)}
+					: lanes.current.status === 404
+						? 'The catalog answered 404 for the lane door. That is the DOOR being absent, not this project: a catalog build predating the transform endpoints serves no /transform routes at all. Check the deployed catalog image before reading this as "no lanes".'
+						: (lanes.current.detail ?? `Could not list lanes (${lanes.current.status}).`)}
 			</p>
 		</Card>
 	{:else if lanes.current}

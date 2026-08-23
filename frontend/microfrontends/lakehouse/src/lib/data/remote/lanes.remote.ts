@@ -26,6 +26,12 @@ import { catalogJSON, parsed } from '$lib/server/doors';
 
 const enc = encodeURIComponent;
 
+// THE PREFIX IS SPLIT, AND THE SPLIT IS NOT A TYPO. The catalog mounts these four doors on TWO
+// routers: `project_router` at `/v1/project` (SINGULAR) carries set/describe/delete, while
+// `projects_router` at `/v1/projects` (PLURAL) carries the list. Using the plural for all four is
+// the obvious mistake and it FAILS ASYMMETRICALLY — the list answers 200 and only the writes 404,
+// so the page looks wired until someone tries to save. Verified live 2026-08-23.
+
 /** The active project, or `''`. Every zone visit happens INSIDE a project (#103) and the lane doors
  *  take it from the gated PATH, so a missing cookie is a REFUSAL rather than an estate-wide read. */
 function activeProject(): string {
@@ -62,7 +68,7 @@ export const setLane = command(LaneDraftSchema, async (draft): Promise<ApiResult
 	const project = activeProject();
 	if (project === '') return noProject<LaneSpec>();
 	const result = parsed(
-		await catalogJSON(`/v1/projects/${enc(project)}/transform/set`, {
+		await catalogJSON(`/v1/project/${enc(project)}/transform/set`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify(draft),
@@ -84,7 +90,7 @@ export const deleteLane = command(
 		const project = activeProject();
 		if (project === '') return noProject<LaneSpec>();
 		const result = parsed(
-			await catalogJSON(`/v1/projects/${enc(project)}/transform/delete`, {
+			await catalogJSON(`/v1/project/${enc(project)}/transform/delete`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ lane }),
