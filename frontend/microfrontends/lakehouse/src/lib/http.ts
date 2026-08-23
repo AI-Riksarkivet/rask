@@ -7,4 +7,4 @@ import { createBffClient } from '@rask/api/client';
 export { type ApiResult } from '@rask/api/client';
 
 export const bff = createBffClient(base);
-export const { bffPath, requestJSON, requestBinary, fetchMeViaBff } = bff;
+export const { bffPath, requestJSON, requestBinary, requestBytes, fetchMeViaBff } = bff;

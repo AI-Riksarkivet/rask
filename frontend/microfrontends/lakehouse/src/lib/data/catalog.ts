@@ -12,7 +12,12 @@
 import { parse } from '@rask/api';
 import * as v from 'valibot';
 import type { components } from '@rask/api/generated/catalog';
-import { type ApiResult, requestBinary as requestBin, requestJSON as request } from '$lib/http';
+import {
+	type ApiResult,
+	requestBinary as requestBin,
+	requestBytes as requestBytesRaw,
+	requestJSON as request,
+} from '$lib/http';
 
 export type TableDescribe = components['schemas']['DescribeTableResponse'];
 export type TableStats = components['schemas']['GetTableStatsResponse'];
@@ -51,6 +56,7 @@ export type TableDetail = {
 export type CatalogResult<T> = ApiResult<T>;
 
 const requestJSON = (path: string, init?: RequestInit) => request('/capi', path, init);
+const requestBytes = (path: string, body: BodyInit) => requestBytesRaw('/capi', path, body);
 
 const enc = encodeURIComponent;
 
@@ -123,11 +129,23 @@ export const fetchTableHistory = async (
 /** #64 data-plane row insert — append Arrow-IPC rows (built in the browser via apache-arrow). Writer-gated
  * (can_write_data) at the catalog, session-only BFF. `mode=append` never rewrites existing versions. */
 export const insertRows = (table: string, arrow: Uint8Array) =>
-	requestJSON(`v1/table/${enc(table)}/insert?mode=append`, {
-		method: 'POST',
-		headers: { 'content-type': 'application/vnd.apache.arrow.stream' },
-		body: arrow as BodyInit,
-	});
+	requestBytes(`v1/table/${enc(table)}/insert?mode=append`, arrow as BodyInit);
+
+/** Insert-if-not-matched on `on` — the write a MANUAL PUSH uses, so a re-push converges.
+ *
+ * The difference from {@link insertRows} is the one that matters: an insert is a blind append, so
+ * running the same push twice lands 2N rows over N distinct ids. `when_not_matched_insert_all` is
+ * native insert-if-not-matched, so the second run is a no-op for rows already there.
+ *
+ * `on` is the match key — the column pair identity is decided by, normally the table's key field.
+ * Writer-gated (can_write_data) at the catalog, session-only through the BFF like every other
+ * data-plane write from a zone.
+ */
+export const mergeRows = (table: string, arrow: Uint8Array, on: string) =>
+	requestBytes(
+		`v1/table/${enc(table)}/merge_insert?on=${encodeURIComponent(on)}&when_not_matched_insert_all=true`,
+		arrow as BodyInit,
+	);
 
 // Schema evolution (#74: add / rename / drop / re-type a column, the field- and table-level property
 // writes) and index build/drop (#73) are remote functions now — `remote/catalog.remote.ts`. The

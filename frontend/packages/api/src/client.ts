@@ -54,6 +54,16 @@ export interface BffClient {
 		path: string,
 		init?: RequestInit,
 	) => Promise<ApiResult<ArrayBuffer>>;
+	/** BYTES UP, JSON ACK DOWN — the shape every data-plane write from a zone actually has, and the
+	 *  one neither sibling modelled. `requestJSON` sends the bytes but names the route as JSON, which
+	 *  counted an Arrow write against the BFF-JSON residual it does not belong to; `requestBinary`
+	 *  reads the ack as an ArrayBuffer, which a small `{version}` reply is not. */
+	requestBytes: (
+		base: string,
+		path: string,
+		body: BodyInit,
+		contentType?: string,
+	) => Promise<ApiResult<unknown>>;
 	/**
 	 * Browser-side `/v1/me` through THIS zone's bearer-forwarding BFF pass-through (`/capi/v1/me`).
 	 * Same degrade posture as the server-side `fetchMe`: `null` on ANY failure (signed out, 401,
@@ -121,6 +131,32 @@ export function createBffClient(base: string): BffClient {
 		}
 	};
 
+	const requestBytes = async (
+		apiBase: string,
+		path: string,
+		body: BodyInit,
+		contentType = 'application/vnd.apache.arrow.stream',
+	): Promise<ApiResult<unknown>> => {
+		// BYTES UP, JSON ACK DOWN — the shape every data-plane write from a zone actually has, and the
+		// one neither helper modelled. `requestJSON` sends the bytes but names the route as JSON, which
+		// is why the insert write counted against the BFF-JSON residual it does not belong to;
+		// `requestBinary` reads the ACK as an ArrayBuffer, which a small `{version}` reply is not.
+		try {
+			const res = await fetch(`${bffPath(apiBase)}/${path}`, {
+				method: 'POST',
+				headers: { 'content-type': contentType },
+				body,
+				signal: timeoutSignal(FETCH_TIMEOUT_MS),
+			});
+			const payload: unknown = await res.json().catch(() => ({}));
+			if (!res.ok)
+				return { ok: false, status: res.status, detail: detailFrom(payload, res.status) };
+			return { ok: true, data: payload };
+		} catch (err) {
+			return { ok: false, status: 0, detail: String(err) };
+		}
+	};
+
 	const getJSON = async <T>(path: string): Promise<T | null> => {
 		try {
 			const res = await fetch(bffPath(`/api/${path}`), { signal: timeoutSignal(FETCH_TIMEOUT_MS) });
@@ -141,5 +177,5 @@ export function createBffClient(base: string): BffClient {
 		}
 	};
 
-	return { bffPath, getJSON, requestJSON, requestBinary, fetchMeViaBff };
+	return { bffPath, getJSON, requestJSON, requestBinary, requestBytes, fetchMeViaBff };
 }

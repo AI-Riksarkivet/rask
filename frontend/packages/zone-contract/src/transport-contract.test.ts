@@ -143,7 +143,9 @@ describe('transport matches the payload kind', () => {
 
 		// The lakehouse's residual is allowed to exist and NOT allowed to grow. If this fails because
 		// you converged one, lower the number in the same commit.
-		expect(counts.get('lakehouse') ?? 0).toBeLessThanOrEqual(13);
+		// 13 -> 12: `insertRows` converged onto `requestBytes` (bytes up, JSON ack down), which is what
+		// that write always was — `requestJSON` named it as a JSON route it never belonged to.
+		expect(counts.get('lakehouse') ?? 0).toBeLessThanOrEqual(12);
 	});
 
 	it('the OIDC endpoints stay on +server.ts', () => {
