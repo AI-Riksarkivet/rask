@@ -234,6 +234,27 @@ DEMO_ESTATE = Estate(
         Grant("team:partners", "team", "project:beta"),
         # dave: a plain WRITER on the bucket — writes any stage, but is NOT a validator.
         Grant("user:dave", "writer", "warehouse:acme-bucket"),
+        # ---- THE CASCADE'S OWN IDENTITIES ---------------------------------------------------------
+        # Observed live 2026-08-23: a seeded estate produced bronze, moved it to silver, and then DIED.
+        # `POST /v1/table/acme-silver$features/publish` answered 403 three times and the trigger parked
+        # in the DLQ, so the run reported nothing and gold never existed.
+        #
+        # The mover already had `writer` — the create seeds that — and writer is deliberately not
+        # enough: publishing is an owner-tier act, and the model's whole point is that "a plain writer
+        # can write within a stage but cannot promote INTO a gated one" (publication.py). Correct rule,
+        # and nothing granted the movers the rung that satisfies it, because this seed grants PEOPLE.
+        #
+        # A tenant whose tiers exist but whose cascade cannot publish into them is exactly the
+        # half-made state this script exists to prevent — the authz half of a ghost. The estate is not
+        # seeded until the services that fill it can.
+        # OWNER, and the rung is the finding rather than a preference. The first attempt granted
+        # `validator`, on the reasoning that promoting into a gated stage is a validator's act — and it
+        # failed identically, three more 403s. `publish` is guarded by `can_update_tag`, and the model
+        # says `define can_update_tag: owner`; `validator` buys `can_promote`, which is the OTHER door
+        # on that route (the accept-assertions override). One rung per tier is enough because both
+        # cascade: `owner from parent` on `table`, and `owner` already subsumes `validator` there.
+        Grant("user:service-bronze-to-silver", "owner", "namespace:acme-silver"),
+        Grant("user:service-silver-to-gold", "owner", "namespace:acme-gold"),
         # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
         Grant("user:carol", "assignee", "role:validators"),
         Grant("role:validators#assignee", "validator", "namespace:acme-gold"),
