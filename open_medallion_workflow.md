@@ -26,19 +26,30 @@ elif result is not None and promotion_hold.review_enabled(settings):     # the B
 With `cascadeViaPublish: true` — which is in this estate's deployed values — the first branch always
 takes, so the band `elif` is unreachable. The §9.1 band is configured, documented, enabled, and dead.
 
-## This is a known gap, not a regression
+## Not blocked on a missing door — blocked on wiring
 
-`services/medallion/tests/test_promotion_review_has_a_live_path.py` already records the deeper half,
-and it is why moving the call site does not fix this:
+I first reported this as blocked behind a catalog endpoint that does not exist, on the strength of
+`test_promotion_review_has_a_live_path.py`'s docstring: "NO DOOR DOES THAT past a failed gate".
+**That sentence was out of date and the conclusion was wrong.** It has been corrected in place.
 
-> An approved hold resumes today by publishing the next-stage trigger. Under a tag-driven cascade the
-> resume must instead move the `published` tag — and NO DOOR DOES THAT past a failed gate: `publish`
-> re-runs the assertions and refuses, `tags/update` moves the tag and emits nothing. So "a validator
-> accepted data the gate refused" is currently unexpressible.
+The door exists. `POST /v1/table/{id}/publish` with `accept_assertions=[...]` is gated on
+`can_promote` — the validator rung, deliberately above the ordinary publish's `can_update_tag` —
+and `catalog/services/publication.py` waives exactly the named findings
+(`waved = set(accept_assertions) - STRUCTURAL_ASSERTIONS`, so a structural finding can never be
+published by naming it), advances the tag, and emits `table_published`. That IS "a validator accepted
+data the gate refused", and it IS the tag-driven resume.
 
-That tripwire is green (27 passed). The decision it defends is now due: a review that cannot be
-resumed is a review that cannot be offered, so closing this needs a CATALOG DOOR that advances
-`published` on a validator's recorded acceptance — not a rearrangement of the mover's branches.
+## What is actually left, and it is two edits
+
+1. **Make the band reachable.** `transform.py`'s gate is one `if/elif` chain; under
+   `cascadeViaPublish` the catalog-publish branch always takes, so the band `elif` never runs and no
+   hold is ever raised. Measured: band set to `0` — "asks about every change" — and a full cascade
+   produced no review.
+2. **Point the resume at the door.** An approved hold resumes via `workflow.publish_promotion` ->
+   `spec.pub_topic`; under `cascadeViaPublish` there is no `pub_topic`, so the resume must call
+   `publish` with the accepted assertion names instead.
+
+Neither needs a new endpoint, a new FGA rung, or a new event. Both are inside medallion.
 
 ## What is NOT blocked
 
