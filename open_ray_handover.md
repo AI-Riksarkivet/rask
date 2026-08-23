@@ -254,8 +254,33 @@ functions, not dataset or operator spans.
 ### APPLY ON THE RAY CLUSTER
 
 The functions already exist in the image: `packages/ratch` depends on `service-kit[lancekit]` and
-`.docker/ray-cluster.dockerfile` installs ratch, so `service_kit` is importable in every Ray Python
-process. No new dependency, no image change.
+`.docker/ray-cluster.dockerfile` installs ratch (`uv sync --package ratch`, lines 62/69), so
+`service_kit` is importable in every Ray Python process. No new dependency, no image change.
+
+> **CHECK THIS ON YOUR IMAGE BEFORE APPLYING — the claim above is about the dockerfile, not about
+> whatever you are running.** Verified 2026-08-23 on rask's own head pod, and it was FALSE there:
+>
+> ```
+> image   = localhost:5000/ray-cluster:main-4f66ce84   (built 2026-08-17)
+> python  = /opt/venv/bin/python                        (the correct venv)
+> import ratch          -> ModuleNotFoundError
+> import service_kit    -> ModuleNotFoundError
+> import opentelemetry  -> OK
+> find / -name service_kit -type d  ->  (nothing)
+> ```
+>
+> Not a PATH problem — the interpreter is the right venv and the packages are absent from the
+> filesystem entirely. That image predates the `uv sync --package ratch` line it is supposed to have
+> come from. The consequence if you skip this check: `RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH` points
+> at a module that cannot be imported, and you get no spans plus an import error inside Serve rather
+> than a clear failure at configuration time.
+>
+> One line tells you whether your image is fine:
+> `kubectl exec <ray-head> -- python -c "import service_kit.ray_tracing"`.
+>
+> This is also why §2 remains UNVERIFIED. It could not be exercised on rask's cluster: the switch
+> needs a module the running image does not carry, so testing it would have required rebuilding and
+> republishing the Ray image first — a much larger change than the switch itself.
 
 **On the head container env (and every worker group container — replicas are scheduled anywhere):**
 
