@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-lanes notifications-rig-up notifications-rig-down audit go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-lanes notifications-rig-up notifications-rig-down audit go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
 
 help:
 	@echo "Targets:"
@@ -186,6 +186,21 @@ alert-rules-check: ## promtool: the alert rules are valid AND actually fire on s
 # root-level gate, not a per-package turbo task (lint/fmt ARE per-package turbo tasks).
 knip:
 	bun --cwd=frontend run knip
+
+# Coverage ON REQUEST, not on every run. `--cov` used to sit in pytest's `addopts`, so every
+# invocation in the estate — local, CI, Dagger — computed a report that nothing read: no `fail_under`,
+# no xml, no artifact upload, no threshold anywhere. Pure cost on the merge path.
+#
+# The denominator it produced was also wrong twice over, and both are fixed in `[tool.coverage.run]`:
+# `source` named the workspace directories rather than the src roots (3 files discovered on a
+# tracker-only run, vs 427 after), and `omit` deleted every `__init__.py` — which is where the whole
+# gateway service lives.
+#
+# NO `fail_under` HERE ON PURPOSE. Picking the number is an owner's decision, and a threshold invented
+# by whoever fixed the plumbing is how a gate ends up ratcheted to whatever happened to be true that
+# afternoon. The report is honest now; the policy is a separate call.
+coverage: ## The coverage report, computed on request against a correct denominator
+	uv run pytest -m "not e2e and not slow" --cov --cov-report=term-missing:skip-covered
 
 check: fmt lint typecheck knip fga-test
 

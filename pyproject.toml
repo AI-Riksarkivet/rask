@@ -221,7 +221,11 @@ exclude = [
 # regression suites (the catalog's replayed-commit door, lineage's external-source authz and its
 # privileged-identity door) sat green-by-absence until 2026-08-09.
 testpaths = ["packages/lineage-kit/tests", "packages/ray-kit/tests", "packages/service-kit/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/annotator/tests", "services/gateway/tests", "services/ingest/tests", "services/compute/tests", "services/controlplane/tests", "services/flows/tests", "services/maintenance/tests", "services/medallion/tests", "services/notifications/tests", "services/catalog/tests", "services/lineage/tests", "services/viewer/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
-addopts = "--cov --cov-report=term-missing:skip-covered --import-mode=importlib"
+# NO `--cov` HERE. It ran on EVERY pytest invocation in the estate and nothing read the result: no
+# `fail_under`, no xml report, no artifact upload, no threshold in `ci.yml` or `.dagger/` — so the
+# measurement was pure cost on the merge path and on every local run. `make coverage` computes it when
+# somebody wants it, against a denominator that is now correct (see [tool.coverage.run] below).
+addopts = "--import-mode=importlib"
 markers = [
     "slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')",
     "e2e: live end-to-end suites needing a running/deployed stack (deselect with '-m \"not e2e\"'; run via make e2e-ci / the per-suite targets)",
@@ -244,5 +248,18 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["packages/", "services/"]
-omit = ["**/tests/*", "**/__init__.py"]
+# THE SRC ROOTS, not the workspace directories. `["packages/", "services/"]` names two paths that are
+# not importable package roots (every member is a src-layout project), so coverage.py's unexecuted-file
+# discovery pruned the tree and the denominator became "files some test happened to import". Measured
+# on a tracker-only run: 3 files discovered before, 427 after. A headline percentage computed over only
+# the files a run touched is not a coverage number, it is a tautology.
+#
+# Enumerated because coverage.py does not glob `source` — and pinned against the globs by
+# tests/unit/test_coverage_denominator.py, so a new package cannot silently fall out of the denominator.
+source = ["packages/lineage-kit/src", "packages/ratch/src", "packages/ray-kit/src", "packages/service-kit/src", "packages/storage/src", "packages/tracker/src", "packages/validate/src", "services/annotator/src", "services/catalog/src", "services/compute/src", "services/controlplane/src", "services/flows/src", "services/gateway/src", "services/ingest/src", "services/lineage/src", "services/maintenance/src", "services/medallion/src", "services/notifications/src", "services/search/src", "services/viewer/src"]
+# `**/__init__.py` was here for empty package markers and deleted 409 statements of real
+# implementation across 69 files — including the ENTIRE gateway service, whose route table,
+# `_CLIENT_SPOOFABLE` header strip and proxy all live in `__init__.py`. Measured: the estate's front
+# door was absent from its own coverage report even when running its own tests; with this row narrowed
+# it reports 140 statements at 83%. An empty marker contributes 0 statements and costs nothing.
+omit = ["**/tests/*"]
