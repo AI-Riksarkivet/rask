@@ -223,6 +223,23 @@ class Settings(BaseSettings):
     # Must be a `warehouse:` object (the model's catalog-root type). Bootstrapped by an admin granting
     # owner/writer on it (there is no auto-seed) — only needed when fga_lock_root_create is on.
     fga_root_object: str = Field(default="warehouse:lance_catalog", alias="LANCE_FGA_ROOT_OBJECT")
+    #: Service identities the CASCADE runs as, granted ``owner`` on every warehouse this catalog creates.
+    #:
+    #: They need it because `publish` is guarded by ``can_update_tag`` and the model defines
+    #: ``can_update_tag: owner``. Without the grant a tenant is created, its tiers are created, rows land
+    #: in bronze, lineage records the run — and the promotion is refused with a 403 in a mover log nobody
+    #: is watching. Measured five times on the live estate before this existed, once AFTER a human had
+    #: already approved the promotion (the resume runs as the producer, which held nothing).
+    #:
+    #: Granted at the WAREHOUSE rather than per tier: ``namespace`` and ``table`` both define
+    #: ``owner ... or owner from parent``, so one tuple at the container reaches every tier and every
+    #: table under it. Per-tier grants would be three-plus tuples per tenant that the hierarchy implies.
+    #:
+    #: EMPTY BY DEFAULT, and deliberately: an estate that declares nothing keeps exactly today's tuples,
+    #: so enabling this is an operator's decision rather than a side effect of upgrading. Subjects are
+    #: written verbatim (``user:service-bronze-to-silver``), because the catalog must not invent the
+    #: naming convention of a plane it does not own.
+    fga_cascade_writers: list[str] = Field(default_factory=list, alias="LANCE_FGA_CASCADE_WRITERS")
     # When False (default), any authenticated caller may create a TOP-LEVEL namespace/
     # table and becomes its owner (the "users create their own workspaces" model). When
     # True, top-level creation also requires can_create_* on fga_root_object — an admin-gated

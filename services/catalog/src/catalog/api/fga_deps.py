@@ -1166,11 +1166,22 @@ async def seed_warehouse(
     if not (settings.fga_enabled and token is not None and client is not None):
         return
     obj = f"warehouse:{warehouse_id}"
+    # The CASCADE's own identities, granted here and not per tier. `publish` is guarded by
+    # `can_update_tag` and the model defines `can_update_tag: owner`, so a mover without this cannot
+    # promote — the tenant is created, its tiers are created, rows land, lineage records the run, and
+    # the promotion is refused with a 403 in a log nobody is watching.
+    #
+    # At the WAREHOUSE because `namespace` and `table` both define `owner ... or owner from parent`:
+    # one tuple reaches every tier and every table under it, instead of three-plus per tenant that the
+    # hierarchy already implies. Written in the SAME call as the creator's grant so there is no window
+    # in which the warehouse exists and its cascade cannot publish into it.
+    cascade = [fga.ClientTuple(user=subject, relation="owner", object=obj) for subject in settings.fga_cascade_writers]
     await fga.write_tuples(
         client,
         [
             fga.ClientTuple(user=f"user:{token.sub}", relation="owner", object=obj),
             fga.ClientTuple(user=f"project:{project}", relation="project", object=obj),
+            *cascade,
         ],
         actor=token.sub,
         origin="warehouse_create",

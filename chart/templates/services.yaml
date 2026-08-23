@@ -159,6 +159,29 @@ spec:
               {{- end }}
             {{- end }}
             - { name: LANCE_SERVICE_SUBJECTS, value: {{ compact $catalogSubjects | uniq | sortAlpha | join "," | quote }} }
+            {{- /* The cascade's WRITERS, granted `owner` on every warehouse this catalog creates.
+                   Admission and authorization are different questions and this is deliberately NOT
+                   $catalogSubjects: that list exists so a service may SPEAK to the catalog and includes
+                   read-only identities like the web BFF, which must never hold owner on a tenant's data.
+                   Only the identities that actually move data between tiers appear here — the producer
+                   (which resumes a human-approved promotion, so it publishes too) and the movers.
+
+                   Without this a tenant is created, its tiers are created, rows land in bronze, lineage
+                   records the run — and the promotion is refused with `403 can_update_tag` in a mover log
+                   nobody is watching. Measured five times on the live estate, once AFTER a person had
+                   already approved it. */}}
+            {{- $cascadeWriters := list .Values.medallion.producer.serviceIdentity }}
+            {{- range .Values.medallion.movers }}
+              {{- $cascadeWriters = append $cascadeWriters .serviceIdentity }}
+            {{- end }}
+            {{- range (.Values.medallion.mediaMovers | default list) }}
+              {{- $cascadeWriters = append $cascadeWriters .serviceIdentity }}
+            {{- end }}
+            {{- $prefixed := list }}
+            {{- range (compact $cascadeWriters | uniq | sortAlpha) }}
+              {{- $prefixed = append $prefixed (printf "user:%s" .) }}
+            {{- end }}
+            - { name: LANCE_FGA_CASCADE_WRITERS, value: {{ toJson $prefixed | quote }} }
             {{- with include "lance.governedFgaPins" (list . "LANCE") }}{{- . | nindent 12 }}{{- end }}
             # #41 compliance audit trail (who/what/outcome for authn/authz/vending) — configurable.
             # hasKey+ternary, NOT `| default`: Sprig's default() treats boolean false as empty (making
