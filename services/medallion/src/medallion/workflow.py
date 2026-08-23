@@ -718,19 +718,31 @@ def _publish_train_fail(spec: TrainJobSpec, reason: str) -> None:
     from dapr.aio.clients import DaprClient
 
     from medallion.core.config import get_settings
+    from medallion.schemas.events import _PRODUCER
     from service_kit.lakehouse import outbox
-    from service_kit.openlineage import run_id_for
+    from service_kit.openlineage import custom_facet, run_id_for
 
     settings = get_settings()
     run_id = run_id_for(f"train-{spec.token}")
     lance: dict[str, Any] = {"operation": "training", "token": spec.token}
-    # The two fields that decide whether anybody hears. `originator` because the job authors as
-    # `service-trainer` and `enforce_author` overwrites anything else; `project` because omitting it
-    # skips the watcher loop entirely.
+    # THREE fields decide whether anybody hears, and this comment named only two — which is exactly how
+    # the third went missing. `originator` because the job authors as `service-trainer` and
+    # `enforce_author` overwrites anything else; `project` because omitting it skips the watcher loop
+    # entirely; and `author`, below, because `notifiable()` returns None on an event with no verified
+    # author BEFORE `originator_subject()` is ever read. Without it the other two are threaded all the
+    # way from /train and then discarded at the last link — and because this goes out on the BUS through
+    # the outbox, neither `enforce_author` nor the HTTP door's checks run, and the plane SUCCESS-acks the
+    # undeliverable event. Nothing reports the loss.
     if spec.originator:
         lance["originator"] = spec.originator
     if spec.project:
         lance["project"] = spec.project
+    # NOT routed through `build_run_event`, deliberately, even though that helper stamps `author` for
+    # free. It derives the runId from `(project+)operation+token`, and THE RUN ID HERE IS THE JOB'S OWN —
+    # `run_id_for(f"train-{token}")`, byte-identical to `scripts/ray_train_job.py`. That is what merges
+    # the watcher's FAIL onto the job's run instead of forking a second failure for one training run.
+    # Using the helper would produce `training-<token>` (NUL-qualified by project), a different id, and
+    # the graph would answer "what happened to this model" with a duplicate.
     event = {
         "eventType": "FAIL",
         "eventTime": datetime.now(UTC).isoformat(),
@@ -740,6 +752,7 @@ def _publish_train_fail(spec: TrainJobSpec, reason: str) -> None:
             "runId": run_id,
             "facets": {
                 "lance": lance,
+                "author": custom_facet(_PRODUCER, name=settings.author, sub=settings.author),
                 "errorMessage": {"message": reason, "programmingLanguage": "PYTHON"},
             },
         },

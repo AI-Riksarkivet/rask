@@ -83,6 +83,51 @@ def _emit_sites() -> list[EmitSite]:
     return out
 
 
+def _hand_built_events() -> list[tuple[str, int, set[str]]]:
+    """Every lineage event built as a DICT LITERAL rather than through `build_run_event`.
+
+    `_emit_sites()` walks `build_run_event(` calls only, so a hand-built event is invisible to both
+    targeting gates above — and the non-vacuity guard still passes, because the same MODULE has other
+    emits that do use the helper. That is how the one site failing the contract stayed unseen.
+    """
+    out: list[tuple[str, int, set[str]]] = []
+    for py in sorted(SRC.rglob("*.py")):
+        for node in ast.walk(ast.parse(py.read_text())):
+            if not isinstance(node, ast.Dict):
+                continue
+            keys = {k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+            if "eventType" not in keys:
+                continue
+            inner = {n.value for n in ast.walk(node) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+            out.append((py.relative_to(SRC).as_posix(), node.lineno, inner))
+    return out
+
+
+def test_every_HAND_BUILT_lineage_event_names_an_author() -> None:
+    """Trap 2, at the one site the `build_run_event` scan cannot reach.
+
+    `notifiable()` returns `None` on an event with no verified author BEFORE `originator_subject()` is
+    read, so an event without an `author` facet is undeliverable no matter what else it carries. The
+    train watcher hand-built one with `facets = {lance, errorMessage}` and threaded `originator` and
+    `project` all the way from `/train` into an event the consumer is designed to drop — then the plane
+    SUCCESS-acked it, so nothing reported the loss.
+
+    Hand-building is LEGITIMATE here and this gate does not forbid it: that site's runId must stay
+    `run_id_for(f"train-{token}")`, byte-identical to the job's own, or the watcher's FAIL forks a second
+    run instead of merging onto it. `build_run_event` derives its own id and cannot express that. So the
+    contract is checked directly rather than by forcing every emit through one helper.
+    """
+    events = _hand_built_events()
+    assert events, "no hand-built lineage events found — the scan root moved and this gate is vacuous"
+
+    authorless = sorted(f"{f}:{line}" for f, line, inner in events if "author" not in inner)
+    assert not authorless, (
+        f"these hand-built lineage events carry no `author` facet: {authorless}. `notifiable()` returns "
+        "None on them, so the plane acks and tells nobody — and because they go out on the BUS through the "
+        "outbox, neither `enforce_author` nor the HTTP door's checks run to supply one."
+    )
+
+
 def test_every_lineage_emit_stamps_lance_project() -> None:
     """Trap 3, at the producer — the only place it can be fixed."""
     sites = _emit_sites()

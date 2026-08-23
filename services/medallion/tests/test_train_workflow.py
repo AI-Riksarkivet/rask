@@ -143,6 +143,59 @@ def test_the_watcher_NAMES_the_person_the_run_was_for() -> None:
     assert reported["spec"]["project"] == "acme"
 
 
+def test_the_watchers_FAIL_EVENT_is_actually_deliverable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The test above proves the wrong half of its own docstring, so this proves the other half.
+
+    It asserts the INPUT handed to `report_train_outcome` — never the EVENT the activity goes on to
+    build. Both can be true at once, and were: the spec carried `originator` and `project` all the way
+    down, and `_publish_train_fail` then hand-built a RunEvent with `facets = {lance, errorMessage}` and
+    NO `author`.
+
+    `notifiable()` returns `None` on an event with no verified author, BEFORE `originator_subject()` is
+    ever read — so the `originator` and `project` this lane threads from `/train` are discarded at the
+    last link. The event goes out on the BUS through the outbox, which applies neither `enforce_author`
+    nor the HTTP door's checks, and the plane then SUCCESS-acks the undeliverable event. Nothing reports
+    the loss.
+
+    This lane exists precisely so a person hears that their GPU job died before it emitted anything. An
+    undeliverable FAIL makes the whole watcher a producer whose output the consumer is designed to drop.
+    """
+    import json as _json
+
+    from notifications.api.lineage_events import LineageRunEvent, notifiable
+    from service_kit.lakehouse import outbox as _outbox
+
+    captured: dict[str, str] = {}
+
+    async def _capture(_client: Any, **kwargs: Any) -> None:
+        captured["event_json"] = kwargs["event_json"]
+
+    class _FakeDapr:
+        async def __aenter__(self) -> _FakeDapr:
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+    monkeypatch.setattr(_outbox, "publish_lineage_with_outbox", _capture)
+    monkeypatch.setattr("dapr.aio.clients.DaprClient", _FakeDapr)
+
+    from medallion import workflow as _workflow
+
+    _workflow._publish_train_fail(TrainJobSpec.model_validate(_spec(originator="alice", project="acme")), "the image had no entrypoint")
+
+    assert "event_json" in captured, "the watcher published nothing at all"
+    event = LineageRunEvent.model_validate(_json.loads(captured["event_json"]))
+
+    assert notifiable(event) is not None, (
+        "the watcher's FAIL is UNDELIVERABLE: notifiable() returns None, so the plane acks it and tells "
+        "nobody. The run facets are "
+        f"{sorted((_json.loads(captured['event_json']).get('run') or {}).get('facets') or {})} — an `author` "
+        "facet is what notifiable() reads first, and without it the originator and project this lane "
+        "threads all the way from /train are never reached."
+    )
+
+
 def test_a_job_still_RUNNING_hands_the_watch_to_a_fresh_turn() -> None:
     """One poll per turn — the Monitor pattern. A turn carries the poll count forward, or the ceiling
     below can never be reached and the instance watches forever."""
