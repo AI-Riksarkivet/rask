@@ -224,8 +224,30 @@ nothing.
 
 ## 2. Ray distributed tracing — the Serve switch first
 
-**Status:** rask half landed **in the chart, where it currently reaches nothing.** External half:
-**yours** — and this section is UNVERIFIED, unlike §1.
+**Status:** CORE tracing is now **VERIFIED END-TO-END**; the SERVE half remains unverified. External
+half: **yours**.
+
+> **VERIFIED 2026-08-23, after rebuilding the Ray image** (see the blockquote below for why that was
+> needed). The head was patched with exactly what this section prescribes — the `tracing-startup-hook`
+> rayStartParams entry plus the container env — and then five trivial Ray tasks were submitted:
+>
+> ```
+> driver log : {"message": "ray_core_tracing_enabled", "filename": "ray_tracing.py", "service_name": "ray"}
+> in the store, service_name = ray:
+>   __main__.ping ray.remote          ->  5 spans   (submitter side)
+>   __main__.ping ray.remote_worker   ->  5 spans   (worker side)
+> ```
+>
+> Five tasks in, five PRODUCER and five CONSUMER spans out, exported through the Collector
+> (`OTEL_EXPORTER_OTLP_ENDPOINT=http://rask-otel-collector:4318`) into GreptimeDB. So the Core hook,
+> the import path, and the export chain are all confirmed working — this is the first time the switch
+> has ever been exercised anywhere.
+>
+> **The SERVE half is still unverified, and honestly so.** rask's own Serve application never came up
+> on the rebuilt cluster (`applicationStatuses` is empty on both the active and pending clusters), so
+> there was no endpoint to send a traced request to. The env var is set and the import resolves; what
+> is unproven is that a Serve request produces proxy/router/replica spans. If you wire this on a
+> cluster with a live Serve app, that is the one thing worth checking that we could not.
 
 > **Read that status precisely, because it was overstated here before.** `service_kit.ray_tracing`
 > genuinely exists and exports `serve_span_processors`, and `chart/templates/rayservice.yaml:117,121`
@@ -371,10 +393,25 @@ the estate does not have today.
 > inside the container.
 >
 > **Correct the row below that says Serve replica logs are already collected.** That could not be
-> confirmed: zero rows from any Ray pod reached the store in the measured window. It may be true when
-> Serve is actively serving — `ray_serve_num_http_requests_total` carries only 2 series here, so this
-> cluster's Serve app is effectively idle and may simply have had nothing to log. Either way, treat
-> "YES" as unverified rather than as a fact you can build on.
+> confirmed: zero rows from any Ray pod reached the store in the measured window.
+>
+> **RE-MEASURED 2026-08-23 with `RAY_LOGGING_CONFIG_ENCODING=JSON` and `RAY_SERVE_LOG_ENCODING=JSON`
+> actually set on a rebuilt head**, which sharpens the finding rather than overturning it:
+>
+> ```
+> head stdout, whole lifetime : 28 lines   (all 28 DO reach the store — the shipper is fine)
+> of those, JSON-encoded      :  0 lines
+> Ray's own logs, in-container: ~490 files under /tmp/ray/session_*/logs
+> ```
+>
+> Two separate facts worth keeping apart. The JSON encoding DOES work — Ray's Python loggers emit
+> structured records (observed directly: a driver process logged
+> `{"asctime": ..., "levelname": "INFO", "message": "ray_core_tracing_enabled", ...}`). But it does
+> not change WHERE Ray writes: the container's stdout carries only `ray start`'s own CLI banner, which
+> predates the logging config and stays plain text. Setting the encoding therefore buys you queryable
+> logs only for the planes that already reach a shipper — it does not move the ~490 in-container files.
+> Treat the "YES" in the row below as unverified, and treat the core half as still needing a sidecar
+> or a mounted path.
 
 ### The problem, split in two — because only one half needs you
 
