@@ -287,6 +287,27 @@ running.** Verify yours before applying anything below.
 > This is also why §2 remains UNVERIFIED. It could not be exercised on rask's cluster: the switch
 > needs a module the running image does not carry, so testing it would have required rebuilding and
 > republishing the Ray image first — a much larger change than the switch itself.
+>
+> **The cause is now pinned, and it is not a design problem.** The dockerfile is correct: it runs
+> `uv sync --package ratch --locked --no-editable` into `/opt/venv` and the final stage copies that
+> venv whole (`.docker/ray-cluster.dockerfile:120-121`), and `packages/ratch` has declared
+> `service-kit[lancekit]` since 2026-07-27. The images are simply OLDER THAN THE LINE THAT INSTALLS IT:
+>
+> ```
+> uv sync --package ratch  entered the dockerfile   fd7dd7e0   2026-08-18 13:52
+> ray-cluster:main-aefae893  built from             aefae893   2026-08-17 23:04
+> ray-cluster:main-4f66ce84  built from  (running)  4f66ce84   2026-08-17 23:32
+> ```
+>
+> Verified against BOTH published tags, not just the running one — neither carries `service_kit` or
+> `ratch`, while `ray` and `opentelemetry` import fine, so it is not a broken venv.
+>
+> So on rask's side §2 unblocks with a rebuild from current `main` and no code change:
+> `dagger call image --name=ray-cluster publish --address=<registry>/ray-cluster:<tag>`, then point the
+> RayService at the new tag. (Two traps if you do it here: the local registry is addressed as
+> `172.17.0.1:5000` from Dagger but `localhost:5000` from k3s, and Dagger speaks HTTPS unless the
+> engine is the one `make dagger-engine` configures — a CLI upgrade silently replaces it with a
+> config-less engine and the plain-HTTP push fails again.)
 
 **On the head container env (and every worker group container — replicas are scheduled anywhere):**
 
