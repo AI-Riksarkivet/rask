@@ -55,14 +55,25 @@ def test_a_failed_assertion_blocks() -> None:
     assert _decide(failed_assertions=("key_non_null",), cascade_via_publish=False) is GateOutcome.BLOCK
 
 
-def test_a_band_breach_holds() -> None:
-    assert _decide(band_reasons=("row_delta",)) is GateOutcome.HOLD
+def test_a_band_breach_holds_on_a_trigger_driven_cascade() -> None:
+    assert _decide(band_reasons=("row_delta",), cascade_via_publish=False, has_pub_topic=True) is GateOutcome.HOLD
 
 
-def test_the_band_is_reached_even_when_publishing_drives_the_cascade() -> None:
-    """The regression this file exists for. With the band as an `elif` below the publish branch, this
-    returned PUBLISH and the review machinery never ran."""
-    assert _decide(band_reasons=("row_delta",), cascade_via_publish=True, has_target=True) is GateOutcome.HOLD
+def test_a_publish_driven_cascade_publishes_even_on_a_band_breach() -> None:
+    """The conflict, pinned so it cannot be "fixed" without deciding it.
+
+    Under `cascade_via_publish` the publish IS the promotion: the catalog runs the assertions and its
+    tag move wakes the next stage. Holding first therefore makes the band work at the cost of the
+    catalog's verdict never reaching the review — which is exactly what
+    `test_a_refused_publish_stops_the_cascade_and_names_its_assertions` defends, because a hold that
+    cannot name its assertions cannot tell a corrupt finding from a reviewable one.
+
+    So on this path the band is deliberately SUBORDINATE, and the consequence is stated rather than
+    hidden: a publish-driven estate cannot hold an unusual-but-valid promotion today. Resolving it
+    needs a gate-only publish the catalog does not offer — assertions evaluated without moving the
+    tag — which is a catalog change, not an ordering one.
+    """
+    assert _decide(band_reasons=("row_delta",), cascade_via_publish=True, has_target=True) is GateOutcome.PUBLISH
 
 
 def test_a_block_outranks_a_hold() -> None:
@@ -70,10 +81,10 @@ def test_a_block_outranks_a_hold() -> None:
     assert _decide(failed_assertions=("key_non_null",), band_reasons=("row_delta",)) is GateOutcome.BLOCK
 
 
-def test_a_hold_outranks_promoting() -> None:
-    """Stated separately from the case above because it is the ORDERING that matters: the hold has to
-    be decided before the promotion, not discovered after the tag moved."""
-    assert _decide(band_reasons=("first_promotion",), has_pub_topic=True) is GateOutcome.HOLD
+def test_a_hold_outranks_a_trigger() -> None:
+    """Where the band CAN act: a topic-driven cascade fires the next stage itself, so withholding the
+    trigger genuinely withholds the promotion."""
+    assert _decide(band_reasons=("first_promotion",), cascade_via_publish=False, has_pub_topic=True) is GateOutcome.HOLD
 
 
 def test_no_target_and_no_topic_is_terminal() -> None:
@@ -86,7 +97,7 @@ def test_every_outcome_is_reachable(outcome: GateOutcome) -> None:
     """A branch no input can produce is dead code wearing a name."""
     reachable = {
         _decide(failed_assertions=("x",)),
-        _decide(band_reasons=("x",)),
+        _decide(band_reasons=("x",), cascade_via_publish=False, has_pub_topic=True),
         _decide(),
         _decide(cascade_via_publish=False, has_pub_topic=True),
         _decide(cascade_via_publish=True, has_target=False),

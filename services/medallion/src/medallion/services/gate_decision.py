@@ -41,20 +41,31 @@ def gate_decision(
     reviewer exists — while a band breach is a question. Letting the question win would park a corrupt
     batch on an approval that should never be offered for it.
 
-    **A hold outranks promoting, and that is an ordering claim, not a preference.** Under
-    `cascade_via_publish` the publish IS the promotion: the catalog's tag move is what wakes the next
-    stage. A breach noticed after that tag has moved cannot un-move it, so a band evaluated after the
-    publish is not a late check — it is no check. This is exactly the bug the extraction fixes.
+    **A band HOLD outranks a trigger, but not a publish — and that is a conflict, not a preference.**
+    Where a topic drives the cascade, withholding the trigger genuinely withholds the promotion, so the
+    hold acts. Where PUBLISHING drives it, the publish IS the promotion: the catalog runs the assertions
+    and its tag move wakes the next stage. Holding first would make the band work at the cost of the
+    catalog's verdict never reaching the review — and a hold that cannot name its assertions cannot tell
+    a corrupt finding from a reviewable one, which is a property `test_cascade_via_publish.py` defends.
+
+    Both cannot hold at once without a GATE-ONLY publish the catalog does not offer: assertions
+    evaluated without moving the tag. Until that exists the band is subordinate on the publish path, and
+    the consequence is stated here rather than hidden — **a publish-driven estate cannot hold an
+    unusual-but-valid promotion.** That is a catalog change, not an ordering one.
 
     **Otherwise the stage promotes** by whichever mechanism drives this estate, and a stage with
     neither a publish target nor a topic is terminal rather than broken.
     """
     if failed_assertions:
         return GateOutcome.BLOCK
-    if band_reasons:
-        return GateOutcome.HOLD
+    # PUBLISH outranks a band HOLD, and that is a conflict rather than a preference — see the module
+    # docstring. Holding first makes the band work but stops the catalog's verdict ever reaching the
+    # review, which `test_a_refused_publish_stops_the_cascade_and_names_its_assertions` defends: a hold
+    # that cannot name its assertions cannot tell a corrupt finding from a reviewable one.
     if cascade_via_publish and has_target:
         return GateOutcome.PUBLISH
+    if band_reasons:
+        return GateOutcome.HOLD
     if has_pub_topic:
         return GateOutcome.TRIGGER
     return GateOutcome.NOTHING

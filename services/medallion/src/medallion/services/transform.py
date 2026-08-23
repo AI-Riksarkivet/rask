@@ -633,8 +633,23 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
         # owns the ordering; it used to be an `elif` beneath the publish branch, where it never ran.
         band_reasons: list[str] = []
         if result is not None and promotion_hold.review_enabled(settings):
-            previous = await run_in_threadpool(promotion_band.previous_row_count, to_uri, settings.storage_options(), version=result.version)
-            band_reasons = promotion_band.review_reasons(row_count=result.row_count, previous_row_count=previous, band=settings.promotion_review_band)
+            # The comparison point comes from the WRITE, not from `version - 1`. That arithmetic is wrong
+            # for this writer and was silently wrong in production: the data lands in one commit and the
+            # lineage index in a SECOND, so the reported version is N+1 and `version - 1` is N — the
+            # commit that already holds the new rows. Measured 2026-08-23: 8 -> 200 and then 200 -> 1000
+            # rows both published without ever asking, because the delta was structurally zero.
+            #
+            # `None` means the writer could not observe a predecessor — a fresh destination, or the RAY
+            # lane, whose job writes out-of-process and is measured only after it finished. The band
+            # reads that as FIRST_PROMOTION and ASKS, which is this module's stated policy for an
+            # unknown history ("a dataset we cannot read the history of gets a person's attention
+            # instead of a silent promote") and the safe direction. Carrying the pre-dispatch count on
+            # the Ray trigger would let that lane compare properly; until then it asks.
+            band_reasons = promotion_band.review_reasons(
+                row_count=result.row_count,
+                previous_row_count=result.previous_row_count,
+                band=settings.promotion_review_band,
+            )
         failed_assertions = [a.assertion for a in assertions if not a.success] if assertions else []
 
         decision = gate_decision(

@@ -70,6 +70,17 @@ class WriteResult(BaseModel):
     version: int
     row_count: int
     size_bytes: int
+    #: Rows the DESTINATION held before this write, or ``None`` when it did not exist — the promotion
+    #: band's comparison point, observed at the only moment it is unambiguous.
+    #:
+    #: It is recorded here rather than reconstructed from ``version - 1`` because that reconstruction
+    #: is wrong for this writer and was silently wrong in production: the data lands in one commit and
+    #: the lineage index in a SECOND (indices do not survive an overwrite), so the version reported is
+    #: N+1 and ``version - 1`` is N — the commit that already holds the new rows. The delta computed
+    #: from it is structurally zero, which is why an 8 -> 1000 row jump published without ever asking
+    #: anyone (measured 2026-08-23). Version arithmetic cannot be made safe here; the count can only be
+    #: taken before the write.
+    previous_row_count: int | None = None
     #: ``SchemaDatasetFacet`` fields (``[{"name", "type"}]``, blob/vector-aware) of the written dataset —
     #: what the emit records on the WROTE edge so the lineage graph shows real media column types.
     fields: list[dict[str, str]] = Field(default_factory=list)
@@ -250,6 +261,19 @@ def _index_lineage(uri: str, storage_options: dict[str, str]) -> None:
     )
 
 
+def _existing_row_count(uri: str, storage_options: dict[str, str]) -> int | None:
+    """Rows at ``uri`` right now, or ``None`` when there is nothing there yet.
+
+    ``None`` on any failure, deliberately: it means "no comparable predecessor", which the promotion
+    band reads as a FIRST PROMOTION and therefore as a reason to ASK. A destination we cannot read is
+    given a person's attention rather than a silent promote.
+    """
+    try:
+        return int(lance.dataset(uri, storage_options=storage_options).count_rows())
+    except Exception:  # noqa: BLE001 — any unreadable destination is "no predecessor", never a failure of the write
+        return None
+
+
 def transform_stage(
     from_uri: str, to_uri: str, storage_options: dict[str, str], *, stage: str, lineage: LineageDoc | None = None, dataset_id: str | None = None
 ) -> WriteResult:
@@ -278,6 +302,8 @@ def transform_stage(
     docs/DECISIONS.md #p21--single-base-cascade-write.
     """
     ds = lance.dataset(from_uri, storage_options=storage_options)
+    # BEFORE the overwrite: what the destination holds now is the band's only honest comparison point.
+    previous_rows = _existing_row_count(to_uri, storage_options)
     out, blob_payloads = _carry_forward(ds, stage)
     out = derive_artifacts(out, blob_payloads)
     if lineage is not None:
@@ -296,7 +322,7 @@ def transform_stage(
     )
     if lineage is not None:
         _index_lineage(to_uri, storage_options)
-    result = measure(to_uri, storage_options)
+    result = measure(to_uri, storage_options).model_copy(update={"previous_row_count": previous_rows})
     # Declare the input→output column edges for the columnLineage facet (#1) — blob_payloads' keys ARE this
     # stage's blob columns (the deriver source). The mover attaches the single upstream dataset identity.
     result.column_map = _column_map(ds.schema, out.column_names, set(blob_payloads))
