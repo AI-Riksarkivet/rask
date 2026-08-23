@@ -158,7 +158,7 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 "packages/ratch/src/ratch/modalities/av/*.py" = ["S603"]
 "packages/ratch/src/ratch/cli/search.py" = ["S603"]
 "services/viewer/src/viewer/services/clips.py" = ["S603"]
-"services/viewer/src/viewer/services/wespeaker.py" = ["S603"]
+"services/viewer/src/viewer/services/audio_prep.py" = ["S603"]
 "scripts/harvest_ead.py" = ["ANN", "RET503", "B007"]
 "scripts/index_catalog.py" = ["ANN", "RET503", "PERF401", "C901", "F841"]
 

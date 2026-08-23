@@ -28,6 +28,14 @@ class ViewerSettings(Settings, GovernedAuthSettings):
 
     service_name: str = "viewer"
     service_port: int = Field(default=8101, alias="VIEWER_PORT")
+    #: Where the voiceprint runner's Ray Serve app answers. EMPTY DISABLES the upload form, and that
+    #: is the honest default: the read plane no longer carries a speaker encoder, so an estate that
+    #: has not deployed the runner cannot embed — and saying so at the door beats a 500 from a model
+    #: that is not there. The Lance-anchored GET forms are unaffected; they run no encoder.
+    #:
+    #: A setting rather than a literal because a hard-coded endpoint does not survive multi-env
+    #: deploys (`fastapi` references/anti-patterns.md).
+    voiceprint_serve_url: str = Field(default="", alias="VIEWER_VOICEPRINT_SERVE_URL")
 
 
 @lru_cache

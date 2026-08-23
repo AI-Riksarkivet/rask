@@ -40,7 +40,7 @@ from viewer.schemas.voice import (
     VoiceSimilarResponse,
     VoiceStatusResponse,
 )
-from viewer.services.wespeaker import (
+from viewer.services.audio_prep import (
     MIN_TURN_DURATION_S,
     TARGET_SAMPLE_RATE,
     extract_wav_16k_mono,
@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
     from service_kit.lancekit.descriptor import Declared
     from service_kit.lancekit.registry import DatasetHandle
-    from viewer.services.wespeaker import TurnBatchEncoder
+    from viewer.services.audio_prep import TurnBatchEncoder
 
 logger = logging.getLogger(__name__)
 

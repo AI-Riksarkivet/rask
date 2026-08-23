@@ -29,7 +29,7 @@ from viewer.services import voice_service
 
 if TYPE_CHECKING:
     from service_kit.lancekit.registry import DatasetHandle
-    from viewer.services.wespeaker import VoiceEncoder
+    from viewer.services.serve_encoder import ServeEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -46,29 +46,29 @@ def require_valid_doc_id(handle: "DatasetHandle", doc_id: str) -> None:
         raise ValidationError("invalid doc_id")
 
 
-def ensure_voice_encoder(state: AppState) -> "VoiceEncoder":
-    """Return the app's voice encoder, loading it on first use (503 on failure).
+def voice_encoder(state: AppState) -> "ServeEncoder":
+    """The encoder for the upload form — the voiceprint runner's Serve app, over HTTP.
 
-    Loads a model **in-process** (pyannote's WeSpeaker encoder, ~30 s of import
-    + weights), so first-load is guarded by ``state.voice_encoder_lock`` — sync
-    handlers run in a threadpool, and two concurrent first uploads must not
-    both construct it. CPU by design: the upload path must never contend with
-    the vLLM servers for the GPUs.
+    This used to load pyannote's WeSpeaker IN-PROCESS (~30 s of import + weights), which put a named
+    model for one modality inside the shared read plane and duplicated the encoder
+    `runners/voiceprint` already seals. It also had to be pinned to CPU so an upload could not
+    contend with the vLLM servers for the GPUs — a constraint that only existed because it ran in the
+    wrong process.
+
+    An unset endpoint is a 503 NAMING the missing runner rather than a generic failure: the read
+    plane is working and the model is simply not deployed, and those lead an operator to different
+    places. The Lance-anchored GET forms run no encoder and are unaffected either way.
     """
-    if state.voice_encoder is not None:
-        return state.voice_encoder
-    with state.voice_encoder_lock:
-        if state.voice_encoder is not None:  # lost the race; the winner loaded it
-            return state.voice_encoder
-        try:
-            from viewer.services.wespeaker import VoiceEncoder
+    from viewer.core.config import get_viewer_settings
+    from viewer.services.serve_encoder import ServeEncoder
 
-            encoder = VoiceEncoder(device="cpu")
-        except Exception as e:
-            logger.exception("failed to load voice encoder")
-            raise ServiceUnavailableError("voice encoder unavailable") from e
-        state.voice_encoder = encoder
-        return encoder
+    url = get_viewer_settings().voiceprint_serve_url
+    if not url:
+        raise ServiceUnavailableError(
+            "the voiceprint runner is not configured (VIEWER_VOICEPRINT_SERVE_URL) — deploy its Ray "
+            "Serve app to enable snippet upload; the Lance-anchored /similar and /identity forms need no encoder"
+        )
+    return ServeEncoder(url)
 
 
 @router.get("/status")
@@ -143,7 +143,7 @@ async def voice_similar_upload(
     return await run_in_threadpool(
         voice_service.similar_voices_for_upload,
         handle,
-        lambda: ensure_voice_encoder(state),
+        lambda: voice_encoder(state),
         file_bytes=file_bytes,
         n=n,
     )
