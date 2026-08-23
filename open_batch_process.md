@@ -14,28 +14,31 @@ the remainder.
 
 ## Ruled: deferred, with the reason
 
-**B4 — transform identity reaches the resume predicate.** BUILT for non-blob tables (`f41bedea`);
-the blob-table half remains and is named below.
+**B4 — transform identity reaches the resume predicate.** DONE (`f41bedea`, `549c348c`).
 
-All three parts landed: `Stage.identity` from the declaration plus the two things a declaration cannot
-see (the actor class the composition root bound, the runner env); a nullable `transform_version`
-column stamped on every row a run writes; and `resume_filter` comparing them, replacing the bare
-`<output> IS NULL` at both sites in `ratch/core/driver.py`.
+`Stage.identity` from the declaration plus the two things a declaration cannot see (the actor class
+the composition root bound, the runner env); a `transform_version` column stamped on every row a run
+writes; and both resume filters comparing them.
 
-Two findings worth keeping. **Lance rejects `IS DISTINCT FROM`** — the one-word SQL for "a NULL
-version counts as stale", which this needed because `!= 'x'` is NULL on a NULL left side and a NULL
-predicate DROPS the row, silently skipping the rows a first identity-aware run must claim. The
-planner answers "not supported SQL in lance"; the string-asserting unit test passed and the test that
-EXECUTES the predicate against a real dataset is what caught it. And `packages/ratch` had no tests at
-all and sat in no testpath — a workspace member with zero tests passes the enrolment gate, because
-that gate checks that test directories which exist are listed.
+Two shapes, two granularities, and the second is a Lance constraint rather than a shortfall:
 
-**What remains is blob tables, and it is not a variation of this work.** B4's capability is a
-SELECTIVE re-run; a blob-bearing table's only legal write is the all-or-nothing `_rowid` rebuild,
-because `merge_insert` crashes Lance's blob decoder (invariant §7.1, `driver.py:134`/`:221`, refusal
-at `:242`). The predicate stays `IS NULL` there, stated at the site. Delivering B4 on those tables
-means changing §7.1 — a partial-update path that does not go through `merge_insert` — which is a
-Lance write-path question, not a resume-predicate one. Whoever takes it starts there, not here.
+* **non-blob tables** — row granularity, exactly as specified: `resume_filter` claims rows that are
+  NULL *or* carry a different version, so an edited transform re-derives only its own rows.
+* **blob tables** — rebuild granularity. `merge_insert` crashes Lance's blob decoder (§7.1), so the
+  only legal write is the all-or-nothing `_rowid` attach and no partial update exists to drive. The
+  rebuild stamps the version through that same attach, and the branch consults it: a column built by
+  a superseded transform is rebuilt instead of being reported as nothing-to-fill. Before this, a
+  populated column was indistinguishable from a correct one.
+
+Findings worth keeping. **Lance rejects `IS DISTINCT FROM`** — the one-word SQL for "a NULL version
+counts as stale", which this needed because `!= 'x'` is NULL on a NULL left side and a NULL predicate
+DROPS the row. The string-asserting unit test passed; the test that EXECUTES the predicate against a
+real dataset is what caught it, so the long NULL-safe form is load-bearing. And **`packages/ratch` had
+no tests at all** and sat in no testpath — a workspace member with zero tests passes the enrolment
+gate, because that gate checks that test directories which exist are listed.
+
+Unversioned columns are deliberately NOT treated as stale. Pre-B4 data has unknown provenance, and
+rebuilding on that basis would re-run every blob stage in the estate the first time this ships.
 
 **B7 — resolve once, carry the value.** Deferred, and the audit's framing overstates it. `submit_stage`
 re-calls `resolve_lane_async`, but `submit_stage` is an ACTIVITY: its result is recorded in history and
