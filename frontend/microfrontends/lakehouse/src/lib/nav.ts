@@ -12,6 +12,7 @@ import {
 	Layers,
 	Network,
 	Radio,
+	Route,
 	ShieldCheck,
 	Warehouse,
 } from '@lucide/svelte';
@@ -101,6 +102,17 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 				// (`catalog/storage/+layout.svelte`, route `catalog/storage/tiers`). A nested rail entry
 				// made two views of one subject read as two areas, and hung a second-level item beside
 				// top-level ones. The old `/catalog/stores` URL 308s to the tab.
+			},
+			{
+				// A lane DECLARATION is a governed catalog record — stored beside table policies and
+				// grants, gated on `project:<id>#can_administer`, landed on the audit trail. It sits in
+				// catalog rather than compute for a checkable reason: a lane runs with Ray DISABLED
+				// (`MEDALLION_RAY_ENABLED` defaults to false), so it cannot be Ray configuration.
+				// Compute observes the job; this declares what the job IS.
+				title: 'Lanes',
+				href: '/lakehouse/catalog/lanes',
+				match: seg('/lakehouse/catalog/lanes'),
+				icon: Route,
 			},
 			{
 				// A held promotion is a CATALOG concern, not a lineage one: the rung a decision is gated
