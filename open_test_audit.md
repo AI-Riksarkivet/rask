@@ -1017,6 +1017,22 @@ whose producer-side field M3 shows is unguarded — is proven only when a human 
 
 `Makefile:769-770`. Grep for `make e2e` not followed by `-` across `.github/workflows/`: no match.
 
+**MIGRATED 2026-08-22.** Same class as H17 and migrated beside it — `open_python-audit.md` § E9, under
+the addendum that now names BOTH layers and the difference between them (H17 is `tests/e2e-py`'s 14
+unreachable suites; this is the standalone Playwright project, in no job at all).
+
+**The state changed while this audit ran, and that is why it is a decision rather than a wiring
+change.** Adding `make e2e` to a CI job before 2026-08-22 would have bought a lane that passed having
+tested nothing: the chart ships `auth.enabled: true`, every route test skipped on the OIDC bounce, and
+the run exited 0. M11's fix makes that case FAIL and gives the config a real `RASK_E2E_STORAGE_STATE`
+hook. So the open question is now sharp and stated: **what identity does CI drive the browser suite
+as** — an auth-off install, or something that produces a signed-in storage state? Adding the job
+without answering it yields a red lane rather than a fake green one, which is an improvement and still
+not something to land silently.
+
+Two mechanical notes for whoever does it: `.github/workflows/ci.yml` is held by a concurrent session in
+this tree, and `make e2e` needs `bun install` in `tests/e2e` first — it carries its own lockfile.
+
 ### M14 — five e2e suites are gated on env vars nothing assigns · **PARTIALLY REFUTED — see Part 9**
 
 The lens filed five; the challenger's control experiment killed the causal claim and found two wrong

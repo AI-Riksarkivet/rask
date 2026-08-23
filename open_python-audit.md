@@ -820,6 +820,28 @@ Sequential awaits over independent I/O, full-table reads to serve one row, and c
 
 ### E9 — Tests that exist but never run, and code with none at all
 
+**Addendum 2026-08-22, from the test audit (its H17 and M13).** Two whole e2e LAYERS sit outside CI,
+and they are different problems with different answers:
+
+* **`tests/e2e-py`** — 12 of 26 live suites are reachable from a CI lane; the other 14 are named by no
+  `run:` line. That is H17, already migrated here with its 12-of-26 map.
+* **`make e2e`** — the standalone Playwright project (its own lockfile, drives a deployed estate) is in
+  **no CI job at all**. `grep 'make e2e'` not followed by `-` across `.github/workflows/` finds nothing.
+
+**Wiring `make e2e` into CI is blocked on a decision that is now explicit rather than hidden**, and
+that is the state change worth recording. Before 2026-08-22 the suite would have "passed" in CI having
+tested nothing: the chart ships `auth.enabled: true` by default, every route test skipped on the OIDC
+bounce, and the run exited 0. The test audit's M11 fix made that case FAIL and gave the config a real
+`RASK_E2E_STORAGE_STATE` hook (the escape hatch its own skip message had been advertising while no
+`storageState` or `globalSetup` existed).
+
+So the remaining work is a decision, not a wiring change: **what identity does CI drive the browser
+suite as?** Either the lane stands up an auth-off install, or something produces a signed-in
+storage-state for it. Adding `make e2e` to a job without answering that now yields a red lane instead
+of a fake green one — which is better, and still not something to land silently.
+
+
+
 **P1** · 9 issues (4 high, 4 medium, 1 low)
 
 Two service suites are on disk and outside `testpaths` — including the two that pin a privilege-escalation and a commit-duplication regression. Three more packages/services have no tests at all.
