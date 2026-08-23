@@ -281,6 +281,34 @@ Worse, the denominator is wrong in two ways:
   whose whole implementation (route table, `_CLIENT_SPOOFABLE` header strip, the proxy) lives in
   `__init__.py`. The estate's front door is absent from its own coverage report.
 
+✅ **FIXED + ENFORCED 2026-08-22.** All three, each measured rather than reasoned.
+
+| defect | measured before | after |
+| --- | --- | --- |
+| `--cov` on every invocation, gated by nothing | **10 883 ms** vs 3 990 ms on one subset — **2.7×**, not the ~60 % filed | removed from `addopts`; `make coverage` computes it on request |
+| `source` names the workspace dirs, not the src roots | `packages/tracker/tests` discovered **3 files** | **427 files** |
+| `omit` deletes every `__init__.py` | the gateway absent from its OWN test run's report | `gateway/__init__.py  140  23  83%` |
+
+The gateway figure matches the finding's "140 statements with 23 uncovered" exactly.
+
+**No `fail_under` was invented.** The plumbing is fixed and the number is honest; choosing a threshold
+is an owner's decision, and one picked by whoever repaired the denominator would just ratchet to
+whatever happened to be true this afternoon.
+
+Enforced by `tests/unit/test_coverage_denominator.py`: `source` is checked against the same
+`packages/*/src` + `services/*/src` globs the workspace uses, `**/__init__.py` may not return to `omit`,
+and `--cov` may not return to `addopts`. The first closes an asymmetry `rask-architecture` names —
+workspace membership IS globbed, so a new member joins silently, while `source` must be enumerated
+because coverage.py cannot glob it. Without the gate a new package would fall out of the denominator as
+quietly as it joined the workspace.
+
+**A defect in my own gate, found by this change.** `test_no_docker.py`'s roster keyed violations by
+`file:line`, and adding the `coverage` target moved `Makefile:161` — so it failed for a reason having
+nothing to do with docker. That is the cry-wolf failure the same file argues against elsewhere (it is
+why `docker inspect` is deliberately not flagged). Rekeyed to file + sub-command: stable under
+refactors, still fires on a genuinely new site (RED re-proven with a `docker run` planted in
+`scripts/k3s-install.sh`).
+
 ---
 
 ## Part 2 — The frontend gate runs one of thirteen test suites
