@@ -422,7 +422,7 @@ tests:
   # M24 a. Oldest staged event ages past 300s and stays → LineageOutboxBacklogAging fires.
   - interval: 1m
     input_series:
-      - series: "outbox_oldest_age"
+      - series: "outbox_oldest_age_seconds"
         values: "400+0x9"
     alert_rule_test:
       - eval_time: 7m
@@ -438,7 +438,7 @@ tests:
   # M24 b. A backlog well under the threshold must NOT page — the gauge falls back on its own.
   - interval: 1m
     input_series:
-      - series: "outbox_oldest_age"
+      - series: "outbox_oldest_age_seconds"
         values: "120+0x9"
     alert_rule_test:
       - eval_time: 7m
@@ -643,3 +643,37 @@ tests:
       - eval_time: 125m
         alertname: WorkflowEngineWedged
         exp_alerts: []
+
+
+  # ABSENT IS NOT ZERO. The reconciler's pod has died, so the series is gone entirely — a bare `== 0` over an empty vector cannot fire, and the alert would go silent exactly when it is most needed.
+  - interval: 1m
+    input_series:
+      - series: "notifications_ingress_events_total{lance_notifications_lane=\"feed\"}"
+        values: "_x40"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: NotificationsReconcilerStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: notifications
+              lance_notifications_lane: feed
+            exp_annotations:
+              summary: "The notifications /events reconciler has processed nothing for 30m"
+              description: "The feed lane has ingested no events for 30m. On an idle estate that is correct; on a busy one it means the reconciler is running and seeing nothing \u2014 check that RASK_LINEAGE_SERVICE_IDENTITY is in lineage's LINEAGE_SERVICE_SUBJECTS allowlist AND that the subject holds grants on the datasets it should see. A reconciler that is admitted but ungranted runs perfectly and reconciles zero. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+
+  # The sweep pod gone entirely — the one thing that reclaims storage, previously silent AND unalertable.
+  - interval: 1m
+    input_series:
+      - series: "compaction_runs_total"
+        values: "_x40"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: MaintenanceSweepNotCompleting
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: maintenance
+            exp_annotations:
+              summary: "No table-maintenance sweep has COMPLETED in 30 minutes"
+              description: "At a 120s cadence roughly fifteen passes should have completed. Either the Dapr cron binding is not delivering or every pass is dying mid-flight \u2014 compare with compaction_runs_started_total, whose excess over compaction_runs_total is the lost-pass count."

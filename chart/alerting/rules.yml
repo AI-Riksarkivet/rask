@@ -19,8 +19,14 @@ groups:
             Durable lineage events are staged but not published — provenance is not reaching the AGE graph.
             The relay, lineage, or the NATS bus is unhealthy. Runbook: docs/RUNBOOK-oncall.md#outbox-not-draining
 
+      # `_seconds`, and the suffix is the whole rule. The instrument declares `unit="s"`, and the
+      # OTLP->Prometheus exporter APPENDS the unit — so the series is `outbox_oldest_age_seconds` and a
+      # rule naming the bare form matches nothing and can never fire. Verified against the live store's
+      # information_schema: `outbox_oldest_age_seconds` exists, `outbox_oldest_age` does not. The gate
+      # could not have caught it either, because it read only the service's own metrics.py while this
+      # instrument lives in service_kit's shared outbox module — both halves fixed together.
       - alert: LineageOutboxBacklogAging
-        expr: max(outbox_oldest_age) > 300
+        expr: max(outbox_oldest_age_seconds) > 300
         for: 5m
         labels:
           severity: warning
@@ -189,7 +195,11 @@ groups:
       #    on their own: the test supplies whatever series the author writes, so the series in
       #    rules_test.yml has to be labelled from the instrument rather than from the rule.
       - alert: NotificationsReconcilerStalled
-        expr: sum(rate(notifications_ingress_events_total{lance_notifications_lane="feed"}[30m])) == 0
+      #    ABSENT IS NOT ZERO. `== 0` evaluates over an EMPTY vector once the series ages out, and it
+      #    ages out exactly when the emitting pod dies — so the alert goes silent at the moment it is
+      #    most needed, and its silence is indistinguishable from health. The estate already solved this
+      #    once for the scheduler (`absent(dapr_scheduler_sidecars_connected)`) and never generalised it.
+        expr: sum(rate(notifications_ingress_events_total{lance_notifications_lane="feed"}[30m])) == 0 or absent(notifications_ingress_events_total{lance_notifications_lane="feed"})
         for: 30m
         labels:
           severity: warning
@@ -227,7 +237,10 @@ groups:
       # The sweep is the only thing that reclaims storage. It stopping is silent by construction: no
       # error is raised, the cron simply never fires or the pass dies before completing.
       - alert: MaintenanceSweepNotCompleting
-        expr: sum(increase(compaction_runs_total[30m])) == 0
+      # ABSENT IS NOT ZERO — same reasoning as the notifications reconciler above. A sweep pod that has
+      # died stops emitting `compaction_runs_total` entirely, and a bare `== 0` over an empty vector
+      # cannot fire, so the one thing that reclaims storage stops silently AND its alert goes quiet with it.
+        expr: sum(increase(compaction_runs_total[30m])) == 0 or absent(compaction_runs_total)
         for: 30m
         labels:
           severity: critical

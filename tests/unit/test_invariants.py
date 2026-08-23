@@ -3741,12 +3741,27 @@ def test_every_perses_dashboard_is_declared_ONCE_and_is_valid_json() -> None:
 #: Alert group -> the module whose OTel instruments its rules may reference. A first-party group
 #: asserts against its own service; the three omitted groups reference metrics no rask instrument
 #: creates and are listed with the reason rather than silently skipped.
-_ALERT_GROUP_SOURCES = {
-    "lance-lineage": "services/lineage/src/lineage/core/metrics.py",
-    "lance-medallion": "services/medallion/src/medallion/core/metrics.py",
-    "lance-notifications": "services/notifications/src/notifications/api/metrics.py",
-    "lance-maintenance": "services/maintenance/src/maintenance/core/metrics.py",
+#: A group's rules may query instruments from MORE THAN ONE module — the outbox ones live in the shared
+#: `service_kit` package, not in the service's own metrics.py. A single-path mapping made those invisible:
+#: the gate derives its match pattern from the prefixes it FINDS, so a metric whose prefix is absent from
+#: the source is not merely unchecked, it is unmatchable — which is exactly how `outbox_oldest_age`
+#: survived as a phantom series name for the life of the rule.
+_ALERT_GROUP_SOURCES: dict[str, tuple[str, ...]] = {
+    "lance-lineage": (
+        "services/lineage/src/lineage/core/metrics.py",
+        "packages/service-kit/src/service_kit/lakehouse/outbox_metrics.py",
+    ),
+    "lance-medallion": ("services/medallion/src/medallion/core/metrics.py",),
+    "lance-notifications": ("services/notifications/src/notifications/api/metrics.py",),
+    "lance-maintenance": ("services/maintenance/src/maintenance/core/metrics.py",),
 }
+
+#: UCUM unit -> the suffix the OTLP->Prometheus exporter APPENDS to the series name. A unit in curly
+#: braces is a dimensionless annotation (`{event}`, `{run}`) and is dropped, which is why counters keep
+#: their bare name. This mapping is the rule `outbox_oldest_age` violated: the instrument declares
+#: `unit="s"`, so the real series is `outbox_oldest_age_seconds` — verified against the live store's
+#: information_schema — and a rule naming the bare form can never fire.
+_UCUM_SUFFIX = {"s": "seconds", "ms": "milliseconds", "By": "bytes"}
 
 #: Groups whose rules query series the estate does not instrument, with why. An entry is a claim.
 _THIRD_PARTY_ALERT_GROUPS = {
@@ -3796,13 +3811,25 @@ def test_every_first_party_ALERT_names_a_metric_the_service_actually_EMITS(group
     group = next((g for g in rules["groups"] if g["name"] == group_name), None)
     assert group is not None, f"no {group_name} alert group — its failures can never page"
 
-    source = (REPO / _ALERT_GROUP_SOURCES[group_name]).read_text()
-    instruments = re.findall(r'create_(?:counter|up_down_counter|histogram|observable_gauge)\(\s*"([^"]+)"', source)
+    sources = [(REPO / path).read_text() for path in _ALERT_GROUP_SOURCES[group_name]]
+    # The name AND its declared unit, because the unit changes the series name. `observable_gauge` is in
+    # the alternation because the outbox age is one — an omission that would have made this whole check
+    # vacuous for the very metric that motivated it.
+    instruments = [
+        m for source in sources for m in re.findall(r'create_(?:counter|up_down_counter|histogram|observable_gauge)\(\s*"([^"]+)"(.*?)\)', source, re.DOTALL)
+    ]
     assert instruments, f"parsed no instruments out of {_ALERT_GROUP_SOURCES[group_name]} — the check would pass vacuously"
-    # A counter gains `_total` under the OTLP->Prometheus convention; a gauge/histogram does not, so
-    # accept both spellings rather than guessing the instrument kind from the name.
-    emitted = {name.replace(".", "_") for name in instruments}
-    emitted |= {f"{name}_total" for name in emitted}
+
+    emitted: set[str] = set()
+    for name, tail in instruments:
+        base = name.replace(".", "_")
+        unit = re.search(r'unit\s*=\s*"([^"]*)"', tail)
+        suffix = _UCUM_SUFFIX.get(unit.group(1)) if unit else None
+        # ONLY the suffixed spelling when the unit maps. Accepting both would defeat the point: the bare
+        # name is not a series the backend ever produces, and tolerating it is what let the phantom pass.
+        base = f"{base}_{suffix}" if suffix else base
+        emitted.add(base)
+        emitted.add(f"{base}_total")
 
     prefixes = sorted({name.split("_")[0] for name in emitted})
     # `[A-Za-z0-9_]+`, NOT `[a-z_]+`. A lowercase-only class silently TRUNCATES at the first capital,
@@ -3820,7 +3847,7 @@ def test_every_first_party_ALERT_names_a_metric_the_service_actually_EMITS(group
     phantom = sorted(referenced - emitted)
     assert phantom == [], (
         f"these {group_name} alerts query series no instrument emits, so they can never fire: {phantom}. "
-        f"{_ALERT_GROUP_SOURCES[group_name]} creates {sorted(emitted)}"
+        f"{list(_ALERT_GROUP_SOURCES[group_name])} creates {sorted(emitted)}"
     )
 
 
