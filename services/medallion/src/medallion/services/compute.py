@@ -19,6 +19,7 @@ rask. Blocking Lance/S3 IO; callers run it in the threadpool.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 
 import lance
@@ -261,6 +262,9 @@ def _index_lineage(uri: str, storage_options: dict[str, str]) -> None:
     )
 
 
+log = logging.getLogger(__name__)
+
+
 def _existing_row_count(uri: str, storage_options: dict[str, str]) -> int | None:
     """Rows at ``uri`` right now, or ``None`` when there is nothing there yet.
 
@@ -270,7 +274,11 @@ def _existing_row_count(uri: str, storage_options: dict[str, str]) -> int | None
     """
     try:
         return int(lance.dataset(uri, storage_options=storage_options).count_rows())
-    except Exception:  # noqa: BLE001 — any unreadable destination is "no predecessor", never a failure of the write
+    except Exception as exc:  # noqa: BLE001 — any unreadable destination is "no predecessor", never a failure of the write
+        # LOUD, because `None` is about to be read as FIRST_PROMOTION and asked about. Without this the
+        # review says "first promotion" whether the dataset genuinely has no predecessor or we simply
+        # could not read it — two very different situations wearing one outcome.
+        log.warning("medallion_predecessor_unreadable", extra={"uri": uri, "error": str(exc)[:200]})
         return None
 
 

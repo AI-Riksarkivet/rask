@@ -18,6 +18,7 @@ what it was when the promotion was held.
 
 from __future__ import annotations
 
+import logging
 from typing import Final
 
 
@@ -27,6 +28,9 @@ FIRST_PROMOTION: Final = "first_promotion"
 
 #: The row count moved further than the configured band allows.
 ROW_DELTA: Final = "row_count_delta"
+
+
+log = logging.getLogger(__name__)
 
 
 def review_reasons(*, row_count: int, previous_row_count: int | None, band: float) -> list[str]:
@@ -76,5 +80,10 @@ def previous_row_count(uri: str, storage_options: dict[str, str], *, version: in
 
     try:
         return int(lance.dataset(uri, storage_options=storage_options, version=version - 1).count_rows())
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 — an unreadable history is "no predecessor", which ASKS
+        # Same reason as the sibling in `compute.py`: the caller is about to read `None` as
+        # FIRST_PROMOTION and raise a review, so a read that FAILED must be distinguishable in the log
+        # from a version that genuinely has nothing before it. `version <= 1` returns above without
+        # coming here, so this only ever fires on a real failure.
+        log.warning("medallion_predecessor_unreadable", extra={"uri": uri, "version": version, "error": str(exc)[:200]})
         return None
