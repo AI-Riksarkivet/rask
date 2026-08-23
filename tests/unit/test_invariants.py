@@ -3664,3 +3664,52 @@ def test_the_shared_ray_image_carries_NO_WORKLOAD_dependencies() -> None:
         "per-deployment Ray `runtime_env`, and keep this base agnostic. A second workload must cost "
         "a sibling dockerfile, never a fatter shared base."
     )
+
+
+def test_the_ray_head_image_the_CHART_CONFIGURES_ships_the_tracing_hook_module() -> None:
+    """The chart names two import paths; the image it configures must be able to import them.
+
+      * `rayStartParams.tracing-startup-hook` is Ray CORE, imported inside worker/driver startup, so an
+        ImportError surfaces as a head that will not come up — not as tracing quietly staying off.
+      * `RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH` is Ray SERVE, which catches it and logs that the
+        proxy/replica continues.
+
+    Both name `service_kit.ray_tracing`, and that module's own docstring states the assumption it rests
+    on: "installs ratch — so `service_kit` is importable in every Ray Python process on the cluster."
+    That is a claim about ONE image, and nothing checked it. This does: the image named by
+    `ray.image.repository` must really provide the module, whether by installing a distribution that
+    depends on it or by carrying the source outright.
+
+    WHY THIS IS WORTH A TEST EVEN THOUGH IT PASSES TODAY. The chart and the dockerfile only contradict
+    each other at pod start — the chart renders fine, the image builds fine, and the mismatch is
+    invisible to every other gate. It is also a live hazard rather than a hypothetical one: the head
+    deployed on 2026-08-23 was built before `ray-cluster.dockerfile` switched to `uv sync --package
+    ratch`, and `python -c "import ratch"` on it returns ModuleNotFoundError. This test cannot see a
+    stale DEPLOYED image, but it does pin the contract the next build must satisfy.
+
+    Deliberately NOT asserted of `ray-lance`. It bakes the same job scripts, so it looks like a head
+    image, but the chart never points at it and its jobs deliberately MIRROR small pieces of service_kit
+    rather than import them — it is built on a py312 base where service-kit (>=3.13) cannot install at
+    all. Demanding the hook of it would be inventing a requirement.
+    """
+    values = yaml.safe_load((REPO / "chart" / "values.yaml").read_text())
+    configured = values["ray"]["image"]["repository"]
+
+    dockerfile = REPO / ".docker" / f"{configured}.dockerfile"
+    assert dockerfile.exists(), f"chart ray.image.repository is {configured!r} but .docker/{configured}.dockerfile does not exist"
+
+    rayservice = (REPO / "chart" / "templates" / "rayservice.yaml").read_text()
+    modules = {m.group(1) for m in re.finditer(r'"([\w.]+):(?:setup_tracing|serve_span_processors)"', rayservice)}
+    assert modules, "the chart names no Ray tracing hook at all — if the hooks were removed, remove this test with them"
+
+    text = dockerfile.read_text()
+    for module in sorted(modules):
+        copied = f"packages/service-kit/src/{module.replace('.', '/')}.py" in text
+        via_ratch = "uv sync --package ratch" in text and "service-kit" in (REPO / "packages" / "ratch" / "pyproject.toml").read_text()
+        installed = re.search(r"(pip install|uv (pip )?install)[^\n]*service-kit", text) is not None
+
+        assert copied or via_ratch or installed, (
+            f"{dockerfile.name} backs the Ray head the chart configures, but nothing in it makes {module!r} "
+            f"importable. Ray CORE imports the startup hook during boot, so this is a head that fails to "
+            f"start, not tracing that stays off."
+        )
