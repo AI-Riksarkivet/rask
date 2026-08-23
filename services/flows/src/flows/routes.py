@@ -26,6 +26,7 @@ from flows import executor, security
 from flows.catalog import CATALOG
 from flows.dependencies import FlowsSettingsDep, HttpDep, RunReaderDep, RunsDep, SchedulerDep, ScheduleUnconfirmed
 from flows.graph import validate_graph
+from flows.metrics import record_run
 from flows.models import (
     CatalogResponse,
     FlowGraph,
@@ -203,8 +204,12 @@ async def create_run(
             # per-node state back out of the workflow history is the follow-up (open_studio_flows.md
             # defers streaming per-node progress) — v0 proves the seam, it does not stream it.
             state = RunState(run_id=run_id, status="running")
+            record_run("durable")
 
     if state is None:
+        # The lane is decided here, per request — the startup log announces only what the process COULD
+        # do, not what this run did.
+        record_run("inline")
         state = await executor.execute(
             request.graph,
             request.seeds,

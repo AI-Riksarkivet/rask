@@ -94,6 +94,29 @@ def _runs(client: TestClient) -> dict[str, Any]:
 # ---- catalog ---------------------------------------------------------------------------------
 
 
+_LANE_CALLS: list[tuple[int, dict[str, str]]] = []
+
+
+def _lane_counts() -> dict[str, int]:
+    """`flows.runs` increments seen this test, keyed by lane."""
+    out: dict[str, int] = {}
+    for amount, attrs in _LANE_CALLS:
+        lane = attrs.get("lance.flows.lane")
+        if lane is not None and amount:
+            out[lane] = out.get(lane, 0) + amount
+    return out
+
+
+@pytest.fixture(autouse=True)
+def _capture_lane_metric(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Counter-double for `flows.runs`, per the house pattern — MeterProvider is process-global and
+    set-once, so an in-memory provider would need a rebinding hook in every metrics module."""
+    from flows import metrics as flows_metrics
+
+    _LANE_CALLS.clear()
+    monkeypatch.setattr(flows_metrics, "_runs", type("C", (), {"add": lambda _s, n, a=None: _LANE_CALLS.append((n, dict(a or {})))})())
+
+
 def test_the_catalog_endpoint_serves_the_pinned_shape(client: TestClient) -> None:
     resp = client.get("/api/flows/catalog")
     assert resp.status_code == 200
@@ -155,6 +178,12 @@ def test_a_run_executes_inline_and_is_readable_afterwards(client: TestClient) ->
     assert again.json() == state
     assert respx.calls.call_count == 1
 
+    assert _lane_counts() == {"inline": 1}, (
+        "an inline run records no lane. The lane is decided PER REQUEST and announced only once per "
+        f"process at startup, so 'did THIS run execute durably or inline?' is unanswerable — saw {_lane_counts()}. "
+        "Latency inverts between the lanes, so mixing them in one series is worse than not having it."
+    )
+
 
 @respx.mock
 def test_a_failing_model_node_blocks_its_dependents(client: TestClient) -> None:
@@ -205,6 +234,8 @@ def test_the_durable_lane_takes_over_when_a_scheduler_is_present(client: TestCli
     state = client.post("/api/flows/runs", json=CHAIN).json()
     assert state["status"] == "running"
     assert state["nodes"] == {}
+
+    assert _lane_counts() == {"durable": 1}, f"a durable run records no lane: {_lane_counts()}"
 
     assert len(scheduler.dispatched) == 1
     run_id, payload = scheduler.dispatched[0]

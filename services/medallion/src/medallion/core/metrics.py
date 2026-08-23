@@ -74,6 +74,60 @@ _stage_bytes = _meter.create_counter(
 )
 
 
+_stage_outcomes = _meter.create_counter(
+    "medallion.stage.outcome",
+    unit="{run}",
+    description="Stage-watch runs by terminal VERDICT (succeeded|failed|abandoned|unnotified) — the failure signal Dapr's own family cannot carry.",
+)
+_train_outcomes = _meter.create_counter(
+    "medallion.train.outcome",
+    unit="{run}",
+    description="Training-watch runs by terminal verdict.",
+)
+_promotion_outcomes = _meter.create_counter(
+    "medallion.promotion.outcome",
+    unit="{review}",
+    description="Promotion reviews by decision.",
+)
+
+
+def record_stage_outcome(verdict: str, *, duration_seconds: float | None = None) -> None:
+    """Count one stage-watch run by its terminal verdict, and record what it COST even when it failed.
+
+    WHY THIS EXISTS WHEN DAPR ALREADY COUNTS WORKFLOWS. `dapr_runtime_workflow_execution_count_total`
+    carries a `status` label, and for this codebase that label is FALSE: all three workflow services
+    convert failure into a RETURNED value rather than raising, so the orchestrator completes normally
+    and the sidecar records `status="success"`. Measured across the live estate — every app_id holds
+    `success` and nothing else, including runs whose activities the sidecar separately labels `failed`.
+    An alert on `status="failed"` therefore reads green while every run dies. The verdict is a fact only
+    the application knows, so only the application can record it.
+
+    DURATION ON THE NON-SUCCESS PATHS, which is the point of taking it here. `_watch_seconds` is
+    computed for the abandoned and failed verdicts too, and only the success path
+    (`publish_stage_ready`) ever recorded it — so p95 stage latency was survivorship-biased BY
+    CONSTRUCTION: the runs that take longest are exactly the ones that hit the watch ceiling and get
+    excluded. Reuses `medallion.stage.duration` rather than opening a second histogram, so the success
+    and failure paths remain comparable in one series.
+
+    `verdict` is a CLOSED vocabulary owned by `StageJobOutcome` (succeeded|failed|abandoned|unnotified)
+    — never a value off a payload. Submission ids, tokens and datasets stay on spans and logs.
+    """
+    attrs = {"lance.medallion.verdict": verdict}
+    _stage_outcomes.add(1, attrs)
+    if duration_seconds is not None:
+        _stage_duration.record(duration_seconds, attrs)
+
+
+def record_train_outcome(verdict: str) -> None:
+    """Count one training-watch run by verdict. Same argument as `record_stage_outcome`."""
+    _train_outcomes.add(1, {"lance.medallion.verdict": verdict})
+
+
+def record_promotion_outcome(decision: str) -> None:
+    """Count one promotion review by decision — a closed set owned by the review activity."""
+    _promotion_outcomes.add(1, {"lance.medallion.decision": decision})
+
+
 def record_stage_completion(transition: str, *, duration_seconds: float, rows: int | None = None, size_bytes: int | None = None) -> None:
     """Record what a completed transition COST — its latency, and what it moved.
 

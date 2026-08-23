@@ -14,6 +14,7 @@ import httpx
 from dapr.ext.workflow import WorkflowActivityContext
 
 from flows import executor
+from flows.metrics import record_node
 from flows.models import NodeJob, NodeResult
 from flows.runtime import wfr
 
@@ -43,6 +44,7 @@ def run_node(ctx: WorkflowActivityContext, activity_input: dict[str, object]) ->
     """
     job = NodeJob.model_validate(activity_input)
     result = asyncio.run(_run(job))
+    record_node(result.state.status)
     if result.state.status == "failed":
         # Logged, not raised. Raising would make Dapr retry the activity and — after the retries —
         # fail the whole workflow, when a failed node is a NORMAL outcome of a sandbox run that the

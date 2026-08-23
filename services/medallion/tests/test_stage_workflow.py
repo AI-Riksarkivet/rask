@@ -356,18 +356,42 @@ def test_the_failure_reason_is_BOUNDED_so_a_traceback_cannot_size_a_lineage_even
 def test_an_ABANDONED_watch_also_reaches_the_graph(monkeypatch: pytest.MonkeyPatch) -> None:
     """The ceiling case. A job still RUNNING when the watch gives up is not a job failure — but it is
     equally invisible, and an operator needs to see that the estate stopped watching something."""
+    from medallion.core import metrics as medallion_metrics
     from medallion.workflow import report_stage_outcome
 
     published: list[dict[str, Any]] = []
     monkeypatch.setattr("medallion.workflow._publish_fail_event", lambda e, _s: published.append(e))
 
+    recorded_outcomes: list[tuple[int, dict[str, str]]] = []
+    recorded_durations: list[tuple[float, dict[str, str]]] = []
+    monkeypatch.setattr(medallion_metrics, "_stage_outcomes", type("C", (), {"add": lambda _s, n, a=None: recorded_outcomes.append((n, dict(a or {})))})())
+    monkeypatch.setattr(medallion_metrics, "_stage_duration", type("H", (), {"record": lambda _s, v, a=None: recorded_durations.append((v, dict(a or {})))})())
+
     report_stage_outcome(
         cast("Any", None),
-        {"spec": _spec(), "outcome": {"submission_id": "sub", "status": "RUNNING", "polls": 2880, "verdict": "abandoned"}},
+        {
+            "spec": _spec(),
+            "outcome": {"submission_id": "sub", "status": "RUNNING", "polls": 2880, "verdict": "abandoned", "duration_seconds": 172800.0},
+        },
     )
 
     assert published, "an abandoned watch reported nothing to the graph"
     assert "abandoned" in json.dumps(published[0]).lower()
+
+    assert recorded_outcomes, (
+        "the abandoned verdict reached the graph but no METRIC. The free Dapr family cannot substitute: all "
+        "three services convert failure into a RETURNED value rather than raising, so "
+        'dapr_runtime_workflow_execution_count_total holds status="success" and nothing else — an alert on '
+        '`status="failed"` reads green while every run dies.'
+    )
+    assert recorded_outcomes[0][1].get("lance.medallion.verdict") == "abandoned", f"wrong verdict label: {recorded_outcomes}"
+
+    assert recorded_durations, (
+        "the measured duration is discarded on every non-success path. The workflow computes "
+        "`_watch_seconds` for BOTH the abandoned and failed verdicts, and only `publish_stage_ready` — the "
+        "success path — ever records it, so p95 stage latency is survivorship-biased by construction: the "
+        "runs that took longest are exactly the ones that time out and are then excluded."
+    )
 
 
 def test_a_lineage_OUTAGE_does_not_fail_the_reporting_activity_BUT_IS_REPORTED(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

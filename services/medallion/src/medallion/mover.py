@@ -91,6 +91,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # is not up yet turns an ordering blip into a CrashLoopBackOff. A stage that cannot
             # schedule fails loudly at dispatch, where an operator can see it.
             log.warning("dapr workflow runtime unavailable — ray stages cannot wait for their jobs", exc_info=True)
+    else:
+        # ANNOUNCE THE NEGATIVE CASE. `flows` states its inline fallback and `ingest` states its own;
+        # this branch said nothing, so a mover hosting ZERO workflow workers looked identical in the log
+        # to one hosting them. The lane is coherently off — `transform.py` gates dispatch on the same
+        # flag — but "off" and "broken" have to be distinguishable without reading the chart.
+        log.info("dapr workflow runtime NOT started — the ray lane is off (MEDALLION_RAY_ENABLED unset)")
     app.state.startup_complete = True
     try:
         yield

@@ -270,3 +270,51 @@ def test_emit_terminal_failing_INSIDE_the_boundary_still_fails_the_workflow() ->
 
     with pytest.raises(RuntimeError, match="lineage door down"):
         gen.throw(RuntimeError("lineage door down"))
+
+
+def test_a_terminal_run_is_COUNTED_by_status_and_volume(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The run-level verdict is a fact only this application knows.
+
+    `ingest` converts failure into a RETURNED value — the error boundary produces
+    `RunOutcome(status="FAILED")` rather than letting the orchestrator raise — so the sidecar's
+    `dapr_runtime_workflow_execution_count_total` records `status="success"` for a run that died. An
+    alert on that label reads green while every harvest fails, and the service had no metrics module at
+    all: `grep -rn opentelemetry services/ingest/` returned nothing, and `chart/alerting/rules.yml`
+    duly contains zero ingest rules.
+
+    Volume rides the same terminal activity because it is the only place that knows both halves: rows
+    committed and units that never made it. `outcome` is a closed pair owned by this module, never a
+    value off a payload — the per-unit ids and the error text stay in the `errors` dict on the log.
+    """
+    import pytest as _pytest  # noqa: F401
+    from ingest import metrics as ingest_metrics
+    from ingest.workflow import emit_terminal
+
+    runs: list[tuple[int, dict[str, str]]] = []
+    units: list[tuple[int, dict[str, str]]] = []
+    monkeypatch.setattr(ingest_metrics, "_runs", type("C", (), {"add": lambda _s, n, a=None: runs.append((n, dict(a or {})))})())
+    monkeypatch.setattr(ingest_metrics, "_units", type("C", (), {"add": lambda _s, n, a=None: units.append((n, dict(a or {})))})())
+    monkeypatch.setattr("ingest.runtime.release_run_units", lambda _r: _noop_coro())
+    monkeypatch.setattr("ingest.workflow._lineage", lambda: _SilentLineage())
+
+    emit_terminal(
+        cast("Any", None),
+        {
+            "spec": {"run_id": "run-1", "project": "acme", "dataset": "d", "kind": "k", "source": "s"},
+            "outcome": {"status": "FAILED", "rows": 12, "errors_total": 3},
+        },
+    )
+
+    assert runs and runs[0][1].get("lance.ingest.status") == "FAILED", f"the run verdict was not counted: {runs}"
+    by_outcome = {a.get("lance.ingest.outcome"): n for n, a in units}
+    assert by_outcome.get("written") == 12, f"rows committed not counted: {units}"
+    assert by_outcome.get("failed") == 3, f"failed units not counted: {units}"
+
+
+async def _noop_coro() -> None:
+    return None
+
+
+class _SilentLineage:
+    def terminal(self, *_a: object, **_k: object) -> None:
+        return None

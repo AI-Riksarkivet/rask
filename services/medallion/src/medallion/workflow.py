@@ -55,6 +55,7 @@ import dapr.ext.workflow as wf
 from pydantic import BaseModel, Field
 
 from medallion.core.best_effort import best_effort
+from medallion.core.metrics import record_promotion_outcome, record_stage_outcome, record_train_outcome
 
 
 if TYPE_CHECKING:
@@ -415,6 +416,10 @@ def report_stage_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) 
     # NOT bare. The log.error immediately below still prints when this fails, and this activity's own
     # docstring promises "THE FAILURE REACHES THE GRAPH, not just this log line" — so a swallowed emit
     # makes that line assert a graph write that never happened.
+    # The verdict is a fact only this application knows: the orchestrator RETURNS failure rather than
+    # raising, so Dapr's own execution counter records `status="success"` for a run that died.
+    record_stage_outcome(outcome.verdict, duration_seconds=outcome.duration_seconds)
+
     with best_effort("stage_fail_event", token=spec.token, submission_id=outcome.submission_id):
         _publish_fail_event(_build_stage_fail_event(spec, outcome, reason), spec)
 
@@ -710,6 +715,8 @@ def report_train_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) 
     outcome = TrainJobOutcome.model_validate(payload["outcome"])
 
     reason = f"the Ray training job {outcome.submission_id} ended {outcome.status or 'UNKNOWN'} after {outcome.polls} poll(s)"
+    record_train_outcome(outcome.verdict)
+
     with best_effort("train_fail_event", token=spec.token, submission_id=outcome.submission_id):
         _publish_train_fail(spec, reason)
 
@@ -1057,6 +1064,8 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]
     spec = PromotionSpec.model_validate(payload["spec"])
     outcome = payload["outcome"]
     settings = get_settings()
+    # PROMOTED | REJECTED | BLOCKED — a closed set decided by the review activity, never caller input.
+    record_promotion_outcome(str(outcome["status"]))
     approved = outcome["status"] == "PROMOTED"
     event = build_run_event(
         operation=settings.operation,

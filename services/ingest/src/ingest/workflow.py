@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING, Any, Final
 import dapr.ext.workflow as wf
 from pydantic import BaseModel, Field
 
+from ingest.metrics import record_run, record_units
 from ingest.sizing import ResolvedSizing
 
 
@@ -1077,6 +1078,11 @@ def emit_terminal(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None
     from ingest.runtime import release_run_units
 
     _run_async(release_run_units(spec.run_id))
+
+    # The verdict and the volume, from the one activity that knows both. The orchestrator RETURNS
+    # failure rather than raising, so Dapr's own execution counter records `status="success"` here.
+    record_run(outcome.status)
+    record_units(written=outcome.rows, failed=outcome.errors_total)
 
     _lineage().terminal(
         spec.run_id,
