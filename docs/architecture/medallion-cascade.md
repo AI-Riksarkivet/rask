@@ -1,8 +1,8 @@
 # The medallion cascade — settled decisions
 
 Migrated from `open_medallion_workflow.md` on 2026-08-22, when that working plan was retired. A root
-`open_*.md` exists only while work is outstanding; these three sections were never outstanding work —
-they are rulings, and two of them say so in their own titles. They live here because the questions
+`open_*.md` exists only while work is in progress; these three sections never were — they are rulings,
+and two of them say so in their own titles. They live here because the questions
 recur and the answers are expensive to re-derive.
 
 **What the plan delivered, for anyone tracing the history.** Its slices S1–S4 (the submit/poll/verify

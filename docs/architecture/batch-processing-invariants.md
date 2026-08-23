@@ -4,8 +4,8 @@ What a Ray-backed batch plane in this estate carries, and where each property is
 on this page is IMPLEMENTED and covered by a test; a property with no test is not an invariant, it is
 an intention.
 
-**What is deliberately NOT here.** The slices still outstanding — deferred, blocked on a measurement,
-or waiting on a decision — live in the root `open_batch_process.md`. They sat on this page for part of
+**What is deliberately NOT here.** This file records INVARIANTS and what they settled. Work in
+progress, with its disposition, lives in the root `open_batch_process.md`. They sat on this page for part of
 2026-08-22 and were moved back the same day: `docs/` asserts settled, so unfinished work placed here
 reads as decided regardless of what the prose around it says.
 

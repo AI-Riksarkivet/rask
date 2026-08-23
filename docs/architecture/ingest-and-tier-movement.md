@@ -3,8 +3,8 @@
 The five decisions this plane rests on, what has actually landed against them, and the two policies
 that are expressed in tuples rather than code.
 
-**What is deliberately NOT here.** Where a decision's disposition is still outstanding — a feature
-not built, a change blocked on a live estate — the status column says so and points at the root
+**What is deliberately NOT here.** This file records DECISIONS and what they settled. Implementation
+status lives in the root
 `open_ingest_design.md`. Those items sat on this page for part of 2026-08-22 and were moved back the
 same day: `docs/` asserts settled, so unfinished work placed here reads as decided regardless of the
 prose around it. A DECISION can be settled while its disposition is not, and the two must not be
@@ -24,7 +24,7 @@ They are not interchangeable, and several rulings below turn on which one a clai
 | **1c** — incremental / CDC | anti-join against bronze itself at enumerate (no new store), triggered by a cron at the outer edge | mechanism **shipped and bounded**; the cron **shipped** (`e629e2cc`) |
 | **1d** — what must pre-exist | warehouse + namespace **yes**, table **no** | **shipped**, and the refusal is now pinned on both sides |
 | **2** — "manual push to bronze only" | a **tuple-seeding policy**, not a code change | **ruled**; the policy is recorded below |
-| **3 / 4** — annotator output, tier movement | annotations are DERIVED so silver is correct; readiness is the `published` tag | tenancy **fixed**; the single-trigger flip **outstanding → `open_ingest_design.md`** |
+| **3 / 4** — annotator output, tier movement | annotations are DERIVED so silver is correct; readiness is the `published` tag | **ruled**; tenancy **fixed**. Which trigger drives the cascade is a separate decision, not this one — `open_ingest_design.md` §4 |
 
 ---
 
