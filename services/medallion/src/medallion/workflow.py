@@ -48,12 +48,13 @@ from __future__ import annotations
 
 import json
 import logging
-from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
 import dapr.ext.workflow as wf
 from pydantic import BaseModel, Field
+
+from medallion.core.best_effort import best_effort
 
 
 if TYPE_CHECKING:
@@ -411,7 +412,10 @@ def report_stage_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) 
         and (summary := cause.summary(_STAGE_FAIL_MESSAGE_CAP))
     ):
         reason = f"{reason} — {summary}"
-    with suppress(Exception):
+    # NOT bare. The log.error immediately below still prints when this fails, and this activity's own
+    # docstring promises "THE FAILURE REACHES THE GRAPH, not just this log line" — so a swallowed emit
+    # makes that line assert a graph write that never happened.
+    with best_effort("stage_fail_event", token=spec.token, submission_id=outcome.submission_id):
         _publish_fail_event(_build_stage_fail_event(spec, outcome, reason), spec)
 
     log.error(
@@ -458,7 +462,9 @@ def _read_stage_failure(submission_id: str) -> Any:
         async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
             return await job_failure(client, submission_id)
 
-    with suppress(Exception):
+    # Best-effort by design — a Ray outage must not stop the failure being reported — but the reason a
+    # FAIL carries no detail is worth knowing, so the swallow is no longer silent.
+    with best_effort("read_stage_failure", submission_id=submission_id):
         return _run_async(_read())
     return None
 
@@ -704,7 +710,7 @@ def report_train_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) 
     outcome = TrainJobOutcome.model_validate(payload["outcome"])
 
     reason = f"the Ray training job {outcome.submission_id} ended {outcome.status or 'UNKNOWN'} after {outcome.polls} poll(s)"
-    with suppress(Exception):
+    with best_effort("train_fail_event", token=spec.token, submission_id=outcome.submission_id):
         _publish_train_fail(spec, reason)
 
     log.error(
@@ -1083,7 +1089,9 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]
                 timeout_seconds=settings.publish_timeout_seconds,
             )
 
-    with suppress(Exception):
+    # emit_promotion_outcome logged NOTHING at all on this path, while its docstring calls workflow
+    # history "a cache; lineage is the durable record" — a dropped publish silently emptied the record.
+    with best_effort("promotion_outcome"):
         _run_async(_publish())
 
 

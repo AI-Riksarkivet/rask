@@ -22,8 +22,6 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import partial
 from typing import Any
@@ -35,6 +33,7 @@ from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from opentelemetry import trace
 
+from medallion.core.best_effort import best_effort
 from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_refused, record_stage_completion, record_transition
 from medallion.schemas.events import build_run_event
@@ -77,29 +76,6 @@ _DROP = {"status": "DROP"}
 # promote — DROP so Dapr doesn't redeliver (the data is deterministically bad; no DLQ is configured,
 # so the drop is final — the failed run in the lineage graph is the audit trail).
 _QUALITY_BLOCKED = {"status": "DROP"}
-
-
-@contextmanager
-def _best_effort(what: str, **context: object) -> Iterator[None]:
-    """Run a compensating lineage emit that must not change the caller's control flow — and SAY SO if
-    it fails.
-
-    Every emit this wraps is deliberately best-effort, and the reasons are sound and written at each
-    site: a graph outage must not convert a correct refusal into a retry storm, and a FAIL record that
-    cannot be written must not stop the DROP that keeps a deterministic failure from re-reading every
-    blob from S3 `maxDeliver` times. That part is design, not defect.
-
-    What WAS a defect is that `with suppress(Exception)` threw the diagnosis away with the exception.
-    These blocks ARE the compensating control — the code's own comment says "a lost FAIL publish means
-    the failed run is NEVER recorded and NEVER retried: the graph silently forgets it" — so a bug
-    inside one produced exactly the silence the control exists to prevent, and nothing anywhere
-    reported it. Logging costs nothing on the happy path and turns an invisible failure into a
-    searchable one.
-    """
-    try:
-        yield
-    except Exception:
-        log.exception(f"medallion_best_effort_emit_failed_{what}", extra=dict(context))
 
 
 def _dispatch_stage_workflow(
@@ -761,7 +737,7 @@ async def handle_stage(
             "medallion_stage_project_unresolvable",
             extra={"transition": transition, "token": token, "project": project, "error": str(exc)},
         )
-        with _best_effort("project_unresolvable", transition=transition, token=token, project=project):
+        with best_effort("project_unresolvable", transition=transition, token=token, project=project):
             fail_event = build_run_event(
                 operation=settings.operation,
                 author=settings.author,
@@ -796,7 +772,7 @@ async def handle_stage(
             "medallion_media_underivable",
             extra={"transition": transition, "token": token, "error": str(exc)},
         )
-        with _best_effort("media_underivable", transition=transition, token=token):
+        with best_effort("media_underivable", transition=transition, token=token):
             fail_event = build_run_event(
                 operation=settings.operation,
                 author=settings.author,
@@ -835,7 +811,7 @@ async def handle_stage(
         # edge, no version) + the errorMessage facet; best-effort + suppressed so it can't mask the RETRY;
         # idempotent on the deterministic run_id.
         if not completed:
-            with _best_effort("stage_fail", transition=transition, token=token):
+            with best_effort("stage_fail", transition=transition, token=token):
                 fail_event = build_run_event(
                     operation=settings.operation,
                     author=settings.author,
@@ -883,7 +859,7 @@ async def handle_stage(
         # so redelivery MERGEs rather than accumulating holds. Suppressed and best-effort for the
         # same reason every other lineage emit here is (I8): a graph outage must not convert a
         # correct refusal into a retry storm.
-        with _best_effort("promotion_held", transition=transition, token=token):
+        with best_effort("promotion_held", transition=transition, token=token):
             held_event = build_run_event(
                 operation=settings.operation,
                 author=settings.author,

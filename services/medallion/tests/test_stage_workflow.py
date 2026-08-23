@@ -370,10 +370,28 @@ def test_an_ABANDONED_watch_also_reaches_the_graph(monkeypatch: pytest.MonkeyPat
     assert "abandoned" in json.dumps(published[0]).lower()
 
 
-def test_a_lineage_OUTAGE_does_not_fail_the_reporting_activity(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_lineage_OUTAGE_does_not_fail_the_reporting_activity_BUT_IS_REPORTED(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Best-effort, and this is the reason. An activity that raises is retried and can end FAILED, so
     a lineage outage would leave the workflow unable to finish reporting a failure — strictly worse
-    than the silent log this replaces."""
+    than the silent log this replaces.
+
+    NOT RAISING AND NOT REPORTING ARE DIFFERENT THINGS, and this test only ever pinned the first. A
+    bare `suppress(Exception)` threw the diagnosis away with the exception, so during a lineage/NATS
+    outage every workflow failure in the window was destroyed silently and nothing afterwards indicated
+    a gap existed.
+
+    Worse than merely silent: the `log.error` immediately below the suppress still prints, and
+    `report_stage_outcome`'s own docstring promises "THE FAILURE REACHES THE GRAPH, not just this log
+    line". So the log asserts a graph write that never happened — an operator reading it concludes the
+    FAIL is recorded.
+
+    The same service already solved this. `services/transform.py::_best_effort` wraps the identical
+    class of compensating emit and logs on the failure path, and its docstring says why in terms: "a bug
+    inside one produced exactly the silence the control exists to prevent, and nothing anywhere reported
+    it. Logging costs nothing on the happy path and turns an invisible failure into a searchable one."
+    """
+    import logging
+
     from medallion.workflow import report_stage_outcome
 
     def _boom(_e: Any, _s: Any) -> None:
@@ -381,9 +399,18 @@ def test_a_lineage_OUTAGE_does_not_fail_the_reporting_activity(monkeypatch: pyte
 
     monkeypatch.setattr("medallion.workflow._publish_fail_event", _boom)
 
-    report_stage_outcome(
-        cast("Any", None),
-        {"spec": _spec(), "outcome": {"submission_id": "sub", "status": "FAILED", "polls": 1, "verdict": "failed"}},
+    with caplog.at_level(logging.ERROR):
+        report_stage_outcome(
+            cast("Any", None),
+            {"spec": _spec(), "outcome": {"submission_id": "sub", "status": "FAILED", "polls": 1, "verdict": "failed"}},
+        )
+
+    suppressed = [r for r in caplog.records if "best_effort" in r.message or "lineage is down" in str(r.exc_info)]
+    assert suppressed, (
+        "the lineage outage was swallowed without a trace: no log record names the suppressed emit. "
+        f"Records seen: {[r.message for r in caplog.records]}. During an outage every workflow failure in "
+        "the window is destroyed silently — and the log.error below the suppress still prints, asserting a "
+        "graph write that never happened."
     )
 
 
