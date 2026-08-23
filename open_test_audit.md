@@ -1875,6 +1875,43 @@ DETACHED dev convenience (`up -d`) and `dagger core … as-service up` holds a t
 changes and two compose files retire with it. Written up as **`open_python-audit.md` § E13** with the
 per-site table and the prescribed `dagger core container` pattern. Deleting this audit loses nothing.
 
+### N2 — the hermetic lane excluded `.dagger`, so every gate that reads the build system failed only there · **NEW, found 2026-08-22 · HIGH**
+
+Found by fixing H19 — the first `dagger call test` that could actually FINISH (7 m 12 s) reported **6
+failures**, and they were invisible for as long as the lane was.
+
+**Five are one cause.** `.dagger/test.go` excluded `.dagger` from its own build context, so gates that
+read `.dagger/*.go` found an empty directory inside the container and passed locally:
+`test_ci_invocations.py` (every `dagger call` in the Makefile/CI resolves to a real function),
+`test_dagger_context_is_hermetic.py` (×2), `test_e2e_collection_gate.py` (×2 — its selection surfaces
+include Dagger functions, which is how the ingest suite and the `--postgresql-port` opt-in are
+reachable at all).
+
+`test_ci_invocations.py` has been in the tree since **2026-07-29**, so this lane cannot have passed
+since then — which is consistent with Part 0's finding that main's last 100 runs contain **zero**
+green. The failure was invisible because the lane was: first hanging on H19's binding, and before that
+simply never green. **A gate that reads the build system has to be able to see the build system**, so
+`.dagger` is no longer excluded from this one context — and the comment at the site says why, because
+the exclusion looks obviously correct next to the three contexts that keep it.
+
+**The sixth is worse and unrelated.**
+`test_annotation_actor_plane.py::test_registering_an_actor_type_proves_nothing_about_a_SIDECAR`
+asserted that `register_actor` "succeeds here — in a unit-test process with no daprd anywhere". That is
+false: registration constructs a `DaprActorHttpClient`, whose `DaprHttpClient.__init__` calls
+`DaprHealth.wait_for_sidecar()`. It passed on a developer box **because one is reachable there** —
+measured, `localhost:3500/v1.0/healthz/outbound` answers **204** on this host from the k3s cluster —
+and failed in the container, after blocking for the health timeout first.
+
+So a test asserting a sidecar-INDEPENDENCE property was itself sidecar-DEPENDENT, and the hermetic
+environment was the only thing that could tell. That is H1's mechanism exactly, in a test H1's fix did
+not reach. Stubbed in that file only — never globally, because the notifications suite's adversarial
+test exists to prove that handshake blocks the event loop. RED: unstubbed against a dead port,
+**1 failed** (`Health check … Connection refused`); stubbed, **1 passed**.
+
+**The general lesson, and it is the audit's own thesis turned on the audit's own tools:** a gate that
+runs in two environments is two gates, and the one nobody runs is the one that is wrong. Five of these
+six failures are gates I wrote or touched in this pass, and every one of them was green locally.
+
 ---
 
 ## Part 13 — Two caveats on this audit itself

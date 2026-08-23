@@ -204,19 +204,34 @@ def test_the_gate_precedes_the_project_read_so_a_down_plane_costs_no_round_trips
 
 
 @pytest.mark.asyncio
-async def test_registering_an_actor_type_proves_nothing_about_a_SIDECAR() -> None:
+async def test_registering_an_actor_type_proves_nothing_about_a_SIDECAR(monkeypatch: pytest.MonkeyPatch) -> None:
     """The gate's honest scope, pinned against the SDK instead of asserted in a comment.
 
-    `ActorRuntime.register_actor` builds the type info, constructs an actor client WITHOUT invoking
-    it, and stores an `ActorManager` in a process dict; daprd learns the entity list afterwards by
-    POLLING `/dapr/config`. So it succeeds here — in a unit-test process with no daprd anywhere —
-    and `actors_registered` is therefore `True` in every no-sidecar composition. The 503 gate covers
-    a malformed actor CLASS, NOT an absent or unreachable sidecar, and `main.py` /
-    `tasks.require_actor_plane` say exactly that. If a future SDK makes registration remote this
-    fails, and those docstrings stop being quietly wrong.
+    The 503 gate covers a malformed actor CLASS, NOT an absent or unreachable sidecar, and `main.py` /
+    `tasks.require_actor_plane` say exactly that. This pins it against the SDK so that if a future
+    version changes the shape, the docstrings stop being quietly wrong.
+
+    **THE STUB IS NOT DECORATION, AND THIS TEST WAS NON-HERMETIC WITHOUT IT.** The previous version
+    claimed registration "succeeds here — in a unit-test process with no daprd anywhere". That is
+    false: `register_actor` constructs a `DaprActorHttpClient`, whose `DaprHttpClient.__init__` calls
+    `DaprHealth.wait_for_sidecar()`. It passed on a DEVELOPER BOX because one is reachable there —
+    measured, `localhost:3500/v1.0/healthz/outbound` answers **204** on this host, from the k3s
+    cluster — and it FAILED inside `dagger call test`, which has no Dapr, after blocking for the
+    health timeout first.
+
+    So the test asserted a sidecar-independence property while depending on a sidecar, and the
+    hermetic environment was the only place that could tell. That is the H1 mechanism exactly (the
+    60-s-per-call handshake), in a test H1's fix did not reach.
+
+    Stubbed HERE and not globally, deliberately: `services/notifications`' adversarial test exists to
+    prove that handshake blocks the event loop, and a global patch would delete the estate's only
+    evidence of a live production defect.
     """
     from annotator.projects.actor import AnnotationTaskActor
     from dapr.actor.runtime.runtime import ActorRuntime
+    from dapr.clients.health import DaprHealth
+
+    monkeypatch.setattr(DaprHealth, "wait_for_sidecar", staticmethod(lambda *_a, **_k: None))
 
     await ActorRuntime.register_actor(AnnotationTaskActor)
 
