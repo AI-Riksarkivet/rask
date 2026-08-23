@@ -14,33 +14,28 @@ the remainder.
 
 ## Ruled: deferred, with the reason
 
-**B4 — transform identity reaches the resume predicate.** Still open, and the reason has CHANGED —
-it is no longer "no workload asks for it" but a structural collision found in the code (2026-08-23).
+**B4 — transform identity reaches the resume predicate.** BUILT for non-blob tables (`f41bedea`);
+the blob-table half remains and is named below.
 
-It asks for a `Stage.identity` from `(name, actor qualname, sha256(runner_env))`, a `transform_version`
-column written with the data, and both resume filters changed. The resume filters are
-`f"{name} IS NULL"` at `ratch/core/driver.py:238` and `:254` — "resume is a property of the read", as
-that module's own header puts it — so widening them to `... OR transform_version != <identity>` is the
-easy half.
+All three parts landed: `Stage.identity` from the declaration plus the two things a declaration cannot
+see (the actor class the composition root bound, the runner env); a nullable `transform_version`
+column stamped on every row a run writes; and `resume_filter` comparing them, replacing the bare
+`<output> IS NULL` at both sites in `ratch/core/driver.py`.
 
-The hard half is the column. B4's capability is a SELECTIVE re-run: update the subset of rows whose
-transform moved. On blob-bearing tables that write does not exist — `merge_insert` crashes Lance's
-blob decoder (invariant §7.1, `driver.py:134` and `:221`), which is why scan stages there build a
-column ALL-OR-NOTHING through `_rowid` and why a partial NULL-fill is refused outright at `:242`. A
-capability whose entire point is "re-derive part of a corpus" therefore cannot be delivered on the
-tables that carry the corpus, under the current write path.
+Two findings worth keeping. **Lance rejects `IS DISTINCT FROM`** — the one-word SQL for "a NULL
+version counts as stale", which this needed because `!= 'x'` is NULL on a NULL left side and a NULL
+predicate DROPS the row, silently skipping the rows a first identity-aware run must claim. The
+planner answers "not supported SQL in lance"; the string-asserting unit test passed and the test that
+EXECUTES the predicate against a real dataset is what caught it. And `packages/ratch` had no tests at
+all and sat in no testpath — a workspace member with zero tests passes the enrolment gate, because
+that gate checks that test directories which exist are listed.
 
-So B4 is not one deferred feature; it is two, and the second is the blocker:
-
-* on non-blob tables it is buildable today, exactly as specified;
-* on blob tables it needs a partial-update path that does not go through `merge_insert` — a change to
-  the §7.1 constraint itself, not to this stage.
-
-**It must not be built halfway.** Landing `Stage.identity` alone, with no consumer, is the dead-config
-defect B8 records this plane being bitten by twice. And the plan's original re-open trigger is
-self-defeating on its own terms: the column has to be written BEFORE the run that would filter on it,
-so "re-open when a workload needs it" guarantees the history that workload wants to filter is already
-unmarked. Whoever takes this decides the blob-table path FIRST.
+**What remains is blob tables, and it is not a variation of this work.** B4's capability is a
+SELECTIVE re-run; a blob-bearing table's only legal write is the all-or-nothing `_rowid` rebuild,
+because `merge_insert` crashes Lance's blob decoder (invariant §7.1, `driver.py:134`/`:221`, refusal
+at `:242`). The predicate stays `IS NULL` there, stated at the site. Delivering B4 on those tables
+means changing §7.1 — a partial-update path that does not go through `merge_insert` — which is a
+Lance write-path question, not a resume-predicate one. Whoever takes it starts there, not here.
 
 **B7 — resolve once, carry the value.** Deferred, and the audit's framing overstates it. `submit_stage`
 re-calls `resolve_lane_async`, but `submit_stage` is an ACTIVITY: its result is recorded in history and
