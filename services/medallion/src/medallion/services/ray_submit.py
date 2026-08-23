@@ -162,8 +162,23 @@ async def submit_stage_job(
     # Empty values are OMITTED rather than sent blank: a service-triggered cascade has no person behind
     # it, and `""` is not an identity — a reader must never mistake it for one. Ray's metadata is
     # `Dict[str, str]`, so every value here is already a string.
+    # `rask.lane` joins the identity keys for the reason the block above already gives: a reader
+    # OUTSIDE the job needs it after the job is gone. The job page shows what a run is DOING, and
+    # without the lane it could name the stage but not the declaration — the entrypoint and params
+    # the run is actually executing — so a person watching a job had no path back to the record that
+    # governs it. Omitted when no lane is declared, like every other key here: that run is off the
+    # chart's settings and there is no record to link to, and `""` would render as a lane named
+    # nothing pointing at a dead link.
     metadata = {
-        key: value for key, value in (("rask.originator", originator), ("rask.project", project), ("rask.token", token or ""), ("rask.stage", stage)) if value
+        key: value
+        for key, value in (
+            ("rask.originator", originator),
+            ("rask.project", project),
+            ("rask.token", token or ""),
+            ("rask.stage", stage),
+            ("rask.lane", spec.lane if spec else ""),
+        )
+        if value
     }
     body = {
         "entrypoint": entrypoint,
