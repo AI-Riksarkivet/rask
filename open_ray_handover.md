@@ -37,6 +37,44 @@ what they are; your work is the "APPLY ON THE RAY CLUSTER" block in each section
 
 ---
 
+## 0. BEFORE THE TELEMETRY — the dashboard API accepts unauthenticated requests
+
+**This is not a telemetry item and it outranks all three below.** Found 2026-08-23 while checking
+whether rask's Ray auth was ever exercised against a live cluster rather than only at render time.
+
+Measured from inside rask's cluster, against `https://dev-kuberay.ra.se`:
+
+```
+GET /api/version      with a valid token  -> 200
+GET /api/version      with NO token       -> 200
+GET /api/version      with a WRONG token  -> 200
+
+No Authorization header at all:
+GET /api/jobs/          -> 200   [{"type":"SUBMISSION","submission_id":"htr_http-chunk-054-of-100-...
+GET /api/cluster_status -> 200
+GET /nodes?view=summary -> 200
+```
+
+`/api/jobs/` is the Ray Job Submission API — the same endpoint that SUBMITS (`POST`) and DELETES
+jobs. Anything that can route to that host can enumerate the cluster's work and, through the same
+door, run arbitrary code on it. Only read paths were exercised here; no write was attempted.
+
+**rask's half is correct and is not the problem.** `ray.auth.enabled` is `true` in the live release,
+the token secret exists and holds 32 bytes, and `compute` sends it as `Authorization: Bearer`. The
+cluster does not check it. rask cannot fix that from this repo — which is precisely why it is in this
+document.
+
+**What this repo got wrong, and has now recorded:** `tests/unit/test_ray_auth.py` has eight tests and
+every one is a `helm template` assertion. They prove the chart RENDERS auth — secret, env, fail-closed
+prod guards — and they all pass. None of them makes an authenticated call, so the gap between "we send
+a token" and "the token is honoured" was invisible to the entire suite. A render-time gate cannot
+observe the far end of a network call, and this is what that costs.
+
+**Two things worth establishing before ranking severity**, neither of which is answerable from inside
+rask's cluster: whether `dev-kuberay.ra.se` is reachable from outside your network, and whether
+anything else (network policy, VPN, ingress auth) fronts it. If it is internal-only the finding is
+much smaller than it reads. If it is not, treat it as urgent.
+
 ## A working reference (added 2026-08-23)
 
 Everything in §1 has now been exercised against a real KubeRay cluster, so you are not applying
