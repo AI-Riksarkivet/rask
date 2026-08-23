@@ -519,9 +519,8 @@ rustfs-lifecycle: ## Catalog lifecycle e2e with the bytes on RustFS (proves S3-a
 # the app seeds ownership tuples on create (no tuple is written by hand), that owner cascades to
 # reader and writer, and that a second identity holding no grant gets 403 on both.
 #
-# `scripts/auth_e2e.sh` still exists and still drives compose, because `.github/workflows/ci.yml` runs
-# it and a concurrent session holds that file. It is not a fallback — both callers run the SAME
-# `scripts/auth_chain.sh`, and the compose half is deleted when that CI job can move here.
+# `scripts/auth_e2e.sh` is GONE. It existed only to bring up a compose stack for the CI job, and that
+# job now calls this target's function directly; the assertions live on in `scripts/auth_chain.sh`.
 auth-chain: ## Dex + OpenFGA authorization chain e2e (app-side tuple seeding)
 	dagger call auth-chain
 

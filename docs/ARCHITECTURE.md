@@ -336,8 +336,8 @@ uv run pytest -q
 uvx ruff check . && uvx ty check
 
 # full auth stack end-to-end (Docker: catalog + Dex + OpenFGA + Postgres + MinIO)
-./scripts/auth_e2e.sh           # anon 401 → alice create/read/write 200 → bob 403
-AUTH_OVERLAY=.docker/docker-compose.auth.sqlite.yml ./scripts/auth_e2e.sh   # lighter SQLite stack
+make auth-chain                 # anon 401 → alice create/read/write 200 → bob 403
+dagger call auth-chain          # the same, standing Dex + OpenFGA up as Dagger services
 ```
 
 Config is env-driven (`LANCE_*`, see `services/catalog/core/config.py`): `LANCE_OIDC_ENABLED`,

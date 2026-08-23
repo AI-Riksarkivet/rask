@@ -259,7 +259,7 @@ def test_every_live_suite_is_selected_by_something() -> None:
 
     `test_auth_e2e.py` had neither. It carried the generic `e2e` marker alone and appeared in no
     Makefile recipe, CI job, Dagger function or script — while a CI job literally named `e2e-auth` ran
-    `scripts/auth_e2e.sh`, which contains no pytest invocation at all. The estate's live authorization
+    `scripts/auth_e2e.sh` (since retired), which contained no pytest invocation at all. The live authorization
     proof was therefore selected by nothing, under a job whose name asserted the opposite.
     """
     surfaces = _selection_surfaces()

@@ -1,7 +1,7 @@
 """Live OIDC (Dex) + OpenFGA authorization end-to-end.
 
 Runs against the auth stack started with the compose overlay
-(``.docker/docker-compose.auth.yml`` — see ``scripts/auth_e2e.sh``). Skipped
+(stood up by ``make auth-chain``). Skipped
 unless ``LANCE_E2E_AUTH_SERVER`` is set and the stack is reachable.
 
 Asserts the full chain: no token → 401, valid Dex token without a tuple → 403,
@@ -101,7 +101,7 @@ def test_oidc_and_openfga_authorization_chain(server: str) -> None:
     # per environment and has already decided it: `chart/values.yaml` ships `auth.lockRootCreate:
     # false`, `chart/values-prod.yaml` ships `true`. `scripts/e2e_stack.sh` sets `auth.enabled=true`
     # and does NOT set lockRootCreate, so this suite runs against the OPEN default — which is exactly
-    # what `scripts/auth_e2e.sh` (the script CI runs) has always expected: `expect 200 ... "alice
+    # what `scripts/auth_chain.sh` (the assertions CI runs) has always expected: `expect 200 ... "alice
     # create namespace"`. Two artifacts asserted opposite outcomes for one request; the shell script
     # was right and this was describing production.
     assert requests.post(f"{server}/v1/namespace/e2ens/create", headers=headers, json={}, timeout=10).status_code in (200, 409)

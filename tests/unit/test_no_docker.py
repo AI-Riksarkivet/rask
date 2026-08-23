@@ -102,23 +102,19 @@ _CONTAINER_EXEMPT = {
 #: deletes, which is the same argument this file already makes for not flagging `docker inspect`. The
 #: file plus the verb is stable under refactors and still changes when a violation is added, removed,
 #: or moved to another file.
-#: The container-creating docker sites that remain. This list has been WRONG in both directions today
-#: and the corrections are worth keeping visible.
+#: EMPTY. Every container-creating docker invocation in the estate is gone.
 #:
-#: It shrank from three to one as `rustfs-up` and `notifications-rig-up` were converted — and then GREW
-#: to five when the gate's own blind spots were fixed. It had been scanning three hand-listed surfaces
-#: (`Makefile`, `.github/workflows`, `scripts`) and requiring `up` on the same line as `compose`, so
-#: `.docker/` was invisible and every compose WRAPPER was too. Six real sites were never reported, and
-#: two `docker buildx build` calls sat in `.docker/` while the tier-1 test said "clean".
+#: The list has been wrong in both directions and the corrections are worth keeping. It shrank from
+#: three to one as targets were converted, then GREW to five when this gate's own blind spots were
+#: fixed — it had been scanning three hand-listed surfaces and requiring `up` on the same line as
+#: `compose`, so `.docker/` was invisible and every compose WRAPPER was too. Six real sites had never
+#: been reported, and two `docker buildx build` calls sat in `.docker/` while the tier-1 test said
+#: "clean". Then it went to zero as each was converted or deleted.
 #:
-#: Both tier-1 violators were DEAD and are deleted: `smoke-gpu.sh` built `.docker/ray.dockerfile`,
-#: which does not exist, and `smoke-build.sh` was referenced by nothing and set `RASK_VIEWER_*`, which
-#: died with the viewer monolith.
-_KNOWN_VIOLATIONS = {
-    (".github/workflows/ci.yml", "compose"),  # the auth/dex e2e stack
-    (".github/workflows/ci.yml", "run"),  # the per-zone image smoke test
-    ("scripts/auth_e2e.sh", "compose"),  # ALIVE — ci.yml:591 runs it
-}
+#: Keep it empty. An entry here is a claim that some container cannot go through Dagger, and every
+#: one that has been examined turned out to be convertible — usually into something better, because
+#: the compose shapes carried orchestration the Dagger versions do not need.
+_KNOWN_VIOLATIONS: set[tuple[str, str]] = set()
 
 _BUILD = re.compile(r"\bdocker\s+(buildx\s+)?build\b")
 #: ANY `docker compose`, not only one with `up` on the same line.

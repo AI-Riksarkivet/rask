@@ -261,18 +261,17 @@ jobs:
         working-directory: frontend
         run: bunx playwright install --with-deps chromium
 
-      # e2e for the FOUR zones that define `test:e2e` — home, lakehouse, media, annotator — fanned by
-      # turbo, which discovers the task rather than reading a list here. `compute`, `studio` and
-      # `models` ship no e2e at all, so this leg is 4-of-7 coverage, not full coverage — a real gap, not
+      # e2e for the FIVE zones that define `test:e2e` — home, lakehouse, explorer, annotator, models —
+      # fanned by turbo, which discovers the task rather than reading a list here. `compute` and
+      # `studio` ship no e2e at all, so this leg is 5-of-7 coverage, not full coverage — a real gap, not
       # a naming leftover (the "four zone" counts elsewhere in this workflow WERE leftovers; there are
       # seven zone images, and they have been corrected).
       #
-      # `models` is the newest hole and the most deliberate one: the registry/experiments/pipeline
-      # specs that covered those surfaces are still in `lakehouse/e2e` (admin/models-*.spec.ts,
-      # models/), pointing at `/lakehouse/models` routes that moved to this zone. They need the
-      # lakehouse harness ported with them — ports.ts, admin/session.ts, mock-catalog.ts,
-      # mock-observability.ts, lineage/mock-lineage.ts and a two-server playwright.config — and they
-      # FAIL until that lands.
+      # `models` CLOSED (#112). Its registry/experiments/pipeline/shell specs used to sit in
+      # `lakehouse/e2e` pointing at `/lakehouse/models` routes that had already moved, so they failed on
+      # a 404; they now live in `microfrontends/models/e2e` with a harness of their own — one auth-ON
+      # dev server plus ONE seed-driven mock upstream standing in for the catalog, GreptimeDB, the
+      # medallion head and the lineage probe (they share a port because their paths never collide).
       #
       # Run SERIALLY (--concurrency=1): each zone spins its own vite SSR dev server + a chromium
       # instance, and running every first-compile at once blows the per-server startup window on a
@@ -280,10 +279,12 @@ jobs:
       # admin — each with its own warmup.)
       #
       # `--continue` because SERIAL + FAIL-FAST is the worst pairing available: turbo cancels every zone
-      # it has not started, and at --concurrency=1 that is "all the ones after the first failure". The
-      # exit code is unchanged — any failing zone still reds the job — so this buys a complete report,
-      # not leniency. Same reasoning, and the same measurement, as `.dagger/frontend.go`'s Frontend().
-      - name: Playwright e2e — 4 of 7 zones (hermetic — /api mocked in-page)
+      # it has not started, and at --concurrency=1 that is "all the ones after the first failure". With
+      # `models#test:e2e` exiting 1 on `Error: No tests found` (its harness is untracked at HEAD), the
+      # zones that happen to be ordered after it have been reporting nothing at all. The exit code is
+      # unchanged — any failing zone still reds the job — so this buys a complete report, not leniency.
+      # Same reasoning, and the same measurement, as `.dagger/frontend.go`'s Frontend().
+      - name: Playwright e2e — 5 of 7 zones (hermetic — upstreams mocked in-page or as a seed server)
         working-directory: frontend
         run: bunx turbo run test:e2e --concurrency=1 --continue
 
@@ -401,61 +402,15 @@ jobs:
       # returns /DECOY, anchored returns /explorer. If a config is ever reformatted so `paths: { … base }`
       # spans lines, sed (line-based, unlike the JS regex) resolves '' and the zone gets probed at '/',
       # which is a 404 for a domain zone — a loud failure, not a silent pass.
+      # Every zone gets probed, not just the first bad one: `--continue`-style accumulation by hand,
+      # because a smoke report that stops at the first failure tells you least when several are broken.
       - name: Smoke-run each zone image
         run: |
           set -uo pipefail
-          # GitHub runs `run:` blocks under `bash -e`, so errexit is ON unless turned off here. It must
-          # be off: the readiness loop below depends on curl exiting non-zero (7, connection refused)
-          # while the Bun server is still starting, and under errexit the first such exit would abort
-          # the step and report a build failure instead of a smoke result. `fail` is accumulated by hand
-          # and returned at the end precisely so every zone gets reported, not just the first bad one.
           set +e
           fail=0
           for z in $ZONES; do
-            # The missing-image check comes FIRST, before the config is read. A zone the tree has but
-            # the Makefile never built is the headline case this step exists to report, and reading its
-            # svelte.config.js first would print a `sed: can't read …` above the diagnosis whenever the
-            # stale-ZONES zone is also a half-added one — noise on top of the line that matters.
-            #
-            # `web-$z:dev` must match what `make frontend-images` tags (Makefile: `-t
-            # web-$$a:$(FRONTEND_TAG)`, FRONTEND_TAG ?= dev). These read as one name in two files, and
-            # the lance-ns merge renamed only one of them: the Makefile moved to `web-*` while this job
-            # kept probing `lance-*`, so it reported "no image lance-lakehouse:dev was built — is the
-            # Makefile ZONES list stale?" for four zones that had in fact built perfectly. The
-            # diagnosis it offers is the wrong one for this failure, which is why it cost a detour;
-            # if the tag ever moves again, both sides change together.
-            if ! docker image inspect "web-$z:dev" >/dev/null 2>&1; then
-              echo "FAIL  $z  no image web-$z:dev was built — is the Makefile ZONES list stale?"
-              fail=1
-              continue
-            fi
-            cfg="frontend/microfrontends/$z/svelte.config.js"
-            base=$(sed -n "s/.*paths:[[:space:]]*{[^}]*base:[[:space:]]*['\"]\([^'\"]*\)['\"].*/\1/p" "$cfg" | head -1)
-            docker rm -f "smoke-$z" >/dev/null 2>&1 || true
-            docker run -d --name "smoke-$z" -p 3000:3000 "web-$z:dev" >/dev/null
-            # No `|| echo 000` fallback: curl already writes 000 to %{http_code} when it cannot connect
-            # (verified: exit 7, stdout "000"), so a fallback appends a SECOND code and $code becomes
-            # "000000" — or "301000" if curl exits non-zero on a request that did get a response, which
-            # would then never equal 200 no matter what the server said. `set -e` is off precisely so
-            # this loop can absorb curl's non-zero exits while the server is still warming up.
-            code=000
-            for _ in $(seq 1 30); do
-              code=$(curl -sL --max-redirs 5 -o "/tmp/smoke-$z.html" -w '%{http_code}' \
-                     --max-time 10 "http://127.0.0.1:3000${base}/")
-              [ "$code" = 200 ] && break
-              sleep 2
-            done
-            state=$(docker inspect -f '{{.State.Status}}' "smoke-$z")
-            title=$(grep -o '<title>[^<]*</title>' "/tmp/smoke-$z.html" | head -1)
-            if [ "$code" = 200 ] && [ "$state" = running ] &&
-               grep -q 'data-sveltekit' "/tmp/smoke-$z.html"; then
-              echo "ok    $z  base='$base'  200  $title"
-            else
-              echo "FAIL  $z  base='$base'  http=$code  state=$state"
-              docker logs "smoke-$z" 2>&1 | tail -30
-              fail=1
-            fi
-            docker rm -f "smoke-$z" >/dev/null 2>&1 || true
+            dagger call zone-smoke --zone="$z" || fail=1
           done
           exit $fail
 
@@ -554,7 +509,7 @@ jobs:
         run: make e2e-ray-ci
 
   # Gated live auth end-to-end: brings up the SQLite OpenFGA + Dex stack via
-  # docker compose and runs scripts/auth_e2e.sh, which asserts APP-SIDE SEEDING
+  # Dagger services and runs scripts/auth_chain.sh, which asserts APP-SIDE SEEDING
   # (create namespace/table -> owner + parent cascade) and a 403 for a second
   # user with no grant. GitHub-hosted ubuntu runners ship Docker + Compose v2,
   # so this is feasible in CI. Skipped on forked-PR runs (no infra guarantees /
@@ -574,29 +529,13 @@ jobs:
       - name: Sync dependencies (Linux-only lockfile)
         run: uv sync --frozen --all-packages --all-groups
 
-      - name: Show docker / compose versions
-        run: |
-          docker version
-          docker compose version
-
-      # Builds the server image, starts MinIO + SQLite OpenFGA + Dex, and runs
-      # the full app-side-seeding assertion chain. The script tears the stack
-      # down on exit (trap). A non-zero exit fails the job.
-      # KEEP_STACK=1 leaves the stack up so the next step can collect logs on
-      # failure; the always() cleanup below tears it down regardless of outcome.
-      - name: Auth e2e (Dex + SQLite OpenFGA, app-side seeding)
-        env:
-          KEEP_STACK: "1"
-        run: bash scripts/auth_e2e.sh
-
-      - name: Dump stack logs on failure
-        if: failure()
-        run: |
-          docker compose -f .docker/docker-compose.yml \
-                         -f .docker/docker-compose.auth.sqlite.yml logs --no-color || true
-
-      - name: Tear down stack
-        if: always()
-        run: |
-          docker compose -f .docker/docker-compose.yml \
-                         -f .docker/docker-compose.auth.sqlite.yml down -v || true
+      # Dex + OpenFGA + a governed catalog, stood up as DAGGER SERVICES — the same seven-step
+      # app-side-seeding chain, with no compose stack to bring up, dump logs from, or tear down.
+      # Those three steps are gone with it: a service bound to the run ends with the run, so there is
+      # nothing left to clean up and no KEEP_STACK dance to let a later step read the logs.
+      #
+      # The assertions are unchanged and live in `scripts/auth_chain.sh`, which `dagger call
+      # auth-chain` runs. `scripts/auth_e2e.sh` existed only to bring up the compose stack for this
+      # job and is deleted.
+      - name: Auth e2e (Dex + OpenFGA, app-side seeding)
+        run: dagger call auth-chain

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 
 	"dagger/rask/internal/dagger"
 )
@@ -76,5 +77,76 @@ func (m *Rask) Frontend(
 ) (string, error) {
 	return m.frontendBase(src).
 		WithExec([]string{"bunx", "turbo", "run", "check", "check:tsgo", "test", "lint", "fmt:check", "--continue"}).
+		Stdout(ctx)
+}
+
+// ZoneSmoke builds ONE zone's image, serves it, and proves the SSR shell actually renders at that
+// zone's own base path.
+//
+// It replaces the `docker run -d --name smoke-$z` loop in `ci.yml`, which was the last docker
+// invocation in the workflow. Three assertions carry over unchanged, because each was earned:
+//
+//   - HTTP 200 at `${base}/` — the zone's `paths.base` from its own svelte.config.js, not a guess.
+//     A bare `/` answers 404 under a base, which is exactly the failure this catches.
+//   - `data-sveltekit` present in the body — a 200 alone can be an error page or a redirect target.
+//   - the marker is read from the FINAL response after redirects, since `/zone` answers 308 and
+//     `/zone/` answers 200.
+//
+// What does NOT carry over is the `docker image inspect web-$z:dev` pre-check, which existed to catch
+// a stale Makefile ZONES list. That is not lost: `@rask/zone-contract`'s manifest test already pins
+// the roster across all five places that declare it, and it fails at unit speed rather than after a
+// full image build. Dagger builds the zone here from its directory, so there is no separately-tagged
+// artefact to be missing in the first place.
+func (m *Rask) ZoneSmoke(
+	ctx context.Context,
+	// +defaultPath="/"
+	// +optional
+	src *dagger.Directory,
+	// Zone directory under frontend/microfrontends.
+	zone string,
+) (string, error) {
+	base, err := dag.Container().
+		From(bunImage).
+		WithDirectory("/src", src.Directory("frontend/microfrontends/"+zone)).
+		WithWorkdir("/src").
+		// The base path is READ FROM THE ZONE, never passed in: `svelte.config.js` is the one place
+		// that declares it, and a smoke test that took it as an argument could agree with itself while
+		// disagreeing with what the server serves.
+		WithExec([]string{"sh", "-c", `sed -n "s/.*paths:[[:space:]]*{[^}]*base:[[:space:]]*['\"]\([^'\"]*\)['\"].*/\1/p" svelte.config.js | head -1`}).
+		Stdout(ctx)
+	if err != nil {
+		return "", err
+	}
+	base = strings.TrimSpace(base)
+
+	server := m.ZoneImage(src, zone, "", "", "").
+		WithExposedPort(3000).
+		AsService()
+
+	return dag.Container().
+		From(bunImage).
+		WithServiceBinding("zone", server).
+		WithEnvVariable("ZONE", zone).
+		WithEnvVariable("BASE", base).
+		WithExec([]string{"sh", "-c", `
+set -u
+url="http://zone:3000${BASE}/"
+code=000
+for _ in $(seq 1 30); do
+  code=$(bunx --bun node -e "
+    fetch('${url}', {redirect:'follow'})
+      .then(async r => { require('fs').writeFileSync('/tmp/body.html', await r.text()); console.log(r.status) })
+      .catch(() => console.log('000'))
+  " 2>/dev/null | tail -1)
+  [ "$code" = 200 ] && break
+  sleep 2
+done
+if [ "$code" != 200 ]; then echo "FAIL  $ZONE  base='$BASE'  http=$code"; exit 1; fi
+if ! grep -q 'data-sveltekit' /tmp/body.html; then
+  echo "FAIL  $ZONE  base='$BASE'  200 but no data-sveltekit marker — an error page or a redirect target"
+  exit 1
+fi
+title=$(grep -o '<title>[^<]*</title>' /tmp/body.html | head -1)
+echo "ok    $ZONE  base='$BASE'  200  $title"`}).
 		Stdout(ctx)
 }

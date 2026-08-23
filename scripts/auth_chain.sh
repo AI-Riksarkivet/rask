@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 # The auth chain's ASSERTIONS, with no opinion about who stood the stack up.
 #
-# Split out of `scripts/auth_e2e.sh` so the same seven steps serve two callers without being written
-# twice: that script (which brings up a compose stack and is what CI runs today) and
-# `dagger call auth-chain`, which binds Dex, OpenFGA and the catalog as Dagger services and sets the
-# three variables below. The assertions were always the value here; the orchestration was the part
-# that needed docker, and it is the part that differs.
-#
-# This is NOT a docker fallback switch — the repository forbids those and one was rejected outright.
-# There is exactly one copy of the assertions, and the compose caller is on its way out: it survives
-# only until `.github/workflows/ci.yml` can be edited, which a concurrent session is holding.
+# Split out of the retired `scripts/auth_e2e.sh`, which brought up a compose stack to run exactly
+# these steps. The assertions were always the value here; the orchestration was the part that needed
+# docker. `dagger call auth-chain` binds Dex, OpenFGA and the catalog as Dagger services and sets the
+# three variables below, and CI calls that — so this file now has ONE caller and no compose anywhere
+# behind it.
 #
 #   LANCE_E2E_AUTH_SERVER=... LANCE_E2E_DEX=... LANCE_E2E_FGA=... bash scripts/auth_chain.sh
 set -euo pipefail
