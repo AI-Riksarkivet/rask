@@ -610,7 +610,7 @@ Each slice is independently shippable and independently verifiable.
 | **8** | **RESPECIFIED — see §10a.** Eight slices (8.0, 8a–8g); two are CORRECTNESS bugs, one is blocked on a measurement | `flows/`, `ingest/`, `medallion/`, `perses-dashboards.yaml`, `alerting/` | — | see §10a |
 | **9** | **LANDED (the correctness half).** `absent()` guards on both `== 0` rules, `outbox_oldest_age` -> `outbox_oldest_age_seconds`, and the name gate taught UCUM units + multi-source. **RULED OUT:** anything gated on turning `alerting.enabled` on — that is `open_alert.md`'s decision, not this audit's | `chart/alerting/`, `test_invariants.py` | S | — |
 | **10** | **LANDED.** storage.json + messaging.json over series already collected, every query proven against the live store; workflows.json shipped with 8g. Panel queries are now GATED, which caught a phantom the alert fix had missed | `perses-dashboards.yaml`, `test_invariants.py` | M | — |
-| **11** | Shutdown flush; sampler env; probe exclusion; metric-interval symmetry; `service.version` | `otel.py`, `service_kit/__init__.py`, `_helpers.tpl` | S | Polish, but cheap |
+| **11** | **LANDED.** Probe exclusion + metric-interval symmetry for the fleet, and two false comments corrected. Shutdown flush landed with slice 3; `service.version` with slice 6. **DROPPED: the SDK sampler env** — the otel skill rules "sample in the Collector, not the SDK", and this estate has one | `_helpers.tpl`, `test_invariants.py` | S | — |
 | **12** | SSR zones export nothing | `chart/templates/frontends.yaml` + a Node SDK preload | M | The first hop of every real user request |
 
 **Slices 1–4 are the ones that change what can be seen.** They are all small, and three of the four

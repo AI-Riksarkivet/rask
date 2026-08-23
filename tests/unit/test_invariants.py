@@ -3851,6 +3851,54 @@ def test_every_first_party_ALERT_names_a_metric_the_service_actually_EMITS(group
     )
 
 
+#: OTel env vars that take effect with NO `opentelemetry-instrument` launcher — verified by reading the
+#: installed SDK, not by convention. The fleet runs `command: ["uvicorn"]`, so anything the LAUNCHER
+#: consumes is inert there and copying it across would be cargo-cult symmetry.
+#:
+#:   OTEL_METRIC_EXPORT_INTERVAL        read by PeriodicExportingMetricReader.__init__
+#:   OTEL_PYTHON_FASTAPI_EXCLUDED_URLS  read by the FastAPI instrumentor itself
+#:
+#: Deliberately EXCLUDED, and each was checked rather than assumed: OTEL_{TRACES,METRICS,LOGS}_EXPORTER
+#: live in `opentelemetry.sdk._configuration`, which only the launcher runs; and
+#: OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED is the launcher's switch for a call the fleet already
+#: makes explicitly in `setup_otel`.
+_LAUNCHER_FREE_OTEL_ENV: Final = ("OTEL_METRIC_EXPORT_INTERVAL", "OTEL_PYTHON_FASTAPI_EXCLUDED_URLS")
+
+
+def test_both_planes_agree_on_the_otel_env_that_ACTUALLY_APPLIES() -> None:
+    """Two planes, two different answers to questions that have one right answer.
+
+    The lakehouse pods carried a metric export interval and a probe-exclusion list; the fleet carried
+    neither, so the estate exported metrics at two different cadences and the fleet's RED dashboard
+    counted `/livez` and `/readyz` as traffic. Kubernetes probes every pod every few seconds, so on a
+    quiet estate the health checks ARE the request rate — the panel reads busy and the latency
+    distribution is dominated by a route nobody calls.
+
+    Scoped to the vars that work WITHOUT the launcher. The fleet runs bare uvicorn, so asserting full
+    symmetry would force in four vars that do nothing there — the same cargo-culting this audit has
+    already cut twice.
+    """
+    docs = _rendered_docs("observability.enabled=true")
+
+    def otel_env(workload: str) -> dict[str, str]:
+        for doc in docs:
+            if doc.get("kind") == "Deployment" and doc["metadata"]["name"] == workload:
+                for container in doc["spec"]["template"]["spec"]["containers"]:
+                    if container["name"].startswith("daprd"):
+                        continue
+                    return {e["name"]: str(e.get("value", "")) for e in (container.get("env") or [])}
+        raise AssertionError(f"{workload} did not render — this gate would pass vacuously")
+
+    fleet, lance = otel_env("rask-gateway"), otel_env("release-name-catalog")
+
+    for name in _LAUNCHER_FREE_OTEL_ENV:
+        assert name in lance, f"the lakehouse plane lost {name} — this gate compares the two, so it cannot anchor on a missing value"
+        assert fleet.get(name) == lance[name], (
+            f"the two planes disagree on {name}: fleet={fleet.get(name)!r} lakehouse={lance[name]!r}. "
+            "It takes effect without the launcher, so the fleet is not exempt — it is just unset."
+        )
+
+
 def test_every_PANEL_query_names_a_series_some_instrument_emits() -> None:
     """The other half of the phantom-series defect: alerts were gated, 34 panel queries were not.
 

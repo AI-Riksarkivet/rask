@@ -237,8 +237,11 @@ dapr.io/config: "lance-tracing"
      A THIRD rendering, and deliberately not a third source of truth: every value below is derived from
      `lance.otlpEndpoint` / `lance.otelViaCollector` / `lance.otelEnabled`, the same single derivation
      the lance plane uses. What differs is only WHICH variables are emitted — `lance.otelEnv` also
-     renders the Python-launcher knobs (OTEL_*_EXPORTER, OTEL_METRIC_EXPORT_INTERVAL,
-     OTEL_PYTHON_FASTAPI_EXCLUDED_URLS), and Ray processes run under no launcher and serve no FastAPI
+     renders OTEL_*_EXPORTER and OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED, which really are
+     launcher-only, plus OTEL_METRIC_EXPORT_INTERVAL and OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, which are
+     NOT — both take effect with no launcher (verified against the installed SDK), and the fleet now
+     carries them too. Ray is exempt for a different reason: it builds no metric reader and serves no
+     FastAPI
      app, so those would be inert config on every Ray pod. Duplicated DATA is the defect; a narrower
      projection of one derivation is not.
 
@@ -369,6 +372,21 @@ dapr.io/config: "lance-tracing"
 - name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
   value: "x-greptime-db-name={{ $db }},x-greptime-pipeline-name={{ $pipeline }}"
 {{- end }}
+{{/* BOTH OF THESE TAKE EFFECT WITHOUT `opentelemetry-instrument`, which is why the fleet is not exempt
+     from them — it was just unset. Verified against the installed SDK rather than assumed:
+     `PeriodicExportingMetricReader.__init__` reads OTEL_METRIC_EXPORT_INTERVAL, and the FastAPI
+     instrumentor reads OTEL_PYTHON_FASTAPI_EXCLUDED_URLS itself. The vars that genuinely ARE
+     launcher-only — OTEL_{TRACES,METRICS,LOGS}_EXPORTER and
+     OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED — are deliberately NOT copied: they live in
+     `opentelemetry.sdk._configuration`, which only the launcher runs, and the fleet already makes the
+     equivalent calls explicitly in `setup_otel`. */}}
+- name: OTEL_METRIC_EXPORT_INTERVAL
+  value: "5000"
+{{/* The probes are hit every few seconds on every pod, so on a quiet estate the health checks ARE the
+     request rate: the RED dashboard reads busy and the latency distribution is dominated by a route
+     nobody calls. */}}
+- name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS
+  value: "/livez,/readyz,/metrics"
 - name: OTEL_SERVICE_NAME
   value: {{ $svc | quote }}
 - name: OTEL_RESOURCE_ATTRIBUTES
@@ -752,7 +770,8 @@ filter deleted every crash log and every daprd line on 10 pods — measured 2026
 - { name: OTEL_METRIC_EXPORT_INTERVAL, value: "5000" }
 - { name: OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED, value: "true" }
 {{/* Don't trace the k8s probe endpoints — they're hit every 10s and bury real request spans (otel
-signals.md § Exclude noisy endpoints). Launcher-driven instrumentation → the env var is the only lever. */}}
+signals.md § Exclude noisy endpoints). The FastAPI instrumentor reads this itself, launcher or not —
+which is why the fleet carries it too. */}}
 - { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, value: "/livez,/readyz,/metrics" }
 - { name: OTEL_RESOURCE_ATTRIBUTES, value: "{{ include "rask.otelResourceAttrs" $root }}" }
 {{- end -}}
