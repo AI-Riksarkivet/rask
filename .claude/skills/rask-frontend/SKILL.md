@@ -418,6 +418,22 @@ So `make e2e` never touches the zone suites, and the zone suites never touch a r
 
 Lint is **oxlint** (`svelte/require-each-key: error`, `svelte/no-reactive-reassign: error`, via `@rsvelte/oxlint-plugin`); format is **oxfmt** with tabs, single quotes, `printWidth: 100`. The cross-zone link rule is a **vitest test**, not a lint rule — oxlint reads a `.svelte` `<script>` block, not its markup, so an anchor-attribute rule cannot live there.
 
+**`derived_inert` is UPSTREAM, and here is the evidence so nobody re-derives it.** Svelte 5.56 warns
+`Reading a derived belonging to a now-destroyed effect` when `(parent.f & (DESTROYED | INERT)) !== 0`
+in `execute_derived` — and INERT is set by `pause_children`, so ANY `{#if}` branch swap or `{#each}`
+item removal opens the window, not only a transition. Traced to bits-ui's dismissible layer:
+`watch([() => this.opts.enabled.current, () => this.opts.ref.current], …)` reads prop-boxed deriveds
+(`boxWith` → `user_derived`) whose owning component subtree is INERT while a panel closes. Identical in
+2.18.1 and 2.19.0, and NOT fixable here — the watch must read those reactively to fire at all, so the
+snapshot trick that `frontend/patches/bits-ui@2.18.1.patch` applies to the global layer maps (a real
+but minor instance, ~4 of 88 warnings) cannot be extended to it.
+
+**Do not try to locate it with `page.on('console')` or an `addInitScript` console patch.** Vite's client
+re-wraps `console.warn`, so `msg.location()` reports `@vite/client` and an init-time patch is bypassed.
+Use CDP — `page.context().newCDPSession(page)`, `Runtime.enable`, listen for `Runtime.consoleAPICalled`
+— whose `stackTrace.callFrames` are captured at the V8 level, below every wrapper. That is what
+finally named the site.
+
 Run the `svelte` MCP autofixer on **every** `.svelte` file you touched, and re-run it after each fix until it reports clean. The standing rule that gives it teeth: **a Svelte defect class found twice becomes an oxlint `error` or a zone-contract test.** Three warnings sit unfixed in `compute` today, which is what an unenforced convention looks like.
 
 ## Staying on-stack
