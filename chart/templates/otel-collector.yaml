@@ -205,6 +205,42 @@ data:
                   target_label: namespace
                 - source_labels: [__meta_kubernetes_pod_name]
                   target_label: pod
+
+            # The telemetry store's OWN health. Until 2026-08-23 nothing scraped it, and the
+            # consequence was not subtle: GreptimeDB was OOMKilled 13 times in one day (exit 137,
+            # 8Gi limit) and every surface that could have reported it is downstream of the store
+            # that was dying. No `kube_*` or `container_*` series exist anywhere in the estate —
+            # kube-state-metrics is not deployed and is not even a toggle — so there was no second
+            # path either. A store that cannot be observed cannot be alerted on, which is why this
+            # job has to land BEFORE the GreptimeDB* rules in chart/alerting/rules.yml can exist
+            # (pinned both ways by test_every_job_selector_names_a_real_scrape_job).
+            #
+            # Selector verified live: pod label app.kubernetes.io/name=greptimedb-standalone, and
+            # the HTTP port is named `http` (4000), not `metrics` — it serves /v1/otlp, /v1/sql,
+            # /v1/prometheus AND /metrics on the one port, so keying on the port NAME the way the
+            # ray-pods job does would select nothing here.
+            #
+            # Yes, this writes greptime_* series into the store it measures. That is the standard
+            # self-monitoring trade and it is the right one at this scale: the alternative is a
+            # second store for one target. It does mean R7/R9 (`process_start_time_seconds` /
+            # `up`) are the load-bearing ones — they are answered by the SCRAPER, so they still
+            # fire when the store itself is the thing that is down.
+            - job_name: greptimedb
+              scrape_interval: 30s
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces: { names: [{{ .Release.Namespace }}] }
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+                  action: keep
+                  regex: greptimedb-standalone
+                - source_labels: [__meta_kubernetes_pod_container_port_name]
+                  action: keep
+                  regex: http
+                - source_labels: [__meta_kubernetes_namespace]
+                  target_label: namespace
+                - source_labels: [__meta_kubernetes_pod_name]
+                  target_label: pod
     processors:
       memory_limiter:
         check_interval: 1s

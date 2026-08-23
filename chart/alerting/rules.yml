@@ -199,7 +199,13 @@ groups:
       #    ages out exactly when the emitting pod dies — so the alert goes silent at the moment it is
       #    most needed, and its silence is indistinguishable from health. The estate already solved this
       #    once for the scheduler (`absent(dapr_scheduler_sidecars_connected)`) and never generalised it.
-        expr: sum(rate(notifications_ingress_events_total{lance_notifications_lane="feed"}[30m])) == 0 or absent(notifications_ingress_events_total{lance_notifications_lane="feed"})
+      #
+      #    ...and then generalised it in a form the production engine REFUSES. `<expr> or absent(<expr>)`
+      #    is valid PromQL, promtool passes it, and GreptimeDB answers HTTP 400 for this one and HTTP 500
+      #    for the maintenance twin below — so from the day the absent() half was added to the day it was
+      #    split (2026-08-23) NEITHER rule could fire at all. The correct shape is the scheduler's own:
+      #    a bare absent() in its OWN rule. Pinned by test_no_alert_rule_combines_absent_with_a_set_operator.
+        expr: sum(rate(notifications_ingress_events_total{lance_notifications_lane="feed"}[30m])) == 0
         for: 30m
         labels:
           severity: warning
@@ -212,6 +218,22 @@ groups:
             in lineage's LINEAGE_SERVICE_SUBJECTS allowlist AND that the subject holds grants on the datasets
             it should see. A reconciler that is admitted but ungranted runs perfectly and reconciles zero.
             Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+      # The absence half of the rule above. Separate rule, not an `or` branch — see the note there.
+      # This is the one that survives the reconciler pod dying: `== 0` cannot fire over a vector that
+      # no longer exists, so without this the estate's most-needed alert is its quietest.
+      - alert: NotificationsReconcilerMetricsMissing
+        expr: absent(notifications_ingress_events_total{lance_notifications_lane="feed"})
+        for: 30m
+        labels:
+          severity: warning
+          service: notifications
+        annotations:
+          summary: "The notifications feed lane has stopped reporting entirely"
+          description: >-
+            No `notifications_ingress_events_total` series for the feed lane exists at all. That is not an
+            idle estate — an idle reconciler still emits a zero-valued counter. Either the pod is gone, its
+            OTLP export is broken, or the lane label changed. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
 
   # T5 — the maintenance sweep's FAILURE surface. Until 2026-08-16 this service had seven metric
   # instruments and not one counted a failure, so a dataset failing on every tick forever was
@@ -240,7 +262,8 @@ groups:
       # ABSENT IS NOT ZERO — same reasoning as the notifications reconciler above. A sweep pod that has
       # died stops emitting `compaction_runs_total` entirely, and a bare `== 0` over an empty vector
       # cannot fire, so the one thing that reclaims storage stops silently AND its alert goes quiet with it.
-        expr: sum(increase(compaction_runs_total[30m])) == 0 or absent(compaction_runs_total)
+      # The absence half is now its own rule below: GreptimeDB answers HTTP 500 to the composite form.
+        expr: sum(increase(compaction_runs_total[30m])) == 0
         for: 30m
         labels:
           severity: critical
@@ -251,6 +274,20 @@ groups:
             At a 120s cadence roughly fifteen passes should have completed. Either the Dapr cron binding
             is not delivering or every pass is dying mid-flight — compare with
             compaction_runs_started_total, whose excess over compaction_runs_total is the lost-pass count.
+
+      # The absence half. A sweep pod that has DIED emits no compaction_runs_total at all, and the
+      # `== 0` above cannot fire over a vector that does not exist.
+      - alert: MaintenanceSweepMetricsMissing
+        expr: absent(compaction_runs_total)
+        for: 30m
+        labels:
+          severity: critical
+          service: maintenance
+        annotations:
+          summary: "The maintenance sweep has stopped reporting entirely"
+          description: >-
+            No `compaction_runs_total` series exists. The sweep pod is gone or its OTLP export is broken.
+            Storage reclamation has stopped and nothing else in this file can tell you.
 
       # `SUPPORTED` is a whitelist, so a pylance upgrade that introduces a legitimate new manifest flag
       # makes the sweep refuse datasets it used to maintain — and refusals are NOT errors, so nothing
@@ -472,3 +509,90 @@ groups:
             errorMessage facet now carries the exit code instead. Reduce the stage's batch size or
             raise the head/worker memory limit.
             Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+  # T-OBS — the telemetry backend itself. Every other group in this file describes something the
+  # store can tell you about; this group is the one that tells you the store is gone. It has to be
+  # here because it cannot be anywhere else: there are no `kube_*` or `container_*` series anywhere
+  # in the estate (kube-state-metrics is not deployed and is not a toggle), so a pod that OOMKills
+  # is invisible unless something scrapes it directly.
+  #
+  # Written 2026-08-23, the day rask-greptimedb-standalone-0 was OOMKilled for the 13th time
+  # (exit 137, 8Gi limit). It had run 6d21h clean before that morning, so this is a load/state
+  # regression, not a chronic mis-size — which is exactly the shape an alert catches and a one-off
+  # limit bump does not. Nothing reported any of the 13.
+  #
+  # These depend on the `greptimedb` scrape job in chart/templates/otel-collector.yaml. That
+  # dependency is pinned in BOTH directions by test_every_job_selector_names_a_real_scrape_job:
+  # the rules cannot ship without the job, and the job cannot be deleted while the rules exist.
+  - name: lance-observability
+    rules:
+
+      # `up` and `process_start_time_seconds` are answered by the SCRAPER, not by GreptimeDB's own
+      # instrumentation, so these two still work when GreptimeDB is the thing that is broken. The
+      # greptime_* self-metrics do not have that property and are deliberately not used here.
+      - alert: GreptimeDBRestarting
+        expr: changes(process_start_time_seconds{job="greptimedb"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: observability
+        annotations:
+          summary: "GreptimeDB restarted in the last 15 minutes"
+          description: >-
+            The estate's only metrics/logs/traces store restarted. Check for OOMKill first —
+            `kubectl get pod rask-greptimedb-standalone-0 -o jsonpath='{.status.containerStatuses[0].lastState}'`
+            — exit 137 means the 8Gi limit was hit. Every dashboard and every other rule in this file
+            went blind for the duration. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+      # Fires while the store is still UP, which is the entire point — GreptimeDBRestarting only
+      # tells you afterwards. RSS, not greptime_cgroups_memory_usage_bytes: the cgroup figure
+      # includes reclaimable page cache from the disk-backed file cache and reads ~1GiB higher
+      # (measured live: cgroup 3.67GiB vs RSS 3.34GiB), so it would fire early and be tuned out.
+      #
+      # 6442450944 = 6GiB = 75% of the current 8Gi limit. This literal MUST move with
+      # greptimedb-standalone.resources.limits.memory in values.yaml — rules.yml is mounted via
+      # .Files.Get and cannot be templated, so the coupling is held by a test instead:
+      # test_the_greptimedb_memory_threshold_tracks_the_chart_limit.
+      - alert: GreptimeDBMemoryHigh
+        expr: max(process_resident_memory_bytes{job="greptimedb"}) > 6442450944
+        for: 10m
+        labels:
+          severity: warning
+          service: observability
+        annotations:
+          summary: "GreptimeDB resident memory is above 75% of its limit"
+          description: >-
+            Approaching the cgroup ceiling; an OOMKill takes the whole telemetry plane with it. The
+            in-process caches are budgeted at ~4.3GiB of the 8GiB and three limits
+            (experimental_compaction_memory_limit, scan_memory_limit, query.memory_pool_size) are
+            Unlimited, so the remainder is unbounded by configuration.
+
+      # Two rules, not `min(up{...}) == 0 or absent(up{...})`: GreptimeDB refuses the composite
+      # form outright (HTTP 500). See the note at NotificationsReconcilerStalled.
+      - alert: GreptimeDBDown
+        expr: min(up{job="greptimedb"}) == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: observability
+        annotations:
+          summary: "GreptimeDB is not answering its scrape"
+          description: >-
+            The store is down. Ingest is being dropped, not buffered — the fleet exports OTLP/HTTP
+            straight to it. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+      # The scrape job itself vanishing looks identical to a healthy quiet store unless something
+      # asserts the series EXISTS. Returns 1 today and goes quiet once the job lands.
+      - alert: GreptimeDBMetricsMissing
+        expr: absent(up{job="greptimedb"})
+        for: 10m
+        labels:
+          severity: critical
+          service: observability
+        annotations:
+          summary: "Nothing is scraping GreptimeDB at all"
+          description: >-
+            No `up{job="greptimedb"}` series exists, so GreptimeDBDown and GreptimeDBMemoryHigh are
+            both dead. Either the scrape job was removed from chart/templates/otel-collector.yaml or
+            the collector is not running. This alert is the reason their silence is not mistaken for
+            health.

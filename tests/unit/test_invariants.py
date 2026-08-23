@@ -3780,6 +3780,12 @@ _THIRD_PARTY_ALERT_GROUPS = {
     "lance-infra": "infrastructure series (NATS, CloudNativePG, RustFS) exported by their own operators",
     "dapr-control-plane": "Dapr's own control-plane metrics, emitted by the sidecar injector and placement service",
     "ray": "Ray's own metrics, exported by the Ray dashboard's Prometheus endpoint",
+    "lance-observability": (
+        "the telemetry backend's own health, from the `greptimedb` scrape job in otel-collector.yaml. "
+        "`up` and `process_start_time_seconds` are synthesised by the SCRAPER and `process_resident_memory_bytes` "
+        "comes from GreptimeDB's process exporter — no rask instrument creates any of them, and none should: "
+        "a first-party metric about the store would be written INTO the store it is reporting on"
+    ),
 }
 
 
@@ -4258,3 +4264,161 @@ def test_the_daprd_sidecar_logs_are_json_and_parsed() -> None:
         "a json_parser is present but not scoped to the daprd container. Every other stream on this node has "
         "its own shape, and an unscoped parser corrupts them — scope it with `if`."
     )
+
+
+# --------------------------------------------------------------------------------------------------
+# Alert rules must be evaluable by the engine that ACTUALLY evaluates them
+# --------------------------------------------------------------------------------------------------
+#: `make alert-rules-check` runs promtool -- PROMETHEUS's engine. Production runs vmalert against
+#: GreptimeDB's PromQL endpoint, and the two do not accept the same language. Everything below is a
+#: shape gate for the differences that have already cost the estate a rule, measured against the live
+#: store (GreptimeDB v1.1.1) at 10.43.90.225:4000/v1/prometheus/api/v1/query.
+
+
+def _alert_exprs() -> list[tuple[str, str]]:
+    """(alert name, expr) for every rule in the shipped file."""
+    rules = yaml.safe_load((REPO / "chart/alerting/rules.yml").read_text())
+    return [(rule["alert"], str(rule["expr"])) for group in rules["groups"] for rule in group.get("rules", []) if "alert" in rule]
+
+
+def _without_string_literals(expr: str) -> str:
+    """Drop quoted label values, so a matcher like `{lane=~"feed|or"}` cannot look like an operator."""
+    return re.sub(r"'[^']*'|\"[^\"]*\"", '""', expr)
+
+
+def test_no_alert_rule_combines_absent_with_a_set_operator() -> None:
+    """`X == 0 or absent(X)` is valid PromQL and GreptimeDB REFUSES it, so the rule can never fire.
+
+    Measured against the live store, both forms of the estate's own two composites:
+
+        sum(increase(compaction_runs_total[30m])) == 0 or absent(compaction_runs_total)   -> HTTP 500
+        sum(rate(notifications_ingress_events_total{...}[30m])) == 0 or absent(...)       -> HTTP 400
+
+    while each half on its own returns 200. promtool reports `SUCCESS: 23 rules found` over exactly
+    these, because Prometheus evaluates them fine -- which is the whole problem: the gate proves the
+    rules against an engine that is not the one in production.
+
+    This is a worse failure than a rule that is merely wrong. Both of these were written DELIBERATELY,
+    by someone who had understood the bug: the comments above them at rules.yml:198-201 and :240-242
+    spell out "ABSENT IS NOT ZERO", cite the DaprSchedulerMetricsMissing precedent, and explain that a
+    `== 0` over an emptied vector goes silent exactly when the emitting pod dies. The reasoning was
+    right and the expression was unevaluable, so the fix for going-silent-when-it-matters was itself
+    silent. The file's own working precedent is a bare `absent()` in its OWN rule (:366, :446).
+    """
+    offenders = []
+    for name, expr in _alert_exprs():
+        stripped = _without_string_literals(expr)
+        if "absent(" in stripped and re.search(r"\b(or|and|unless)\b", stripped):
+            offenders.append(f"{name}: {expr}")
+
+    assert not offenders, (
+        f"{len(offenders)} alert rule(s) use absent() as an operand of a set operator. GreptimeDB "
+        f"rejects the whole expression, so the rule NEVER fires and its silence is indistinguishable "
+        f"from health:\n" + "\n".join(f"  - {o}" for o in offenders) + "\n"
+        "Split it into two rules: the `== 0` condition, and a standalone `absent(...)` rule "
+        "(the shape already used at rules.yml:366 and :446)."
+    )
+
+
+def test_no_alert_rule_uses_absent_over_time() -> None:
+    """`absent_over_time` is the tempting fix for the above, and on GreptimeDB it is SILENT.
+
+    Measured: `absent_over_time(nonexistent_xyz_metric[10m])` returns `status: success` with an EMPTY
+    result, where Prometheus returns 1. So it evaluates, it is green, and it can never fire -- strictly
+    worse than the HTTP 500 it would replace, because nothing at all reports it. `absent(...)` on the
+    same non-existent metric correctly returns 1 (verified in the same session).
+    """
+    offenders = [f"{name}: {expr}" for name, expr in _alert_exprs() if "absent_over_time(" in expr]
+    assert not offenders, (
+        "absent_over_time() returns an empty vector on GreptimeDB where Prometheus returns 1, so these "
+        "rules are evaluable, green, and dead:\n" + "\n".join(f"  - {o}" for o in offenders) + "\n"
+        "Use a bare absent() in its own rule instead."
+    )
+
+
+def _scrape_job_names() -> set[str]:
+    """The `job_name:` values the OTel Collector's prometheus receiver actually declares."""
+    text = (REPO / "chart/templates/otel-collector.yaml").read_text()
+    return set(re.findall(r"^\s*-\s*job_name:\s*(\S+)\s*$", text, re.MULTILINE))
+
+
+def test_every_job_selector_names_a_real_scrape_job() -> None:
+    """A rule selecting `job="X"` where nothing scrapes X is a rule that can never fire.
+
+    The estate already has the series-level version of this gate (the phantom-metric checks above).
+    This is the TARGET-level version, and it is the one that matters for anything self-monitoring:
+    a metric name can be real and universally emitted, and the rule still be dead because no scrape
+    job attaches that `job` label. `up{job="greptimedb"}` was exactly that until the scrape job landed
+    on 2026-08-23 — the metric `up` exists estate-wide, and the selector matched nothing.
+
+    It binds both directions, which is the point: the GreptimeDB* rules cannot ship without the
+    scrape job, and the scrape job cannot be deleted while the rules that depend on it are here.
+    """
+    declared = _scrape_job_names()
+    assert declared, "parsed no job_name out of otel-collector.yaml — this check would pass vacuously"
+
+    dangling = []
+    for name, expr in _alert_exprs():
+        for job in re.findall(r'job\s*=~?\s*"([^"]+)"', expr):
+            if job not in declared:
+                dangling.append(f'{name}: job="{job}"')
+
+    assert not dangling, (
+        f"{len(dangling)} alert rule selector(s) name a scrape job that otel-collector.yaml does not "
+        f"declare, so they match nothing and can never fire:\n" + "\n".join(f"  - {d}" for d in dangling) + f"\ndeclared jobs: {sorted(declared)}"
+    )
+
+
+def test_the_greptimedb_memory_threshold_tracks_the_chart_limit() -> None:
+    """GreptimeDBMemoryHigh's byte literal must stay a sane fraction of the pod's memory limit.
+
+    rules.yml is mounted with `.Files.Get`, so it CANNOT be templated — the threshold is a hardcoded
+    literal and the limit lives in values.yaml. Nothing otherwise relates them, so raising the limit
+    to 16Gi would silently leave a warning that fires at 37% of capacity, and lowering it to 4Gi would
+    leave one that can only fire after the OOM it exists to pre-empt.
+    """
+    exprs = dict(_alert_exprs())
+    expr = exprs.get("GreptimeDBMemoryHigh")
+    assert expr, "GreptimeDBMemoryHigh is gone — delete this gate with it, do not leave it passing vacuously"
+    match = re.search(r">\s*(\d+)\s*$", expr)
+    assert match, f"GreptimeDBMemoryHigh no longer ends in a byte literal: {expr!r}"
+    threshold = int(match.group(1))
+
+    values = yaml.safe_load((REPO / "chart/values.yaml").read_text())
+    raw = values["greptimedb-standalone"]["resources"]["limits"]["memory"]
+    units = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4}
+    suffix = next((u for u in units if str(raw).endswith(u)), None)
+    assert suffix, f"unrecognised memory limit {raw!r} — teach this gate the unit rather than skipping it"
+    limit = int(str(raw)[: -len(suffix)]) * units[suffix]
+
+    ratio = threshold / limit
+    assert 0.60 <= ratio <= 0.85, (
+        f"GreptimeDBMemoryHigh fires at {threshold} bytes, which is {ratio:.0%} of the configured "
+        f"limit {raw}. Below 60% it is noise; above 85% it cannot pre-empt the OOMKill it exists for. "
+        f"Move the literal in chart/alerting/rules.yml when you move the limit in chart/values.yaml."
+    )
+
+
+def test_every_alert_rule_has_a_promtool_case() -> None:
+    """rules.yml and rules_test.yml are related by nothing, so both directions rot silently.
+
+    `promtool check rules` reports `SUCCESS: N rules found` whether or not any of them is exercised,
+    and `promtool test rules` passes a file that tests three of twenty-nine. So deleting an alert
+    together with its case leaves every gate green, and adding an alert with no case does too — the
+    second is how six rules landed untested in this very change until this gate was added.
+
+    Both directions are asserted. A case naming an alert that no longer exists is the same defect
+    wearing the other hat: it reads as coverage and exercises nothing.
+    """
+    rules = yaml.safe_load((REPO / "chart/alerting/rules.yml").read_text())
+    declared = {r["alert"] for g in rules["groups"] for r in g.get("rules", []) if "alert" in r}
+    assert declared, "parsed no alerts out of rules.yml — this check would pass vacuously"
+
+    tests = yaml.safe_load((REPO / "chart/alerting/rules_test.yml").read_text())
+    exercised = {case["alertname"] for group in tests.get("tests", []) for case in group.get("alert_rule_test", []) if "alertname" in case}
+    assert exercised, "parsed no alertname out of rules_test.yml — this check would pass vacuously"
+
+    untested = sorted(declared - exercised)
+    phantom = sorted(exercised - declared)
+    assert not untested, f"{len(untested)} alert rule(s) have no promtool case, so nothing proves they fire (or stay quiet) under any series at all: {untested}"
+    assert not phantom, f"{len(phantom)} promtool case(s) name an alert that rules.yml does not define — they read as coverage and exercise nothing: {phantom}"
