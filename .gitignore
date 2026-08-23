@@ -27,7 +27,9 @@ site/
 batches.db
 scripts/batch_ids.txt
 
-# Demo runtime endpoints (written by scripts/medallion_demo.sh; machine-specific)
+# Demo runtime endpoints (machine-specific). `make medallion-demo` no longer writes this —
+# the driver runs inside the Dagger service and reads its endpoints from the environment — but a
+# hand-run `python scripts/medallion_demo.py` against your own stack still can.
 .medallion-demo.env
 
 .localbin/

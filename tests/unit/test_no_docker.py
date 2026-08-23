@@ -118,7 +118,6 @@ _KNOWN_VIOLATIONS = {
     (".github/workflows/ci.yml", "compose"),  # the auth/dex e2e stack
     (".github/workflows/ci.yml", "run"),  # the per-zone image smoke test
     ("scripts/auth_e2e.sh", "compose"),  # ALIVE — ci.yml:591 runs it
-    ("scripts/medallion_demo.sh", "compose"),
 }
 
 _BUILD = re.compile(r"\bdocker\s+(buildx\s+)?build\b")

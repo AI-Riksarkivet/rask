@@ -325,7 +325,7 @@ embedded JSONB lineage). A zero-dependency fallback (`services/lineage/static/in
 
 ```bash
 # bring up RustFS + lineage + the SvelteKit UI (host ports overridable to avoid clashes):
-DEMO_S3_PORT=9100 DEMO_LINEAGE_PORT=8001 DEMO_WEB_PORT=5173 ./scripts/medallion_demo.sh
+make medallion-demo        # or: dagger call medallion-demo --step-delay=5 up --ports=9100:8000
 # open the live view:
 open http://localhost:5173/            # SvelteKit UI  (fallback: http://localhost:8001/ui/)
 

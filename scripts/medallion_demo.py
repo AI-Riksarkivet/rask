@@ -17,7 +17,8 @@ The flow (faithful to ``services/lineage/seed.py`` / ``docs/LINEAGE.md``):
 The object store is **RustFS** (Rust, S3-compatible) by default — the driver is storage-agnostic
 (it only speaks S3 ``storage_options``), so MinIO/Ceph/AWS work identically by changing the creds.
 
-Run (after ``scripts/medallion_demo.sh`` brings up RustFS + lineage)::
+Normally run FOR you, inside the service that `make medallion-demo` starts. To drive it by hand
+against a stack you stood up yourself::
 
     uv run scripts/medallion_demo.py
 

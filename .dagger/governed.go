@@ -377,3 +377,96 @@ echo "lineage-api never became ready"; exit 1`}).
 		}).
 		Stdout(ctx)
 }
+
+// MedallionDemo is the live medallion walkthrough: real Lance datasets on RustFS, a real OpenLineage
+// event after each step, and the DAG building in front of you at http://localhost:8000/ui/.
+//
+//	make medallion-demo        # then open the UI and watch bronze -> silver -> gold appear
+//
+// It replaces `scripts/medallion_demo.sh`, which could not run: that script did
+// `compose up -d --build rustfs-perms rustfs lineage-postgres lineage-api web`, and NONE of the five
+// compose files it layers defines a `web` service — compose fails on an unknown service name. (Its
+// other apparent problem, the missing `lakehouse` bucket, is not one: the driver's `ensure_bucket()`
+// creates it.)
+//
+// SELF-DRIVING, and that is what preserves the demo. The point is watching the DAG build, not reading
+// a finished one — but Dagger services are per-invocation, so a driver running in a separate call
+// would address a different stack. Instead the service's own command starts uvicorn, waits for it,
+// and then runs the driver in the same container, so `up` gives a live UI that fills in as it goes.
+func (m *Rask) MedallionDemo(
+	ctx context.Context,
+	// +defaultPath="/"
+	// +optional
+	src *dagger.Directory,
+	// Seconds between steps — the walkthrough's pacing.
+	// +optional
+	// +default="2.5"
+	stepDelay string,
+) (*dagger.Service, error) {
+	run := runToken()
+
+	store := dag.Container().
+		From(rustfsImage).
+		WithEnvVariable("RUSTFS_ACCESS_KEY", "rustfsadmin").
+		WithEnvVariable("RUSTFS_SECRET_KEY", "rustfsadmin").
+		WithEnvVariable("RUSTFS_ADDRESS", ":9000").
+		WithMountedCache("/data", dag.CacheVolume("rask-demo-store-"+run)).
+		WithExposedPort(9000).
+		AsService()
+
+	pg := dag.Container().
+		From(ageImage).
+		WithEnvVariable("POSTGRES_USER", "lineage").
+		WithEnvVariable("POSTGRES_PASSWORD", "lineage").
+		WithEnvVariable("POSTGRES_DB", "lineage").
+		WithEnvVariable("POSTGRES_HOST_AUTH_METHOD", "trust").
+		WithFile("/docker-entrypoint-initdb.d/10-age.sql", src.File(".docker/lineage-init.sql")).
+		WithMountedCache("/var/lib/postgresql/data", dag.CacheVolume("rask-demo-lineage-pg-"+run)).
+		WithExposedPort(5432).
+		WithDefaultArgs([]string{"docker-entrypoint.sh", "postgres"}).
+		AsService()
+
+	if _, err := dag.Container().
+		From(ageImage).
+		WithServiceBinding("lineage-postgres", pg).
+		WithExec([]string{"sh", "-c", "until pg_isready -h lineage-postgres -U lineage -d lineage; do sleep 1; done"}).
+		Sync(ctx); err != nil {
+		return nil, err
+	}
+
+	return m.Image(src, "rest-catalog", "", "", "", nil).
+		WithServiceBinding("lineage-postgres", pg).
+		WithServiceBinding("rustfs", store).
+		WithEnvVariable("LINEAGE_DATABASE_URL", "postgresql://lineage:lineage@lineage-postgres:5432/lineage").
+		WithEnvVariable("LINEAGE_GRAPH", "lineage").
+		// The demo overlay's own settings: the lineage service reads the same store the driver writes.
+		WithEnvVariable("LINEAGE_DEMO_DATA_ENABLED", "true").
+		WithEnvVariable("LINEAGE_S3_ENDPOINT", "http://rustfs:9000").
+		WithEnvVariable("LINEAGE_S3_ACCESS_KEY_ID", "rustfsadmin").
+		WithEnvVariable("LINEAGE_S3_SECRET_ACCESS_KEY", "rustfsadmin").
+		WithEnvVariable("LINEAGE_S3_REGION", "us-east-1").
+		WithEnvVariable("LINEAGE_S3_BUCKET", "lakehouse").
+		// What the driver reads. The script exported the same set from the host.
+		WithEnvVariable("S3_ENDPOINT", "http://rustfs:9000").
+		WithEnvVariable("S3_ACCESS_KEY", "rustfsadmin").
+		WithEnvVariable("S3_SECRET_KEY", "rustfsadmin").
+		WithEnvVariable("S3_REGION", "us-east-1").
+		WithEnvVariable("S3_BUCKET", "lakehouse").
+		WithEnvVariable("LINEAGE_URL", "http://localhost:8000").
+		WithEnvVariable("STEP_DELAY", stepDelay).
+		WithDirectory("/srv/scripts", src.Directory("scripts")).
+		WithExposedPort(8000).
+		// The image's baked HEALTHCHECK probes the CATALOG's port 2333 — see lineageService above.
+		WithDockerHealthcheck(
+			[]string{"python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/livez').read()"},
+			dagger.ContainerWithDockerHealthcheckOpts{Interval: "5s", Timeout: "3s", StartPeriod: "60s", Retries: 30},
+		).
+		WithDefaultArgs([]string{"sh", "-c", `
+uvicorn lineage.main:app --host 0.0.0.0 --port 8000 &
+until python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/livez')" 2>/dev/null; do sleep 1; done
+echo "== UI is live at http://localhost:8000/ui/ — the DAG builds as the driver runs =="
+python /srv/scripts/medallion_demo.py || echo "driver exited non-zero"
+echo "== walkthrough complete — the stack stays up so you can explore it =="
+wait`}).
+		AsService(), nil
+}

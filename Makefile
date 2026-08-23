@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-lanes notifications-rig audit tracker-postgres smoke-rustfs rustfs-lifecycle auth-chain governance-chain go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-lanes notifications-rig audit tracker-postgres smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
 
 help:
 	@echo "Targets:"
@@ -536,6 +536,21 @@ auth-chain: ## Dex + OpenFGA authorization chain e2e (app-side tuple seeding)
 # what the tests prove.
 governance-chain: ## Governance e2e — authz + provenance authorship + lineage (add --demo for the walkthrough)
 	dagger call governance-chain
+
+# The live medallion walkthrough: real Lance datasets on RustFS, a real OpenLineage event per step,
+# and the DAG building in front of you. Ctrl-C stops it.
+#
+# It replaced `scripts/medallion_demo.sh`, which COULD NOT RUN: that script did
+# `compose up ... web`, and none of the five compose files it layered defines a `web` service, so
+# compose failed on an unknown service name. Nobody had run this successfully in a long time.
+#
+# Self-driving on purpose. The point is watching the DAG build rather than reading a finished one, and
+# Dagger services are per-invocation — a driver in a separate call would address a different stack —
+# so the service's own command starts uvicorn, waits for it, then runs the driver in the same
+# container. Pace it with `dagger call medallion-demo --step-delay=5 up --ports=8000:8000`.
+medallion-demo: ## Live medallion walkthrough — watch the DAG build at http://localhost:8000/ui/
+	@echo "UI: http://localhost:8000/ui/  (Ctrl-C to stop)"
+	dagger call medallion-demo up --ports=8000:8000
 
 # ---- local k3s ------------------------------------------------------------
 # `ingest` was MISSING here until 2026-08-06, and its absence is why the plane could never be
