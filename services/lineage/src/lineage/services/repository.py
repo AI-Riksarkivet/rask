@@ -120,9 +120,15 @@ _LIST_RUNS: Final = (
     "MATCH (r:Run) RETURN r.run_id, r.job, r.author, r.event_type, r.progress_done, r.progress_total, "
     "r.error_message, r.started_at, r.event_time, r.events_count, r.outputs, r.operation, r.source_run_id"
 )
-# Discovery / browse — the "what exists?" lists. Like _LIST_RUNS these fetch every node and are governed +
-# paginated in Python (the graph's node count is modest), so a caller can browse the estate without already
-# knowing an exact name. Tags ride the Dataset node as a comma-joined string (_tags_from splits them back).
+# Discovery / browse — the "what exists?" lists. Like _LIST_RUNS these fetch every node and are governed in
+# Python, so a caller can browse the estate without already knowing an exact name.
+#
+# PAGINATION IS NOT UNIFORM, and this comment used to claim it was. Only `/datasets` takes offset/limit
+# (`discovery.list_datasets`, capped at _MAX_LIMIT); `/runs`, `/jobs` and `/namespaces` take neither and
+# return every row the FGA filter leaves. That is currently fine — the graph's node count is modest, and
+# `/runs` measured 272 rows on the live estate 2026-08-23 — but it is a property of the data, not of the
+# code, and nothing bounds it if the estate grows. Adding a bound to the other three is a wire-contract
+# change and a decision; saying which of them have one is not. Tags ride the Dataset node as a comma-joined string (_tags_from splits them back).
 _LIST_DATASETS: Final = "MATCH (d:Dataset) RETURN d.name, d.namespace, d.tags"
 # The full linked column inventory for /search (P1 Search tier 1, 2026-07-11) — HAS_COLUMN-scoped so
 # only CURRENT inventory matches (pruned/overwritten columns don't resurrect via search).
