@@ -8,7 +8,7 @@ import {
 	LaneSpecSchema,
 	type LaneList,
 	type LaneSpec,
-} from '../lanes';
+} from '$lib/lanes';
 import { catalogJSON, parsed } from '$lib/server/doors';
 
 // Transport: the zone's CATALOG door. A lane declaration is a governed catalog record — stored

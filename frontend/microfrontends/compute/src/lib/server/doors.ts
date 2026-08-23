@@ -10,8 +10,9 @@
 
 import { getRequestEvent } from '$app/server';
 import { env } from '$env/dynamic/private';
+import type * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
-import { upstreamJSON } from '@rask/api/upstream';
+import { parsed as sharedParsed, upstreamJSON } from '@rask/api/upstream';
 
 const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 
@@ -29,4 +30,15 @@ export function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult
 		bearer: locals.session?.accessToken,
 		upstream: 'catalog',
 	});
+}
+
+/** Parse a successful wire payload; a shape drift is a 502-flavoured failure, never a cast.
+ *
+ * Added with the lane surface (the 21b17f1a overturn): execution config now lives in this zone, so
+ * this zone parses the catalog's answer rather than trusting it. */
+export function parsed<T>(
+	result: ApiResult<unknown>,
+	schema: v.GenericSchema<unknown, T>,
+): ApiResult<T> {
+	return sharedParsed(result, schema, 'catalog');
 }

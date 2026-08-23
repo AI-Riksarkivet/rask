@@ -5,8 +5,8 @@
 	import { GatedAction } from '@rask/ui/gated-action';
 	import { Input } from '@rask/ui/input';
 	import { Textarea } from '@rask/ui/textarea';
-	import { formatParams, parseParams, type LaneSpec } from '$lib/data/lanes';
-	import { deleteLane, listLanes, setLane } from '$lib/data/remote/lanes.remote';
+	import { formatParams, parseParams, type LaneSpec } from '$lib/lanes';
+	import { deleteLane, listLanes, setLane } from '$lib/remote/lanes.remote';
 
 	const lanes = $derived(listLanes());
 
