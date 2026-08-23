@@ -141,6 +141,47 @@ def _set_tag(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], ta
         dataplane.update_tag(ns, so, UpdateTableTagRequest(id=list(table_id), tag=tag, version=version))
 
 
+def gate(
+    uri: str,
+    *,
+    key_column: str,
+    version: int,
+    required_columns: Sequence[str] = (),
+    storage_options: dict[str, str] | None = None,
+) -> PublicationResult:
+    """Run the publish gate's assertions and return the verdict WITHOUT touching the tag.
+
+    A QUESTION, not a write. `published` is False on this path whatever the assertions say, and
+    nothing about the dataset changes — which is what makes it safe to ask speculatively.
+
+    It exists because the medallion cascade otherwise cannot have two properties it needs at once.
+    Under `cascadeViaPublish` the publish IS the promotion (the tag move wakes the next stage), so
+    deciding the promotion review BEFORE publishing lets the band hold but leaves the review unable to
+    name the assertions it is reviewing, while publishing first preserves those names but has already
+    promoted. Separating the verdict from the act dissolves that: a caller asks "would this pass, and
+    is it unusual?", and only then decides to publish.
+
+    The same `assert_quality` call the real publish makes, on the same pinned `version` — a gate that
+    answered differently from the publish would be worse than no gate, because a caller would trust it.
+    """
+    assertions = assert_quality(
+        uri,
+        storage_options or {},
+        key_column=key_column,
+        required_columns=tuple(required_columns),
+        version=version,
+    )
+    failed = [a.assertion for a in assertions if not a.success]
+    return PublicationResult(
+        table=uri,
+        published=False,
+        from_version=None,
+        to_version=version,
+        assertions=list(assertions),
+        reason=f"gate only: {', '.join(failed)}" if failed else None,
+    )
+
+
 def publish(
     ns: LanceNamespace,
     storage_options: dict[str, str],
