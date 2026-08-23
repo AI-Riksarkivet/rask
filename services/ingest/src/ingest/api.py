@@ -46,6 +46,7 @@ from ingest.runs import (
 )
 from ingest.sizing import IngestSizing, SizingRefused, resolve
 from ingest.sources import SourceDescriptor, SourceSpec, describe_sources, registered_kinds
+from service_kit.exceptions import ValidationError
 
 
 logger = logging.getLogger(__name__)
@@ -373,7 +374,43 @@ async def create_ingest(
     # that project rather than a configured one — authorization scope must equal write scope, or an
     # admin of project A passes the gate while the rows land in project B.
     originator = await authorize_ingest(request, settings, body.project, dapr_api_token, authorization, dapr_caller_app_id)
+    await _refuse_unusable_source(body)
     return await dispatch_run(body, response, store=store, starter=starter, idempotency_key=idempotency_key, originator=originator)
+
+
+async def _refuse_unusable_source(body: IngestRequest) -> None:
+    """Build the source HERE, so a refusal reaches the caller instead of a run record.
+
+    Two docstrings already promised this and nothing delivered it. `LanceFragmentSource.probe` calls
+    itself "the ACCEPT-time half of the plan's second guard … refused while the caller is still
+    holding the request", and `_lance_append` repeats it — but `build_source` was called in exactly
+    ONE place, `workflow.py`'s enumerate activity, which runs long after this door has answered
+    202. So every refusal was asynchronous: the caller got an accepted run id, and the reason
+    surfaced later inside `errors.run`.
+
+    That is not merely a worse message. `ensure_dataset` (workflow.py:473) provisions the target
+    table BEFORE enumerate (workflow.py:963) reaches the guards, so a request refused for a SECURITY
+    reason had already created a table. Measured 2026-08-23: a `lance-append` naming
+    `s3://lance-catalog/...` — the governed-tier refusal — came back 202 ACCEPTED and left
+    `acme-bronze$should_refuse` registered as an empty dataset at version 1.
+
+    Only ValueError becomes a 400. That is every guard (unknown kind, outside the confinement root,
+    catalog-governed, and lance's own "Dataset … was not found") and nothing else: a transient S3
+    failure raises OSError and must stay a retryable run-time fault rather than being reported to
+    the caller as a bad request.
+
+    Off the loop, like the OIDC verify above it: building a source opens the dataset, and for an S3
+    URI that is a network round trip that would otherwise stall every in-flight request in the pod.
+    """
+    from ingest.adapters import register_builtin_sources
+    from ingest.sources import SourceSpec, build_source
+
+    register_builtin_sources()
+    spec = SourceSpec(kind=body.kind, project=body.project, dataset=body.dataset, options=body.options)
+    try:
+        await asyncio.to_thread(build_source, spec)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from None
 
 
 @router.get("/ingests", response_model=RunListResponse)
