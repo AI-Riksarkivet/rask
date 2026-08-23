@@ -11,30 +11,25 @@ cross-cutting rules — is `docs/architecture/ingest-and-tier-movement.md`.
 
 ---
 
+## Landed (2026-08-23)
+
+**1b — the `lance-append` source kind (`8e2da00a`).** Built with all three guards. The unit grain
+changed during the build: the plan said "a bounded row range", and `lance_sdk.md` refuses it —
+offsets "are not stable" across versions, so an offset-keyed unit would re-land a table's whole tail
+after any early delete, which is the duplication the anti-join exists to prevent. `file_format.md`
+gives the stable grain (fragment ids are reserved and monotonic), so the unit is a FRAGMENT and the
+payload is its rows as Arrow IPC.
+
+**1c — the incremental cron trigger (`e629e2cc`).** Landed after `RASK_INGEST_INCREMENTAL_MAX_ROWS`
+existed, which was the ordering the plan called for: a fresh idempotency key per tick, sharing
+`dispatch_run` with the route so the poll and the manual call cannot drift.
+
+**2 — the frontend `merge_insert` proxy (`7ea1b7d8`).** The zone-side proxy plus a `mergeRows` helper
+on `requestBytes`, which also dropped the BFF-JSON residual ceiling 13 -> 12.
+
+---
+
 ## Ruled: deferred, with the reason
-
-**1b — the `lance-append` source kind, and its three guards.** Deferred as a feature; the guards go
-with it, since a guard for a kind that does not exist is unreachable code. What 1b actually wanted is
-mostly already available: `POST /v1/table/{id}/register` is the existing catalog door and does the
-whole job — parent check, native register, ownership seeding — so "an existing Lance table becomes
-governed" is solved. What is missing is the INGEST-run form: reading a bounded row range out of an
-ungoverned `.lance` and projecting it into BRONZE_SCHEMA. No workload asks for that today; the
-registered path covers the case the estate has. Its three guards land with it if it is ever built —
-refuse a source that resolves to a catalog table (naming the medallion mover, because copying between
-governed tiers is the cascade's job), refuse a schema that cannot produce BRONZE_SCHEMA at ACCEPT
-rather than hanging, and run a bronze conformance check in front of register.
-
-**1c — the cron trigger.** Deferred, and the ordering turned out to matter. Incremental ingest is
-REACHABLE today: the anti-join runs on every `POST /v1/ingests`, so what the cron adds is automation,
-not capability. Shipping the cron before the ceiling existed would have put an unbounded
-O(existing rows) read on a clock; now that `RASK_INGEST_INCREMENTAL_MAX_ROWS` exists it is safe to add
-when an operator wants it. The plan's companion note — "state plainly in the code that incremental
-ingest is a scheduled poll at the outer boundary and event-driven from bronze inward" — is recorded
-here instead, because the statement had no home while the outer boundary did not exist.
-
-**2 — the frontend `merge_insert` proxy.** Deferred. The RULING (below) is that a manual push uses
-`merge_insert`, not a raw insert, and the catalog's door already accepts it. What is missing is the
-zone-side proxy and a `mergeRows` helper — UI for an operation no surface currently offers.
 
 **3 — FIX 3, the source pin.** REFUTED rather than deferred, and this is the one to read before
 re-opening. FIX 3 says to carry the send's dataset as a catalog-qualified id so `source_pin` resolves.
@@ -48,9 +43,16 @@ registry id to catalog id, or carries a second field — both depend on whether 
 catalog node at all, which was never established. Pinned by
 `services/annotator/tests/test_item_source_where_is_the_media_registry_key.py`.
 
-**4 — make `table_published` the single cascade trigger.** BLOCKED, not deferred. The mechanism
-exists behind `medallion.cascadeViaPublish` and the chart says "it should die once every estate runs
-on it", but flipping it is a live-estate change against a cluster whose tiers are not provisioned —
-the same blocker as tier provisioning. Retiring the lane-matching guards is the same change and the
-same blocker. See `docs/architecture/medallion-cascade.md` for why BOTH cascade heads must fire
+**4 — make `table_published` the single cascade trigger.** Still open, and its STATED blocker is
+gone: it read "a cluster whose tiers are not provisioned", and the tiers were provisioned 2026-08-23
+(`acme-bronze` / `acme-silver$features` / `acme-gold$catalog`, seed `converged=7 created=25 failed=0`).
+`medallion.cascadeViaPublish` is also already `true` in the deployed values, so the mechanism is not
+merely available, it is ON in this estate.
+
+What actually remains is the part the old wording hid behind the provisioning excuse: retiring the
+lane-matching guards is a change to every estate, and it must not be made until ONE cascade has been
+driven end to end through the publish head and observed reaching gold. That drive is blocked today on
+reading `APP_API_TOKEN` (`POST /produce` answers 403 without it, verified 2026-08-23). So this is
+blocked on a proof, not on provisioning — a narrower and more honest statement than the one it
+replaces. See `docs/architecture/medallion-cascade.md` for why BOTH cascade heads must fire
 meanwhile; that is a ruling, not an interim state.
