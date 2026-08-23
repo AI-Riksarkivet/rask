@@ -71,11 +71,13 @@ _CONTAINER_EXEMPT = {
 #: deletes, which is the same argument this file already makes for not flagging `docker inspect`. The
 #: file plus the verb is stable under refactors and still changes when a violation is added, removed,
 #: or moved to another file.
-#: SHRANK 2026-08-22: `rustfs-up`/`rustfs-down` are gone, replaced by `dagger call smoke-rustfs`. The
-#: ratchet is what caught the stale entry — it failed with "fixed (delete from _KNOWN_VIOLATIONS)"
-#: rather than quietly passing on a roster that had stopped describing the estate.
+#: SHRANK TWICE on 2026-08-22, from three sites to one. `rustfs-up`/`rustfs-down` became
+#: `dagger call smoke-rustfs`; `notifications-rig-up`/`-down` became `make notifications-rig` over two
+#: Dagger services. **The Makefile now contains no docker at all.** Both times the ratchet is what
+#: caught the stale entry — it failed with "fixed (delete from _KNOWN_VIOLATIONS)" rather than passing
+#: on a roster that had stopped describing the estate, which is the half of a ratchet people forget to
+#: build.
 _KNOWN_VIOLATIONS = {
-    ("Makefile", "compose"),  # notifications-rig-up — Mailpit + a counting Slack sink
     (".github/workflows/ci.yml", "run"),  # the per-zone image smoke test
 }
 

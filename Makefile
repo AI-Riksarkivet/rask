@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-lanes notifications-rig-up notifications-rig-down audit tracker-postgres smoke-rustfs go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-lanes notifications-rig audit tracker-postgres smoke-rustfs go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
 
 help:
 	@echo "Targets:"
@@ -161,13 +161,21 @@ notifications-lanes: ## The five notification-lane drives vs a deployed estate (
 		echo "== $$drive"; ORIGIN=$(ORIGIN) node "$$drive" || exit 1; \
 	done
 
-notifications-rig-up: ## Mailpit + a counting Slack sink, for the channel idempotency drive
-	docker compose -f .docker/docker-compose.notifications-channels.yml up -d
+# ONE command for both halves, and Ctrl-C tears both down — `trap 'kill 0'` kills the process group,
+# so nothing is left running the way a detached `compose up -d` could be. That was the last
+# `docker compose` in the Makefile.
+#
+# Foreground is right for THIS rig specifically: it is a thing you poke at (open the Mailpit UI, curl
+# the ledger, redeliver, look again), so seeing it run and killing it with Ctrl-C is the workflow
+# rather than a cost. The rustfs smoke went the other way and became a single non-interactive
+# `dagger call smoke-rustfs`, because it is a script with an answer.
+notifications-rig: ## Mailpit + a counting Slack sink for the channel idempotency drive (Ctrl-C stops both)
 	@echo "Mailpit UI  : http://localhost:8025"
 	@echo "Slack ledger: curl -s localhost:9099/deliveries | jq"
-
-notifications-rig-down: ## tear the channel verify rig down
-	docker compose -f .docker/docker-compose.notifications-channels.yml down -v
+	@trap 'kill 0' INT TERM EXIT; \
+	  dagger call notifications-mailpit up --ports=1025:1025 --ports=8025:8025 & \
+	  dagger call notifications-slack-sink up --ports=9099:9099 & \
+	  wait
 
 # `promtool` is resolved, not assumed. A bare `promtool` had never been on PATH here: `make bootstrap`
 # installs it into .localbin and NOTHING prepends that to PATH — `.dagger/charts.go` asserted in a
