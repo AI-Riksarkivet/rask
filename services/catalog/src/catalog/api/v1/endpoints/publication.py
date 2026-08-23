@@ -19,6 +19,7 @@ Lance/object-store IO and runs in a threadpool, like every other Lance-touching 
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, Depends
@@ -35,6 +36,7 @@ from catalog.api.dependencies import (
 from catalog.api.fga_deps import require_relation
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier
+from catalog.core.namespace import open_dataset
 from catalog.schemas import PublishRequest, PublishResult
 from catalog.services import publication
 from service_kit.control_emit import emit_control
@@ -120,6 +122,27 @@ async def publish_table(
             token,
             relation="can_promote",
             obj=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        )
+    if body.gate_only:
+        # A QUESTION: the same assertions on the same version, tag untouched, no control event. It
+        # returns before the publish so nothing here can advance `published` by accident — a caller
+        # asking "would you accept this?" must never discover it published as a side effect.
+        candidate = await run_in_threadpool(partial(open_dataset, ns, so, segments, version=body.version))
+        verdict = await run_in_threadpool(
+            publication.gate,
+            candidate.uri,
+            key_column=body.key_column,
+            version=body.version,
+            required_columns=tuple(body.required_columns),
+            storage_options=so,
+        )
+        return PublishResult(
+            table=verdict.table,
+            published=False,
+            from_version=verdict.from_version,
+            to_version=verdict.to_version,
+            assertions=[a.model_dump() for a in verdict.assertions],
+            reason=verdict.reason,
         )
     result = await run_in_threadpool(
         publication.publish,

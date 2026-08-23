@@ -200,8 +200,16 @@ def publish_stage_output(
     app_token: str | None = None,
     service_identity: str | None = None,
     timeout_seconds: float = 30.0,
+    gate_only: bool = False,
 ) -> PublishOutcome:
     """Ask the catalog to gate `version` and, if it passes, advance the `published` tag.
+
+    With ``gate_only`` it asks for the VERDICT and nothing else: the same assertions on the same
+    version, `published` false and the tag untouched. That is what lets a caller decide a promotion
+    review BEFORE promoting — under a publish-driven cascade the tag move IS the promotion, so a
+    review that runs after it has nothing left to withhold, and one that runs before it cannot name
+    the assertions unless it can ask first. Same door and same rung either way: only a caller who
+    could publish has any business asking whether this door would accept a version.
 
     THE OTHER HALF OF REGISTERING. A commit makes the output readable; this is what makes it READY,
     and it is the catalog's operation so that every writer — this mover, a Ray job, a backfill —
@@ -222,6 +230,7 @@ def publish_stage_output(
         "key_column": key_column,
         "required_columns": list(required_columns),
         "accept_assertions": list(accept_assertions),
+        "gate_only": gate_only,
     }
     with httpx.Client(base_url=catalog_url.rstrip("/"), timeout=timeout_seconds) as client:
         try:

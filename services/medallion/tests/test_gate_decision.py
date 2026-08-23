@@ -59,21 +59,20 @@ def test_a_band_breach_holds_on_a_trigger_driven_cascade() -> None:
     assert _decide(band_reasons=("row_delta",), cascade_via_publish=False, has_pub_topic=True) is GateOutcome.HOLD
 
 
-def test_a_publish_driven_cascade_publishes_even_on_a_band_breach() -> None:
-    """The conflict, pinned so it cannot be "fixed" without deciding it.
+def test_a_band_breach_holds_even_when_publishing_drives_the_cascade() -> None:
+    """The case this file was written for, and it moved twice before settling.
 
     Under `cascade_via_publish` the publish IS the promotion: the catalog runs the assertions and its
-    tag move wakes the next stage. Holding first therefore makes the band work at the cost of the
-    catalog's verdict never reaching the review — which is exactly what
-    `test_a_refused_publish_stops_the_cascade_and_names_its_assertions` defends, because a hold that
-    cannot name its assertions cannot tell a corrupt finding from a reviewable one.
+    tag move wakes the next stage. That made two wanted properties look mutually exclusive — holding
+    first let the band act but left the review unable to name the assertions it was reviewing, while
+    publishing first kept those names and had already promoted. For a while this test asserted PUBLISH
+    and recorded the cost.
 
-    So on this path the band is deliberately SUBORDINATE, and the consequence is stated rather than
-    hidden: a publish-driven estate cannot hold an unusual-but-valid promotion today. Resolving it
-    needs a gate-only publish the catalog does not offer — assertions evaluated without moving the
-    tag — which is a catalog change, not an ordering one.
+    `publication.gate` removed the tradeoff rather than picking a side: the caller asks the catalog
+    what it WOULD say, tag untouched, and reaches this function already holding `failed_assertions`.
+    So a breach can hold, and a corrupt batch still blocks by name.
     """
-    assert _decide(band_reasons=("row_delta",), cascade_via_publish=True, has_target=True) is GateOutcome.PUBLISH
+    assert _decide(band_reasons=("row_delta",), cascade_via_publish=True, has_target=True) is GateOutcome.HOLD
 
 
 def test_a_block_outranks_a_hold() -> None:

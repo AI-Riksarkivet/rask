@@ -719,6 +719,18 @@ class PublishRequest(BaseModel):
     #: (`STRUCTURAL_ASSERTIONS`) are refused however they are named, and a non-empty list additionally
     #: requires `can_promote` — a rung ABOVE the `can_update_tag` publish itself needs.
     accept_assertions: list[str] = Field(default_factory=list)
+    #: Ask for the gate's VERDICT without publishing. The identical assertions on the identical
+    #: version, with `published` false and the tag untouched — a question, never a write.
+    #:
+    #: It exists for the cascade's promotion review. Under a publish-driven cascade the publish IS the
+    #: promotion (the tag move wakes the next stage), so a review that decides BEFORE publishing cannot
+    #: name the assertions it is reviewing, and one that decides after has already promoted. Asking
+    #: first separates the two.
+    #:
+    #: Guarded by the SAME rung as an ordinary publish, deliberately: only a caller who could publish
+    #: has any business asking whether this door would accept a version, and a cheaper rung would make
+    #: the gate a free full-scan for anyone who can read.
+    gate_only: bool = False
 
 
 class PublishResult(BaseModel):

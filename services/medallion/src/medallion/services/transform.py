@@ -25,6 +25,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 
 from dapr.aio.clients import DaprClient
@@ -650,7 +651,37 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                 previous_row_count=result.previous_row_count,
                 band=settings.promotion_review_band,
             )
+        # ASK THE CATALOG'S GATE BEFORE DECIDING — but ONLY when the band would hold. The publish IS
+        # the promotion on this path, so a review that runs after it has nothing left to withhold, and
+        # one that runs before it cannot name what it is reviewing unless it can ask. `gate_only`
+        # returns the identical assertions on the identical version with the tag untouched, which is
+        # what lets a corrupt finding block with its names intact AND an unusual-but-valid promotion be
+        # held for a person.
+        #
+        # Guarded on `band_reasons` because the probe is a FULL ASSERTION SCAN, and running it on every
+        # promotion would pay for it twice on the overwhelming majority that were never going to be
+        # held. With no breach there is nothing to distinguish, so the publish gates as it always did —
+        # one call, byte-identical to before. The second scan is bought only where it decides
+        # something: separating "unusual" from "corrupt", which is precisely the distinction the review
+        # cannot make on its own.
         failed_assertions = [a.assertion for a in assertions if not a.success] if assertions else []
+        if band_reasons and settings.cascade_via_publish and to_dataset and result is not None:
+            verdict = await run_in_threadpool(
+                partial(
+                    catalog_register.publish_stage_output,
+                    catalog_url=settings.catalog_url,
+                    table_id=to_dataset,
+                    version=result.version,
+                    key_column=settings.quality_key_column,
+                    required_columns=settings.required_column_list,
+                    token=settings.catalog_token,
+                    app_token=settings.app_api_token,
+                    service_identity=settings.catalog_service_identity,
+                    timeout_seconds=settings.publish_timeout_seconds,
+                    gate_only=True,
+                )
+            )
+            failed_assertions = list(verdict.failed_assertions)
 
         decision = gate_decision(
             failed_assertions=failed_assertions,

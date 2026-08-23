@@ -41,31 +41,26 @@ def gate_decision(
     reviewer exists — while a band breach is a question. Letting the question win would park a corrupt
     batch on an approval that should never be offered for it.
 
-    **A band HOLD outranks a trigger, but not a publish — and that is a conflict, not a preference.**
-    Where a topic drives the cascade, withholding the trigger genuinely withholds the promotion, so the
-    hold acts. Where PUBLISHING drives it, the publish IS the promotion: the catalog runs the assertions
-    and its tag move wakes the next stage. Holding first would make the band work at the cost of the
-    catalog's verdict never reaching the review — and a hold that cannot name its assertions cannot tell
-    a corrupt finding from a reviewable one, which is a property `test_cascade_via_publish.py` defends.
+    **A HOLD outranks promoting, and that ordering only became available with a gate-only publish.**
+    Under `cascade_via_publish` the publish IS the promotion — the catalog runs the assertions and its
+    tag move wakes the next stage — so for a while these two properties could not both hold: deciding
+    the review first made the band able to act but left it unable to name the assertions it was
+    reviewing, and deciding after preserved those names but had already promoted.
 
-    Both cannot hold at once without a GATE-ONLY publish the catalog does not offer: assertions
-    evaluated without moving the tag. Until that exists the band is subordinate on the publish path, and
-    the consequence is stated here rather than hidden — **a publish-driven estate cannot hold an
-    unusual-but-valid promotion.** That is a catalog change, not an ordering one.
+    `publication.gate` separates the verdict from the act. The caller asks the catalog what it WOULD
+    say, with the tag untouched, and arrives here already holding `failed_assertions`. So a corrupt
+    finding blocks with its names intact, an unusual-but-valid promotion can be withheld for a person,
+    and neither costs the other.
 
     **Otherwise the stage promotes** by whichever mechanism drives this estate, and a stage with
     neither a publish target nor a topic is terminal rather than broken.
     """
     if failed_assertions:
         return GateOutcome.BLOCK
-    # PUBLISH outranks a band HOLD, and that is a conflict rather than a preference — see the module
-    # docstring. Holding first makes the band work but stops the catalog's verdict ever reaching the
-    # review, which `test_a_refused_publish_stops_the_cascade_and_names_its_assertions` defends: a hold
-    # that cannot name its assertions cannot tell a corrupt finding from a reviewable one.
-    if cascade_via_publish and has_target:
-        return GateOutcome.PUBLISH
     if band_reasons:
         return GateOutcome.HOLD
+    if cascade_via_publish and has_target:
+        return GateOutcome.PUBLISH
     if has_pub_topic:
         return GateOutcome.TRIGGER
     return GateOutcome.NOTHING
