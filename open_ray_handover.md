@@ -4,14 +4,17 @@
 applied everything below and it has been observed working.
 
 **Who this is for:** whoever operates the KubeRay cluster at `dev-kuberay.ra.se`. You should not need
-to read `open_ray_otel.md`, the rask chart, or anything else to apply this. Each section is
+to read the rask chart or anything else to apply this. (This line used to point at
+`open_ray_otel.md`; that file was deleted 2026-08-22 once its work landed, so the pointer is gone
+rather than dangling.) Each section is
 self-contained: what to add, where, why, and how to tell it worked.
 
 ---
 
 ## Why a hand-over exists at all
 
-`chart/values.yaml:1428-1432` in the rask repo says it plainly:
+`chart/values.yaml:1501` in the rask repo says it plainly (the line number has drifted before — the
+value is `ray.dashboardUrl`, which is the durable way to find it):
 
 > *The Ray dashboard `compute` talks to. Set => used verbatim and NO in-cluster Ray is needed; empty
 > => fall back to the in-cluster head Service, which exists only under singleTenant. **rask's Ray is
@@ -102,7 +105,8 @@ should be dropped as external-only. Today it is the third by accident rather tha
 External half: **yours**.
 
 > **VERIFIED 2026-08-23 on rask's own in-cluster KubeRay** (`rask-ray`, a RayService the chart no
-> longer renders — see *A working reference* below). The scrape job works exactly as written here:
+> longer renders — see *A working reference* ABOVE, before §1). The scrape job works exactly as
+> written here:
 >
 > ```
 > up{job="ray-pods"} = 1

@@ -228,6 +228,17 @@ data:
               # Reversible in one edit if a workload ever needs the per-operator detail — but bound the
               # store first (chart/values.yaml `greptimedb-standalone.configToml`), because this drop is
               # a cardinality economy, NOT the reason the store stopped dying.
+              #
+              # WHAT IT DOES NOT DO: reclaim anything. 113 `ray_data_*` tables are already resident in
+              # GreptimeDB and this rule only stops NEW rows; the existing ones expire on their own
+              # (`ttl = '14days'`, verified on both the logical and the physical table), and the empty
+              # table definitions outlive that. So do not read a table listing as evidence the drop is
+              # not working — read the row timestamps.
+              #
+              # ALSO UNEXERCISED, and honest about it: `ray_data_*` series only appear while a Ray Data
+              # job is running, and none has run since this landed. The keep-list was checked against
+              # the dashboards by inspection (an exact match for the only two `ray_data_` names any
+              # panel queries), not against live traffic.
               metric_relabel_configs:
                 - source_labels: [__name__]
                   regex: 'ray_data_(num_tasks_submitted|task_submission_backpressure_time)'
