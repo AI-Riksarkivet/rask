@@ -832,6 +832,45 @@ Custom status, not a metric: it is per-instance state, read by the run's own GET
 
 ---
 
+### 8.0 RESULT — measured 2026-08-23, after a lane was exercised
+
+**8d IS CANCELLED.** daprd now exports every workflow span the audit said it did not, because slice 1
+gave the sidecar an exporter and no workflow had run since. All four predicted names are live:
+
+| scope | span | kind |
+| --- | --- | --- |
+| `durabletask` | `create_orchestration\|\|<workflow>` | CLIENT |
+| `durabletask` | `orchestration\|\|<workflow>` | SERVER |
+| `durabletask` | `activity\|\|<activity>` | SERVER |
+| `durabletask` | `timer` | INTERNAL |
+
+Hand-rolling a CLIENT span at the five schedule sites would now duplicate
+`create_orchestration||<workflow>` exactly — the same waste slice 7 was cut for. The audit's "zero
+orchestration spans across 18,547,561 spans" was a PRE-EXPORTER measurement and is retired.
+
+**8e SURVIVES, NARROWED.** Status codes in the same window:
+
+```
+durabletask                            STATUS_CODE_UNSET  73    STATUS_CODE_ERROR  1
+dapr.ext.workflow._durabletask.worker  STATUS_CODE_UNSET  46    STATUS_CODE_ERROR  0
+```
+
+The single ERROR is on `orchestration||promotion_review`, message *"Activity task #13 failed: catalog
+refused the publish of 'acme-silv…"*. So daprd DOES mark the ORCHESTRATION span when an activity
+**raises** — that half needs nothing. Two halves remain, and neither can come from the sidecar:
+
+* **A RETURNED failure marks nothing, anywhere.** All three services convert failure into a returned
+  value, so daprd sees an activity that completed and every span stays UNSET. That is the common case
+  here, not the exceptional one.
+* **No span carries a domain attribute.** The SDK span holds `task.instance_id`, `task.id` and
+  `activity.name`; daprd's holds its own. Neither knows the dataset, stage, run or node — so a trace
+  answers "an activity ran" and never "which stage of which project".
+
+Do NOT add `record_exception` for the raising path (daprd owns it) and do NOT open a second span
+(three already exist on that hop).
+
+---
+
 ### 8.4 DROP — unverified, free, or not worth the cardinality
 
 - **The `timer` span, a `dapr_runtime_workflow_timer_*` metric, and any per-timer telemetry.** No such family exists upstream; the drift and lost-reminder questions are answered free by `dapr_scheduler_trigger_latency_*` and `_jobs_undelivered_total`.
