@@ -31,7 +31,11 @@ function testFiles(dir: string, acc: string[] = [], anyScript = false): string[]
 		// filter. A dedicated browser-driving tree does not: EVERY script in it drives a browser, and
 		// requiring `.spec`/`.e2e` in the name is how `@rask/ui`'s `harness/drive.mjs` kept a
 		// `networkidle` the zone-shaped matcher could never see.
-		else if (anyScript ? /\.(ts|mjs|js)$/.test(entry.name) : /\.(spec|test|e2e)\.(ts|mjs|js)$/.test(entry.name))
+		else if (
+			anyScript
+				? /\.(ts|mjs|js)$/.test(entry.name)
+				: /\.(spec|test|e2e)\.(ts|mjs|js)$/.test(entry.name)
+		)
 			acc.push(path);
 	}
 	return acc;
