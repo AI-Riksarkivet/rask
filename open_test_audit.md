@@ -1140,6 +1140,35 @@ them. Proved by mutation: replacing **both handler bodies** with `return json({d
 {status:500})` — no auth gate, no clamp, no bearer forwarding, no upstream call — left the three specs
 **54/54 green**, including one titled "the preview…".
 
+✅ **FIXED 2026-08-22.** Both handlers now have unit tests, and the audit's own mutation is the RED
+proof: replacing a handler body with `json({detail:'AUDIT MUTANT'},{status:500})` — the exact edit that
+left 54/54 green — now fails **17 tests** on the query route and **9** on insert.
+
+What the specs could not reach, because every one of them intercepts these routes at `page.route`:
+
+* **The auth gate**, and that a refusal is decided HERE — `expect(seen).toEqual([])` asserts an
+  anonymous request never leaves the BFF. On the insert route that gate is the only thing between an
+  anonymous visitor on an OIDC web tier and a writer-gated data-plane write.
+* **The auth-OFF path.** `dev-zone` and every hermetic zone suite run auth-off, so a gate keyed on
+  `session` alone rather than `authEnabled && !session` would make the preview unreachable there while
+  looking correct in prod.
+* **The confused-deputy stance**, which is the security property the route exists for. The test posts
+  `{limit, vector, filter, columns, k}` and asserts the catalog receives exactly `{k: 10, vector: {}}` —
+  a forwarded `filter` would run under the caller's bearer.
+* **The clamp**, parametrized over the cap, the floor, negatives, fractions, and four
+  non-numeric/`NaN`/`Infinity` bodies falling back to the default.
+* **The two Arrow content-types, which differ by direction** — the read answers `arrow.file`, the write
+  sends `arrow.stream`. Swapping them is a silent wire-format mismatch.
+* **Upstream status passthrough and the 502.** A writer-gated 403 must reach the UI as a 403; flattening
+  it makes a permission problem look like a bug.
+
+Two notes on how they are written. `$env/dynamic/private` is stubbed, which is also what lets the
+upstream base be asserted (the handler reads `CATALOG_API` at module scope). And oxlint's
+`no-unsafe-optional-chaining` rejected `seen[0]?.init.body` — correctly: the honest fix is not a cast
+but an `only(seen)` helper that fails with *"expected exactly one upstream call"*, so a handler that
+never called out reports THAT rather than a `TypeError` three lines later. Five lakehouse tasks green
+(lint, fmt:check, check, test, build).
+
 So the anonymous-401 confused-deputy gate, the bearer forwarding, the `MAX_PREVIEW_ROWS` clamp and the
 `{k, vector:{}}` body the catalog actually receives are asserted by nothing.
 
