@@ -89,7 +89,9 @@
 
 		{#snippet failed(err)}
 			<p class="empty">
-				<ShieldAlert size={15} /> Feed unavailable: {err instanceof Error ? err.message : String(err)}
+				<ShieldAlert size={15} /> Feed unavailable: {err instanceof Error
+					? err.message
+					: String(err)}
 			</p>
 		{/snippet}
 	</svelte:boundary>

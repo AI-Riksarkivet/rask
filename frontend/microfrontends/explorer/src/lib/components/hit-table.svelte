@@ -404,7 +404,7 @@
 							onpointercancel={onHandleUp}
 							ondblclick={(e) => onHandleReset(e, c.key)}
 							class={'hover:bg-primary/50 absolute top-0 right-0 z-[1] h-full w-1.5 cursor-col-resize transition-colors ' +
-	(drag?.key === c.key ? 'bg-primary/60' : 'bg-transparent')}
+								(drag?.key === c.key ? 'bg-primary/60' : 'bg-transparent')}
 						></button>
 					</th>
 				{/each}
@@ -435,9 +435,9 @@
 			{#each displayedHits as hit (hitKey(hit))}
 				<tr
 					class={'border-border/60 hover:bg-muted/60 cursor-pointer border-b ' +
-	(activeKey === hitKey(hit)
-		? 'bg-primary/15 font-medium [box-shadow:inset_3px_0_0_0_var(--color-primary)]'
-		: '')}
+						(activeKey === hitKey(hit)
+							? 'bg-primary/15 font-medium [box-shadow:inset_3px_0_0_0_var(--color-primary)]'
+							: '')}
 					onclick={() => onselect?.(hit)}
 				>
 					{#each cols as c (c.key)}
@@ -457,23 +457,23 @@
 									type="button"
 									disabled={failed}
 									title={failed
-	? 'Audio unavailable — media failed to load'
-	: playing
-		? 'Pause'
-		: `Play ${fmtTime(clipStart)}–${fmtTime(clipEnd)}`}
+										? 'Audio unavailable — media failed to load'
+										: playing
+											? 'Pause'
+											: `Play ${fmtTime(clipStart)}–${fmtTime(clipEnd)}`}
 									aria-label={playing ? 'Pause clip' : 'Play clip'}
 									aria-pressed={playing}
 									onclick={(e) => {
-	e.stopPropagation(); // don't also select the row
-	audioPreview.toggle({
-		key: rowKey,
-		docId: view.docId(hit),
-		start: clipStart,
-		end: clipEnd,
-	});
-}}
+										e.stopPropagation(); // don't also select the row
+										audioPreview.toggle({
+											key: rowKey,
+											docId: view.docId(hit),
+											start: clipStart,
+											end: clipEnd,
+										});
+									}}
 									class={'enabled:hover:bg-muted enabled:hover:text-foreground inline-flex size-6 items-center justify-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40 ' +
-	(playing ? 'text-primary' : 'text-muted-foreground')}
+										(playing ? 'text-primary' : 'text-muted-foreground')}
 								>
 									{#if playing}
 										<Pause class="size-3.5" />
@@ -490,7 +490,7 @@
 									alt=""
 									class="bg-muted h-9 w-16 rounded-md object-cover"
 									onerror={(e) =>
-	((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
+										((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
 								/>
 							</td>
 						{:else if c.key === 'text'}
@@ -508,7 +508,7 @@
 							{@const wraps = wrap && wrapKeys.has(c.key)}
 							<td
 								class={'text-muted-foreground max-w-[28rem] px-3 py-1.5 align-top ' +
-	(wraps ? 'break-words whitespace-normal' : 'truncate whitespace-nowrap')}
+									(wraps ? 'break-words whitespace-normal' : 'truncate whitespace-nowrap')}
 								style={w !== undefined ? `max-width:${w}px` : undefined}
 								title={c.render(hit)}
 							>

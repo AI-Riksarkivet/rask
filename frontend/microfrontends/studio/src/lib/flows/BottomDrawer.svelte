@@ -218,7 +218,9 @@
 					>
 						{#each logs.visible as e (e.seq)}
 							<div class="flex gap-2">
-								<span class="text-muted-foreground/60 shrink-0">{e.at.toTimeString().slice(0, 8)}</span>
+								<span class="text-muted-foreground/60 shrink-0"
+									>{e.at.toTimeString().slice(0, 8)}</span
+								>
 								{#if e.nodeId}
 									<span class="text-primary/80 shrink-0">{e.nodeId}</span>
 								{/if}
@@ -227,7 +229,9 @@
 						{/each}
 						{#if logs.visible.length === 0}
 							<p class="text-muted-foreground/70">
-								{logs.entries.length ? 'No problems logged.' : 'Run the flow — every call lands here.'}
+								{logs.entries.length
+									? 'No problems logged.'
+									: 'Run the flow — every call lands here.'}
 							</p>
 						{/if}
 					</div>
@@ -301,7 +305,8 @@
 						<div class="flex-1"></div>
 						{#if exported.droppedImageNodes.length}
 							<span class="text-[0.65rem] text-amber-600 dark:text-amber-400">
-								image node(s) {exported.droppedImageNodes.join(', ')} omitted — an upload lives in the browser
+								image node(s) {exported.droppedImageNodes.join(', ')} omitted — an upload lives in the
+								browser
 							</span>
 						{/if}
 						<button

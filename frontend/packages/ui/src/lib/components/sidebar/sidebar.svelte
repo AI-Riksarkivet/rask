@@ -25,9 +25,9 @@
 {#if collapsible === 'none'}
 	<div
 		class={cn(
-	'bg-sidebar text-sidebar-foreground flex h-full w-(--sidebar-width) flex-col',
-	className,
-)}
+			'bg-sidebar text-sidebar-foreground flex h-full w-(--sidebar-width) flex-col',
+			className,
+		)}
 		bind:this={ref}
 		{...restProps}
 	>
@@ -41,9 +41,9 @@
 			data-slot="sidebar"
 			data-mobile="true"
 			class={cn(
-	'bg-sidebar text-sidebar-foreground w-(--sidebar-width) p-0 [&>button]:hidden',
-	className,
-)}
+				'bg-sidebar text-sidebar-foreground w-(--sidebar-width) p-0 [&>button]:hidden',
+				className,
+			)}
 			--sidebar-width={SIDEBAR_WIDTH_MOBILE}
 			{side}
 		>
@@ -70,30 +70,30 @@
 		<div
 			data-slot="sidebar-gap"
 			class={cn(
-	'relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear',
-	'group-data-[collapsible=offcanvas]:w-0',
-	'group-data-[side=right]:rotate-180',
-	variant === 'floating' || variant === 'inset'
-		? 'group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4)))]'
-		: 'group-data-[collapsible=icon]:w-(--sidebar-width-icon)',
-)}
+				'relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear',
+				'group-data-[collapsible=offcanvas]:w-0',
+				'group-data-[side=right]:rotate-180',
+				variant === 'floating' || variant === 'inset'
+					? 'group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4)))]'
+					: 'group-data-[collapsible=icon]:w-(--sidebar-width-icon)',
+			)}
 		></div>
 		<div
 			data-slot="sidebar-container"
 			class={cn(
-	// `lg:` (not `md:`) so the media query agrees with SHELL_COLLAPSE_BREAKPOINT — this branch
-	// only renders above it anyway, and a disagreement would leave a 768–1023px band with
-	// both an in-document sidebar and an off-canvas sheet.
-	'fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear lg:flex',
-	side === 'left'
-		? 'start-0 group-data-[collapsible=offcanvas]:start-[calc(var(--sidebar-width)*-1)]'
-		: 'end-0 group-data-[collapsible=offcanvas]:end-[calc(var(--sidebar-width)*-1)]',
-	// Adjust the padding for floating and inset variants.
-	variant === 'floating' || variant === 'inset'
-		? 'p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]'
-		: 'group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-e group-data-[side=right]:border-s',
-	className,
-)}
+				// `lg:` (not `md:`) so the media query agrees with SHELL_COLLAPSE_BREAKPOINT — this branch
+				// only renders above it anyway, and a disagreement would leave a 768–1023px band with
+				// both an in-document sidebar and an off-canvas sheet.
+				'fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear lg:flex',
+				side === 'left'
+					? 'start-0 group-data-[collapsible=offcanvas]:start-[calc(var(--sidebar-width)*-1)]'
+					: 'end-0 group-data-[collapsible=offcanvas]:end-[calc(var(--sidebar-width)*-1)]',
+				// Adjust the padding for floating and inset variants.
+				variant === 'floating' || variant === 'inset'
+					? 'p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]'
+					: 'group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-e group-data-[side=right]:border-s',
+				className,
+			)}
 			{...restProps}
 		>
 			<div

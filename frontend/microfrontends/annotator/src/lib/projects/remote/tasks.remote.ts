@@ -34,19 +34,15 @@ const write = (method: 'POST' | 'PUT', path: string, body: unknown): Promise<Api
 const TaskIdArg = v.object({ taskId: v.string() });
 
 /** One task document with its own legal events. */
-export const fetchTask = query(
-	TaskIdArg,
-	async ({ taskId }): Promise<ApiResult<TaskDetail>> =>
-		parsed(await annotatorJSON(`/tasks/${taskId}`), TaskDetailSchema),
+export const fetchTask = query(TaskIdArg, async ({ taskId }): Promise<ApiResult<TaskDetail>> =>
+	parsed(await annotatorJSON(`/tasks/${taskId}`), TaskDetailSchema),
 );
 
 /** The task draft as the publish will read it. A 404 here means "not written yet" and MUST stay
  *  distinguishable from a failure — `draft-sync.ts` omits `base_revision` on 404 and aborts on
  *  anything else. */
-export const fetchDraft = query(
-	TaskIdArg,
-	async ({ taskId }): Promise<ApiResult<Draft>> =>
-		parsed(await annotatorJSON(`/tasks/${taskId}/draft`), DraftSchema),
+export const fetchDraft = query(TaskIdArg, async ({ taskId }): Promise<ApiResult<Draft>> =>
+	parsed(await annotatorJSON(`/tasks/${taskId}/draft`), DraftSchema),
 );
 
 /** Fire a task transition. Every optional field rides only when the caller set it: `assignee` is the

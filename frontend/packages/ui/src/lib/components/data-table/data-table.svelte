@@ -58,9 +58,9 @@
 					{#each headerGroup.headers as header (header.id)}
 						<TablePrimitive.Head
 							class={cn(
-	'text-muted-foreground px-3 py-2 font-medium',
-	header.column.columnDef.meta?.headerClass,
-)}
+								'text-muted-foreground px-3 py-2 font-medium',
+								header.column.columnDef.meta?.headerClass,
+							)}
 						>
 							{#if !header.isPlaceholder}
 								<FlexRender
@@ -101,10 +101,10 @@
 						class={cn(onrowclick && 'cursor-pointer')}
 						onclick={onrowclick ? () => onrowclick(row.original) : undefined}
 						onkeydown={onrowclick
-	? (e: KeyboardEvent) => {
-			if (e.key === 'Enter') onrowclick(row.original);
-		}
-	: undefined}
+							? (e: KeyboardEvent) => {
+									if (e.key === 'Enter') onrowclick(row.original);
+								}
+							: undefined}
 						role={onrowclick ? 'button' : undefined}
 						tabindex={onrowclick ? 0 : undefined}
 					>

@@ -316,8 +316,8 @@
 			class="shrink-0 px-2 text-xs"
 			disabled={controller?.selectedIndex == null}
 			title={controller?.selectedIndex == null
-	? 'Select a shape, seek to where its motion changes, then add a keyframe'
-	: 'Add a keyframe for the selected object at this moment'}
+				? 'Select a shape, seek to where its motion changes, then add a keyframe'
+				: 'Add a keyframe for the selected object at this moment'}
 			data-testid="add-keyframe"
 			onclick={() => controller?.addTrackKeyframe()}
 		>

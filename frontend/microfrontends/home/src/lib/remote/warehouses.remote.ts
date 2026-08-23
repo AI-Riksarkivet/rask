@@ -53,10 +53,8 @@ const ProjectSchema = v.object({
 
 /** One tenant: its warehouses + effective admins — what `/projects/[project]` renders. Gated by the
  *  catalog (401/403/404 are all honest states the page branches on). */
-export const fetchProject = query(
-	v.string(),
-	async (project): Promise<ApiResult<ProjectSummary>> =>
-		parsed(await catalogJSON(`/v1/projects/${enc(project)}`), ProjectSchema),
+export const fetchProject = query(v.string(), async (project): Promise<ApiResult<ProjectSummary>> =>
+	parsed(await catalogJSON(`/v1/projects/${enc(project)}`), ProjectSchema),
 );
 
 /** One control event, as `/v1/events` reports it — the fields the project page renders. */

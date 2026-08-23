@@ -181,7 +181,8 @@
 								class="h-7 flex-1"
 								onkeydown={(e) => e.key === 'Enter' && detect()}
 							/>
-							<Button size="sm" disabled={!prompt.trim() || controller.saving} onclick={detect}>Run</Button
+							<Button size="sm" disabled={!prompt.trim() || controller.saving} onclick={detect}
+								>Run</Button
 							>
 						</div>
 					</div>
@@ -225,7 +226,9 @@
 						onValueChange={(value) => (controller.assistMinConfidence = value)}
 					/>
 					<span class="text-muted-foreground w-8 shrink-0 text-right text-[10px] tabular-nums">
-						{controller.assistMinConfidence === 0 ? 'off' : controller.assistMinConfidence.toFixed(2)}
+						{controller.assistMinConfidence === 0
+							? 'off'
+							: controller.assistMinConfidence.toFixed(2)}
 					</span>
 				</div>
 
@@ -247,17 +250,17 @@
 		     mask, and Done keeps the prediction and starts fresh on the next object. -->
 		<span
 			class={cn(
-	'text-muted-foreground flex items-center gap-1 text-xs',
-	controller.saving && 'animate-pulse',
-)}
+				'text-muted-foreground flex items-center gap-1 text-xs',
+				controller.saving && 'animate-pulse',
+			)}
 			data-testid="assist-armed"
 		>
 			{#if controller.saving}
 				segmenting…
 			{:else if controller.assistPoints.length > 0}
 				<span data-testid="assist-point-count">
-					{controller.assistPoints.length} point{controller.assistPoints.length === 1 ? '' : 's'} — click to
-					refine
+					{controller.assistPoints.length} point{controller.assistPoints.length === 1 ? '' : 's'} — click
+					to refine
 				</span>
 			{:else}
 				Click or drag a box — {controller.assistProducer}
@@ -311,8 +314,8 @@
 				{/snippet}
 			</Tooltip.Trigger>
 			<Tooltip.Content class="max-w-64">
-				No model runner is deployed (MEDIA_ASSIST_URL unset) — assist returns deterministic mock shapes,
-				not model predictions.
+				No model runner is deployed (MEDIA_ASSIST_URL unset) — assist returns deterministic mock
+				shapes, not model predictions.
 			</Tooltip.Content>
 		</Tooltip.Root>
 	{/if}

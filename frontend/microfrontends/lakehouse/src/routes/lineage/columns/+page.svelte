@@ -80,8 +80,8 @@
 	{:else if !selected}
 		<div class="empty pad">
 			<p>
-				Pick a dataset above (or open one from <a href="{base}/lineage/datasets">Datasets</a> and follow “column
-				lineage”) to see how its fields were derived.
+				Pick a dataset above (or open one from <a href="{base}/lineage/datasets">Datasets</a> and follow
+				“column lineage”) to see how its fields were derived.
 			</p>
 		</div>
 	{:else}

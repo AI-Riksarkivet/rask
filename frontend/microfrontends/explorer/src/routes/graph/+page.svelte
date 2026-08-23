@@ -500,8 +500,8 @@
 					<ul class="ml-4 list-disc space-y-0.5">
 						<li><b>Search</b> an entity (top-left) or click a node → its side panel opens.</li>
 						<li>
-							The side panel lists <b>clips</b> (the 30 s moments it's mentioned — click one to play it),
-							plus <b>related</b> and <b>co-occurring</b> entities (click to re-centre).
+							The side panel lists <b>clips</b> (the 30 s moments it's mentioned — click one to play
+							it), plus <b>related</b> and <b>co-occurring</b> entities (click to re-centre).
 						</li>
 						<li>
 							<b>Cypher presets</b> / the REPL answer precise questions; results show in the
@@ -517,12 +517,13 @@
 							<b>Colour</b> = type (legend, bottom-left). Drag to pan, scroll to zoom, “Fit” to recentre.
 						</li>
 						<li>
-							The picture is for <i>navigating</i> — the precise answers live in the clips list and the Cypher/Table
-							view.
+							The picture is for <i>navigating</i> — the precise answers live in the clips list and the
+							Cypher/Table view.
 						</li>
 						<li>
-							<b>One name can be several people.</b> A bare first name like <i>“Anders”</i> is one node,
-							but the transcripts may mean different individuals — the AI links them by name only.
+							<b>One name can be several people.</b> A bare first name like <i>“Anders”</i> is one
+							node, but the transcripts may mean different individuals — the AI links them by name
+							only.
 							<b>The clips disambiguate</b>: open the node and read each clip's context.
 							<i>Full names</i> (“Göran Persson”) are unambiguous.
 						</li>
@@ -596,7 +597,9 @@
 									{t}
 								</span>
 							{/each}
-							<span class="text-muted-foreground/70">· size = mentions · click a node for clips</span>
+							<span class="text-muted-foreground/70"
+								>· size = mentions · click a node for clips</span
+							>
 						</div>
 					</div>
 				{:else if view === 'table'}
@@ -608,7 +611,8 @@
 							<table class="w-full text-left text-sm">
 								<thead class="text-muted-foreground border-border border-b">
 									<tr>
-										{#each cypherResult.columns as c (c)}<th class="px-2 py-1 font-medium">{c}</th>{/each}
+										{#each cypherResult.columns as c (c)}<th class="px-2 py-1 font-medium">{c}</th
+											>{/each}
 									</tr>
 								</thead>
 								<tbody>
@@ -637,7 +641,9 @@
 				<aside class="border-border bg-card/20 w-80 shrink-0 space-y-2 overflow-auto border-l p-3">
 					<div>
 						<p class="text-foreground text-sm font-semibold">Example questions</p>
-						<p class="text-muted-foreground text-xs">Click one to run it — results show on the left.</p>
+						<p class="text-muted-foreground text-xs">
+							Click one to run it — results show on the left.
+						</p>
 					</div>
 					{#each HELP_EXAMPLES as ex (ex.label)}
 						<button

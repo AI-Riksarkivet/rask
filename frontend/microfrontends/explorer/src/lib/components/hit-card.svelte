@@ -108,7 +108,9 @@
 					Strong match
 				</Badge>
 			{:else if band === 'possible'}
-				<Badge variant="warning" title={bandTitle} class="px-1.5 py-px text-[0.7rem]">Possible</Badge>
+				<Badge variant="warning" title={bandTitle} class="px-1.5 py-px text-[0.7rem]"
+					>Possible</Badge
+				>
 			{:else}
 				<Badge variant="outline" title={bandTitle} class="px-1.5 py-px font-mono text-[0.7rem]">
 					{voice.turn_score.toFixed(2)}
@@ -132,22 +134,22 @@
 		type="button"
 		disabled={failed}
 		title={failed
-	? 'Audio unavailable — media failed to load'
-	: playing
-		? 'Pause'
-		: `Play ${fmtTime(clipStart)}–${fmtTime(clipEnd)}`}
+			? 'Audio unavailable — media failed to load'
+			: playing
+				? 'Pause'
+				: `Play ${fmtTime(clipStart)}–${fmtTime(clipEnd)}`}
 		aria-label={playing ? 'Pause clip' : 'Play clip'}
 		aria-pressed={playing}
 		onclick={(e) => {
-	e.stopPropagation();
-	audioPreview.toggle({ key: rowKey, docId, start: clipStart, end: clipEnd });
-}}
+			e.stopPropagation();
+			audioPreview.toggle({ key: rowKey, docId, start: clipStart, end: clipEnd });
+		}}
 		class={cn(
-	'focus-visible:ring-ring inline-flex size-6 items-center justify-center rounded-md transition-opacity focus-visible:opacity-100 focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed',
-	extra,
-	playing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
-	failed && 'group-hover:opacity-40',
-)}
+			'focus-visible:ring-ring inline-flex size-6 items-center justify-center rounded-md transition-opacity focus-visible:opacity-100 focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed',
+			extra,
+			playing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+			failed && 'group-hover:opacity-40',
+		)}
 	>
 		{#if playing}
 			<Pause class="size-3.5" />
@@ -166,12 +168,12 @@
 			{onclick}
 			aria-pressed={active}
 			class={cn(
-	'bg-card flex h-full w-full flex-col overflow-hidden rounded-lg border text-left transition-all',
-	'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
-	active
-		? 'border-primary ring-primary -translate-y-0.5 shadow-md ring-2'
-		: 'border-border hover:border-primary hover:-translate-y-0.5 hover:shadow-md',
-)}
+				'bg-card flex h-full w-full flex-col overflow-hidden rounded-lg border text-left transition-all',
+				'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
+				active
+					? 'border-primary ring-primary -translate-y-0.5 shadow-md ring-2'
+					: 'border-border hover:border-primary hover:-translate-y-0.5 hover:shadow-md',
+			)}
 		>
 			<div class="bg-muted relative aspect-video w-full overflow-hidden">
 				<img
@@ -188,9 +190,9 @@
 						alt=""
 						class="border-background absolute right-1.5 bottom-1.5 h-10 w-16 rounded-md border bg-black object-cover shadow"
 						onerror={(e) => {
-	features.framesUnavailable = true;
-	(e.currentTarget as HTMLImageElement).style.display = 'none';
-}}
+							features.framesUnavailable = true;
+							(e.currentTarget as HTMLImageElement).style.display = 'none';
+						}}
 					/>
 				{/if}
 				{#if time}
@@ -241,14 +243,14 @@
 			{onclick}
 			aria-pressed={active}
 			class={cn(
-	'border-border flex w-full items-start gap-3 border-b px-3 py-2.5 text-left transition-colors',
-	'hover:bg-muted/60',
-	// ring-inset keeps the highlight inside the row's box so it survives
-	// the parent's overflow-clip; bg + thick left bar make selection
-	// unmistakable in both light and dark themes.
-	active &&
-		'bg-primary/15 ring-primary relative z-[1] shadow-[inset_4px_0_0_0_var(--color-primary)] ring-2 ring-inset',
-)}
+				'border-border flex w-full items-start gap-3 border-b px-3 py-2.5 text-left transition-colors',
+				'hover:bg-muted/60',
+				// ring-inset keeps the highlight inside the row's box so it survives
+				// the parent's overflow-clip; bg + thick left bar make selection
+				// unmistakable in both light and dark themes.
+				active &&
+					'bg-primary/15 ring-primary relative z-[1] shadow-[inset_4px_0_0_0_var(--color-primary)] ring-2 ring-inset',
+			)}
 		>
 			<div class="relative flex-none">
 				<img
@@ -265,9 +267,9 @@
 						alt=""
 						class="border-background absolute -right-0.5 -bottom-0.5 h-5 w-9 rounded-sm border bg-black object-cover"
 						onerror={(e) => {
-	features.framesUnavailable = true;
-	(e.currentTarget as HTMLImageElement).style.display = 'none';
-}}
+							features.framesUnavailable = true;
+							(e.currentTarget as HTMLImageElement).style.display = 'none';
+						}}
 					/>
 				{/if}
 			</div>

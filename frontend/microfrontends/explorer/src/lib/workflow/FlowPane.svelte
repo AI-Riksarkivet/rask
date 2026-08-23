@@ -145,53 +145,53 @@
 		isValidConnection={validate}
 		onnodeclick={(e) => graph.inspectNode(e.node.id)}
 		onnodecontextmenu={({ node, event }) => {
-	event.preventDefault();
-	menu = {
-		x: event.clientX,
-		y: event.clientY,
-		mode: 'node',
-		nodeId: node.id,
-		flow: { x: 0, y: 0 },
-	};
-}}
+			event.preventDefault();
+			menu = {
+				x: event.clientX,
+				y: event.clientY,
+				mode: 'node',
+				nodeId: node.id,
+				flow: { x: 0, y: 0 },
+			};
+		}}
 		onpanecontextmenu={({ event }) => {
-	event.preventDefault();
-	menu = {
-		x: event.clientX,
-		y: event.clientY,
-		mode: 'pane',
-		nodeId: null,
-		flow: screenToFlowPosition({ x: event.clientX, y: event.clientY }),
-	};
-}}
+			event.preventDefault();
+			menu = {
+				x: event.clientX,
+				y: event.clientY,
+				mode: 'pane',
+				nodeId: null,
+				flow: screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+			};
+		}}
 		onconnectstart={() => {
-	pendingReason = null;
-	madeConnection = false;
-	invalidMsg = null;
-}}
+			pendingReason = null;
+			madeConnection = false;
+			invalidMsg = null;
+		}}
 		onconnect={() => {
-	madeConnection = true;
-	pendingReason = null;
-}}
+			madeConnection = true;
+			pendingReason = null;
+		}}
 		onconnectend={(_event, connectionState) => {
-	// Only flash the reason if the drag actually ended over an (invalid)
-	// handle — releasing over empty pane is a legitimate cancel, stay silent.
-	if (!madeConnection && pendingReason && connectionState?.toHandle) flash(pendingReason);
-}}
+			// Only flash the reason if the drag actually ended over an (invalid)
+			// handle — releasing over empty pane is a legitimate cancel, stay silent.
+			if (!madeConnection && pendingReason && connectionState?.toHandle) flash(pendingReason);
+		}}
 		onbeforedelete={async ({ nodes }) => {
-	const feedsOthers = nodes.some((n) => graph.dependentsOf(n.id).length > 0);
-	return !feedsOthers || window.confirm('Delete node(s) that feed others downstream?');
-}}
+			const feedsOthers = nodes.some((n) => graph.dependentsOf(n.id).length > 0);
+			return !feedsOthers || window.confirm('Delete node(s) that feed others downstream?');
+		}}
 		ondelete={({ nodes, edges }) =>
-	graph.syncDeleted(
-		nodes.map((n) => n.id),
-		edges.map((e) => e.id),
-	)}
+			graph.syncDeleted(
+				nodes.map((n) => n.id),
+				edges.map((e) => e.id),
+			)}
 		onselectionchange={(p) =>
-	graph.setSelection(
-		p.nodes.map((n) => n.id),
-		p.edges.map((e) => e.id),
-	)}
+			graph.setSelection(
+				p.nodes.map((n) => n.id),
+				p.edges.map((e) => e.id),
+			)}
 	>
 		<Background />
 		<Controls />

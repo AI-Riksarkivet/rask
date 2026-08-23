@@ -162,7 +162,8 @@
 <div class="page">
 	<header>
 		<h1>Datasets</h1>
-		<span class="sub">every dataset the lineage graph knows — governed, so only what you may see</span
+		<span class="sub"
+			>every dataset the lineage graph knows — governed, so only what you may see</span
 		>
 	</header>
 
@@ -204,9 +205,9 @@
 				ariaLabel="Namespace filter"
 				placeholder="all namespaces"
 				options={[
-	{ value: '', label: 'all namespaces' },
-	...namespaces.map((ns) => ({ value: ns, label: ns })),
-]}
+					{ value: '', label: 'all namespaces' },
+					...namespaces.map((ns) => ({ value: ns, label: ns })),
+				]}
 			/>
 		</div>
 		<DataTable

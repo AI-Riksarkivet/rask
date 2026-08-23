@@ -19,7 +19,8 @@
 		</Dialog.Trigger>
 		<Dialog.Content>
 			<Dialog.Title>Confirm action</Dialog.Title>
-			<Dialog.Description>Are you sure you want to do this? It cannot be undone.</Dialog.Description>
+			<Dialog.Description>Are you sure you want to do this? It cannot be undone.</Dialog.Description
+			>
 		</Dialog.Content>
 	</Dialog.Root>
 </Story>

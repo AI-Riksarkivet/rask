@@ -69,11 +69,11 @@
 			<a
 				href={taskCanvasHref(task, projectId, base)}
 				class={cn(
-	'group relative block overflow-hidden rounded-md border transition-colors',
-	active
-		? 'border-primary ring-primary/40 ring-2'
-		: 'border-border hover:border-muted-foreground',
-)}
+					'group relative block overflow-hidden rounded-md border transition-colors',
+					active
+						? 'border-primary ring-primary/40 ring-2'
+						: 'border-border hover:border-muted-foreground',
+				)}
 				aria-current={active ? 'true' : undefined}
 				title={`item ${i + 1} of ${items.length}`}
 				data-testid="filmstrip-item"

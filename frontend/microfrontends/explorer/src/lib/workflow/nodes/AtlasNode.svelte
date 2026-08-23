@@ -46,9 +46,9 @@
 				type="button"
 				class="nodrag border-border bg-background text-foreground hover:bg-muted inline-flex items-center justify-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors"
 				onclick={(e) => {
-	e.stopPropagation();
-	openModal();
-}}
+					e.stopPropagation();
+					openModal();
+				}}
 			>
 				<MapIcon class="size-3" />
 				Open atlas

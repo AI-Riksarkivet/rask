@@ -47,16 +47,13 @@ const DeleteWarehouseSchema = v.object({
 });
 
 /** Warehouse admin reads: whatever the catalog shows this caller (any signed-in user). */
-export const fetchWarehouses = query(
-	async (): Promise<ApiResult<WarehouseRecord[]>> =>
-		parsed(await catalogJSON('/v1/warehouses'), v.array(WarehouseSchema)),
+export const fetchWarehouses = query(async (): Promise<ApiResult<WarehouseRecord[]>> =>
+	parsed(await catalogJSON('/v1/warehouses'), v.array(WarehouseSchema)),
 );
 
 /** One warehouse record — the hierarchy drill-down's warehouse page (can_get_metadata gated). */
-export const fetchWarehouse = query(
-	v.string(),
-	async (id): Promise<ApiResult<WarehouseRecord>> =>
-		parsed(await catalogJSON(`/v1/warehouses/${enc(id)}`), WarehouseSchema),
+export const fetchWarehouse = query(v.string(), async (id): Promise<ApiResult<WarehouseRecord>> =>
+	parsed(await catalogJSON(`/v1/warehouses/${enc(id)}`), WarehouseSchema),
 );
 
 /** `EstateBindingsResponse` — `{namespace: warehouse_id}` for the whole estate, in ONE catalog read.

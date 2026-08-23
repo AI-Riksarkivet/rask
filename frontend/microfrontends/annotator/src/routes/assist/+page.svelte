@@ -49,9 +49,9 @@
 			<h1 class="text-xl font-semibold">AI assistance</h1>
 		</div>
 		<p class="text-muted-foreground text-sm">
-			The model backends this zone can call to pre-fill annotations, and what each returns. Read from
-			the annotation service, which is the process that resolves and calls them — not from this pod's
-			own environment.
+			The model backends this zone can call to pre-fill annotations, and what each returns. Read
+			from the annotation service, which is the process that resolves and calls them — not from this
+			pod's own environment.
 		</p>
 	</div>
 
@@ -112,8 +112,8 @@
 			{:else}
 				No default runner (<code>MEDIA_ASSIST_URL</code>) — unregistered names are mocked.
 			{/if}
-			Endpoints are redacted by the service: presence is all a labeling surface needs, and an internal model-server
-			URL is not an annotator's to have.
+			Endpoints are redacted by the service: presence is all a labeling surface needs, and an internal
+			model-server URL is not an annotator's to have.
 		</p>
 	{/if}
 </div>

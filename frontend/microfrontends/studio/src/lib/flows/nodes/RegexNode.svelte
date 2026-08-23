@@ -19,7 +19,8 @@
 			<option value="extract">Extract matches</option>
 			<option value="replace">Replace matches</option>
 		</select>
-		<label class="text-muted-foreground mt-2 mb-1 block text-[0.7rem]" for="pat-{id}">Pattern</label>
+		<label class="text-muted-foreground mt-2 mb-1 block text-[0.7rem]" for="pat-{id}">Pattern</label
+		>
 		<input
 			id="pat-{id}"
 			class="{FIELD_CLASS} w-full font-mono"

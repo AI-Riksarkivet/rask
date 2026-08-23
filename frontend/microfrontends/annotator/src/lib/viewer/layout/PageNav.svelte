@@ -37,9 +37,9 @@
      the zoom cluster and the assist bar so the three read as one family of overlays. -->
 <nav
 	class={cn(
-	'border-border bg-card/90 text-card-foreground pointer-events-auto absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-lg border p-1 shadow-sm backdrop-blur',
-	className,
-)}
+		'border-border bg-card/90 text-card-foreground pointer-events-auto absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-lg border p-1 shadow-sm backdrop-blur',
+		className,
+	)}
 	data-testid="page-nav"
 >
 	<Button

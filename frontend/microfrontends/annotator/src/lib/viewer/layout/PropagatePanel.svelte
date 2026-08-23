@@ -91,8 +91,8 @@
 			</span>
 		</div>
 		<p class="text-muted-foreground text-[11px]">
-			The selected annotation{exemplars.length === 1 ? '' : 's'} become the few-shot examples; a batch run
-			applies the pattern across the scope and lands predictions in the review queue.
+			The selected annotation{exemplars.length === 1 ? '' : 's'} become the few-shot examples; a batch
+			run applies the pattern across the scope and lands predictions in the review queue.
 		</p>
 		<div class="flex items-center gap-1.5">
 			<select

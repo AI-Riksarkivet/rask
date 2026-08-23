@@ -44,11 +44,11 @@
 			<button
 				type="button"
 				onclick={(e) => {
-	// Don't let the click bubble to the node wrapper (would fire
-	// onnodeclick → inspectNode and clear the hit we just selected).
-	e.stopPropagation();
-	graph.selectHit(h);
-}}
+					// Don't let the click bubble to the node wrapper (would fire
+					// onnodeclick → inspectNode and clear the hit we just selected).
+					e.stopPropagation();
+					graph.selectHit(h);
+				}}
 				class="hover:bg-muted flex w-full gap-2 p-1.5 text-left transition-colors"
 			>
 				<div class="relative shrink-0">
@@ -58,15 +58,15 @@
 						loading="lazy"
 						class="bg-muted h-10 w-14 rounded-md object-cover"
 						onerror={(e) => {
-	// Many transcript chunks have no extracted frame → 404. Swap to a
-	// transparent pixel once so it shows a clean muted box, not a
-	// broken-image glyph (and never re-requests).
-	const img = e.currentTarget as HTMLImageElement;
-	if (img.dataset.fallback) return;
-	img.dataset.fallback = '1';
-	img.src =
-		'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-}}
+							// Many transcript chunks have no extracted frame → 404. Swap to a
+							// transparent pixel once so it shows a clean muted box, not a
+							// broken-image glyph (and never re-requests).
+							const img = e.currentTarget as HTMLImageElement;
+							if (img.dataset.fallback) return;
+							img.dataset.fallback = '1';
+							img.src =
+								'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+						}}
 					/>
 					<span
 						class="pointer-events-none absolute inset-0 grid place-items-center rounded-md bg-black/45 opacity-0 transition-opacity group-hover:opacity-100"
@@ -98,9 +98,9 @@
 							class="text-muted-foreground hover:text-destructive"
 							aria-label="Remove tag {tag}"
 							onclick={(e) => {
-	e.stopPropagation();
-	graph.tags.toggle(h, tag);
-}}
+								e.stopPropagation();
+								graph.tags.toggle(h, tag);
+							}}
 						>
 							<X class="size-2.5" />
 						</button>
@@ -115,15 +115,15 @@
 						bind:value={draft}
 						onclick={(e) => e.stopPropagation()}
 						onkeydown={(e) => {
-	e.stopPropagation();
-	if (e.key === 'Enter') commitAdd(h);
-	else if (e.key === 'Escape') {
-		// Clear the draft BEFORE unmounting so the blur fired by removal
-		// doesn't re-commit what was typed (Escape = cancel).
-		draft = '';
-		addingKey = null;
-	}
-}}
+							e.stopPropagation();
+							if (e.key === 'Enter') commitAdd(h);
+							else if (e.key === 'Escape') {
+								// Clear the draft BEFORE unmounting so the blur fired by removal
+								// doesn't re-commit what was typed (Escape = cancel).
+								draft = '';
+								addingKey = null;
+							}
+						}}
 						onblur={() => commitAdd(h)}
 					/>
 				{:else}
@@ -131,9 +131,9 @@
 						type="button"
 						class="border-border text-muted-foreground hover:bg-muted hover:text-foreground inline-flex items-center gap-0.5 rounded-md border border-dashed px-1 py-0.5 text-[9px]"
 						onclick={(e) => {
-	e.stopPropagation();
-	openAdd(key);
-}}
+							e.stopPropagation();
+							openAdd(key);
+						}}
 					>
 						<Plus class="size-2.5" />
 						tag

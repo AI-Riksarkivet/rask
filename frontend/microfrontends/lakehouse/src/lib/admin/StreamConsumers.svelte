@@ -133,8 +133,8 @@
 <Sheet.Root
 	open={drawerConsumer !== null}
 	onOpenChange={(o) => {
-	if (!o) drawerConsumer = null;
-}}
+		if (!o) drawerConsumer = null;
+	}}
 >
 	<Sheet.Content side="right">
 		{#if drawerConsumer}
@@ -178,8 +178,8 @@
 						No delivery activity for over 10 minutes — on an active fabric that usually means the
 						subscriber stopped reading (wedged), even if its pod looks Ready.
 					{:else if drawerConsumer.num_redelivered > 0}
-						Redeliveries are the wedge signal: the app received these messages but did not ack them in
-						time.
+						Redeliveries are the wedge signal: the app received these messages but did not ack them
+						in time.
 					{:else if drawerConsumer.num_pending > 0}
 						Backlog exists but delivery is active — pressure, not a wedge.
 					{:else}

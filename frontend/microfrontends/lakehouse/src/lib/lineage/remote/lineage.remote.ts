@@ -118,9 +118,8 @@ export const replayDlq = command(
 /** The dataset's governance record (#49): curated tags + description with their last-writer
  *  attribution. A swallowed failure is `null`, exactly as before — the panel says "unavailable"
  *  rather than showing an empty record as if the metadata were absent. */
-export const fetchGovernance = query(
-	v.string(),
-	async (name): Promise<DatasetGovernance | null> => lineage().fetchGovernance(name),
+export const fetchGovernance = query(v.string(), async (name): Promise<DatasetGovernance | null> =>
+	lineage().fetchGovernance(name),
 );
 
 const TagWrite = v.object({ name: v.string(), tag: v.string() });

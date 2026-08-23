@@ -200,9 +200,9 @@
 									aria-label="rename {f.name}"
 									disabled={colBusy}
 									onclick={() => {
-	renaming = f.name;
-	renameTo = '';
-}}>✎</button
+										renaming = f.name;
+										renameTo = '';
+									}}>✎</button
 								>
 								<button
 									class="chip-x"
@@ -210,9 +210,9 @@
 									aria-label="re-type {f.name}"
 									disabled={colBusy}
 									onclick={() => {
-	retyping = f.name;
-	retypeTo = '';
-}}>⇄</button
+										retyping = f.name;
+										retypeTo = '';
+									}}>⇄</button
 								>
 								<button
 									class="chip-x"
@@ -220,9 +220,9 @@
 									aria-label="backfill {f.name}"
 									disabled={colBusy}
 									onclick={() => {
-	backfilling = f.name;
-	backfillWhere = '';
-}}>⤵</button
+										backfilling = f.name;
+										backfillWhere = '';
+									}}>⤵</button
 								>
 								<button
 									class="chip-x"
@@ -242,9 +242,9 @@
 	<form
 		class="row addcol"
 		onsubmit={(e) => {
-	e.preventDefault();
-	runAddColumn();
-}}
+			e.preventDefault();
+			runAddColumn();
+		}}
 	>
 		<input
 			class="mono"

@@ -88,9 +88,9 @@
 <section>
 	<h2>Update / delete rows</h2>
 	<p class="mut">
-		SQL predicate over the table's columns (e.g. <span class="mono">id &gt; 3</span>). Update applies
-		the SET pairs to matching rows (empty predicate = all rows); delete removes them (predicate
-		required). Both are writer-gated.
+		SQL predicate over the table's columns (e.g. <span class="mono">id &gt; 3</span>). Update
+		applies the SET pairs to matching rows (empty predicate = all rows); delete removes them
+		(predicate required). Both are writer-gated.
 	</p>
 	<input
 		class="mono pred"
@@ -100,7 +100,12 @@
 	/>
 	{#each rowSets as s, i (i)}
 		<div class="row setpair">
-			<input class="mono" bind:value={s.column} placeholder="column" aria-label="SET column {i + 1}" />
+			<input
+				class="mono"
+				bind:value={s.column}
+				placeholder="column"
+				aria-label="SET column {i + 1}"
+			/>
 			<input
 				class="mono"
 				bind:value={s.expression}
@@ -144,7 +149,7 @@
 			</button>
 		{/if}
 		{#if rowMsg}<span class="ins-msg" class:okmsg={rowMsg.ok} class:error={!rowMsg.ok}
-		  >{rowMsg.text}</span
+			>{rowMsg.text}</span
 		>{/if}
 	</div>
 </section>

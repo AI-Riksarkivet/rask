@@ -85,8 +85,8 @@
 <!-- Escape closes (discard) — the dialog keyboard contract. -->
 <svelte:window
 	onkeydown={(e) => {
-	if (e.key === 'Escape') onCancel();
-}}
+		if (e.key === 'Escape') onCancel();
+	}}
 />
 
 <!-- Portaled to <body> (see `portal` above) so the overlay escapes the canvas
@@ -146,7 +146,9 @@
 			</span>
 			<div class="flex items-center gap-2">
 				<Button variant="ghost" size="sm" onclick={onCancel}>Cancel</Button>
-				<Button size="sm" disabled={selectionTotal === 0} onclick={confirm}>Confirm selection</Button>
+				<Button size="sm" disabled={selectionTotal === 0} onclick={confirm}
+					>Confirm selection</Button
+				>
 			</div>
 		</div>
 	</div>

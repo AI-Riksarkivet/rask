@@ -139,11 +139,11 @@
 									class={interactive ? 'cursor-pointer' : undefined}
 									onclick={() => interactive && onSelect(node.name)}
 									onkeydown={(e) => {
-	if (interactive && (e.key === 'Enter' || e.key === ' ')) {
-		e.preventDefault();
-		onSelect(node.name);
-	}
-}}
+										if (interactive && (e.key === 'Enter' || e.key === ' ')) {
+											e.preventDefault();
+											onSelect(node.name);
+										}
+									}}
 									onmouseenter={() => (hovered = node.key)}
 									onmouseleave={() => (hovered = null)}
 								>

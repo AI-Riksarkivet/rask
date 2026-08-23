@@ -76,9 +76,9 @@
 		{#each lines as line, n (line.id)}
 			<div
 				class={cn(
-	'group flex items-start gap-3 rounded-md py-0.5',
-	controller?.selectedIndex === line.index && 'bg-accent/40',
-)}
+					'group flex items-start gap-3 rounded-md py-0.5',
+					controller?.selectedIndex === line.index && 'bg-accent/40',
+				)}
 				data-testid="text-canvas-line"
 				use:trackSelection={line.index}
 			>

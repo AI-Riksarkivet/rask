@@ -21,19 +21,19 @@
 				<button
 					type="button"
 					class={`rounded px-2 py-0.5 transition ${
-	view === 'swagger'
-		? 'bg-background text-foreground'
-		: 'text-muted-foreground hover:bg-muted'
-}`}
+						view === 'swagger'
+							? 'bg-background text-foreground'
+							: 'text-muted-foreground hover:bg-muted'
+					}`}
 					onclick={() => (view = 'swagger')}>Swagger</button
 				>
 				<button
 					type="button"
 					class={`rounded px-2 py-0.5 transition ${
-	view === 'redoc'
-		? 'bg-background text-foreground'
-		: 'text-muted-foreground hover:bg-muted'
-}`}
+						view === 'redoc'
+							? 'bg-background text-foreground'
+							: 'text-muted-foreground hover:bg-muted'
+					}`}
 					onclick={() => (view = 'redoc')}>ReDoc</button
 				>
 			</div>

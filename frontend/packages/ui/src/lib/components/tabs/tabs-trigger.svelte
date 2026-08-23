@@ -16,13 +16,13 @@
 	bind:ref
 	data-slot="tabs-trigger"
 	class={cn(
-	`focus-visible:border-ring focus-visible:ring-ring/50 data-[state=active]:bg-card
+		`focus-visible:border-ring focus-visible:ring-ring/50 data-[state=active]:bg-card
 		 data-[state=active]:text-foreground inline-flex h-[calc(100%-1px)] flex-1 items-center
 		 justify-center gap-1.5 rounded-md border border-transparent px-3 py-1 text-sm font-medium
 		 whitespace-nowrap transition-[color,box-shadow] focus-visible:ring-[3px]
 		 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50
 		 data-[state=active]:shadow-sm [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0`,
-	className,
-)}
+		className,
+	)}
 	{...restProps}
 />

@@ -100,28 +100,28 @@
 	<form
 		class="row"
 		onsubmit={(e) => {
-	e.preventDefault();
-	runCreateIndex();
-}}
+			e.preventDefault();
+			runCreateIndex();
+		}}
 	>
 		<input class="mono" bind:value={ixColumn} placeholder="column" aria-label="Index column" />
 		<Select
 			bind:value={ixType}
 			ariaLabel="Index type"
 			options={[
-	...SCALAR_TYPES.map((t) => ({ value: t, label: `scalar · ${t}` })),
-	...VECTOR_TYPES.map((t) => ({ value: t, label: `vector · ${t}` })),
-]}
+				...SCALAR_TYPES.map((t) => ({ value: t, label: `scalar · ${t}` })),
+				...VECTOR_TYPES.map((t) => ({ value: t, label: `vector · ${t}` })),
+			]}
 		/>
 		{#if !ixScalar}
 			<Select
 				bind:value={ixDistance}
 				ariaLabel="Distance type"
 				options={[
-	{ value: 'cosine', label: 'cosine' },
-	{ value: 'l2', label: 'l2' },
-	{ value: 'dot', label: 'dot' },
-]}
+					{ value: 'cosine', label: 'cosine' },
+					{ value: 'l2', label: 'l2' },
+					{ value: 'dot', label: 'dot' },
+				]}
 			/>
 		{/if}
 		<button class="btn" type="submit" disabled={ixBusy || !ixColumn.trim()}>

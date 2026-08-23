@@ -490,13 +490,14 @@
 	<span class="vcell">
 		<span class="mono v">v{row.version}</span>
 		{#if row.version === currentVersion}<span class="tip" title="the table's current version"
-		  >tip</span
+			>tip</span
 		>{/if}
 		{#each row.refs as name (name)}
 			<span class="tagchip mono" title="tag {name} pins v{row.version}">{name}</span>
 		{/each}
 		{#if row.schemaChange}
-			<span class="schemadot" title="this commit changed the schema" aria-label="schema change">◆</span
+			<span class="schemadot" title="this commit changed the schema" aria-label="schema change"
+				>◆</span
 			>
 		{/if}
 	</span>
@@ -511,8 +512,8 @@
 		<span
 			class="mut"
 			title={history === null
-	? 'the commit log is unavailable — this row is the manifest only'
-	: 'the transaction file for this version could not be read'}>—</span
+				? 'the commit log is unavailable — this row is the manifest only'
+				: 'the transaction file for this version could not be read'}>—</span
 		>
 	{/if}
 {/snippet}
@@ -587,9 +588,9 @@
 		aria-label="details for v{row.version}"
 		aria-expanded={selectedVersion === row.version}
 		onclick={(e) => {
-	e.stopPropagation();
-	select(row.version);
-}}
+			e.stopPropagation();
+			select(row.version);
+		}}
 	>
 		{#if selectedVersion === row.version}<ChevronDown size={13} />{:else}<ChevronRight size={13} />{/if}
 	</button>
@@ -607,13 +608,13 @@
 	{:else if historyStatus === 404}
 		<div class="banner warn">
 			The catalog does not serve <code>/v1/table/{table}/history</code> (404) — this deployment
-			predates the endpoint. Showing the manifest list only: <em>operation</em>, <em>what changed</em> and
-			the raw transaction fields need it.
+			predates the endpoint. Showing the manifest list only: <em>operation</em>,
+			<em>what changed</em> and the raw transaction fields need it.
 		</div>
 	{:else if historyStatus === 403}
 		<div class="banner warn">
-			Denied: reading the commit log needs metadata access (<code>can_get_metadata</code>). Showing the
-			manifest list only.
+			Denied: reading the commit log needs metadata access (<code>can_get_metadata</code>). Showing
+			the manifest list only.
 		</div>
 	{:else if historyStatus === 401}
 		<div class="banner warn">Sign in to read the commit log — showing the manifest list only.</div>
@@ -672,8 +673,8 @@
 			table={logTable}
 			loading={loading && history === null && manifests.length === 0}
 			emptyMessage={rows.length === 0
-	? 'No versions — this table has no manifest the catalog can read.'
-	: 'No commits match this filter.'}
+				? 'No versions — this table has no manifest the catalog can read.'
+				: 'No commits match this filter.'}
 			onrowclick={(row) => select(row.version)}
 		>
 			{#snippet footer()}
@@ -694,9 +695,9 @@
 	{#if unattributed > 0}
 		<p class="mut legend">
 			<strong>—</strong> in <em>by whom</em> means no governed run recorded that version ({unattributed}
-			of {rows.length}): garbage collection and compaction write versions without one (the compaction
-			service records an empty author), and a write that bypassed the catalog has no author to record.
-			It is never a guess.
+			of {rows.length}): garbage collection and compaction write versions without one (the
+			compaction service records an empty author), and a write that bypassed the catalog has no
+			author to record. It is never a guess.
 		</p>
 	{/if}
 	{#if producers === null}
@@ -742,7 +743,8 @@
 						<dd class="mono">
 							{#each selected.who.others as run (run.run_id)}
 								<div>
-									{run.run_id} · {run.event_type ?? '—'} · {fmtInstant(run.event_time)} · {run.author || '—'}
+									{run.run_id} · {run.event_type ?? '—'} · {fmtInstant(run.event_time)} · {run.author ||
+										'—'}
 								</div>
 							{/each}
 						</dd>
@@ -753,7 +755,8 @@
 			<h3>Raw transaction fields</h3>
 			{#if selected.txn === null}
 				<p class="mut">
-					Not available — the commit log endpoint did not answer, so this row is the manifest entry only.
+					Not available — the commit log endpoint did not answer, so this row is the manifest entry
+					only.
 				</p>
 			{:else if rawFields(selected.txn).length === 0}
 				<p class="mut">The transaction carried no detail fields beyond its operation.</p>
@@ -808,19 +811,19 @@
 						<button
 							class="btn tiny ghost"
 							onclick={() => {
-	restoreArmed = null;
-	restoreTyped = '';
-}}>cancel</button
+								restoreArmed = null;
+								restoreTyped = '';
+							}}>cancel</button
 						>
 					{:else}
 						<button
 							class="btn tiny ghost"
 							onclick={() => {
-	restoreArmed = selected.version;
-	restoreTyped = '';
-	restoreError = null;
-	restoreNote = null;
-}}
+								restoreArmed = selected.version;
+								restoreTyped = '';
+								restoreError = null;
+								restoreNote = null;
+							}}
 						>
 							Restore v{selected.version} (creates a new version)
 						</button>
@@ -887,9 +890,9 @@
 	<form
 		class="row"
 		onsubmit={(e) => {
-	e.preventDefault();
-	runCreateBranch();
-}}
+			e.preventDefault();
+			runCreateBranch();
+		}}
 	>
 		<input
 			class="mono"
@@ -924,7 +927,9 @@
 							/>
 						</span>
 						<button class="chip-x" disabled={refBusy || !moveTo} onclick={runMoveTag}>save</button>
-						<button class="chip-x" aria-label="cancel move" onclick={() => (movingTag = null)}>×</button>
+						<button class="chip-x" aria-label="cancel move" onclick={() => (movingTag = null)}
+							>×</button
+						>
 					</span>
 				{:else}
 					<span class="chip tag mono"
@@ -935,9 +940,9 @@
 							aria-label="move tag {name}"
 							disabled={refBusy}
 							onclick={() => {
-	movingTag = name;
-	moveTo = '';
-}}>↪</button
+								movingTag = name;
+								moveTo = '';
+							}}>↪</button
 						>
 						{#if refConfirm?.kind === 'tag' && refConfirm.name === name}
 							<button
@@ -946,7 +951,9 @@
 								disabled={refBusy}
 								onclick={() => refDo(() => deleteTableTag({ table, tag: name }))}>delete?</button
 							>
-							<button class="chip-x" aria-label="cancel" onclick={() => (refConfirm = null)}>×</button>
+							<button class="chip-x" aria-label="cancel" onclick={() => (refConfirm = null)}
+								>×</button
+							>
 						{:else}
 							<button
 								class="chip-x"

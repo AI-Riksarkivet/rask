@@ -82,9 +82,9 @@
 				class="nodrag border-border bg-background text-foreground hover:bg-muted inline-flex items-center justify-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-50"
 				disabled={!canDownload}
 				onclick={(e) => {
-	e.stopPropagation();
-	exportHits(graph.tags.withTags(hits), cfg.exportFormat, new Date(), cfg.exportColumns);
-}}
+					e.stopPropagation();
+					exportHits(graph.tags.withTags(hits), cfg.exportFormat, new Date(), cfg.exportColumns);
+				}}
 			>
 				<Download class="size-3" />
 				Download {cfg.exportFormat.toUpperCase()}
@@ -96,9 +96,9 @@
 				disabled={tagSaving || (taggedCount === 0 && removedCount === 0)}
 				title="Persist the run's chunk-tags as reviewable annotation rows"
 				onclick={(e) => {
-	e.stopPropagation();
-	void saveTags();
-}}
+					e.stopPropagation();
+					void saveTags();
+				}}
 			>
 				<Tags class="size-3" />
 				Save {taggedCount || ''} tag{taggedCount === 1 ? '' : 's'} as annotations

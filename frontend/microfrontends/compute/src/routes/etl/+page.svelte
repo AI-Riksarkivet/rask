@@ -212,9 +212,9 @@
 	<Card class="mx-auto my-6 w-full max-w-2xl space-y-4 p-6">
 		<h1 class="text-lg font-semibold">Ingest a source</h1>
 		<p class="text-muted-foreground text-sm">
-			Accepts a run that harvests the source into a bronze dataset; the cascade then runs event-driven.
-			The run starts in the background — this form returns as soon as it is dispatched, and progress
-			lands in the pipeline-runs feed on the landing page.
+			Accepts a run that harvests the source into a bronze dataset; the cascade then runs
+			event-driven. The run starts in the background — this form returns as soon as it is
+			dispatched, and progress lands in the pipeline-runs feed on the landing page.
 		</p>
 
 		{#if registry.error}
@@ -315,12 +315,14 @@
 			<details class="rounded border" bind:open={showAdvanced}>
 				<summary class="cursor-pointer px-3 py-2 text-sm font-medium" data-testid="sizing-advanced">
 					Partitioning &amp; throughput
-					<span class="text-muted-foreground font-normal">(optional — deployment defaults apply)</span>
+					<span class="text-muted-foreground font-normal"
+						>(optional — deployment defaults apply)</span
+					>
 				</summary>
 				<div class="space-y-3 border-t px-3 py-3">
 					<p class="text-muted-foreground text-xs">
-						The run writes Lance fragments as it goes; these decide how big each one is and how hard the
-						source is pushed. Leave a field empty to use the deployment's value.
+						The run writes Lance fragments as it goes; these decide how big each one is and how hard
+						the source is pushed. Leave a field empty to use the deployment's value.
 					</p>
 					{#each SIZING_FIELDS as field (field.name)}
 						<label class="block space-y-1">
@@ -343,8 +345,8 @@
 				<p class="text-destructive text-sm" data-testid="sizing-error">
 					{#if badSizing.includes('Rows per fragment') && Number(sizing.fragment_rows ?? 0) >= ACK_CEILING}
 						Rows per fragment must stay under {ACK_CEILING}. Above that the drain holds more unacked
-						messages than the queue will deliver and the run hangs rather than failing — compaction is
-						what grows fragments toward Lance's larger target, not this field.
+						messages than the queue will deliver and the run hangs rather than failing — compaction
+						is what grows fragments toward Lance's larger target, not this field.
 					{:else}
 						A whole number ≥ 1, or leave empty: {badSizing.join(', ')}.
 					{/if}

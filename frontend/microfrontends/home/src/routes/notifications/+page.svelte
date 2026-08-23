@@ -96,8 +96,8 @@
 			Notifications
 		</h1>
 		<p class="text-muted-foreground mt-1 text-sm">
-			You are always told about runs you started. Watch a project to also be told about everyone else's
-			runs in it — nothing is watched by default.
+			You are always told about runs you started. Watch a project to also be told about everyone
+			else's runs in it — nothing is watched by default.
 		</p>
 	</header>
 
@@ -113,8 +113,9 @@
 			<BellOff class="text-muted-foreground mx-auto mb-2 size-5" aria-hidden="true" />
 			<p class="text-sm font-medium">We could not confirm who you are.</p>
 			<p class="text-muted-foreground mt-1 text-xs">
-				You are signed in, but the catalog did not answer with your identity, so your projects cannot be
-				listed. Signing in again will not help — this clears when the catalog is reachable.
+				You are signed in, but the catalog did not answer with your identity, so your projects
+				cannot be listed. Signing in again will not help — this clears when the catalog is
+				reachable.
 			</p>
 		</Card>
 	{:else if watches === null}
@@ -123,15 +124,16 @@
 			<BellOff class="text-muted-foreground mx-auto mb-2 size-5" aria-hidden="true" />
 			<p class="text-sm font-medium">Watching is unavailable on this stack.</p>
 			<p class="text-muted-foreground mt-1 text-xs">
-				Either you are not signed in, or the notification service is not reachable from this zone. Runs
-				you start still reach your bell.
+				Either you are not signed in, or the notification service is not reachable from this zone.
+				Runs you start still reach your bell.
 			</p>
 		</Card>
 	{:else if projects.length === 0}
 		<Card class="p-6 text-center">
 			<p class="text-sm font-medium">You are not a member of any project yet.</p>
 			<p class="text-muted-foreground mt-1 text-xs">
-				Project membership is what makes a project watchable — it gates watching, and never implies it.
+				Project membership is what makes a project watchable — it gates watching, and never implies
+				it.
 			</p>
 		</Card>
 	{:else}

@@ -91,8 +91,8 @@ const GcBoundsSchema = v.object({
 /** The catalog's own table registry (#52) — names in `<ns>$<table>` canonical form. Its route existed
  *  only because the static `[id]` branch shadowed the `/capi` catch-all for the bare list; a remote
  *  function has no such shadowing. */
-export const fetchTables = query(
-	async (): Promise<ApiResult<TablesList>> => typedAs<TablesList>(await catalogJSON('/v1/table')),
+export const fetchTables = query(async (): Promise<ApiResult<TablesList>> =>
+	typedAs<TablesList>(await catalogJSON('/v1/table')),
 );
 
 /** `TrashEntry[]` — what is SCHEDULED against one table (#75/§2.4). Today that is exactly one thing:
@@ -107,10 +107,8 @@ const TrashEntrySchema = v.object({
 });
 export type TrashEntry = v.InferOutput<typeof TrashEntrySchema>;
 
-export const fetchTableTasks = query(
-	v.string(),
-	async (table): Promise<ApiResult<TrashEntry[]>> =>
-		parsed(await catalogJSON(`/v1/table/${enc(table)}/tasks`), v.array(TrashEntrySchema)),
+export const fetchTableTasks = query(v.string(), async (table): Promise<ApiResult<TrashEntry[]>> =>
+	parsed(await catalogJSON(`/v1/table/${enc(table)}/tasks`), v.array(TrashEntrySchema)),
 );
 
 /** Recover a dropped table from the trash (#75). Owner-gated at the catalog; a 404 means the grace

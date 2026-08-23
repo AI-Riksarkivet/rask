@@ -179,13 +179,13 @@
 				size="sm"
 				class="shrink-0 px-2 text-[10px] font-medium uppercase tracking-wide"
 				title={controller.brushOptions.output === 'mask'
-	? 'Commits a raster mask (click to commit a traced polygon instead)'
-	: 'Commits a traced polygon (click to commit a raster mask instead)'}
+					? 'Commits a raster mask (click to commit a traced polygon instead)'
+					: 'Commits a traced polygon (click to commit a raster mask instead)'}
 				data-testid="brush-output"
 				onclick={() =>
-	controller.setBrushOptions({
-		output: controller.brushOptions.output === 'mask' ? 'polygon' : 'mask',
-	})}
+					controller.setBrushOptions({
+						output: controller.brushOptions.output === 'mask' ? 'polygon' : 'mask',
+					})}
 			>
 				{controller.brushOptions.output === 'mask' ? 'Mask' : 'Poly'}
 			</Button>
@@ -205,8 +205,8 @@
 						variant={controller.imageAdjusted ? 'default' : 'ghost'}
 						size="icon-sm"
 						title={controller.imageAdjusted
-	? 'Image adjustments (active — not saved with annotations)'
-	: 'Image adjustments (brightness · contrast · saturation)'}
+							? 'Image adjustments (active — not saved with annotations)'
+							: 'Image adjustments (brightness · contrast · saturation)'}
 						data-testid="image-adjust-trigger"
 					>
 						<SlidersHorizontal class="size-4" />
@@ -297,16 +297,16 @@
 		variant={controller.canSave ? 'default' : 'ghost'}
 		size="icon-sm"
 		title={controller.saveError ??
-	(controller.dirty ? 'Save to Lance (Ctrl+S)' : 'No unsaved edits')}
+			(controller.dirty ? 'Save to Lance (Ctrl+S)' : 'No unsaved edits')}
 		disabled={!controller.canSave}
 		onclick={() => controller.save()}
 	>
 		<Save
 			class={cn(
-	'size-4',
-	controller.saving && 'animate-pulse',
-	controller.saveError && 'text-destructive',
-)}
+				'size-4',
+				controller.saving && 'animate-pulse',
+				controller.saveError && 'text-destructive',
+			)}
 		/>
 	</Button>
 

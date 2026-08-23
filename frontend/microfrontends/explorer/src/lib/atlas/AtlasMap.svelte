@@ -776,11 +776,11 @@
              persisted value on remount). -->
 				<Select
 					bind:value={
-	() => crossFilter.colorBy,
-	(v) => {
-		if (colorValues.has(v)) crossFilter.colorBy = v;
-	}
-}
+						() => crossFilter.colorBy,
+						(v) => {
+							if (colorValues.has(v)) crossFilter.colorBy = v;
+						}
+					}
 					options={colorOptions}
 					ariaLabel="Colour points by"
 				/>
@@ -833,8 +833,8 @@
 									class="accent-primary w-full"
 								/>
 								<span class="text-muted-foreground/70 mt-0.5 block text-[0.7rem]">
-									How visible excluded points are — search-filtered or not in the lasso/cluster selection
-									(left = hidden).
+									How visible excluded points are — search-filtered or not in the lasso/cluster
+									selection (left = hidden).
 								</span>
 							</label>
 						</div>

@@ -111,7 +111,10 @@ test('selecting text in the surface labels a span in place — one click per cla
 	const surface = page.getByTestId('span-surface');
 
 	// Select "Dalarna" the way a person does — a real DOM selection over the rendered text (the
-	// segment holding it starts at offset 20: "​ reste till Dalarna år 1520").
+	// segment holding it starts at offset 20: "<U+200B> reste till Dalarna år 1520" — that
+	// leading zero-width space is REAL text in the fixture, not a typo here. It used to be written
+	// as the literal character, which made the comment self-demonstrating and invisible at once;
+	// oxlint 1.79 flags a literal U+200B as irregular whitespace, so it is spelled out instead.
 	await page.evaluate(() => {
 		const seg = [...document.querySelectorAll('[data-testid="span-surface"] [data-start]')].find(
 			(el) => el.textContent?.includes('Dalarna'),

@@ -135,24 +135,20 @@
 	const rows = $derived.by((): Row[] => {
 		const l = listing;
 		if (l === null) return [];
-		const folders = l.prefixes.map(
-			(p): Row => ({
-				kind: 'folder',
-				id: p,
-				name: p.slice(l.prefix.length),
-				size: -1,
-				modified: null,
-			}),
-		);
-		const objects = l.objects.map(
-			(o): Row => ({
-				kind: 'object',
-				id: o.key,
-				name: o.key.slice(l.prefix.length),
-				size: o.size,
-				modified: o.last_modified,
-			}),
-		);
+		const folders = l.prefixes.map((p): Row => ({
+			kind: 'folder',
+			id: p,
+			name: p.slice(l.prefix.length),
+			size: -1,
+			modified: null,
+		}));
+		const objects = l.objects.map((o): Row => ({
+			kind: 'object',
+			id: o.key,
+			name: o.key.slice(l.prefix.length),
+			size: o.size,
+			modified: o.last_modified,
+		}));
 		return [...folders, ...objects];
 	});
 

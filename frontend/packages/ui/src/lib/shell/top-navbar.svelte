@@ -356,7 +356,9 @@
 												{@attach warm(entry.href)}
 												class="bg-muted/40 p-3"
 											>
-												<span class="text-foreground text-sm leading-none font-medium">{entry.title}</span>
+												<span class="text-foreground text-sm leading-none font-medium"
+													>{entry.title}</span
+												>
 												<span class="text-muted-foreground text-xs leading-snug">
 													Open the {entry.title.toLowerCase()} zone.
 												</span>

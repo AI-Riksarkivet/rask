@@ -113,8 +113,8 @@
 					<CircleX class="h-5 w-5 shrink-0" />
 					<span>
 						<strong>No such run.</strong> The ingest plane has no record of
-						<span class="font-mono">{runId}</span>. Neither its accepted record nor a workflow for it
-						exists — a run that had merely lost its progress would still answer here.
+						<span class="font-mono">{runId}</span>. Neither its accepted record nor a workflow for
+						it exists — a run that had merely lost its progress would still answer here.
 					</span>
 				</p>
 			{:else if run === undefined}

@@ -253,24 +253,24 @@
 			ariaLabel="Time window"
 			placeholder="last 24 hours"
 			options={[
-	{ value: '1h', label: 'last hour' },
-	{ value: '24h', label: 'last 24 hours' },
-	{ value: '7d', label: 'last 7 days' },
-	{ value: '30d', label: 'last 30 days' },
-	{ value: 'all', label: 'all time' },
-]}
+				{ value: '1h', label: 'last hour' },
+				{ value: '24h', label: 'last 24 hours' },
+				{ value: '7d', label: 'last 7 days' },
+				{ value: '30d', label: 'last 30 days' },
+				{ value: 'all', label: 'all time' },
+			]}
 		/>
 		<Select
 			bind:value={outcome}
 			ariaLabel="Outcome filter"
 			placeholder="any outcome"
 			options={[
-	{ value: '', label: 'any outcome' },
-	{ value: 'ALLOW', label: 'ALLOW' },
-	{ value: 'DENY', label: 'DENY' },
-	{ value: 'SUCCESS', label: 'SUCCESS' },
-	{ value: 'FAILURE', label: 'FAILURE' },
-]}
+				{ value: '', label: 'any outcome' },
+				{ value: 'ALLOW', label: 'ALLOW' },
+				{ value: 'DENY', label: 'DENY' },
+				{ value: 'SUCCESS', label: 'SUCCESS' },
+				{ value: 'FAILURE', label: 'FAILURE' },
+			]}
 		/>
 		<input
 			class="mono"
@@ -295,7 +295,8 @@
 
 	{#if unauthorized}
 		<div class="empty">
-			<ShieldAlert size={15} /> <a href={loginHref} data-sveltekit-reload>Sign in</a> to view the audit trail.
+			<ShieldAlert size={15} /> <a href={loginHref} data-sveltekit-reload>Sign in</a> to view the audit
+			trail.
 		</div>
 	{:else if forbidden}
 		<div class="empty">
@@ -321,8 +322,8 @@
 <Sheet.Root
 	open={drawerEvent !== null}
 	onOpenChange={(o) => {
-	if (!o) drawerEvent = null;
-}}
+		if (!o) drawerEvent = null;
+	}}
 >
 	<Sheet.Content side="right">
 		{#if drawerEvent}
@@ -362,7 +363,11 @@
 						</button>
 						{#if resourceHref(drawerEvent.resource)}
 							<!-- Cross-zone jump: leaves this zone's route manifest, so hard-navigate. -->
-							<a class="btn jumplink" href={resourceHref(drawerEvent.resource)} data-sveltekit-reload>
+							<a
+								class="btn jumplink"
+								href={resourceHref(drawerEvent.resource)}
+								data-sveltekit-reload
+							>
 								<ExternalLink size={12} /> Open resource ↗
 							</a>
 						{/if}

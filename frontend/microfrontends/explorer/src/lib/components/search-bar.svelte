@@ -300,9 +300,9 @@
 	<form
 		class="flex flex-col gap-2.5"
 		onsubmit={(e) => {
-	e.preventDefault();
-	submit();
-}}
+			e.preventDefault();
+			submit();
+		}}
 	>
 		<!-- ── Row A: mode + actions ── -->
 		<div class="flex flex-wrap items-center gap-2">
@@ -328,10 +328,10 @@
 						accept="image/*"
 						class="hidden"
 						onchange={(e) => {
-	const f = e.currentTarget.files?.[0];
-	if (f && f.type.startsWith('image/')) imageFile = f;
-	e.currentTarget.value = '';
-}}
+							const f = e.currentTarget.files?.[0];
+							if (f && f.type.startsWith('image/')) imageFile = f;
+							e.currentTarget.value = '';
+						}}
 					/>
 				{/if}
 				{#if voiceSearch.built}
@@ -356,10 +356,10 @@
 						accept="audio/*,video/mp4,.m4a,.mp3,.wav"
 						class="hidden"
 						onchange={(e) => {
-	const f = e.currentTarget.files?.[0];
-	e.currentTarget.value = '';
-	if (f) pickAudio(f);
-}}
+							const f = e.currentTarget.files?.[0];
+							e.currentTarget.value = '';
+							if (f) pickAudio(f);
+						}}
 					/>
 				{/if}
 				<SearchSettings
@@ -375,20 +375,20 @@
 				<HelpPopover
 					{examples}
 					onpick={(key, ex) => {
-	if (key === 'phrase' || key === 'fuzzy') {
-		kind = 'keyword';
-		style = key;
-	} else if (key === 'meaning') kind = 'meaning';
-	else if (key === 'scene') kind = 'scene';
-	else if (key === 'both') {
-		kind = 'both';
-		style = 'loose';
-	} else {
-		kind = 'keyword';
-		style = 'loose';
-	}
-	q = ex;
-}}
+						if (key === 'phrase' || key === 'fuzzy') {
+							kind = 'keyword';
+							style = key;
+						} else if (key === 'meaning') kind = 'meaning';
+						else if (key === 'scene') kind = 'scene';
+						else if (key === 'both') {
+							kind = 'both';
+							style = 'loose';
+						} else {
+							kind = 'keyword';
+							style = 'loose';
+						}
+						q = ex;
+					}}
 				/>
 			</div>
 		</div>

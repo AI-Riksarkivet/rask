@@ -13,9 +13,9 @@
 <div
 	data-slot="card"
 	class={cn(
-	'border-border bg-card text-card-foreground max-w-full min-w-0 rounded-lg border shadow-sm',
-	className,
-)}
+		'border-border bg-card text-card-foreground max-w-full min-w-0 rounded-lg border shadow-sm',
+		className,
+	)}
 	{...rest}
 >
 	{@render children?.()}

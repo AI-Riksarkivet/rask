@@ -191,7 +191,8 @@
 	</ul>
 	{#if ordered.length > shown.length}
 		<p class="text-muted-foreground border-border/60 border-t px-3 py-2 text-center text-xs">
-			{ordered.length - shown.length} older {ordered.length - shown.length === 1 ? 'run' : 'runs'} not shown
+			{ordered.length - shown.length} older {ordered.length - shown.length === 1 ? 'run' : 'runs'} not
+			shown
 		</p>
 	{/if}
 {/if}

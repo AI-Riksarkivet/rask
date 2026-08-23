@@ -67,8 +67,8 @@
 			<div>
 				<p class="text-foreground mb-1 font-medium">No embedding map yet</p>
 				<p>
-					Run <code class="bg-muted rounded-md px-1 py-0.5">ratch feature atlas</code> to build the 2-D projection
-					of the chunks table.
+					Run <code class="bg-muted rounded-md px-1 py-0.5">ratch feature atlas</code> to build the 2-D
+					projection of the chunks table.
 				</p>
 			</div>
 		</div>

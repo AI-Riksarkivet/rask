@@ -374,9 +374,9 @@
 							<Badge
 								variant={loadFailed ? 'destructive' : 'secondary'}
 								class={cn(
-	'pointer-events-none absolute bottom-2 left-2 z-10 font-mono shadow-sm backdrop-blur',
-	raisedOverTransport,
-)}
+									'pointer-events-none absolute bottom-2 left-2 z-10 font-mono shadow-sm backdrop-blur',
+									raisedOverTransport,
+								)}
 								data-testid="annotate-status"
 							>
 								annotate · {unit.kind} · {status}{controller.saveStatus
@@ -388,13 +388,13 @@
 									{unit}
 									{controller}
 									onload={(n) => {
-	status = `${n} annotations from Lance`;
-	loadFailed = false;
-}}
+										status = `${n} annotations from Lance`;
+										loadFailed = false;
+									}}
 									onerror={(message) => {
-	status = `load failed — ${message}`;
-	loadFailed = true;
-}}
+										status = `load failed — ${message}`;
+										loadFailed = true;
+									}}
 								/>
 							{/key}
 							{#if remoteNotice}
@@ -412,9 +412,9 @@
 										size="sm"
 										class="h-6 shrink-0 px-2 text-xs"
 										onclick={() => {
-	remoteNotice = null;
-	reloadNonce += 1;
-}}
+											remoteNotice = null;
+											reloadNonce += 1;
+										}}
 									>
 										Reload
 									</Button>

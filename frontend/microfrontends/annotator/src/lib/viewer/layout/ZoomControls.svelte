@@ -15,9 +15,9 @@
      shadow-sm) so the canvas overlays read as one family. -->
 <div
 	class={cn(
-	'border-border bg-card/90 text-card-foreground pointer-events-auto absolute right-2 bottom-2 z-10 flex items-center gap-0.5 rounded-lg border p-1 shadow-sm backdrop-blur',
-	className,
-)}
+		'border-border bg-card/90 text-card-foreground pointer-events-auto absolute right-2 bottom-2 z-10 flex items-center gap-0.5 rounded-lg border p-1 shadow-sm backdrop-blur',
+		className,
+	)}
 	data-testid="zoom-controls"
 >
 	<Button variant="ghost" size="icon-xs" title="Zoom out" onclick={() => controller.zoomOut()}>

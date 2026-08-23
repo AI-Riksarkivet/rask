@@ -61,9 +61,9 @@
 		dataset={selectedDataset}
 		datasetVersion={selectedVersion}
 		onsent={() => {
-	// Cleared on success: leaving them selected invites a second send of the same items, and
-	// two tasks for one page is two people labelling it.
-	selected = [];
-}}
+			// Cleared on success: leaving them selected invites a second send of the same items, and
+			// two tasks for one page is two people labelling it.
+			selected = [];
+		}}
 	/>
 </div>

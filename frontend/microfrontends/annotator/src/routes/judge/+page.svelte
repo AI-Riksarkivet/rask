@@ -19,9 +19,9 @@
 	summary="Score submitted annotations with a model instead of a second human, and route only the
 	         disagreements to review."
 	intent={[
-	'Run a judge over submitted tasks and record a verdict beside the human one, rather than in place of it.',
-	'Send only the items the judge and the annotator disagree on to human review — which is what makes a consensus_n of 2 affordable at corpus scale.',
-	'Report judge-vs-human agreement over time, so a judge that drifts is visible before it has silently graded a batch.',
-	'Reuse the review vocabulary the task actor already declares (approve / request_changes), so a judge verdict is the same kind of event as a reviewer verdict.',
-]}
+		'Run a judge over submitted tasks and record a verdict beside the human one, rather than in place of it.',
+		'Send only the items the judge and the annotator disagree on to human review — which is what makes a consensus_n of 2 affordable at corpus scale.',
+		'Report judge-vs-human agreement over time, so a judge that drifts is visible before it has silently graded a batch.',
+		'Reuse the review vocabulary the task actor already declares (approve / request_changes), so a judge verdict is the same kind of event as a reviewer verdict.',
+	]}
 />

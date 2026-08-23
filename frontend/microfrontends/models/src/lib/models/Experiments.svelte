@@ -104,7 +104,8 @@
 						{#each panel.series as s (s.model)}
 							<li>
 								<span class="model mono">{s.model}</span>
-								<span class="bar"><span class="fill" style={`width:${(s.value / max) * 100}%`}></span></span
+								<span class="bar"
+									><span class="fill" style={`width:${(s.value / max) * 100}%`}></span></span
 								>
 								<span class="val mono">{fmt(s.value)}</span>
 							</li>

@@ -558,8 +558,8 @@
 						<Popover.Content class="w-96 p-3" align="end">
 							<div class="flex flex-col gap-2">
 								<p class="text-muted-foreground text-xs">
-									Type your action — the column is named from it, appended to the task's ontology, and the
-									first {PREVIEW_ROWS} rows fill immediately.
+									Type your action — the column is named from it, appended to the task's ontology,
+									and the first {PREVIEW_ROWS} rows fill immediately.
 								</p>
 								<Textarea
 									class="min-h-16 text-xs"
@@ -567,11 +567,11 @@
 									bind:value={columnAction}
 									data-testid="bulk-column-action"
 									onkeydown={(event: KeyboardEvent) => {
-	if (event.key === 'Enter' && !event.shiftKey) {
-		event.preventDefault();
-		void addColumn();
-	}
-}}
+										if (event.key === 'Enter' && !event.shiftKey) {
+											event.preventDefault();
+											void addColumn();
+										}
+									}}
 								/>
 								<label class="text-muted-foreground flex items-center gap-2 text-xs">
 									model
@@ -750,12 +750,12 @@
 									bind:value={editing.draft}
 									data-testid="bulk-text-editor"
 									onkeydown={(event: KeyboardEvent) => {
-	if (event.key === 'Escape') editing = null;
-	if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-		event.preventDefault();
-		void commitEdit(task);
-	}
-}}
+										if (event.key === 'Escape') editing = null;
+										if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+											event.preventDefault();
+											void commitEdit(task);
+										}
+									}}
 								/>
 								<span class="flex gap-1">
 									<Button

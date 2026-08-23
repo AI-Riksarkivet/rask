@@ -146,7 +146,8 @@
 
 	{#if unauthorized}
 		<div class="empty">
-			<ShieldAlert size={15} /> <a href={loginHref} data-sveltekit-reload>Sign in</a> to view JetStream streams.
+			<ShieldAlert size={15} /> <a href={loginHref} data-sveltekit-reload>Sign in</a> to view JetStream
+			streams.
 		</div>
 	{:else if forbidden}
 		<div class="empty">
@@ -178,8 +179,8 @@
 						<span
 							class="misspair mono"
 							title={m.unbound
-	? 'a consumer for this group exists (e.g. an orphaned durable) but nothing is attached to it'
-	: 'no consumer for this group exists on the stream'}
+								? 'a consumer for this group exists (e.g. an orphaned durable) but nothing is attached to it'
+								: 'no consumer for this group exists on the stream'}
 							>{m.stream}:{m.service}{m.unbound ? ' · present but unbound' : ''}</span
 						>
 					{/each}

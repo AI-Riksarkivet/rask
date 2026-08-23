@@ -24,10 +24,10 @@
 <button
 	type="button"
 	class={cn(
-	'hover:text-foreground inline-flex items-center gap-1 transition-colors',
-	sorted && 'text-foreground',
-	className,
-)}
+		'hover:text-foreground inline-flex items-center gap-1 transition-colors',
+		sorted && 'text-foreground',
+		className,
+	)}
 	{onclick}
 >
 	{label}

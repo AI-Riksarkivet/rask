@@ -61,11 +61,11 @@
 			placeholder="type a tag, press Enter"
 			bind:value={draft}
 			onkeydown={(e) => {
-	if (e.key === 'Enter') {
-		e.preventDefault();
-		addTag();
-	}
-}}
+				if (e.key === 'Enter') {
+					e.preventDefault();
+					addTag();
+				}
+			}}
 		/>
 
 		<!-- Run summary; hidden on error so the NodeShell banner stands alone. -->

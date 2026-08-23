@@ -263,7 +263,11 @@
 				{#if simError}
 					<p class="mut">{simError}</p>
 				{:else if simVerdictShown}
-					<p class="verdict" class:allow={simVerdictShown.allowed} class:deny={!simVerdictShown.allowed}>
+					<p
+						class="verdict"
+						class:allow={simVerdictShown.allowed}
+						class:deny={!simVerdictShown.allowed}
+					>
 						<span class="mono">{simVerdictShown.user}</span>
 						{simVerdictShown.allowed ? 'can' : 'cannot'}
 						<span class="mono">{simVerdictShown.relation}</span> on this {kind}.

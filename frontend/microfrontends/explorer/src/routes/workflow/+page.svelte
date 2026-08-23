@@ -11,8 +11,8 @@
 
 <svelte:window
 	onkeydown={(e) => {
-	if (e.key === 'Escape' && graph.selectedHit) graph.closeDetail();
-}}
+		if (e.key === 'Escape' && graph.selectedHit) graph.closeDetail();
+	}}
 />
 
 <CommandMenu />

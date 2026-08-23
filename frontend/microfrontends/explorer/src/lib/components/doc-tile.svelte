@@ -31,12 +31,12 @@
 	{onclick}
 	aria-pressed={active}
 	class={cn(
-	'group bg-card flex flex-col overflow-hidden rounded-lg border text-left transition-all',
-	'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
-	active
-		? 'border-primary ring-primary -translate-y-0.5 shadow-md ring-2'
-		: 'border-border hover:border-primary hover:-translate-y-0.5 hover:shadow-md',
-)}
+		'group bg-card flex flex-col overflow-hidden rounded-lg border text-left transition-all',
+		'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
+		active
+			? 'border-primary ring-primary -translate-y-0.5 shadow-md ring-2'
+			: 'border-border hover:border-primary hover:-translate-y-0.5 hover:shadow-md',
+	)}
 >
 	<div class="bg-muted relative aspect-video w-full overflow-hidden">
 		<img

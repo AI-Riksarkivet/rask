@@ -172,8 +172,8 @@
 				variant="ghost"
 				size="xs"
 				class={i === path.length - 1
-	? 'text-foreground disabled:cursor-default disabled:opacity-100'
-	: 'text-muted-foreground'}
+					? 'text-foreground disabled:cursor-default disabled:opacity-100'
+					: 'text-muted-foreground'}
 				disabled={i === path.length - 1}
 				onclick={() => crumbTo(i)}
 			>
@@ -261,11 +261,11 @@
 									class={interactive ? 'cursor-pointer' : 'cursor-not-allowed'}
 									onclick={() => onCell(node)}
 									onkeydown={(e) => {
-	if (interactive && (e.key === 'Enter' || e.key === ' ')) {
-		e.preventDefault();
-		onCell(node);
-	}
-}}
+										if (interactive && (e.key === 'Enter' || e.key === ' ')) {
+											e.preventDefault();
+											onCell(node);
+										}
+									}}
 									onmouseenter={() => (hovered = pathKey)}
 									onmouseleave={() => (hovered = null)}
 								>

@@ -167,9 +167,9 @@
 		<form
 			class="form"
 			onsubmit={(e) => {
-	e.preventDefault();
-	create();
-}}
+				e.preventDefault();
+				create();
+			}}
 		>
 			<label
 				>project name

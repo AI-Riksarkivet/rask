@@ -49,7 +49,8 @@
 							<td class="py-1 text-right tabular-nums">{row.submitted}</td>
 							<td class="py-1 text-right tabular-nums">{row.accepted}</td>
 							<td class="py-1 text-right tabular-nums">{row.changesRequested}</td>
-							<td class="py-1 text-right tabular-nums" data-testid="accept-rate">{rate(row.acceptRate)}</td
+							<td class="py-1 text-right tabular-nums" data-testid="accept-rate"
+								>{rate(row.acceptRate)}</td
 							>
 						</tr>
 					{/each}

@@ -101,8 +101,8 @@
 
 {#if wouldLose.length > 0}
 	<p class="text-destructive text-sm" data-testid="ontology-too-rich">
-		This task declares {wouldLose.join(' and ')}, which this form cannot edit. Editing here would drop
-		them, so it is disabled — change the ontology through the API until the full editor lands.
+		This task declares {wouldLose.join(' and ')}, which this form cannot edit. Editing here would
+		drop them, so it is disabled — change the ontology through the API until the full editor lands.
 	</p>
 {:else}
 	<div class="flex flex-col gap-3">
@@ -124,9 +124,9 @@
 				bind:value={taskKind}
 				ariaLabel="Task type"
 				options={[
-	{ value: 'free', label: 'free (no task type)' },
-	...TASK_KINDS.map((kind) => ({ value: kind, label: kind })),
-]}
+					{ value: 'free', label: 'free (no task type)' },
+					...TASK_KINDS.map((kind) => ({ value: kind, label: kind })),
+				]}
 			/>
 		</label>
 		<label class="flex items-center gap-2 text-sm">

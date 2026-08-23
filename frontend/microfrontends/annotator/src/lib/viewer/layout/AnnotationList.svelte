@@ -45,14 +45,14 @@
 			<li>
 				<button
 					class={cn(
-	'hover:bg-muted/60 flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
-	(controller.selectedIndex === r.index || controller.selectedSet.has(r.index)) &&
-		'bg-primary/10 ring-primary/40 ring-1',
-)}
+						'hover:bg-muted/60 flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+						(controller.selectedIndex === r.index || controller.selectedSet.has(r.index)) &&
+							'bg-primary/10 ring-primary/40 ring-1',
+					)}
 					onclick={(e) =>
-	e.shiftKey || e.metaKey || e.ctrlKey
-		? controller.toggleSelect(r.index)
-		: controller.select(r.index)}
+						e.shiftKey || e.metaKey || e.ctrlKey
+							? controller.toggleSelect(r.index)
+							: controller.select(r.index)}
 				>
 					<span class={cn('mt-1 size-2 shrink-0 rounded-full', statusDot(r.status))}></span>
 					<!-- One primary line at the estate's text-sm, meta beneath at text-xs — the same

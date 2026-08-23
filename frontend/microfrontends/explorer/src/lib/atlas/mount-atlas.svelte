@@ -152,7 +152,9 @@
 							<Tags class="size-3.5" /> Label selection
 						</Button>
 						{#if refusal}
-							<span class="text-muted-foreground/70" data-testid="atlas-send-refusal">{refusal}</span>
+							<span class="text-muted-foreground/70" data-testid="atlas-send-refusal"
+								>{refusal}</span
+							>
 						{/if}
 					{/if}
 

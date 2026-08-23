@@ -93,8 +93,8 @@
 		<p class="mut">
 			Dropped by <Subject value={recoverable.dropped_by} />
 			on {recoverable.dropped_at.slice(0, 10)} · recoverable until
-			<strong>{recoverable.expires_at.slice(0, 10)}</strong>, after which the maintenance sweep reports
-			it for reclamation.
+			<strong>{recoverable.expires_at.slice(0, 10)}</strong>, after which the maintenance sweep
+			reports it for reclamation.
 		</p>
 		{#if recoverError}<p class="problem" data-testid="undrop-problem">{recoverError}</p>{/if}
 		<Button size="sm" disabled={recovering} onclick={recover}>

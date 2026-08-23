@@ -67,9 +67,9 @@
 						/>
 						<span
 							class={cn(
-	'flex-1 truncate text-xs',
-	controller.isHidden(g.name) && 'text-muted-foreground line-through',
-)}
+								'flex-1 truncate text-xs',
+								controller.isHidden(g.name) && 'text-muted-foreground line-through',
+							)}
 							title={g.name}
 						>
 							{g.name || '∅'}

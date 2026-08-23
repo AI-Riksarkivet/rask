@@ -13,7 +13,7 @@
 	<AtlasMap
 		bind:active={bench.active}
 		onSelectionHits={(hits) => {
-	if (hits.length > 0) bench.select(hits[0] ?? null);
-}}
+			if (hits.length > 0) bench.select(hits[0] ?? null);
+		}}
 	/>
 </div>

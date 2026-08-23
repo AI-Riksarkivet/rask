@@ -209,19 +209,19 @@
 					<Input
 						bind:value={val}
 						placeholder={colType === 'number'
-	? 'number…'
-	: colType === 'time'
-		? 'date/time…'
-		: colType === 'boolean'
-			? 'true / false'
-			: 'value…'}
+							? 'number…'
+							: colType === 'time'
+								? 'date/time…'
+								: colType === 'boolean'
+									? 'true / false'
+									: 'value…'}
 						class="h-8 flex-1 rounded-lg text-xs"
 						onkeydown={(e) => {
-	if (e.key === 'Enter') {
-		e.preventDefault();
-		addFilter();
-	}
-}}
+							if (e.key === 'Enter') {
+								e.preventDefault();
+								addFilter();
+							}
+						}}
 					/>
 					<Button type="button" disabled={!colName || !val.trim()} onclick={addFilter}>
 						<Plus /> Add

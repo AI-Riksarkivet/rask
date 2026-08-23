@@ -161,7 +161,7 @@
 								value={attrValues[spec.name] ?? ''}
 								data-testid={`attr-${spec.name}`}
 								onchange={(e) =>
-	controller.setAttribute(row.index, spec.name, e.currentTarget.value)}
+									controller.setAttribute(row.index, spec.name, e.currentTarget.value)}
 							>
 								<option value="">—</option>
 								{#each spec.choices as c (c)}<option value={c}>{c}</option>{/each}
@@ -173,11 +173,11 @@
 								checked={attrValues[spec.name] === 'true'}
 								data-testid={`attr-${spec.name}`}
 								onchange={(e) =>
-	controller.setAttribute(
-		row.index,
-		spec.name,
-		e.currentTarget.checked ? 'true' : 'false',
-	)}
+									controller.setAttribute(
+										row.index,
+										spec.name,
+										e.currentTarget.checked ? 'true' : 'false',
+									)}
 							/>
 						{:else}
 							<input
@@ -187,7 +187,7 @@
 								placeholder="—"
 								data-testid={`attr-${spec.name}`}
 								oninput={(e) =>
-	controller.setAttribute(row.index, spec.name, e.currentTarget.value)}
+									controller.setAttribute(row.index, spec.name, e.currentTarget.value)}
 							/>
 						{/if}
 					</label>

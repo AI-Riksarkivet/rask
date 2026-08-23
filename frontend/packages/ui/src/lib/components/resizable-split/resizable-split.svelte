@@ -135,22 +135,22 @@
 		onpointerup={onPointerUp}
 		ondblclick={onDoubleClick}
 		onkeydown={(e) => {
-	// Same px clamps as the pointer path (0.2/0.8 ignored minLeft/minRight
-	// and could violate them), and persist like a drag does.
-	if (!container) return;
-	const dec = vertical ? 'ArrowUp' : 'ArrowLeft';
-	const inc = vertical ? 'ArrowDown' : 'ArrowRight';
-	if (e.key !== dec && e.key !== inc) return;
-	const rect = container.getBoundingClientRect();
-	const total = vertical ? rect.height : rect.width;
-	const minF = minLeft / total;
-	const maxF = 1 - minRight / total;
-	const next = e.key === dec ? fraction - 0.02 : fraction + 0.02;
-	fraction = Math.max(minF, Math.min(maxF, next));
-	try {
-		localStorage.setItem(storageKey, fraction.toFixed(3));
-	} catch {}
-}}
+			// Same px clamps as the pointer path (0.2/0.8 ignored minLeft/minRight
+			// and could violate them), and persist like a drag does.
+			if (!container) return;
+			const dec = vertical ? 'ArrowUp' : 'ArrowLeft';
+			const inc = vertical ? 'ArrowDown' : 'ArrowRight';
+			if (e.key !== dec && e.key !== inc) return;
+			const rect = container.getBoundingClientRect();
+			const total = vertical ? rect.height : rect.width;
+			const minF = minLeft / total;
+			const maxF = 1 - minRight / total;
+			const next = e.key === dec ? fraction - 0.02 : fraction + 0.02;
+			fraction = Math.max(minF, Math.min(maxF, next));
+			try {
+				localStorage.setItem(storageKey, fraction.toFixed(3));
+			} catch {}
+		}}
 		title="Drag to resize · double-click to reset"
 		class="group border-border bg-secondary/40 hover:bg-primary/30 active:bg-primary/40 focus-visible:bg-primary/40 relative
            flex items-center justify-center

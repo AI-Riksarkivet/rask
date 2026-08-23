@@ -14,7 +14,12 @@
 <div
 	class="border-border bg-card/95 flex items-center gap-1 rounded-lg border p-1 shadow-md backdrop-blur"
 >
-	<Button size="sm" onclick={() => graph.run()} disabled={graph.running} title="Run the whole graph">
+	<Button
+		size="sm"
+		onclick={() => graph.run()}
+		disabled={graph.running}
+		title="Run the whole graph"
+	>
 		{#if graph.running}
 			<LoaderCircle class="size-3.5 animate-spin" />
 		{:else}

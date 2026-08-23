@@ -136,9 +136,9 @@
 			size="sm"
 			disabled={sending || refusal !== null}
 			title={refusal ??
-	(chosenLabel
-		? `pre-label the selected items as ${chosenLabel} — a person still reviews each one`
-		: 'queue the selected items into this labeling task, unlabelled')}
+				(chosenLabel
+					? `pre-label the selected items as ${chosenLabel} — a person still reviews each one`
+					: 'queue the selected items into this labeling task, unlabelled')}
 			data-testid="bulk-send"
 			onclick={() => void send()}
 		>

@@ -121,8 +121,8 @@
 			Notifications
 		</h1>
 		<p class="text-muted-foreground text-sm">
-			The bell always shows what concerns you. These decide whether anything also reaches you when this
-			tab is closed.
+			The bell always shows what concerns you. These decide whether anything also reaches you when
+			this tab is closed.
 		</p>
 	</header>
 
@@ -136,8 +136,8 @@
 			<span class="flex min-w-0 flex-col">
 				<span class="font-medium">Channels are unavailable on this stack</span>
 				<span class="text-muted-foreground text-xs">
-					No signed-in session, or the notifications service is not reachable. The bell still works — it
-					falls back to per-tab memory.
+					No signed-in session, or the notifications service is not reachable. The bell still works
+					— it falls back to per-tab memory.
 				</span>
 			</span>
 			<Badge variant="outline" class="ml-auto shrink-0">Not available</Badge>
@@ -148,8 +148,8 @@
 				Channels
 			</h2>
 			<p class="text-muted-foreground text-xs">
-				A channel appears here once an operator has configured its component. Hosts, webhook URLs and
-				credentials are never editable from a browser.
+				A channel appears here once an operator has configured its component. Hosts, webhook URLs
+				and credentials are never editable from a browser.
 			</p>
 			{#each channelIds as id (id)}
 				{@const known = KNOWN[id]}
@@ -192,7 +192,8 @@
 				<span class="flex min-w-0 flex-col">
 					<span class="font-medium">Batch pushes into a digest</span>
 					<span class="text-muted-foreground text-xs">
-						Off means immediate, which is the default. A failed run is never batched whatever this says.
+						Off means immediate, which is the default. A failed run is never batched whatever this
+						says.
 					</span>
 				</span>
 				<Switch
@@ -210,10 +211,10 @@
 						min="60"
 						value={String(prefs.digest_seconds ?? 900)}
 						oninput={(e) => {
-	const n = Number(e.currentTarget.value);
-	if (prefs && Number.isFinite(n))
-		prefs = { ...prefs, digest_seconds: Math.max(60, n) };
-}}
+							const n = Number(e.currentTarget.value);
+							if (prefs && Number.isFinite(n))
+								prefs = { ...prefs, digest_seconds: Math.max(60, n) };
+						}}
 					/>
 				</label>
 			{/if}
@@ -234,8 +235,8 @@
 			Watched projects
 		</h2>
 		<p class="text-muted-foreground text-xs">
-			Watching a project tells you about its runs even when you did not start them. Watching is added
-			from a project's own page; membership is what allows it.
+			Watching a project tells you about its runs even when you did not start them. Watching is
+			added from a project's own page; membership is what allows it.
 		</p>
 		{#if watches === null}
 			<p class="text-muted-foreground text-sm">Watches are unavailable on this stack.</p>

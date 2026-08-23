@@ -63,10 +63,12 @@
 					id="facet-type-{type}"
 					checked={selectedTypes.has(type)}
 					onCheckedChange={() =>
-	onchange({ types: toggle(selectedTypes, type), relations: selectedRelations })}
+						onchange({ types: toggle(selectedTypes, type), relations: selectedRelations })}
 					aria-label="Filter by type {type}"
 				/>
-				<label for="facet-type-{type}" class="flex-1 cursor-pointer truncate font-mono">{type}</label>
+				<label for="facet-type-{type}" class="flex-1 cursor-pointer truncate font-mono"
+					>{type}</label
+				>
 				<span class="tabular-nums text-muted-foreground">{count}</span>
 			</div>
 		{:else}
@@ -75,14 +77,16 @@
 	</section>
 
 	<section class="flex flex-col gap-1">
-		<h3 class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Relation</h3>
+		<h3 class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+			Relation
+		</h3>
 		{#each relations as [relation, count] (relation)}
 			<div class="flex items-center gap-2 py-0.5 text-xs">
 				<Checkbox
 					id="facet-relation-{relation}"
 					checked={selectedRelations.has(relation)}
 					onCheckedChange={() =>
-	onchange({ types: selectedTypes, relations: toggle(selectedRelations, relation) })}
+						onchange({ types: selectedTypes, relations: toggle(selectedRelations, relation) })}
 					aria-label="Filter by relation {relation}"
 				/>
 				<label for="facet-relation-{relation}" class="flex-1 cursor-pointer truncate font-mono">

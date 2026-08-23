@@ -181,7 +181,9 @@
 				<div>
 					<h1 class="flex items-center gap-2 text-lg font-semibold">
 						{project.title || project.slug}
-						<Badge variant={projectStateVariant(project.state)}>{project.state.replace('_', ' ')}</Badge>
+						<Badge variant={projectStateVariant(project.state)}
+							>{project.state.replace('_', ' ')}</Badge
+						>
 					</h1>
 					<p class="text-muted-foreground font-mono text-xs">{project.tenant} / {project.slug}</p>
 				</div>
@@ -339,8 +341,8 @@
 				/>
 				{#if (listing?.missing?.length ?? 0) > 0}
 					<p class="text-warning text-xs">
-						{listing?.missing?.length} item(s) are indexed but their actors hold no state — a re-send repairs
-						them.
+						{listing?.missing?.length} item(s) are indexed but their actors hold no state — a re-send
+						repairs them.
 					</p>
 				{/if}
 			</Tabs.Content>

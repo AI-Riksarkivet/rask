@@ -144,9 +144,9 @@
 			<form
 				class="tag-add"
 				onsubmit={(e) => {
-	e.preventDefault();
-	submitTag();
-}}
+					e.preventDefault();
+					submitTag();
+				}}
 			>
 				<input
 					bind:value={newTag}

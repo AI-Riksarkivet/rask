@@ -87,7 +87,10 @@
 							{#if p.configured}
 								<Badge variant="outline">live</Badge>
 							{:else}
-								<Badge variant="warning" title="No endpoint resolves — answers come from the in-repo mock">
+								<Badge
+									variant="warning"
+									title="No endpoint resolves — answers come from the in-repo mock"
+								>
 									<FlaskConical class="size-3" /> mock
 								</Badge>
 							{/if}

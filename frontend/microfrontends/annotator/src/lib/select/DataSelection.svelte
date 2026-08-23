@@ -180,8 +180,8 @@
 			doc={openDoc}
 			onopen={(keys) => onopen(keys, view!.datasetParam())}
 			onselect={onselect
-	? (keys) => onselect(keys, view!.datasetParam(), view!.rowTableVersion)
-	: undefined}
+				? (keys) => onselect(keys, view!.datasetParam(), view!.rowTableVersion)
+				: undefined}
 			{selectedKeys}
 			onback={() => (openDoc = null)}
 		/>
@@ -228,9 +228,9 @@
 				<div class="w-56">
 					<Select
 						options={datasets.map((d) => ({
-	value: d.id,
-	label: d.docs != null ? `${d.id} (${d.docs} docs)` : d.id,
-}))}
+							value: d.id,
+							label: d.docs != null ? `${d.id} (${d.docs} docs)` : d.id,
+						}))}
 						bind:value={datasetChoice}
 						ariaLabel="Dataset"
 					/>

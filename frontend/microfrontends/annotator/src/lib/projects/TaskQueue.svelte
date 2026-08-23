@@ -646,9 +646,9 @@
 				disabled={busy !== null}
 				title="assign this item to a named annotator (pinned — the lease never expires)"
 				onclick={() => {
-	assignFor = task;
-	assignee = '';
-}}
+					assignFor = task;
+					assignee = '';
+				}}
 			>
 				{EVENT_LABELS['assign']}
 			</Button>
@@ -660,12 +660,12 @@
 					size="sm"
 					disabled={busy !== null}
 					title={task.submitted_by && me !== null && task.submitted_by === me
-	? 'you submitted this — the server will refuse a self-review'
-	: 'send the item back with a note'}
+						? 'you submitted this — the server will refuse a self-review'
+						: 'send the item back with a note'}
 					onclick={() => {
-	changesFor = task;
-	changesMessage = '';
-}}
+						changesFor = task;
+						changesMessage = '';
+					}}
 				>
 					{EVENT_LABELS[event] ?? event}
 				</Button>
@@ -678,8 +678,8 @@
 					task.submitted_by &&
 					me !== null &&
 					task.submitted_by === me
-	? 'you submitted this — the server will refuse a self-review'
-	: undefined}
+						? 'you submitted this — the server will refuse a self-review'
+						: undefined}
 					onclick={() => void fire(task, event)}
 				>
 					{EVENT_LABELS[event] ?? event}
@@ -727,9 +727,9 @@
 							data-testid="bulk-assign"
 							disabled={bulkBusy}
 							onclick={() => {
-	bulkAssignFor = [...selectedAssignable];
-	assignee = '';
-}}
+								bulkAssignFor = [...selectedAssignable];
+								assignee = '';
+							}}
 						>
 							{`Assign ${selectedAssignable.length}`}
 						</Button>
@@ -805,18 +805,18 @@
 						ariaLabel="Filter by label"
 						onValueChange={onFilterChanged}
 						options={[
-	{ value: '', label: `All labels (${tasks.length})` },
-	...labelsPresent.map((name) => ({
-		value: name,
-		label: `${name} (${
-			tasks.filter((t) =>
-				labelText(t)
-					.split(',')
-					.some((l) => l.trim() === name),
-			).length
-		})`,
-	})),
-]}
+							{ value: '', label: `All labels (${tasks.length})` },
+							...labelsPresent.map((name) => ({
+								value: name,
+								label: `${name} (${
+									tasks.filter((t) =>
+										labelText(t)
+											.split(',')
+											.some((l) => l.trim() === name),
+									).length
+								})`,
+							})),
+						]}
 					/>
 				{/if}
 				<Select
@@ -824,14 +824,14 @@
 					ariaLabel="Filter by state"
 					onValueChange={onFilterChanged}
 					options={[
-	{ value: '', label: `All states (${tasks.length})` },
-	...statesPresent.map((st) => ({
-		value: st,
-		// The count is what turns the dropdown into a summary of the queue, so a manager
-		// can see WHERE the work is sitting without applying a filter to find out.
-		label: `${st} (${tasks.filter((t) => t.state === st).length})`,
-	})),
-]}
+						{ value: '', label: `All states (${tasks.length})` },
+						...statesPresent.map((st) => ({
+							value: st,
+							// The count is what turns the dropdown into a summary of the queue, so a manager
+							// can see WHERE the work is sitting without applying a filter to find out.
+							label: `${st} (${tasks.filter((t) => t.state === st).length})`,
+						})),
+					]}
 				/>
 				<Input
 					bind:value={filterAssignee}
@@ -876,12 +876,12 @@
 						size="sm"
 						data-testid="clear-filter"
 						onclick={() => {
-	filterState = '';
-	filterAssignee = '';
-	filterText = '';
-	filterLabel = '';
-	onFilterChanged();
-}}
+							filterState = '';
+							filterAssignee = '';
+							filterText = '';
+							filterLabel = '';
+							onFilterChanged();
+						}}
 					>
 						Clear
 					</Button>
@@ -903,8 +903,8 @@
 			<DataTable
 				{table}
 				emptyMessage={filtering
-	? 'No items match this filter.'
-	: 'No items yet — send data points in from Search or the Atlas.'}
+					? 'No items match this filter.'
+					: 'No items yet — send data points in from Search or the Atlas.'}
 			/>
 		{/if}
 	</div>
@@ -964,21 +964,23 @@
 	<Dialog.Content class="sm:max-w-sm" data-testid="bulk-assign-dialog">
 		<Dialog.Title>Assign {bulkAssignFor?.length ?? 0} items</Dialog.Title>
 		<Dialog.Description>
-			Each is assigned individually and reported individually — there is no transaction across items,
-			so a refusal on one leaves the rest alone.
+			Each is assigned individually and reported individually — there is no transaction across
+			items, so a refusal on one leaves the rest alone.
 		</Dialog.Description>
 		<form
 			class="flex flex-col gap-3"
 			onsubmit={(e) => {
-	e.preventDefault();
-	const targets = bulkAssignFor;
-	bulkAssignFor = null;
-	if (targets && assignee.trim()) void bulkAssign(targets, assignee.trim());
-}}
+				e.preventDefault();
+				const targets = bulkAssignFor;
+				bulkAssignFor = null;
+				if (targets && assignee.trim()) void bulkAssign(targets, assignee.trim());
+			}}
 		>
 			<Input bind:value={assignee} placeholder="annotator (OIDC subject or username)" />
 			<div class="flex justify-end gap-2">
-				<Button type="button" variant="outline" onclick={() => (bulkAssignFor = null)}>Cancel</Button>
+				<Button type="button" variant="outline" onclick={() => (bulkAssignFor = null)}
+					>Cancel</Button
+				>
 				<Button type="submit" disabled={!assignee.trim()}>Assign all</Button>
 			</div>
 		</form>
@@ -992,17 +994,17 @@
 	<Dialog.Content class="sm:max-w-sm">
 		<Dialog.Title>Assign this item</Dialog.Title>
 		<Dialog.Description>
-			The named annotator holds it with a pinned lease (it never expires) until they submit, release,
-			or a manager reassigns.
+			The named annotator holds it with a pinned lease (it never expires) until they submit,
+			release, or a manager reassigns.
 		</Dialog.Description>
 		<form
 			class="flex flex-col gap-3"
 			onsubmit={(e) => {
-	e.preventDefault();
-	const task = assignFor;
-	assignFor = null;
-	if (task && assignee.trim()) void fire(task, 'assign', { assignee: assignee.trim() });
-}}
+				e.preventDefault();
+				const task = assignFor;
+				assignFor = null;
+				if (task && assignee.trim()) void fire(task, 'assign', { assignee: assignee.trim() });
+			}}
 		>
 			<Input bind:value={assignee} placeholder="annotator (OIDC subject or username)" />
 			<div class="flex justify-end gap-2">
@@ -1025,11 +1027,11 @@
 		<form
 			class="flex flex-col gap-3"
 			onsubmit={(e) => {
-	e.preventDefault();
-	const task = changesFor;
-	changesFor = null;
-	if (task) void fire(task, 'request_changes', { message: changesMessage });
-}}
+				e.preventDefault();
+				const task = changesFor;
+				changesFor = null;
+				if (task) void fire(task, 'request_changes', { message: changesMessage });
+			}}
 		>
 			<Textarea
 				bind:value={changesMessage}

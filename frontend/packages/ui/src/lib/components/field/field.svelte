@@ -24,9 +24,9 @@
 
 <div
 	class={cn(
-	inline ? 'flex items-center justify-between gap-3' : 'flex flex-col gap-1.5',
-	className,
-)}
+		inline ? 'flex items-center justify-between gap-3' : 'flex flex-col gap-1.5',
+		className,
+	)}
 >
 	{#if label}
 		<span class="text-foreground text-xs font-medium">{label}</span>

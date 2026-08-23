@@ -36,9 +36,9 @@
 <Popover.Root>
 	<Popover.Trigger
 		class={cn(
-	buttonVariants({ variant: 'ghost', size: 'sm' }),
-	'text-muted-foreground w-full justify-start',
-)}
+			buttonVariants({ variant: 'ghost', size: 'sm' }),
+			'text-muted-foreground w-full justify-start',
+		)}
 		title="Service status"
 	>
 		<span class="size-2 rounded-full {tone}"></span>
@@ -95,7 +95,8 @@
 								<span class="text-muted-foreground">chunks</span>
 								<span class="text-foreground font-mono">{health.db.chunks.toLocaleString()}</span>
 								<span class="text-muted-foreground">documents</span>
-								<span class="text-foreground font-mono">{health.db.documents.toLocaleString()}</span>
+								<span class="text-foreground font-mono">{health.db.documents.toLocaleString()}</span
+								>
 							</div>
 						{:else}
 							<!-- The service is UP and answered; it just has no corpus dataset (an empty corpus

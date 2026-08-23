@@ -100,7 +100,9 @@
 						     trailing space inside a block, which rendered "lance-medallion ·alice" once. -->
 						{[row.reason, row.source_run_id].filter(Boolean).join(' · ')}
 						{#if row.occurred_at}
-							· <span title={formatAbsolute(row.occurred_at)}>{formatRelative(row.occurred_at, now)}</span>
+							· <span title={formatAbsolute(row.occurred_at)}
+								>{formatRelative(row.occurred_at, now)}</span
+							>
 						{/if}
 					</p>
 				</div>

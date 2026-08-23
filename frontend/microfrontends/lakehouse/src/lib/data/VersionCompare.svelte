@@ -138,7 +138,8 @@
 			{#if byteDelta.delta !== null}
 				<div class="tile" data-metric="bytes">
 					<span class="tval mono">{signed(byteDelta.delta)} B</span>
-					<span class="tlbl">size · {fmtBytes(byteDelta.base)} → {fmtBytes(byteDelta.compare)}</span>
+					<span class="tlbl">size · {fmtBytes(byteDelta.base)} → {fmtBytes(byteDelta.compare)}</span
+					>
 				</div>
 			{/if}
 			{#if rowDelta.delta === null && byteDelta.delta === null}
@@ -152,8 +153,8 @@
 		<h4>Schema</h4>
 		{#if baseSide?.fields == null && compareSide?.fields == null}
 			<p class="mut">
-				The lineage store has no recorded schema for v{baseVersion} or v{compareVersion} — only versions written
-				through a governed run carry one.
+				The lineage store has no recorded schema for v{baseVersion} or v{compareVersion} — only versions
+				written through a governed run carry one.
 			</p>
 		{:else if changed.length === 0}
 			<p class="mut">Identical columns — {schemaRows.length} unchanged.</p>
@@ -177,8 +178,8 @@
 				</tbody>
 			</table>
 			<p class="mut fine">
-				Columns are matched by name: the recorded schema carries no field ids, so a renamed column reads
-				as one removed and one added, not as a rename.
+				Columns are matched by name: the recorded schema carries no field ids, so a renamed column
+				reads as one removed and one added, not as a rename.
 			</p>
 		{/if}
 	{/if}

@@ -313,7 +313,9 @@
 										: ''}"
 									onclick={() => toggle(a.actor_id ?? '')}
 								>
-									<td class="px-3 py-1.5"><Badge variant={stateVariant(a.state)}>{a.state}</Badge></td>
+									<td class="px-3 py-1.5"
+										><Badge variant={stateVariant(a.state)}>{a.state}</Badge></td
+									>
 									<td class="px-3 py-1.5 font-mono">{a.ray_namespace ?? '—'}</td>
 									<td class="px-3 py-1.5 font-mono">{nodeLabel(a)}</td>
 									<td class="px-3 py-1.5 font-mono tabular-nums">{fmtUptime(actorAge(a))}</td>
@@ -321,7 +323,10 @@
 										{#if a.cpu_percent != null}
 											<div class="flex items-center gap-1.5">
 												<div class="bg-muted h-1.5 w-10 shrink-0 overflow-hidden rounded-full">
-													<div class="h-full bg-sky-500" style:width={`${Math.min(100, a.cpu_percent)}%`}></div>
+													<div
+														class="h-full bg-sky-500"
+														style:width={`${Math.min(100, a.cpu_percent)}%`}
+													></div>
 												</div>
 												<span>{a.cpu_percent.toFixed(0)}%</span>
 											</div>

@@ -13,9 +13,9 @@
 	title="Annotation settings"
 	summary="Defaults that apply across projects, rather than being re-typed inside each one."
 	intent={[
-	'Reusable label ontologies — define a class set once and bind projects to it, instead of each project owning a private copy that silently diverges.',
-	'Zone defaults for a new project: consensus_n, whether review is required, and which assist producer pre-fills.',
-	'Keyboard bindings for the canvas tools, which are currently fixed in tool-defs.ts and cannot be matched to an existing team habit.',
-	'Where the per-project settings that already exist (the ontology editor, consensus) surface together, instead of only from inside a project.',
-]}
+		'Reusable label ontologies — define a class set once and bind projects to it, instead of each project owning a private copy that silently diverges.',
+		'Zone defaults for a new project: consensus_n, whether review is required, and which assist producer pre-fills.',
+		'Keyboard bindings for the canvas tools, which are currently fixed in tool-defs.ts and cannot be matched to an existing team habit.',
+		'Where the per-project settings that already exist (the ontology editor, consensus) surface together, instead of only from inside a project.',
+	]}
 />

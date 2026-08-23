@@ -58,9 +58,9 @@
 			title="Disconnect edge"
 			aria-label="Disconnect edge"
 			onclick={(e) => {
-	e.stopPropagation();
-	graph.removeEdge(id);
-}}
+				e.stopPropagation();
+				graph.removeEdge(id);
+			}}
 		>
 			<X class="size-3" />
 		</button>

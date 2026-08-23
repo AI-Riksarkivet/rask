@@ -139,8 +139,8 @@
 		<AlertDialog.Title>Delete project {project}</AlertDialog.Title>
 		<AlertDialog.Description>
 			This revokes every grant on <span class="mono">project:{project}</span> and drops its registry record.
-			It touches no bytes — a project delete has deliberately no cascade, so its warehouses and their buckets
-			must be retired one rung at a time first.
+			It touches no bytes — a project delete has deliberately no cascade, so its warehouses and their
+			buckets must be retired one rung at a time first.
 		</AlertDialog.Description>
 
 		{#if failure}
@@ -150,8 +150,8 @@
 						<TriangleAlert size={14} />
 						{blockers.length} warehouse{blockers.length === 1 ? '' : 's'} still
 						{blockers.length === 1 ? 'claims' : 'claim'} this project. Delete
-						{blockers.length === 1 ? 'it' : 'each of them'} first — its bucket purge is a separate opt-in on
-						that door:
+						{blockers.length === 1 ? 'it' : 'each of them'} first — its bucket purge is a separate opt-in
+						on that door:
 					</p>
 					<ul class="blockers">
 						{#each blockers as id (id)}

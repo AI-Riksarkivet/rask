@@ -159,8 +159,8 @@
 					<p class="problem" data-testid="delete-problem">{problem}</p>
 					{#if problemStatus === 404}
 						<p class="hint">
-							The catalog answers 404 identically for a warehouse that does not exist and one you may not
-							administer — deliberately, so nobody can probe which ids exist.
+							The catalog answers 404 identically for a warehouse that does not exist and one you
+							may not administer — deliberately, so nobody can probe which ids exist.
 						</p>
 					{/if}
 				{/if}
@@ -179,8 +179,8 @@
 							{/each}
 						</ul>
 						<p class="hint">
-							Exactly these are dropped, one at a time. A namespace that still holds tables refuses on its
-							own rung — empty it first.
+							Exactly these are dropped, one at a time. A namespace that still holds tables refuses
+							on its own rung — empty it first.
 						</p>
 					</section>
 				{/if}
@@ -192,8 +192,9 @@
 							<span>Override deletion protection</span>
 						</label>
 						<p class="hint">
-							Force turns off the <code>protected</code> flag and nothing else. It is not an authorization override
-							— the same project-admin rung is still required, checked identically with or without it.
+							Force turns off the <code>protected</code> flag and nothing else. It is not an authorization
+							override — the same project-admin rung is still required, checked identically with or without
+							it.
 						</p>
 					</section>
 				{/if}
@@ -201,8 +202,8 @@
 				<section class="opt danger">
 					<p class="lead">Permanently destroy the bucket</p>
 					<p class="hint">
-						Deletes every object in <code>{warehouse.bucket}</code> and the bucket itself. This cannot be undone
-						and no other step here touches bytes. Type the bucket name to enable it.
+						Deletes every object in <code>{warehouse.bucket}</code> and the bucket itself. This cannot
+						be undone and no other step here touches bytes. Type the bucket name to enable it.
 					</p>
 					<input
 						class="mono"

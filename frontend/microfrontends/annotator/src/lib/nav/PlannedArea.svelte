@@ -59,7 +59,7 @@
 	</div>
 
 	<p class="text-muted-foreground border-t pt-4 text-xs">
-		This route exists so the rail names every job this zone does, rather than only the ones already on
-		screen. Nothing here reads or writes annotation data.
+		This route exists so the rail names every job this zone does, rather than only the ones already
+		on screen. Nothing here reads or writes annotation data.
 	</p>
 </div>

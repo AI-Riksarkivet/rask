@@ -434,15 +434,15 @@
 	<Dialog.Content>
 		<Dialog.Title>Grant on {selected}</Dialog.Title>
 		<Dialog.Description>
-			Writes one relationship tuple to the live store. Only a directly-assignable relation is accepted
-			— a derived <span class="font-mono">can_*</span> is rejected by the catalog.
+			Writes one relationship tuple to the live store. Only a directly-assignable relation is
+			accepted — a derived <span class="font-mono">can_*</span> is rejected by the catalog.
 		</Dialog.Description>
 		<form
 			class="flex flex-col gap-2"
 			onsubmit={(e) => {
-	e.preventDefault();
-	grant();
-}}
+				e.preventDefault();
+				grant();
+			}}
 		>
 			<div class="flex flex-col gap-1">
 				<div class="flex items-center justify-between gap-2">
@@ -454,9 +454,9 @@
 							type="button"
 							class="h-6 text-[11px]"
 							onclick={() => {
-	gUser = `user:${mySub}`;
-	preview = null;
-}}
+								gUser = `user:${mySub}`;
+								preview = null;
+							}}
 						>
 							use my identity
 						</Button>
@@ -468,9 +468,9 @@
 					placeholder="user:&lt;oidc-sub&gt;"
 					aria-label="Grant subject"
 					oninput={() => {
-	preview = null;
-	previewFailed = false;
-}}
+						preview = null;
+						previewFailed = false;
+					}}
 				/>
 				<!-- The single most confusing thing about this store, stated rather than implied: a subject
 				     is TYPE-PREFIXED, and for a person it is the OIDC `sub`, not a username. Under Dex that
@@ -494,9 +494,9 @@
 						class="rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs"
 						aria-label="Grant relation"
 						onchange={() => {
-	preview = null;
-	previewFailed = false;
-}}
+							preview = null;
+							previewFailed = false;
+						}}
 					>
 						<option value="" disabled>choose a relation…</option>
 						{#each assignableRelations as r (r)}
@@ -523,10 +523,10 @@
 									checked={gCondition !== ''}
 									aria-label="Time-box this grant"
 									onchange={(e) => {
-	gCondition = e.currentTarget.checked ? (conditionChoices[0] ?? '') : '';
-	gParams = {};
-	preview = null;
-}}
+										gCondition = e.currentTarget.checked ? (conditionChoices[0] ?? '') : '';
+										gParams = {};
+										preview = null;
+									}}
 								/>
 								Time-box this grant
 							</label>
@@ -551,9 +551,9 @@
 														size="sm"
 														variant={gParams[name] === preset ? 'default' : 'outline'}
 														onclick={() => {
-	gParams = { ...gParams, [name]: preset };
-	preview = null;
-}}
+															gParams = { ...gParams, [name]: preset };
+															preview = null;
+														}}
 													>
 														{preset}
 													</Button>
@@ -566,9 +566,9 @@
 												placeholder={type === 'timestamp' ? 'now (leave blank)' : type}
 												aria-label="Condition parameter {name}"
 												oninput={(e) => {
-	gParams = { ...gParams, [name]: e.currentTarget.value };
-	preview = null;
-}}
+													gParams = { ...gParams, [name]: e.currentTarget.value };
+													preview = null;
+												}}
 											/>
 											{#if type === 'timestamp'}
 												<p class="text-[11px] text-muted-foreground">
@@ -588,9 +588,9 @@
 						placeholder="reader"
 						aria-label="Grant relation"
 						oninput={() => {
-	preview = null;
-	previewFailed = false;
-}}
+							preview = null;
+							previewFailed = false;
+						}}
 					/>
 				{/if}
 			</div>
@@ -612,8 +612,8 @@
 				</div>
 				{#if previewFailed}
 					<p class="text-[11px] text-muted-foreground">
-						Could not simulate — the store did not answer. Granting anyway is still possible; its effect
-						is simply unknown.
+						Could not simulate — the store did not answer. Granting anyway is still possible; its
+						effect is simply unknown.
 					</p>
 				{:else if preview === null}
 					<p class="text-[11px] text-muted-foreground">
@@ -625,7 +625,8 @@
 					     that someone must later reason about when revoking. -->
 					<p class="text-[11px] text-warning">
 						<strong>No change.</strong> This subject already holds
-						<span class="font-mono">{gRelation}</span> here — inherited, not stored. The tuple would be redundant.
+						<span class="font-mono">{gRelation}</span> here — inherited, not stored. The tuple would be
+						redundant.
 					</p>
 				{:else if preview.allowed}
 					<p class="text-[11px] text-success">
@@ -655,11 +656,11 @@
 <AlertDialog.Root
 	open={revokeTarget !== null}
 	onOpenChange={(open) => {
-	if (!open) {
-		revokeTarget = null;
-		blast = null;
-	}
-}}
+		if (!open) {
+			revokeTarget = null;
+			blast = null;
+		}
+	}}
 >
 	<AlertDialog.Content>
 		<AlertDialog.Title>Revoke this tuple</AlertDialog.Title>

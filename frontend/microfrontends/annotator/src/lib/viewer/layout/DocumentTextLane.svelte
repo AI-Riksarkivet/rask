@@ -65,9 +65,9 @@
 				{#each lines as line, n (line.id)}
 					<div
 						class={cn(
-	'flex items-start gap-2 rounded-md p-1',
-	controller.selectedIndex === line.index && 'bg-accent/50',
-)}
+							'flex items-start gap-2 rounded-md p-1',
+							controller.selectedIndex === line.index && 'bg-accent/50',
+						)}
 						data-testid="text-lane-line"
 						use:trackSelection={line.index}
 					>
@@ -93,7 +93,7 @@
 								hint={false}
 								testid={`lane-surface-${n}`}
 								onlabel={(start, end, label) =>
-	controller.addTextSpan(line.index, start, end, label)}
+									controller.addTextSpan(line.index, start, end, label)}
 								onpick={(i) => controller.select(i)}
 								onremove={(i) => controller.deleteRow(i)}
 							/>

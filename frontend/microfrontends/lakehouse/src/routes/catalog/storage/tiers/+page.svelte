@@ -49,8 +49,8 @@
 <header class="head">
 	<h1><Layers size={18} /> Stores by tier</h1>
 	<p>
-		Every object store the catalog knows, grouped by the role it was registered with. The medallion is
-		exactly bronze → silver → gold; raw is the external world and never a governed tier.
+		Every object store the catalog knows, grouped by the role it was registered with. The medallion
+		is exactly bronze → silver → gold; raw is the external world and never a governed tier.
 	</p>
 	<!-- Attaching lives HERE rather than on the Browse tab: this view is the registry, and Browse is a
 	     window onto one store's objects. Re-reads from the server's returned registry rather than

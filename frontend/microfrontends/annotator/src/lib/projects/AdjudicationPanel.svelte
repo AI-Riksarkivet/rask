@@ -79,8 +79,8 @@
 		<div>
 			<h2 class="text-sm font-semibold">Adjudication</h2>
 			<p class="text-muted-foreground text-xs">
-				Pick the canonical replica per group — every replica still publishes; the pick travels in the
-				run facet with your name on it. Only accepted work can be canonical.
+				Pick the canonical replica per group — every replica still publishes; the pick travels in
+				the run facet with your name on it. Only accepted work can be canonical.
 			</p>
 		</div>
 		{#if notice}
@@ -102,7 +102,9 @@
 						{/if}
 						{#if isCanonical}
 							{#if member.state === 'accepted'}
-								<Badge title="the manager's canonical pick — picked by {current?.by}">canonical</Badge>
+								<Badge title="the manager's canonical pick — picked by {current?.by}"
+									>canonical</Badge
+								>
 							{:else}
 								<!-- The pick's target left `accepted` since it was made. The server voids it on
 								     the state report and the publish refuses it regardless — this names the

@@ -167,20 +167,20 @@
 							<button
 								type="button"
 								title={`${speaker} · ${fmtTime(t.start)} → ${fmtTime(t.end)}` +
-	(showVoice ? ' · right-click: find this voice' : '')}
+									(showVoice ? ' · right-click: find this voice' : '')}
 								aria-label={`${speaker} from ${fmtTime(t.start)} to ${fmtTime(t.end)}`}
 								onclick={(e) => {
-	e.stopPropagation();
-	onSeek(t.start);
-}}
+									e.stopPropagation();
+									onSeek(t.start);
+								}}
 								oncontextmenu={(e) => {
-	// Secondary action: anchor on THIS turn's voiceprint instead
-	// of the speaker centroid. No-op (native menu) until built.
-	if (!showVoice) return;
-	e.preventDefault();
-	e.stopPropagation();
-	onFindVoice?.({ turnId: t.turn_id });
-}}
+									// Secondary action: anchor on THIS turn's voiceprint instead
+									// of the speaker centroid. No-op (native menu) until built.
+									if (!showVoice) return;
+									e.preventDefault();
+									e.stopPropagation();
+									onFindVoice?.({ turnId: t.turn_id });
+								}}
 								class="absolute top-0 h-full cursor-pointer rounded-sm transition-colors hover:brightness-110 {c} {isCurrent
 									? 'ring-primary ring-1'
 									: 'opacity-70'}"

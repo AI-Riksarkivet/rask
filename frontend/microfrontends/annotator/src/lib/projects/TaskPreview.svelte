@@ -91,7 +91,9 @@
 					<span class="border-border bg-background rounded border px-1.5 py-0.5">
 						{field.name}
 						<span class="text-muted-foreground">
-							{field.options.length ? field.options.join(' | ') : field.type}{field.required ? ' *' : ''}
+							{field.options.length ? field.options.join(' | ') : field.type}{field.required
+								? ' *'
+								: ''}
 						</span>
 					</span>
 				{/each}

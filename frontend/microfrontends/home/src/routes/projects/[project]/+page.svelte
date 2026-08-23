@@ -249,7 +249,8 @@
 		     while the gallery listed it, naming neither the cause nor the fix. -->
 		<div class="empty">
 			<p>
-				No such project — the catalog has no registry record for <code class="mono">{project}</code>.
+				No such project — the catalog has no registry record for <code class="mono">{project}</code
+				>.
 			</p>
 		</div>
 	{:else if offline}
@@ -343,7 +344,9 @@
 					{/each}
 				</ul>
 				<p class="mut">
-					<a href="/lakehouse/admin/events" data-sveltekit-reload>All events, live and filterable →</a>
+					<a href="/lakehouse/admin/events" data-sveltekit-reload
+						>All events, live and filterable →</a
+					>
 				</p>
 			{/if}
 		</section>
@@ -354,9 +357,9 @@
 			<h2>Maintenance</h2>
 			<p class="mut">
 				A project policy is the sweep's fallback for this tenant's data. Resolution is
-				<strong>winner-takes-all</strong>: a table record shadows a namespace record shadows this one,
-				and the winning record supplies <em>every</em> field — a value it leaves unset falls to the
-				sweep's global default, not to the record it shadowed. Tag-pinned versions (e.g.
+				<strong>winner-takes-all</strong>: a table record shadows a namespace record shadows this
+				one, and the winning record supplies <em>every</em> field — a value it leaves unset falls to
+				the sweep's global default, not to the record it shadowed. Tag-pinned versions (e.g.
 				<code class="mono">blessed</code>) are never cleaned up, whatever any policy says.
 			</p>
 
@@ -366,7 +369,8 @@
 				<p class="mut">{policiesDenied}</p>
 			{:else if policiesPart === 'unavailable'}
 				<p class="mut">
-					Policies unavailable right now — not shown, to avoid an overwriting edit against a stale read.
+					Policies unavailable right now — not shown, to avoid an overwriting edit against a stale
+					read.
 				</p>
 			{:else if policies}
 				{#if policies.incomplete}
@@ -425,12 +429,14 @@
 						>
 						<div class="btnrow">
 							<Button size="sm" disabled={busy} onclick={savePolicy}>Save policy</Button>
-							<Button variant="ghost" size="sm" onclick={() => (editingPolicy = false)}>Cancel</Button>
+							<Button variant="ghost" size="sm" onclick={() => (editingPolicy = false)}
+								>Cancel</Button
+							>
 						</div>
 						<p class="mut">
-							An empty field means <em>inherit</em> — it is left out of the request, not sent as a cleared value,
-							so the knobs this form has no control for (the compaction scan batch, auto-cleanup ownership) keep
-							whatever the record already carries.
+							An empty field means <em>inherit</em> — it is left out of the request, not sent as a cleared
+							value, so the knobs this form has no control for (the compaction scan batch, auto-cleanup
+							ownership) keep whatever the record already carries.
 						</p>
 					</div>
 				{:else if ownPolicy}
@@ -449,15 +455,16 @@
 					{#if ownPolicy.buckets && ownPolicy.buckets.length > 0}
 						<p class="mut">
 							Covers <span class="mono">{ownPolicy.buckets.join(
-				', ',
-			)}</span> — the warehouse buckets resolved
-							when the policy was set. A warehouse provisioned since is not covered until the policy is set again.
+								', ',
+							)}</span> — the warehouse buckets
+							resolved when the policy was set. A warehouse provisioned since is not covered until the
+							policy is set again.
 						</p>
 					{/if}
 				{:else}
 					<p class="mut">
-						No project policy — the sweep applies its global defaults to anything no table or namespace
-						record claims.
+						No project policy — the sweep applies its global defaults to anything no table or
+						namespace record claims.
 						<Button variant="ghost" size="sm" onclick={startPolicyEdit}>Set policy</Button>
 					</p>
 				{/if}
@@ -473,7 +480,8 @@
 				{:else}
 					<table>
 						<thead
-							><tr><th>tier</th><th>object</th><th>path</th><th>retention</th><th>state</th></tr></thead
+							><tr><th>tier</th><th>object</th><th>path</th><th>retention</th><th>state</th></tr
+							></thead
 						>
 						<tbody>
 							{#each scopedPolicies as p (`${p.kind}:${p.id}`)}
@@ -511,8 +519,8 @@
 		<section class="danger">
 			<h2>Danger zone</h2>
 			<p class="mut">
-				Retiring <code class="mono">{project}</code> revokes every grant on it and drops its registry
-				record. No bytes are touched: there is deliberately no cascade here, so its
+				Retiring <code class="mono">{project}</code> revokes every grant on it and drops its
+				registry record. No bytes are touched: there is deliberately no cascade here, so its
 				{detail.warehouses.length === 1 ? 'warehouse' : 'warehouses'} — and the buckets behind
 				{detail.warehouses.length === 1 ? 'it' : 'them'} — have to be retired one rung at a time first.
 			</p>
@@ -525,10 +533,10 @@
 			bind:open={deleting}
 			{project}
 			ondeleted={() => {
-	// The project is gone — this very route's read would 404 on the next tick. Back to the
-	// estate list, re-read from the server so the retired tenant is not still on it.
-	goto('/projects', { invalidateAll: true });
-}}
+				// The project is gone — this very route's read would 404 on the next tick. Back to the
+				// estate list, re-read from the server so the retired tenant is not still on it.
+				goto('/projects', { invalidateAll: true });
+			}}
 		/>
 	{/if}
 </div>

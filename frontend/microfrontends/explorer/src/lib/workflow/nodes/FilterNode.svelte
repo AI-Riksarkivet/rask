@@ -38,14 +38,16 @@
 						placeholder="{f.label.toLowerCase()} contains…"
 						value={cfg.filters[f.field] ?? ''}
 						oninput={(e) =>
-	graph.setConfig(id, {
-		filters: { ...cfg.filters, [f.field]: e.currentTarget.value },
-	})}
+							graph.setConfig(id, {
+								filters: { ...cfg.filters, [f.field]: e.currentTarget.value },
+							})}
 					/>
 				</div>
 			{/each}
 			<div>
-				<label class="text-muted-foreground mb-1 block text-[0.7rem]" for="where-{id}">SQL where</label>
+				<label class="text-muted-foreground mb-1 block text-[0.7rem]" for="where-{id}"
+					>SQL where</label
+				>
 				<input
 					id="where-{id}"
 					class="{FIELD_CLASS} w-full font-mono"

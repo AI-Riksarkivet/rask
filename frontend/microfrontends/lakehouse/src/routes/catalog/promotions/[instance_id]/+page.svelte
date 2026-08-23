@@ -100,7 +100,9 @@
 				</dl>
 
 				<div class="flex flex-col gap-1">
-					<p class="text-muted-foreground text-xs uppercase tracking-wide">Why you are being asked</p>
+					<p class="text-muted-foreground text-xs uppercase tracking-wide">
+						Why you are being asked
+					</p>
 					<ul class="flex flex-col gap-1 text-sm">
 						{#each held.reasons as reason (reason)}
 							<li>{reasonLabel(reason)}</li>

@@ -157,23 +157,23 @@
 		isValidConnection={validate}
 		onnodeclick={({ node }) => graph.inspectNode(node.id)}
 		onconnectstart={() => {
-	pendingReason = null;
-	madeConnection = false;
-	invalidMsg = null;
-}}
+			pendingReason = null;
+			madeConnection = false;
+			invalidMsg = null;
+		}}
 		onconnect={() => {
-	madeConnection = true;
-	pendingReason = null;
-}}
+			madeConnection = true;
+			pendingReason = null;
+		}}
 		onconnectend={(_event, connectionState) => {
-	// Only flash the reason if the drag actually ended over an (invalid)
-	// handle — releasing over empty pane is a legitimate cancel.
-	if (!madeConnection && pendingReason && connectionState?.toHandle) flash(pendingReason);
-}}
+			// Only flash the reason if the drag actually ended over an (invalid)
+			// handle — releasing over empty pane is a legitimate cancel.
+			if (!madeConnection && pendingReason && connectionState?.toHandle) flash(pendingReason);
+		}}
 		onbeforedelete={async ({ nodes }) => {
-	const feedsOthers = nodes.some((n) => graph.dependentsOf(n.id).length > 0);
-	return !feedsOthers || window.confirm('Delete node(s) that feed others downstream?');
-}}
+			const feedsOthers = nodes.some((n) => graph.dependentsOf(n.id).length > 0);
+			return !feedsOthers || window.confirm('Delete node(s) that feed others downstream?');
+		}}
 		ondelete={({ nodes }) => graph.syncDeleted(nodes.map((n) => n.id))}
 	>
 		<Background />

@@ -272,10 +272,10 @@
 		<button
 			type="button"
 			title={raisedHere.length > 0
-	? `Acknowledge ${raisedHere.length} alert${raisedHere.length === 1 ? '' : 's'}`
-	: allMuted
-		? 'Unmute alerts in this group'
-		: 'Mute alerts in this group'}
+				? `Acknowledge ${raisedHere.length} alert${raisedHere.length === 1 ? '' : 's'}`
+				: allMuted
+					? 'Unmute alerts in this group'
+					: 'Mute alerts in this group'}
 			aria-label={raisedHere.length > 0 ? 'Acknowledge alerts' : 'Mute alerts'}
 			class:on={raisedHere.length > 0}
 			onclick={toggleBell}

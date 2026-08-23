@@ -132,20 +132,20 @@
 			data-end={a.end}
 			class="hover:bg-muted/60 cursor-pointer rounded-sm transition-colors"
 			onclick={() => {
-	if (media) {
-		media.currentTime = a.start;
-		media.play().catch(() => {});
-	}
-}}
+				if (media) {
+					media.currentTime = a.start;
+					media.play().catch(() => {});
+				}
+			}}
 			onkeydown={(e) => {
-	if (e.key === 'Enter' || e.key === ' ') {
-		e.preventDefault();
-		if (media) {
-			media.currentTime = a.start;
-			media.play().catch(() => {});
-		}
-	}
-}}
+				if (e.key === 'Enter' || e.key === ' ') {
+					e.preventDefault();
+					if (media) {
+						media.currentTime = a.start;
+						media.play().catch(() => {});
+					}
+				}
+			}}
 			role="button"
 			tabindex="0"
 		>

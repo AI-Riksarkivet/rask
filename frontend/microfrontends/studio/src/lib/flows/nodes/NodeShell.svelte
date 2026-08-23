@@ -68,9 +68,9 @@
 			aria-label="Run node"
 			disabled={graph.running}
 			onclick={(e) => {
-	e.stopPropagation();
-	void graph.runNode(id, { fresh: e.shiftKey });
-}}
+				e.stopPropagation();
+				void graph.runNode(id, { fresh: e.shiftKey });
+			}}
 		>
 			<Play class="size-3.5" />
 		</button>
@@ -79,9 +79,9 @@
 			title="Duplicate node"
 			aria-label="Duplicate node"
 			onclick={(e) => {
-	e.stopPropagation();
-	graph.duplicateNode(id);
-}}
+				e.stopPropagation();
+				graph.duplicateNode(id);
+			}}
 		>
 			<Copy class="size-3.5" />
 		</button>
@@ -91,9 +91,9 @@
 			aria-label="Toggle node enabled"
 			disabled={graph.running}
 			onclick={(e) => {
-	e.stopPropagation();
-	graph.setConfig(id, { enabled: !enabled });
-}}
+				e.stopPropagation();
+				graph.setConfig(id, { enabled: !enabled });
+			}}
 		>
 			{#if enabled}<EyeOff class="size-3.5" />{:else}<Eye class="size-3.5" />{/if}
 		</button>
@@ -102,9 +102,9 @@
 			title="Delete node"
 			aria-label="Delete node"
 			onclick={(e) => {
-	e.stopPropagation();
-	graph.removeNode(id);
-}}
+				e.stopPropagation();
+				graph.removeNode(id);
+			}}
 		>
 			<X class="size-3.5" />
 		</button>

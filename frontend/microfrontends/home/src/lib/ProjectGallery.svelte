@@ -133,9 +133,9 @@
 									title={option.label}
 									data-slot="projects-view-{option.id}"
 									class={[
-	'text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-sm p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2',
-	view === option.id && 'bg-accent text-foreground',
-]}
+										'text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-sm p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2',
+										view === option.id && 'bg-accent text-foreground',
+									]}
 									onclick={() => choose(option.id)}
 								>
 									<option.icon class="size-4" aria-hidden="true" />
@@ -247,9 +247,9 @@
 					     user who already signed in round a loop that cannot fix it — the fault is the
 					     identity lookup, not the session. -->
 					<p class="text-muted-foreground">
-						You are signed in, but the catalog could not confirm your identity, so your projects cannot be
-						listed. This is a backend fault, not a sign-in problem — retry, or check that the catalog is
-						reachable.
+						You are signed in, but the catalog could not confirm your identity, so your projects
+						cannot be listed. This is a backend fault, not a sign-in problem — retry, or check that
+						the catalog is reachable.
 					</p>
 					<Button href={here}>Retry</Button>
 				{:else if authEnabled}

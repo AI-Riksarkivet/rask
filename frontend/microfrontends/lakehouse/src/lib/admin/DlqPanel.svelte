@@ -200,10 +200,10 @@
 			disabled={busy !== null}
 			aria-label="Replay {e.run_id}"
 			onclick={(ev) => {
-	// The row itself opens the drawer — the inline replay must not also do that.
-	ev.stopPropagation();
-	replay(e);
-}}><RotateCcw size={12} /> {busy === e.run_id ? '…' : 'Replay'}</button
+				// The row itself opens the drawer — the inline replay must not also do that.
+				ev.stopPropagation();
+				replay(e);
+			}}><RotateCcw size={12} /> {busy === e.run_id ? '…' : 'Replay'}</button
 		>
 	{:else}
 		<span class="mut" title="An unparseable object can't be replayed; the relay drops it."
@@ -223,7 +223,9 @@
 		<button class="btn" onclick={load}><RefreshCw size={13} /> Refresh</button>
 		{#if backlog}
 			<span class="depth mono" class:warn={backlog.depth > 0}>
-				depth {backlog.depth}{backlog.depth > 0 ? ` · oldest ${age(backlog.oldest_age_seconds)}` : ''}
+				depth {backlog.depth}{backlog.depth > 0
+					? ` · oldest ${age(backlog.oldest_age_seconds)}`
+					: ''}
 			</span>
 		{/if}
 		{#if msg}<span class="msg" class:okmsg={msg.ok} class:error={!msg.ok}>{msg.text}</span>{/if}
@@ -252,8 +254,8 @@
 <Sheet.Root
 	open={drawerEvent !== null}
 	onOpenChange={(o) => {
-	if (!o) drawerEvent = null;
-}}
+		if (!o) drawerEvent = null;
+	}}
 >
 	<Sheet.Content side="right">
 		{#if drawerEvent}
@@ -285,8 +287,12 @@
 				<div>
 					<h4 class="drawer-h">Payload (parsed staged fields)</h4>
 					<pre
-       class="payload"
-       aria-label="Staged event payload"><code>{JSON.stringify(drawerEvent, null, 2)}</code></pre>
+            class="payload"
+            aria-label="Staged event payload"><code>{JSON.stringify(
+							drawerEvent,
+							null,
+							2,
+						)}</code></pre>
 				</div>
 				<div class="drawer-links">
 					{#if drawerEvent.parseable}

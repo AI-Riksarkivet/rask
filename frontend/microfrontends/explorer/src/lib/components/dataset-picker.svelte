@@ -106,7 +106,9 @@
 		     there the instant the popover opens. Hidden when the corpus declares one, because a
 		     section with a single row is furniture rather than a choice. -->
 		{#if showTables}
-			<div class="text-muted-foreground px-2 pt-1 pb-0.5 text-[10px] font-medium uppercase">Table</div>
+			<div class="text-muted-foreground px-2 pt-1 pb-0.5 text-[10px] font-medium uppercase">
+				Table
+			</div>
 			<ul class="flex flex-col" data-testid="table-list">
 				{#each tables as table (table.name)}
 					<li>

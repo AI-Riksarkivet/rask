@@ -57,8 +57,8 @@
 	<Card class="flex flex-col gap-3 p-4">
 		<h2 class="text-sm font-medium">The decision this page is waiting on</h2>
 		<p class="text-muted-foreground text-sm">
-			Two shapes, and they are not variants of each other — they put the engine in different places and
-			imply different failure modes. Nothing here should be built until one is chosen.
+			Two shapes, and they are not variants of each other — they put the engine in different places
+			and imply different failure modes. Nothing here should be built until one is chosen.
 		</p>
 
 		<div class="border-border/60 flex flex-col gap-1 rounded-md border p-3">
@@ -69,47 +69,49 @@
 				<code class="text-foreground">FFILanceTableProvider</code>, so a dataset becomes a table the
 				planner can push projections and filters into:
 			</p>
-			<pre class="bg-muted/40 mt-1 overflow-x-auto rounded p-2 text-xs"><code>{`from datafusion import SessionContext
+			<pre class="bg-muted/40 mt-1 overflow-x-auto rounded p-2 text-xs"><code
+          >{`from datafusion import SessionContext
 from lance import FFILanceTableProvider
 
 ctx = SessionContext()
 ctx.register_table("t", FFILanceTableProvider(ds, with_row_id=True))
-ctx.sql("SELECT * FROM t LIMIT 10")`}</code></pre>
+ctx.sql("SELECT * FROM t LIMIT 10")`}</code
+        ></pre>
 			<p class="text-muted-foreground text-sm">
 				The argument for it is that the expensive middle of a query engine — planner, optimiser,
-				executor — is the part least likely to differentiate this platform, and it is already written.
-				LanceDB, lance-graph, InfluxDB 3.0, Arroyo, ParadeDB and Spark (via Comet) all embed the same
-				engine rather than building one. lance-graph is the sharpest case: it is a Cypher <em
-					>frontend</em
-				> lowered onto DataFusion logical plans, with no custom physical operators and no bespoke optimiser
-				rules.
+				executor — is the part least likely to differentiate this platform, and it is already
+				written. LanceDB, lance-graph, InfluxDB 3.0, Arroyo, ParadeDB and Spark (via Comet) all
+				embed the same engine rather than building one. lance-graph is the sharpest case: it is a
+				Cypher <em>frontend</em> lowered onto DataFusion logical plans, with no custom physical operators
+				and no bespoke optimiser rules.
 			</p>
 		</div>
 
 		<div class="border-border/60 flex flex-col gap-1 rounded-md border p-3">
 			<h3 class="text-foreground text-sm font-medium">B · Ray + sqlglot, distributed</h3>
 			<p class="text-muted-foreground text-sm">
-				Parse and rewrite with sqlglot, fan the plan out over the Ray cluster this zone already runs. It
-				buys horizontal scale over one query — and costs us the planner and optimiser that option A gets
-				for free.
+				Parse and rewrite with sqlglot, fan the plan out over the Ray cluster this zone already
+				runs. It buys horizontal scale over one query — and costs us the planner and optimiser that
+				option A gets for free.
 			</p>
 		</div>
 
 		<h3 class="text-foreground text-sm font-medium">Two questions that decide it</h3>
 		<ul class="text-muted-foreground list-disc space-y-1 pl-5 text-sm">
 			<li>
-				<strong class="text-foreground">Where does the cache live?</strong> A hybrid memory/disk cache (foyer-style)
-				beside the engine, or at the caller — a client-side cache makes the engine stateless and the cache
-				a per-user concern; a server-side one makes repeat queries cheap for everyone and adds state to evict,
-				invalidate and size.
+				<strong class="text-foreground">Where does the cache live?</strong> A hybrid memory/disk cache
+				(foyer-style) beside the engine, or at the caller — a client-side cache makes the engine stateless
+				and the cache a per-user concern; a server-side one makes repeat queries cheap for everyone and
+				adds state to evict, invalidate and size.
 			</li>
 			<li>
-				<strong class="text-foreground">Is “distributed” the right answer to the right question?</strong
+				<strong class="text-foreground"
+					>Is “distributed” the right answer to the right question?</strong
 				>
 				The pressure we actually have is governance — FGA checks, auth, per-caller row and column scoping
-				— not single-query throughput. Distributing execution does not help with that, and an embedded engine
-				leaves the governance layer exactly where it already is. Choosing B for scale we do not yet measure
-				would buy the wrong axis.
+				— not single-query throughput. Distributing execution does not help with that, and an embedded
+				engine leaves the governance layer exactly where it already is. Choosing B for scale we do not
+				yet measure would buy the wrong axis.
 			</li>
 		</ul>
 		<p class="text-muted-foreground text-sm">
@@ -123,9 +125,9 @@ ctx.sql("SELECT * FROM t LIMIT 10")`}</code></pre>
 		<p class="text-muted-foreground text-sm">
 			There is no query service in the fleet today. The catalog serves table
 			<em>metadata</em>, and the explorer reads row batches as Arrow over its own
-			<code class="text-foreground">/api/explorer</code> seam — neither accepts SQL. Wiring this means a
-			real engine (a Lance/DataFusion door, or Ray Data) behind a gateway route, and it is a backend change,
-			not a frontend one. This page exists so the surface can be argued about first.
+			<code class="text-foreground">/api/explorer</code> seam — neither accepts SQL. Wiring this means
+			a real engine (a Lance/DataFusion door, or Ray Data) behind a gateway route, and it is a backend
+			change, not a frontend one. This page exists so the surface can be argued about first.
 		</p>
 	</Card>
 </div>

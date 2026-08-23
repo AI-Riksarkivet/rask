@@ -218,7 +218,9 @@
 								>
 									<span class="flex min-w-0 flex-col">
 										<span class="truncate font-medium">{project.title || project.slug}</span>
-										<span class="text-muted-foreground truncate font-mono text-xs">{project.slug}</span>
+										<span class="text-muted-foreground truncate font-mono text-xs"
+											>{project.slug}</span
+										>
 									</span>
 									<Badge variant={project.state === 'labeling' ? 'default' : 'secondary'}>
 										{project.state}

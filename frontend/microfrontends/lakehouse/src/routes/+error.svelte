@@ -28,8 +28,8 @@
 	<div class="mx-auto flex max-w-md flex-col items-center gap-4 px-6 py-24 text-center">
 		<h1 class="text-xl font-semibold">{message || 'Sign in to continue'}</h1>
 		<p class="text-sm text-muted-foreground">
-			You are not signed in, so there is no identity to authorize. This is not a permissions problem —
-			sign in and the estate will decide what you can reach.
+			You are not signed in, so there is no identity to authorize. This is not a permissions problem
+			— sign in and the estate will decide what you can reach.
 		</p>
 		<!-- data-sveltekit-reload: /auth/* is the HOME zone's BFF, not a route this zone owns, so a soft
 		     navigation would 404 into this zone's own manifest. -->

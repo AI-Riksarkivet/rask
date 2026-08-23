@@ -94,9 +94,9 @@
 	<form
 		class="row"
 		onsubmit={(e) => {
-	e.preventDefault();
-	runRenameTable();
-}}
+			e.preventDefault();
+			runRenameTable();
+		}}
 	>
 		<input
 			class="mono"
@@ -104,11 +104,13 @@
 			placeholder="new table name"
 			aria-label="Rename table to"
 		/>
-		<button class="btn" type="submit" disabled={dangerBusy || !renameTableTo.trim()}> Rename </button>
+		<button class="btn" type="submit" disabled={dangerBusy || !renameTableTo.trim()}>
+			Rename
+		</button>
 	</form>
 	<p class="mut">
-		Rename relocates the table within its namespace and navigates to the new id (owner-gated: can_drop
-		on the source + can_create_table on the destination).
+		Rename relocates the table within its namespace and navigates to the new id (owner-gated:
+		can_drop on the source + can_create_table on the destination).
 	</p>
 	<div class="row">
 		<button class="btn danger" disabled={dangerBusy} onclick={() => openDanger('deregister')}>
@@ -132,11 +134,11 @@
 		</AlertDialog.Title>
 		<AlertDialog.Description>
 			{#if dangerAction === 'deregister'}
-				This detaches <span class="mono">{table}</span> from the catalog (owner-gated: can_deregister). The
-				data stays on storage, but the catalog forgets the id and its grants are revoked.
+				This detaches <span class="mono">{table}</span> from the catalog (owner-gated: can_deregister).
+				The data stays on storage, but the catalog forgets the id and its grants are revoked.
 			{:else}
-				This permanently drops <span class="mono">{table}</span> and its data (owner-gated: can_drop). Every
-				version, tag and branch is deleted; its grants are revoked.
+				This permanently drops <span class="mono">{table}</span> and its data (owner-gated: can_drop).
+				Every version, tag and branch is deleted; its grants are revoked.
 			{/if}
 		</AlertDialog.Description>
 		<div class="dialog-actions">

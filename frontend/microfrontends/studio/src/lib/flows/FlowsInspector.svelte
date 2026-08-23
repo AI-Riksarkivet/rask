@@ -181,7 +181,7 @@
 					{#if payload.kind === 'text'}
 						<pre
 							class="border-border bg-background max-h-[28rem] overflow-auto rounded-md border p-2 text-[0.7rem] leading-snug whitespace-pre-wrap">{payload.text ||
-				'(empty)'}</pre>
+								'(empty)'}</pre>
 					{:else if payload.mime.startsWith('image/')}
 						<img
 							alt={payload.label}

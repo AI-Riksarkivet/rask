@@ -142,7 +142,9 @@
 			{#if bound === null}
 				<p class="mut">Bindings unavailable right now — this list cannot be shown, so it is not.</p>
 			{:else if namespaces.length === 0}
-				<p class="mut">No namespaces bound to this warehouse — it can be deleted without a cascade.</p>
+				<p class="mut">
+					No namespaces bound to this warehouse — it can be deleted without a cascade.
+				</p>
 			{:else}
 				<ul class="list">
 					{#each namespaces as { ns, count, info } (ns)}

@@ -50,9 +50,9 @@
 		<form
 			class="new"
 			onsubmit={(e) => {
-	e.preventDefault();
-	void create();
-}}
+				e.preventDefault();
+				void create();
+			}}
 		>
 			<!-- svelte-ignore a11y_autofocus -- the field appears on an explicit click, so focusing it is
 			     what the click asked for. -->
@@ -88,7 +88,7 @@
 						<span class="name">{v.name}</span>
 						<!-- The whole point of the state model, in one dot. -->
 						{#if isActive && views.dirty}<span class="dot" title="Modified since it was saved"
-						  >●</span
+							>●</span
 						>{/if}
 					</button>
 					{#if isActive}

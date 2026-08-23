@@ -27,11 +27,11 @@
 	bind:checked
 	data-slot="switch"
 	class={cn(
-	'inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors',
-	'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
-	'data-[state=checked]:bg-primary data-[state=unchecked]:bg-secondary',
-	className,
-)}
+		'inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors',
+		'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
+		'data-[state=checked]:bg-primary data-[state=unchecked]:bg-secondary',
+		className,
+	)}
 	{...rest}
 >
 	<Switch.Thumb

@@ -112,9 +112,9 @@
 	<div
 		bind:this={container}
 		class={cn(
-	'border-input bg-background selection:bg-primary/25 rounded-md border p-2.5 select-text',
-	textClass,
-)}
+			'border-input bg-background selection:bg-primary/25 rounded-md border p-2.5 select-text',
+			textClass,
+		)}
 	>
 		{#each segments as seg (seg.start)}
 			{#if seg.marks.length > 0}
@@ -122,15 +122,15 @@
 				<mark
 					data-start={seg.start}
 					class={cn(
-	'cursor-pointer rounded-sm py-0.5 text-inherit',
-	selectedIndex != null &&
-		seg.marks.some((m) => m.index === selectedIndex) &&
-		'ring-ring ring-1',
-)}
+						'cursor-pointer rounded-sm py-0.5 text-inherit',
+						selectedIndex != null &&
+							seg.marks.some((m) => m.index === selectedIndex) &&
+							'ring-ring ring-1',
+					)}
 					style:background-color={tint(top.label)}
 					style:box-shadow={seg.marks.length > 1
-	? `inset 0 -2px ${spanColor(seg.marks[0]!.label, classes)}, inset 0 -4px ${spanColor(top.label, classes)}`
-	: `inset 0 -2px ${spanColor(top.label, classes)}`}
+						? `inset 0 -2px ${spanColor(seg.marks[0]!.label, classes)}, inset 0 -4px ${spanColor(top.label, classes)}`
+						: `inset 0 -2px ${spanColor(top.label, classes)}`}
 					onclick={() => onpick?.(top.index)}>{seg.text}</mark
 				>{#each seg.ending as m (m.id)}<span
 						class="bg-card text-muted-foreground border-border mr-0.5 ml-0.5 inline-flex translate-y-[-0.45em] items-center gap-0.5 rounded border px-1 align-middle text-[9px] font-medium tracking-wide uppercase"
@@ -140,9 +140,9 @@
 							title="Remove this span"
 							aria-label={`Remove ${m.label} span`}
 							onclick={(e) => {
-	e.stopPropagation();
-	onremove?.(m.index);
-}}
+								e.stopPropagation();
+								onremove?.(m.index);
+							}}
 						><X class="size-2.5" /></button></span>{/each}
 			{:else}<span data-start={seg.start}>{seg.text}</span>{/if}
 		{/each}
@@ -169,7 +169,9 @@
 		</div>
 	{:else if hint}
 		<span class="text-muted-foreground text-[11px]">
-			Select text above to label a span{classes.length ? '' : ' — this task declares no text classes'}.
+			Select text above to label a span{classes.length
+				? ''
+				: ' — this task declares no text classes'}.
 		</span>
 	{/if}
 </div>

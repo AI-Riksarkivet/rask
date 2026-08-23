@@ -93,9 +93,9 @@
 		data-testid="similar-open"
 		title="find items whose embedding is nearest to this one"
 		onclick={() => {
-	open = !open;
-	added = null;
-}}
+			open = !open;
+			added = null;
+		}}
 	>
 		<Sparkles class="size-4" />
 		{open ? 'Hide similar' : 'More like this'}
@@ -174,7 +174,10 @@
 							     pane: a bulk surface that cannot explain its selection is one nobody trusts
 							     enough to accept in bulk, which is the only thing it exists for. -->
 							<span class="text-muted-foreground shrink-0">
-								{describeNeighbour(i, typeof hit._distance === 'number' ? hit._distance : undefined)}
+								{describeNeighbour(
+									i,
+									typeof hit._distance === 'number' ? hit._distance : undefined,
+								)}
 							</span>
 						</li>
 					{/if}

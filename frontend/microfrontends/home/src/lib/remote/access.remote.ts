@@ -145,15 +145,13 @@ export const checkAccess = query(
 );
 
 /** The authorization model (read-only — model changes are code migrations). */
-export const fetchAccessModel = query(
-	async (): Promise<ApiResult<AccessModel>> =>
-		parsed(await catalogJSON('/v1/access/model'), AccessModelSchema),
+export const fetchAccessModel = query(async (): Promise<ApiResult<AccessModel>> =>
+	parsed(await catalogJSON('/v1/access/model'), AccessModelSchema),
 );
 
 /** The catalog registry (`<ns>$<table>` ids) — one-click graph seeds. */
-export const fetchTables = query(
-	async (): Promise<ApiResult<{ tables: string[] }>> =>
-		parsed(await catalogJSON('/v1/table'), v.object({ tables: v.array(v.string()) })),
+export const fetchTables = query(async (): Promise<ApiResult<{ tables: string[] }>> =>
+	parsed(await catalogJSON('/v1/table'), v.object({ tables: v.array(v.string()) })),
 );
 
 /** The signed-in identity — what the tuple store actually keys on. Fail-soft to `null` (no session,

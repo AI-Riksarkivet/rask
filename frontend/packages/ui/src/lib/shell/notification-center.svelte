@@ -136,8 +136,8 @@
 <Popover.Root
 	bind:open
 	onOpenChange={(next) => {
-	if (!next) markSeen();
-}}
+		if (!next) markSeen();
+	}}
 >
 	<Popover.Trigger>
 		{#snippet child({ props })}

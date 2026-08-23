@@ -75,8 +75,8 @@
 	<div>
 		<h2 class="text-sm font-semibold">Publish to the lakehouse</h2>
 		<p class="text-muted-foreground text-xs">
-			One governed table per publish, created through the catalog — nothing lands before every item is
-			terminal.
+			One governed table per publish, created through the catalog — nothing lands before every item
+			is terminal.
 		</p>
 	</div>
 	<div class="flex flex-col gap-3 text-sm">
@@ -88,7 +88,8 @@
 				</p>
 				<p class="text-muted-foreground text-xs">
 					version {project.published.version} · tag
-					<span class="font-mono">{project.published.tag}</span> · by {project.published.published_by}
+					<span class="font-mono">{project.published.tag}</span> · by {project.published
+						.published_by}
 				</p>
 			</div>
 		{:else if project.state === 'publishing'}
@@ -118,9 +119,9 @@
 					class="w-fit"
 					disabled={firing}
 					onclick={() => {
-	namespace = project.pending_target_namespace ?? 'silver';
-	void publish();
-}}
+						namespace = project.pending_target_namespace ?? 'silver';
+						void publish();
+					}}
 				>
 					<RotateCcw class="size-3.5" /> Retry publish
 				</Button>
@@ -140,8 +141,8 @@
 				class="w-fit"
 				disabled={!canPublish}
 				title={canPublish
-	? undefined
-	: 'freeze the project first — publish is legal only from frozen'}
+					? undefined
+					: 'freeze the project first — publish is legal only from frozen'}
 				onclick={() => (confirmOpen = true)}
 			>
 				<Rocket class="size-3.5" /> Publish…
@@ -156,8 +157,10 @@
 		<Dialog.Description>This is what lands, and whose names travel with it.</Dialog.Description>
 		<div class="flex flex-col gap-2 text-sm">
 			<p>
-				<span class="font-medium">{accepted}</span> accepted item{accepted === 1 ? '' : 's'} contribute their
-				shapes; <span class="font-medium">{skipped}</span> skipped item{skipped === 1 ? '' : 's'}
+				<span class="font-medium">{accepted}</span> accepted item{accepted === 1 ? '' : 's'} contribute
+				their shapes; <span class="font-medium">{skipped}</span> skipped item{skipped === 1
+					? ''
+					: 's'}
 				land as sentinel rows (the decisions stay on the record).
 			</p>
 			<p class="text-muted-foreground text-xs">

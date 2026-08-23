@@ -73,13 +73,11 @@ export async function loadGallery(event: {
 			const res = await event.fetch('/capi/v1/projects');
 			if (res.ok) {
 				const roleOf = new Map(me.projects.map((p) => [p.project, p.role]));
-				const listed = parse(EstateProjectsSchema, await res.json()).map(
-					(p): GalleryProject => ({
-						project: p.project,
-						role: roleOf.get(p.project) ?? null,
-						warehouses: p.warehouses.length,
-					}),
-				);
+				const listed = parse(EstateProjectsSchema, await res.json()).map((p): GalleryProject => ({
+					project: p.project,
+					role: roleOf.get(p.project) ?? null,
+					warehouses: p.warehouses.length,
+				}));
 				// MERGED, never replaced. The estate listing used to be substituted for the membership
 				// list outright, which meant an admin saw exactly what the listing returned — and the
 				// listing answering `200 []` is not the same claim as "you belong to nothing". On this

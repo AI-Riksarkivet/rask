@@ -140,9 +140,12 @@
 			<section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 				<Card class="relative overflow-hidden p-4">
 					<div class="absolute inset-x-0 top-0 h-0.5 bg-emerald-500"></div>
-					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">Nodes</div>
+					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
+						Nodes
+					</div>
 					<div class="mt-1 font-mono text-2xl tabular-nums">
-						{payload.alive_count}<span class="text-muted-foreground text-base">/{payload.node_count}</span
+						{payload.alive_count}<span class="text-muted-foreground text-base"
+							>/{payload.node_count}</span
 						>
 					</div>
 					<div class="text-muted-foreground text-xs">alive / total</div>
@@ -150,9 +153,13 @@
 
 				<Card class="relative overflow-hidden p-4">
 					<div class="absolute inset-x-0 top-0 h-0.5 bg-violet-500"></div>
-					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">GPU</div>
+					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
+						GPU
+					</div>
 					<div class="mt-1 font-mono text-2xl tabular-nums">
-						{ur.GPU.toFixed(1)}<span class="text-muted-foreground text-base">/{tr.GPU.toFixed(0)}</span>
+						{ur.GPU.toFixed(1)}<span class="text-muted-foreground text-base"
+							>/{tr.GPU.toFixed(0)}</span
+						>
 					</div>
 					<div class="bg-muted mt-1.5 h-1.5 w-full overflow-hidden rounded-full">
 						<div
@@ -164,9 +171,13 @@
 
 				<Card class="relative overflow-hidden p-4">
 					<div class="absolute inset-x-0 top-0 h-0.5 bg-sky-500"></div>
-					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">CPU</div>
+					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
+						CPU
+					</div>
 					<div class="mt-1 font-mono text-2xl tabular-nums">
-						{ur.CPU.toFixed(0)}<span class="text-muted-foreground text-base">/{tr.CPU.toFixed(0)}</span>
+						{ur.CPU.toFixed(0)}<span class="text-muted-foreground text-base"
+							>/{tr.CPU.toFixed(0)}</span
+						>
 					</div>
 					<div class="bg-muted mt-1.5 h-1.5 w-full overflow-hidden rounded-full">
 						<div
@@ -244,7 +255,9 @@
 											</div>
 											<div class="min-w-0">
 												<div class="truncate font-mono" title={n.hostname ?? ''}>
-													{short(n.hostname) === '—' ? (n.node_id?.slice(0, 12) ?? '—') : short(n.hostname)}
+													{short(n.hostname) === '—'
+														? (n.node_id?.slice(0, 12) ?? '—')
+														: short(n.hostname)}
 												</div>
 												<div class="text-muted-foreground font-mono text-[10px]">
 													{n.node_ip ?? ''}
@@ -269,7 +282,9 @@
 																style:width={`${g.utilization_percent ?? 0}%`}
 															></div>
 														</div>
-														<span class="w-8 text-right">{(g.utilization_percent ?? 0).toFixed(0)}%</span>
+														<span class="w-8 text-right"
+															>{(g.utilization_percent ?? 0).toFixed(0)}%</span
+														>
 													</div>
 												{/each}
 											</div>
@@ -287,8 +302,12 @@
 										{#if n.gpus.length}
 											{#each n.gpus as g, i (g.uuid ?? g.index ?? i)}
 												<div>
-													{mbGb(g.memory_used_mb ?? 0).toFixed(1)}/{mbGb(g.memory_total_mb ?? 0).toFixed(0)} GB
-													<span class="text-muted-foreground">· {(g.temperature_c ?? 0).toFixed(0)}°C</span>
+													{mbGb(g.memory_used_mb ?? 0).toFixed(1)}/{mbGb(g.memory_total_mb ?? 0).toFixed(
+														0,
+													)} GB
+													<span class="text-muted-foreground"
+														>· {(g.temperature_c ?? 0).toFixed(0)}°C</span
+													>
 												</div>
 											{/each}
 										{:else}
@@ -313,7 +332,9 @@
 									</td>
 
 									<td class="px-3 py-1.5 font-mono tabular-nums">
-										{bytesGb(n.host_mem_used ?? 0).toFixed(1)}/{bytesGb(n.host_mem_total ?? 0).toFixed(0)} GiB
+										{bytesGb(n.host_mem_used ?? 0).toFixed(1)}/{bytesGb(n.host_mem_total ?? 0).toFixed(
+											0,
+										)} GiB
 									</td>
 								</tr>
 							{/each}

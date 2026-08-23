@@ -247,11 +247,11 @@
 					     failure signal is `error_type`, or a FAILED/STOPPED status. -->
 					<div
 						class={[
-	'mx-4 mb-3 flex items-start gap-1.5 rounded-md border p-2 font-mono text-[11px]',
-	jobFailed
-		? 'border-destructive/30 bg-destructive/5 text-destructive'
-		: 'border-border/60 bg-muted/40 text-muted-foreground',
-]}
+							'mx-4 mb-3 flex items-start gap-1.5 rounded-md border p-2 font-mono text-[11px]',
+							jobFailed
+								? 'border-destructive/30 bg-destructive/5 text-destructive'
+								: 'border-border/60 bg-muted/40 text-muted-foreground',
+						]}
 					>
 						{#if jobFailed}
 							<TriangleAlert class="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -299,7 +299,9 @@
 						>Driver logs</span
 					>
 					{#if running}
-						<span class="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
+						<span
+							class="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400"
+						>
 							<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500"></span>live
 						</span>
 					{/if}
@@ -392,8 +394,8 @@
 			{:else}
 				<div class="text-muted-foreground flex items-center gap-2 text-xs">
 					<FileText class="h-4 w-4" />
-					No Ray tasks for this job — htr_http jobs run as a plain HTTP driver; the work happens in the Serve
-					replicas (Actors page).
+					No Ray tasks for this job — htr_http jobs run as a plain HTTP driver; the work happens in the
+					Serve replicas (Actors page).
 				</div>
 			{/if}
 		{/if}

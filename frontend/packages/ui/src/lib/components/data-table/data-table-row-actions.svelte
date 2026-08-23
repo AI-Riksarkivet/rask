@@ -20,10 +20,10 @@
 				variant="ghost"
 				size="icon-sm"
 				onclick={(e: MouseEvent) => {
-	// Keep the trigger from also firing the table's row-level onrowclick.
-	e.stopPropagation();
-	(props as { onclick?: (e: MouseEvent) => void }).onclick?.(e);
-}}
+					// Keep the trigger from also firing the table's row-level onrowclick.
+					e.stopPropagation();
+					(props as { onclick?: (e: MouseEvent) => void }).onclick?.(e);
+				}}
 			>
 				<span class="sr-only">{label}</span>
 				<Ellipsis class="size-4" />

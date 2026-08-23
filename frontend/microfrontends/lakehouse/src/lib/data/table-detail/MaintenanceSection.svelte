@@ -277,8 +277,8 @@
 		{#if gcPreview}
 			<p class="mut">
 				{gcPreview.eligible_versions.length} version{gcPreview.eligible_versions.length === 1
-			? ''
-			: 's'}
+					? ''
+					: 's'}
 				reclaimable
 				{#if gcPreview.eligible_versions.length}(v{gcPreview.eligible_versions.join(', v')}){/if}
 				· {gcPreview.total_versions} total, current v{gcPreview.current_version}.
@@ -291,7 +291,9 @@
 			{#if gcPreview.eligible_versions.length}
 				{#if gcConfirm}
 					<div class="row">
-						<span class="mut">Permanently reclaim {gcPreview.eligible_versions.length} version(s)?</span>
+						<span class="mut"
+							>Permanently reclaim {gcPreview.eligible_versions.length} version(s)?</span
+						>
 						<button class="btn danger" disabled={gcBusy} onclick={runGc}>Confirm reclaim</button>
 						<button class="btn ghost" onclick={() => (gcConfirm = false)}>Cancel</button>
 					</div>

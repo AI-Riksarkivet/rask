@@ -50,15 +50,15 @@
 	<Dialog.Content class="sm:max-w-md">
 		<Dialog.Title>Send items into this labeling task</Dialog.Title>
 		<Dialog.Description>
-			One key per line (<span class="font-mono">doc/speech/chunk</span>) — from the corpus browser, a
-			search, or an atlas selection. Each becomes a claimable item.
+			One key per line (<span class="font-mono">doc/speech/chunk</span>) — from the corpus browser,
+			a search, or an atlas selection. Each becomes a claimable item.
 		</Dialog.Description>
 		<form
 			class="flex flex-col gap-3"
 			onsubmit={(e) => {
-	e.preventDefault();
-	void send();
-}}
+				e.preventDefault();
+				void send();
+			}}
 		>
 			<Textarea
 				bind:value={keysText}

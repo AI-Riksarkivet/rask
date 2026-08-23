@@ -358,9 +358,10 @@
 						<span class="ml-auto tabular-nums"
 							>{view.length}{onlyMatches && query ? `/${allLines.length}` : ''} lines</span
 						>
-						{#if follow}<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><span
-							class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500"
-						></span>live</span>{/if}
+						{#if follow}<span
+								class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400"
+							><span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500"></span>live</span
+							>{/if}
 					</div>
 				{/if}
 				{#if !selected}

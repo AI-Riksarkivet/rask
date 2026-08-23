@@ -123,9 +123,9 @@
 		<form
 			class="flex flex-wrap items-center gap-2"
 			onsubmit={(e) => {
-	e.preventDefault();
-	void grant();
-}}
+				e.preventDefault();
+				void grant();
+			}}
 		>
 			<Input
 				bind:value={who}

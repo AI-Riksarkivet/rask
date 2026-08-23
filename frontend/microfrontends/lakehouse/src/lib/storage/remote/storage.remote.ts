@@ -21,16 +21,14 @@ const RegistrySchema = v.object({ stores: v.array(StoreSchema) });
 const TiersSchema = v.record(v.string(), v.array(StoreSchema));
 
 /** Every store the catalog knows, with its role. */
-export const listStores = query(
-	async (): Promise<ApiResult<{ stores: Store[] }>> =>
-		parsed(await catalogJSON('/v1/stores'), RegistrySchema),
+export const listStores = query(async (): Promise<ApiResult<{ stores: Store[] }>> =>
+	parsed(await catalogJSON('/v1/stores'), RegistrySchema),
 );
 
 /** The tier → store view, grouped by the catalog — derived there, so a store's tier cannot drift
  *  between the registry and the page that displays it. */
-export const listStoresByTier = query(
-	async (): Promise<ApiResult<Record<string, Store[]>>> =>
-		parsed(await catalogJSON('/v1/stores/tiers'), TiersSchema),
+export const listStoresByTier = query(async (): Promise<ApiResult<Record<string, Store[]>>> =>
+	parsed(await catalogJSON('/v1/stores/tiers'), TiersSchema),
 );
 
 /** Attach a bucket for BROWSING (registers only). Estate-admin gated by the catalog; echoes the

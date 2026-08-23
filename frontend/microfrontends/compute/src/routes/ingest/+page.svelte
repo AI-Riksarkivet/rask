@@ -45,8 +45,8 @@
 			<div class="space-y-1">
 				<h1 class="text-xl font-semibold tracking-tight">Ingest runs</h1>
 				<p class="text-muted-foreground max-w-prose text-sm">
-					Every run this plane has recorded, newest first — from the lineage graph, so the board survives
-					a pod restart and is shared across replicas.
+					Every run this plane has recorded, newest first — from the lineage graph, so the board
+					survives a pod restart and is shared across replicas.
 				</p>
 			</div>
 			<!-- The design system's Button (href form), not a hand-styled anchor: the base variant
@@ -93,8 +93,8 @@
 									: 'opacity-60'}"
 								href={run.source_run_id ? `${base}/ingest/${run.source_run_id}` : undefined}
 								title={run.source_run_id
-	? undefined
-	: 'Recorded before run identity landed in the graph — no detail page can resolve it.'}
+									? undefined
+									: 'Recorded before run identity landed in the graph — no detail page can resolve it.'}
 							>
 								{#if run.state === 'COMPLETE'}
 									<CircleCheck class="h-4 w-4 shrink-0 text-emerald-600" />
@@ -114,7 +114,9 @@
 											>{run.source_run_id ?? run.run_id}</span
 										>
 									{:else}
-										<span class="block truncate font-mono text-xs">{run.source_run_id ?? run.run_id}</span>
+										<span class="block truncate font-mono text-xs"
+											>{run.source_run_id ?? run.run_id}</span
+										>
 									{/if}
 									{#if run.error_message}
 										<span class="text-destructive block truncate text-xs">{run.error_message}</span>

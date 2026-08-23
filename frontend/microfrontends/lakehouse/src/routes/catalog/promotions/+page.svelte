@@ -29,8 +29,8 @@
 	<div>
 		<h1 class="text-lg font-semibold">Promotions</h1>
 		<p class="text-muted-foreground text-sm">
-			A promotion the quality gate found unusual waits for a validator rather than being dropped. Open
-			one by its review id to approve or reject it.
+			A promotion the quality gate found unusual waits for a validator rather than being dropped.
+			Open one by its review id to approve or reject it.
 		</p>
 	</div>
 

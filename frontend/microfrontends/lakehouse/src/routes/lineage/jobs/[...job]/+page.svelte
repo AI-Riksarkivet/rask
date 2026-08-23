@@ -92,7 +92,8 @@
 			<div class="rel-group">
 				<span class="rel-label">Reads</span>
 				{#each upstream as u (u)}
-					<a class="rel-chip mono" href={`${base}/lineage/datasets/${encodeURIComponent(u)}`}>{u}</a>
+					<a class="rel-chip mono" href={`${base}/lineage/datasets/${encodeURIComponent(u)}`}>{u}</a
+					>
 				{:else}
 					<span class="mut">no recorded inputs</span>
 				{/each}
@@ -100,7 +101,8 @@
 			<div class="rel-group">
 				<span class="rel-label">Writes</span>
 				{#each downstream as d (d)}
-					<a class="rel-chip mono" href={`${base}/lineage/datasets/${encodeURIComponent(d)}`}>{d}</a>
+					<a class="rel-chip mono" href={`${base}/lineage/datasets/${encodeURIComponent(d)}`}>{d}</a
+					>
 				{:else}
 					<span class="mut">no recorded outputs</span>
 				{/each}
@@ -133,8 +135,9 @@
 					{#if (r.outputs ?? []).length}
 						<div class="outs">
 							{#each r.outputs ?? [] as out (out)}
-								<a class="rel-chip mono" href={`${base}/lineage/datasets/${encodeURIComponent(out)}`}
-									>{out}</a
+								<a
+									class="rel-chip mono"
+									href={`${base}/lineage/datasets/${encodeURIComponent(out)}`}>{out}</a
 								>
 							{/each}
 						</div>

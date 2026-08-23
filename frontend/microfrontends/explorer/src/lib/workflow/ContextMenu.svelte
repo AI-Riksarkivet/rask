@@ -30,8 +30,8 @@
 <!-- Escape dismisses the menu (role="menu" keyboard contract). -->
 <svelte:window
 	onkeydown={(e) => {
-	if (e.key === 'Escape') onClose();
-}}
+		if (e.key === 'Escape') onClose();
+	}}
 />
 
 <!-- Backdrop: any click (or another right-click) dismisses the menu. -->
@@ -40,9 +40,9 @@
 	role="presentation"
 	onclick={onClose}
 	oncontextmenu={(e) => {
-	e.preventDefault();
-	onClose();
-}}
+		e.preventDefault();
+		onClose();
+	}}
 ></div>
 
 <div
@@ -93,7 +93,9 @@
 			<Trash2 class="size-3.5" /> Delete
 		</button>
 	{:else}
-		<div class="text-muted-foreground px-2 py-1 text-[0.7rem] tracking-wide uppercase">Add node</div>
+		<div class="text-muted-foreground px-2 py-1 text-[0.7rem] tracking-wide uppercase">
+			Add node
+		</div>
 		{#each NODE_KINDS as kind (kind)}
 			<button
 				class={ITEM}

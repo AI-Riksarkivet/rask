@@ -48,7 +48,9 @@
 				options={blobColumns.map((c) => ({ value: c, label: c }))}
 			/>
 			<input class="mono" type="number" min="0" placeholder="row" bind:value={blobRow} />
-			<button class="btn" disabled={!blobCol || blobRow == null} onclick={previewBlob}>Preview</button>
+			<button class="btn" disabled={!blobCol || blobRow == null} onclick={previewBlob}
+				>Preview</button
+			>
 		</div>
 		{#if blobSrc}
 			{#if blobFailed}

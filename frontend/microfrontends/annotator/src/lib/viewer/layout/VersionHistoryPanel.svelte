@@ -91,9 +91,9 @@
 				{#each versions as v, i (v.version)}
 					<button
 						class={cn(
-	'hover:bg-muted/50 flex items-center gap-2 rounded-md px-1 py-0.5 text-left transition-colors',
-	selected === v.version && 'bg-primary/10 ring-primary/40 ring-1',
-)}
+							'hover:bg-muted/50 flex items-center gap-2 rounded-md px-1 py-0.5 text-left transition-colors',
+							selected === v.version && 'bg-primary/10 ring-primary/40 ring-1',
+						)}
 						title="Compare this version against the current rows"
 						onclick={() => compare(v.version)}
 					>

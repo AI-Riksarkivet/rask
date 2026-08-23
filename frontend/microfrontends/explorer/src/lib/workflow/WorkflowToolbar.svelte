@@ -100,12 +100,12 @@
 		</div>
 		<div>
 			<span class="text-foreground">Run one node</span> — hover a node and press ▶: upstream results are
-			reused, missing upstream runs once. Shift+▶ reruns the whole branch; an amber “stale” chip means upstream
-			changed since that node last ran.
+			reused, missing upstream runs once. Shift+▶ reruns the whole branch; an amber “stale” chip means
+			upstream changed since that node last ran.
 		</div>
 		<div>
-			<span class="text-foreground">Delete</span> — hover a node and click ✕, or select a node/edge and press
-			⌫ (or the Delete button).
+			<span class="text-foreground">Delete</span> — hover a node and click ✕, or select a node/edge and
+			press ⌫ (or the Delete button).
 		</div>
 		<div>
 			<span class="text-foreground">Refine</span> — Search → Search scopes the second to the first's videos.

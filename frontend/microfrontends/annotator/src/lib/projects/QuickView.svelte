@@ -199,8 +199,8 @@
 				</Button>
 			</div>
 			<p class="text-muted-foreground text-sm">
-				This item is no longer on the current page — a filter, sort or page change moved it. Clear the
-				filter or turn back to its page to preview it.
+				This item is no longer on the current page — a filter, sort or page change moved it. Clear
+				the filter or turn back to its page to preview it.
 			</p>
 		</div>
 	{/if}

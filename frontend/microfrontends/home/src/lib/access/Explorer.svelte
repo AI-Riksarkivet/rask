@@ -611,12 +611,12 @@
 		subjects={['user:', 'team:', 'role:']}
 		objects={objectOptions}
 		onrun={() => {
-	void run();
-	pushUrl({ run: '1' });
-	// Recorded from `lastPushed` — the string pushUrl just wrote — so the history replays the exact
-	// query the address bar holds and cannot drift from it.
-	if (lastPushed) history = recordQuery(lastPushed);
-}}
+			void run();
+			pushUrl({ run: '1' });
+			// Recorded from `lastPushed` — the string pushUrl just wrote — so the history replays the exact
+			// query the address bar holds and cannot drift from it.
+			if (lastPushed) history = recordQuery(lastPushed);
+		}}
 	/>
 
 	{#if hasQuery}
@@ -643,11 +643,11 @@
 							class="w-full truncate rounded px-1.5 py-1 text-left font-mono text-[11px] hover:bg-muted"
 							title={entry.label}
 							onclick={() => {
-	// Replay the stored query VERBATIM through the same hydration path a pasted link takes — so a
-	// re-run cannot diverge from what the entry says it was.
-	lastPushed = null;
-	void goto(`?${entry.query}`, { keepFocus: true, noScroll: true });
-}}
+								// Replay the stored query VERBATIM through the same hydration path a pasted link takes — so a
+								// re-run cannot diverge from what the entry says it was.
+								lastPushed = null;
+								void goto(`?${entry.query}`, { keepFocus: true, noScroll: true });
+							}}
 						>
 							{entry.label}
 						</button>
@@ -672,9 +672,9 @@
 			variant={view === 'data' ? 'default' : 'outline'}
 			aria-pressed={view === 'data'}
 			onclick={() => {
-	view = 'data';
-	pushUrl({});
-}}
+				view = 'data';
+				pushUrl({});
+			}}
 		>
 			Live data
 		</Button>
@@ -683,9 +683,9 @@
 			variant={view === 'model' ? 'default' : 'outline'}
 			aria-pressed={view === 'model'}
 			onclick={() => {
-	view = 'model';
-	pushUrl({});
-}}
+				view = 'model';
+				pushUrl({});
+			}}
 		>
 			Model schema
 		</Button>
@@ -707,10 +707,10 @@
 				variant="outline"
 				title="Your own OIDC subject — what the tuple store actually keys on"
 				onclick={() => {
-	user = `user:${me?.sub}`;
-	kind = 'what';
-	pushUrl({});
-}}
+					user = `user:${me?.sub}`;
+					kind = 'what';
+					pushUrl({});
+				}}
 			>
 				me{me.name ? ` (${me.name})` : ''}
 			</Button>
@@ -721,14 +721,14 @@
 				variant="outline"
 				class="font-mono"
 				onclick={() => {
-	object = entry;
-	selected = entry;
-	kind = 'who';
-	// The visible half of the jump: the canvas glides to the node and the inspector fills. Without
-	// this the click only prefilled form fields, which read as the chip doing nothing.
-	focusTarget = { id: entry };
-	pushUrl({ seed: entry });
-}}
+					object = entry;
+					selected = entry;
+					kind = 'who';
+					// The visible half of the jump: the canvas glides to the node and the inspector fills. Without
+					// this the click only prefilled form fields, which read as the chip doing nothing.
+					focusTarget = { id: entry };
+					pushUrl({ seed: entry });
+				}}
 			>
 				{entry}
 			</Button>
@@ -784,10 +784,10 @@
 						shown={filtered.nodes.length}
 						total={composed.nodes.length}
 						onchange={(next) => {
-	selectedTypes = next.types;
-	selectedRelations = next.relations;
-	pushUrl({});
-}}
+							selectedTypes = next.types;
+							selectedRelations = next.relations;
+							pushUrl({});
+						}}
 					/>
 				</Popover.Content>
 			</Popover.Root>
@@ -807,9 +807,9 @@
 				role="presentation"
 				class="relative min-w-0 flex-1 overflow-hidden rounded-md border border-border"
 				onpointerleave={() => {
-	hovered = null;
-	hoveredEdge = null;
-}}
+					hovered = null;
+					hoveredEdge = null;
+				}}
 			>
 				{#if composed.nodes.length === 0}
 					<div
@@ -867,8 +867,8 @@
 				{supportingTuples}
 				{modelConditions}
 				onchanged={() => {
-	void loadNeighbourhood(seed);
-}}
+					void loadNeighbourhood(seed);
+				}}
 			/>
 		</div>
 	{/if}

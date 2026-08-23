@@ -39,9 +39,9 @@
 				{ontology}
 				oncancel={() => (open = false)}
 				onsaved={() => {
-	open = false;
-	onsaved();
-}}
+					open = false;
+					onsaved();
+				}}
 			/>
 		{/if}
 	</Dialog.Content>

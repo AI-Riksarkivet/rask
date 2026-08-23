@@ -30,11 +30,11 @@
 	{onclick}
 	data-testid="doc-tile"
 	class={cn(
-	// Card geometry straight off @rask/ui's Card (border-border / bg-card / rounded-lg /
-	// shadow-sm), plus the lift + ring this tile needs as an interactive element.
-	'group border-border bg-card text-card-foreground flex flex-col overflow-hidden rounded-lg border text-left shadow-sm transition-all',
-	'hover:border-primary focus-visible:ring-ring/50 hover:-translate-y-0.5 hover:shadow-md focus-visible:ring-3 focus-visible:outline-none',
-)}
+		// Card geometry straight off @rask/ui's Card (border-border / bg-card / rounded-lg /
+		// shadow-sm), plus the lift + ring this tile needs as an interactive element.
+		'group border-border bg-card text-card-foreground flex flex-col overflow-hidden rounded-lg border text-left shadow-sm transition-all',
+		'hover:border-primary focus-visible:ring-ring/50 hover:-translate-y-0.5 hover:shadow-md focus-visible:ring-3 focus-visible:outline-none',
+	)}
 >
 	<div class="bg-muted relative aspect-video w-full overflow-hidden">
 		<img
