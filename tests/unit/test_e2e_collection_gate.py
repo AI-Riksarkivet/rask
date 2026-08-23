@@ -349,3 +349,32 @@ def test_every_notification_lane_drive_is_invoked_by_something() -> None:
         "or script. They are the only end-to-end proof for their targeting sources, and they run "
         "nowhere:\n  " + "\n  ".join(unreferenced)
     )
+
+
+def test_every_opt_in_pytest_option_has_something_that_passes_it() -> None:
+    """A suite gated on a CLI option nobody passes is a deletion that still reads as coverage.
+
+    `packages/tracker/tests/test_postgres.py` skipped six tests unless `--postgresql-port` was given,
+    and no Makefile target, script, CI job or Dagger function gave it. The package's stated contract is
+    backend-agnosticism — SQLite for dev, Postgres for production — so every green tracker run proved
+    only the half that does not ship. Measured: 17 passed / 6 skipped locally, against 23 passed / 0
+    skipped once something actually passes the option.
+
+    This is the same rule as the two gates above, applied to the third way a test can be unreachable.
+    A suite can fail to run because nothing SELECTS it (a marker with no target), because nothing NAMES
+    it (a drive nobody invokes), or — here — because it is selected and named and then skips itself.
+    All three read as green.
+    """
+    surfaces = _selection_surfaces()
+    unpassed: list[str] = []
+
+    for path in sorted((REPO_ROOT / "packages").rglob("test_*.py")) + sorted((REPO_ROOT / "tests").rglob("test_*.py")):
+        for match in re.finditer(r'getoption\(\s*["\'](--[a-z0-9-]+)["\']', path.read_text(encoding="utf-8")):
+            option = match.group(1)
+            if option not in surfaces:
+                unpassed.append(f"{path.relative_to(REPO_ROOT).as_posix()} -> {option}")
+
+    assert not unpassed, (
+        "these suites gate themselves on a pytest option that nothing in the Makefile, CI, Dagger or "
+        "scripts passes, so they skip everywhere and the run stays green:\n  " + "\n  ".join(unpassed)
+    )

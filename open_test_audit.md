@@ -1072,6 +1072,44 @@ against the cold Vite cache the config exists to pre-warm.
 `--postgresql-port` CLI option **no Makefile target, script, CI job or Dagger function passes**. The
 package's stated contract is backend-agnosticism; its production backend has no runner.
 
+✅ **FIXED + ENFORCED 2026-08-22.** `dagger call tracker-postgres` (`.dagger/tracker.go`), reachable as
+`make tracker-postgres`.
+
+| | result |
+| --- | --- |
+| `uv run pytest packages/tracker/tests/test_postgres.py` | **17 passed, 6 SKIPPED** — the production backend untested |
+| `dagger call tracker-postgres` | **23 passed, 0 skipped, exit 0** — all six against a real PG16 |
+
+PG16 because that is what the estate runs (the chart's AGE image is `apache/age:release_PG16_1.5.0`,
+CloudNativePG the same major), so this proves the tracker against the version production uses.
+
+**The server is a Dagger SERVICE, never a container the test starts.** The rule admits no exception —
+*"Any container — ephemeral brokers, one-off fixtures, ad-hoc debugging — goes through Dagger"* — and a
+test fixture is precisely the "one-off fixture" it names. The suite was already shaped for it:
+`postgresql_noproc()` connects to a server someone else runs.
+
+Three things had to be got right, and each failed in a way that looked like something else:
+
+1. **`WithDefaultArgs`, not `WithExec`.** The official image refuses to run as root — *"must be started
+   under an unprivileged user ID"* — because its entrypoint is what drops privileges. A direct
+   `WithExec` of `postgres` bypasses it.
+2. **The maintenance DB must differ from the test DB.** With both named `tracker`, pytest-postgresql
+   tried to CREATE a database the image had already made: six errors reading `DuplicateDatabase`, on a
+   perfectly healthy server.
+3. **Trust auth, for a reason that belongs to the SUITE.** `pg_tracker` rebuilds a DSN from
+   `postgresql_conn.info`, and `info.password` is empty for a noproc server — so the DSN carries no
+   password and scram refuses it. Five tests use the live connection object and passed; only
+   `test_postgres_via_factory_end_to_end`, which goes through the DSN, hit it. Trust auth on a
+   throwaway server is the right fix; teaching the fixture to carry a password would be changing a
+   suite whose job is to test the tracker, not pytest-postgresql.
+
+Enforced by `test_every_opt_in_pytest_option_has_something_that_passes_it`, which scans for
+`request.config.getoption("--x")` and requires `--x` to appear in a selection surface. **This is the
+THIRD way a suite can be unreachable while reading green**, and the file now gates all three: nothing
+SELECTS it (a marker with no target — M10), nothing NAMES it (a drive nobody invokes — M12), or it is
+selected and named and then skips itself (here). RED: deleting `--postgresql-port=5432` from the Dagger
+call fails **exit 1** naming the file and the option.
+
 ---
 
 ## Part 7 — Mocks and doubles that stand in for something else
