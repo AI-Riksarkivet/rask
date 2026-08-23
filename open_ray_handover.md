@@ -37,14 +37,60 @@ what they are; your work is the "APPLY ON THE RAY CLUSTER" block in each section
 
 ---
 
+## A working reference (added 2026-08-23)
+
+Everything in §1 has now been exercised against a real KubeRay cluster, so you are not applying
+untested instructions. That cluster is `rask-ray`, inside rask's own k3s estate — a RayService that
+**the chart no longer renders** (`rayservice.yaml` gates on `singleTenant.enabled`, which is `false`)
+and that is **orphaned from Helm**: it carries Helm labels from an older revision but appears in no
+current release manifest. It is therefore not a template you can copy, but it IS a live cluster the
+scrape config was proven against, and its being unmanaged is what made it safe to test on.
+
+What that changes for you, section by section:
+
+| | before | now |
+| --- | --- | --- |
+| §1 metrics scrape | proposed | **verified end-to-end** — series named and counted |
+| §2 tracing | "rask half LANDED" | wiring exists, **reaches nothing**, no span ever observed |
+| §3 log shipping | "Serve stderr already collected" | **measured**: 0 Ray rows reached the store in 6h |
+
+The one decision this raises for rask, not for you: the chart ships Ray telemetry wiring that no
+install renders. Either the RayService should render, or the orphan should be adopted, or the wiring
+should be dropped as external-only. Today it is the third by accident rather than by choice.
+
 ## 1. Scrape Ray's metrics endpoint
 
-**Status:** rask half LANDED (a `ray-pods` job in the in-cluster Collector, for the `singleTenant`
-case). External half: **yours**.
+**Status:** rask half LANDED **and now VERIFIED END-TO-END** against a real KubeRay cluster.
+External half: **yours**.
+
+> **VERIFIED 2026-08-23 on rask's own in-cluster KubeRay** (`rask-ray`, a RayService the chart no
+> longer renders — see *A working reference* below). The scrape job works exactly as written here:
+>
+> ```
+> up{job="ray-pods"} = 1
+>   k8s_pod_name   = rask-ray-h5j5d-head-jpj2d
+>   ray_io_cluster = rask-ray-h5j5d
+>   ray_node_type  = head
+>
+> ray_tasks                         → 50 series
+> ray_serve_num_http_requests_total →  2 series
+> ray_node_cpu_utilization          →  1 series
+> ray_cluster_active_nodes          →  1 series
+> ```
+>
+> So this section is no longer a proposal — it is a procedure with a known-good outcome, and the
+> block below is the config that produced it.
+>
+> **One thing to carry over that this section did not originally warn about.** Turning the scrape on
+> more than DOUBLED the estate's series count in a single step — 3,250 → 7,349 — because Ray Data
+> emits 113 `ray_data_*` families of per-dataset, per-operator series. rask's telemetry store began
+> OOMKilling 3h30m later and died 13 times. Budget for that before you enable it, and consider the
+> `metric_relabel_configs` drop rask now ships (`chart/templates/otel-collector.yaml`), which keeps
+> the two `ray_data_` series a dashboard actually reads and drops the other 111.
 
 ### The problem
 
-Nothing collects a single Ray series today. Every `ray_*`, `ray_serve_*`, `ray_data_*` and
+Nothing collected a single Ray series before this landed. Every `ray_*`, `ray_serve_*`, `ray_data_*` and
 `autoscaler_*` metric is uncollected, so a Ray head that is alive-but-wedged, a Serve application with
 zero healthy replicas, and a cascade stalled on backpressure are all indistinguishable from an idle,
 healthy cluster.
@@ -136,8 +182,21 @@ nothing.
 
 ## 2. Ray distributed tracing — the Serve switch first
 
-**Status:** rask half **LANDED** — `service_kit.ray_tracing` exists and the chart wires both switches
-for the `singleTenant` case. External half: **yours**.
+**Status:** rask half landed **in the chart, where it currently reaches nothing.** External half:
+**yours** — and this section is UNVERIFIED, unlike §1.
+
+> **Read that status precisely, because it was overstated here before.** `service_kit.ray_tracing`
+> genuinely exists and exports `serve_span_processors`, and `chart/templates/rayservice.yaml:117,121`
+> genuinely sets both env vars. But that template renders only under
+> `ray.enabled AND singleTenant.enabled`, and `singleTenant.enabled` is `false` — so on a normal
+> install the chart deploys no RayService at all. rask's own running `rask-ray` predates the current
+> gate and is **orphaned from Helm** (it carries Helm labels but appears in no release manifest), so
+> the chart's wiring does not reach it either: `RAY_SERVE_TRACING_*` appears **0 times** on the live
+> RayService, verified 2026-08-23.
+>
+> Consequence for you: nobody has ever run this switch, here or anywhere. Treat the block below as
+> untested — the code path is real and the env var names are correct, but no span has been observed
+> arriving from it. §1 is the section with a proven outcome; this one is not.
 
 ### Wire the Serve switch first — it is the higher-value one
 
@@ -205,8 +264,27 @@ the estate does not have today.
 
 ## 3. Ray log shipping
 
-**Status:** rask half **LANDED** — the pruner now keeps a floor of failures, and the chart sets both
-log encodings for the `singleTenant` case. External half: **yours**.
+**Status:** rask half landed in the chart (same caveat as §2 — it renders for nobody). External half:
+**yours**. The GAP here is now **measured**, and one claim in the table below was optimistic.
+
+> **MEASURED 2026-08-23 on rask's own `rask-ray` head pod:**
+>
+> ```
+> stdout lines since 2026-08-17 (6 days) :  28
+> log files in /tmp/ray/session_latest/logs : 490
+> ray-pod rows in opentelemetry_logs (6h)   :   0   (of 1,110,457 rows total)
+> ```
+>
+> The Collector's filelog receiver includes `/var/log/pods/*/*/*.log` — every pod on the node, Ray
+> included — and other pods' logs land fine over the same path. So this is not a selector bug on the
+> shipper side. Ray simply does not write to stdout: 28 lines in six days against 490 files kept
+> inside the container.
+>
+> **Correct the row below that says Serve replica logs are already collected.** That could not be
+> confirmed: zero rows from any Ray pod reached the store in the measured window. It may be true when
+> Serve is actively serving — `ray_serve_num_http_requests_total` carries only 2 series here, so this
+> cluster's Serve app is effectively idle and may simply have had nothing to log. Either way, treat
+> "YES" as unverified rather than as a fact you can build on.
 
 ### The problem, split in two — because only one half needs you
 
