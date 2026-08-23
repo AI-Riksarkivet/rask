@@ -345,7 +345,6 @@ def merge_workflow_state(record: RunRecord, state: Mapping[str, object] | None) 
             errors = {"run": detail}
 
     committed = output.get("committed_version")
-    rows = output.get("rows")
 
     # The DENOMINATOR, and it has two sources because a run needs it at two different times. While
     # the run is in flight only the custom status has it (the output does not exist yet); once the
@@ -354,6 +353,14 @@ def merge_workflow_state(record: RunRecord, state: Mapping[str, object] | None) 
     total = output.get("units_total")
     if not isinstance(total, int):
         total = _as_mapping(state.get("serialized_custom_status")).get("units_total")
+
+    # The NUMERATOR, and it needs the SAME two sources for the same reason. `rows` exists only once
+    # `finalize` has returned, so reading it alone pinned `units_done` at 0 for the entire run — the two
+    # halves of one progress bar disagreeing about when they are readable. The fan-in publishes the
+    # aggregate its children reported, so a run says "320 of 500" while it is still going.
+    done = output.get("rows")
+    if not isinstance(done, int):
+        done = _as_mapping(state.get("serialized_custom_status")).get("units_done")
 
     # The PUBLICATION half, carried from the workflow output the same way the commit is. Read
     # permissively (`in output` rather than a truthiness test) because `published=False` is a REAL
@@ -366,7 +373,7 @@ def merge_workflow_state(record: RunRecord, state: Mapping[str, object] | None) 
             "status": status,
             "errors": errors if isinstance(errors, dict) else record.errors,
             "committed_version": committed if isinstance(committed, int) else record.committed_version,
-            "units_done": rows if isinstance(rows, int) else record.units_done,
+            "units_done": done if isinstance(done, int) else record.units_done,
             "units_total": total if isinstance(total, int) else record.units_total,
             **publication,
         }

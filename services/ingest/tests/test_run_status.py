@@ -17,7 +17,7 @@ this arithmetic.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -369,6 +369,31 @@ def test_units_total_comes_from_the_engine_while_the_run_is_IN_FLIGHT() -> None:
     assert merged.status == "RUNNING"
 
 
+def test_units_DONE_also_comes_from_the_engine_while_the_run_is_IN_FLIGHT() -> None:
+    """The NUMERATOR needed the same two sources the denominator got, and only had one.
+
+    `units_total` reads from the output when terminal and the custom status while in flight — its own
+    comment calls that "what makes '4 of 500' available for the whole life of a run". `units_done` read
+    only `rows` from the terminal output, so the numerator was pinned at 0 for the entire run and the
+    two halves of one progress bar disagreed about when they were readable.
+
+    Sibling rather than folded into the denominator test: they assert different facts, and a test that
+    checks both passes while either is broken.
+    """
+    state = {
+        "runtime_status": "RUNNING",
+        "serialized_custom_status": json.dumps({"units_total": 500, "units_done": 320, "finalizing": 4}),
+    }
+    merged = merge_workflow_state(_record(), state)
+
+    assert merged.units_total == 500
+    assert merged.units_done == 320, (
+        f"the numerator is still pinned at {merged.units_done} while the run is in flight — it reads only the "
+        "terminal output's `rows`, which does not exist until finalize returns, so the progress bar shows "
+        "'0 of 500' for the whole run."
+    )
+
+
 def test_units_total_survives_into_the_TERMINAL_record() -> None:
     """Once the run ends, the output carries it permanently — the custom status is the live view."""
     state = {
@@ -450,3 +475,69 @@ def test_an_UNRECORDED_reason_does_not_raise() -> None:
     merged = merge_workflow_state(record, {"runtime_status": "FAILED"})
 
     assert merged.status == "FAILED"  # must not raise
+
+
+class _ProgressCtx:
+    """A workflow ctx that RECORDS custom status, which the shared doubles discard."""
+
+    def __init__(self) -> None:
+        self.statuses: list[str] = []
+        self.instance_id = "r-progress"
+
+    def call_activity(self, fn: Any, *, input: Any = None, retry_policy: Any = None) -> None:  # noqa: A002
+        return None
+
+    def set_custom_status(self, status: str) -> None:
+        self.statuses.append(status)
+
+
+def _drive_chunk(ctx: Any, chunk: dict[str, Any], drained: dict[str, Any]) -> dict[str, Any]:
+    """Run `chunk_run` to completion, feeding it the drain result."""
+    from ingest.workflow import chunk_run
+
+    gen = chunk_run(ctx, chunk)
+    gen.send(None)  # advance to the publish_units yield
+    gen.send(None)  # its result is discarded; advance to the drain_chunk yield
+    try:
+        gen.send(drained)  # drain_chunk
+    except StopIteration as stop:
+        return dict(stop.value)
+    try:
+        gen.send({"errors": {}, "errors_total": 0})  # reconcile_chunk
+    except StopIteration as stop:
+        return dict(stop.value)
+    raise AssertionError("chunk_run did not finish")
+
+
+def test_a_chunk_reports_its_own_PROGRESS_while_the_fan_out_runs() -> None:
+    """The fan-out is the longest phase of a large harvest and it published nothing.
+
+    The parent sets `units_total` before the fan-out and `finalizing` after the fan-in, and in between
+    it is blocked on `when_all` — so for the whole fan-out, potentially hours, the run's own status is
+    frozen at the value it had before any work started.
+
+    The parent CANNOT fix this itself: a workflow can only set its status between yields, and
+    `when_all` is one yield. So the progress has to come from the child, whose status is readable per
+    instance while it runs.
+
+    `units_done` also joins `ChunkResult`, because the parent could otherwise not aggregate what its
+    children achieved even at fan-in: the drain reports it, `chunk_run` reads it to decide whether to
+    reconcile, and then dropped it on the floor.
+    """
+    ctx = _ProgressCtx()
+    chunk = {"run_id": "r-progress", "chunk_id": "c1", "dataset": "d", "keys": [], "offset": 0, "count": 40}
+
+    result = _drive_chunk(ctx, chunk, {"fragments": ["f1"], "errors": {}, "errors_total": 0, "units_done": 40})
+
+    assert ctx.statuses, (
+        "the child published no status, so nothing anywhere advances during the fan-out — the run reads "
+        "'0 of N' from before the first unit was published until finalize returns."
+    )
+    published = json.loads(ctx.statuses[-1])
+    assert published.get("units_done") == 40, f"the child's status does not carry its progress: {published}"
+    assert published.get("chunk_id") == "c1", f"the child's status does not say which chunk it is: {published}"
+
+    assert result.get("units_done") == 40, (
+        "ChunkResult drops units_done, so the parent cannot aggregate what its children achieved even at "
+        f"fan-in — the drain reports it and chunk_run reads it to decide on reconcile, then discards it: {result}"
+    )

@@ -313,6 +313,10 @@ class ChunkResult(BaseModel):
     fragments: list[str] = Field(default_factory=list, description="FragmentMetadata JSON blobs")
     errors: dict[str, str] = Field(default_factory=dict, description="unit key -> reason, capped at MAX_REPORTED_ERRORS")
     errors_total: int = Field(default=0, description="how many units failed, whether or not each is listed above")
+    #: Units this chunk actually landed. The drain reports it and `chunk_run` reads it to decide whether
+    #: to reconcile — and then dropped it, so the parent could not aggregate what its children achieved
+    #: even at fan-in, and the run's `units_done` had to wait for the terminal output's `rows`.
+    units_done: int = Field(default=0, description="units this chunk landed, as confirmed against the queue")
 
 
 class RunSpec(BaseModel):
@@ -648,7 +652,9 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
         for result in parsed:
             merged.update(result.errors)
         errors, errors_total = bound_errors(merged, sum(r.errors_total for r in parsed))
-        ctx.set_custom_status(json.dumps({"units_total": units_total, "finalizing": len(fragments)}))
+        # Now that children report what they landed, the fan-in can say how much of the run actually
+        # arrived — before `finalize` runs, rather than only after its terminal output exists.
+        ctx.set_custom_status(json.dumps({"units_total": units_total, "units_done": sum(r.units_done for r in parsed), "finalizing": len(fragments)}))
 
         # Exactly one commit for the whole run — D6. Nothing is visible in bronze until this returns, so
         # there is no observable partially-ingested state to reason about. INSIDE the boundary on
@@ -746,12 +752,28 @@ def chunk_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         errors.update(extra)
         errors_total += len(extra)
 
+    units_done = int(drained.get("units_done") or 0)
+
+    # THE FAN-OUT'S ONLY PROGRESS SIGNAL, and it has to come from the child.
+    #
+    # The parent sets `units_total` before the fan-out and `finalizing` after the fan-in, and in
+    # between it is blocked on ONE `when_all` yield — a workflow can only set its status between
+    # yields, so the parent cannot report progress during the phase that takes the longest. For a
+    # million-unit harvest that is hours in which the run's own status is frozen at the value it held
+    # before the first unit was published.
+    #
+    # Custom status rather than a metric: this is per-INSTANCE state read by that instance's own GET,
+    # not an aggregate. A per-chunk metric would also mint one series per chunk id, which is exactly
+    # the unbounded-label rule the estate has already been burned by.
+    ctx.set_custom_status(json.dumps({"chunk_id": chunk.chunk_id, "units_done": units_done, "units_expected": chunk.expected_units}))
+
     listed, total = bound_errors(errors, errors_total)
     return ChunkResult(
         chunk_id=chunk.chunk_id,
         fragments=[str(fragment) for fragment in (drained.get("fragments") or ())],
         errors=listed,
         errors_total=total,
+        units_done=units_done,
     ).model_dump()
 
 
