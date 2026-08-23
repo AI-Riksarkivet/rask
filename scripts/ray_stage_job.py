@@ -134,28 +134,16 @@ def _lineage_array(lineage: str, rows: int) -> pa.Array:
 
 
 def _stamp_stage(table: pa.Table, stage: str, lineage: str = "") -> pa.Table:
-    """Carry every upstream column forward, thread root-provenance ``source_rowid``, and (re)stamp ``stage``
-    — the generic per-stage transform, type-preserving via the pyarrow batch format.
+    """The per-stage provenance stamp — delegated to the ONE implementation both drivers share.
 
-    Mirrors compute._carry_source_rowid + _stamp_stage: an upstream that already carries ``source_rowid``
-    keeps it (a later stage), the cascade head mints it from the reserved ``_rowid`` metacolumn (durable
-    under stable row ids), and ``_rowid`` itself is never persisted (reserved name; advances on overwrite).
-
-    ``lineage`` re-stamps the consume-layer provenance column (R26) exactly like ``stage``: the inherited
-    cell is dropped, this run's document appended. Empty → the column is dropped and not re-added.
+    This was a hand-maintained mirror of the medallion's copy and it had already drifted: on a
+    re-stamp it dropped `stage` and re-appended it at the end while the in-process driver replaced it
+    in place, so a silver table's column ORDER — and therefore its dataset schema, since
+    `write_dataset(mode="overwrite")` takes the table's — depended on which compute path wrote it.
     """
-    if "source_rowid" not in table.column_names and "_rowid" in table.column_names:
-        table = table.append_column(pa.field("source_rowid", pa.uint64()), table.column("_rowid").cast(pa.uint64()))
-    if "_rowid" in table.column_names:
-        table = table.drop_columns(["_rowid"])
-    if "stage" in table.column_names:
-        table = table.drop_columns(["stage"])
-    if _LINEAGE_COLUMN in table.column_names:
-        table = table.drop_columns([_LINEAGE_COLUMN])
-    table = table.append_column("stage", pa.array([stage] * table.num_rows, pa.string()))
-    if not lineage:
-        return table
-    return table.append_column(pa.field(_LINEAGE_COLUMN, pa.json_()), _lineage_array(lineage, table.num_rows))
+    from service_kit.lakehouse.stage_stamp import stamp_stage
+
+    return stamp_stage(table, stage=stage, lineage=lineage)
 
 
 def _open_guarded(payload: bytes):  # -> PIL.Image.Image

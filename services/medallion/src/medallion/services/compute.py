@@ -397,28 +397,23 @@ def _drop_inherited_lineage(table: pa.Table) -> pa.Table:
 
 
 def _carry_source_rowid(table: pa.Table) -> pa.Table:
-    """Ensure ``source_rowid`` holds the stable _rowid of the BRONZE row this output descends from (root
-    provenance — bronze is the first governed tier, R23). An upstream that already carries it (a later
-    stage) keeps it; the first derive off bronze mints it from the reserved ``_rowid`` metacolumn of the
-    row just read. ``_rowid`` itself is never persisted (it is a
-    reserved name and would advance on the next overwrite). Input MUST be read ``with_row_id=True``.
+    """Root provenance — delegated to the shared stamp so the Ray driver cannot disagree with this one.
 
-    HEAD DETECTION IS HEURISTIC (absence of ``source_rowid``), not positional. In the steady state only
-    bronze (the root) lacks it, so this is exact. During a MIXED-VERSION ROLLOUT a mid-cascade dataset written by
-    pre-#38a code also lacks it; a stage reading such an upstream mints from the IMMEDIATE parent's _rowid
-    (parent, not root) for that one cycle — the best available id when the root was never captured — and
-    self-heals on the next full run from bronze. Acceptable because the cascade is overwrite-only and re-runs.
+    `source_rowid` names the BRONZE row an output descends from (R23). An upstream that already carries
+    it keeps it; re-minting from the immediate parent would reroot the chain one tier down.
     """
-    if _SOURCE_ROWID_COLUMN in table.column_names:
-        return table.drop_columns(["_rowid"]) if "_rowid" in table.column_names else table
-    srid = table.column("_rowid").cast(pa.uint64())
-    return table.drop_columns(["_rowid"]).append_column(pa.field(_SOURCE_ROWID_COLUMN, pa.uint64()), srid)
+    from service_kit.lakehouse.stage_stamp import carry_source_rowid
+
+    return carry_source_rowid(table)
 
 
 def _stamp_stage(table: pa.Table, stage: str) -> pa.Table:
-    """Set (or append) the ``stage`` provenance column on ``table``."""
-    field = pa.field(_STAGE_COLUMN, pa.string())
-    marker = pa.array([stage] * table.num_rows, pa.string())
-    if _STAGE_COLUMN in table.column_names:
-        return table.set_column(table.schema.get_field_index(_STAGE_COLUMN), field, marker)
-    return table.append_column(field, marker)
+    """Set (or append) the ``stage`` provenance column — delegated to the shared stamp.
+
+    IN PLACE when the column exists, and that is the half which had drifted from the Ray driver:
+    dropping and re-appending moves the column to the end, and `write_dataset(mode="overwrite")` takes
+    the table's schema as the dataset's — so the same lane written two ways left unequal schemas.
+    """
+    from service_kit.lakehouse.stage_stamp import stamp_stage
+
+    return stamp_stage(table, stage=stage)
