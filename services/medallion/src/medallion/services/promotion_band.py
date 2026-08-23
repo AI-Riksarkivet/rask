@@ -41,9 +41,16 @@ def review_reasons(*, row_count: int, previous_row_count: int | None, band: floa
     was empty. Both are first promotions: an empty predecessor gives nothing to compare against, and
     dividing by it would either raise or manufacture an infinite delta.
 
-    A band of zero or less asks about EVERY change. That is the safe direction for a misconfigured
-    value — asking too often is visible and annoying, while asking never is invisible, and invisible
-    is the failure this module exists to end.
+    A band of ZERO asks about every change, which is the safe direction for a misconfigured value:
+    asking too often is visible and annoying, while asking never is invisible, and invisible is the
+    failure this module exists to end. Note "every CHANGE" is literal — with a band of zero an
+    UNCHANGED row count still does not ask, because `abs(0) > 0` is false.
+
+    This used to read "zero or less", and negative is not reachable: `MedallionSettings` declares
+    `promotion_review_band` with `ge=0`, so `MEDALLION_PROMOTION_REVIEW_BAND=-1` fails validation and
+    CRASH-LOOPS the mover — measured 2026-08-23, after that sentence invited exactly that value. The
+    constraint is right (a band that quietly promotes everything is the failure this exists to end);
+    the sentence describing a value it forbids was not.
     """
     if not previous_row_count:
         return [FIRST_PROMOTION]
