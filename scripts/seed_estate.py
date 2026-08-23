@@ -247,6 +247,17 @@ DEMO_ESTATE = Estate(
         # A tenant whose tiers exist but whose cascade cannot publish into them is exactly the
         # half-made state this script exists to prevent — the authz half of a ghost. The estate is not
         # seeded until the services that fill it can.
+        # Granted on the NAMESPACE, not the table, and that is the prescribed shape rather than a
+        # convenience: `design-create-on-parent.md` — "creation permissions should usually live on the
+        # parent or container object, not on the leaf resource being created", because a grant whose
+        # object does not exist yet "forces the application to invent an object identifier before
+        # authorization". The mover CREATES `<tier>$<table>`, so the table cannot be the object here;
+        # `table` defines `owner from parent` for exactly this reason.
+        #
+        # And the failure itself is the one `core-tuples.md` names: "the model only defines what is
+        # possible, not what currently exists". `can_update_tag: owner` was the possibility; nothing
+        # made these identities owners, so ten 403s were the model working correctly on absent facts.
+        #
         # OWNER, and the rung is the finding rather than a preference. The first attempt granted
         # `validator`, on the reasoning that promoting into a gated stage is a validator's act — and it
         # failed identically, three more 403s. `publish` is guarded by `can_update_tag`, and the model
