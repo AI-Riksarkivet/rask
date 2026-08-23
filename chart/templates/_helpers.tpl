@@ -200,6 +200,10 @@ dapr.io/enabled: "true"
 dapr.io/app-id: {{ $appId | quote }}
 dapr.io/app-port: {{ $appPort | quote }}
 dapr.io/log-level: {{ $root.Values.dapr.logLevel | quote }}
+{{- /* Hardcoded, deliberately NOT a values knob: the Collector's filelog json_parser is scoped to the
+       daprd container and is only correct while this is true. A knob would let someone turn the sidecar
+       plane back into unparsed logfmt with no gate firing. */}}
+dapr.io/log-as-json: "true"
 {{- with $root.Values.dapr.maxBodySize }}
 dapr.io/max-body-size: {{ . | quote }}
 {{- end }}
@@ -697,9 +701,15 @@ OTEL_PYTHON_* knobs); rask's fleet keeps its own direct-to-GreptimeDB block. Bot
 {{/* Logs go out via the OTel SDK (OTLP → the Collector → GreptimeDB `opentelemetry_logs`) — the "three
 signals, one SDK, all OTLP" path. NO double-ingest: the app pods carry `lance.dev/logs=otlp`, and the
 Collector's filelog receiver drops that label (a filter processor), so the file-tailed infra logs (no OTel
-SDK) land in the SAME `opentelemetry_logs` table without duplicating the app logs. Tradeoff: an app crash
-BEFORE the SDK inits is only in `kubectl logs`, not GreptimeDB — the Collector's filelog tail still catches
-it (it's not labelled until the pod is up, so it's not dropped). */}}
+SDK) land in the SAME `opentelemetry_logs` table without duplicating the app logs. The filter drops ONLY
+what the SDK also exported: a file-tailed line is a duplicate iff a root-logger handler emitted it, and those
+all begin with an ISO date — so the condition additionally requires `IsMatch(body, "^[0-9]{4}-...")` and
+excludes the `daprd` container. A pre-SDK crash, a uvicorn.error record and the sidecar's own logs therefore
+survive in `opentelemetry_logs`, unparsed but present.
+
+DO NOT "SIMPLIFY" THAT BACK TO THE LABEL. It is POD-SPEC metadata, stamped by the ReplicaSet at creation, so
+it is never absent during a crash loop. This comment used to claim the opposite, and on that false premise the
+filter deleted every crash log and every daprd line on 10 pods — measured 2026-08-23, 0 survivors of 10. */}}
 - { name: OTEL_LOGS_EXPORTER, value: "otlp" }
 {{/* Default metric export interval is 60s — too slow to observe in a demo/test. Push every 5s. */}}
 - { name: OTEL_METRIC_EXPORT_INTERVAL, value: "5000" }

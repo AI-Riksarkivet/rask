@@ -1803,14 +1803,24 @@ def _rendered_docs(*set_values: str) -> list[dict]:
     return [doc for doc in yaml.safe_load_all(_helm_template(*set_values)) if isinstance(doc, dict)]
 
 
-def _collector_scrape_jobs(docs: list[dict]) -> list[dict]:
-    """The OTel Collector's prometheus scrape_configs, parsed out of its ConfigMap."""
+def _collector_config(docs: list[dict]) -> dict:
+    """The OTel Collector's whole rendered config, parsed out of its ConfigMap.
+
+    Lifted so every collector gate locates the ConfigMap the SAME way. They used to disagree — one keyed
+    on `"otlp" in config.yaml`, another on a processor's own name — so renaming a processor broke one gate
+    and left the other passing on a config it could no longer find.
+    """
     for doc in docs:
         data = doc.get("data") or {}
         if doc.get("kind") == "ConfigMap" and "config.yaml" in data and "otlp" in data["config.yaml"]:
-            config = yaml.safe_load(data["config.yaml"])
-            return list(config.get("receivers", {}).get("prometheus", {}).get("config", {}).get("scrape_configs", []))
-    return []
+            return yaml.safe_load(data["config.yaml"])
+    return {}
+
+
+def _collector_scrape_jobs(docs: list[dict]) -> list[dict]:
+    """The OTel Collector's prometheus scrape_configs, parsed out of its ConfigMap."""
+    config = _collector_config(docs)
+    return list(config.get("receivers", {}).get("prometheus", {}).get("config", {}).get("scrape_configs", []))
 
 
 def test_ray_pods_are_a_scrape_target() -> None:
@@ -2809,17 +2819,8 @@ def test_the_app_log_filter_discriminates_by_SOURCE_not_by_POD() -> None:
     its records — carry `log.file.path`. That attribute is what tells the two sources apart; the pod
     label cannot, because both sources share the pod.
     """
-    import yaml as _yaml
-
-    rendered = _helm_template("observability.enabled=true")
-    configmaps = [d for d in _yaml.safe_load_all(rendered) if d and d.get("kind") == "ConfigMap"]
-
-    collector_conf = None
-    for cm in configmaps:
-        for value in (cm.get("data") or {}).values():
-            if isinstance(value, str) and "filter/drop_app_file_logs" in value:
-                collector_conf = _yaml.safe_load(value)
-    assert collector_conf is not None, (
+    collector_conf = _collector_config(_rendered_docs("observability.enabled=true"))
+    assert "filter/drop_app_file_logs" in (collector_conf.get("processors") or {}), (
         "no rendered ConfigMap carries the Collector config with `filter/drop_app_file_logs` — this gate "
         "would pass vacuously (the processor was renamed, or observability stopped rendering)"
     )
@@ -2842,6 +2843,37 @@ def test_the_app_log_filter_discriminates_by_SOURCE_not_by_POD() -> None:
             f"file-tailed duplicate — deleting the entire application log tier while the pipeline reports "
             f"healthy. Key on `log.file.path`, which only the filelog receiver sets."
         )
+        assert "k8s.container.name" in condition and "daprd" in condition, (
+            f"the app-log filter has no sidecar carve-out:\n    {condition}\n\n"
+            "k8sattributes extracts the pod label `from: pod`, so it stamps `lance.dev/logs=otlp` onto the "
+            "daprd container's records too — and Dapr registers a NullExporter for its own logs, so stdout is "
+            "their ONLY copy. Measured 2026-08-23: an identical hot-reload ERROR line, emitted once a minute by "
+            "every sidecar, was stored 0 times from all 10 labelled pods and 115 times from unlabelled ones."
+        )
+        assert "IsMatch(body," in condition, (
+            f"the app-log filter has no body-shape guard:\n    {condition}\n\n"
+            "A file-tailed line is a DUPLICATE only if a root-logger handler emitted it — that is where both "
+            "`rask-stdout` (service_kit/__init__.py) and the OTel LoggingHandler live, and every such line starts "
+            "with an ISO date. uvicorn's own records never reach root (uvicorn/config.py sets propagate=False on "
+            '`uvicorn`), so "Application startup failed. Exiting.", the lifespan traceback and every ASGI '
+            "exception have no OTLP twin at all. Without this clause they are deleted — and the filter is armed "
+            "from pod admission, so the crash-loop window is exactly what it erases."
+        )
+
+    extract = collector_conf["processors"]["k8sattributes"]["extract"]["metadata"]
+    assert "k8s.container.name" in extract, (
+        'k8sattributes no longer extracts `k8s.container.name`, so the filter\'s `!= "daprd"` clause reads nil '
+        "and is silently TRUE — the sidecar carve-out becomes a no-op and daprd goes dark again."
+    )
+
+    logs_processors = collector_conf["service"]["pipelines"]["logs"]["processors"]
+    assert "filter/drop_app_file_logs" in logs_processors, (
+        "the filter is defined but not in the logs pipeline — every app log is double-ingested, and NOTHING "
+        "else in this suite reads the pipeline membership, so the hole would be invisible."
+    )
+    assert logs_processors.index("k8sattributes") < logs_processors.index("filter/drop_app_file_logs"), (
+        "the filter runs before k8sattributes, so `lance.dev/logs` and `k8s.container.name` are not yet stamped and every condition evaluates against nil."
+    )
 
 
 def test_every_assert_retention_EXPECTS_a_string_nats_can_actually_emit() -> None:
@@ -3772,3 +3804,89 @@ def test_the_ray_head_image_the_CHART_CONFIGURES_ships_the_tracing_hook_module()
             f"importable. Ray CORE imports the startup hook during boot, so this is a head that fails to "
             f"start, not tracing that stays off."
         )
+
+
+def test_every_pod_that_exports_otlp_logs_is_labelled_as_such() -> None:
+    """The label and the exporter are two halves of one decision, and nothing held them together.
+
+    `lance.dev/logs: otlp` tells the Collector "this pod's stdout is a DUPLICATE — drop the file-tailed
+    copy". That is true exactly when the pod's SDK really exports logs over OTLP, and the two drifted the
+    moment 5dae4538 gave `service_kit.setup_otel` a real `LoggerProvider`: six fleet pods became genuine
+    OTLP log producers while carrying no label, so every record they emit is stored TWICE. Measured live
+    the same day — one httpx request, both copies in `opentelemetry_logs`:
+
+        scope_name='httpx' body='HTTP Request: POST http://localhost:3500/v1.0/state/... "204 No Content"'
+        scope_name=''      body='2026-08-23 06:45:13,634 INFO [httpx] ... - HTTP Request: POST ...'
+
+    Asserted as an EQUALITY because both directions are defects, and the second is far worse than the
+    first: an exporter without the label double-ingests, but a label without an exporter deletes a whole
+    pod's logs and the pipeline still reports healthy.
+
+    Mechanical and drift-proof: `OTEL_EXPORTER_OTLP_ENDPOINT` is rendered by exactly `rask.otelEnv` and
+    `lance.otelEnv`, so a new workload is covered the day it is added rather than the day someone
+    remembers this test.
+    """
+    offenders = []
+    for doc in _rendered_docs("observability.enabled=true"):
+        if doc.get("kind") not in {"Deployment", "StatefulSet", "DaemonSet"}:
+            continue
+        template = doc["spec"]["template"]
+        exports = any(env.get("name") == "OTEL_EXPORTER_OTLP_ENDPOINT" for container in template["spec"]["containers"] for env in container.get("env") or [])
+        labelled = ((template.get("metadata") or {}).get("labels") or {}).get("lance.dev/logs") == "otlp"
+        if exports != labelled:
+            offenders.append(f"{doc['metadata']['name']}: exports_otlp={exports} labelled={labelled}")
+
+    assert not offenders, (
+        "these workloads disagree with themselves about whether their logs are already exported:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nexports_otlp=True labelled=False -> every log record is stored twice.\n"
+        "exports_otlp=False labelled=True -> the Collector deletes that pod's file-tailed logs and it has "
+        "no OTLP copy, so the pod goes dark while every pipeline reports healthy."
+    )
+
+
+def test_the_daprd_sidecar_logs_are_json_and_parsed() -> None:
+    """Two halves that are only correct together, and either alone is dead config.
+
+    The Collector's filelog `json_parser` is scoped to the daprd container so that
+    `WHERE severity_text = 'ERROR'` can find a sidecar failure at all, and so `scope`/`app_id` become
+    queryable columns. It fires only if daprd actually emits JSON, which is `dapr.io/log-as-json`. Ship
+    the annotation without the parser and the sidecar plane stays unparsed logfmt; ship the parser without
+    the annotation and it never matches a single record.
+
+    The parser is deliberately NOT estate-wide. Every other stream on the node has its own shape — NATS,
+    OpenFGA, CloudNativePG, the Dapr control plane, Dex, uvicorn — and an unscoped parser or recombine
+    would corrupt them. daprd is the one container here with both a fixed schema and no OTLP twin.
+    """
+    docs = _rendered_docs("observability.enabled=true")
+
+    annotated = [
+        doc["metadata"]["name"]
+        for doc in docs
+        if doc.get("kind") in {"Deployment", "StatefulSet"}
+        and ((doc["spec"]["template"].get("metadata") or {}).get("annotations") or {}).get("dapr.io/enabled") == "true"
+    ]
+    assert annotated, "no dapr-annotated workloads rendered — this gate would pass vacuously"
+
+    for doc in docs:
+        if doc.get("kind") not in {"Deployment", "StatefulSet"}:
+            continue
+        annotations = (doc["spec"]["template"].get("metadata") or {}).get("annotations") or {}
+        if annotations.get("dapr.io/enabled") != "true":
+            continue
+        assert annotations.get("dapr.io/log-as-json") == "true", (
+            f"{doc['metadata']['name']} injects a Dapr sidecar but does not ask it for JSON logs. daprd then "
+            "ships logrus text, the Collector's json_parser never matches, and a component-init failure is "
+            "the same shape as a routine startup line — no severity, no scope, no app_id."
+        )
+
+    operators = _collector_config(docs)["receivers"]["filelog"]["operators"]
+    parsers = [op for op in operators if op.get("type") == "json_parser"]
+    assert parsers, (
+        "the filelog receiver parses nothing. `dapr.io/log-as-json` then produces JSON that is stored as an "
+        "opaque body string: severity_text stays empty and no query can find a sidecar ERROR."
+    )
+    assert any('== "daprd"' in (op.get("if") or "") for op in parsers), (
+        "a json_parser is present but not scoped to the daprd container. Every other stream on this node has "
+        "its own shape, and an unscoped parser corrupts them — scope it with `if`."
+    )

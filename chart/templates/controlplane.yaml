@@ -21,6 +21,7 @@ spec:
         {{- include "rask.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: controlplane
         {{- include "rask.daprPodLabels" . | nindent 8 }}
+        lance.dev/logs: otlp # setup_otel builds a real LoggerProvider (5dae4538), so the file-tailed line is a dup — the uvicorn/crash tier is NOT dropped, see the filter's body guard
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

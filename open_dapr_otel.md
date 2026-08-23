@@ -293,7 +293,7 @@ on every container in the pod.
 medallion-producer / the three movers / maintenance produces ZERO rows in GreptimeDB.** The one class
 of failure where the OTLP exporter provably cannot exist is the class the filter deletes.
 
-`chart/templates/_helpers.tpl:621-623` claims the opposite — *"the Collector's filelog tail still
+`chart/templates/_helpers.tpl:697-702` claims the opposite — *"the Collector's filelog tail still
 catches it (it's not labelled until the pod is up, so it's not dropped)"*. It is labelled from
 creation. The repo already knows this elsewhere: `maintenance/core/lance_trace.py:10-15` states the
 drop as fact and routes Lance's stderr around it.

@@ -9,8 +9,9 @@ and issues fewer IOPS. Without them the cache fix is unfalsifiable in prod.
 
 **Why a callback and not ``LANCE_LOG``.** Lance's Rust log records go to stderr, not Python
 ``logging``. The maintenance pod carries the ``lance.dev/logs: otlp`` label, and the collector's
-``filter/drop_app_file_logs`` processor DROPS file-tailed logs from exactly those pods — so
-``LANCE_LOG`` reaches ``kubectl logs`` and never reaches GreptimeDB. The honest route to the
+``filter/drop_app_file_logs`` processor drops the file-tailed lines that the Python SDK also exported.
+Lance's Rust lines are not among them, but they arrive with no scope, no severity and no trace
+correlation — a raw stderr string. The honest route to the
 warehouse is this one: take the events in-process and re-emit them through the OTLP metrics pipeline
 the service already has.
 
