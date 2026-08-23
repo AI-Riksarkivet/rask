@@ -411,3 +411,151 @@ tests:
                 errorMessage facet now carries the exit code instead. Reduce the stage's batch size or
                 raise the head/worker memory limit.
                 Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+  # ── M24: the six rules that had no fire-proof ────────────────────────────────────────────────────
+  # `promtool test rules` only evaluates the cases declared here, so a rule with no case is never
+  # touched and promtool still exits 0. Six of twenty alerts were in that state while `rules.yml:4-5`
+  # and `docs/DECISIONS.md` both assert the whole file is "proven to FIRE". Each rule below gets a
+  # case that FIRES, and — where silence is a real outcome rather than the absence of one — a paired
+  # case that must NOT fire, because a rule that pages forever is its own outage.
+
+  # M24 a. Oldest staged event ages past 300s and stays → LineageOutboxBacklogAging fires.
+  - interval: 1m
+    input_series:
+      - series: "outbox_oldest_age"
+        values: "400+0x9"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: LineageOutboxBacklogAging
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lineage"
+            exp_annotations:
+              summary: "Lineage outbox oldest staged event > 5 min old"
+              description: "The outbox relay is lagging; the oldest undrained event exceeds 300s. Runbook: docs/RUNBOOK-oncall.md#outbox-not-draining"
+
+  # M24 b. A backlog well under the threshold must NOT page — the gauge falls back on its own.
+  - interval: 1m
+    input_series:
+      - series: "outbox_oldest_age"
+        values: "120+0x9"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: LineageOutboxBacklogAging
+        exp_alerts: []
+
+  # M24 c. Any dead-lettered lineage event is provenance LOST → rate() > 0 fires.
+  - interval: 1m
+    input_series:
+      - series: "lineage_events_processed_total{lance_lineage_outcome=\"dead_lettered\"}"
+        values: "0+1x11"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: LineageIngestDeadLettering
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "lineage"
+            exp_annotations:
+              summary: "Lineage ingest dead-lettering \u2014 provenance is being LOST"
+              description: "A lineage event exhausted its Dapr resiliency schedule and was parked (a terminal loss signal). Runbook: docs/RUNBOOK-oncall.md#dlq-parking"
+
+  # M24 d. A flat dead-letter counter is the healthy estate; it must stay silent.
+  - interval: 1m
+    input_series:
+      - series: "lineage_events_processed_total{lance_lineage_outcome=\"dead_lettered\"}"
+        values: "3+0x11"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: LineageIngestDeadLettering
+        exp_alerts: []
+
+  # M24 e. A mover denied its grant stalls the cascade at that stage → fires on the first denial.
+  - interval: 1m
+    input_series:
+      - series: "medallion_stage_denied_total"
+        values: "0+1x11"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MedallionStageDenied
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "medallion"
+            exp_annotations:
+              summary: "Medallion stage FGA-denied \u2014 the cascade may stall at this stage"
+              description: "A mover lacked the grant to write its target stage; re-seed with scripts/seed_medallion_fga.sh. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+
+  # M24 f. Sweep failures accumulating over 30m → MaintenanceDatasetsFailing fires.
+  - interval: 1m
+    input_series:
+      - series: "compaction_datasets_failed_total"
+        values: "0+1x44"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: MaintenanceDatasetsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+            exp_annotations:
+              summary: "Table maintenance is failing on one or more datasets"
+              description: "The sweep could not complete one or more datasets. Sustained failure means those datasets accumulate fragments and superseded versions indefinitely while every tick still reports a successful run. Break down by error.type; the per-dataset URI is on the trace span and in the maintenance_sweep log line, deliberately not on the metric (unbounded cardinality)."
+
+  # M24 g. A sweep that COMPLETES nothing for 30m — a FLAT counter, not a missing one. The rule is
+  #        `== 0`, so the series must exist and not move; a deleted series would make it vacuous instead.
+  - interval: 1m
+    input_series:
+      - series: "compaction_runs_total"
+        values: "7+0x44"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: MaintenanceSweepNotCompleting
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "maintenance"
+            exp_annotations:
+              summary: "No table-maintenance sweep has COMPLETED in 30 minutes"
+              description: "At a 120s cadence roughly fifteen passes should have completed. Either the Dapr cron binding is not delivering or every pass is dying mid-flight \u2014 compare with compaction_runs_started_total, whose excess over compaction_runs_total is the lost-pass count."
+
+  # M24 h. A sweep that keeps completing must not page.
+  - interval: 1m
+    input_series:
+      - series: "compaction_runs_total"
+        values: "0+1x44"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: MaintenanceSweepNotCompleting
+        exp_alerts: []
+
+  # M24 i. Refusals outrunning half the swept datasets over an hour → MaintenanceRefusalsRising fires.
+  - interval: 1m
+    input_series:
+      - series: "compaction_datasets_refused_total"
+        values: "0+10x74"
+      - series: "compaction_datasets_swept_total"
+        values: "0+4x74"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: MaintenanceRefusalsRising
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+            exp_annotations:
+              summary: "More than half of swept datasets are being REFUSED"
+              description: "The supported-manifest-flag whitelist is rejecting most of the estate, so maintenance is running without maintaining. Usually a pylance upgrade introducing a flag the guard does not know. Check the refusal reasons in the maintenance_sweep log line."
+
+  # M24 j. Refusals well under half of swept → silent. The ratio, not the absolute count, is the rule.
+  - interval: 1m
+    input_series:
+      - series: "compaction_datasets_refused_total"
+        values: "0+1x74"
+      - series: "compaction_datasets_swept_total"
+        values: "0+20x74"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: MaintenanceRefusalsRising
+        exp_alerts: []

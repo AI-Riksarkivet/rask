@@ -3479,37 +3479,90 @@ def test_every_perses_dashboard_is_declared_ONCE_and_is_valid_json() -> None:
             pytest.fail(f"{name} is not valid JSON, so Perses will skip it at provisioning time: {exc}")
 
 
-def test_every_maintenance_ALERT_names_a_metric_the_service_actually_EMITS() -> None:
-    """AN ALERT ON A SERIES NOBODY WRITES IS INDISTINGUISHABLE FROM AN ESTATE THAT IS HEALTHY.
+#: Alert group -> the module whose OTel instruments its rules may reference. A first-party group
+#: asserts against its own service; the three omitted groups reference metrics no rask instrument
+#: creates and are listed with the reason rather than silently skipped.
+_ALERT_GROUP_SOURCES = {
+    "lance-lineage": "services/lineage/src/lineage/core/metrics.py",
+    "lance-medallion": "services/medallion/src/medallion/core/metrics.py",
+    "lance-notifications": "services/notifications/src/notifications/api/metrics.py",
+    "lance-maintenance": "services/maintenance/src/maintenance/core/metrics.py",
+}
 
-    vmalert evaluates these against GreptimeDB. A rule whose PromQL names a metric no instrument
-    creates never fires — and never fires is exactly what a working alert looks like, so the mistake is
-    self-concealing and survives review.
+#: Groups whose rules query series the estate does not instrument, with why. An entry is a claim.
+_THIRD_PARTY_ALERT_GROUPS = {
+    "lance-catalog": "the catalog ships no metrics.py — its rules ride the shared HTTP server metrics that service_kit.setup_otel's FastAPI instrumentation emits automatically, not a first-party instrument",
+    "lance-infra": "infrastructure series (NATS, CloudNativePG, RustFS) exported by their own operators",
+    "dapr-control-plane": "Dapr's own control-plane metrics, emitted by the sidecar injector and placement service",
+    "ray": "Ray's own metrics, exported by the Ray dashboard's Prometheus endpoint",
+}
 
-    The maintenance group exists because the reverse hole was live until 2026-08-16: seven instruments
-    counted what the sweep ACHIEVED and none counted a failure, so a dataset failing every tick was
-    invisible to anything that could page. Adding the counter without an alert would have closed
-    nothing; adding an alert on a mistyped series would look identical to success.
 
-    Checks the alert's metric names against the OTel instrument names, applying the OTLP->Prometheus
-    convention the other direction: dots become underscores and a counter gains `_total`.
+def test_every_ALERT_GROUP_is_either_first_party_or_declared_third_party() -> None:
+    """The gate below covered ONE group of eight, and a scope that narrow is its own hazard.
+
+    A rule in an unchecked group could name `medallion_stage_deniedTYPO_total` and pass
+    `promtool check rules`, `promtool test rules` and every chart invariant — while the file's own
+    header asserts the whole thing is proven to fire. Splitting the groups into "checked against a
+    service" and "declared third-party, with the reason" means a NEW group cannot land in neither.
     """
     rules = yaml.safe_load((REPO / "chart/alerting/rules.yml").read_text())
-    group = next((g for g in rules["groups"] if g["name"] == "lance-maintenance"), None)
-    assert group is not None, "no lance-maintenance alert group — the sweep's failures can never page"
+    groups = {g["name"] for g in rules["groups"]}
 
-    source = (REPO / "services/maintenance/src/maintenance/core/metrics.py").read_text()
-    # `create_counter("compaction.datasets.failed", ...)` -> compaction_datasets_failed_total
-    emitted = {f"{name.replace('.', '_')}_total" for name in re.findall(r'create_counter\(\s*"([^"]+)"', source)}
-    assert emitted, "parsed no instruments out of metrics.py — the check would pass vacuously"
+    assert groups, "no alert groups parsed — the check would pass vacuously"
+    unclassified = sorted(groups - set(_ALERT_GROUP_SOURCES) - set(_THIRD_PARTY_ALERT_GROUPS))
+    assert not unclassified, (
+        f"these alert groups are neither checked against a service's instruments nor declared "
+        f"third-party: {unclassified}. Add the group's metrics module to _ALERT_GROUP_SOURCES, or "
+        "record in _THIRD_PARTY_ALERT_GROUPS whose exporter emits its series."
+    )
+    stale = sorted((set(_ALERT_GROUP_SOURCES) | set(_THIRD_PARTY_ALERT_GROUPS)) - groups)
+    assert not stale, f"these groups are classified but no longer exist in rules.yml: {stale}"
 
-    referenced = set()
+
+@pytest.mark.parametrize("group_name", sorted(_ALERT_GROUP_SOURCES))
+def test_every_first_party_ALERT_names_a_metric_the_service_actually_EMITS(group_name: str) -> None:
+    """AN ALERT ON A SERIES NOBODY WRITES IS INDISTINGUISHABLE FROM AN ESTATE THAT IS HEALTHY.
+
+    Widened 2026-08-22 from `lance-maintenance` alone to every first-party group. The narrow version
+    was right about the mechanism and wrong about the blast radius: the same mistake in the lineage,
+    medallion or notifications rules was unguarded, and self-concealing in exactly the same way.
+
+    vmalert evaluates these against GreptimeDB. A rule whose PromQL names a metric no instrument
+    creates never fires — and never fires is what a working alert looks like, so the mistake survives
+    review. Checks the alert's metric names against the OTel instrument names, applying the
+    OTLP->Prometheus convention the other direction: dots become underscores, a counter gains `_total`.
+    """
+    rules = yaml.safe_load((REPO / "chart/alerting/rules.yml").read_text())
+    group = next((g for g in rules["groups"] if g["name"] == group_name), None)
+    assert group is not None, f"no {group_name} alert group — its failures can never page"
+
+    source = (REPO / _ALERT_GROUP_SOURCES[group_name]).read_text()
+    instruments = re.findall(r'create_(?:counter|up_down_counter|histogram|observable_gauge)\(\s*"([^"]+)"', source)
+    assert instruments, f"parsed no instruments out of {_ALERT_GROUP_SOURCES[group_name]} — the check would pass vacuously"
+    # A counter gains `_total` under the OTLP->Prometheus convention; a gauge/histogram does not, so
+    # accept both spellings rather than guessing the instrument kind from the name.
+    emitted = {name.replace(".", "_") for name in instruments}
+    emitted |= {f"{name}_total" for name in emitted}
+
+    prefixes = sorted({name.split("_")[0] for name in emitted})
+    # `[A-Za-z0-9_]+`, NOT `[a-z_]+`. A lowercase-only class silently TRUNCATES at the first capital,
+    # so `medallion_stage_deniedTYPO_total` matched as `medallion_stage_denied` — a real emitted
+    # metric — and the typo passed. Verified: the mutation that motivated this gate did not fail it
+    # until the class was widened. This audit has now caught the identical bug twice in two different
+    # gates, which is what makes it worth a comment rather than a quiet fix: a value pattern narrower
+    # than the values it must reject will match a PREFIX of a bad value and call it good.
+    pattern = r"\b((?:" + "|".join(prefixes) + r")_[A-Za-z0-9_]+)\b"
+    referenced: set[str] = set()
     for rule in group["rules"]:
-        referenced |= set(re.findall(r"\b(compaction_[a-z_]+_total|maintenance_[a-z_]+_total)\b", rule["expr"]))
-    assert referenced, "the maintenance alert rules reference no maintenance metric at all"
+        referenced |= set(re.findall(pattern, rule["expr"]))
+    assert referenced, f"the {group_name} rules reference no metric with any of its own prefixes {prefixes}"
 
     phantom = sorted(referenced - emitted)
-    assert phantom == [], f"these alerts query series no instrument emits, so they can never fire: {phantom}"
+    assert phantom == [], (
+        f"these {group_name} alerts query series no instrument emits, so they can never fire: {phantom}. "
+        f"{_ALERT_GROUP_SOURCES[group_name]} creates {sorted(emitted)}"
+    )
 
 
 def test_every_service_app_entrypoint_CONFIGURES_LOGGING() -> None:

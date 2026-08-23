@@ -1512,6 +1512,37 @@ groups** and one source file. So `medallion_stage_deniedTYPO_total` is a perfect
 it passes `promtool check rules`, `promtool test rules` and all 105 chart invariants — while
 `rules.yml:4-5` and `docs/DECISIONS.md:509-510` both assert the whole file is "proven to FIRE".
 
+✅ **FIXED + ENFORCED 2026-08-22.** Both halves. Re-measured first, and the file had GROWN since the
+audit: **20 alerts, not 15** — 14 with a fire-proof and the **same six** without.
+
+*The proofs.* Ten `promtool` cases written for the six, each FIRING, and — where silence is a real
+outcome rather than the absence of one — a paired case that must NOT fire, because a rule that pages
+forever is its own outage. Enrollment is now **20 alerts, 20 tested, 0 missing**, and the cases bite:
+breaking `max(outbox_oldest_age) > 300` to `> 99999` fails `make alert-rules-check` with **exit 2**
+naming the alert. The expected labels and annotations are EXTRACTED from `rules.yml` rather than
+hand-copied, so a proof cannot drift from the rule it proves by transcription.
+
+`MaintenanceSweepNotCompleting` needed care the others did not: its rule is `== 0`, so the proof feeds
+a FLAT counter rather than deleting the series — a missing series makes `sum(increase(...)) == 0`
+vacuous instead of true.
+
+*The scope.* The semantic gate is parametrized over every FIRST-PARTY group (lineage, medallion,
+notifications, maintenance) instead of maintenance alone, and the three remaining groups are declared
+third-party with whose exporter emits their series (`lance-catalog` rides `setup_otel`'s automatic HTTP
+server metrics; `lance-infra`, `dapr-control-plane` and `ray` ride their own operators). A new group
+landing in NEITHER list fails — RED: adding `lance-brandnew` fails naming it. The superseded
+single-group function was deleted rather than left beside its replacement (32 lines).
+
+**I reintroduced the exact bug this audit already caught once, and the mutation caught me.** The first
+version of the widened gate used `[a-z_]+` for the metric name, so `medallion_stage_deniedTYPO_total`
+matched as `medallion_stage_denied` — a real emitted metric — and the typo **passed**. That is the same
+shape as the earlier `([a-z_]+)` gate-value pattern that skipped `can_be_notifiedX` rather than
+rejecting it. Widened to `[A-Za-z0-9_]+`; RED then fires **exit 1** naming
+`medallion_stage_deniedTYPO_total`. The general rule, now written at the code site: **a value pattern
+narrower than the values it must reject will match a PREFIX of a bad value and call it good.**
+
+121 invariants pass; `make alert-rules-check` exit 0.
+
 *And per H22, `make alert-rules-check` sits behind the dead render, so none of it runs in CI anyway.*
 
 ### M25 — the CI lint gate is two directories narrower than `make lint` · **CONFIRMED, raised to MEDIUM**
