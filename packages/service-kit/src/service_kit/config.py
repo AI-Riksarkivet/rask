@@ -20,7 +20,13 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # `populate_by_name` also teaches the env source the bare FIELD NAME as a second
+        # lookup, so every alias below silently gained an un-namespaced twin. `env_prefix`
+        # redirects that fallback onto the namespace the aliases already declare; an explicit
+        # alias bypasses it, so the deliberately-bare ones still land. See
+        # tests/unit/test_settings_env_namespace.py.
         populate_by_name=True,
+        env_prefix="RASK_",
     )
 
     api_prefix: str = Field(default="/api/v1", alias="RASK_API_PREFIX")
@@ -28,7 +34,7 @@ class Settings(BaseSettings):
 
     ray_dashboard_url: str = Field(default="http://localhost:8265", alias="RAY_DASHBOARD_URL")
 
-    http_timeout: float = 15.0
+    http_timeout: float = Field(default=15.0, alias="RASK_HTTP_TIMEOUT")
 
     # OpenTelemetry opt-in. When true, OTLP/HTTP traces are exported to the
     # endpoint configured by OTEL_EXPORTER_OTLP_ENDPOINT. Also auto-enabled when

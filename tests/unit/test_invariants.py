@@ -297,7 +297,11 @@ def test_no_dead_chart_env_vars() -> None:
     fully "configured" and completely dead.
     """
     source = _first_party_source()
-    dead = sorted(env for env in _chart_injected_envs() if env not in source)
+    # A BARE substring match reports MEDALLION_RAY_ADDRESS as live when the only occurrence in source
+    # is MEDALLION_RAY_ADDRESS_TYPO — measured: renaming that alias to a SUFFIXED name kept this test
+    # green while the chart-injected var went unread. Require the name not to continue into another
+    # identifier character, so being a prefix of a longer name no longer satisfies it.
+    dead = sorted(env for env in _chart_injected_envs() if not re.search(rf"{re.escape(env)}(?![A-Za-z0-9_])", source))
     assert not dead, (
         f"the chart injects these env vars but NO first-party code reads them (dead config → a feature "
         f"that is configured but inert): {dead}. Either wire them up or delete them from the chart."

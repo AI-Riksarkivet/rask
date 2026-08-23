@@ -31,7 +31,13 @@ from service_kit.lakehouse.warehouse_registry import project_namespace as projec
 class MedallionSettings(BaseSettings):
     """Config for one medallion service (a mover stage, or the medallion-producer producer)."""
 
-    model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+    # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
+    # every alias below silently gained an un-namespaced twin (MedallionSettings.ray_address
+    # answered to Ray's own $RAY_ADDRESS). `env_prefix` redirects that fallback onto the
+    # namespace the aliases already declare; an explicit alias bypasses it, so the
+    # deliberately-bare ones (DAPR_HTTP_PORT, RAY_DASHBOARD_URL) still land.
+    # See tests/unit/test_settings_env_namespace.py.
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="MEDALLION_", extra="ignore")
 
     # --- shared Dapr wiring (same component + lineage topic as catalog/lineage) -----------------
     pubsub: str = Field(default="lineage-pubsub", alias="MEDALLION_PUBSUB")

@@ -23,7 +23,13 @@ class FlowsSettings(GovernedAuthSettings, BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # `populate_by_name` also teaches the env source the bare FIELD NAME as a second
+        # lookup, so every alias below silently gained an un-namespaced twin. `env_prefix`
+        # redirects that fallback onto the namespace the aliases already declare; an explicit
+        # alias bypasses it, so the deliberately-bare ones still land. See
+        # tests/unit/test_settings_env_namespace.py.
         populate_by_name=True,
+        env_prefix="LANCE_",
     )
 
     #: Ray Serve's HTTP ingress origin. A `model` node POSTs to `{serve_url}/{app}`.

@@ -13,7 +13,13 @@ from service_kit.lakehouse.objectfs import lance_storage_options
 class MaintenanceSettings(BaseSettings):
     """Config for the table-maintenance service + its S3 access to the lakehouse buckets."""
 
-    model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+    # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
+    # every alias below silently gained an un-namespaced twin (MedallionSettings.ray_address
+    # answered to Ray's own $RAY_ADDRESS). `env_prefix` redirects that fallback onto the
+    # namespace the aliases already declare; an explicit alias bypasses it, so the
+    # deliberately-bare ones (DAPR_HTTP_PORT, RAY_DASHBOARD_URL) still land.
+    # See tests/unit/test_settings_env_namespace.py.
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="MAINTENANCE_", extra="ignore")
 
     # #102: the shared Lance session's cache caps. Defaults sized for the pod tier (512Mi limit —
     # Lance's own defaults are 1 GiB metadata + 6 GiB index PER OPEN, which is the defect).

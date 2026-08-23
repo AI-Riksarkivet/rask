@@ -63,7 +63,13 @@ class IngestAuthSettings(GovernedAuthSettings, BaseSettings):
     governed service already reads.
     """
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False, populate_by_name=True)
+    # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
+    # every alias below silently gained an un-namespaced twin (MedallionSettings.ray_address
+    # answered to Ray's own $RAY_ADDRESS). `env_prefix` redirects that fallback onto the
+    # namespace the aliases already declare; an explicit alias bypasses it, so the
+    # deliberately-bare ones (DAPR_HTTP_PORT, RAY_DASHBOARD_URL) still land.
+    # See tests/unit/test_settings_env_namespace.py.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False, populate_by_name=True, env_prefix="LANCE_")
 
     #: The project the SERVICE token may ingest into. The shared token carries no tenant identity, so
     #: it is pinned here; crossing tenants requires a user bearer and its per-project FGA check.
