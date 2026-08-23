@@ -65,7 +65,6 @@ nav = [
       { "Ray Train" = "RAY-TRAIN.md" },
       { "Operators & Submit Seam" = "OPERATORS.md" },
       { "API Surface" = "API.md" },
-      { "rask Integration" = "RASK-INTEGRATION.md" },
     ]},
     { "Operations" = [
       { "Deploy" = "DEPLOY.md" },
@@ -81,16 +80,9 @@ nav = [
       { "Image Pipeline" = "image-pipeline-event-driven.md" },
     ]},
     { "Design Notes" = [
-      { "Annotation Projects" = "DESIGN-annotation-projects.md" },
-      { "Interactive State" = "DESIGN-interactive-state.md" },
-      { "UX Reactive Evidence" = "GOAL-UX-REACTIVE-EVIDENCE.md" },
     ]},
     { "Reports" = [
-      { "Assessment 2026-07-15" = "ASSESSMENT-2026-07-15.md" },
-      { "Catalog Bench 2026-07-22" = "BENCH-2026-07-22.md" },
       { "Coverage" = "COVERAGE.md" },
-      { "Lineage Verification" = "VERIFY-LINEAGE-OPENLINEAGE.md" },
-      { "Open Work" = "OPEN-WORK.md" },
     ]},
   ]},
   { "Lance Reference" = [
@@ -103,10 +95,7 @@ nav = [
     { "Ray Integration" = "lance/ray.md" },
   ]},
   { "Reference" = [
-    { "HTR" = "reference/htr.md" },
     { "Storage" = "reference/storage.md" },
-    { "Runner" = "reference/runner.md" },
-    { "Viewer" = "reference/viewer.md" },
   ]},
   { "Runbooks" = [
     { "LLM Cluster" = "runbooks/llm-cluster.md" },

@@ -15,10 +15,6 @@ overview see [Packages → Storage](../packages/storage.md).
 
 ::: storage.s3
 
-## IIIF cache
-
-::: storage.iiif
-
 ## URI helpers
 
 ::: storage.uri

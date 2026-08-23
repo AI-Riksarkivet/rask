@@ -38,7 +38,7 @@ flowchart LR
 - **[Concepts](getting-started/concepts.md)** — the vocabulary: batches, chunks, pipelines, the orchestrator.
 - **[Architecture](architecture/index.md)** — how runner, Ray, the services, the frontend, and storage fit together.
 - **[Packages](packages/index.md)** / **[Components](components/index.md)** — the monorepo, layer by layer (plus [sub-project notes](projects/index.md): runner, HCP).
-- **[API Reference](reference/htr.md)** — auto-generated from source docstrings.
+- **[API Reference](reference/storage.md)** — auto-generated from source docstrings.
 
 !!! note "Audience"
     These docs describe the system as it is. For deeper design rationale and
