@@ -20,8 +20,8 @@ They are not interchangeable, and several rulings below turn on which one a clai
 
 | Question | Decision | State |
 | --- | --- | --- |
-| **1b** — an existing Lance table as a source | `lance-append` at fragment/row-range grain over UNGOVERNED locations; `lance-register` is the existing catalog door, not an ingest run; **no overwrite mode** | register door **shipped**; the `lance-append` kind **outstanding → `open_ingest_design.md`** |
-| **1c** — incremental / CDC | anti-join against bronze itself at enumerate (no new store), triggered by a cron at the outer edge | mechanism **shipped and bounded**; the cron **outstanding → `open_ingest_design.md`** |
+| **1b** — an existing Lance table as a source | `lance-append` at fragment/row-range grain over UNGOVERNED locations; `lance-register` is the existing catalog door, not an ingest run; **no overwrite mode** | register door **shipped**; the `lance-append` kind **shipped** (`8e2da00a`, keyed on FRAGMENTS — offsets are not stable across versions) |
+| **1c** — incremental / CDC | anti-join against bronze itself at enumerate (no new store), triggered by a cron at the outer edge | mechanism **shipped and bounded**; the cron **shipped** (`e629e2cc`) |
 | **1d** — what must pre-exist | warehouse + namespace **yes**, table **no** | **shipped**, and the refusal is now pinned on both sides |
 | **2** — "manual push to bronze only" | a **tuple-seeding policy**, not a code change | **ruled**; the policy is recorded below |
 | **3 / 4** — annotator output, tier movement | annotations are DERIVED so silver is correct; readiness is the `published` tag | tenancy **fixed**; the single-trigger flip **outstanding → `open_ingest_design.md`** |
