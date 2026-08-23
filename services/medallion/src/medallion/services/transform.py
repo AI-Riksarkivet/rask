@@ -39,12 +39,13 @@ from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register, promotion_band, promotion_hold
 from medallion.services.compute import measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
+from medallion.services.gate_decision import GateOutcome, gate_decision
 from medallion.services.promotion import promotion_lineage
 from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, uri_within
 from service_kit import dapr_publish
 from service_kit.governed import fga
 from service_kit.lakehouse import outbox
-from service_kit.lakehouse.quality import Assertion, assert_quality, passed
+from service_kit.lakehouse.quality import Assertion, assert_quality
 from service_kit.lakehouse.warehouse_registry import (
     UnresolvableProjectError,
     is_safe_project,
@@ -629,7 +630,38 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
         # 2. PUBLISH what was written, and let the catalog gate it — the tag move is the trigger, so
         # there is nothing else to fire. A refusal is a normal outcome that names its assertions, and
         # those become the hold a person may be asked about.
-        if settings.cascade_via_publish and to_dataset and result is not None:
+        # 2a. THE BAND, evaluated BEFORE any promotion. Under `cascade_via_publish` the publish IS the
+        # promotion — the catalog's tag move is what wakes the next stage — so a breach noticed after
+        # that tag has moved cannot un-move it. Evaluated here and RULED ON by `gate_decision`, which
+        # owns the ordering; it used to be an `elif` beneath the publish branch, where it never ran.
+        band_reasons: list[str] = []
+        if result is not None and promotion_hold.review_enabled(settings):
+            previous = await run_in_threadpool(promotion_band.previous_row_count, to_uri, settings.storage_options(), version=result.version)
+            band_reasons = promotion_band.review_reasons(row_count=result.row_count, previous_row_count=previous, band=settings.promotion_review_band)
+        failed_assertions = [a.assertion for a in assertions if not a.success] if assertions else []
+
+        decision = gate_decision(
+            failed_assertions=failed_assertions,
+            band_reasons=band_reasons,
+            cascade_via_publish=settings.cascade_via_publish,
+            has_target=bool(to_dataset) and result is not None,
+            has_pub_topic=bool(settings.pub_topic),
+        )
+        # 3. A failed assertion BLOCKS — record it, do not trigger the next stage, so a bad batch
+        # cannot cascade. Composes with the FGA gate above.
+        if decision is GateOutcome.BLOCK:
+            quality_blocked = True
+            quality_reasons = failed_assertions
+        # 3b. A band breach is a QUESTION (§9.1): unusual rather than broken, so it becomes a hold a
+        # person is asked about rather than a verdict this code invents.
+        elif decision is GateOutcome.HOLD:
+            quality_blocked = True
+            quality_reasons = band_reasons
+        # `result is not None` restates an invariant `gate_decision` already enforces — it only returns
+        # PUBLISH when `has_target`, which includes it — and is here so the checker can narrow
+        # `result` for `result.version` below. A PUBLISH that somehow arrived without one falls
+        # through to no branch, which is the same terminal outcome as NOTHING.
+        elif decision is GateOutcome.PUBLISH and result is not None:
             outcome = await run_in_threadpool(
                 catalog_register.publish_stage_output,
                 catalog_url=settings.catalog_url,
@@ -645,27 +677,8 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             if not outcome.published:
                 quality_blocked = True
                 quality_reasons = outcome.failed_assertions
-        # 3. Quality gate (local): a failed assertion BLOCKS promotion — record it, but do NOT trigger
-        # the next stage, so a bad batch can't cascade. Composes with the FGA gate above.
-        elif assertions and not passed(assertions):
-            quality_blocked = True
-            quality_reasons = [a.assertion for a in assertions if not a.success]
-        # 3b. The gate's OTHER question (§9.1): is this promotion unusual rather than broken? The
-        # assertions cannot answer it — a batch whose row count doubled passes every one of them — so
-        # before this, exactly the promotion a person should look at was the one promoted silently.
-        #
-        # Gated on review being ENABLED, and that is the whole difference from 3. A failed assertion
-        # blocks with or without a reviewer, because corrupt data is wrong either way. A band breach is
-        # only ever a QUESTION: with nobody to ask there is no honest answer but to promote, and
-        # blocking here would invent a verdict the policy never authorised.
-        elif result is not None and promotion_hold.review_enabled(settings):
-            previous = await run_in_threadpool(promotion_band.previous_row_count, to_uri, settings.storage_options(), version=result.version)
-            band_reasons = promotion_band.review_reasons(row_count=result.row_count, previous_row_count=previous, band=settings.promotion_review_band)
-            if band_reasons:
-                quality_blocked = True
-                quality_reasons = band_reasons
         # 4. Trigger the next stage (unless terminal — gold has no pub_topic — or blocked by the gate).
-        elif settings.pub_topic:
+        elif decision is GateOutcome.TRIGGER:
             next_trigger = {
                 "token": token,
                 "dataset": settings.to_dataset,
