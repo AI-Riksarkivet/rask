@@ -1875,6 +1875,132 @@ def _greptimedb_config(docs: list[dict]) -> str:
 _UNBOUNDED_BY_DEFAULT = ("memory_pool_size", "scan_memory_limit", "experimental_compaction_memory_limit")
 
 
+def test_every_probe_path_the_chart_configures_is_excluded_from_tracing() -> None:
+    """A kubelet polls twice a second forever, and every one of those probes was a traced request.
+
+    MEASURED 2026-08-23 over three hours of live spans:
+
+        GET /api/health http send   19,194
+        GET /api/health              6,398
+        GET /healthz http send       4,743
+        GET /healthz                 1,581
+                                    ------
+                                    31,916 spans of pure liveness noise
+
+    That is EIGHT TIMES the workflow keepalive everyone had noticed, and it dominated the RED metrics
+    of every service whose probe path was not on the exclusion list. The counts differ 3:1 between a
+    path and its `http send` twin because ASGI instrumentation emits a child span per send/receive, so
+    each probe costs several spans rather than one.
+
+    The cause is a list that drifted from the thing it is supposed to mirror. `rask.otelEnv` excluded
+    `/livez,/readyz,/metrics`, but `chart/templates/fleet.yaml` points both probes at
+    `healthPath | default "/api/health"`, and one service overrides it to `/healthz` — so the two
+    services taking the DEFAULT were traced on every poll.
+
+    This gate is written against the rendered chart rather than a hardcoded list on purpose: it asks
+    each first-party pod what path its OWN probes hit and requires the exclusion on that SAME pod to
+    cover it. A new service, or a changed `healthPath`, is then caught by construction instead of by
+    someone re-reading two files that have no reason to agree.
+    """
+    docs = _rendered_docs()
+
+    uncovered: list[str] = []
+    checked = 0
+    for doc in docs:
+        if doc.get("kind") not in ("Deployment", "StatefulSet"):
+            continue
+        spec = ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
+        for container in spec.get("containers") or []:
+            env = {e.get("name"): e.get("value") for e in (container.get("env") or []) if isinstance(e, dict)}
+            excluded_raw = env.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS")
+            if excluded_raw is None:
+                continue  # not an instrumented Python pod; nothing to promise
+            excluded = [entry.strip() for entry in excluded_raw.split(",") if entry.strip()]
+            paths = {(probe or {}).get("httpGet", {}).get("path") for probe in (container.get("livenessProbe"), container.get("readinessProbe"))} - {None}
+            for path in sorted(paths):
+                checked += 1
+                # The instrumentation matches each entry as a regex SEARCHED against the url, so an
+                # entry is covering when it appears anywhere in the path.
+                if not any(entry.strip("/") and entry.strip("/") in path for entry in excluded):
+                    uncovered.append(f"{doc.get('metadata', {}).get('name')} probes {path}, excluded={excluded}")
+
+    assert checked, "no instrumented pod declared both a probe and an exclusion list — this gate is testing nothing"
+    assert not uncovered, "these pods trace their own kubelet probes on every poll:\n  " + "\n  ".join(uncovered)
+
+
+def test_the_workflow_keepalive_is_filtered_out_of_the_trace_stream() -> None:
+    """`/TaskHubSidecarService/Hello` is the workflow engine pinging its own sidecar, and nothing reads it.
+
+    RE-MEASURED 2026-08-23 (two earlier audits disagreed by 40 points on its share, so the number was
+    taken fresh rather than inherited): 3,828 spans in three hours, the ninth-largest span name in the
+    estate. It carries no information — it is a liveness ping between two processes in the same pod.
+
+    Dropped at the Collector rather than at the app: the span is created by daprd, which this repo does
+    not instrument and cannot configure per-span. The processor is scoped to the exact span name, not a
+    prefix, so a real TaskHubSidecarService call is unaffected.
+
+    Kept in proportion deliberately: this is the SMALL half of the trace-noise problem. The probe spans
+    fixed alongside it were 31,916 over the same window — see
+    `test_every_probe_path_the_chart_configures_is_excluded_from_tracing`.
+    """
+    config = _collector_config(_rendered_docs("observability.enabled=true"))
+    processors = config.get("processors") or {}
+
+    keepalive = [name for name, body in processors.items() if "TaskHubSidecarService" in yaml.safe_dump(body or {})]
+    assert keepalive, (
+        f"no processor drops the workflow keepalive — `/TaskHubSidecarService/Hello` reaches the store on every tick. processors are {sorted(processors)}"
+    )
+
+    traces = ((config.get("service") or {}).get("pipelines") or {}).get("traces") or {}
+    wired = [p for p in (traces.get("processors") or []) if p in keepalive]
+    assert wired, (
+        f"the keepalive filter {keepalive} exists but is not in the traces pipeline "
+        f"{traces.get('processors')} — a processor nothing references filters nothing."
+    )
+
+
+def test_the_collector_exporters_are_durable_and_their_storage_id_resolves() -> None:
+    """A Collector restart during a store outage dropped whatever was in flight, silently.
+
+    Both OTLP exporters declared `endpoint` and `headers` and nothing else, and all three pipelines
+    ended in a bare `batch`. `batch` is not durability: it holds a batch in memory and forgets it if
+    the process dies. That mattered concretely on 2026-08-23, when the store it writes to OOMKilled
+    thirteen times — every one of those was a hole in the record that a queue would have ridden out.
+
+    The second assertion is the one that earns its keep. A `sending_queue` naming a `storage:` id that
+    is NOT in `service.extensions` passes `otelcol validate` with exit 0 and then kills the Collector
+    at startup with `no storage client extension found` — taking the entire telemetry plane down to
+    fix a durability gap. That failure mode is why this item was deferred rather than dashed off, so
+    the gate checks the reference resolves rather than merely that a queue exists.
+
+    Bounded on purpose: the queue is backed by an emptyDir shared with filelog's read offsets, so an
+    unbounded queue would trade dropped telemetry for a filled node. `queue_size` and the volume's
+    `sizeLimit` are both explicit for that reason.
+    """
+    docs = _rendered_docs("observability.enabled=true")
+    config = _collector_config(docs)
+    exporters = config.get("exporters") or {}
+    otlp = {name: body or {} for name, body in exporters.items() if "otlphttp" in name}
+    assert otlp, f"no otlphttp exporters found — exporters are {sorted(exporters)}"
+
+    registered = set((config.get("service") or {}).get("extensions") or [])
+
+    for name, body in sorted(otlp.items()):
+        queue = body.get("sending_queue") or {}
+        assert queue.get("enabled") is True, (
+            f"exporter {name} has no enabled sending_queue — a Collector restart during a store outage drops what is in flight. keys are {sorted(body)}"
+        )
+        assert queue.get("queue_size"), f"exporter {name}'s sending_queue has no explicit queue_size"
+        assert body.get("retry_on_failure", {}).get("enabled") is True, f"exporter {name} does not retry on failure"
+        storage_id = queue.get("storage")
+        if storage_id:
+            assert storage_id in registered, (
+                f"exporter {name}'s sending_queue names storage {storage_id!r}, which is NOT in "
+                f"service.extensions {sorted(registered)}. This renders, passes `otelcol validate`, "
+                f"and then CRASHES the Collector at startup with `no storage client extension found`."
+            )
+
+
 def test_the_telemetry_store_bounds_its_own_memory() -> None:
     """The estate's ONLY sink for logs, metrics and traces was configured to have no memory ceiling.
 

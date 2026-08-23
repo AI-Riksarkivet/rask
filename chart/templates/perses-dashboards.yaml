@@ -630,7 +630,7 @@ data:
           "executionLatency": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Workflow execution latency p95", "description": "Free from the engine. Note the lanes that continue_as_new (stage_run, train_run) report per-TURN latency, not wall-clock run duration." },
+              "display": { "name": "Workflow execution latency p95", "description": "Free from the engine. Note the lanes that continue_as_new (stage_run, train_run) report per-TURN latency, not wall-clock run duration. A lane reading +Inf is NOT a broken panel: histogram_quantile returns +Inf when the quantile falls above the largest bucket, and Dapr's default buckets stop at 100s. promotion_review does that by design — it blocks on ctx.wait_for_external_event, i.e. a person approving a promotion. It cannot be fixed by widening the buckets, because spec.metrics.latencyDistributionBuckets is GLOBAL: workflow latency shares the HTTP distribution, so a ceiling wide enough for a human would wreck the resolution of every HTTP lane. Read +Inf here as 'longer than 100s', and read the other lanes normally." },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                 "query": "histogram_quantile(0.95, sum by (le, workflow_name) (rate(dapr_runtime_workflow_execution_latency_bucket[5m])))", "seriesNameFormat": {{ "{{workflow_name}}" | quote }} } } } } ]

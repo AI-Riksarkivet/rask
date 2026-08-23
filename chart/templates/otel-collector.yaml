@@ -312,30 +312,67 @@ data:
               and resource.attributes["k8s.container.name"] != "daprd"
               and IsMatch(body, "^[0-9]{4}-[0-9]{2}-[0-9]{2} ")
       batch: {}
+      # The workflow engine's liveness ping to its own sidecar, dropped before it reaches the store.
+      # RE-MEASURED 2026-08-23 rather than inherited (two audits put its share 40 points apart):
+      # 3,828 spans in three hours, ninth-largest span name in the estate, carrying nothing anyone
+      # reads. Scoped to the EXACT name, not a prefix, so a real TaskHubSidecarService call still
+      # traces. `error_mode: ignore` so a span with no name cannot wedge the pipeline.
+      #
+      # Proportion matters here: this is the SMALL half of the trace noise. The kubelet probe spans
+      # fixed in the same change were 31,916 over the same window, and those are excluded at the SDK
+      # (rask.otelEnv's OTEL_PYTHON_FASTAPI_EXCLUDED_URLS) because the app owns them — dropping them
+      # here instead would pay to serialize and ship spans only to discard them at the far end.
+      filter/drop_keepalive:
+        error_mode: ignore
+        traces:
+          span:
+            - 'name == "/TaskHubSidecarService/Hello"'
     exporters:
       # Traces carry GreptimeDB's trace-pipeline header (→ opentelemetry_traces); metrics/logs must NOT, so
       # they get a separate exporter with only the db-name header. Both hit the same /v1/otlp base; the
       # otlphttp exporter appends /v1/{traces,metrics,logs} per signal (same as the app SDK did).
-      {{- /* NO `sending_queue` / `retry_on_failure` ON EITHER EXPORTER, and it is unfinished work rather
-         than a ruling. A Collector restart during a GreptimeDB blip loses whatever is in flight, and the
-         `file_storage` extension above is wired to the filelog receiver's READ OFFSETS, not to an
-         exporter queue. The otel skill's collector reference is explicit that a persistent
-         `sending_queue` + `file_storage` is the durable shape and the bare `batch` processor is not.
-         Deferred deliberately: a `storage:` id naming an extension absent from `service.extensions`
-         passes `otelcol validate` with exit 0 and then kills the Collector at startup with
-         `no storage client extension found` — taking the whole telemetry plane down. It needs its own
-         change with a gate, not a line added here.
-         This matters more than it reads: the store it writes to is itself OOM-looping (see
-         chart/values.yaml's greptimedb resources comment). */}}
+      {{- /* DURABILITY. Both exporters queue and retry; `batch` alone is not durability — it holds a
+         batch in memory and forgets it if the process dies. That was not theoretical: the store these
+         write to OOMKilled 13 times on 2026-08-23 and every one was a hole a queue would have ridden out.
+
+         `storage: file_storage` makes the queue survive a Collector restart, and the id MUST appear in
+         `service.extensions` below — it does. A queue naming an unregistered extension renders fine,
+         passes `otelcol validate` with exit 0, and then kills the Collector at startup with
+         `no storage client extension found`, taking the whole telemetry plane down to fix a
+         durability gap. That trap is why this was deferred once; the gate now checks the reference
+         resolves, not merely that a queue exists.
+
+         BOUNDED, because the backing emptyDir is shared with filelog's read offsets: an unbounded
+         queue would trade dropped telemetry for a filled node. `queue_size` is explicit here and the
+         volume carries a `sizeLimit`. `max_elapsed_time` is finite for the same reason — past five
+         minutes the queue, not the retry loop, is what carries the data. */}}
       otlphttp/greptime_traces:
         endpoint: {{ $greptime | quote }}
         headers:
           x-greptime-db-name: {{ $o.dbName | quote }}
           x-greptime-pipeline-name: {{ $o.tracePipeline | quote }}
+        sending_queue:
+          enabled: true
+          storage: file_storage
+          queue_size: 500
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 300s
       otlphttp/greptime:
         endpoint: {{ $greptime | quote }}
         headers:
           x-greptime-db-name: {{ $o.dbName | quote }}
+        sending_queue:
+          enabled: true
+          storage: file_storage
+          queue_size: 500
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 300s
     service:
       extensions: [health_check, file_storage]
       pipelines:
@@ -348,7 +385,7 @@ data:
                either figure. */}}
         traces:
           receivers: [otlp]
-          processors: [memory_limiter, k8sattributes, batch]
+          processors: [memory_limiter, k8sattributes, filter/drop_keepalive, batch]
           exporters: [otlphttp/greptime_traces]
         metrics:
           receivers: [otlp, prometheus]
@@ -400,7 +437,9 @@ spec:
           configMap: { name: {{ $sa }} }
         - { name: varlogpods, hostPath: { path: /var/log/pods } }
         - { name: varlibdockercontainers, hostPath: { path: /var/lib/docker/containers } }
-        - { name: offsets, emptyDir: {} }
+        # sizeLimit because this dir now backs the exporters' persistent sending_queue as well as
+        # filelog's read offsets — without it a store outage trades dropped telemetry for a full node.
+        - { name: offsets, emptyDir: { sizeLimit: 2Gi } }
 ---
 apiVersion: v1
 kind: Service

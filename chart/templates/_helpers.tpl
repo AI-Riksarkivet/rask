@@ -424,7 +424,17 @@ dapr.io/config: "lance-tracing"
      request rate: the RED dashboard reads busy and the latency distribution is dominated by a route
      nobody calls. */}}
 - name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS
-  value: "/livez,/readyz,/metrics"
+  {{- /* MUST cover every path `fleet.yaml` points a probe at, which is
+         `healthPath | default "/api/health"` — NOT just the operational pair. It listed only
+         /livez,/readyz,/metrics until 2026-08-23, and the four services taking the default
+         (controlplane, compute, ingest, notifications) therefore traced their own kubelet polls
+         twice a second: 31,916 spans in three hours, measured, eight times the workflow keepalive
+         everyone had noticed instead. Each probe costs SEVERAL spans, not one — ASGI
+         instrumentation emits a child per send/receive, which is why `GET /api/health http send`
+         outnumbered `GET /api/health` three to one.
+         Pinned by `test_every_probe_path_the_chart_configures_is_excluded_from_tracing`, which reads
+         each pod's OWN probe paths out of the render rather than trusting this list to stay in step. */}}
+  value: "/livez,/readyz,/healthz,/api/health,/metrics"
 - name: OTEL_SERVICE_NAME
   value: {{ $svc | quote }}
 - name: OTEL_RESOURCE_ATTRIBUTES
@@ -813,7 +823,11 @@ filter deleted every crash log and every daprd line on 10 pods — measured 2026
 {{/* Don't trace the k8s probe endpoints — they're hit every 10s and bury real request spans (otel
 signals.md § Exclude noisy endpoints). The FastAPI instrumentor reads this itself, launcher or not —
 which is why the fleet carries it too. */}}
-- { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, value: "/livez,/readyz,/metrics" }
+{{- /* Must MATCH `rask.otelEnv`'s list byte for byte — pinned by
+     `test_both_planes_agree_on_the_otel_env_that_ACTUALLY_APPLIES`, which caught exactly this
+     file being updated in one plane and not the other. Covers every path fleet.yaml points a
+     probe at (`healthPath | default "/api/health"`), not just the operational pair. */}}
+- { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, value: "/livez,/readyz,/healthz,/api/health,/metrics" }
 - { name: OTEL_RESOURCE_ATTRIBUTES, value: "{{ include "rask.otelResourceAttrs" $root }}" }
 {{- end -}}
 
