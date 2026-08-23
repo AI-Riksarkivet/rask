@@ -30,11 +30,15 @@ exactly that once, so each row below is the exit code of the command itself with
 
 | # | command | result |
 | --- | --- | --- |
-| 1 | `uv run pytest -q --no-cov -m "not e2e and not slow"` | ✅ **exit 0** — 5202 passed, 7 skipped, 88 deselected, 1 xfailed, 242 s |
+| 1 | `uv run pytest -q --no-cov -m "not e2e and not slow"` | ✅ **exit 0** — 5232 passed, 7 skipped, 88 deselected, 1 xfailed, 241 s |
 | 2 | `bunx turbo --cwd=frontend run check check:tsgo test lint fmt:check --continue` | ✅ **exit 0** — 74/74 tasks, no `Failed:` line |
-| 3 | `dagger call charts` | ✅ **exit 0** — 17 steps, 27.4 s (first green since 2026-08-04) |
-| 4 | `dagger call frontend` | ✅ **exit 0** — 74/74 tasks, 53 s, 0 cached |
-| 5 | `dagger call test` | ⏳ **still running** at 1 h 02 m — H19's NATS binding is unverified and stays uncommitted until it returns |
+| 3 | `dagger call charts` | ✅ **exit 0** — all steps, `SUCCESS: 20 rules found` (first green since 2026-08-04) |
+| 4 | `dagger call frontend` | ✅ **exit 0** — 74/74 tasks |
+| 5 | `dagger call test` | ⏳ **running** — H19's NATS binding is committed but UNVERIFIED until it returns, and is reported as such |
+
+Re-run after every change in this pass, not once at the start: gate 2 caught a `fmt:check` on the
+widened no-networkidle gate that a green vitest run said nothing about (fmt is a per-package task), and
+gates 3 and 4 were re-run specifically because the `.env` exclusion changed their build contexts.
 
 Gate 2 needed three fixes before it went green, and gate 3 needed five: both were reporting success
 while measuring a fraction of what they claimed. Those are recorded at H3 and H22 respectively.
