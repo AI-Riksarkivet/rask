@@ -90,6 +90,91 @@ def _local_dir_partition(spec: SourceSpec, key: str) -> str | None:
     return head or None
 
 
+#: The ONE dataset root `lance-append` may read, resolved exactly like :data:`LOCAL_ROOT_ENV`.
+#:
+#: Same reasoning, same shape: `options.uri` is caller-supplied and reaches a reader that will scan
+#: whatever it is pointed at. Unset means the kind is REFUSED rather than unconfined — a source that
+#: cannot be pointed anywhere is a source nobody can abuse.
+LANCE_ROOT_ENV = "RASK_INGEST_LANCE_ROOT"
+
+#: The catalog's own root. `lance-append` refuses anything under it (guard 1) even when the confinement
+#: root would otherwise allow it, because a copy between governed tiers is the CASCADE's operation.
+GOVERNED_ROOT_ENV = "LANCE_REST_ROOT"
+
+
+def _has_scheme(uri: str) -> bool:
+    """True for `s3://...`-style URIs, false for filesystem paths.
+
+    A scheme'd URI is compared as a STRING prefix: `Path.resolve()` on `s3://bucket/x` yields
+    `<cwd>/s3:/bucket/x`, which would both mangle the value and make the confinement check compare two
+    fictions.
+    """
+    return "://" in uri
+
+
+def _under(candidate: str, base: str) -> bool:
+    if _has_scheme(candidate) or _has_scheme(base):
+        normalized = base.rstrip("/")
+        return candidate == normalized or candidate.startswith(normalized + "/")
+    resolved, root = Path(candidate).resolve(), Path(base).resolve()
+    return resolved == root or root in resolved.parents
+
+
+def confine_to_lance_root(candidate: str) -> str:
+    """Refuse `candidate` unless it sits under the configured dataset root, and never if it is governed.
+
+    The governed check runs FIRST and independently of the confinement root: an operator who points
+    `RASK_INGEST_LANCE_ROOT` at the catalog's own bucket must still not be able to re-ingest a governed
+    tier through this door. Its message names the mover, because "denied" without a destination is how a
+    caller ends up building the second, unlineaged copy path by hand.
+    """
+    governed = os.getenv(GOVERNED_ROOT_ENV)
+    if governed and _under(candidate, governed):
+        raise ValueError(
+            f"{candidate!r} is a catalog-governed dataset; ingest does not copy between governed tiers — "
+            "that is the medallion mover's job (the bronze->silver->gold cascade). To land an EXISTING "
+            "table under governance instead, use POST /v1/table/{id}/register."
+        )
+    base = os.getenv(LANCE_ROOT_ENV)
+    if not base:
+        raise ValueError(f"lance-append is not enabled here: set {LANCE_ROOT_ENV} to the dataset root it may read")
+    if not _under(candidate, base):
+        raise ValueError(f"lance-append uri {candidate!r} is outside {LANCE_ROOT_ENV} ({base})")
+    return candidate
+
+
+def _lance_append(spec: SourceSpec) -> SourceAdapter:
+    """One unit per FRAGMENT of an ungoverned `.lance` dataset.
+
+    `probe()` before returning is guard 2: it opens the dataset and counts fragments, so an absent or
+    unreadable source fails while the caller still holds the request rather than inside a worker that
+    has already claimed a unit and then has nothing to fetch.
+    """
+    from service_kit.lakehouse.sources import LanceFragmentSource
+
+    uri = str(spec.options.get("uri") or "")
+    if not uri:
+        raise ValueError("lance-append source requires options.uri")
+    source = LanceFragmentSource(confine_to_lance_root(uri))
+    source.probe()
+    return source
+
+
+def _lance_append_lineage(spec: SourceSpec) -> LineageInput:
+    """The dataset itself is the lineage input — the fragment is an ingest unit, not a provenance node."""
+    return LineageInput(namespace="lance", name=str(spec.options.get("uri") or ""))
+
+
+def _lance_append_partition(spec: SourceSpec, key: str) -> str | None:
+    """Every fragment of one dataset shares its dataset — the folder rule has no analogue here.
+
+    `key` is `<uri>#fragment=<id>`; the part before the fragment marker is the dataset, which is the only
+    grouping this kind has. Partitioning per fragment would make the column a second copy of the id.
+    """
+    dataset, _, _ = key.partition("#fragment=")
+    return dataset or None
+
+
 def _s3_prefix(spec: SourceSpec) -> SourceAdapter:
     """An S3 prefix over the estate's provider-agnostic client.
 
@@ -199,6 +284,25 @@ def register_builtin_sources() -> None:
                     label="Endpoint URL",
                     placeholder="(the configured default)",
                     help="Override only when the bucket is not on the estate's own endpoint.",
+                ),
+            ],
+        )
+
+    if "lance-append" not in known:
+        register(
+            "lance-append",
+            build=_lance_append,
+            lineage_input=_lance_append_lineage,
+            partition_of=_lance_append_partition,
+            label="Lance dataset",
+            description="Every fragment of an ungoverned .lance dataset, each landed as one bronze row carrying its rows as Arrow IPC.",
+            options=[
+                SourceOption(
+                    name="uri",
+                    label="Dataset URI",
+                    required=True,
+                    placeholder="/data/exports/run-42.lance",
+                    help="An UNGOVERNED dataset under the configured root. A catalog-governed table is refused — that copy is the cascade's job.",
                 ),
             ],
         )
