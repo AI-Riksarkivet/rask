@@ -35,10 +35,37 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
-#: `OIDCVerifier(` through its closing paren. Non-greedy across newlines: these constructions are
-#: multi-line keyword calls, so a line-oriented scan would see the opening line and none of the
-#: arguments — and would pass on exactly the code that fails.
-CONSTRUCTION = re.compile(r"OIDCVerifier\((.*?)\n\s*\)", re.DOTALL)
+#: The opening of a construction. The ARGUMENTS are read by `_constructions()` below with a depth
+#: counter rather than by this pattern.
+#:
+#: The previous pattern was `OIDCVerifier\((.*?)\n\s*\)`, which required a NEWLINE before the closing
+#: paren — so `OIDCVerifier(iss, aud)` written on one line was invisible to the whole gate. Every
+#: construction in the estate happens to be multi-line today, so the gate was green and would have
+#: stayed green through a single-line one; and the `>= 5` floor against 8 doors could absorb three
+#: disappearances before it noticed. A pattern anchored on incidental FORMATTING cannot be a contract.
+CONSTRUCTION_START = re.compile(r"OIDCVerifier\(")
+
+
+def _constructions(text: str) -> list[str]:
+    """The argument text of every `OIDCVerifier(...)`, matched by depth rather than by layout.
+
+    Walking the parens has no formatting assumption to violate and no window to tune — the same fix,
+    and the same reason, as the estate's single-flight-keys gate, whose regex could not cross a `)`
+    and judged 15 of 40 sites.
+    """
+    out: list[str] = []
+    for match in CONSTRUCTION_START.finditer(text):
+        open_paren = match.end() - 1
+        depth = 0
+        for i in range(open_paren, len(text)):
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    out.append(text[open_paren + 1 : i])
+                    break
+    return out
 
 
 def _sources() -> list[Path]:
@@ -52,7 +79,7 @@ def _sources() -> list[Path]:
         if "test" in path.parts or path.name.startswith("test_"):
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
-        if CONSTRUCTION.search(text):
+        if _constructions(text):
             found.append(path)
     return sorted(found)
 
@@ -60,7 +87,22 @@ def _sources() -> list[Path]:
 def test_the_estate_has_governed_doors_to_check() -> None:
     """A guard on the guard: if the regex stops matching, every test below passes vacuously."""
     doors = _sources()
-    assert len(doors) >= 5, f"expected the estate's governed doors, found {[str(p) for p in doors]} — the scan is broken, not the code"
+    # DERIVED, not a remembered floor. `>= 5` against eight real doors could absorb three
+    # disappearances silently — and a floor cannot know what it is missing, which is the failure this
+    # audit found in `nav-truth.test.ts` as well. Counting the literal occurrences of the constructor
+    # name and requiring the parser to reach all of them means the two can only agree if the walk works.
+    mentions = sum(
+        len(CONSTRUCTION_START.findall(p.read_text(encoding="utf-8", errors="ignore")))
+        for p in (ROOT / "services").rglob("*.py")
+        if "test" not in p.parts and not p.name.startswith("test_")
+    )
+    parsed = sum(len(_constructions(p.read_text(encoding="utf-8"))) for p in doors)
+
+    assert doors, "no governed doors found at all — the scan is broken, not the code"
+    assert parsed == mentions, (
+        f"the estate names OIDCVerifier( {mentions} times but the paren walk parsed {parsed} — a "
+        "construction is being skipped, so the assertions below run on a subset of the doors"
+    )
 
 
 @pytest.mark.parametrize("path", _sources(), ids=lambda p: p.relative_to(ROOT).as_posix())
@@ -68,7 +110,7 @@ def test_every_governed_door_passes_discovery_overrides(path: Path) -> None:
     """The issuer names the token's `iss`; the discovery URL is where the document is FETCHED. A door
     that conflates them cannot verify a user token behind a reverse-proxied IdP — and fails at runtime
     with a connection error that says nothing about authentication."""
-    for call in CONSTRUCTION.findall(path.read_text(encoding="utf-8")):
+    for call in _constructions(path.read_text(encoding="utf-8")):
         assert "discovery_overrides" in call, (
             f"{path.relative_to(ROOT)} builds an OIDCVerifier without discovery_overrides — behind a reverse-proxied IdP "
             f"it will fetch discovery from the browser-facing issuer and every user-bearer request will 500"

@@ -801,6 +801,16 @@ tenth runner with a `pyproject.toml` and no `tests/` fires the roster naming `zz
 - **`test_oidc_discovery_parity.py:41`** — the `OIDCVerifier\((.*?)\n\s*\)` regex anchors on a newline
   before the closing paren, so a single-line construction is invisible to the scan; the `>= 5` floor
   against 8 found doors then absorbs three disappearances.
+  **ENFORCED 2026-08-22** — both halves. Confirmed directly: the old pattern returns `False` on
+  `OIDCVerifier(issuer=..., audience=...)` written on one line. Replaced with a depth-counting paren
+  walk, which has no formatting assumption to violate — the same fix and the same reason as the
+  single-flight-keys gate above, whose regex could not cross a `)`. **A pattern anchored on incidental
+  FORMATTING cannot be a contract.**
+  The `>= 5` floor is gone too: the guard now counts literal `OIDCVerifier(` mentions across
+  `services/` and requires the walk to have parsed exactly that many, so the two can only agree if the
+  scan works. RED: a single-line construction without `discovery_overrides` appended to
+  `services/viewer/src/viewer/main.py` fails **exit 1** naming the file — under the old regex it was
+  invisible. 10 passed.
 - **`test_ray_job_images.py:33`** — gates `.docker/ray-lance.dockerfile`, a demo image the chart does
   not deploy, while KubeRay runs `.docker/ray-cluster.dockerfile`. *(Filed, then partly refuted — see
   Part 9; the mechanism is real but the fix is not deletion.)*
