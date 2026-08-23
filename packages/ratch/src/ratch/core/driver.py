@@ -44,6 +44,35 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+#: Written beside a stage's output so a later run can ask which TRANSFORM produced a row, not merely
+#: whether one did. Nullable and additive: a dataset written before B4 simply has no such column, and
+#: :func:`resume_filter` degrades to the original predicate rather than naming a column that is absent.
+TRANSFORM_VERSION_COLUMN = "transform_version"
+
+
+def resume_filter(output_column: str, *, identity: str = "", has_version_column: bool = False) -> str:
+    """The rows a stage still owes work on.
+
+    `<output> IS NULL` asks "was this row ever computed". With a transform identity available AND a
+    `transform_version` column to compare against, it can ask the question B4 exists for — "was this
+    row computed by THIS transform" — so an edited transform reclaims its own rows without a rebuild.
+
+    The NULL case is spelled out rather than folded into an operator. A NULL version — every row
+    written before this column existed — must count as STALE, and `<> 'x'` evaluates to NULL on a NULL
+    left side, which drops the row: precisely the rows a first identity-aware run needs to claim. SQL's
+    one-word form for that is `IS DISTINCT FROM`, and **Lance does not support it** — its planner
+    answers "Expression ... is not supported SQL in lance" (lance-datafusion planner.rs). Verified by
+    executing it, not by reading: `tests/test_resume_filter_against_lance.py` runs this predicate
+    through a real dataset, which is what caught it.
+
+    Both conditions must hold before the predicate widens. Missing either, this is the original filter:
+    a dataset on disk from before B4 has no column to name, and naming it is a scan error, not a resume.
+    """
+    if not identity or not has_version_column:
+        return f"{output_column} IS NULL"
+    return f"({output_column} IS NULL OR {TRANSFORM_VERSION_COLUMN} IS NULL OR {TRANSFORM_VERSION_COLUMN} != '{identity}')"
+
+
 def _table_uri(db_path: str | Path, table: str) -> str:
     # Resolved absolute path: a relative URI would be re-rooted inside Ray's
     # runtime-env working-dir COPY on the workers (a stale snapshot), silently
@@ -235,6 +264,10 @@ def run_scan_column_stage(
             ds.drop_columns([name])
             ds = lance.dataset(uri)
         else:
+            # Stays `IS NULL` rather than the identity-aware predicate: a blob table's only legal
+            # write is the all-or-nothing `_rowid` rebuild below (merge_insert crashes the blob
+            # decoder, §7.1), so there is no partial update for a widened predicate to drive. A
+            # transform change on a blob column is a REBUILD, which is what this branch already says.
             pending = ds.count_rows(filter=f"{name} IS NULL")
             if pending:
                 raise RuntimeError(
@@ -251,12 +284,23 @@ def run_scan_column_stage(
         ds.add_columns(pa.field(name, output_type, nullable=True))
         ds = lance.dataset(uri)
 
-    pending = ds.count_rows(filter=f"{name} IS NULL")
+    # B4: the transform's identity, stamped on every row this run writes, so a LATER run can tell a row
+    # computed by this transform from one computed by an older version of it. The factory's qualname
+    # stands in for the bound implementation — the declaration cannot see which class the composition
+    # root injected, and a rewritten actor under an unchanged declaration is still a new transform.
+    identity = stage.identity(actor_qualname=getattr(factory, "__qualname__", ""))
+    if TRANSFORM_VERSION_COLUMN not in ds.schema.names:
+        ds.add_columns(pa.field(TRANSFORM_VERSION_COLUMN, pa.string(), nullable=True))
+        ds = lance.dataset(uri)
+    has_version = TRANSFORM_VERSION_COLUMN in ds.schema.names
+
+    predicate = resume_filter(name, identity=identity, has_version_column=has_version)
+    pending = ds.count_rows(filter=predicate)
     if pending == 0:
         logger.info("stage %s: nothing to fill", stage.name)
         return 0
 
-    filters = [f"{name} IS NULL"]
+    filters = [predicate]
     gate = _gate_filter(db_path, stage)
     if gate is not None:
         filters.append(gate)
@@ -273,6 +317,8 @@ def run_scan_column_stage(
         if batch.num_rows == 0:
             continue
         update = batch.select([*key_columns, name])
+        stamp = pa.array([identity] * update.num_rows, pa.string())
+        update = update.append_column(pa.field(TRANSFORM_VERSION_COLUMN, pa.string()), stamp)
         ds.merge_insert(key_columns).when_matched_update_all().execute(update)
         written += batch.num_rows
         logger.info("stage %s: %s/%s row(s) committed", stage.name, written, pending)

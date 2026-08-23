@@ -10,6 +10,8 @@ injecting the concrete compute factory when it hands the stage to a driver in
 
 from __future__ import annotations
 
+import hashlib
+import json
 from enum import StrEnum
 
 from pydantic import BaseModel, Field, model_validator
@@ -76,6 +78,44 @@ class Stage(BaseModel):
     # its deps come from the runner's env (per-stage runtime_env on a cluster).
     runner: str | None = None
     actor: ActorConfig = ActorConfig()
+
+    def identity(self, *, actor_qualname: str = "", runner_env: str = "") -> str:
+        """A stable id for THIS TRANSFORM — what `transform_version` records on every row it writes.
+
+        It answers one question: would this row compute differently now than it did then? So it covers
+        everything that changes the OUTPUT — the shape, the runner, the columns read and written, the
+        actor sizing (a batch size or GPU fraction can change a model's numerics) — and deliberately
+        excludes `key_columns` and `table`, which say where a row LIVES rather than what it becomes.
+
+        `actor_qualname` and `runner_env` are parameters because a declaration cannot see them. The
+        composition root binds the concrete compute class, so a stage whose Python was rewritten under
+        an unchanged declaration is still a new transform, and the qualname is what carries it; the
+        runner env carries a dependency bump that changes results without touching any rask file.
+        Both default to empty, which is honest rather than convenient: an identity computed without
+        them tracks the declaration only, and callers that know more pass more.
+
+        Truncated to 16 hex chars because it is stored PER ROW — a full sha256 would be 64 bytes of
+        the same repeated value on every row of a corpus. 64 bits is far past collision risk for the
+        handful of versions one column ever sees.
+        """
+        payload = json.dumps(
+            {
+                "name": self.name,
+                "shape": str(self.shape),
+                "runner": self.runner,
+                "client": self.client,
+                "read_columns": list(self.read_columns),
+                "output_columns": list(self.output_columns),
+                "output_table": self.output_table,
+                "blob_column": self.blob_column,
+                "actor": self.actor.model_dump(),
+                "actor_qualname": actor_qualname,
+                "runner_env": hashlib.sha256(runner_env.encode()).hexdigest() if runner_env else "",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
     @model_validator(mode="after")
     def _shape_requirements(self) -> Stage:

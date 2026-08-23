@@ -220,7 +220,7 @@ exclude = [
 # the list is explicit, and adding the directory is a separate act from adding the file. Three landed
 # regression suites (the catalog's replayed-commit door, lineage's external-source authz and its
 # privileged-identity door) sat green-by-absence until 2026-08-09.
-testpaths = ["packages/lineage-kit/tests", "packages/ray-kit/tests", "packages/service-kit/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/annotator/tests", "services/gateway/tests", "services/ingest/tests", "services/compute/tests", "services/controlplane/tests", "services/flows/tests", "services/maintenance/tests", "services/medallion/tests", "services/notifications/tests", "services/catalog/tests", "services/lineage/tests", "services/search/tests", "services/viewer/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
+testpaths = ["packages/lineage-kit/tests", "packages/ratch/tests", "packages/ray-kit/tests", "packages/service-kit/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/annotator/tests", "services/gateway/tests", "services/ingest/tests", "services/compute/tests", "services/controlplane/tests", "services/flows/tests", "services/maintenance/tests", "services/medallion/tests", "services/notifications/tests", "services/catalog/tests", "services/lineage/tests", "services/search/tests", "services/viewer/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
 # NO `--cov` HERE. It ran on EVERY pytest invocation in the estate and nothing read the result: no
 # `fail_under`, no xml report, no artifact upload, no threshold in `ci.yml` or `.dagger/` — so the
 # measurement was pure cost on the merge path and on every local run. `make coverage` computes it when
