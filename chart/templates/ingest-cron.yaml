@@ -1,0 +1,26 @@
+{{- $ingest := .Values.services.ingest }}
+{{- if and .Values.dapr.enabled $ingest.cronBindingName }}
+# Dapr cron INPUT binding for the INCREMENTAL POLL (TRIGGER-2) — the sidecar POSTs to
+# /<cronBindingName> on `cronSchedule`. The schedule lives here as component config, not in app code:
+# there is no scheduler thread in the ingest service, and a cadence in code cannot be changed without
+# a deploy.
+#
+# Gated on a NAMED binding as well as dapr.enabled. Empty is off, because the tick's anti-join reads
+# every existing bronze id per poll — O(existing rows), not O(new rows) — so scheduling it is an
+# opt-in with a real recurring cost. `services.ingest.incrementalMaxRows` bounds it when on.
+#
+# Scoped to the ingest app-id: a cron component visible to another app would deliver ingest ticks to
+# a service that has no such route, which reads as a broken binding rather than a misconfiguration.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ $ingest.cronBindingName }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ $ingest.cronSchedule | quote }} }
+scopes:
+  - ingest
+{{- end }}

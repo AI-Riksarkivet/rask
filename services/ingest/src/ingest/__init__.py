@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -51,6 +52,15 @@ def create_app() -> FastAPI:
     app.state.workflow_reader = _DaprWorkflowReader()
     app.state.workflow_terminator = _DaprWorkflowTerminator()
     app.state.provenance_reader = LineageProvenanceReader()
+    # The incremental poll (TRIGGER-2), mounted ONLY when a Dapr cron binding names it. Unmounted by
+    # default because a cron route with no cron behind it is a door into starting ingest runs that
+    # exists for no reason. Root-mounted by `mount_incremental_cron`: the sidecar delivers an input
+    # binding to POST /<component name> at the pod root, so the component name, the env var and the
+    # served path are one string.
+    from ingest.cron import mount_incremental_cron
+
+    if mount_incremental_cron(app, os.environ.get("RASK_INGEST_CRON_BINDING_NAME")):
+        logger.info("ingest incremental cron mounted at /%s", os.environ["RASK_INGEST_CRON_BINDING_NAME"])
     # The authz/authn clients the ingest door needs. Wired here rather than lazily inside the
     # dependency because `authorize_ingest` FAILS CLOSED on a missing client — a lazily-absent client
     # would 503 every request instead of authorizing it, and the estate's review found exactly that

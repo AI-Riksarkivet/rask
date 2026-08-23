@@ -99,6 +99,25 @@ services:
     replicas: 1
     frontDoor: true
     waitFor: []
+    # The incremental poll (TRIGGER-2). EMPTY = OFF, and that is the honest default: the anti-join
+    # reads every existing bronze id per tick — O(existing rows), not O(new rows) — so putting it on
+    # a clock is an opt-in with a real recurring cost, bounded by incrementalMaxRows below.
+    #
+    # It is a POLL at the outer boundary and event-driven from bronze inward. Bucket notification was
+    # rejected as the general mechanism: it covers one of three registered kinds and IIIF has no
+    # notification channel and never will.
+    #
+    # ONE PROJECT, by construction. A tick carries no user, so the run authorizes on the
+    # service-token branch, which is pinned to RASK_INGEST_SERVICE_PROJECT — a multi-tenant watch set
+    # cannot work through that door as it stands.
+    cronBindingName: ""
+    cronSchedule: "@every 1h"
+    cronKind: ""
+    cronDataset: ""
+    cronOptions: ""
+    # The anti-join's ceiling. 0 = unbounded, matching maxUnits/maxRunHours. It REFUSES rather than
+    # sampling: a truncated anti-join inverts, making the run re-land rows bronze already holds.
+    incrementalMaxRows: 0
     # Where the plane lands bronze. WITHOUT this the code falls back to a temp dir, and the first
     # in-cluster run resolved a RELATIVE path ("tmp/rask-ingest/...") inside the container — data
     # would have landed in the pod's ephemeral filesystem and vanished with it, silently, because a

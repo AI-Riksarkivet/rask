@@ -167,25 +167,27 @@ async def _release_claim(store: RunStore, record: RunRecord, **update: object) -
     await store.put((current or record).model_copy(update=update))
 
 
-@router.post("/ingests", status_code=status.HTTP_202_ACCEPTED, response_model=IngestAccepted)
-async def create_ingest(
+async def dispatch_run(
     body: IngestRequest,
     response: Response,
-    request: Request,
-    store: Annotated[RunStore, Depends(get_store)],
-    starter: Annotated[WorkflowStarter, Depends(get_starter)],
-    settings: AuthSettingsDep,
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
-    dapr_api_token: Annotated[str | None, Header()] = None,
-    authorization: Annotated[str | None, Header()] = None,
-    # The INVOKING Dapr app-id. Without it the door cannot tell a service from the public front
-    # door invoking on a stranger's behalf — see `auth.public_callers`.
-    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+    *,
+    store: RunStore,
+    starter: WorkflowStarter,
+    idempotency_key: str | None,
+    originator: str | None,
 ) -> IngestAccepted:
-    # BEFORE anything else. The body names the project this write lands in, so the admin check targets
-    # that project rather than a configured one — authorization scope must equal write scope, or an
-    # admin of project A passes the gate while the rows land in project B.
-    originator = await authorize_ingest(request, settings, body.project, dapr_api_token, authorization, dapr_caller_app_id)
+    """Accept and dispatch one run — everything the door does AFTER authorization.
+
+    Split out so the cron tick and the HTTP door share ONE path rather than two that agree today.
+    Every property here is load-bearing and none of it should be re-derived per caller: the
+    deterministic run id, the idempotency dedupe, the claim/release around dispatch, and the
+    503-with-Retry-After that makes a busy sidecar retryable instead of a 500 over a stored record.
+
+    It still raises HTTPException, and that is deliberate rather than a leaked abstraction: the status
+    codes ARE the contract this implements — a 400 naming an unknown kind, a 400 naming the queue
+    ceiling, a 503 the caller can act on. A non-HTTP caller catches them; inventing a parallel error
+    vocabulary would be a second thing to keep in agreement.
+    """
 
     if body.kind not in registered_kinds():
         raise HTTPException(
@@ -350,6 +352,28 @@ class RunListResponse(BaseModel):
         default=False,
         description="FALSE always: this is one replica's read-side index, not the estate's run history. Use the lineage graph for that.",
     )
+
+
+@router.post("/ingests", status_code=status.HTTP_202_ACCEPTED, response_model=IngestAccepted)
+async def create_ingest(
+    body: IngestRequest,
+    response: Response,
+    request: Request,
+    store: Annotated[RunStore, Depends(get_store)],
+    starter: Annotated[WorkflowStarter, Depends(get_starter)],
+    settings: AuthSettingsDep,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    # The INVOKING Dapr app-id. Without it the door cannot tell a service from the public front
+    # door invoking on a stranger's behalf — see `auth.public_callers`.
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+) -> IngestAccepted:
+    # BEFORE anything else. The body names the project this write lands in, so the admin check targets
+    # that project rather than a configured one — authorization scope must equal write scope, or an
+    # admin of project A passes the gate while the rows land in project B.
+    originator = await authorize_ingest(request, settings, body.project, dapr_api_token, authorization, dapr_caller_app_id)
+    return await dispatch_run(body, response, store=store, starter=starter, idempotency_key=idempotency_key, originator=originator)
 
 
 @router.get("/ingests", response_model=RunListResponse)
