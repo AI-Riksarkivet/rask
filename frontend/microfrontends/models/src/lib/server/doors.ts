@@ -22,6 +22,14 @@ import { parsed as sharedParsed, upstreamJSON } from '@rask/api/upstream';
 
 const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 
+/** The GATEWAY, absolute — never a relative `/api/…`.
+ *
+ * Same rule the bell already follows in this zone (`lib/live/inbox.remote.ts`): a relative call is
+ * resolved against the incoming external origin under svelte-adapter-bun, and only the zones that
+ * proxy `/api` would reach anything at all. Naming the gateway is the one form that is right in dev
+ * and in cluster. */
+const GATEWAY_API = (env.RASK_GATEWAY_URL ?? 'http://localhost:8888').replace(/\/$/, '');
+
 /** One catalog call → `ApiResult<unknown>`; the signed-in session's bearer rides along. */
 export function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
 	const { fetch, locals } = getRequestEvent();
@@ -35,10 +43,38 @@ export function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult
 	});
 }
 
+/** One gateway call → `ApiResult<unknown>`; the signed-in session's bearer rides along.
+ *
+ * The bearer is the whole authorization story for `/train`: the door takes a service token OR an
+ * ADMIN of the configured project, and a browser has only the latter. A remote function forwards
+ * exactly the signed-in human's bearer — nothing else this zone holds would be accepted. */
+export function gatewayJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
+	const { fetch, locals } = getRequestEvent();
+	return upstreamJSON({
+		fetch,
+		base: GATEWAY_API,
+		path,
+		init,
+		bearer: locals.session?.accessToken,
+		upstream: 'gateway',
+	});
+}
+
 /** Parse a successful wire payload; a shape drift is a 502-flavoured failure, never a cast. */
 export function parsed<T>(
 	result: ApiResult<unknown>,
 	schema: v.GenericSchema<unknown, T>,
 ): ApiResult<T> {
 	return sharedParsed(result, schema, 'catalog');
+}
+
+/** `parsed` for a GATEWAY payload — same contract, honest attribution.
+ *
+ * A separate function rather than a defaulted parameter: the upstream NAME is what a 502 reports,
+ * and a `/train` drift labelled `catalog` sends the next reader to the wrong service. */
+export function parsedGateway<T>(
+	result: ApiResult<unknown>,
+	schema: v.GenericSchema<unknown, T>,
+): ApiResult<T> {
+	return sharedParsed(result, schema, 'gateway');
 }
