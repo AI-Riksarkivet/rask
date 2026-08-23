@@ -627,10 +627,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             topic_name=settings.lineage_topic,
             timeout_seconds=settings.publish_timeout_seconds,
         )
-        # 2. PUBLISH what was written, and let the catalog gate it — the tag move is the trigger, so
-        # there is nothing else to fire. A refusal is a normal outcome that names its assertions, and
-        # those become the hold a person may be asked about.
-        # 2a. THE BAND, evaluated BEFORE any promotion. Under `cascade_via_publish` the publish IS the
+        # 2. THE BAND, evaluated BEFORE any promotion. Under `cascade_via_publish` the publish IS the
         # promotion — the catalog's tag move is what wakes the next stage — so a breach noticed after
         # that tag has moved cannot un-move it. Evaluated here and RULED ON by `gate_decision`, which
         # owns the ordering; it used to be an `elif` beneath the publish branch, where it never ran.
@@ -657,6 +654,10 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
         elif decision is GateOutcome.HOLD:
             quality_blocked = True
             quality_reasons = band_reasons
+        # 3c. PUBLISH what was written and let the CATALOG gate it — its tag move is the trigger, so
+        # there is nothing else to fire. A refusal is a normal outcome that names its assertions, and
+        # those become the hold a person may be asked about.
+        #
         # `result is not None` restates an invariant `gate_decision` already enforces — it only returns
         # PUBLISH when `has_target`, which includes it — and is here so the checker can narrow
         # `result` for `result.version` below. A PUBLISH that somehow arrived without one falls
