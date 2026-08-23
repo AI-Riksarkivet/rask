@@ -1054,19 +1054,34 @@ registry Dagger pushes to, which must exist before a push can reach it.
 | --- | --- | --- |
 | ~~`Makefile:161` `notifications-rig-up`~~ | ~~Mailpit + a counting Slack sink~~ | ✅ **DONE 2026-08-22** — `make notifications-rig` over two Dagger services, `trap 'kill 0'` so Ctrl-C stops both. Foreground is RIGHT for this one: it is a rig you poke at, so seeing it run and killing it is the workflow, not a cost. The compose file is deleted and its 27-line inline HTTP server is now `scripts/slack_sink.py` — lintable, type-checked and runnable on its own, which it never was inside YAML |
 | ~~`Makefile:463` `rustfs-up`~~ | ~~a local rustfs S3 server for the storage smoke~~ | ✅ **DONE 2026-08-22** — `dagger call smoke-rustfs`. The UX objection turned out to be an artefact of the TWO-STEP shape: as one function the service is bound for the life of the smoke, so nothing is detached, nothing leaks on failure, no host port is taken, and there is no teardown to forget. Three targets became one. `EXIT=0, ALL PASS`, including the LanceDB-over-`s3://` path |
-| `.github/workflows/ci.yml:436` | the per-zone image smoke test | mechanically the easiest, but that file is contended and the smoke needs the image already loaded into a daemon |
+| ~~`.github/workflows/ci.yml:436`~~ | ~~the per-zone image smoke test~~ | ✅ **DONE 2026-08-23** — `dagger call zone-smoke --zone=$z`. All three earned assertions kept: 200 at the zone's OWN base (read from its `svelte.config.js`, never passed in), the `data-sveltekit` marker, and the marker read AFTER redirects. The `docker image inspect` pre-check does not carry over and that is stated rather than glossed: it caught a stale Makefile `ZONES` list, which `zone-contract`'s manifest test already pins across all five declaring places, at unit speed |
+| ~~`.github/workflows/ci.yml` auth job~~ | ~~the Dex/OpenFGA compose stack~~ | ✅ **DONE 2026-08-23** — `dagger call auth-chain`. FOUR steps became one: the version dump, the log-dump-on-failure and the teardown all existed to service a compose stack, with `KEEP_STACK=1` threaded through so the log step could still read it. A service bound to the run ends with the run. `scripts/auth_e2e.sh` is deleted; its assertions live on in `scripts/auth_chain.sh` |
 
 The pattern CLAUDE.md prescribes, and no module is needed for an ad-hoc service:
 
     dagger core container from --address=<img> with-exposed-port --port=<p> \
       with-default-args --args=<cmd> as-service up --ports=<host>:<p>
 
-**Two of the three are done (2026-08-22), and the UX objection did not survive contact.** It assumed
+**ALL OF IT IS DONE (2026-08-22/23), and the UX objection did not survive contact.** It assumed
 each site keeps its two-step shape. `rustfs-up`+`smoke-rustfs`+`rustfs-down` collapsed into ONE
 non-interactive `dagger call smoke-rustfs` — no terminal held, nothing detached, no host port taken —
 because it is a script with an answer. The notifications rig stayed interactive and gained a `trap`, so
 one Ctrl-C stops both halves, because it is a thing you poke at. **The Makefile now contains no
-container-creating docker at all.** One site remains, in `.github/workflows/ci.yml`.
+container-creating docker at all**, and neither does `.github/workflows/ci.yml`.
+
+**The estate is clean, and `tests/unit/test_no_docker.py`'s violations roster is EMPTY.** Two
+invocations remain and are permanently exempt by construction: `scripts/dagger-engine.sh` cannot use
+Dagger to create the Dagger engine, and `scripts/k3s-registry.sh` creates the registry Dagger pushes
+to. Image plumbing (`docker image ls`/`load`/`tag`) is deliberately not flagged — it talks to a daemon
+about images Dagger built, and `scripts/dagger-image.sh` is the seam CLAUDE.md names for exactly that.
+
+**Three of the scripts could not run as written, which is why nobody had noticed the docker.**
+`governance_e2e.sh` never exported `LANCE_E2E_DEX_SECRET`, so its own test sent a client secret to a
+Dex client declared `public: true` (401). `medallion_demo.sh` did `compose up ... web`, and no compose
+file defines a `web` service. `.docker/smoke-gpu.sh` built `.docker/ray.dockerfile`, which does not
+exist. The first two are converted and verified; the last two `.docker/smoke-*.sh` scripts were deleted
+as dead — and they carried the estate's only `docker buildx build`, a tier-1 violation the gate had
+been reporting as "clean" because it scanned three hand-listed surfaces and `.docker/` was not one.
 
 **The original framing, kept because it is what the remaining site still needs:** Every one of these is a
 detached dev convenience today (`up -d`, then the developer keeps working). The Dagger equivalent holds
