@@ -596,10 +596,10 @@ Each slice is independently shippable and independently verifiable.
 | **2** | grpc + aiohttp + requests instrumentors in `setup_otel` | `service-kit/pyproject.toml`, `otel.py`, one test | S | Without it, slice 1 gives disconnected sidecar spans on the fleet |
 | **3** | `LoggerProvider` in `setup_otel` | `otel.py` (~8 lines) | S | Third signal for 6 services; no chart change; fixes the audit trail |
 | **4** | `spec.metrics` + `spec.logging.apiLogging` | `chart/templates/observability.yaml` | S | **Stops publishing user subjects as metric labels.** Arguably slice 1 |
-| **5** | Narrow the log-drop filter; `log-as-json`; filelog parser chain | `otel-collector.yaml`, `_helpers.tpl` (+ fix the false comment at `:621-623`) | M | Recovers crash logs on 7 pods and gives the whole file-tailed tier a severity |
+| **5** | Narrow the log-drop filter; `log-as-json`; filelog parser chain | `otel-collector.yaml`, `_helpers.tpl` (+ fix the false comment at `:697-702`) | M | Recovers crash logs on 10 pods and gives the whole file-tailed tier a severity |
 | **6** | Converge `rask.otelEnv` onto `lance.otlpEndpoint`/`lance.otelEnabled`; one resource-attribute helper; reorder `lance.otlpEndpoint` | `_helpers.tpl`, `tests/unit/test_invariants.py` | M | Closes both §8 dark configurations, both resource schemas, and the k8sattributes gap in one edit |
 | **7** | Spans + metrics at the four unnamed seams: publish funnel, actor proxy, FGA check, cron ticks | `dapr_publish.py`, `proxies.py`, `governed/fga.py`, `reconcile_cron.py` | M | Domain names that survive a future missing instrumentor |
-| **8** | Workflow tracing + a `workflows.json` dashboard | `flows/`, `ingest/`, `medallion/`, `perses-dashboards.yaml` | M | Depends on slice 2 |
+| **8** | **RESPECIFIED — see §10a.** Eight slices (8.0, 8a–8g); two are CORRECTNESS bugs, one is blocked on a measurement | `flows/`, `ingest/`, `medallion/`, `perses-dashboards.yaml`, `alerting/` | — | see §10a |
 | **9** | Alert correctness: `absent()` guards, the `outbox_oldest_age` name, generalise the name gate | `chart/alerting/`, `test_invariants.py` | S | Land regardless of how `open_alert.md` resolves |
 | **10** | Dashboards for what is already collected: storage, workflows, pub/sub health, cron, control plane | `perses-dashboards.yaml` | M | Zero instrumentation cost — the series exist today |
 | **11** | Shutdown flush; sampler env; probe exclusion; metric-interval symmetry; `service.version` | `otel.py`, `service_kit/__init__.py`, `_helpers.tpl` | S | Polish, but cheap |
@@ -607,6 +607,274 @@ Each slice is independently shippable and independently verifiable.
 
 **Slices 1–4 are the ones that change what can be seen.** They are all small, and three of the four
 are chart-only.
+
+---
+
+## 10a. Slice 8, respecified — the per-workflow audit
+
+**Supersedes the single row `| 8 | Workflow tracing + a workflows.json dashboard | flows/, ingest/, medallion/, perses-dashboards.yaml | M | Depends on slice 2 |`.** That row was one blob answering *"did a workflow run"*. The measurement below says the free tier already answers that, and that the questions actually unanswered are per-activity, per-outcome, and — in two places — not telemetry questions at all.
+
+**Re-measured 2026-08-23 09:00 UTC** against k3s + GreptimeDB and against `.venv/…/dapr/ext/workflow/_durabletask/`. Registered surface is **6 workflows / 21 activities / 34 `call_activity` sites**, not 8/22: `flows/workflow.py:45` (`flow_run`) + `flows/activities.py:24` (`run_node`); `ingest/workflow.py:1119` `WORKFLOWS = (ingest_run, chunk_run)` + `:1175` 10 activities; `medallion/workflow.py:1091` `WORKFLOWS = (stage_run, train_run, promotion_review)` + `:1093` 10 activities. `grep -cE "start_as_current_span|get_tracer|get_meter|add_event|record_exception|create_counter|create_histogram"` over all four files → **0, 0, 0, 0**.
+
+---
+
+### 8.1 What is already free — do not instrument any of this
+
+Four things arrive with no code change. Three of them were specced as work in the audits that fed this section, and that work is struck.
+
+**(a) Ten sidecar metric families, 22 GreptimeDB tables, bounded labels.** Verified by `desc table`, not by memory:
+
+| family | labels beyond `app_id` + k8s/infra tags |
+| --- | --- |
+| `dapr_runtime_workflow_execution_count_total` / `_latency_{bucket,count,sum}` | `workflow_name`, `status` |
+| `dapr_runtime_workflow_scheduling_latency_*` | `workflow_name` (no status) |
+| `dapr_runtime_workflow_payload_size_ratio_*` | `workflow_name` |
+| `dapr_runtime_workflow_operation_count_total` / `_latency_*` | `operation`, `status` — `create_workflow`, `purge_workflow`, … |
+| `dapr_runtime_workflow_activity_execution_count_total` / `_latency_*` | `activity_name`, **`status`** |
+| `dapr_runtime_workflow_activity_operation_count_total` | `activity_name`, `status` |
+| `dapr_runtime_workflow_activity_payload_size_ratio_*` | `workflow_name`, `activity_name` |
+
+The `status` label on the **activity** families genuinely records failure. Measured today:
+
+```
+ingest | ensure_dataset | failed | 4      ← a full ACTIVITY_RETRY exhaustion, counted, by name
+ingest | emit_start / resolve_limits / emit_terminal | success | 1
+flows  | run_node | success | 258
+```
+
+**(b) A per-app orchestration-turn counter and a lost-reminder signal.** `dapr_runtime_actor_reminders_fired_total{app_id, actor_type, success}` carries the workflow engine's *own* internal actor types:
+
+```
+flows            | dapr.internal.default.flows.workflow            | true | 260   (vs 2 flow_run executions)
+bronze-to-silver | dapr.internal.default.bronze-to-silver.workflow | true |  15   (vs 3 stage_run executions)
+ingest           | dapr.internal.default.ingest.workflow           | true |  11
+```
+
+Fires climbing while `execution_count_total` stays flat **is** a wedged `continue_as_new` loop. Alongside it: `dapr_scheduler_jobs_undelivered_total`, `dapr_scheduler_trigger_latency_{bucket,count,sum}`, `dapr_scheduler_jobs_triggered_total` — a lost durable reminder and timer drift, free, at app granularity.
+
+**(c) One span per activity execution.** `.venv/lib/python3.13/site-packages/dapr/ext/workflow/_durabletask/worker.py:982-995` is the only `start_as_current_span` in the SDK: `activity: <name>`, parented on `req.parentTraceContext.traceParent`, attributes `…task.instance_id`, `…task.id`, `…activity.name`. **The workflow instance id is already on a span today.**
+
+**(d) gRPC client spans to the sidecar**, instrumented twice: `_durabletask/client.py:38-44` calls `GrpcInstrumentorClient().instrument()` at import, and `service-kit/src/service_kit/otel.py:143-152` already documents that the second call is a no-op.
+
+**STRUCK from the surviving gap list, because (a)–(d) cover them:**
+
+| struck claim | what actually exists |
+| --- | --- |
+| "no activity retry/failure count; nothing can be alerted on" | `activity_execution_count_total{activity_name,status="failed"}` — a `MaintenanceDatasetsFailing`-shaped rule is writable today |
+| "per-workflow/activity execution counts and latency must be built" | 22 tables, live |
+| "scheduling latency / payload size must be built" | free, and non-obvious to reimplement |
+| "`continue_as_new` turn count is unobservable" | (b) — app-granular, real |
+| "a reminder lost by the scheduler is invisible; timer drift invisible" | `dapr_scheduler_jobs_undelivered_total` + `_trigger_latency_*` |
+| "an operator cannot pivot from a slow cascade to the instance responsible" | the instance id is on every `activity:` span (c) |
+| "add a span around each activity body" | one already exists — set attributes on it, never open a second |
+
+**One caveat, and it is not a licence to reimplement.** These families are **lazily registered**. Scraped today from inside `rask-ingest-6f654c65bc-zs945`: **563** live `dapr_` series, **0** `dapr_runtime_workflow_*`, **0** `dapr_runtime_actor_reminders_fired`. Absence is not zero — it is "no workflow event since this pod started". Every rule written against these families needs the `absent()` guard slice 9 already owns.
+
+---
+
+### 8.2 The gaps that survive, ranked
+
+| # | gap | the operational question it answers | sev |
+| --- | --- | --- | --- |
+| G1 | **The run-level `status` label is false for this codebase.** All three services convert failure into a *returned value*: `flows/workflow.py:103-107` returns `RunState(status="failed")`; `ingest/workflow.py:441` opens an error boundary that returns `RunOutcome(status="FAILED")`; medallion returns outcome dicts. Measured: `execution_count_total` holds `status="success"` **and nothing else** for all four app_ids — including `ingest_run`, whose `ensure_dataset` has only a `failed` row. | "How many runs failed?" The free metric answers 0 forever. An alert on `status="failed"` reads green while every run dies. | critical |
+| G2 | **No orchestration span — but UNVERIFIED post-slice-1.** See the blocker in §8.7. | "How long did this run take, which branch did it take, where did it stall?" | critical (blocked) |
+| G3 | **The free activity span can never be ERROR.** `worker.py:1086` puts `try/except Exception → _build_activity_failure_response` *inside* `with self._activity_span(...)`; `grep -rn "record_exception\|set_status" _durabletask/` → **nothing**. Measured: 327/327 `activity: *` spans `STATUS_CODE_UNSET`, including the 4 the sidecar metric labels `failed`. | "Show me error spans in the last hour." Clean estate, always. | high |
+| G4 | **No domain identity on any workflow signal.** The free span carries 3 SDK attributes; the free metrics carry names and a status. No run_id, dataset, project, stage, submission_id, node id. | "Did the bronze→silver stage for project *acme* fail?" — only "a `stage_run` failed somewhere". | high |
+| G5 | **`flows` has no failure signal at all.** `grep -rnE "publish_event\|lineage\|emit_control\|pubsub\|notif" services/flows/src/` → nothing; no metrics module; `workflow.py` has no logger. The only failure record in the service is `activities.py:51 log.info("node %s failed: %s", …)` — INFO, no run id. | "Did any flow run fail in the last hour, and whose?" | high |
+| G6 | **The medallion outcome counter its own docstring promises does not exist.** `workflow.py:379`: *"The record is the log line and the counter."* `workflow.py` imports no metrics module; `core/metrics.py` has no stage-job-outcome counter. | "Is the cascade failing more than usual?" | high |
+| G7 | **Four bare `suppress(Exception)` on the reporting path** — `workflow.py:414, 461, 707, 1073` — against the same service's `transform.py:80-99 _best_effort`, which logs. | "The stage failed — why is there no FAIL in the graph?" — nothing distinguishes *published* from *dropped*. **CORRECTNESS, see §8.7.** | high |
+| G8 | **ingest fan-out progress is frozen.** `set_custom_status` only at `workflow.py:525` (before fan-out) and `:650` (after fan-in); `chunk_run` (`:704`) sets none; `ChunkResult` (`:308-314`) has no `units_done`. | "Is this 4-hour harvest progressing, or are all 500 children wedged?" API says "0 of N" throughout. | medium |
+| G9 | **The measured duration is discarded on every non-success.** `workflow.py:231` and `:239` both set `duration_seconds=_watch_seconds(...)`; `report_stage_outcome` (`:374-427`) never reads it. The histogram is fed only via `publish_stage_ready` → the success path. | "Is p95 stage latency degrading?" — survivorship-biased by construction. | medium |
+| G10 | **A `flows` run does not record which lane executed it.** The lane is decided per request at `routes.py:170 if scheduler is not None:` and announced once per process at `lifespan.py:114/:119/:123`. Only the degrade branch (`routes.py:200`) logs per run. | "Did *this* run execute durably or inline?" Unanswerable; latency inverts (a durable schedule may burn `5.0 + 2.0 s` at `lifespan.py:40/45` while an inline text graph returns in 4 ms). | medium |
+| G11 | **No workflow panel, no workflow alert.** `grep -cE "workflow\|activity\|orchestrat" chart/alerting/rules.yml` → **0** across 20 rules; `chart/templates/perses-dashboards.yaml` declares 8 dashboards and matches nothing. | "Page me when the cascade stops." Even the free families are read by nobody. | medium |
+
+---
+
+### 8.3 The work — seven slices, and why it cannot be one
+
+Splitting is not stylistic. **8a and 8b are correctness fixes that change what "add a span" would even mean** — instrumenting a producer whose event the consumer discards buys a span on a message nobody receives. **8d is blocked on a measurement that has not been possible since slice 1 landed.** **8c and 8g are shippable today with no cluster.** One blob makes the shippable half wait on the blocked half.
+
+| # | slice | files | size | depends |
+| --- | --- | --- | --- | --- |
+| **8.0** | Exercise each lane once, re-measure, then decide 8d | runbook only + one docstring repair | S | slice 1 (landed) |
+| **8a** | The train-watcher's FAIL names nobody (**CORRECTNESS**) | `medallion/workflow.py`, 2 tests | S | — |
+| **8b** | The reporting path swallows its own failures (**CORRECTNESS**) | `medallion/workflow.py` | S | — |
+| **8c** | One outcome metric per lane, at the terminal activity | `medallion/core/metrics.py` + `workflow.py`; new `flows/metrics.py`; new `ingest/metrics.py` | M | — |
+| **8d** | One orchestration span at the **schedule** site | 5 schedule sites | M | **8.0** |
+| **8e** | Domain attributes + ERROR status on the activity's own span | 3 modules | M | — |
+| **8f** | ingest fan-out progress | `ingest/workflow.py` | S | — |
+| **8g** | `workflows.json` panel + 3 alert rules | `perses-dashboards.yaml`, `alerting/rules.yml`, `test_invariants.py` | S | 8c |
+
+---
+
+#### 8.0 — MEASURE FIRST (S)
+
+Trigger one `flow_run` (`POST /api/flows/runs`), one `ingest_run` (`POST /v1/ingests`), and one `stage_run` (needs §8.7 blocker 3 resolved, or record it UNMEASURED). Then re-run three queries: `span_name LIKE '%||%'`, `scope_name='durabletask'`, and the `dapr-diagnostics` span-name census.
+
+**Decision gate.** If daprd 1.18.1 now exports `orchestration||<name>` / `create_orchestration||<name>` / `activity||<name>` / `timer`, **8d is cancelled** and G2 shrinks to "the run's *domain verdict* is on no span" (covered by 8e). If it exports none, 8d proceeds and the upstream cause is `dapr/durabletask-go backend/orchestration.go:418 if ptc == nil { return helpers.NoopSpan() }` plus `endWorkflowSpan`'s `helpers.CancelSpan(span)`.
+
+**RED test:** none — this is a measurement, and writing a test for an unmeasured absence is exactly what this section is replacing.
+**REPAIR:** `tests/unit/test_invariants.py:2247` `test_dapr_sidecar_spans_actually_have_an_exporter` — its docstring lists *"workflow steps"* among the hops that "produced no span anywhere". Untrue: the Python SDK's 327 `activity: *` spans reached the store through the **app's** exporter, never daprd's. Fix the sentence in whichever commit lands 8.0.
+
+---
+
+#### 8a — the train-watcher's FAIL names nobody (S) — CORRECTNESS
+
+`medallion/workflow.py:716-762` hand-builds its event (`:735 "eventType": "FAIL"`) with `facets = {lance, errorMessage}` and **no `author`**. It publishes to the **bus** via `outbox.publish_lineage_with_outbox(... topic_name=settings.lineage_topic)`, and the bus path applies neither `enforce_author` nor the HTTP door's checks (`lineage/api/fga_deps.py:176-178` says so in terms). `notifications/api/lineage_events.py:197-198` returns `None` before `originator_subject()` is read at `:208`.
+
+**Executed today against the real modules, both shapes:**
+
+```
+train-watcher FAIL  -> None
+with author facet   -> author= data_eng originator= alice project= acme
+```
+
+The `originator` and `project` this lane threads from `/train` all the way down are discarded at the last link. Per `.claude/skills/rask-notifications`, the plane then **SUCCESS-acks** it, so nothing reports the loss.
+
+**Fix:** route `_publish_train_fail` through `build_run_event(...)` (`medallion/schemas/events.py:159`), which stamps `run_facets["author"]` at `:256-257`. This also drags the site into the AST scan below, closing both holes in one edit.
+
+**RED test (new, `services/medallion/tests/test_train_workflow.py`):** build the event exactly as `_publish_train_fail` does, feed it through the real `notifiable()`, assert non-`None`. Verified to fail today (output above). Cross-plane import works in the root venv (`from notifications.api.lineage_events import notifiable` alongside `from medallion...`).
+
+**REPAIR, two — both are green tests asserting the wrong thing:**
+
+1. `services/medallion/tests/test_train_workflow.py:134` `test_the_watcher_NAMES_the_person_the_run_was_for`. Its docstring is exactly right — *"a FAIL that names nobody is discarded by the plane's own rule, so the whole lane would be a producer whose output the consumer is designed to drop"* — and then it asserts only `reported["spec"]["originator"] == "alice"`: the **input handed to the activity**, never the **event the activity builds**. It proves the wrong half of its own docstring.
+2. `services/medallion/tests/test_producer_targeting_contract.py:67-83` `_emit_sites()` walks only `ast.Call` nodes whose func id is `build_run_event`. `workflow.py:735` is the **only** hand-built lineage event in the service (`grep -rn '"eventType"' services/medallion/src/` → that line and `ingest_trigger.py:51`, a reader), so both targeting gates (`:86`, `:131`) are structurally blind to the one site that fails them. Worse, the non-vacuity guard `:159 test_the_targeting_scan_sees_every_hop_of_the_cascade` asserts `"workflow.py" in files` and **passes**, because `workflow.py`'s other two emits (`:491`, `:1042`) do use the helper. Widen the scan to any dict literal carrying an `"eventType"` key, or assert the module has no hand-built events.
+
+---
+
+#### 8b — the reporting path swallows its own failures (S) — CORRECTNESS
+
+Two defects, one file.
+
+**(i) Four bare suppresses.** `medallion/workflow.py:414, 461, 707, 1073` — no log, no counter, no re-raise. The same service already solved this: `services/transform.py:80-99 _best_effort`, whose own comment reads *"What WAS a defect is that `with suppress(Exception)` threw the diagnosis away with the exception"*, logging at `:99`. `emit_promotion_outcome` (`:1026-1074`) is the worst case — it logs nothing at all, and its docstring calls workflow history *"a cache; lineage is the durable record"*.
+
+**(ii) The unguarded reporting sites.** `ACTIVITY_RETRY` (`:71-76`, 5 attempts) exhaustion raises into the generator at `:194, :235, :263, :265` (`report_stage_outcome`), `:665` (`report_train_outcome`) and every promotion site (`:810, :825, :860`, …). The guarded sites are `:189, :213, :255` only.
+
+**A nuance worth writing down before anyone alerts on it:** these unguarded sites are the *only* paths on which the free `execution_count_total{status="failed"}` is reachable at all. So that label does not mean "the run failed" — it means "an activity exhausted its retries at a site with no boundary". That is a second reason G1 needs a rask-owned outcome metric.
+
+**RED test (new, `services/medallion/tests/test_stage_workflow.py`):** monkeypatch `_publish_fail_event` to raise; assert a log record is emitted naming the suppressed emit. Fails today — the suppress is bare.
+**REPAIR:** `services/medallion/tests/test_stage_workflow.py:373` `test_a_lineage_OUTAGE_does_not_fail_the_reporting_activity` already drives the outage and asserts only that the activity does not raise. Extend it to assert the outage is *reported*, rather than adding a parallel test.
+
+---
+
+#### 8c — one outcome metric per lane (M)
+
+The single highest-value item, and it is one counter per service, not a tracing project. Emit at the **terminal activity** (never the orchestrator body — see §8.6):
+
+| service | site | metric |
+| --- | --- | --- |
+| medallion | `report_stage_outcome` (`workflow.py:374`), `report_train_outcome` (`:686`), `emit_promotion_outcome` (`:1026`) | `medallion.stage.outcome{verdict}`, `medallion.train.outcome{verdict}`, `medallion.promotion.outcome{decision}` in the existing `core/metrics.py` |
+| medallion | `:231`/`:239` already compute `_watch_seconds` and throw it away | record `medallion.stage.duration` on the **non-success** paths too, reusing `_STAGE_DURATION_BUCKETS` (`core/metrics.py:57`) — closes G9 without a new histogram |
+| flows | `routes.py:205` (durable) and `:208` (inline) | new `flows/metrics.py`: `flows.runs{lane}`; plus `flows.nodes{status}` at `activities.py:44` — **one counter closes G5 and G10** |
+| ingest | `emit_terminal` (`workflow.py:1053`) | new `ingest/metrics.py`: `ingest.runs{status}`, `ingest.units{outcome}` |
+
+`verdict` / `status` / `lane` / `decision` are closed sets read from the source (`StageJobOutcome.verdict` ∈ {succeeded, failed, abandoned, unnotified}), which is the cardinality rule in §8.6. Follow `medallion/core/metrics.py` exactly — the `lance.*` meter name, the `{transition}`-style units, the second-scale buckets whose header records having been bitten by the SDK's 10 s default.
+
+Ride along: `medallion/mover.py:71-88` has no `else` on `if settings.ray_enabled:`, so a mover hosting **zero** workflow workers logs neither the start line nor the fallback — unlike `flows/lifespan.py:123`, which announces its negative case. One `else: log.info(...)`.
+
+**RED test (new, one per service):** `services/flows/tests/test_routes.py` — drive a run with `scheduler=None` and assert `flows.runs{lane="inline"}` incremented (in-memory `MetricReader`). `services/medallion/tests/test_stage_workflow.py` — assert `report_stage_outcome` records a `failed` verdict and a duration.
+**REPAIR:** `services/medallion/tests/test_stage_workflow.py:169` `test_a_TERMINAL_BAD_job_does_NOT_wake_the_mover` and `:356` `test_an_ABANDONED_watch_also_reaches_the_graph` both already drive the exact paths; extend them rather than duplicating the fixtures. Also fix `workflow.py:379`'s docstring, which promises a counter that does not exist.
+
+---
+
+#### 8d — one orchestration span at the SCHEDULE site (M) — GATED ON 8.0
+
+Only if 8.0 shows daprd still exports nothing. A `CLIENT` span at the five schedule sites, so the HTTP door and the run share a trace:
+
+`ingest/__init__.py:292`, `medallion/services/transform.py:146`, `medallion/services/train.py:331`, `medallion/api/promotions.py:145`, `flows/lifespan.py:232`.
+
+**Not in the orchestrator body.** It replays; a span per replay is both wrong and unbounded. This is why the site is the scheduler, not the workflow.
+
+**RED test:** an in-memory span exporter asserting a `CLIENT` span carrying `lance.workflow.instance_id` exists after a schedule call, and that the run's activity spans resolve their parent inside it.
+**REPAIR:** none — no test covers this today.
+
+---
+
+#### 8e — domain attributes + ERROR on the activity's own span (M)
+
+Do **not** open a second span. Take `trace.get_current_span()` inside each activity body — it is the SDK's `activity: <name>` span — and set the domain attributes the SDK cannot know, plus `record_exception` / `set_status(ERROR)` on the failure path. Precedent, already in this service: `medallion/services/transform.py:429-432` writes `lance.medallion.transition`, `lance.lineage.run_id`, `lance.lineage.chain_depth`.
+
+Per lane: `lance.medallion.stage` / `lance.medallion.submission_id` / `lance.medallion.verdict`; `lance.ingest.run_id` / `lance.ingest.chunk_id` / `lance.dataset`; `lance.flows.node_id` / `lance.flows.node_kind`. G3's fix belongs here and not in the SDK — `flows/activities.py:46-52` and the medallion outcome paths *deliberately* return failure rather than raising, so the exception never reaches the SDK's `with` block to be recorded.
+
+**RED test:** in-memory exporter — assert a failing `run_node` produces a span with `StatusCode.ERROR` and `lance.flows.node_id`. Fails today (327/327 spans `UNSET`).
+**REPAIR:** none.
+
+---
+
+#### 8f — ingest fan-out progress (S)
+
+`set_custom_status` inside `chunk_run` (`workflow.py:704`) plus a `units_done` field on `ChunkResult` (`:308-314`) so the parent can aggregate live. Today the API reports "0 of N" for the whole fan-out because `runs.py:369` derives `units_done` from the terminal output's `rows`, which does not exist until `finalize` returns — while `workflow.py:486-489` claims the opposite ("*the API could say '4 done' and never '4 of 500'*").
+
+Custom status, not a metric: it is per-instance state, read by the run's own GET.
+
+**RED test:** drive a fan-out with a fake context; assert the parent's status advances between the first and last child.
+**REPAIR:** `services/ingest/tests/test_run_status.py` — it already covers the status surface.
+
+---
+
+#### 8g — the panel and three rules (S)
+
+`workflows.json` in `chart/templates/perses-dashboards.yaml` over the free families (§8.1a/b) plus 8c's outcome counters. Three rules in `chart/alerting/rules.yml`, all `absent()`-guarded per slice 9:
+
+1. `sum(increase(dapr_runtime_workflow_activity_execution_count_total{status="failed"}[30m])) > 0` — writable **today**, no instrumentation, exactly the shape of the existing `MaintenanceDatasetsFailing`.
+2. `<lane>.outcome{verdict!="succeeded"}` rising (needs 8c).
+3. Reminder fires climbing while `execution_count_total` is flat — the wedged `continue_as_new` detector from §8.1b.
+
+**REPAIR:** the alert-name gate in `tests/unit/test_invariants.py` (slice 9 generalises it) must cover the new rules.
+
+---
+
+### 8.4 DROP — unverified, free, or not worth the cardinality
+
+- **The `timer` span, a `dapr_runtime_workflow_timer_*` metric, and any per-timer telemetry.** No such family exists upstream; the drift and lost-reminder questions are answered free by `dapr_scheduler_trigger_latency_*` and `_jobs_undelivered_total`.
+- **A `continue_as_new` turn counter.** Free (§8.1b).
+- **Any per-activity duration histogram or execution counter.** Free, with a working `status` label.
+- **Any rule over `dapr_runtime_workflow_activity_operation_latency`.** Declared in `dapr/dapr pkg/diagnostics/workflow_monitoring.go`, **no table in GreptimeDB** — never recorded here. Do not write against it.
+- **A "children outstanding" gauge for `chunk_run`.** 8f's custom status answers it with no series and no cardinality.
+- **Suppressing the `/TaskHubSidecarService/Hello` keepalive.** Real (34,393 of 35,196 grpc-scope spans) but it is a **collector** concern — hand it to slice 5/10, not to workflow instrumentation. The two audits that measured its share disagree by 40 points; whoever takes it should re-measure.
+- **"How many promotions are waiting on a human right now."** Needs a listing endpoint (`promotions.py` exposes only per-token `show`) — a product decision, not telemetry. Defer.
+- **A guard rejecting non-personal inbox principals** (`team:eng`, `service-web` holding inboxes). `.claude/skills/rask-notifications` owns it; out of scope here.
+- **Treating the movers' missing workflow runtime as critical.** `use_ray = settings.ray_enabled` (`transform.py:433`) gates the **dispatch** with the same flag that gates the runtime (`mover.py:72`), so nothing is orphaned — the lane is coherently OFF. Only the missing `else:` log survives, and it rides in 8c.
+
+---
+
+### 8.5 What none of this touches
+
+The estate has never run a `chunk_run`, `train_run` or `promotion_review` to completion — none appears in `execution_count_total` — so 12 of 21 activities have never emitted an observation of any kind. **That is a coverage gap, not an instrumentation gap.** Say so in the slice notes rather than letting the dashboard's empty panels read as "instrumented and healthy".
+
+---
+
+### 8.6 Cardinality — the rule, and the one that has already burned this estate
+
+**§6 of this file records the estate minting a metric series per object id** through daprd's default `spec.metrics`. Slice 4 fixed that at the sidecar. **Do not reintroduce it one layer up.**
+
+| signal | carries | rule |
+| --- | --- | --- |
+| **Metrics** | closed enums only: `workflow_name`, `activity_name`, `verdict`, `status`, `lane`, `transition`, `decision` | A label's domain must be enumerable **from the source**, not from the data. If you cannot write the full value list in the metric's `description`, it is not a label. |
+| **Spans** | every identifier: `lance.workflow.instance_id`, `lance.ingest.run_id`, `lance.medallion.submission_id`, `lance.dataset`, `lance.project`, `lance.flows.node_id` | Attributes are per-span, not per-series — unbounded values are correct here. Precedent: `transform.py:429-432`. |
+| **Logs** | unbounded text: error messages, Ray driver output, the `errors_total` dict, tracebacks | `extra=` survives to `log_attributes` (measured: `polls`, `status`, `submission_id`, `topic`). |
+
+**NEVER a metric label, no exceptions:** a workflow instance id, a run id, a submission id, a dataset/table URI, a node or chunk id, a token, a subject or originator, an error message, or **any part of an activity input payload**.
+
+**The replay rule, which is a cardinality rule too.** Never emit a metric or open a span from an **orchestrator body** — it replays, so a counter there over-counts by the replay factor and a span there is unbounded. Metrics go in **activities**; the orchestration span goes at the **schedule site**. Any log inside a body stays behind `if not ctx.is_replaying`, as `medallion/workflow.py` already does at `:191, :216, :233, :240, :261, :643, :655, :661` — and as `flows/workflow.py` does zero times, because it has no logger at all.
+
+---
+
+### 8.7 Blockers, and the two gaps that are correctness bugs
+
+**BLOCKER 1 — no workflow has executed since the sidecar exporter landed. This gates 8d.**
+`kubectl get configuration lance-tracing --show-managed-fields` shows `helm` owns `spec.tracing.otel`, last written **2026-08-23T08:19:49Z**; the older `kubectl-patch` entry (2026-08-15) owns **only** `spec.workflow.stateRetentionPolicy`. Meanwhile the newest workflow-worker span is **2026-08-17 22:55** and the newest workflow metric **2026-08-19 06:00** — and every live sidecar carries 0 workflow families against 563 `dapr_` series. daprd *is* exporting right now (scope `dapr-diagnostics`, 11,454 spans, newest 2026-08-23 08:56: `CallLocal/…`, `pubsub/lineage.events.v1`, `bindings/…`). **Therefore every "daprd emits no orchestration span" measurement in the feeding audits is pre-exporter and cannot be relied on.** Run 8.0 before writing 8d.
+
+**BLOCKER 2 — the telemetry store is unhealthy and nothing alerts on it.** `rask-greptimedb-standalone-0`: `OOMKilled`, exit 137, restarts **8 → 9 during this session**, 8 Gi limit, container lifetimes as short as 26 s. Queries died mid-measurement. Assume unquantified loss behind every count in this section, and treat "the series is missing" as ambiguous until the store is stable. No rule in `chart/alerting/rules.yml` covers it.
+
+**BLOCKER 3 (soft) — `stage_run` cannot be exercised here.** `core/config.py:225 ray_enabled: bool = Field(default=False, alias="MEDALLION_RAY_ENABLED")` and the variable is unset on all three movers, so neither the runtime (`mover.py:72`) nor the dispatch (`transform.py:433`) is on. 8.0 either enables it deliberately or records `stage_run` as UNMEASURED — it must not be inferred from the bronze→silver metrics, which are four days old.
+
+**CORRECTNESS, not telemetry — fix before instrumenting, because "add a span" would otherwise mean "instrument a message nobody receives":**
+
+1. **8a — the train-watcher's FAIL is undeliverable by construction.** The lane exists precisely so a person hears about a dead GPU job (`workflow.py:585-588`: *"Ray knows; nobody else does; and the person who asked is told nothing, ever"*), and it emits an event `notifiable()` returns `None` for — then SUCCESS-acks. Proven by execution today.
+2. **8b — the FAIL emits are suppressed without a trace.** A lineage or NATS outage destroys every workflow failure in the window, and afterwards nothing indicates a gap exists. `report_stage_outcome`'s own docstring promises *"THE FAILURE REACHES THE GRAPH, not just this log line"* — when the suppress fires, the `log.error` at `:417` still prints identically, so the log asserts a graph write that never happened.
+
+Both are provable in unit tests **today**, with no cluster, and both have an existing green test asserting the adjacent-but-wrong thing (`test_train_workflow.py:134`; `test_stage_workflow.py:373`). Repair those rather than adding parallel ones.
 
 ---
 
