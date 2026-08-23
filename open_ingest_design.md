@@ -51,8 +51,16 @@ merely available, it is ON in this estate.
 
 What actually remains is the part the old wording hid behind the provisioning excuse: retiring the
 lane-matching guards is a change to every estate, and it must not be made until ONE cascade has been
-driven end to end through the publish head and observed reaching gold. That drive is blocked today on
-reading `APP_API_TOKEN` (`POST /produce` answers 403 without it, verified 2026-08-23). So this is
-blocked on a proof, not on provisioning — a narrower and more honest statement than the one it
-replaces. See `docs/architecture/medallion-cascade.md` for why BOTH cascade heads must fire
-meanwhile; that is a ruling, not an interim state.
+driven end to end through the publish head and observed reaching gold.
+
+**THAT PROOF NOW EXISTS (2026-08-23).** A cascade was driven end to end through the publish head on an
+isolated tenant (`gateprobe`) and observed reaching gold: the Ray stage job SUCCEEDED, the workflow
+re-published with `ray_job_done`, the mover logged `medallion_stage_moved`, the `published` tag
+advanced to version 7, and `gateprobe-gold` received `catalog`. The stated blocker — reading
+`APP_API_TOKEN`, since `POST /produce` answers 403 without it — was not solved by extracting the
+credential but by calling from INSIDE the mover pod, where it is already in the environment; the
+secret never left the cluster, which is the only form of this that respects the secret rule.
+
+So this item is no longer blocked on a proof. What is left is the change itself, and it is still a
+change to every estate: retiring the lane-matching guards. See `docs/architecture/medallion-cascade.md`
+for why BOTH cascade heads must fire meanwhile; that is a ruling, not an interim state.
