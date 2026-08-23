@@ -19,6 +19,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
+import httpx
 from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
@@ -52,6 +53,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await run_in_threadpool(apply_dapr_secrets, _settings)
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     app.state.dapr = DaprClient()  # local sidecar; persists publishes to NATS JetStream
+    # ONE catalog client for the process, not one per stage transition. Every mover event makes at
+    # least one catalog call (register/publish) and the held path makes two, each of which was opening
+    # and tearing down its own connection — `fastapi` -> production-patterns.md § Lifespan: build once,
+    # dispose once. Closed below, beside the sidecar client.
+    app.state.catalog_http = httpx.Client(base_url=_settings.catalog_url.rstrip("/"), timeout=_settings.publish_timeout_seconds)
     app.state.fga = None
     settings = get_settings()
     if settings.fga_enabled:
@@ -95,6 +101,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 app.state.workflow_runtime.shutdown()
         with suppress(Exception):
             await app.state.dapr.close()
+        # Dispose the catalog client beside the sidecar's: built once in this lifespan, so it is this
+        # lifespan's to close. `suppress` for the same reason the others use it — a shutdown that
+        # raises on a already-broken connection must not stop the rest of the teardown.
+        with suppress(Exception):
+            app.state.catalog_http.close()
         if app.state.fga is not None:
             with suppress(Exception):
                 await app.state.fga.close()

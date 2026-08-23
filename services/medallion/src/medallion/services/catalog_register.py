@@ -27,7 +27,8 @@ answer an opaque 400.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 
 import httpx
 import pyarrow as pa
@@ -88,6 +89,7 @@ def register_stage_output(
     app_token: str | None = None,
     service_identity: str | None = None,
     timeout_seconds: float = 30.0,
+    client: httpx.Client | None = None,
 ) -> None:
     """Register the just-written dataset as ``table_id``; 409 means already governed.
 
@@ -99,7 +101,7 @@ def register_stage_output(
     location = relative_location(to_uri, catalog_root)
     segments = table_id.split(delimiter)
     headers = _credential(token=token, app_token=app_token, service_identity=service_identity)
-    with httpx.Client(base_url=catalog_url.rstrip("/"), timeout=timeout_seconds) as client:
+    with _catalog_client(catalog_url, timeout_seconds, client) as client:
         # Creates are top-down (the catalog's require_parent guard, live-verified: registering into
         # an absent namespace answers NamespaceNotFound 404) — and the cascade OWNS its tier
         # namespaces, so the lane ensures its parent exists rather than demanding a manual
@@ -201,6 +203,7 @@ def publish_stage_output(
     service_identity: str | None = None,
     timeout_seconds: float = 30.0,
     gate_only: bool = False,
+    client: httpx.Client | None = None,
 ) -> PublishOutcome:
     """Ask the catalog to gate `version` and, if it passes, advance the `published` tag.
 
@@ -232,7 +235,7 @@ def publish_stage_output(
         "accept_assertions": list(accept_assertions),
         "gate_only": gate_only,
     }
-    with httpx.Client(base_url=catalog_url.rstrip("/"), timeout=timeout_seconds) as client:
+    with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
             response = client.post(f"/v1/table/{table_id}/publish", json=body, headers=headers)
         except httpx.HTTPError as exc:
@@ -249,6 +252,23 @@ def publish_stage_output(
     )
 
 
+@contextmanager
+def _catalog_client(catalog_url: str, timeout_seconds: float, client: httpx.Client | None) -> Iterator[httpx.Client]:
+    """The shared client when the caller has one, otherwise a per-call client it owns.
+
+    `fastapi` -> `production-patterns.md` § Lifespan wants one client built once and injected; the
+    mover's lifespan now builds it. The fallback is not laziness — every OTHER caller of these helpers
+    (the tests, `scripts/`, any direct use) has no app and no lifespan, and making the client mandatory
+    would break them to satisfy a rule about the hot path. A caller that passes one must keep owning
+    it: closing it here would shut the app's client after the first stage.
+    """
+    if client is not None:
+        yield client
+        return
+    with httpx.Client(base_url=catalog_url.rstrip("/"), timeout=timeout_seconds) as owned:
+        yield owned
+
+
 def ensure_stage_output(
     *,
     catalog_url: str,
@@ -259,6 +279,7 @@ def ensure_stage_output(
     app_token: str | None = None,
     service_identity: str | None = None,
     timeout_seconds: float = 30.0,
+    client: httpx.Client | None = None,
 ) -> str:
     """Ask the catalog where this stage's output lives, creating the table if it does not exist yet.
 
@@ -284,7 +305,7 @@ def ensure_stage_output(
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot resolve where to write")
     headers = _credential(token=token, app_token=app_token, service_identity=service_identity)
     segments = table_id.split(delimiter)
-    with httpx.Client(base_url=catalog_url.rstrip("/"), timeout=timeout_seconds) as client:
+    with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
             described = client.post(f"/v1/table/{table_id}/describe", json={}, headers=headers)
         except httpx.HTTPError as exc:

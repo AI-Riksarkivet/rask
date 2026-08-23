@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from functools import partial
 from typing import Any
 
+import httpx
 from dapr.aio.clients import DaprClient
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError
@@ -175,7 +176,14 @@ def _stage_workflow_exists(client: Any, instance_id: str) -> bool:
         return False
 
 
-async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any, *, fga_client: OpenFgaClient | None = None) -> dict[str, str]:
+async def handle_stage(
+    dapr: DaprClient,
+    settings: MedallionSettings,
+    event: Any,
+    *,
+    fga_client: OpenFgaClient | None = None,
+    catalog_http: httpx.Client | None = None,
+) -> dict[str, str]:
     """Handle one upstream stage trigger: emit the transform's lineage, then trigger the next stage.
     ``event`` is the untrusted Dapr CloudEvent envelope (hence ``Any``); it is parsed and shape-checked
     by ``trigger_guards.parse_stage_trigger`` before any field is read, and a payload that is not a
@@ -679,6 +687,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                     service_identity=settings.catalog_service_identity,
                     timeout_seconds=settings.publish_timeout_seconds,
                     gate_only=True,
+                    client=catalog_http,
                 )
             )
             failed_assertions = list(verdict.failed_assertions)
@@ -720,6 +729,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                 app_token=settings.app_api_token,
                 service_identity=settings.catalog_service_identity,
                 timeout_seconds=settings.publish_timeout_seconds,
+                client=catalog_http,
             )
             if not outcome.published:
                 quality_blocked = True
