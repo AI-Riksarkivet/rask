@@ -166,8 +166,22 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
 
     dispatched: dict[str, Any] = {}
 
-    def fake_dispatch(_settings: Any, *, from_uri: str, to_uri: str, token: str | None, lineage_json: str, trigger: Any, event_time: str | None = None) -> str:
-        dispatched.update({"from": from_uri, "to": to_uri, "token": token, "lineage": lineage_json, "trigger": trigger})
+    def fake_dispatch(
+        _settings: Any,
+        *,
+        from_uri: str,
+        to_uri: str,
+        token: str | None,
+        lineage_json: str,
+        trigger: Any,
+        event_time: str | None = None,
+        pre_row_count: int | None = None,
+    ) -> str:
+        # `pre_row_count` is RECORDED, not merely tolerated: the dispatch pass measuring the
+        # destination before the Ray job overwrites it is the only way that lane can ever compare row
+        # counts, and a double that accepted the argument without asserting it would let the fix be
+        # deleted silently.
+        dispatched.update({"from": from_uri, "to": to_uri, "token": token, "lineage": lineage_json, "trigger": trigger, "pre_row_count": pre_row_count})
         return "stage-ray-silver-tok-abc"
 
     monkeypatch.setattr(mover, "_dispatch_stage_workflow", fake_dispatch)

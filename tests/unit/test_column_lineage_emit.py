@@ -307,7 +307,17 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
     # so that the second delivery below measures a destination that genuinely exists. Before S1 this
     # test had the write happening inside the handler's own submit call, which is exactly the ordering
     # the production code did NOT have: there, `submit_stage_job` returned before the cluster wrote.
-    def fake_dispatch(_settings: Any, *, from_uri: str, to_uri: str, token: str | None, lineage_json: str, trigger: Any, event_time: str | None = None) -> str:
+    def fake_dispatch(
+        _settings: Any,
+        *,
+        from_uri: str,
+        to_uri: str,
+        token: str | None,
+        lineage_json: str,
+        trigger: Any,
+        event_time: str | None = None,
+        pre_row_count: int | None = None,
+    ) -> str:
         _ray_job_write(from_uri, to_uri, settings.to_namespace, lineage_json)
         return "stage-ray-silver-t1-abc"
 
