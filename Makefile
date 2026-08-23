@@ -675,6 +675,17 @@ k3s-crds: ## Apply the vendored CRDs the chart deliberately does not package (se
 	@# Server-side apply: the CNPG CRD set exceeds kubectl's client-side annotation limit.
 	kubectl apply --server-side -f chart/crds-bootstrap/
 
+# `-o yaml` on the `helm get values` below is LOAD-BEARING, not a style choice. Bare `helm get values`
+# prints a HUMAN header line ("USER-SUPPLIED VALUES:") above the YAML; feeding that straight back
+# through `-f` parses the header as a KEY, so every upgrade re-stored a junk `USER-SUPPLIED VALUES:
+# null` entry in the release and carried it forward forever (observed live 2026-08-16 on rev 6).
+#
+# This note lives ABOVE the target rather than beside the line it describes, and that is deliberate:
+# the recipe is ONE shell command joined by trailing backslashes, so a `@#` line placed inside the
+# continuation is not a comment at all — make hands it to sh as a command. It did, from 2026-08-16
+# (7c2171f0) until 2026-08-23, and the whole target failed with `/bin/sh: @#: not found` plus a
+# `helm get values requires 1 argument` from the orphaned `-o yaml`. A comment that breaks the recipe
+# it documents is worse than no comment; keep prose out of the continuation.
 k3s-up: k3s-deps k3s-crds ## Vendor deps, apply CRDs, then install/upgrade the release and wait for the gateway
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ -z "$$HF_TOKEN" ] && [ -r "$${HF_HOME:-$$HOME/.cache/huggingface}/token" ]; then \
@@ -684,10 +695,6 @@ k3s-up: k3s-deps k3s-crds ## Vendor deps, apply CRDs, then install/upgrade the r
 	if [ -z "$$HF_TOKEN" ]; then echo "WARN: no HF token (env, .env, or 'hf auth login') — htrflow Serve will 401 on the gated TrOCR model"; fi; \
 	IMGARGS="--set image.localImages=true"; \
 	LIVE=$$(mktemp); \
-	@# `-o yaml` is LOAD-BEARING, not a style choice. Bare `helm get values` prints a HUMAN header line
-	@# ("USER-SUPPLIED VALUES:") above the YAML; feeding that straight back through `-f` parses the header
-	@# as a KEY, so every upgrade re-stored a junk `USER-SUPPLIED VALUES: null` entry in the release and
-	@# carried it forward forever (observed live 2026-08-16 on rev 6). `-o yaml` emits values only.
 	if $(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null && grep -q 'repository:' "$$LIVE"; then \
 	  IMGARGS="-f $$LIVE"; \
 	  echo ">> reusing the LIVE release's image settings ($$(grep -c . "$$LIVE") values) — not imposing localImages"; \
