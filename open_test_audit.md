@@ -837,6 +837,44 @@ a run that reports success.
 that proves it runs only on a developer box with a `kubectl port-forward` holding `127.0.0.1:4222`.
 Two of the seven skipped tests need no broker at all.
 
+✅ **FIXED 2026-08-22 — and the first fix HUNG the entire Python CI lane, which is worse than the
+defect it repaired.**
+
+The finding is real: the suite carries a module-level `skipif` over a live TCP probe of
+`RASK_NATS_URL`, no lane bound a broker, and the tests vanished from every run while the job printed
+green. `.dagger/test.go` now binds a JetStream-enabled `nats:2.14.2-alpine` (the version the chart
+pins), and `-js` is not optional — the suite provisions streams, and a core-only server answers those
+calls with an error rather than a skip.
+
+**But the binding as I first committed it used `WithExec`, and a `WithExec` is a BUILD STEP: Dagger
+runs it and waits for it to exit.** `nats-server` never exits. So `dagger call test` sat at
+`1 steps running` with **zero output for 2 h 20 m** before I killed it — and I had earlier read that
+same symptom as "the box is loaded", because a hung Dagger lane and a slow one are indistinguishable
+from the outside. `AsService()` runs the container's entrypoint plus its DEFAULT ARGS, which is the
+form a long-running process needs.
+
+Measured three ways against `services/ingest/tests/test_worker_queue.py`:
+
+| binding | result |
+| --- | --- |
+| none (the pre-fix state) | exit 0, **6 SKIPPED** — the defect as filed |
+| `WithExec` (my first fix) | **exit 124 — HUNG** |
+| `WithDefaultArgs` (shipped) | exit 0, **6 PASSED** |
+
+**The middle row is the worst of the three, and that is the lesson.** A skipping suite still lets the
+rest of the estate report; a hung lane reports *nothing at all* and wears the costume of a slow
+machine. A fix that converts a silent gap into a silent stall has made the estate harder to reason
+about, not easier — which is the same family as everything else in this audit.
+
+**I had already learned this exact thing earlier in this pass and failed to apply it.** M17's Postgres
+service needed `WithDefaultArgs` for the same reason (there the image refused to run as root, which at
+least failed LOUDLY in seconds). The NATS binding was written before that and never revisited. A lesson
+learned in one place is not learned until it is carried to the places that share its shape — the
+identical sentence this audit already wrote about the gateway's `/api/ingest` rows.
+
+The three-way measurement is recorded at the code site so the next person changing it sees the
+comparison, not just the conclusion.
+
 ### H20 — seven of nine sealed runners have no tests, and the two that do run in no CI job · **CONFIRMED, HIGH**
 
 `.dagger/test.go:139` is the single pytest exec of `Test()`; it runs the root `testpaths`, which list

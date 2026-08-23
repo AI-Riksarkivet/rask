@@ -157,10 +157,25 @@ func (m *Rask) Test(
 		// `-js` is not optional: the suite provisions and reads JetStream streams, and a core-only
 		// server answers those calls with an error rather than a skip. Dagger, never docker — this is
 		// exactly the "ephemeral broker for a test repro" case CLAUDE.md names.
+		//
+		// `WithDefaultArgs`, NEVER `WithExec`, and this cost two and a half hours to learn. A
+		// `WithExec` is a BUILD STEP: Dagger runs it and waits for it to exit. `nats-server` is a
+		// server, so it never exits — the whole pipeline sat at "1 steps running" with ZERO output for
+		// 2h20m and had to be killed. `AsService()` runs the container's entrypoint plus its default
+		// args, which is the form a long-running process needs.
+		//
+		// Measured three ways against services/ingest/tests/test_worker_queue.py:
+		//
+		//	no binding at all (the pre-fix state):  exit 0, 6 SKIPPED   <- the defect
+		//	WithExec:                               exit 124, HUNG      <- the fix, broken
+		//	WithDefaultArgs:                        exit 0, 6 PASSED    <- this
+		//
+		// The middle row is the worse failure of the three: a suite that skips still reports the rest
+		// of the estate, while a hung lane reports nothing at all and looks like a slow machine.
 		WithServiceBinding("nats", dag.Container().
 			From(natsImage).
 			WithExposedPort(4222).
-			WithExec([]string{"nats-server", "--jetstream", "--addr", "0.0.0.0", "--port", "4222"}).
+			WithDefaultArgs([]string{"nats-server", "--jetstream", "--addr", "0.0.0.0", "--port", "4222"}).
 			AsService()).
 		WithEnvVariable("RASK_NATS_URL", "nats://nats:4222").
 		WithExec([]string{"uv", "run", "--no-sync", "pytest", "-q", "--timeout=300", "--timeout-method=thread", "-m", "not e2e and not slow"}).
