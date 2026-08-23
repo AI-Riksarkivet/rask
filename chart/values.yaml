@@ -2192,6 +2192,59 @@ observability:
 # rendered `<release>-observability-s3` Secret (templates/observability.yaml — rustfs.accessKey/secretKey,
 # the ONE store credential pair).
 greptimedb-standalone:
+  # The ONLY seam this subchart offers for engine tuning (its templates/configmap.yaml renders
+  # `config.toml: {{ .Values.configToml | indent 4 }}` and then APPENDS the storage + logging blocks,
+  # which is why neither appears below). It was unset until 2026-08-23, so every knob here ran at
+  # GreptimeDB's stock default — defaults sized for a dedicated large machine, not an 8Gi container.
+  #
+  # WHY THIS EXISTS. The pod OOMKilled 13 times inside a 7h27m window on 2026-08-23 after running
+  # 6d21h clean at this same 8Gi ceiling. The live `GET :4000/config` showed the three work-driven
+  # allocators as the literal string "unlimited" — query.memory_pool_size, scan_memory_limit,
+  # experimental_compaction_memory_limit — while ~4.3GiB of the 8GiB was already committed to stock
+  # caches plus the write buffer. A store configured that way has no ceiling: it is killed by
+  # whatever grows next, and something always does. (What grew: a new `ray-pods` scrape job adding
+  # 4,099 series in one step — see otel-collector.yaml. That was the TRIGGER; this was the DEFECT,
+  # and fixing only the trigger leaves the next one to find it.)
+  #
+  # BOUNDING IS NOT SHRINKING, and the direction of failure is the point. With these set, an
+  # oversized scan fails ITS OWN QUERY (`scan_memory_on_exhausted = "fail"`, the default) instead of
+  # taking the process down and losing every log, metric and trace the estate holds. One loud failure
+  # beats a silent hole in the record — doubly so here, because the Collector declares no
+  # `sending_queue`, so whatever was in flight at each OOM was dropped rather than retried.
+  #
+  # SIZING against the 8Gi limit below. Worst case sums to ~6.3GiB, leaving real headroom:
+  #   caches ~1.31GiB + write-buffer reject 1GiB + query 2GiB + scan 1GiB + compaction 1GiB.
+  # The concurrency knobs are cut for the same reason: stock is num_workers 32 / 16 compactions /
+  # 32 flushes / 64 purges and `parallelism = 0` (= every core), sized off the NODE's 64 cores on a
+  # container whose CPU request is 100m. Each is a per-unit multiplier on the allocators above.
+  #
+  # These are a BOUND, not a measurement. Nothing has profiled which subsystem actually allocates —
+  # heap profiling is already enabled (`/debug/prof/mem`, POST) and nobody has pulled it. Revisit
+  # with a profile, not by raising a number: 2Gi -> 8Gi is what was tried before, and it bought six
+  # quiet days rather than a fix.
+  configToml: |
+    mode = 'standalone'
+
+    [query]
+    parallelism = 8
+    memory_pool_size = "2GiB"
+
+    [region_engine.mito]
+    num_workers = 8
+    max_background_compactions = 4
+    max_background_flushes = 8
+    max_background_purges = 8
+    global_write_buffer_size = "512MiB"
+    global_write_buffer_reject_size = "1GiB"
+    scan_memory_limit = "1GiB"
+    experimental_compaction_memory_limit = "1GiB"
+    page_cache_size = "512MiB"
+    vector_cache_size = "256MiB"
+    sst_meta_cache_size = "128MiB"
+    selector_result_cache_size = "128MiB"
+    range_result_cache_size = "128MiB"
+    prefilter_result_cache_size = "64MiB"
+    manifest_cache_size = "128MiB"
   # Memory bound (#139) — see the note under `openfga.resources`. Sized HIGHEST of the group on
   # purpose: this is a database ingesting OTLP traces + RED metrics from the whole fleet, so it is
   # the one workload here whose footprint genuinely grows with how busy the estate is.

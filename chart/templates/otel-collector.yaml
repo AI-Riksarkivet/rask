@@ -205,6 +205,38 @@ data:
                   target_label: namespace
                 - source_labels: [__meta_kubernetes_pod_name]
                   target_label: pod
+              # DROP THE ray_data_* FIREHOSE. This job is what broke the telemetry store: it went live
+              # 2026-08-23 04:36:45Z and added 4,099 series in one step, against the whole prior
+              # estate's 3,250 (dapr-sidecars 3,186 + dapr-control-plane 64). First OOMKill followed at
+              # 08:07:16Z; twelve more that day. Of the 288 ray_* metric families that arrived, 113 are
+              # `ray_data_*` — Ray Data's PER-DATASET, PER-OPERATOR instrumentation, whose series set
+              # grows with every dataset and operator a job creates. Unbounded by construction, not
+              # merely large.
+              #
+              # Two of the 113 ARE read, by the ray dashboard's backpressure panel
+              # (perses-dashboards.yaml: ray_data_num_tasks_submitted and
+              # ray_data_task_submission_backpressure_time), so this keeps exactly those and drops the
+              # rest. A blanket `drop: ray_data_.*` would have blanked that panel silently — the
+              # failure mode this whole change exists to avoid.
+              #
+              # Expressed as mark-then-drop because RE2 has no negative lookahead, so "all except these
+              # two" cannot be one regex. The marker is `__`-prefixed, so Prometheus removes it after
+              # relabeling and it never reaches the store.
+              #
+              # Dropped HERE and not at Ray on purpose: the Ray cluster is operated outside this repo
+              # (open_ray_handover.md), so a fix depending on its config is one this chart cannot land.
+              # Reversible in one edit if a workload ever needs the per-operator detail — but bound the
+              # store first (chart/values.yaml `greptimedb-standalone.configToml`), because this drop is
+              # a cardinality economy, NOT the reason the store stopped dying.
+              metric_relabel_configs:
+                - source_labels: [__name__]
+                  regex: 'ray_data_(num_tasks_submitted|task_submission_backpressure_time)'
+                  target_label: __ray_data_keep
+                  replacement: 'yes'
+                - source_labels: [__ray_data_keep, __name__]
+                  separator: ';'
+                  regex: ';ray_data_.*'
+                  action: drop
 
             # The telemetry store's OWN health. Until 2026-08-23 nothing scraped it, and the
             # consequence was not subtle: GreptimeDB was OOMKilled 13 times in one day (exit 137,

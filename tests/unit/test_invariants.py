@@ -1855,6 +1855,92 @@ def _collector_scrape_jobs(docs: list[dict]) -> list[dict]:
     return list(config.get("receivers", {}).get("prometheus", {}).get("config", {}).get("scrape_configs", []))
 
 
+def _greptimedb_config(docs: list[dict]) -> str:
+    """The telemetry store's rendered `config.toml`, as text.
+
+    Located by CONTENT, not by name: the subchart names its ConfigMap
+    `<release>-greptimedb-standalone-config`, and a release-name change would silently return {} from a
+    name match, turning every gate below green against a config it could no longer find.
+    """
+    for doc in docs:
+        data = doc.get("data") or {}
+        toml = data.get("config.toml", "")
+        if doc.get("kind") == "ConfigMap" and "[storage]" in toml and "greptimedb" in toml:
+            return toml
+    return ""
+
+
+#: The three settings that name a memory ceiling for a WORK-DRIVEN (non-cache) allocator in
+#: GreptimeDB. Every one of them defaults to the literal string "unlimited".
+_UNBOUNDED_BY_DEFAULT = ("memory_pool_size", "scan_memory_limit", "experimental_compaction_memory_limit")
+
+
+def test_the_telemetry_store_bounds_its_own_memory() -> None:
+    """The estate's ONLY sink for logs, metrics and traces was configured to have no memory ceiling.
+
+    MEASURED 2026-08-23: `rask-greptimedb-standalone-0` OOMKilled 13 times in a 7h27m window after
+    running 6d21h clean, and the live `GET :4000/config` showed all three of the settings below as the
+    literal string `"unlimited"` — `query.memory_pool_size`, `region_engine.mito.scan_memory_limit` and
+    `region_engine.mito.experimental_compaction_memory_limit`. rask set NO GreptimeDB knobs at all: the
+    mounted config.toml was 15 lines of `mode`, `[storage]` and `[logging]`.
+
+    Why this is the defect and the trigger is not: the trigger was a new `ray-pods` scrape job adding
+    4,099 series (commit 519ea5c4, live 04:36:45Z, first OOM 08:07:16Z). But a telemetry sink must
+    survive whatever is written to it — a store that dies from new series is a store with no ceiling,
+    and the NEXT thing to grow would have killed it just the same.
+
+    Bounding is not the same as shrinking, and the direction matters: with a limit set, an oversized
+    scan FAILS ITS QUERY (`scan_memory_on_exhausted = "fail"`) instead of taking the whole process
+    down and losing every signal the estate has. One loud failure beats a silent hole in the record.
+
+    The seam is `configToml` on the subchart — the ONLY channel it offers — and it was unset
+    everywhere in the repo, which is why no lever could be delivered without adding this key.
+    """
+    toml = _greptimedb_config(_rendered_docs("observability.enabled=true"))
+    assert toml, "no greptimedb config.toml rendered — the store's config gate is testing nothing"
+
+    unbounded = [knob for knob in _UNBOUNDED_BY_DEFAULT if knob not in toml]
+    assert not unbounded, (
+        f"the telemetry store declares no ceiling for {unbounded}. Each defaults to the literal "
+        f'"unlimited", so compaction, scans and queries may allocate without bound inside an 8Gi '
+        f"container. Set them via `greptimedb-standalone.configToml` in chart/values.yaml."
+    )
+
+    assert "[region_engine.mito]" in toml, "no [region_engine.mito] section — the cache and compaction knobs live there"
+    assert "page_cache_size" in toml, (
+        "the mito cache sizes are left at GreptimeDB's large-machine defaults (~3.35GiB of caches, plus "
+        "a 1GiB write buffer) inside an 8Gi container, so ~4.3GiB is committed before any query or "
+        "compaction allocates a byte. Size the caches to the container."
+    )
+
+
+def test_the_ray_scrape_does_not_ship_the_per_operator_ray_data_firehose() -> None:
+    """The Ray scrape job doubled the estate's series count in one step, and that is what broke the store.
+
+    MEASURED: `scrape_samples_scraped` shows the job appearing on 2026-08-23 at 4,099 series against
+    the whole prior estate's 3,250 (`dapr-sidecars` 3,186 + `dapr-control-plane` 64), and the store
+    holds 288 `ray_*` metric tables of which 113 are `ray_data_*`.
+
+    `ray_data_*` is Ray Data's PER-DATASET, PER-OPERATOR instrumentation — the series set grows with
+    every dataset and operator a job creates, so it is unbounded by construction rather than merely
+    large. Nothing in this estate reads it: the deployed Ray dashboard panels and the handover's own
+    verification steps use node, cluster, serve and task series.
+
+    Dropped at the Collector rather than at Ray, deliberately: the Ray cluster is operated elsewhere
+    (open_ray_handover.md), so a fix that depends on its config is a fix this repo cannot land.
+    """
+    jobs = _collector_scrape_jobs(_rendered_docs())
+    ray_jobs = [j for j in jobs if "ray" in str(j.get("job_name", ""))]
+    assert ray_jobs, "no Ray scrape job at all"
+
+    drops = [rc for rc in ray_jobs[0].get("metric_relabel_configs", []) if rc.get("action") == "drop"]
+    dropped_patterns = " ".join(str(rc.get("regex", "")) for rc in drops)
+    assert "ray_data_" in dropped_patterns, (
+        "the Ray job ships every `ray_data_*` family (113 of them) — per-dataset, per-operator series "
+        f"that nothing here reads. metric_relabel_configs drops are {drops or 'ABSENT'}."
+    )
+
+
 def test_ray_pods_are_a_scrape_target() -> None:
     """Nothing collected a single Ray series, and no rule or panel about Ray could ever have fired.
 
