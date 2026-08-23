@@ -839,6 +839,16 @@ medallion:
   # (acme-bronze / acme-bronze$events). Project-less traffic is BYTE-IDENTICAL either way; with this
   # false (default — zero render diff), a project-carrying trigger is DROPPED fail-closed (never a
   # fallback into the shared zone URIs). Per-project FGA namespace tuples must be seeded separately.
+  # OFF renders no MEDALLION_CONTROL_ROOT anywhere, and the resulting failure names neither this flag
+  # nor that variable — measured live 2026-08-23 on a seeded estate: `POST /produce?project=acme`
+  # answered `409 routing is disabled (MEDALLION_CONTROL_ROOT unset)`, and the silver->gold mover
+  # logged `medallion_stage_project_routing_disabled` and parked its trigger in the DLQ, so the run
+  # reported nothing and gold never existed. Fail-closed is correct — a project trigger must never
+  # fall back to the shared roots and transform the WRONG tenant's data — but an estate that HAS
+  # projects seeded and leaves this off has a cascade that cannot complete for any of them.
+  #
+  # Turn it on wherever `scripts/seed_estate.py` has run. `make e2e-medallion LANCE_E2E_PROJECT=<p>`
+  # is the proof it is on and working end to end.
   projectsEnabled: false
   # Gold SERVING warehouse (OPT-IN; composes with projectsEnabled). When true, the terminal silver→gold
   # mover gets MEDALLION_GOLD_WAREHOUSE_ENABLED: a `project`-carrying trigger's TARGET root becomes the
