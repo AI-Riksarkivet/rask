@@ -836,7 +836,7 @@ e2e-governed-union: ## Full governed-union proof (the estate's widest authz path
 e2e-medallion:      ## Medallion bronze→silver→gold cascade proof (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL)
 	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-medallion needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-medallion needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) uv run pytest tests/e2e-py -m medallion -v
+	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_PROJECT=$(LANCE_E2E_PROJECT) LANCE_E2E_DAPR_TOKEN=$(LANCE_E2E_DAPR_TOKEN) uv run pytest tests/e2e-py -m medallion -v
 e2e-media:          ## Media-lane proof (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL)
 	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-media needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-media needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }

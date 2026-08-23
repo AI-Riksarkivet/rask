@@ -30,6 +30,22 @@ LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 # estate's secret store. This line used to claim the target filled it, which sent a reader looking for a
 # mechanism that was never written.
 DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
+#: The tenant to drive, and on a publish-driven estate it is REQUIRED rather than optional.
+#:
+#: With `medallion.cascadeViaPublish` on, the cascade is triggered by `publication_trigger`, and that
+#: publisher ALWAYS carries a project — `transform.py` says why: "the mover cannot resolve its tiers
+#: without it". So a projectless produce publishes silver and gold never fires, and this test failed
+#: with `runs 131->133, expected >= 134` against a cascade that was working perfectly for a tenant.
+#: The shape asserted here has to be the shape the estate runs.
+#:
+#: Unset keeps the projectless drive, which is correct for an estate still on the legacy trigger.
+PROJECT = os.environ.get("LANCE_E2E_PROJECT", "")
+
+
+def _qualified(tier: str, table: str) -> str:
+    """`bronze$events` on a shared estate, `acme-bronze$events` for a tenant — the names lineage records."""
+    return f"{PROJECT}-{tier}${table}" if PROJECT else f"{tier}${table}"
+
 
 # Governed lineage READS use the app-token SERVICE door as `service-web` (a warehouse reader — the same
 # read-only identity the web BFF uses). Auth-off → OIDC off → authenticate() pass-through (harmless);
@@ -69,19 +85,29 @@ def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
 
     # ACT — one trigger at the head of the pipeline (carrying the app-token when the stack enforces it).
     headers = {"dapr-api-token": DAPR_TOKEN} if DAPR_TOKEN else {}
-    produced = requests.post(f"{lance_ray}/produce", headers=headers, timeout=8)
+    params = {"project": PROJECT} if PROJECT else {}
+    produced = requests.post(f"{lance_ray}/produce", headers=headers, params=params, timeout=8)
     assert produced.status_code == 202 and produced.json()["status"] == "produced", produced.text
 
     # ASSERT — the cascade reached gold (its transitive upstream is the full chain) AND it did so from THIS
     # produce: all three stages emitted a fresh run, so the count grew by the producer + 2 movers.
-    chain = {"bronze$events", "silver$features"}
+    gold = _qualified("gold", "catalog")
+    chain = {_qualified("bronze", "events"), _qualified("silver", "features")}
     deadline = time.monotonic() + 60.0
     upstream: list[str] = []
+    #: The last non-200 the read door gave, so a REFUSAL is not reported as an absent cascade. This test
+    #: swallowed every non-200 and failed with `upstream=[]`, which reads as "the cascade never ran" —
+    #: while the actual answer was `403 can_get_metadata required on table:acme-gold$catalog`, the
+    #: lineage plane correctly refusing a reader with no grant on that tenant. A live drive that cannot
+    #: tell "it did not happen" from "you may not look" sends the next reader after the wrong bug.
+    refusal = ""
     while time.monotonic() < deadline:
-        resp = requests.get(f"{lineage}/datasets/gold$catalog/upstream", headers=_LINEAGE_HEADERS, timeout=8)
+        resp = requests.get(f"{lineage}/datasets/{gold}/upstream", headers=_LINEAGE_HEADERS, timeout=8)
         if resp.status_code == 200:
             upstream = [ref["name"] for ref in resp.json().get("related", [])]
             if chain <= set(upstream) and _run_count(lineage) >= before + 3:
                 return
+        else:
+            refusal = f" [read door answered {resp.status_code}: {resp.text[:200]}]"
         time.sleep(3)
-    pytest.fail(f"gold$catalog cascade did not complete within 60s (upstream={upstream}, runs {before}->{_run_count(lineage)}, expected >= {before + 3})")
+    pytest.fail(f"{gold} cascade did not complete within 60s (upstream={upstream}, runs {before}->{_run_count(lineage)}, expected >= {before + 3}){refusal}")

@@ -253,6 +253,15 @@ DEMO_ESTATE = Estate(
         # says `define can_update_tag: owner`; `validator` buys `can_promote`, which is the OTHER door
         # on that route (the accept-assertions override). One rung per tier is enough because both
         # cascade: `owner from parent` on `table`, and `owner` already subsumes `validator` there.
+        # The READ half of the same omission. `service-web` is the read-only identity the web BFF and
+        # the live cascade proof both use; it holds grants on the shared datasets and had none on a
+        # TENANT's tiers, so `GET /datasets/acme-gold$catalog/upstream` answered
+        # `403 can_get_metadata required on table:acme-gold$catalog` — the lineage plane correctly
+        # refusing a reader with no grant. A tenant whose cascade runs but whose lineage nobody may
+        # read is governed correctly and observable by no one.
+        Grant("user:service-web", "reader", "namespace:acme-bronze"),
+        Grant("user:service-web", "reader", "namespace:acme-silver"),
+        Grant("user:service-web", "reader", "namespace:acme-gold"),
         Grant("user:service-bronze-to-silver", "owner", "namespace:acme-silver"),
         Grant("user:service-silver-to-gold", "owner", "namespace:acme-gold"),
         # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
