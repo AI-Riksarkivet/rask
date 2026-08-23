@@ -12,6 +12,7 @@ import {
 	Layers,
 	Network,
 	Radio,
+	ShieldCheck,
 	Warehouse,
 } from '@lucide/svelte';
 import { exact, seg, type ZoneNav } from '@rask/ui/shell';
@@ -100,6 +101,15 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 				// (`catalog/storage/+layout.svelte`, route `catalog/storage/tiers`). A nested rail entry
 				// made two views of one subject read as two areas, and hung a second-level item beside
 				// top-level ones. The old `/catalog/stores` URL 308s to the tab.
+			},
+			{
+				// A held promotion is a CATALOG concern, not a lineage one: the rung a decision is gated
+				// on is `can_promote` on `namespace:<project>-<to_namespace>` (medallion promotions.py),
+				// which is this zone's own hierarchy. Lineage is a READ of the graph; this one ACTS.
+				title: 'Promotions',
+				href: '/lakehouse/catalog/promotions',
+				match: seg('/lakehouse/catalog/promotions'),
+				icon: ShieldCheck,
 			},
 		],
 	},
