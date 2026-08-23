@@ -337,6 +337,44 @@ dapr.io/config: "lance-tracing"
 {{- end }}
 {{- end -}}
 
+{{/* THE SSR ZONES' OTel env — a FOURTH rendering, and deliberately not a fourth source of truth. Every
+     value below comes from `lance.otlpEndpoint` / `lance.otelViaCollector` / `rask.otelResourceAttrs`,
+     the same derivations the other three use. What differs is only WHICH variables are emitted.
+
+     `rask.otelEnv` cannot simply be reused here, and trying it is what produced this helper. That one
+     renders RASK_OTEL_ENABLED — `service_kit`'s PYTHON opt-in, read by `Settings.otel_enabled` and
+     meaningless to a Bun process — plus OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, which names a framework these
+     pods do not run. Worse than merely inert: RASK_OTEL_ENABLED is one of the two flags that mark a pod
+     as an OTLP LOG producer, and the zones export TRACES ONLY. A zone carrying it reads as a log
+     exporter, which would earn it the `lance.dev/logs: otlp` label and delete the stdout of seven pods
+     that have no other copy.
+
+     No metric interval either: the zone SDK builds a tracer provider and no metric reader. */}}
+{{- define "rask.zoneOtelEnv" -}}
+{{- $root := index . 0 -}}
+{{- $svc := index . 1 -}}
+{{- $o := $root.Values.observability -}}
+{{- if include "lance.otelEnabled" $root -}}
+{{- $db := (hasKey $o "dbName") | ternary $o.dbName "public" -}}
+{{- $pipeline := (hasKey $o "tracePipeline") | ternary $o.tracePipeline "greptime_trace_v1" -}}
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: "{{ include "lance.otlpEndpoint" $root }}"
+- name: OTEL_EXPORTER_OTLP_PROTOCOL
+  value: "http/protobuf"
+{{- if not (include "lance.otelViaCollector" $root) }}
+{{/* Vendor headers only on the DIRECT path, exactly as every other plane does it. */}}
+- name: OTEL_EXPORTER_OTLP_HEADERS
+  value: "x-greptime-db-name={{ $db }}"
+- name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
+  value: "x-greptime-db-name={{ $db }},x-greptime-pipeline-name={{ $pipeline }}"
+{{- end }}
+- name: OTEL_SERVICE_NAME
+  value: {{ $svc | quote }}
+- name: OTEL_RESOURCE_ATTRIBUTES
+  value: {{ include "rask.otelResourceAttrs" $root | quote }}
+{{- end }}
+{{- end -}}
+
 {{- define "rask.otelEnv" -}}
 {{- $root := index . 0 -}}
 {{- $svc := index . 1 -}}

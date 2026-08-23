@@ -62,6 +62,7 @@
 			"types": "./src/serve-proxy.ts",
 			"default": "./src/serve-proxy.ts"
 		},
+		"./telemetry": "./src/telemetry.ts",
 		"./upstream": {
 			"types": "./src/upstream.ts",
 			"default": "./src/upstream.ts"
@@ -76,6 +77,11 @@
 		"fmt:check": "rsvelte-fmt --check ."
 	},
 	"dependencies": {
+		"@opentelemetry/api": "^1.9.1",
+		"@opentelemetry/exporter-trace-otlp-http": "^0.221.0",
+		"@opentelemetry/resources": "^2.10.0",
+		"@opentelemetry/sdk-trace-base": "^2.10.0",
+		"@opentelemetry/sdk-trace-node": "^2.10.0",
 		"valibot": "^1.4.2"
 	},
 	"devDependencies": {

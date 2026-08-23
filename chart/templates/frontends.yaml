@@ -136,6 +136,22 @@ spec:
             # 413 is anonymous. The zone-level knob is the outer bound, not the policy.
             - name: BODY_SIZE_LIMIT
               value: {{ $root.Values.frontend.bodySizeLimit | default "32M" | quote }}
+            {{- /* TELEMETRY. The zones are the FIRST hop of every browser request — a page is served by
+                   this Bun server before anything reaches the gateway — and they exported nothing, so a
+                   slow page with a healthy gateway had no span anywhere to explain it. Worse than a gap:
+                   the RED dashboard's unfiltered `sum by (service_name)` rendered their absence as "these
+                   services do not exist" rather than "these services are unmonitored".
+
+                   The SAME helper the fleet uses, so the endpoint, protocol, headers and resource identity
+                   come from one derivation rather than a fourth hand-rolled copy. `OTEL_SERVICE_NAME` is
+                   the zone's own name, which is what makes it appear in the dashboard as itself.
+
+                   Verified before wiring, not assumed: the OTel Node SDK runs under Bun — spans created,
+                   correctly parented, and AsyncLocalStorage surviving an await, which is exactly what a
+                   per-request server span needs. Only MANUAL instrumentation is used; the
+                   auto-instrumentation packages depend on Node loader hooks Bun implements incompletely,
+                   and nothing here needs them. */}}
+            {{- include "rask.zoneOtelEnv" (list $root (printf "web-%s" .name)) | nindent 12 }}
             {{- /* DERIVED from ray.dashboardUrl, not defaulted to the in-cluster Service — discovery and
                    INVOCATION must name the same cluster or the builder lists apps it cannot call.
                    `compute` reads that dashboard for /api/serve, and its comment says the quiet part:

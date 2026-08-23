@@ -3865,6 +3865,42 @@ def test_every_first_party_ALERT_names_a_metric_the_service_actually_EMITS(group
 _LAUNCHER_FREE_OTEL_ENV: Final = ("OTEL_METRIC_EXPORT_INTERVAL", "OTEL_PYTHON_FASTAPI_EXCLUDED_URLS")
 
 
+def test_the_SSR_ZONES_export_telemetry_too() -> None:
+    """The seven zones are the FIRST hop of every real user request, and they exported nothing.
+
+    A browser reaches a SvelteKit/Bun server before it ever reaches the gateway, so a slow page with a
+    fast gateway had no span anywhere to explain it. Worse than a gap: the RED dashboard's unfiltered
+    `sum by (service_name)` renders their absence as "these services do not exist" rather than "these
+    services are unmonitored" — the estate looks smaller than it is, and correctly so, because nothing
+    was ever asked to report.
+
+    Verified feasible before being asserted: the OTel Node SDK runs under Bun (spans created, correctly
+    parented, and AsyncLocalStorage survives an await — which is what a per-request server span needs).
+    Only MANUAL instrumentation is used; the auto-instrumentation packages rely on Node loader hooks Bun
+    implements incompletely, and this estate does not need them.
+    """
+    docs = _rendered_docs("observability.enabled=true")
+    zones = [doc for doc in docs if doc.get("kind") == "Deployment" and doc["metadata"]["name"].startswith("rask-web-")]
+    assert len(zones) >= 7, f"expected the seven SSR zones, found {[d['metadata']['name'] for d in zones]}"
+
+    missing = []
+    for doc in zones:
+        env = {
+            e["name"]
+            for container in doc["spec"]["template"]["spec"]["containers"]
+            if not container["name"].startswith("daprd")
+            for e in (container.get("env") or [])
+        }
+        if "OTEL_EXPORTER_OTLP_ENDPOINT" not in env or "OTEL_SERVICE_NAME" not in env:
+            missing.append(doc["metadata"]["name"])
+
+    assert not missing, (
+        f"these SSR zones export no telemetry: {sorted(missing)}. They are the first hop of every browser "
+        "request, so a slow page has no span to explain it — and the RED dashboard reads their silence as "
+        "absence rather than as being unmonitored."
+    )
+
+
 def test_both_planes_agree_on_the_otel_env_that_ACTUALLY_APPLIES() -> None:
     """Two planes, two different answers to questions that have one right answer.
 
@@ -4121,7 +4157,11 @@ def test_every_pod_that_exports_otlp_logs_is_labelled_as_such(posture: tuple[str
     first: an exporter without the label double-ingests, but a label without an exporter deletes a whole
     pod's logs and the pipeline still reports healthy.
 
-    Mechanical and drift-proof: `OTEL_EXPORTER_OTLP_ENDPOINT` is rendered by exactly `rask.otelEnv` and
+    KEYED ON LOG EXPORT, NOT ON ANY OTLP ENDPOINT — a distinction this gate learned the day the SSR zones
+    started exporting. They emit traces and no logs, so an endpoint-only test read them as log producers
+    and would have had them labelled, deleting the stdout of seven pods that have no other copy.
+
+    Mechanical and drift-proof: the opt-in vars are rendered by exactly `rask.otelEnv` and
     `lance.otelEnv`, so a new workload is covered the day it is added rather than the day someone
     remembers this test.
 
@@ -4137,7 +4177,18 @@ def test_every_pod_that_exports_otlp_logs_is_labelled_as_such(posture: tuple[str
         if doc.get("kind") not in {"Deployment", "StatefulSet", "DaemonSet"}:
             continue
         template = doc["spec"]["template"]
-        exports = any(env.get("name") == "OTEL_EXPORTER_OTLP_ENDPOINT" for container in template["spec"]["containers"] for env in container.get("env") or [])
+        # LOGS specifically, not "any OTLP". The label means "my log records already reach the store by
+        # another route, so drop the file-tailed copy" — so the question is whether this pod exports
+        # LOGS, and an endpoint alone does not answer it. The SSR zones export TRACES ONLY (a
+        # NodeTracerProvider, no logger provider), so labelling them on the strength of an endpoint would
+        # delete the stdout of seven pods that have no other copy — the precise defect slice 5 measured
+        # at 0 survivors of 10.
+        #
+        # Two spellings because the planes opt in differently: the lakehouse pods run under the launcher
+        # and declare OTEL_LOGS_EXPORTER, while the fleet builds a real LoggerProvider inside
+        # `setup_otel`, gated on RASK_OTEL_ENABLED.
+        names = {env.get("name") for container in template["spec"]["containers"] for env in container.get("env") or []}
+        exports = bool(names & {"OTEL_LOGS_EXPORTER", "RASK_OTEL_ENABLED"})
         labelled = ((template.get("metadata") or {}).get("labels") or {}).get("lance.dev/logs") == "otlp"
         if exports != labelled:
             offenders.append(f"{doc['metadata']['name']}: exports_otlp={exports} labelled={labelled}")

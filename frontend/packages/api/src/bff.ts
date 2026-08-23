@@ -2,7 +2,9 @@
 // passes its own $env values in, so this is the shared, single-sourced auth trailer (mirroring the
 // backend services' shared auth). Imports @sveltejs/kit TYPES only, so it lives in server bundles.
 import type { Handle, RequestHandler } from '@sveltejs/kit';
+import { sequence } from '@sveltejs/kit/hooks';
 import { makeGatewayHandleFetch } from './gateway';
+import { makeTelemetryHandle, startZoneTelemetry } from './telemetry';
 import { fetchMe } from './me';
 import {
 	SESSION_COOKIE,
@@ -317,9 +319,24 @@ export function makeZoneLayoutLoad(env: Env) {
  * zones that read the lineage plane during SSR (`gateway: true`); the media zones reach their services
  * through their own BFF routes instead, so they leave it undefined.
  */
-export function makeZoneHooks(env: Env, opts: { gateway?: boolean } = {}) {
+export function makeZoneHooks(env: Env, opts: { gateway?: boolean; zone?: string } = {}) {
+	// TELEMETRY FIRST IN THE SEQUENCE, so the span covers session resolution too — an OIDC lookup that
+	// hangs is exactly the kind of slow request this exists to explain, and a span opened after it would
+	// measure everything except the part that was slow.
+	//
+	// Wired HERE rather than in each zone because all seven zones go through this one function: a
+	// per-zone opt-in is a per-zone chance to forget, and the estate has already paid for that shape
+	// (see the notification-surface gate, which exists because zones can bind everything and still hand
+	// the bell nothing).
+	//
+	// A no-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set, which keeps `make dev-zone` and every per-zone
+	// Playwright suite working with no collector behind them.
+	const telemetryOn = startZoneTelemetry(env);
+	const session = makeSessionHandle(makeOidcConfig(env));
 	return {
-		handle: makeSessionHandle(makeOidcConfig(env)),
+		handle: telemetryOn
+			? sequence(makeTelemetryHandle(opts.zone ?? env.OTEL_SERVICE_NAME ?? 'zone'), session)
+			: session,
 		handleFetch: opts.gateway
 			? makeGatewayHandleFetch(env.LANCE_GATEWAY_URL ?? DEFAULT_GATEWAY_URL)
 			: undefined,
