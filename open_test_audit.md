@@ -1588,6 +1588,41 @@ And it fails today: `PluginError: Could not collect 'storage.iiif'`, because `do
 still references the IIIF read-through cache that **moved to `runners/htr` on 2026-08-17** — the move
 CLAUDE.md records. Nothing on the merge path could have caught it.
 
+✅ **FIXED + ENFORCED 2026-08-22 — and `storage.iiif` was one of THIRTEEN.** The gate found twelve more
+the moment it existed, and they are all one mistake: `docs/reference/htr.md` (9 directives) and
+`docs/reference/runner.md` (4) document a **sealed runner's internals** from the platform's own
+reference. `runners/*` is matched by no workspace glob, so those modules are not importable from the
+root environment at all — the pages could never have built since the seal.
+
+They were **deleted, not repointed**, and that is the architectural answer rather than convenience:
+CLAUDE.md rules that a runner's internals are deliberately undescribed at the platform level, and that
+"there is no per-workload skill — one would make that modality look privileged, which is the opposite
+of how this platform is built". `docs/index.md` pointed at `reference/htr.md` as THE API Reference, so
+the platform's front door offered one workload's internals as its API — the identity rule failing in
+the docs while it holds in the code. `storage.iiif`'s own section went for the same reason: the source
+moved INTO a runner.
+
+Two more the gate surfaced, both invisible with a release-only docs build:
+
+* **`docs/reference/viewer.md` documented nothing** — a June-2026 tombstone for the dissolved viewer
+  monolith, pointing at `core-api`, `orchestrator` and `services/core`, all since deleted, while
+  `viewer` now means the lance media viewer on `:8101`. A page titled "API Reference — viewer"
+  answering about a different `viewer` is worse than no page. Deleted.
+* **Ten nav entries named pages that do not exist** — eight working documents (`OPEN-WORK.md`, three
+  `DESIGN-*`, two dated assessments) plus the two runner pages. Each is a 404 in the built site.
+
+**Gated rather than wiring the whole docs build into CI.** The build installs with `pip` in a uv estate
+and belongs on its own decision; the IMPORT half — the part that actually caught a defect — costs
+milliseconds on the merge path. `tests/unit/test_docs_references_are_importable.py` imports every
+`::: dotted.path` and checks every nav target exists. RED: re-adding `::: storage.iiif` fails **exit 1**
+naming file, line and module.
+
+**My own non-vacuity floor was the magic-number trap this audit keeps finding.** I wrote
+`len(references) >= 10` against the seventeen directives that existed BEFORE the cleanup, so it went red
+on a change that made the estate more correct. Replaced with a derived one — every page under
+`docs/reference/` must carry at least one directive — which is what immediately caught the empty
+`viewer.md`.
+
 ### L5 — the `.dagger` Go plane has no Go-native formatting gate · **PARTIAL → LOW**
 
 The finding as filed ("1,047 lines implementing every CI gate, tested by nothing") had its three
