@@ -273,8 +273,17 @@ DEMO_ESTATE = Estate(
         Grant("user:service-web", "reader", "namespace:acme-bronze"),
         Grant("user:service-web", "reader", "namespace:acme-silver"),
         Grant("user:service-web", "reader", "namespace:acme-gold"),
+        # The PRODUCER too, and its rung is not obvious from the cascade's shape: an approved promotion
+        # is resumed by `publish_promotion`, which runs in the PRODUCER's process (the workflow instance
+        # and the approve door must share an app-id for `raise_workflow_event` to resolve it). So the
+        # publish that completes a human-approved hold is made by `service-medallion-producer`, not by
+        # the mover that raised it — and without this grant the whole review path ends in
+        # `403 can_update_tag`, AFTER a person has already said yes. Measured 2026-08-23: the
+        # orchestration reported FAILED with exactly that, and the approval was silently worthless.
         Grant("user:service-bronze-to-silver", "owner", "namespace:acme-silver"),
         Grant("user:service-silver-to-gold", "owner", "namespace:acme-gold"),
+        Grant("user:service-medallion-producer", "owner", "namespace:acme-silver"),
+        Grant("user:service-medallion-producer", "owner", "namespace:acme-gold"),
         # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
         Grant("user:carol", "assignee", "role:validators"),
         Grant("role:validators#assignee", "validator", "namespace:acme-gold"),
