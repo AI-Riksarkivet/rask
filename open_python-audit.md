@@ -1053,7 +1053,7 @@ registry Dagger pushes to, which must exist before a push can reach it.
 | site | what it starts | why it is a scope decision, not a patch |
 | --- | --- | --- |
 | `Makefile:161` `notifications-rig-up` | Mailpit + a counting Slack sink, from `.docker/docker-compose.notifications-channels.yml` | two services plus an inline Python webhook-sink script; converting means retiring the compose file, and `dagger core … as-service up` runs in the FOREGROUND where `docker compose up -d` detaches |
-| `Makefile:463` `rustfs-up` | a local rustfs S3 server for the storage smoke | same foreground/detached UX change; `rustfs-down` disappears with it |
+| ~~`Makefile:463` `rustfs-up`~~ | ~~a local rustfs S3 server for the storage smoke~~ | ✅ **DONE 2026-08-22** — `dagger call smoke-rustfs`. The UX objection turned out to be an artefact of the TWO-STEP shape: as one function the service is bound for the life of the smoke, so nothing is detached, nothing leaks on failure, no host port is taken, and there is no teardown to forget. Three targets became one. `EXIT=0, ALL PASS`, including the LanceDB-over-`s3://` path |
 | `.github/workflows/ci.yml:436` | the per-zone image smoke test | mechanically the easiest, but that file is contended and the smoke needs the image already loaded into a daemon |
 
 The pattern CLAUDE.md prescribes, and no module is needed for an ad-hoc service:

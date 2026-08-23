@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-lanes notifications-rig-up notifications-rig-down audit tracker-postgres go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-lanes notifications-rig-up notifications-rig-down audit tracker-postgres smoke-rustfs go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
 
 help:
 	@echo "Targets:"
@@ -489,20 +489,16 @@ seed-dev: ## Seed the dev estate: media corpus + a labeling task with items (nee
 # ---- rustfs (S3-compatible object storage) smoke ---------------------------
 # Prove packages/storage + LanceDB work against a REAL rustfs backend (not moto).
 # rustfs serves the S3 API on :9000; rask is storage-agnostic, so this is env-only.
-rustfs-up: ## Start a local rustfs S3 server in docker (:9000, rustfsadmin/rustfsadmin)
-	docker run -d --name rask-rustfs -p 9000:9000 \
-	  -e RUSTFS_ACCESS_KEY=rustfsadmin -e RUSTFS_SECRET_KEY=rustfsadmin \
-	  rustfs/rustfs:latest
-	@echo "rustfs up on http://localhost:9000 (access/secret: rustfsadmin). Smoke: make smoke-rustfs"
-
-rustfs-down:
-	docker rm -f rask-rustfs
-
-smoke-rustfs: ## Storage smoke vs rustfs (S3 round-trip + LanceDB) — needs rustfs-up
-	RASK_S3_ENDPOINT_URL=http://localhost:9000 \
-	  AWS_ACCESS_KEY_ID=rustfsadmin AWS_SECRET_ACCESS_KEY=rustfsadmin \
-	  RASK_S3_INSECURE=1 RASK_SMOKE_BUCKET=rask-rustfs-smoke \
-	  uv run python scripts/smoke_rustfs.py
+# ONE command, not three. This replaced `rustfs-up` (a DETACHED `docker run`), `smoke-rustfs` and
+# `rustfs-down` — the last of which an operator had to remember. The service is bound for exactly the
+# life of the smoke: nothing is detached, nothing leaks when it fails, and no host port is taken, so it
+# cannot collide with a `make dev-*` stack or a second developer on the same box.
+#
+# The old shape's `docker run` was one of the estate's last three, and the stated objection to
+# converting it was that `as-service up` holds a terminal where `up -d` does not. That is true of a
+# two-step shape and irrelevant to a one-step one.
+smoke-rustfs: ## Storage smoke vs a REAL rustfs S3 backend (round-trip + LanceDB over s3://)
+	dagger call smoke-rustfs
 
 # ---- local k3s ------------------------------------------------------------
 # `ingest` was MISSING here until 2026-08-06, and its absence is why the plane could never be
