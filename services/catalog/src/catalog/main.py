@@ -7,6 +7,7 @@ default), with the pylance data plane filling operations the backend stubs.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -48,6 +49,21 @@ log = logging.getLogger(__name__)
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)
 
 PROBLEM_JSON = "application/problem+json"
+
+
+async def _backfill_cascade_grants(app: FastAPI) -> None:
+    """Run the cascade-grant backfill, reporting rather than raising. See its call site for why."""
+    from catalog.services.cascade_backfill import backfill
+
+    try:
+        seen, written, failures = await backfill(app.state.settings)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.warning("cascade_backfill_error", extra={"error": str(exc)})
+        return
+    if seen:
+        log.info("cascade_backfill_done", extra={"warehouses": seen, "tuples": written, "failures": len(failures)})
 
 
 @asynccontextmanager
@@ -180,10 +196,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         timeout_seconds=settings.user_state_timeout_seconds,
     )
     app.state.startup_complete = True
+    # Re-assert the cascade's grants over warehouses that already exist. BACKGROUND and non-fatal, and
+    # both of those are the design rather than caution:
+    #
+    #   * The grants are written ONCE, at warehouse-create, from `LANCE_FGA_CASCADE_WRITERS` — a value
+    #     that CHANGES. Adding a mover extends the list and every older warehouse is missing the new
+    #     subject, so that mover cannot promote into any existing tenant. It fails 403 at promotion,
+    #     in a log nobody watches. Measured on the k3s estate: `user:service-silver-to-gold` held
+    #     `owner` on NEITHER warehouse:acme-bucket NOR warehouse:research-bucket.
+    #   * A hook Job was the first choice and cannot work here. With `secrets_from_dapr` the registry
+    #     read needs the S3 secret from the secret store, so the Job needs a Dapr sidecar — and a
+    #     sidecar keeps a Job from ever completing. Putting the secret in the Job's env instead is the
+    #     one thing the secret rule forbids. This process already holds both the secret and an FGA
+    #     client, so the work belongs here.
+    #   * NOT awaited, so a slow or unreachable OpenFGA cannot delay readiness, and NOT fatal, because
+    #     a grant that could not be re-asserted must not take the catalog down — it leaves the estate
+    #     exactly as it was, which is the state this repairs, not a worse one.
+    #   * Per-replica repetition is harmless: every write is idempotent (`write_tuples` retries
+    #     one-by-one past a duplicate), so replicas racing land the same tuples.
+    backfill_task = asyncio.create_task(_backfill_cascade_grants(app))
     try:
         yield
     finally:
         app.state.shutting_down = True
+        backfill_task.cancel()
         fga_client = getattr(app.state, "fga", None)
         # Each close is isolated so one failing teardown can't strand the other resource.
         if fga_client is not None:

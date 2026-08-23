@@ -1175,14 +1175,61 @@ async def seed_warehouse(
     # one tuple reaches every tier and every table under it, instead of three-plus per tenant that the
     # hierarchy already implies. Written in the SAME call as the creator's grant so there is no window
     # in which the warehouse exists and its cascade cannot publish into it.
-    cascade = [fga.ClientTuple(user=subject, relation="owner", object=obj) for subject in settings.fga_cascade_writers]
     await fga.write_tuples(
         client,
         [
             fga.ClientTuple(user=f"user:{token.sub}", relation="owner", object=obj),
-            fga.ClientTuple(user=f"project:{project}", relation="project", object=obj),
-            *cascade,
+            *cascade_tuples(settings, warehouse_id=warehouse_id, project=project),
         ],
         actor=token.sub,
         origin="warehouse_create",
     )
+
+
+def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> list[fga.ClientTuple]:
+    """The tuples a warehouse needs to be REACHABLE — its project edge, plus the cascade's own owners.
+
+    Shared by the create path and the backfill so the two cannot drift. That is the whole reason it is
+    a function: a backfill that writes a different set from the one creates write is worse than no
+    backfill, because the estate then has two populations of warehouse that differ in a way nothing
+    reports.
+
+    The creator's own grant is deliberately NOT here. It is the one tuple a backfill must never write
+    — re-running the create path over an existing estate to repair it would make whoever ran the
+    repair an owner of every tenant.
+    """
+    obj = f"warehouse:{warehouse_id}"
+    return [
+        fga.ClientTuple(user=f"project:{project}", relation="project", object=obj),
+        *(fga.ClientTuple(user=subject, relation="owner", object=obj) for subject in settings.fga_cascade_writers),
+    ]
+
+
+async def backfill_cascade_grants(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    *,
+    warehouse_id: str,
+    project: str,
+    actor: str,
+) -> int:
+    """Re-assert :func:`cascade_tuples` over a warehouse that ALREADY exists. Returns tuples submitted.
+
+    Why this is needed at all, given creates already seed: the grants are written ONCE, at create, from
+    a config value that CHANGES. Adding a mover to `medallion.movers` extends
+    ``LANCE_FGA_CASCADE_WRITERS``, and every warehouse that predates the change is missing the new
+    subject — so the new mover cannot publish into any existing tenant, and the failure is a 403 at
+    promotion time in a log nobody is watching. Measured on this estate: `user:service-silver-to-gold`
+    held `owner` on NEITHER warehouse:acme-bucket NOR warehouse:research-bucket, both created before
+    the setting existed.
+
+    Idempotent by the same mechanism the create path relies on: ``write_tuples`` retries one-by-one
+    when OpenFGA rejects a batch for containing a duplicate, so a re-run lands only what is missing.
+    It inherits fail-closed too — an unreachable OpenFGA raises rather than reporting success, because
+    a backfill that silently wrote nothing is indistinguishable from one that had nothing to do.
+    """
+    if not (settings.fga_enabled and client is not None):
+        return 0
+    tuples = cascade_tuples(settings, warehouse_id=warehouse_id, project=project)
+    await fga.write_tuples(client, tuples, actor=actor, origin="cascade_backfill")
+    return len(tuples)

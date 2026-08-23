@@ -1075,6 +1075,11 @@ TupleOrigin = Literal[
     "create",
     "project_create",
     "warehouse_create",
+    # Re-asserting the cascade's grants over warehouses that already exist. Distinct from
+    # "warehouse_create" deliberately: an audit row that claims a tuple was written at CREATE time,
+    # when it was actually written by a backfill months later, destroys the one property the origin
+    # field exists for.
+    "cascade_backfill",
     "lifecycle_delete",
     "train",
     "annotator",
