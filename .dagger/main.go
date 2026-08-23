@@ -66,7 +66,14 @@ func (m *Rask) base(src *dagger.Directory) *dagger.Container {
 		From(UvPythonImage).
 		WithMountedCache("/root/.cache/uv", dag.CacheVolume("rask-uv-cache")).
 		WithDirectory("/src", src, dagger.ContainerWithDirectoryOpts{
-			Exclude: []string{"**/.env", "**/.env.*", ".venv", ".git", "node_modules", ".dagger", "frontend/node_modules"},
+			// `.dagger` is NOT excluded, and that is deliberate: the root suite carries gates that READ
+			// `.dagger/*.go` — `test_ci_invocations.py` (every `dagger call` names a real function),
+			// `test_dagger_context_is_hermetic.py` (no context ships a developer `.env`) and
+			// `test_e2e_collection_gate.py` (a suite may be selected by a Dagger function). Excluded,
+			// they found an empty directory and FAILED inside the container while passing locally.
+			// `test_ci_invocations.py` has been in the tree since 2026-07-29, so this lane cannot have
+			// passed since. A gate that reads the build system has to be able to see the build system.
+			Exclude: []string{"**/.env", "**/.env.*", ".venv", ".git", "node_modules", "frontend/node_modules"},
 		}).
 		WithWorkdir("/src").
 		WithExec([]string{"uv", "sync", "--all-packages"})
