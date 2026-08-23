@@ -1,6 +1,6 @@
 """Governance end-to-end: catalog authz + lineage provenance, one flow.
 
-Runs against the full governance stack (``scripts/governance_e2e.sh``):
+Runs against the full governance stack (``make governance-chain``):
 catalog (OIDC + OpenFGA) **+** lineage-api (OpenLineage → Apache AGE), with the catalog's
 ``LANCE_LINEAGE_EMIT_ENABLED`` on. Skipped unless ``LANCE_E2E_AUTH_SERVER`` and
 ``LANCE_E2E_LINEAGE_URL`` are set and reachable.

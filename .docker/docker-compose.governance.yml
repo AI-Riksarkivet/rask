@@ -4,7 +4,7 @@
 #   catalog (OIDC + OpenFGA authz)  +  lineage service (OpenLineage -> Apache AGE)
 # and turns ON the catalog -> lineage emission so a table create records its *verified*
 # creator in the lineage graph. This is what makes "who created/changed what, governed by
-# who-may + versioned-by-Lance" verifiable end to end (see scripts/governance_e2e.sh).
+# who-may + versioned-by-Lance" verifiable end to end (see `make governance-chain` — this stack was retired in favour of .dagger/governed.go).
 #
 #   docker compose \
 #     -f .docker/docker-compose.yml \

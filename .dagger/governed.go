@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"strconv"
+	"time"
 
 	"dagger/rask/internal/dagger"
 )
@@ -38,13 +40,30 @@ type governedStack struct {
 	Dex     *dagger.Service
 }
 
+// runToken makes every volume in a run unique to that run.
+//
+// The volumes are REQUIRED for durability inside a run (a bootstrap that finishes drops its service to
+// zero references and stops it), and a NAMED volume shared across runs then leaks the estate: a
+// namespace a previous run created is still there, so `create` answers 409 where the test expects 200.
+// Worse, the obvious fix — dropping and recreating the bucket in the bootstrap — does nothing, because
+// Dagger caches that exec by its inputs and the command string never changes. It ran once, months of
+// runs ago in cache terms, and every run since reused the result.
+//
+// A per-run name gives both properties at once: durable within the run, fresh between runs. The cost
+// is re-running the OpenFGA migration and the AGE init each time, which is the correct cost for an
+// e2e — `make dagger-gc` reclaims the volumes.
+func runToken() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 36)
+}
+
 func (m *Rask) governedStack(ctx context.Context, src *dagger.Directory) (*governedStack, error) {
+	run := runToken()
 	store := dag.Container().
 		From(rustfsImage).
 		WithEnvVariable("RUSTFS_ACCESS_KEY", "rustfsadmin").
 		WithEnvVariable("RUSTFS_SECRET_KEY", "rustfsadmin").
 		WithEnvVariable("RUSTFS_ADDRESS", ":9000").
-		WithMountedCache("/data", dag.CacheVolume("rask-governed-store")).
+		WithMountedCache("/data", dag.CacheVolume("rask-governed-store-"+run)).
 		WithExposedPort(9000).
 		AsService()
 
@@ -68,7 +87,7 @@ func (m *Rask) governedStack(ctx context.Context, src *dagger.Directory) (*gover
 		// fga-postgres to zero references, so it stops and the migration goes with it. OpenFGA then
 		// starts against empty tables and answers `/healthz` with a 500, which reads as "OpenFGA is
 		// broken" rather than "its database was rolled back underneath it".
-		WithMountedCache("/var/lib/postgresql/data", dag.CacheVolume("rask-governed-fga-pg")).
+		WithMountedCache("/var/lib/postgresql/data", dag.CacheVolume("rask-governed-fga-pg-"+run)).
 		WithExposedPort(5432).
 		WithDefaultArgs([]string{"docker-entrypoint.sh", "postgres"}).
 		AsService()
@@ -121,7 +140,7 @@ func (m *Rask) governedStack(ctx context.Context, src *dagger.Directory) (*gover
 //
 // `auth` decides whether OIDC + OpenFGA are enforced. Both e2es want the same image and differ only
 // in that flag, which is exactly why this is one function rather than two near-copies.
-func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth bool) *dagger.Service {
+func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth bool, lineage *dagger.Service) *dagger.Service {
 	c := m.Image(src, "rest-catalog", "", "", "", nil).
 		WithServiceBinding("store", stack.Store).
 		WithEnvVariable("LANCE_REST_IMPL", "dir").
@@ -149,7 +168,86 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth 
 			WithEnvVariable("LANCE_FGA_ENABLED", "true").
 			WithEnvVariable("LANCE_FGA_API_URL", "http://openfga:8080")
 	}
+	if lineage != nil {
+		// The governance stack turns catalog->lineage emission ON. Without this the catalog runs
+		// perfectly and simply records nothing, so the provenance assertions fail against a healthy
+		// service — the emit is the thing under test, not a side effect of it.
+		//
+		// THE SERVICE BINDING IS AS LOAD-BEARING AS THE URL, and passing only the URL is how this
+		// failed the first time. `LANCE_LINEAGE_URL` pointed at `http://lineage-api:8000`, a name the
+		// catalog's container could not resolve because nothing bound it — and the emit is
+		// BEST-EFFORT, so the failure was swallowed exactly as designed. The catalog ran perfectly,
+		// the lineage service ran perfectly, and the only symptom was a governance assertion reading
+		// `expected lineage creator=…, got None`. A misconfigured emit target and a missing author
+		// are indistinguishable from the far end.
+		c = c.
+			WithServiceBinding("lineage-api", lineage).
+			WithEnvVariable("LANCE_LINEAGE_EMIT_ENABLED", "true").
+			WithEnvVariable("LANCE_LINEAGE_URL", "http://lineage-api:8000/api/v1/lineage")
+	}
 	return c.WithExposedPort(2333).AsService()
+}
+
+// lineageService is the AGE-backed provenance store plus the service that writes to it.
+//
+// The graph lives in Apache AGE (Postgres), initialised by `.docker/lineage-init.sql` — which
+// `docker-entrypoint-initdb.d` runs ONCE, on first init. With the cache volume below that means once
+// per volume rather than once per run, which is correct and is also why the volume is not optional:
+// the same reference-counting that lost the catalog's bucket and the OpenFGA migration would drop
+// this Postgres between the init and the first read, and the graph would simply not exist.
+func (m *Rask) lineageService(src *dagger.Directory) (*dagger.Service, error) {
+	pg := dag.Container().
+		From(ageImage).
+		WithEnvVariable("POSTGRES_USER", "lineage").
+		WithEnvVariable("POSTGRES_PASSWORD", "lineage").
+		WithEnvVariable("POSTGRES_DB", "lineage").
+		WithEnvVariable("POSTGRES_HOST_AUTH_METHOD", "trust").
+		WithFile("/docker-entrypoint-initdb.d/10-age.sql", src.File(".docker/lineage-init.sql")).
+		WithMountedCache("/var/lib/postgresql/data", dag.CacheVolume("rask-governed-lineage-pg-"+runToken())).
+		WithExposedPort(5432).
+		WithDefaultArgs([]string{"docker-entrypoint.sh", "postgres"}).
+		AsService()
+
+	// WAIT FOR POSTGRES TO BE READY, not merely listening. `docker-entrypoint.sh` starts a TEMPORARY
+	// server to run `/docker-entrypoint-initdb.d` and then restarts into the real one, so the port is
+	// accepting during a window when the database is not usable — and Dagger's service binding waits
+	// on the port. The lineage service then dies in its lifespan at `ensure_events_table()`, deep in
+	// psycopg's pool, which reads as a lineage bug rather than a startup race.
+	//
+	// It is also why this failed INTERMITTENTLY before the wait existed: with the cache volume already
+	// initialised the init scripts are skipped and the race usually loses, so the first symptom was a
+	// gate that passed and then stopped passing for no visible reason.
+	if _, err := dag.Container().
+		From(ageImage).
+		WithServiceBinding("lineage-postgres", pg).
+		WithExec([]string{"sh", "-c", "until pg_isready -h lineage-postgres -U lineage -d lineage; do sleep 1; done"}).
+		Sync(context.Background()); err != nil {
+		return nil, err
+	}
+
+	api := m.Image(src, "rest-catalog", "", "", "", nil).
+		WithServiceBinding("lineage-postgres", pg).
+		WithEnvVariable("LINEAGE_DATABASE_URL", "postgresql://lineage:lineage@lineage-postgres:5432/lineage").
+		WithEnvVariable("LINEAGE_GRAPH", "lineage").
+		WithExposedPort(8000).
+		// The SAME image as the catalog, run with a different command — the compose overlay says so
+		// explicitly ("same image as the catalog (now ships the lineage service too)"), and building
+		// it twice would let the two drift.
+		//
+		// SHARING THE IMAGE MEANS INHERITING ITS HEALTHCHECK, and `.docker/rest-catalog.dockerfile`
+		// bakes one that connects to 127.0.0.1:2333 — the CATALOG's port. Nothing listens on 2333
+		// here, so the probe fails, Dagger refuses to start the service, and the run dies with
+		// `health check errored` plus a `ConnectionRefusedError` naming a port this service was never
+		// supposed to serve. The compose overlay hit the same thing and solved it the same way, by
+		// overriding the healthcheck rather than dropping it.
+		WithDockerHealthcheck(
+			[]string{"python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/livez').read()"},
+			dagger.ContainerWithDockerHealthcheckOpts{Interval: "5s", Timeout: "3s", StartPeriod: "30s", Retries: 20},
+		).
+		WithDefaultArgs([]string{"uvicorn", "lineage.main:app", "--host", "0.0.0.0", "--port", "8000"}).
+		AsService()
+
+	return api, nil
 }
 
 // AuthChain runs the app-side-seeding authorization chain against a real Dex and a real OpenFGA.
@@ -172,7 +270,7 @@ func (m *Rask) AuthChain(
 	if err != nil {
 		return "", err
 	}
-	catalog := m.catalogService(src, stack, true)
+	catalog := m.catalogService(src, stack, true, nil)
 
 	return m.base(src).
 		WithServiceBinding("catalog", catalog).
@@ -180,6 +278,20 @@ func (m *Rask) AuthChain(
 		WithServiceBinding("openfga", stack.OpenFGA).
 		WithEnvVariable("LANCE_E2E_AUTH_SERVER", "http://catalog:2333").
 		WithEnvVariable("LANCE_E2E_DEX", "http://dex:5556/dex").
+		// The narrated demo reads a different trio of names for the same three endpoints; the retired
+		// script exported both sets side by side and so does this.
+		WithEnvVariable("CATALOG_URL", "http://catalog:2333").
+		WithEnvVariable("LINEAGE_URL", "http://lineage-api:8000").
+		WithEnvVariable("DEX_URL", "http://dex:5556/dex").
+		// EMPTY, and it must be set rather than left unset. `test_governance_e2e.py` DEFAULTS
+		// `LANCE_E2E_DEX_SECRET` to "lance-catalog-secret", and both Dex configs in this repo declare
+		// `lance-catalog` as `public: true` — a public client, which rejects a client_secret with
+		// `401 invalid_client`. Its own comment names the fix (`LANCE_E2E_DEX_SECRET="" for a
+		// public-client Dex`), and `scripts/governance_e2e.sh` never set it: it exported
+		// LANCE_E2E_AUTH_SERVER, LANCE_E2E_LINEAGE_URL and LANCE_E2E_DEX and stopped. So that script
+		// could not have passed as written against the stack it stood up — the same "exists but cannot
+		// run" shape this estate's test audit kept finding.
+		WithEnvVariable("LANCE_E2E_DEX_SECRET", "").
 		WithEnvVariable("LANCE_E2E_FGA", "http://openfga:8080").
 		WithExec([]string{"sh", "-c", "command -v curl >/dev/null || (apt-get update -qq && apt-get install -y -qq curl)"}).
 		// WAIT FOR THE APP, not just the port. Dagger's service binding waits for the socket to
@@ -192,5 +304,76 @@ func (m *Rask) AuthChain(
 		// mechanical.
 		WithExec([]string{"sh", "-c", `command -v curl || echo "NO CURL"; for i in $(seq 1 45); do echo "try $i: $(curl -s -o /dev/null -w '%{http_code}' http://catalog:2333/livez 2>&1)"; curl -fsS http://catalog:2333/livez >/dev/null 2>&1 && exit 0; sleep 2; done; echo "catalog never became ready"; exit 1`}).
 		WithExec([]string{"bash", "scripts/auth_chain.sh"}).
+		Stdout(ctx)
+}
+
+// GovernanceChain proves the dataops loop end to end: authorization, provenance AUTHORSHIP, and
+// medallion lineage — with real Dex id_tokens and not one hand-written tuple.
+//
+// It replaces `scripts/governance_e2e.sh`, which layered FOUR compose files (base + auth + lineage +
+// governance) to assemble the same thing. Everything it needs beyond the auth stack is the AGE graph
+// and the lineage service, so it is the auth stack plus two bindings rather than a second stack.
+//
+// The catalog runs with emission ON. That is the distinction from `AuthChain`: authorization alone
+// passes with emission off, so a run that forgot it would prove the authz half and silently skip the
+// provenance half — which is the shape of every finding in this estate's test audit.
+func (m *Rask) GovernanceChain(
+	ctx context.Context,
+	// +defaultPath="/"
+	// +optional
+	src *dagger.Directory,
+	// Run the narrated demo instead of the assertions (the retired script's DEMO=1).
+	// +optional
+	demo bool,
+) (string, error) {
+	stack, err := m.governedStack(ctx, src)
+	if err != nil {
+		return "", err
+	}
+	lineage, err := m.lineageService(src)
+	if err != nil {
+		return "", err
+	}
+	catalog := m.catalogService(src, stack, true, lineage)
+
+	return m.base(src).
+		WithServiceBinding("catalog", catalog).
+		WithServiceBinding("lineage-api", lineage).
+		WithServiceBinding("dex", stack.Dex).
+		WithServiceBinding("openfga", stack.OpenFGA).
+		WithEnvVariable("LANCE_E2E_AUTH_SERVER", "http://catalog:2333").
+		WithEnvVariable("LANCE_E2E_LINEAGE_URL", "http://lineage-api:8000").
+		WithEnvVariable("LANCE_E2E_DEX", "http://dex:5556/dex").
+		// Wait for BOTH, not just the ports: uvicorn accepts before either lifespan is built, and the
+		// lineage service additionally has to reach AGE. A racing first request reads as a wrong
+		// answer rather than as an unready service.
+		WithExec([]string{"sh", "-c", `
+for i in $(seq 1 90); do
+  python -c "import urllib.request,sys; urllib.request.urlopen('http://catalog:2333/livez',timeout=2)" 2>/dev/null && break
+  sleep 2
+done
+for i in $(seq 1 90); do
+  python -c "import urllib.request,sys; urllib.request.urlopen('http://lineage-api:8000/livez',timeout=2)" 2>/dev/null && exit 0
+  sleep 2
+done
+echo "lineage-api never became ready"; exit 1`}).
+		// `LANCE_E2E_DEX_SECRET=` IN THE SHELL, not via WithEnvVariable — and the difference is not
+		// cosmetic. Dagger's `WithEnvVariable(name, "")` leaves the variable UNSET rather than setting
+		// it to empty (measured: the container reported `'<UNSET>'`), and this test distinguishes the
+		// two: it DEFAULTS `LANCE_E2E_DEX_SECRET` to "lance-catalog-secret" when unset, then sends
+		// that secret to a client both Dex configs declare `public: true`, which answers
+		// `401 invalid_client`. A secretless grant against the same Dex returns 200, verified directly.
+		//
+		// `scripts/governance_e2e.sh` never set this variable at all, so it could not have passed
+		// against the stack it stood up — the "exists but cannot run" shape again.
+		With(func(c *dagger.Container) *dagger.Container {
+			// `DEMO=1` on the retired script ran the narrated walkthrough instead of the assertions
+			// against the SAME stack. Keeping it as a flag preserves that without a second function —
+			// and a demo that stands up its own stack is how a demo drifts from what the tests prove.
+			if demo {
+				return c.WithExec([]string{"sh", "-c", "LANCE_E2E_DEX_SECRET= uv run --no-sync python scripts/governance_demo.py"})
+			}
+			return c.WithExec([]string{"sh", "-c", "LANCE_E2E_DEX_SECRET= uv run --no-sync pytest tests/e2e-py/test_governance_e2e.py -v"})
+		}).
 		Stdout(ctx)
 }

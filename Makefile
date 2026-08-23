@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-lanes notifications-rig audit tracker-postgres smoke-rustfs rustfs-lifecycle auth-chain go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check notifications-lanes notifications-rig audit tracker-postgres smoke-rustfs rustfs-lifecycle auth-chain governance-chain go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation
 
 help:
 	@echo "Targets:"
@@ -524,6 +524,18 @@ rustfs-lifecycle: ## Catalog lifecycle e2e with the bytes on RustFS (proves S3-a
 # `scripts/auth_chain.sh`, and the compose half is deleted when that CI job can move here.
 auth-chain: ## Dex + OpenFGA authorization chain e2e (app-side tuple seeding)
 	dagger call auth-chain
+
+# The dataops loop: authorization + provenance AUTHORSHIP + medallion lineage, with real Dex tokens
+# and not one hand-written tuple. Replaced `scripts/governance_e2e.sh`, which layered FOUR compose
+# files to assemble the same thing — and which could not have passed as written: it never exported
+# `LANCE_E2E_DEX_SECRET`, so its own test sent a client secret to a Dex client both configs declare
+# `public: true`, which answers 401.
+#
+# `DEMO=1 ./scripts/governance_e2e.sh` becomes `dagger call governance-chain --demo` — the narrated
+# walkthrough against the SAME stack, because a demo that stands up its own is how a demo drifts from
+# what the tests prove.
+governance-chain: ## Governance e2e — authz + provenance authorship + lineage (add --demo for the walkthrough)
+	dagger call governance-chain
 
 # ---- local k3s ------------------------------------------------------------
 # `ingest` was MISSING here until 2026-08-06, and its absence is why the plane could never be

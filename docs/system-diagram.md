@@ -70,7 +70,7 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 > but supports `AssumeRoleWithWebIdentity` — that's `WebIdentityVendor`
 > (`vending.mode=web_identity`), the RustFS-native scoped-STS path, live-verified
 > (`docs/DEPLOY.md`). For a backend with neither, `StaticPrefixVendor`/`ModeBVendor` remain.
-> That's the point of pluggable vending. *(RustFS lifecycle e2e: `scripts/rustfs_e2e.sh`.)*
+> That's the point of pluggable vending. *(RustFS lifecycle e2e: `make rustfs-lifecycle`.)*
 
 > 🔑 **Who holds secrets (least-privilege).** Only the **catalog** and **lineage svc** consume OpenBao.
 > Compute jobs (**medallion-producer**) **never** read OpenBao — they get short-TTL scoped creds *from the
@@ -139,8 +139,8 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 >    audit fact at `GET /datasets/{id}/creator` (P0 #3). Insert/delete/merge-insert/update and the
 >    compaction sweeper all emit too — the write surface is fully covered.
 >
-> Tracked in [`docs/DECISIONS.md`](DECISIONS.md). Run the whole loop: `scripts/governance_e2e.sh` (or
-> `DEMO=1 scripts/governance_e2e.sh` for the narrated [`governance_demo.py`](../scripts/governance_demo.py)).
+> Tracked in [`docs/DECISIONS.md`](DECISIONS.md). Run the whole loop: `make governance-chain` (or
+> `dagger call governance-chain --demo` for the narrated [`governance_demo.py`](../scripts/governance_demo.py)).
 
 ---
 

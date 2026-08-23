@@ -386,5 +386,5 @@ LINEAGE_DATABASE_URL=postgresql://lineage:lineage@localhost:5433/lineage \
   (same owner, just decoupled). Direct `POST /api/v1/lineage` is fine until then.
 - **Frontend:** an SSR micro-frontend renders the DAG by calling `/graph` via the gateway
   (no direct DB access).
-- **Verify the whole loop:** `scripts/governance_e2e.sh` (or `DEMO=1 …` for the narrated
+- **Verify the whole loop:** `make governance-chain` (or `dagger call governance-chain --demo` for the narrated
   `scripts/governance_demo.py`) — authz + create-lineage + medallion provenance over the full stack.

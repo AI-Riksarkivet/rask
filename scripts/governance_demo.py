@@ -9,7 +9,8 @@ step by step, how the three axes meet on one identity (``table:<id>``):
   how/who   (OpenLineage)  — the catalog records alice as the *verified* creator; a promote
                              run links silver ← bronze (the medallion lineage)
 
-Run the stack first (see scripts/governance_e2e.sh), then:
+Run it through the stack that already exists: `dagger call governance-chain --demo`.
+Or, against a stack you stood up yourself:
 
     uv run scripts/governance_demo.py
 

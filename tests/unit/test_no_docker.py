@@ -35,7 +35,9 @@ someone deletes.
 
 from __future__ import annotations
 
+import ast
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -43,8 +45,37 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: The surfaces CLAUDE.md names, plus scripts/ which it names alongside them.
-_SURFACES = ("Makefile", ".github/workflows", "scripts")
+#: EVERY tracked file, not a hand-listed set of surfaces.
+#:
+#: This was `("Makefile", ".github/workflows", "scripts")` — the three CLAUDE.md names — and that
+#: scoping is exactly the mistake CLAUDE.md itself warns about one paragraph later: the rule "used to
+#: name only `docker build`/`buildx`, and that scoping was read as licence". A gate that inherits the
+#: prose's examples inherits its blind spots. `.docker/` was invisible, and it held TWO
+#: `docker buildx build` calls — tier-1 violations of the clause this file calls absolute — while the
+#: tier-1 test reported "NONE — clean".
+#:
+#: Derived from `git ls-files` so a new directory cannot be outside the gate by default. The compose
+#: YAML files under `.docker/` are excluded because they are DATA describing containers, not
+#: invocations creating them; `docs/` is excluded because it is prose about the estate, and the rule
+#: is about what the estate RUNS.
+_EXCLUDED_TREES = ("docs/",)
+_EXCLUDED_SUFFIXES = (".md",)
+
+
+def _tracked_files() -> list[Path]:
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, text=True, check=True)
+    files: list[Path] = []
+    for rel in out.stdout.split("\0"):
+        if not rel or rel.startswith(_EXCLUDED_TREES) or rel.endswith(_EXCLUDED_SUFFIXES):
+            continue
+        # A `docker-compose*.yml` DESCRIBES containers; it does not invoke docker.
+        if "docker-compose" in rel:
+            continue
+        path = REPO_ROOT / rel
+        if path.is_file() and not path.is_symlink():
+            files.append(path)
+    return files
+
 
 #: Tier 1 — building an image. No exceptions, by owner ruling. Keep this empty.
 _BUILD_EXEMPT: dict[str, str] = {}
@@ -71,45 +102,93 @@ _CONTAINER_EXEMPT = {
 #: deletes, which is the same argument this file already makes for not flagging `docker inspect`. The
 #: file plus the verb is stable under refactors and still changes when a violation is added, removed,
 #: or moved to another file.
-#: SHRANK TWICE on 2026-08-22, from three sites to one. `rustfs-up`/`rustfs-down` became
-#: `dagger call smoke-rustfs`; `notifications-rig-up`/`-down` became `make notifications-rig` over two
-#: Dagger services. **The Makefile now contains no docker at all.** Both times the ratchet is what
-#: caught the stale entry — it failed with "fixed (delete from _KNOWN_VIOLATIONS)" rather than passing
-#: on a roster that had stopped describing the estate, which is the half of a ratchet people forget to
-#: build.
+#: The container-creating docker sites that remain. This list has been WRONG in both directions today
+#: and the corrections are worth keeping visible.
+#:
+#: It shrank from three to one as `rustfs-up` and `notifications-rig-up` were converted — and then GREW
+#: to five when the gate's own blind spots were fixed. It had been scanning three hand-listed surfaces
+#: (`Makefile`, `.github/workflows`, `scripts`) and requiring `up` on the same line as `compose`, so
+#: `.docker/` was invisible and every compose WRAPPER was too. Six real sites were never reported, and
+#: two `docker buildx build` calls sat in `.docker/` while the tier-1 test said "clean".
+#:
+#: Both tier-1 violators were DEAD and are deleted: `smoke-gpu.sh` built `.docker/ray.dockerfile`,
+#: which does not exist, and `smoke-build.sh` was referenced by nothing and set `RASK_VIEWER_*`, which
+#: died with the viewer monolith.
 _KNOWN_VIOLATIONS = {
+    (".github/workflows/ci.yml", "compose"),  # the auth/dex e2e stack
     (".github/workflows/ci.yml", "run"),  # the per-zone image smoke test
+    ("scripts/auth_e2e.sh", "compose"),  # ALIVE — ci.yml:591 runs it
+    ("scripts/medallion_demo.sh", "compose"),
 }
 
 _BUILD = re.compile(r"\bdocker\s+(buildx\s+)?build\b")
-_CONTAINER = re.compile(r"\bdocker\s+run\b|\bdocker\s+compose\b[^\n|]*\bup\b|\bdocker-compose\b[^\n|]*\bup\b")
+#: ANY `docker compose`, not only one with `up` on the same line.
+#:
+#: The previous pattern required `up` in the same line as `compose`, and `scripts/auth_e2e.sh` — which
+#: CI runs — wraps it: `compose() { docker compose -f "$BASE" -f "$AUTH" "$@"; }`, with the verb
+#: arriving through `"$@"`. So a live compose stack was invisible to a gate whose whole subject is
+#: compose stacks. The same shape as every other finding in this audit: a pattern that cannot cross a
+#: boundary reports the estate it can see.
+#:
+#: Flagging `down`/`logs` alongside `up` is correct rather than over-broad: they only exist because
+#: something came up. A file that tears a compose stack down is a file that has one.
+_CONTAINER = re.compile(r"\bdocker\s+(run|create|start)\b|\bdocker\s+compose\b|\bdocker-compose\b")
 
 
 def _files() -> list[Path]:
-    out: list[Path] = []
-    for name in _SURFACES:
-        path = REPO_ROOT / name
-        if path.is_file():
-            out.append(path)
-        elif path.is_dir():
-            out.extend(p for p in sorted(path.rglob("*")) if p.is_file() and not p.is_symlink())
-    return out
+    return sorted(_tracked_files())
+
+
+def _prose_lines(path: Path, text: str) -> set[int]:
+    """Line numbers that are PROSE rather than an invocation — comments and Python string literals.
+
+    `#`-stripping alone is not enough and over-reported badly when this gate was widened: a docstring
+    describing the rule ("Not `docker build`, not `docker run`…") is documentation, and so is a
+    module docstring showing the command a reader might otherwise reach for. THIS FILE was its own
+    loudest false positive, which is a fair warning about the class.
+
+    For Python that means parsing: every string constant's span is prose, so the rule can be quoted
+    in a docstring without the gate firing on its own explanation — the same reason
+    `test_no_fixed_tmp_roots.py` walks the AST instead of grepping.
+    """
+    prose: set[int] = set()
+    for lineno, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith(("#", "//", "*", "--")):
+            prose.add(lineno)
+    if path.suffix == ".py":
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:  # pragma: no cover — another gate's problem
+            return prose
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.lineno:
+                prose.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    return prose
 
 
 def _hits(pattern: re.Pattern[str]) -> list[tuple[str, int, str]]:
-    """Matches outside comments. A rule quoted in a comment is documentation, not a docker call."""
+    """Matches that are INVOCATIONS — prose about the rule is not a breach of it."""
     found: list[tuple[str, int, str]] = []
     for path in _files():
         try:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
+        prose = _prose_lines(path, text)
         for lineno, line in enumerate(text.splitlines(), 1):
-            stripped = line.strip()
-            if stripped.startswith("#") or stripped.startswith("//"):
+            if lineno in prose:
                 continue
-            if pattern.search(line):
-                found.append((path.relative_to(REPO_ROOT).as_posix(), lineno, stripped[:100]))
+            match = pattern.search(line)
+            if not match:
+                continue
+            # A TRAILING comment is prose too, and checking only the line's PREFIX missed it:
+            # `if DEX_SECRET:  # ... (docker-compose)` is code followed by an explanation, not an
+            # invocation. Compare positions rather than testing `startswith`.
+            comment = line.find("#")
+            if comment != -1 and comment < match.start():
+                continue
+            found.append((path.relative_to(REPO_ROOT).as_posix(), lineno, line.strip()[:100]))
     return found
 
 
@@ -161,11 +240,18 @@ def test_every_container_exemption_still_names_a_real_file(path: str) -> None:
 
 
 def test_the_scan_reaches_the_surfaces_the_rule_names() -> None:
-    """Non-vacuity: a scan that resolved no files would report a docker-free estate."""
+    """Non-vacuity: a scan that resolved no files would report a docker-free estate.
+
+    The floor was `f"...across {_SURFACES}"` and survived the widening that DELETED `_SURFACES` — a
+    `NameError` that only fires when the assertion does, i.e. on the one run where this gate is trying
+    to tell you something. `ty` caught it; no test could, because the passing path never evaluates the
+    message. Worth remembering when writing any assertion whose text is more interesting than its
+    condition.
+    """
     files = _files()
     names = {p.relative_to(REPO_ROOT).as_posix() for p in files}
 
-    assert len(files) >= 40, f"only {len(files)} files scanned across {_SURFACES}"
+    assert len(files) >= 40, f"only {len(files)} tracked files scanned — git ls-files resolved almost nothing"
     assert "Makefile" in names, "the Makefile is not being scanned"
     assert any(n.startswith("scripts/") for n in names), "scripts/ is not being scanned"
     assert any(n.startswith(".github/workflows/") for n in names), "the workflows are not being scanned"
