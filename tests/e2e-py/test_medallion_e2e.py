@@ -25,7 +25,10 @@ import requests
 LANCERAY = os.environ.get("LANCE_E2E_LANCERAY_URL", "")
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 # /produce is guarded by require_dapr_token; when the deployed stack sets APP_API_TOKEN this must carry the
-# shared secret (empty on a token-less dev stack, where the guard is a no-op). `make e2e-medallion` fills it.
+# shared secret (empty on a token-less dev stack, where the guard is a no-op). `make e2e-medallion` does NOT
+# fill it — it requires the two URLs and forwards them, and the token stays the caller's to supply from the
+# estate's secret store. This line used to claim the target filled it, which sent a reader looking for a
+# mechanism that was never written.
 DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
 
 # Governed lineage READS use the app-token SERVICE door as `service-web` (a warehouse reader — the same

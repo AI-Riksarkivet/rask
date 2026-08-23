@@ -801,16 +801,22 @@ E2E_SUITES = auth cas compaction duckdb dummy-lane gateway governed-union medall
                                           # so referencing E2E_SUITES before this assignment
                                           # expands to nothing and silently declares no target.
 
-e2e-auth:           ## Live OIDC/FGA authorization proof (Dex + OpenFGA + governed catalog)
-	uv run pytest tests/e2e-py -m auth -v
-e2e-cas:            ## Object-store + registry conditional-write (CAS) proofs
-	uv run pytest tests/e2e-py -m cas -v
-e2e-compaction:     ## Maintenance sweep / compaction / GC proofs
-	uv run pytest tests/e2e-py -m compaction -v
-e2e-duckdb:         ## DuckDB-over-Lance proof
-	uv run pytest tests/e2e-py -m duckdb -v
-e2e-dummy-lane:     ## The GPU-free dummy medallion lane, end to end
-	uv run pytest tests/e2e-py -m dummy_lane -v
+e2e-auth:           ## Live OIDC/FGA authorization proof (Dex + OpenFGA + governed catalog) (needs LANCE_E2E_AUTH_SERVER)
+	@test -n "$(LANCE_E2E_AUTH_SERVER)" || { echo "  !! e2e-auth needs LANCE_E2E_AUTH_SERVER — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_AUTH_SERVER=$(LANCE_E2E_AUTH_SERVER) uv run pytest tests/e2e-py -m auth -v
+e2e-cas:            ## Object-store + registry conditional-write (CAS) proofs (needs LANCE_E2E_S3_ENDPOINT)
+	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-cas needs LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m cas -v
+e2e-compaction:     ## Maintenance sweep / compaction / GC proofs (needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL)
+	@test -n "$(LANCE_E2E_MAINTENANCE_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_GREPTIME_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_MAINTENANCE_URL=$(LANCE_E2E_MAINTENANCE_URL) LANCE_E2E_GREPTIME_URL=$(LANCE_E2E_GREPTIME_URL) uv run pytest tests/e2e-py -m compaction -v
+e2e-duckdb:         ## DuckDB-over-Lance proof (needs LANCE_E2E_S3_ENDPOINT)
+	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-duckdb needs LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m duckdb -v
+e2e-dummy-lane:     ## The GPU-free dummy medallion lane, end to end (needs LANCE_E2E_CATALOG_URL)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-dummy-lane needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) uv run pytest tests/e2e-py -m dummy_lane -v
 # REQUIRES its target, rather than skipping into a green. Every test in this suite is guarded on
 # LANCE_E2E_GATEWAY_URL, so without it the target collected 3 tests, skipped all 3 and exited 0 — a
 # routing proof that reported success having proved nothing, which is exactly what its docstring
@@ -818,22 +824,39 @@ e2e-dummy-lane:     ## The GPU-free dummy medallion lane, end to end
 e2e-gateway:        ## Dapr service-invocation gateway routing proof (needs LANCE_E2E_GATEWAY_URL)
 	@test -n "$(LANCE_E2E_GATEWAY_URL)" || { echo "set LANCE_E2E_GATEWAY_URL, e.g. make e2e-gateway LANCE_E2E_GATEWAY_URL=http://localhost:8888"; exit 1; }
 	LANCE_E2E_GATEWAY_URL=$(LANCE_E2E_GATEWAY_URL) uv run pytest tests/e2e-py -m gateway -v
-e2e-governed-union: ## Full governed-union proof (the estate's widest authz path)
-	uv run pytest tests/e2e-py -m governed_union -v
-e2e-medallion:      ## Medallion bronze→silver→gold cascade proof
-	uv run pytest tests/e2e-py -m medallion -v
-e2e-media:          ## Media-lane proof
-	uv run pytest tests/e2e-py -m media -v
-e2e-media-catalog:  ## Annotator/catalog live-mode proof
-	uv run pytest tests/e2e-py -m media_catalog -v
-e2e-observability:  ## OTLP → GreptimeDB observability proof
-	uv run pytest tests/e2e-py -m observability -v
-e2e-user-state:     ## Durable user-state (dock layouts, read state) proof
-	uv run pytest tests/e2e-py -m user_state -v
-e2e-ray-batch:      ## Ray batch proof
-	uv run pytest tests/e2e-py -m ray_batch -v
-e2e-ray-train:      ## Ray train proof
-	uv run pytest tests/e2e-py -m ray_train -v
+e2e-governed-union: ## Full governed-union proof (the estate's widest authz path) (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA)
+	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_FGA)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_FGA=$(LANCE_E2E_FGA) uv run pytest tests/e2e-py -m governed_union -v
+e2e-medallion:      ## Medallion bronze→silver→gold cascade proof (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL)
+	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-medallion needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-medallion needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) uv run pytest tests/e2e-py -m medallion -v
+e2e-media:          ## Media-lane proof (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL)
+	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-media needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-media needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) uv run pytest tests/e2e-py -m media -v
+e2e-media-catalog:  ## Annotator/catalog live-mode proof (needs MEDIA_CATALOG_URL)
+	@test -n "$(MEDIA_CATALOG_URL)" || { echo "  !! e2e-media-catalog needs MEDIA_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	MEDIA_CATALOG_URL=$(MEDIA_CATALOG_URL) uv run pytest tests/e2e-py -m media_catalog -v
+e2e-observability:  ## OTLP → GreptimeDB observability proof (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_GREPTIME_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_GREPTIME_URL=$(LANCE_E2E_GREPTIME_URL) uv run pytest tests/e2e-py -m observability -v
+e2e-user-state:     ## Durable user-state (dock layouts, read state) proof (needs LANCE_E2E_CATALOG_URL)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-user-state needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) uv run pytest tests/e2e-py -m user_state -v
+e2e-ray-batch:      ## Ray batch proof (needs LANCE_E2E_RAY_HEAD_DEPLOY)
+	@test -n "$(LANCE_E2E_RAY_HEAD_DEPLOY)" || { echo "  !! e2e-ray-batch needs LANCE_E2E_RAY_HEAD_DEPLOY — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_RAY_HEAD_DEPLOY=$(LANCE_E2E_RAY_HEAD_DEPLOY) uv run pytest tests/e2e-py -m ray_batch -v
+e2e-ray-train:      ## Ray train proof (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA)
+	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-ray-train needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-ray-train needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-ray-train needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_FGA)" || { echo "  !! e2e-ray-train needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_FGA=$(LANCE_E2E_FGA) uv run pytest tests/e2e-py -m ray_train -v
 
 # ---- the local image path (registry + Dagger engine) ------------------------
 # `make dev-registry` once per host (a local registry on :5000, and k3s pointed at it), and
