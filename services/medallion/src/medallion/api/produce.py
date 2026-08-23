@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import JSONResponse
 
 from medallion.api.dependencies import DaprClientDep, SettingsDep
@@ -44,6 +44,18 @@ async def produce(
     originator: Annotated[str | None, Depends(authorize_produce)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")] = None,
     project: ProjectParam = None,
+    # The bronze volume this call writes. Optional, and absent means the seeder's own default — the
+    # cascade is byte-identical to before unless a caller asks for something else.
+    #
+    # It exists because the promotion review band compares a stage's row count against its
+    # predecessor's, and a producer that always writes the same rows makes that delta permanently
+    # ZERO: no legal band can breach it (`ge=0` forbids a negative one), so the band was enabled,
+    # correct, and unfalsifiable. §9.1's open question — the 0.25 default is ASSUMED, and wants "a
+    # measurement of real promotions" — needs the same thing.
+    #
+    # Bounded because this writes every row synchronously before the request returns; an unbounded
+    # value is a request that never comes back rather than an error a caller can read.
+    rows: Annotated[int | None, Query(ge=1, le=1_000_000)] = None,
 ) -> dict[str, str] | JSONResponse:
     """Ingest (dummy) the bronze dataset and emit its write event — the event-driven cascade head.
 
@@ -70,7 +82,7 @@ async def produce(
     never a silent fallback to the shared root). Absent → today's single-tenant behavior, unchanged.
     """
     try:
-        result = await run_produce(dapr, settings, token=idempotency_key, project=project or "", originator=originator or "")
+        result = await run_produce(dapr, settings, token=idempotency_key, project=project or "", originator=originator or "", rows=rows)
     except UnresolvableProjectError as exc:
         return JSONResponse(
             status_code=409,

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from functools import partial
 
 from dapr.aio.clients import DaprClient
 from fastapi.concurrency import run_in_threadpool
@@ -33,7 +34,15 @@ log = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 
-async def produce(dapr: DaprClient, settings: MedallionSettings, *, token: str | None = None, project: str = "", originator: str = "") -> dict[str, str]:
+async def produce(
+    dapr: DaprClient,
+    settings: MedallionSettings,
+    *,
+    token: str | None = None,
+    project: str = "",
+    originator: str = "",
+    rows: int | None = None,
+) -> dict[str, str]:
     """Ingest the bronze dataset and emit its write event (the event-driven cascade head).
 
     With ``compute_enabled`` it FIRST seeds a real ``bronze$events`` Lance dataset (the fake medallion-producer
@@ -41,6 +50,13 @@ async def produce(dapr: DaprClient, settings: MedallionSettings, *, token: str |
     ONE OpenLineage event for ``bronze$events``. It does NOT publish ``medallion.bronze`` — medallion-producer's
     ``/bronze-arrival`` subscription reacts to this bronze-write event and fires the trigger, so the
     cascade is event-driven.
+    ``rows`` (optional) sets the bronze volume this call writes. It exists because the review band
+    compares a promotion's row count against its predecessor's, and a producer that always writes the
+    same eight rows makes the delta permanently ZERO — no legal band can breach that, so the band was
+    enabled, correct and unfalsifiable. It is also what §9.1's open question needs: the 0.25 default is
+    ASSUMED, and measuring a real distribution takes promotions of different sizes. Absent → the
+    seeder's own default, byte-identical to before.
+
     Best-effort: a sidecar/broker outage logs + still returns (the catalog-style contract).
 
     ``token`` is the caller's idempotency key (skill rule: an operation whose route invites retry must
@@ -77,7 +93,13 @@ async def produce(dapr: DaprClient, settings: MedallionSettings, *, token: str |
             # composed from the NAMESPACE alone, so `medallion/bronze` is both `bronze$events` and
             # `bronze$pages` — the sweep cannot derive the id and, without this, emits no maintenance
             # provenance and no per-dataset FAIL event for the cascade HEAD.
-            result = await run_in_threadpool(seed_bronze, bronze_uri, settings.storage_options(), dataset_id=bronze_dataset_id)
+            # `rows` is forwarded ONLY when given, so absent stays byte-identical to seed_bronze's own
+            # default rather than restating it here — two copies of one number drift, and the drift is
+            # invisible because both still "work".
+            seed_kwargs: dict[str, object] = {"dataset_id": bronze_dataset_id}
+            if rows is not None:
+                seed_kwargs["rows"] = rows
+            result = await run_in_threadpool(partial(seed_bronze, bronze_uri, settings.storage_options(), **seed_kwargs))
             span.set_attribute("lance.version", result.version)
             span.set_attribute("lance.row_count", result.row_count)
             span.set_attribute("lance.size_bytes", result.size_bytes)
