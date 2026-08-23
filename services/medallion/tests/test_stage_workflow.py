@@ -800,3 +800,41 @@ def test_a_projectless_stage_FAIL_is_byte_identical() -> None:
     event = _build_stage_fail_event(spec, outcome, "reason")
 
     assert "-" not in event["outputs"][0]["namespace"].split("$")[0].replace("gold-htr", "goldhtr")
+
+
+def test_the_stage_outcome_span_carries_the_CASCADE_identity_and_the_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cascade trace answers "an activity ran" and never "which stage of which project".
+
+    daprd emits `activity||report_stage_outcome` and the SDK emits `activity: report_stage_outcome`,
+    both correctly parented. Neither knows the transition, the submission or the verdict — so an
+    operator looking at a stalled bronze->silver cascade cannot find its span among the others.
+
+    And the verdict never marks the span. daprd marks the ORCHESTRATION span when an activity RAISES;
+    this one RETURNS its outcome, so nothing is ever ERROR. Measured estate-wide: every activity span
+    STATUS_CODE_UNSET, including the four the sidecar's own metric labels `failed`.
+    """
+    from medallion.workflow import report_stage_outcome
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.trace import StatusCode
+
+    monkeypatch.setattr("medallion.workflow._publish_fail_event", lambda _e, _s: None)
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    with provider.get_tracer("test").start_as_current_span("activity: report_stage_outcome"):
+        report_stage_outcome(
+            cast("Any", None),
+            {"spec": _spec(), "outcome": {"submission_id": "sub-9", "status": "FAILED", "polls": 3, "verdict": "failed"}},
+        )
+
+    (span,) = exporter.get_finished_spans()
+    attrs = dict(span.attributes or {})
+    assert attrs.get("lance.medallion.verdict") == "failed", f"the span does not carry the verdict: {attrs}"
+    assert attrs.get("lance.medallion.submission_id") == "sub-9", f"the span does not name the Ray submission: {attrs}"
+    assert span.status.status_code is StatusCode.ERROR, (
+        "a failed stage leaves its activity span UNSET, so trace-based error search shows a clean estate "
+        "while the cascade dies. The activity RETURNS the verdict rather than raising, so daprd cannot know."
+    )

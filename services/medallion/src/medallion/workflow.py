@@ -52,6 +52,8 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
 import dapr.ext.workflow as wf
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 from pydantic import BaseModel, Field
 
 from medallion.core.best_effort import best_effort
@@ -419,6 +421,23 @@ def report_stage_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) 
     # The verdict is a fact only this application knows: the orchestrator RETURNS failure rather than
     # raising, so Dapr's own execution counter records `status="success"` for a run that died.
     record_stage_outcome(outcome.verdict, duration_seconds=outcome.duration_seconds)
+
+    # THE SPAN THAT ALREADY EXISTS — daprd's `activity||report_stage_outcome` and the SDK's
+    # `activity: report_stage_outcome` are both correctly parented into the run's trace, and neither
+    # knows the transition, the submission or the verdict. Opening a third span on the same hop would
+    # make the trace view worse; setting attributes on the live one costs nothing.
+    #
+    # The submission id rides the SPAN, never a metric label: it is per-run and unbounded, which is the
+    # series-per-object-id rule §6 records this estate breaking once already. The verdict is a closed
+    # set, so it is safe in both places and appears in both.
+    span = trace.get_current_span()
+    span.set_attribute("lance.medallion.verdict", outcome.verdict)
+    span.set_attribute("lance.medallion.submission_id", outcome.submission_id)
+    if outcome.verdict != "succeeded":
+        # daprd marks the ORCHESTRATION span when an activity RAISES; this one RETURNS its verdict, so
+        # without this every activity span stays UNSET — including the ones whose own sidecar metric
+        # says `failed`. Trace-based error search would show a clean estate while the cascade dies.
+        span.set_status(Status(StatusCode.ERROR, f"stage {outcome.verdict}: {outcome.submission_id}"))
 
     with best_effort("stage_fail_event", token=spec.token, submission_id=outcome.submission_id):
         _publish_fail_event(_build_stage_fail_event(spec, outcome, reason), spec)

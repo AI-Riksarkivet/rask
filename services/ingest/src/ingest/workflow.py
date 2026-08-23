@@ -54,6 +54,8 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
 
 import dapr.ext.workflow as wf
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 from pydantic import BaseModel, Field
 
 from ingest.metrics import record_run, record_units
@@ -1105,6 +1107,22 @@ def emit_terminal(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None
     # failure rather than raising, so Dapr's own execution counter records `status="success"` here.
     record_run(outcome.status)
     record_units(written=outcome.rows, failed=outcome.errors_total)
+
+    # THE SPANS THAT ALREADY EXIST carry only SDK and sidecar identifiers, so nothing on this hop names
+    # the run or the dataset — the two things an operator actually knows about a failed harvest. Set on
+    # the live span rather than opening a third one.
+    #
+    # Both ride the SPAN and neither is a metric label: a run id is per-run and a dataset is
+    # caller-supplied, so either would be an unbounded series. `ingest.runs{status}` above carries the
+    # closed half.
+    span = trace.get_current_span()
+    span.set_attribute("lance.ingest.run_id", spec.run_id)
+    span.set_attribute("lance.dataset", spec.dataset)
+    if outcome.status != "COMPLETE":
+        # The error boundary RETURNS RunOutcome(status="FAILED") rather than raising — deliberately, so
+        # the queue release and the FAIL lineage record still happen — which means daprd sees an activity
+        # that completed normally and marks nothing.
+        span.set_status(Status(StatusCode.ERROR, f"run {outcome.status}: {outcome.errors_total} unit(s) failed"))
 
     _lineage().terminal(
         spec.run_id,

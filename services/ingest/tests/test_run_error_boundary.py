@@ -318,3 +318,45 @@ async def _noop_coro() -> None:
 class _SilentLineage:
     def terminal(self, *_a: object, **_k: object) -> None:
         return None
+
+
+def test_the_terminal_span_names_the_RUN_and_marks_a_failed_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A harvest trace answers "an activity ran" and never "which run, on which dataset".
+
+    Both existing spans on this hop — daprd's `activity||emit_terminal` and the SDK's
+    `activity: emit_terminal` — are correctly parented and carry only SDK/sidecar identifiers. Nothing
+    names the run or the dataset, so a failed harvest cannot be found in a trace view by the thing an
+    operator actually knows about it.
+
+    And a FAILED run never marks its span: the error boundary RETURNS `RunOutcome(status="FAILED")`
+    rather than raising, so daprd sees an activity that completed normally.
+    """
+    from ingest.workflow import emit_terminal
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.trace import StatusCode
+
+    monkeypatch.setattr("ingest.runtime.release_run_units", lambda _r: _noop_coro())
+    monkeypatch.setattr("ingest.workflow._lineage", lambda: _SilentLineage())
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    with provider.get_tracer("test").start_as_current_span("activity: emit_terminal"):
+        emit_terminal(
+            cast("Any", None),
+            {
+                "spec": {"run_id": "run-77", "project": "acme", "dataset": "pages", "kind": "k", "source": "s"},
+                "outcome": {"status": "FAILED", "rows": 0, "errors_total": 2},
+            },
+        )
+
+    (span,) = exporter.get_finished_spans()
+    attrs = dict(span.attributes or {})
+    assert attrs.get("lance.ingest.run_id") == "run-77", f"the span does not name the run: {attrs}"
+    assert attrs.get("lance.dataset") == "pages", f"the span does not name the dataset: {attrs}"
+    assert span.status.status_code is StatusCode.ERROR, (
+        "a FAILED run leaves its terminal span UNSET — the boundary RETURNS the failure, so daprd sees an "
+        "activity that completed and trace-based error search shows a clean estate."
+    )

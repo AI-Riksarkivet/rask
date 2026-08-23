@@ -12,6 +12,8 @@ import logging
 
 import httpx
 from dapr.ext.workflow import WorkflowActivityContext
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 from flows import executor
 from flows.metrics import record_node
@@ -45,6 +47,29 @@ def run_node(ctx: WorkflowActivityContext, activity_input: dict[str, object]) ->
     job = NodeJob.model_validate(activity_input)
     result = asyncio.run(_run(job))
     record_node(result.state.status)
+
+    # THE SPAN THAT ALREADY EXISTS, not a new one. daprd emits `activity||run_node` (SERVER) and the SDK
+    # emits `activity: run_node` (INTERNAL); opening a third on the same hop would make the trace view
+    # worse. Neither can carry what this service knows — the SDK's holds task.instance_id/task.id and
+    # daprd's holds its own, so in a 256-span run nothing says WHICH node.
+    #
+    # The identifiers ride the SPAN and not a metric: a node id is caller-supplied and unbounded, which
+    # is exactly the series-per-object-id rule this estate has already been burned by. `flows.nodes`
+    # above carries only the closed status.
+    span = trace.get_current_span()
+    span.set_attribute("lance.flows.node_id", job.node.id)
+    span.set_attribute("lance.flows.node_kind", job.node.kind)
+
+    if result.state.status == "failed":
+        # daprd marks the ORCHESTRATION span when an activity RAISES — but this one deliberately
+        # RETURNS a failed NodeResult (see below), so no `with` block anywhere sees an exception and
+        # every activity span stays UNSET. Measured estate-wide: 46/46 SDK activity spans UNSET,
+        # including runs whose nodes failed. Trace-based error search shows a clean estate.
+        #
+        # `set_status` and NOT `record_exception`: there is no exception here, and the Span Event API is
+        # being deprecated — the failure detail already rides the log line below and the NodeResult.
+        span.set_status(Status(StatusCode.ERROR, f"node {job.node.id} failed: {result.state.error}"))
+
     if result.state.status == "failed":
         # Logged, not raised. Raising would make Dapr retry the activity and — after the retries —
         # fail the whole workflow, when a failed node is a NORMAL outcome of a sandbox run that the
