@@ -60,7 +60,14 @@ def test_lance_rows_present_and_ordered(gw) -> None:
         ("/api/produce", "medallion-producer", "http://127.0.0.1:8002/produce"),
         ("/api/train", "medallion-producer", "http://127.0.0.1:8002/train"),
         # the media trio serves /api/... internally — /media is dropped, /api kept
-        ("/api/explorer/transcripts", "viewer", "http://127.0.0.1:8101/api/transcripts"),
+        # `/api/explorer/documents`, NOT `/api/explorer/transcripts`. The viewer serves 33 OpenAPI paths
+        # and NONE of them is `/api/transcripts` — there is no transcript route at all. The row was
+        # fabricated, and because the MockTransport below answers 200 for any request, the only thing
+        # checked was that the rewrite equalled a string this file made up. That is the exact assertion
+        # shape the ingest row passed with while every `/api/ingest/*` call 404'd in production.
+        # `test_the_media_rewrites_land_on_paths_the_upstreams_ACTUALLY_serve` now pins these against
+        # each service's own openapi.
+        ("/api/explorer/documents", "viewer", "http://127.0.0.1:8101/api/documents"),
         ("/api/explorer/search", "search", "http://127.0.0.1:8102/api/search"),
         ("/api/explorer/annotations/doc/sp/ch", "annotator", "http://127.0.0.1:8103/api/annotations/doc/sp/ch"),
     ],
@@ -99,3 +106,62 @@ def test_rask_rows_still_forward_unrewritten(gw, proxied) -> None:
     resp = client.get("/api/ray/jobs")
     assert resp.status_code == 200
     assert str(captured[-1].url) == "http://127.0.0.1:8804/api/ray/jobs"
+
+
+# ── The rewrites, checked against the upstreams rather than against this file ──────────────────────
+#
+# Every parametrized row above compares the rewritten URL to a literal written by hand, and the
+# `proxied` fixture's MockTransport answers 200 for ANY request — so a rewrite landing on a path the
+# upstream does not serve passes. It did: `/api/explorer/transcripts` was asserted to rewrite to
+# `/api/transcripts`, and the viewer serves 33 paths, none of them that one. This is the assertion
+# shape the ingest row already passed with while every `/api/ingest/*` call 404'd in production, so it
+# is not a hypothetical failure mode — it is a recurrence.
+#
+# `services/gateway/tests/test_routing.py` already had the right pattern for the flows row ("checked
+# against the flows app's OWN openapi — the ingest lesson, applied to the new row rather than trusted
+# not to recur"). It simply was never applied to the lance rows. This is that.
+_MEDIA_ROWS = [
+    ("/api/explorer/documents", "viewer.main"),
+    ("/api/explorer/search", "search.main"),
+    ("/api/explorer/annotations/{doc_id}/{speech_id}/{chunk_id}", "annotator.main"),
+]
+
+
+def _served_paths(module_name: str) -> set[str]:
+    """The upstream's own OpenAPI paths — the only authority on what it answers."""
+    import importlib
+
+    module = importlib.import_module(module_name)
+    app = getattr(module, "app", None) or module.create_app()
+    return set(app.openapi().get("paths", {}))
+
+
+def _matches_a_served_path(candidate: str, served: set[str]) -> bool:
+    """Template-aware: `/api/annotations/a/b/c` satisfies `/api/annotations/{doc}/{speech}/{chunk}`."""
+    if candidate in served:
+        return True
+    parts = candidate.strip("/").split("/")
+    for path in served:
+        template = path.strip("/").split("/")
+        if len(template) != len(parts):
+            continue
+        if all(t.startswith("{") or t == p for t, p in zip(template, parts, strict=True)):
+            return True
+    return False
+
+
+@pytest.mark.parametrize(("public", "module_name"), _MEDIA_ROWS)
+def test_the_media_rewrites_land_on_paths_the_upstreams_ACTUALLY_serve(gw, public: str, module_name: str) -> None:
+    served = _served_paths(module_name)
+    assert served, f"{module_name} reported no OpenAPI paths — the probe is broken, not the service"
+
+    route = gw._pick_route(public, gw._routes())
+    assert route is not None, f"no gateway row matches {public}"
+    route_prefix, upstream_prefix = route[0], route[1]
+    upstream_path = upstream_prefix + public[len(route_prefix) :]
+
+    assert _matches_a_served_path(upstream_path, served), (
+        f"the gateway rewrites {public} to {upstream_path}, which {module_name} does not serve. Its "
+        f"{len(served)} paths do not include it, so this row 404s in production while the literal "
+        f"comparison above passes — the ingest lesson, recurring."
+    )

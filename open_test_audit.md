@@ -1151,6 +1151,26 @@ the upstream does not serve passes — and the viewer row's own example, `/api/t
 the 33 paths the viewer actually serves.** This is the assertion shape the ingest row already passed
 while every `/api/ingest/*` call 404'd in production.
 
+✅ **FIXED + ENFORCED 2026-08-22 — and the fabricated row was real.** Probed the viewer's own app:
+**33 OpenAPI paths, and not one of them is `/api/transcripts`** — no transcript route exists at all.
+So that row asserted a rewrite that 404s, and passed, because the `MockTransport` answers 200 for any
+request and the only check was a string this file made up.
+
+Of the three media rows, exactly one was wrong: `search` serves `/api/search` and `annotator` serves
+`/api/annotations/{doc_id}/{speech_id}/{chunk_id}`, both correct. The viewer row is now
+`/api/explorer/documents` → `/api/documents`, which the service actually serves.
+
+Enforced by `test_the_media_rewrites_land_on_paths_the_upstreams_ACTUALLY_serve`: it computes the
+rewrite with the gateway's OWN route table and `_pick_route`, then checks the result against the
+upstream's own OpenAPI paths, template-aware so `/api/annotations/a/b/c` satisfies the `{doc_id}` form.
+RED: restoring `transcripts` fails with *"the gateway rewrites /api/explorer/transcripts to
+/api/transcripts, which viewer.main does not serve. Its 33 paths do not include it"*.
+
+**The pattern already existed and had simply never been applied here.** `test_routing.py:105` pins the
+flows row against the flows app's own openapi and its docstring says why — *"the ingest lesson, applied
+to the new row rather than trusted not to recur"*. The lance rows were written the old way beside it.
+A lesson learned in one row is not learned until it is applied to the rows that share its shape.
+
 ### L1 — two green suites assert opposite things about Ray job metadata · **CONFIRMED, LOW**
 
 `frontend/packages/api/src/ray.test.ts:51-57` asserts `metadata` survives the wire; the backend's own
