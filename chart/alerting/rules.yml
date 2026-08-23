@@ -73,6 +73,26 @@ groups:
             A cascade delivery exhausted its retries and was parked; a dataset has silently stopped updating.
             Runbook: docs/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
+      # THE RUN-LEVEL VERDICT, and the reason it cannot come from Dapr's own family.
+      # `dapr_runtime_workflow_execution_count_total` carries a `status` label, and for this codebase it
+      # is FALSE: all three workflow services convert failure into a RETURNED value rather than raising,
+      # so the orchestrator completes normally and the sidecar records status="success". Measured across
+      # the live estate — every app_id holds `success` and nothing else, including runs whose ACTIVITIES
+      # the sidecar separately labels `failed`. An alert on that label reads green while every run dies.
+      - alert: MedallionStageOutcomesFailing
+        expr: sum(rate(medallion_stage_outcome_total{lance_medallion_verdict!="succeeded"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: medallion
+        annotations:
+          summary: "Medallion stage runs are ending badly — failed, abandoned or unnotified"
+          description: >-
+            A stage watch reached a terminal verdict other than `succeeded`. `abandoned` means the job was
+            still RUNNING at the watch ceiling — not a failure, but the estate stopped looking; `unnotified`
+            means the outcome reached the graph and no person. Split by `lance_medallion_verdict` to tell
+            them apart. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
       - alert: MedallionStageDenied
         expr: sum(rate(medallion_stage_denied_total[5m])) > 0
         for: 5m
@@ -274,6 +294,58 @@ groups:
             stops. Check `kubectl get pods -l app=dapr-scheduler-server` and the etcd PVCs; a rollback or
             PVC loss here is not recoverable from the state store, which holds no copy of the reminders.
             Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+      # WORKFLOW ACTIVITY FAILURES — writable with no first-party instrumentation at all, and unwritten
+      # until now. This is the one workflow family whose `status` label is TRUE: an activity that
+      # exhausts its retries raises into the orchestrator, so the sidecar sees a real failure. Measured
+      # live: ingest/ensure_dataset/failed = 4, by name, while the RUN-level counter for the same runs
+      # held only `success`.
+      #
+      # `increase() > 0` shaped on purpose. A `== 0` shape evaluates over an empty vector once the series
+      # ages out and goes silent exactly when the emitting pod dies — the class being retrofitted
+      # elsewhere in this file. These families are also LAZILY REGISTERED: a sidecar that has run no
+      # workflow omits them entirely, so absence here means "nothing ran", not "nothing failed".
+      - alert: WorkflowActivitiesFailing
+        expr: sum(increase(dapr_runtime_workflow_activity_execution_count_total{status="failed"}[30m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: dapr
+        annotations:
+          summary: "Dapr workflow activities are failing — a lane is burning its retries"
+          description: >-
+            One or more activities exhausted their retry policy. Group by `activity_name` and `app_id` to
+            find which lane. Note the activity SPAN cannot corroborate this: the SDK wraps the call in a
+            span but swallows the exception inside it, so every activity span is STATUS_CODE_UNSET even
+            when this counter says failed. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+      # THE WEDGED `continue_as_new` DETECTOR. The workflow engine drives each orchestration turn through
+      # its own internal actor type, so reminder fires climbing while executions stay flat IS a watch loop
+      # that will never terminate — a Ray job that never ends, a poll that never sees a terminal status.
+      #
+      # `unless` rather than `and ... == 0`, deliberately. If the execution family is ABSENT — lazily
+      # registered, so absent whenever no workflow has completed since the pod started — an `== 0`
+      # comparison yields no series and the `and` produces nothing, silently failing to fire in exactly
+      # the case the rule exists for. `unless` is set difference: an empty right side leaves the left
+      # intact, so absence reads as "no executions", which is what it means here.
+      #
+      # NOT Dapr's own published query. Its actor dashboard derives reminder triggers from
+      # `dapr_http_client_roundtrip_latency_bucket{path=~"actors/.../method/remind/..."}` — and this estate
+      # sets `spec.metrics.http.increasedCardinality: false`, which templates that path label away by
+      # design. Importing Dapr's actor dashboard here renders empty reminder panels for the same reason.
+      - alert: WorkflowEngineWedged
+        expr: sum(increase(dapr_runtime_actor_reminders_fired_total{actor_type=~"dapr.internal.*workflow"}[30m])) > 0 unless sum(increase(dapr_runtime_workflow_execution_count_total[30m])) > 0
+        for: 1h
+        labels:
+          severity: warning
+          service: dapr
+        annotations:
+          summary: "Workflow orchestration turns are firing but nothing completes — a wedged continue_as_new"
+          description: >-
+            The engine's internal reminders keep firing while no workflow execution completes, which is a
+            watch loop taking turns forever. `stage_run` and `train_run` both continue_as_new on every
+            poll, so a job that never reaches a terminal status turns indefinitely and looks healthy from
+            every angle except this one. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
       # The scrape itself, asserted. If the control-plane job stops producing series the rule above
       # cannot fire, and its silence would be indistinguishable from health — the failure mode this
       # whole entry is about, one level up.

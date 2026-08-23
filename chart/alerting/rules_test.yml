@@ -559,3 +559,87 @@ tests:
       - eval_time: 65m
         alertname: MaintenanceRefusalsRising
         exp_alerts: []
+
+  # WORKFLOW ACTIVITY FAILURES. The one workflow family whose `status` label is TRUE — an activity that
+  # exhausts its retries raises into the orchestrator, so the sidecar records a real failure.
+  - interval: 1m
+    input_series:
+      - series: 'dapr_runtime_workflow_activity_execution_count_total{app_id="ingest",activity_name="ensure_dataset",status="failed"}'
+        values: "0+1x70" # one failure a minute
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: WorkflowActivitiesFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: dapr
+            exp_annotations:
+              summary: "Dapr workflow activities are failing — a lane is burning its retries"
+              description: "One or more activities exhausted their retry policy. Group by `activity_name` and `app_id` to find which lane. Note the activity SPAN cannot corroborate this: the SDK wraps the call in a span but swallows the exception inside it, so every activity span is STATUS_CODE_UNSET even when this counter says failed. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+
+  # A lane where only SUCCEEDED activities run must not page.
+  - interval: 1m
+    input_series:
+      - series: 'dapr_runtime_workflow_activity_execution_count_total{app_id="ingest",activity_name="ensure_dataset",status="success"}'
+        values: "0+1x70"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: WorkflowActivitiesFailing
+        exp_alerts: []
+
+  # THE RUN-LEVEL VERDICT. Dapr's own status label reads `success` for these runs, which is why the
+  # estate has to record the verdict itself.
+  - interval: 1m
+    input_series:
+      - series: 'medallion_stage_outcome_total{lance_medallion_verdict="abandoned"}'
+        values: "0+1x40"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: MedallionStageOutcomesFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: medallion
+            exp_annotations:
+              summary: "Medallion stage runs are ending badly — failed, abandoned or unnotified"
+              description: "A stage watch reached a terminal verdict other than `succeeded`. `abandoned` means the job was still RUNNING at the watch ceiling — not a failure, but the estate stopped looking; `unnotified` means the outcome reached the graph and no person. Split by `lance_medallion_verdict` to tell them apart. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+
+  # Succeeded runs must not page — the label filter is the whole rule.
+  - interval: 1m
+    input_series:
+      - series: 'medallion_stage_outcome_total{lance_medallion_verdict="succeeded"}'
+        values: "0+1x40"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: MedallionStageOutcomesFailing
+        exp_alerts: []
+
+  # THE WEDGED continue_as_new. Reminders climbing with the execution family entirely ABSENT — which is
+  # the real shape, since these families are lazily registered and a pod that has completed no workflow
+  # never emits one. This is exactly the case an `and ... == 0` would silently miss.
+  - interval: 1m
+    input_series:
+      - series: 'dapr_runtime_actor_reminders_fired_total{app_id="flows",actor_type="dapr.internal.default.flows.workflow",success="true"}'
+        values: "0+1x130"
+    alert_rule_test:
+      - eval_time: 125m
+        alertname: WorkflowEngineWedged
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: dapr
+            exp_annotations:
+              summary: "Workflow orchestration turns are firing but nothing completes — a wedged continue_as_new"
+              description: "The engine's internal reminders keep firing while no workflow execution completes, which is a watch loop taking turns forever. `stage_run` and `train_run` both continue_as_new on every poll, so a job that never reaches a terminal status turns indefinitely and looks healthy from every angle except this one. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+
+  # Turns firing AND executions completing is a healthy busy estate — must not page.
+  - interval: 1m
+    input_series:
+      - series: 'dapr_runtime_actor_reminders_fired_total{app_id="flows",actor_type="dapr.internal.default.flows.workflow",success="true"}'
+        values: "0+1x130"
+      - series: 'dapr_runtime_workflow_execution_count_total{app_id="flows",workflow_name="flow_run",status="success"}'
+        values: "0+1x130"
+    alert_rule_test:
+      - eval_time: 125m
+        alertname: WorkflowEngineWedged
+        exp_alerts: []

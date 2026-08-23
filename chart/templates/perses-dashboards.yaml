@@ -595,4 +595,95 @@ data:
         ]
       }
     }
+  workflows.json: |
+    {
+      "kind": "Dashboard",
+      "metadata": { "name": "workflows", "project": "rask" },
+      "spec": {
+        "display": { "name": "rask Workflows \u2014 Dapr engine + the estate's own verdicts", "description": "Dapr publishes no workflow dashboard, so this one is authored. The engine families are free; the outcome counters exist because the engine's run-level status label is FALSE for this codebase \u2014 all three services RETURN failure rather than raising, so the sidecar records success for a run that died." },
+        "duration": "6h",
+        "panels": {
+          "activityOutcomes": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Activity executions by status", "description": "The one workflow family whose `status` label is TRUE: an activity that exhausts its retries raises into the orchestrator, so the sidecar sees a real failure." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (activity_name, status) (rate(dapr_runtime_workflow_activity_execution_count_total[5m]))", "seriesNameFormat": {{ "{{activity_name}} {{status}}" | quote }} } } } } ]
+            }
+          },
+          "runVerdicts": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Run verdicts (the estate's own)", "description": "NOT dapr_runtime_workflow_execution_count_total{status}. That label reads `success` for every run here, because failure is RETURNED rather than raised. These counters are recorded at each lane's terminal activity." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum by (lance_medallion_verdict) (rate(medallion_stage_outcome_total[15m]))", "seriesNameFormat": {{ "stage {{lance_medallion_verdict}}" | quote }} } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum by (lance_ingest_status) (rate(ingest_runs_total[15m]))", "seriesNameFormat": {{ "ingest {{lance_ingest_status}}" | quote }} } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum by (lance_flows_lane) (rate(flows_runs_total[15m]))", "seriesNameFormat": {{ "flows {{lance_flows_lane}}" | quote }} } } } }
+              ]
+            }
+          },
+          "executionLatency": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Workflow execution latency p95", "description": "Free from the engine. Note the lanes that continue_as_new (stage_run, train_run) report per-TURN latency, not wall-clock run duration." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "histogram_quantile(0.95, sum by (le, workflow_name) (rate(dapr_runtime_workflow_execution_latency_bucket[5m])))", "seriesNameFormat": {{ "{{workflow_name}}" | quote }} } } } } ]
+            }
+          },
+          "schedulingLatency": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Scheduling latency p95", "description": "How long a scheduled workflow waits before the engine starts it \u2014 the signal that separates a slow run from a backlogged engine." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "histogram_quantile(0.95, sum by (le, workflow_name) (rate(dapr_runtime_workflow_scheduling_latency_bucket[5m])))", "seriesNameFormat": {{ "{{workflow_name}}" | quote }} } } } } ]
+            }
+          },
+          "orchestrationTurns": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Orchestration turns vs completions", "description": "The wedged-continue_as_new view: turns climbing while completions stay flat is a watch loop that will never terminate. NOT Dapr's own published reminder query \u2014 that one regexes a `path` label this estate templates away via spec.metrics.http.increasedCardinality: false." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum by (app_id) (rate(dapr_runtime_actor_reminders_fired_total{actor_type=~\"dapr.internal.*workflow\"}[5m]))", "seriesNameFormat": {{ "turns {{app_id}}" | quote }} } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum by (app_id) (rate(dapr_runtime_workflow_execution_count_total[5m]))", "seriesNameFormat": {{ "completions {{app_id}}" | quote }} } } } }
+              ]
+            }
+          },
+          "pendingActorCalls": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Pending actor calls", "description": "Reused verbatim from Dapr's own actor dashboard \u2014 one of the few of its queries that survives this estate's cardinality bound." },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "dapr_runtime_actor_pending_actor_calls", "seriesNameFormat": {{ "{{actor_type}}" | quote }} } } } } ]
+            }
+          }
+        },
+        "layouts": [
+          {
+            "kind": "Grid",
+            "spec": {
+              "display": { "title": "Workflows" },
+              "items": [
+                { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/runVerdicts" } },
+                { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/activityOutcomes" } },
+                { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/executionLatency" } },
+                { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/schedulingLatency" } },
+                { "x": 0, "y": 16, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/orchestrationTurns" } },
+                { "x": 12, "y": 16, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/pendingActorCalls" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
 {{- end }}
