@@ -2229,6 +2229,12 @@ greptimedb-standalone:
     parallelism = 8
     memory_pool_size = "2GiB"
 
+    # `region_engine` is an ARRAY of engine tables, not a map — the `[[ ]]` is load-bearing.
+    # Written as a plain `[region_engine.mito]` this renders valid TOML that GreptimeDB then REFUSES
+    # at startup: `invalid type: map, expected a sequence`, exit 1, crash loop. Learned the hard way
+    # on 2026-08-23 — `tomllib.loads` parsing cleanly is NOT evidence the engine accepts the schema,
+    # and a render-time gate that only checks TOML validity will pass this bug straight through.
+    [[region_engine]]
     [region_engine.mito]
     num_workers = 8
     max_background_compactions = 4

@@ -1906,6 +1906,15 @@ def test_the_telemetry_store_bounds_its_own_memory() -> None:
         f"container. Set them via `greptimedb-standalone.configToml` in chart/values.yaml."
     )
 
+    # `[[region_engine]]`, NOT `[region_engine]`. GreptimeDB models region_engine as an ARRAY of
+    # engine tables, so the map form renders perfectly valid TOML that the engine then refuses at
+    # startup — `invalid type: map, expected a sequence`, exit 1, crash loop, store down. This gate
+    # exists because a render-time TOML-validity check passed that bug straight through to the
+    # cluster on 2026-08-23: parsing clean says nothing about the engine's schema.
+    assert "[[region_engine]]" in toml, (
+        "region_engine is declared as a map, not an array of engine tables. This renders valid TOML "
+        "and then crash-loops GreptimeDB at startup with `invalid type: map, expected a sequence`."
+    )
     assert "[region_engine.mito]" in toml, "no [region_engine.mito] section — the cache and compaction knobs live there"
     assert "page_cache_size" in toml, (
         "the mito cache sizes are left at GreptimeDB's large-machine defaults (~3.35GiB of caches, plus "
