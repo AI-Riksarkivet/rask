@@ -50,6 +50,29 @@ logger = logging.getLogger(__name__)
 TRANSFORM_VERSION_COLUMN = "transform_version"
 
 
+def blob_column_is_stale(versions: set[str | None], *, identity: str) -> bool:
+    """Whether a blob table's existing output column was built by a DIFFERENT transform.
+
+    Blob tables get rebuild granularity rather than row granularity, and not by preference: their only
+    legal write is the all-or-nothing `_rowid` attach, because `merge_insert` crashes Lance's blob
+    decoder (§7.1). So the question this answers is not "which rows are stale" — it is "must this whole
+    column be rebuilt", which is the only action available.
+
+    `versions` is the set of distinct `transform_version` values present in the column.
+
+    A column with NO version is pre-B4 data, and UNKNOWN provenance is deliberately not treated as
+    stale: rebuilding on that basis would re-run every blob stage in the estate the first time this
+    ships, which is far worse than leaving those columns until something else touches them. A MIXED set
+    is stale, because some rows came from something else and no write here can fix a subset.
+    """
+    if not identity:
+        return False
+    known = {version for version in versions if version is not None}
+    if not known:
+        return False
+    return known != {identity} or len(versions) > len(known)
+
+
 def resume_filter(output_column: str, *, identity: str = "", has_version_column: bool = False) -> str:
     """The rows a stage still owes work on.
 
@@ -275,6 +298,16 @@ def run_scan_column_stage(
                     "NULL-fill needs merge_insert, which crashes the blob decoder (§7.1); "
                     "rebuild the column instead"
                 )
+            # B4 on blob tables: a populated column used to be indistinguishable from a CORRECT one.
+            # The only write available here is the all-or-nothing rebuild, so the question is not which
+            # rows are stale but whether the whole column was built by a superseded transform.
+            blob_identity = stage.identity(actor_qualname=getattr(factory, "__qualname__", ""))
+            if TRANSFORM_VERSION_COLUMN in ds.schema.names:
+                seen = set(ds.to_table(columns=[TRANSFORM_VERSION_COLUMN]).column(TRANSFORM_VERSION_COLUMN).to_pylist())
+                if blob_column_is_stale(seen, identity=blob_identity):
+                    logger.info("stage %s: %s was built by a superseded transform — rebuilding", stage.name, name)
+                    ds.drop_columns([name])
+                    return _build_scan_column_by_rowid(uri, stage, factory=factory, output_type=output_type, checkpoint_file=checkpoint_file)
             logger.info("stage %s: nothing to fill", stage.name)
             return 0
 
@@ -361,6 +394,16 @@ def _build_scan_column_by_rowid(
         value_by_row_id=value_by_row_id,
         batch_rows=stage.actor.batch_rows,
         checkpoint_file=checkpoint_file,
+    )
+    # The version rides the SAME all-or-nothing attach, one column later: this path rebuilds every row,
+    # so a constant map is exactly right, and it is what makes a superseded column detectable next run.
+    identity = stage.identity(actor_qualname=getattr(factory, "__qualname__", ""))
+    attach_values_by_rowid(
+        uri,
+        name=TRANSFORM_VERSION_COLUMN,
+        output_type=pa.string(),
+        value_by_row_id=dict.fromkeys(value_by_row_id, identity),
+        batch_rows=stage.actor.batch_rows,
     )
     ckpt.cleanup()
     return len(value_by_row_id)
