@@ -2630,7 +2630,7 @@ def test_workflow_history_has_a_retention_policy() -> None:
     assert policy.get("failed"), "a FAILED run's history is never collected"
 
 
-def test_retention_does_not_disappear_when_telemetry_is_off() -> None:
+def test_the_sidecars_non_telemetry_config_survives_telemetry_being_off() -> None:
     """THE REGRESSION THIS GUARDS, and it is the reason the Configuration is no longer otel-gated.
 
     A sidecar may reference exactly ONE `dapr.io/config`, so everything per-sidecar lives in one
@@ -2638,12 +2638,71 @@ def test_retention_does_not_disappear_when_telemetry_is_off() -> None:
     concern, so hanging it there meant turning telemetry off silently returned the estate to unbounded
     workflow history. The gate now sits on the tracing stanza, which is the part that is about
     telemetry.
+
+    RENAMED AND WIDENED rather than joined by a sibling, because retention was only the FIRST instance
+    of the rule. Metric cardinality and api-logging are instances two and three: the sidecar's `:9090`
+    exposition and its log stream both exist whether or not this estate ships a collector, so a bound
+    that vanishes with telemetry is not a bound. A second test asserting the same rule from the same
+    render would be a divergent answer to a settled question.
+
+    ASSERTING THE LITERAL KEY NAMES IS THE WHOLE POINT, and it is the only gate there is. Helm does not
+    request strict field validation, so `increasedCardinallity`, `recordErrorCode` or `obfuscateUrls`
+    would render, apply CLEANLY, and be silently pruned by the API server — no error, no warning, no
+    chart-visible signal. The symptom is "the setting had no effect", which is the same shape as the
+    NullExporter defect this file already guards. Measured against the live k3s CRD: a strict-validating
+    client rejects those three, and `--validate=ignore` (what Helm gets) stores the object with every
+    typo dropped.
+
+    `metric` (singular) is a real CRD key with a byte-identical schema and no stated precedence; daprd
+    merges plural over singular field-by-field, so writing both would make that merge the only tiebreak.
+    Plural only, asserted.
     """
     spec = _lance_tracing_config(_helm_template("observability.enabled=false"))
 
     assert spec is not None, "the Configuration vanished with telemetry — every sidecar's config reference now dangles"
     assert _retention_policy(spec), "retention was lost with telemetry"
     assert "tracing" not in spec, "tracing must still drop out when telemetry is off"
+
+    metrics = spec.get("metrics")
+    assert isinstance(metrics, dict), (
+        f"no spec.metrics stanza with telemetry off (keys: {sorted(spec)}) — the sidecar still scrapes at :9090, so its cardinality bound must not be otel-gated"
+    )
+    assert "metric" not in spec, (
+        "the legacy singular `metric:` key is also set — daprd merges the two field-by-field, so the manifest no longer says what is in force"
+    )
+    assert metrics.get("enabled") is True, "spec.metrics.enabled is REQUIRED by the CRD — without it the API server refuses the object outright"
+    assert metrics.get("recordErrorCodes") is True, (
+        "recordErrorCodes must sit under `metrics:`, NOT under `metrics.http:` — under http it is an unknown field and is pruned in silence"
+    )
+
+    http = metrics.get("http")
+    assert isinstance(http, dict), "spec.metrics.http is missing"
+    assert http.get("increasedCardinality") is False, (
+        "increasedCardinality is not pinned false. At the upstream default the sidecar stamps the raw remainder of a "
+        "service-invocation URL onto the `path` label — measured live: "
+        'dapr_http_server_request_count{app_id="gateway",path="/v1.0/invoke/compute/method/api/ray/jobs"} — which is one '
+        "series per table, namespace and project id, forever."
+    )
+
+    patterns = http.get("pathMatching")
+    assert isinstance(patterns, list), "pathMatching must be a YAML sequence of strings; a map is refused by the API server"
+    assert patterns, "pathMatching is empty, so every path collapses to the empty label"
+    for pattern in patterns:
+        assert not pattern.startswith("/v1.0/invoke/"), (
+            f"{pattern!r} is a service-invocation pattern. daprd auto-registers an invoke twin for every OTHER entry here "
+            "and registers the lot on a real http.ServeMux, which PANICS at startup on conflicting patterns. One "
+            "Configuration serves every app-id, so that is the whole fleet crash-looping — triggered by a later one-line "
+            "edit adding `/` or a bare `/{x...}` to this same list."
+        )
+
+    api_logging = (spec.get("logging") or {}).get("apiLogging")
+    assert isinstance(api_logging, dict), "spec.logging.apiLogging is missing"
+    assert api_logging.get("obfuscateURLs") is True, (
+        "obfuscateURLs must be true and is INSEPARABLE from apiLogging.enabled: with it false daprd logs the raw "
+        "`method + URL.Path`, and the actor URL carries base64url(<oidc sub>), which `decode_subject` reverses exactly. "
+        "Enabling api logging without it would CREATE a subject exposure."
+    )
+    assert api_logging.get("omitHealthChecks") is True, "the kubelet polls /v1.0/healthz on every sidecar; without this the stream is mostly probe noise"
 
 
 def test_every_sidecar_references_the_config_that_carries_retention() -> None:

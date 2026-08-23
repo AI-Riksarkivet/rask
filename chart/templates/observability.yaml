@@ -17,7 +17,8 @@ stringData:
 ---
 {{- if .Values.dapr.enabled }}
 # THE SIDECAR Configuration. Named for tracing because that is all it carried when it was written; it
-# now also carries the workflow state-retention policy, and it renders whether or not telemetry ships.
+# now also carries the workflow state-retention policy, the sidecar metric-cardinality bound and the
+# api-logging policy, and it renders whether or not telemetry ships.
 #
 # **Why it is no longer gated on otelEnabled.** A sidecar may reference exactly ONE `dapr.io/config`,
 # so everything configured per-sidecar has to live in one object. While this was gated, turning
@@ -88,6 +89,73 @@ spec:
       timeout: "30s"
 {{- end }}
 {{- end }}
+{{- /* SIDECAR METRIC CARDINALITY. Gated on `dapr.enabled` only, deliberately NOT on
+       `lance.otelEnabled` — the same argument as the retention stanza below. The sidecar's :9090
+       exposition and its log stream exist whether or not this estate ships a collector, so a bound
+       that disappears with telemetry is not a bound.
+
+       `enabled` is REQUIRED by the CRD (chart/charts/dapr-1.18.1.tgz -> crds/configuration.yaml,
+       `required: [enabled]` under spec.metrics); omitting it is refused with
+       `spec.metrics.enabled: Required value`.
+
+       PLURAL `metrics:` ONLY. The CRD also accepts a legacy `metric:` whose schema is byte-identical
+       and states no precedence; daprd resolves it in Go by merging plural over singular field by
+       field, so writing both would make that merge the only tiebreak and the manifest would no longer
+       say what is in force.
+
+       NOTHING VALIDATES THESE FIELD NAMES BEFORE RUNTIME. Helm does not request strict field
+       validation, so `recordErrorCode`, `increasedCardinallity` or `obfuscateUrls` would render, apply
+       CLEANLY, and be pruned by the API server with no error and no warning — "the setting had no
+       effect", the same silent shape as the NullExporter above. Pinned by tests/unit/test_invariants.py
+       ::test_the_sidecars_non_telemetry_config_survives_telemetry_being_off, which is the only gate
+       that fails loudly on a typo here. */}}
+  metrics:
+    enabled: true
+    # dapr_error_code_total — a closed set of daprd error codes, so bounded by construction.
+    recordErrorCodes: true
+    http:
+      # THE POINT OF THIS BLOCK. At the upstream default (still `true` in 1.18.1) the sidecar stamps the
+      # RAW remainder of a service-invocation URL onto the `path` label. Measured live on this cluster:
+      #   dapr_http_server_request_count{app_id="gateway",path="/v1.0/invoke/compute/method/api/ray/jobs"}
+      # The gateway proxies /api/catalog/... and /api/lineage/..., so that is one series per table,
+      # namespace and project id, forever, in a store nothing authorizes reads against.
+      #
+      # NOT A SUBJECT LEAK, and do not describe it as one. daprd 1.18.1 ALREADY templates actor ids
+      # (`/v1.0/actors/InboxActor/{id}/method`) and drops state keys (`/v1.0/state/lance-statestore`) at
+      # the default — verified by scraping a live sidecar, by an active probe with a subject-shaped key,
+      # and by a real non-templated actor id present in app logs but absent from the metrics body. The
+      # OIDC subject never reached a metric label. The rule in notifications/api/metrics.py is correct;
+      # this is not an instance of it.
+      increasedCardinality: false
+      # With increasedCardinality false the `path` label is the MATCHED pattern or the empty string, so
+      # these three RESTORE labels that would otherwise be erased outright. Detail is still lost on
+      # purpose: actor type, pubsub topic and store name collapse into their wildcards. Nothing in this
+      # repo queries dapr_http_server_* (the dashboards and alerts use the component/actor/scheduler
+      # families and the app SDK's own http_server_duration_milliseconds_*), so no consumer breaks.
+      #
+      # NO `/v1.0/invoke/...` ENTRY, EVER. daprd auto-registers an invoke twin for every non-invoke
+      # pattern here and registers the lot on a real http.ServeMux, which PANICS at startup on
+      # conflicting patterns. A catch-all does not conflict with THIS list, but panics the moment anyone
+      # adds `/` or a bare `/{x...}` to it. One Configuration serves every app-id, so that is the whole
+      # fleet crash-looping on a one-line edit three lines above, with no recover() on the path and no
+      # validation anywhere before runtime. It also buys nothing: it only renames the "" bucket. Invoke
+      # paths therefore label as "", and the gateway->upstream hop is read from the UPSTREAM's own
+      # http_server_duration_milliseconds_* instead — a deliberate erasure, not an oversight.
+      pathMatching:
+        - "/v1.0/state/{storeName}"
+        - "/v1.0/publish/{pubsubName}/{topic...}"
+        - "/v1.0/actors/{actorType}/{actorId}/method/{method}"
+  logging:
+    apiLogging:
+      enabled: true
+      # INSEPARABLE from `enabled` above. With obfuscateURLs false daprd logs the raw
+      # `method + URL.Path`, and the actor URL DOES carry base64url(<oidc sub>) as a path segment
+      # (service_kit/governed/user_state.py::encode_subject, reversed exactly by decode_subject). With it
+      # true daprd logs the matched endpoint NAME instead. This is the one place in this object where a
+      # subject could reach telemetry, so the two keys ship together or not at all.
+      obfuscateURLs: true
+      # The kubelet polls /v1.0/healthz on every sidecar; without this the stream is mostly probe noise.
+      omitHealthChecks: true
 {{- with .Values.dapr.workflowRetention }}
 {{- if .enabled }}
   workflow:

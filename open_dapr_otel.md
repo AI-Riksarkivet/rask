@@ -385,7 +385,7 @@ be found by **pod name** — two lines fix it (add the key, plus a `transform` t
 
 ---
 
-## 6. `spec.metrics` is absent — and the default publishes user subjects
+## 6. `spec.metrics` is absent — and the default mints a series per object id
 
 `grep -n "  metrics:" chart/templates/observability.yaml` → **rc=1**.
 `grep -rn "increasedCardinality\|pathMatching\|recordErrorCodes\|latencyDistributionBuckets\|excludeVerbs\|apiLogging" chart/ services/ packages/` → **no matches**.
@@ -406,11 +406,19 @@ So every sidecar emits, into a live scrape (`otel-collector.yaml:91-109` → the
 dapr_http_server_request_count{path="/v1.0/actors/InboxActor/<base64url-of-the-OIDC-sub>/method/Deliver"}
 ```
 
-**One unbounded series per person, carrying a reversible encoding of their OIDC subject, in a store
-nothing authorizes reads against.** This estate wrote the rule against exactly this, for its own
-instruments, and the sidecar arrives through a channel that module cannot see:
-`notifications/api/metrics.py:7-11` — *"The bounded-cardinality rule is a security rule here, not a
-cost rule … the SUBJECT is per-user data … NEVER on a metric label."*
+> **CORRECTED 2026-08-23, before landing — this paragraph was WRONG.** It claimed the sidecar
+> published the OIDC subject as a metric label. It does not, and never did. daprd 1.18.1 **already**
+> templates actor ids (`path="/v1.0/actors/InboxActor/{id}/method"`) and drops state keys
+> (`path="/v1.0/state/lance-statestore"`) **at the default**, verified three ways: a passive scrape of
+> a live sidecar, an active probe with a subject-shaped key, and a real non-templated actor id present
+> in app logs but absent from the metrics body. The rule at `notifications/api/metrics.py:7-11` is
+> correct; this was not an instance of it, and shipping it as one would have attached a sound rule to a
+> false case. The block below still earns its place — see the real hazard immediately following.
+
+The real hazard is the **gateway's service-invocation path**, which no templating covers. Measured
+live: `dapr_http_server_request_count{app_id="gateway",path="/v1.0/invoke/compute/method/api/ray/jobs"}`
+— one unbounded series per table, namespace and project id, forever, in a store nothing authorizes
+reads against. Bounded cardinality, not subject protection, is the justification.
 
 The gateway is the other big emitter: `gateway/__init__.py:226-233` builds every upstream call as
 `http://127.0.0.1:3500/v1.0/invoke/{app_id}/method` + the full public path, so every table id,
@@ -449,9 +457,11 @@ concern, not a telemetry one.
    service-invocation twin for every `pathMatching` entry; patterns go into a real `http.ServeMux`,
    and Go's ServeMux **panics on conflicting patterns** — which would take daprd down at startup
    rather than degrade.
-3. **`increasedCardinality: false` silently unregisters `dapr_http_server_response_count`.** Nothing
-   in this repo queries it (`grep -rn "dapr_http_server_response_count" chart/` → no matches), so the
-   switch is safe *here* — but audit before landing.
+3. **`increasedCardinality: false` silently unregisters `dapr_http_server_response_count`.**
+   AUDITED AND CLEARED before landing (2026-08-23): no alert rule, dashboard panel, runbook, test or
+   script reads any `dapr_http_server_*` family — the dashboards use the component/actor/scheduler
+   families and the app SDK's own `http_server_duration_milliseconds_*`. Confirmed in v1.18.1 source:
+   the view is appended only under `if h.legacy`, and `pathMatching` cannot re-register it.
 4. **`latencyDistributionBuckets` is global, not per-family.** Workflow execution latency shares the
    HTTP distribution. The default 34 buckets top out at ~100 s, so **every workflow longer than that
    lands in `+Inf`**.
