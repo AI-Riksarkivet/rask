@@ -25,6 +25,11 @@ func (m *Rask) frontendBase(src *dagger.Directory) *dagger.Container {
 			// Exclude checked-in build/install artefacts so the container installs clean from the lockfile.
 			// The zone build outputs (.svelte-kit/build) are stripped generically via the globs below.
 			Exclude: []string{
+				// A developer's `.env` is NOT a build input. It is untracked, so CI checking out fresh
+				// never has one while a LOCAL run shipped it into the container — the same command taking
+				// a different, secret-bearing input depending on whose machine ran it.
+				"**/.env",
+				"**/.env.*",
 				".git",
 				"node_modules",
 				"frontend/node_modules",

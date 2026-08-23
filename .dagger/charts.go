@@ -67,7 +67,7 @@ func (m *Rask) chartsBase(src *dagger.Directory) *dagger.Container {
 				" | tar xz -C /tmp && install -m0755 /tmp/prometheus-" + promVersion +
 				".linux-amd64/promtool /usr/local/bin/promtool"}).
 		WithDirectory("/src", src, dagger.ContainerWithDirectoryOpts{
-			Exclude: []string{".venv", ".git", "node_modules", ".dagger", "frontend/node_modules", ".localbin"},
+			Exclude: []string{"**/.env", "**/.env.*", ".venv", ".git", "node_modules", ".dagger", "frontend/node_modules", ".localbin"},
 		}).
 		WithWorkdir("/src")
 }

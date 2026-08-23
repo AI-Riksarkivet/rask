@@ -1370,6 +1370,37 @@ that `.dagger/test.go`'s `WithDirectory` exclude list is `.venv, .git, node_modu
 frontend/node_modules` — **`.env` is not excluded**, so a *local* `dagger call test` ships the developer's
 `.env` into the container while CI, checking out fresh, does not.
 
+✅ **FIXED + ENFORCED 2026-08-22 (the container half); the `os.environ` half MIGRATED.**
+
+*The container half, measured live rather than reasoned.* `.env` exists on this host (1470 bytes) and
+**none of the FOUR** Dagger build contexts excluded it — `main.go`, `test.go`, `charts.go` and
+`frontend.go`, not just the one the finding names. All four now exclude it, and a probe counting `.env`
+entries in the container's `/src` gives:
+
+| | `.env` entries in the container |
+| --- | --- |
+| exclude removed (the pre-fix state) | **2** |
+| exclude present | **0** |
+
+Two — so the host carried a sibling `.env.*` as well, which is why the pattern is a pair.
+
+The glob is `**/.env`, not `.env`, for a reason the estate has already learned once: a root-relative
+pattern misses nested copies, exactly as bare `.venv`/`node_modules` in a `+ignore` leaves
+`runners/*/.venv` behind. A service or runner growing its own `.env` is the same shape.
+
+Enforced by `tests/unit/test_dagger_context_is_hermetic.py`, which parses every `Exclude:` literal in
+`.dagger/*.go`, requires both patterns, checks the scan still reaches all four named contexts, and
+asserts the patterns are recursive rather than root-only. RED: dropping the exclusion from `charts.go`
+alone fails **exit 1** naming that file.
+
+*The `os.environ` half is a design decision, not a patch.* `build_settings()` calls `load_dotenv()` then
+`derive_hcp_creds()`, which writes derived credentials into the process environment permanently and
+unrestorably — and the fixture that claims to isolate it defers to whatever the ambient environment
+already says. Changing that changes how every service boots, so it is **MIGRATED to
+`open_python-audit.md` § E14** rather than altered here. Excluding `.env` from the build context removes
+the CONSEQUENCE this audit found (a local run diverging from CI on a secret-bearing input) without
+pretending the underlying seam is fixed.
+
 ### What is clean
 
 Worth recording, because an audit that only lists failures is less useful than one that says what holds:

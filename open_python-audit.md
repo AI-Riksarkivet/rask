@@ -1045,6 +1045,41 @@ a terminal. That is not a reason to keep docker — the rule is not negotiable �
 conversion needs an owner's call on the resulting loop, rather than a silent swap that makes three
 familiar targets behave differently one morning.
 
+## E14 — `build_settings()` mutates the process environment permanently, and its isolation fixture defers to the ambient one
+
+*Added 2026-08-22 from the test audit (L4), which fixed the consequence and migrated the cause.*
+
+`packages/service-kit/src/service_kit/__init__.py`:
+
+    def build_settings() -> Settings:
+        load_dotenv()
+        derive_hcp_creds()
+        return Settings.model_validate({})
+
+`derive_hcp_creds()` writes derived credentials into `os.environ` — permanently, unrestorably, for the
+whole process. Every app built after it inherits them, including apps built by later tests in the same
+session. The one fixture that claims to isolate this defers to whatever the ambient environment already
+says, so it cannot restore a value it never captured.
+
+**Already done:** the test audit closed the consequence it could reach. All four Dagger build contexts
+now exclude `**/.env`, so a local `dagger call` no longer ships a developer's untracked `.env` into the
+container while CI, checking out fresh, cannot (measured: 2 entries before, 0 after, gated by
+`tests/unit/test_dagger_context_is_hermetic.py`). That removes the divergence between a local run and
+CI. It does NOT fix the seam.
+
+**The work.** `load_dotenv()` at app-build time is load-bearing for local development and is not the
+problem on its own; writing derived values into `os.environ` is. Options, in increasing order of change:
+
+1. Have `derive_hcp_creds()` RETURN the derived values and let `Settings` take them, so nothing global
+   is written. Smallest diff, but every caller reading them off `os.environ` has to be found first.
+2. Scope the mutation to a context manager that restores on exit, so a test can build an app without
+   leaking into the next one.
+3. Move the derivation into `Settings` itself as a validator, which is where the estate puts
+   "compute a field from other fields" everywhere else.
+
+Whichever is chosen, the fixture has to capture-and-restore rather than assert-the-ambient — that half
+is a bug regardless of which option wins.
+
 ## Appendix A — every finding, by scope
 
 The table below is the complete, verified list. `→` names the epic each finding was filed under.

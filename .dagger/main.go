@@ -66,7 +66,7 @@ func (m *Rask) base(src *dagger.Directory) *dagger.Container {
 		From(UvPythonImage).
 		WithMountedCache("/root/.cache/uv", dag.CacheVolume("rask-uv-cache")).
 		WithDirectory("/src", src, dagger.ContainerWithDirectoryOpts{
-			Exclude: []string{".venv", ".git", "node_modules", ".dagger", "frontend/node_modules"},
+			Exclude: []string{"**/.env", "**/.env.*", ".venv", ".git", "node_modules", ".dagger", "frontend/node_modules"},
 		}).
 		WithWorkdir("/src").
 		WithExec([]string{"uv", "sync", "--all-packages"})
