@@ -814,6 +814,19 @@ tenth runner with a `pyproject.toml` and no `tests/` fires the roster naming `zz
 - **`test_ray_job_images.py:33`** — gates `.docker/ray-lance.dockerfile`, a demo image the chart does
   not deploy, while KubeRay runs `.docker/ray-cluster.dockerfile`. *(Filed, then partly refuted — see
   Part 9; the mechanism is real but the fix is not deletion.)*
+  **ENFORCED 2026-08-22** — and the note is right: the fix is not deletion. The demo image's gate stays
+  (it guards `make ray-demo` / `deploy/ray-lance-demo.yaml`); what was missing is a gate on the CLUSTER
+  image's baked job ENTRYPOINTS, which is the expensive direction. CLAUDE.md states the failure exactly
+  — *"a job whose entrypoint the image lacks dies `exit 2` and the stage reports FAILED with nothing
+  naming the image"* — and the dockerfile's own comment quotes the incident's runtime error
+  (`can't open file '/home/ray/jobs/ray_stage_job.py'`).
+  Two new tests derive both sides: every `jobs/<name>.py` the estate SUBMITS (scanned across
+  `services/`, `chart/`, `scripts/`) must be COPIED into `/home/ray/jobs/`, and every copied script must
+  exist on disk. All three submitted jobs are baked today — the point is that nothing said so. RED:
+  dropping `ray_dummy_job.py` from the COPY fails naming it; adding a COPY of a script that does not
+  exist fails the mirrored way (which would otherwise surface only in a 238-second image build).
+  7 passed. The existing `test_the_ray_cluster_image_can_read_the_lakehouse` covers that image's
+  DEPENDENCIES; this covers its entrypoints, which is a different failure.
 
 ---
 

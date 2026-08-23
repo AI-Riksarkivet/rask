@@ -93,3 +93,78 @@ def test_the_ray_image_pins_the_fleets_lance_stack(package: str, installed: str)
         "The Ray jobs read/write the SAME blob-v2 datasets the services write — bump the dockerfile "
         "together with the lock, never one alone (docs/architecture/lance-blob-v2-findings.md)."
     )
+
+
+# ── The CLUSTER image, which is the one KubeRay actually runs ──────────────────────────────────────
+#
+# Everything above gates `.docker/ray-lance.dockerfile` — the DEMO image behind `make ray-demo` and
+# `deploy/ray-lance-demo.yaml`, which the chart does not deploy. The image the chart's KubeRay cluster
+# runs is `.docker/ray-cluster.dockerfile`, and its baked job entrypoints were gated by nothing.
+#
+# That is the expensive direction. CLAUDE.md states the failure exactly: "The Ray lane submits
+# `python /home/ray/jobs/<job>.py` — those scripts are baked by `.docker/ray-cluster.dockerfile` ... a
+# job whose entrypoint the image lacks dies `exit 2` and the stage reports FAILED with nothing naming
+# the image." The dockerfile's own comment records the same incident, quoting the runtime error:
+# `python: can't open file '/home/ray/jobs/ray_stage_job.py': No such file or directory`.
+#
+# The gate is NOT the demo file's deletion — the finding's own note says so. It is that the SUBMITTED
+# set and the BAKED set agree, derived from both sides so neither can be restated by hand.
+
+_CLUSTER_DOCKERFILE = _REPO / ".docker" / "ray-cluster.dockerfile"
+
+#: Where the estate names a job it submits: services, the chart, and the scripts that drive Ray.
+_SUBMISSION_ROOTS = ("services", "chart", "scripts")
+
+
+def _submitted_jobs() -> set[str]:
+    """Every `jobs/<name>.py` the estate submits, from wherever it is named."""
+    found: set[str] = set()
+    for root in _SUBMISSION_ROOTS:
+        base = _REPO / root
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*"):
+            if not path.is_file() or path.suffix not in {".py", ".yaml", ".yml", ".sh"}:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:  # pragma: no cover
+                continue
+            found |= {m.group(1) for m in re.finditer(r"jobs/([a-z_]+\.py)", text)}
+    return found
+
+
+def _baked_jobs() -> set[str]:
+    """Every script the cluster image copies into `/home/ray/jobs/`."""
+    text = _CLUSTER_DOCKERFILE.read_text(encoding="utf-8")
+    baked: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or "/home/ray/jobs" not in stripped or not stripped.upper().startswith("COPY"):
+            continue
+        baked |= {m.group(1) for m in re.finditer(r"scripts/([a-z_]+\.py)", stripped)}
+    return baked
+
+
+def test_every_submitted_ray_job_is_baked_into_the_cluster_image() -> None:
+    submitted, baked = _submitted_jobs(), _baked_jobs()
+
+    assert submitted, "no `jobs/<name>.py` submission found anywhere — the scan is broken, not the estate"
+    assert baked, "the cluster image copies nothing into /home/ray/jobs — the COPY moved and this gate is vacuous"
+
+    missing = sorted(submitted - baked)
+    assert not missing, (
+        f"these jobs are submitted but not baked into {_CLUSTER_DOCKERFILE.name}: {missing}. The lane "
+        "runs `python /home/ray/jobs/<job>.py`, so the job dies `exit 2` and the stage reports FAILED "
+        "with nothing naming the image."
+    )
+
+
+def test_every_baked_ray_job_exists_on_disk() -> None:
+    """The mirrored mistake: a COPY naming a script that is gone fails the BUILD, not the run.
+
+    Cheaper to catch here than in a 238-second image build, and it is how a renamed script leaves a
+    dangling COPY behind.
+    """
+    missing = sorted(name for name in _baked_jobs() if not (_REPO / "scripts" / name).is_file())
+    assert not missing, f"{_CLUSTER_DOCKERFILE.name} copies scripts that do not exist: {missing}"
