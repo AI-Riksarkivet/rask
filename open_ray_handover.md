@@ -1,6 +1,6 @@
 # open_ray_handover.md — the Ray telemetry half this repo cannot merge
 
-**Working spec, 2026-08-22.** Companion to `open_ray_otel.md`. Delete when the external cluster has
+**Working spec, 2026-08-22.** Companion to the dapr/otel audit (landed and deleted 2026-08-23; the rask-side halves this file relies on are in `service_kit/ray_tracing.py`, the `ray-pods` scrape job in `chart/templates/otel-collector.yaml`, and `chart/templates/rayservice.yaml`). Delete when the external cluster has
 applied everything below and it has been observed working.
 
 **Who this is for:** whoever operates the KubeRay cluster at `dev-kuberay.ra.se`. You should not need

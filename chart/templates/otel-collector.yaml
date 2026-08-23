@@ -248,6 +248,17 @@ data:
       # Traces carry GreptimeDB's trace-pipeline header (→ opentelemetry_traces); metrics/logs must NOT, so
       # they get a separate exporter with only the db-name header. Both hit the same /v1/otlp base; the
       # otlphttp exporter appends /v1/{traces,metrics,logs} per signal (same as the app SDK did).
+      {{- /* NO `sending_queue` / `retry_on_failure` ON EITHER EXPORTER, and it is unfinished work rather
+         than a ruling. A Collector restart during a GreptimeDB blip loses whatever is in flight, and the
+         `file_storage` extension above is wired to the filelog receiver's READ OFFSETS, not to an
+         exporter queue. The otel skill's collector reference is explicit that a persistent
+         `sending_queue` + `file_storage` is the durable shape and the bare `batch` processor is not.
+         Deferred deliberately: a `storage:` id naming an extension absent from `service.extensions`
+         passes `otelcol validate` with exit 0 and then kills the Collector at startup with
+         `no storage client extension found` — taking the whole telemetry plane down. It needs its own
+         change with a gate, not a line added here.
+         This matters more than it reads: the store it writes to is itself OOM-looping (see
+         chart/values.yaml's greptimedb resources comment). */}}
       otlphttp/greptime_traces:
         endpoint: {{ $greptime | quote }}
         headers:
@@ -260,6 +271,13 @@ data:
     service:
       extensions: [health_check, file_storage]
       pipelines:
+        {{- /* THE WORKFLOW KEEPALIVE IS NOT FILTERED. `/TaskHubSidecarService/Hello` is the engine's
+               health ping to its own sidecar: measured at roughly 3,980 spans in three hours, about the
+               ninth-largest span source in the estate, and carrying no information anyone reads.
+               Dropping it is a `filter/drop_keepalive` processor in this pipeline, not app work.
+               Left undone deliberately rather than missed: two audits measured its share of the grpc
+               scope 40 points apart, so whoever takes it should RE-MEASURE first instead of trusting
+               either figure. */}}
         traces:
           receivers: [otlp]
           processors: [memory_limiter, k8sattributes, batch]

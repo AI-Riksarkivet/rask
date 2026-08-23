@@ -2286,8 +2286,15 @@ def test_dapr_sidecar_spans_actually_have_an_exporter() -> None:
     that is down.
 
     So every Dapr hop in the estate — service invocation, pub/sub publish and delivery, actor calls,
-    input bindings, workflow steps — produced no span anywhere, while three files asserted the
-    opposite (observability.yaml's own comment, chart/values.yaml, docs/MEDALLION.md).
+    input bindings — produced no span anywhere, while three files asserted the opposite
+    (observability.yaml's own comment, chart/values.yaml, docs/MEDALLION.md).
+
+    One correction to that sentence, which used to end "...input bindings, workflow steps": WORKFLOW
+    STEPS were never in the hole. The Python SDK creates its own `activity: <name>` and orchestration
+    spans through the APP's tracer, so they reached the store the whole time on the app's exporter,
+    independent of anything the sidecar did or did not export. What the missing stanza cost there was
+    the daprd HALF of each hop — the grpc call into the sidecar that carries an activity — not the
+    activity itself. Verified after this landed: all four workflow span kinds now arrive.
 
     The stated reason for omitting it was also wrong on its own terms: Dapr's `otel.headers` accepts
     arbitrary pairs, and more to the point the estate RUNS a Collector whose `otlp` receiver already

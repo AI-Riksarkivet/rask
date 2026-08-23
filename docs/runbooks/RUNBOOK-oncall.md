@@ -17,7 +17,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 - **Signals**: Perses panels (`make dashboards`), `kubectl logs`, and the domain metrics —
   `lineage_events_processed_total{lance_lineage_outcome}` (incl. `DEAD_LETTERED`),
   `medallion_stage_transitions_total{lance_medallion_transition}`, `medallion_dlq_parked{lance_medallion_app}`,
-  `outbox_depth` / `outbox_oldest_age`, `lance_training_*`.
+  `outbox_depth` / `outbox_oldest_age_seconds`, `lance_training_*`.
 - **First move for any pod issue**: `kubectl get pods -o wide`, then `kubectl logs <pod> --all-containers
   --tail=100` and `kubectl describe pod <pod>` (Events section).
 
@@ -31,7 +31,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 | `/readyz` = 503 `{"database":"unavailable"}`, pod `NotReady` | [readyz degraded](#readyz-degraded--pool-or-graph) |
 | Cascade stops mid-way (bronze but no silver, etc.) | [Cascade stalled](#cascade-stalled) |
 | `medallion_dlq_parked` rising / `dapr_dead_letter_parked` ERROR logs | [DLQ parking](#dlq-parking--a-delivery-gave-up) |
-| `outbox_depth` sustained > 0, `outbox_oldest_age` climbing | [Outbox not draining](#outbox-not-draining) |
+| `outbox_depth` sustained > 0, `outbox_oldest_age_seconds` climbing | [Outbox not draining](#outbox-not-draining) |
 | Catalog reads/writes fail, Lance data unreachable | [RustFS down](#rustfs-down--data-plane) |
 | No lineage, `/runs` empty or erroring, FGA also failing | [AGE down](#age-postgres-down--lineage--fga) |
 
@@ -129,7 +129,7 @@ Deliberately no auto-requeue — re-firing a poison message blind would loop the
 
 ## Outbox not draining
 
-**Symptom.** `outbox_depth` sustained > 0 and `outbox_oldest_age` climbing (the "alertable pair" panel).
+**Symptom.** `outbox_depth` sustained > 0 and `outbox_oldest_age_seconds` climbing (the "alertable pair" panel).
 
 **Cause.** The lineage outbox stages each event durably before publishing; the relay drains it. A sustained
 non-zero depth means the relay isn't draining — usually the lineage service or NATS is unhealthy.

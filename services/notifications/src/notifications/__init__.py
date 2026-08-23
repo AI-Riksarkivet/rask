@@ -40,7 +40,14 @@ _root.include_router(reconcile_router)
 # span in the service and carries no information. `setup_otel` (called by `make_service_app` below)
 # takes no `excluded_urls` argument, so the lever is the instrumentation's own env var — read when
 # `opentelemetry.instrumentation.fastapi` is first imported, which `setup_otel` does lazily and only
-# when telemetry is on, i.e. after this line. `setdefault`, so a deployment can still widen or clear it.
+# when telemetry is on, i.e. after this line. `setdefault`, so a deployment can still widen or clear it —
+# and in-cluster it always does. `rask.otelEnv` sets "/livez,/readyz,/metrics" on every fleet pod, so this
+# line only ever takes effect in a bare local run, and the two values DIFFER in both form and content.
+# Neither difference is a bug, and both were checked: the instrumentation matches each entry as a regex
+# searched against the url, so "livez" and "/livez" exclude the same path; the chart adds `/metrics`
+# (harmless here, nothing local scrapes it) and omits `/health`, which this service really does serve.
+# Left as-is rather than unified: `test_probe_wiring.py` pins this set as a MEMBERSHIP so a deployment
+# may widen it, and rewriting the value to look like the chart's would buy nothing but churn.
 os.environ.setdefault("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", "livez,readyz,health")
 
 app = make_service_app(title="notifications", routers=[health.router, *routers], proxy_router=_root, lifespan=make_lifespan)

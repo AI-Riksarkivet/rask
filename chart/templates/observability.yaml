@@ -145,6 +145,13 @@ spec:
         - "/v1.0/state/{storeName}"
         - "/v1.0/publish/{pubsubName}/{topic...}"
         - "/v1.0/actors/{actorType}/{actorId}/method/{method}"
+  {{- /* NOT SET, and it is a decision rather than an oversight. `latencyDistributionBuckets` is GLOBAL:
+         workflow-execution latency shares the HTTP distribution, so one bucket list has to cover both.
+         Dapr's default 34 buckets top out at 100s, and `promotion_review` blocks on
+         `ctx.wait_for_external_event` — a human approving a promotion — so it is unbounded BY DESIGN and
+         no list covers it. Measured: that workflow already has 0 observations at le=100000 and 1 at
+         le=+Inf. Consequence to know before trusting a chart: the workflow p95 panel renders +Inf for
+         that lane. Setting a wider ceiling trades a visibly-broken quantile for a silently-wrong one. */}}
   logging:
     apiLogging:
       enabled: true

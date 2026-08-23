@@ -776,8 +776,11 @@ vendor headers). ONLY on the direct-to-GreptimeDB paths (no Collector) does the 
 on every signal + the trace-pipeline header on traces (metrics/logs must NOT carry it → separate
 *_TRACES_HEADERS). The SDK appends /v1/{traces,metrics,logs} to the endpoint.
 
-NOT the same as "rask.otelEnv": this one is Collector-first and Python-launcher-specific (the
-OTEL_PYTHON_* knobs); rask's fleet keeps its own direct-to-GreptimeDB block. Both names coexist. */}}
+NOT the same as "rask.otelEnv": this one is Python-launcher-specific (the OTEL_PYTHON_* knobs).
+Both names coexist, but they no longer DIFFER on routing — the second half of this sentence used to
+read "rask's fleet keeps its own direct-to-GreptimeDB block" and has been false since the fleet was
+converged: "rask.otelEnv" derives its endpoint from "lance.otlpEndpoint" too, so both are
+Collector-first and fall back to the store only when the Collector is disabled. */}}
 {{- define "lance.otelEnv" -}}
 {{- $root := index . 0 -}}
 {{- $svc := index . 1 -}}

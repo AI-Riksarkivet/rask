@@ -2209,6 +2209,19 @@ greptimedb-standalone:
   # 8Gi is not a measured working-set, it is room to stop the loop: the node carries 503Gi and runs at
   # ~26%, so the cost of being generous here is nil next to the cost of a blind estate. Revisit with a
   # real high-water measurement once it has survived a busy period without restarting.
+  #
+  # IT HAS NOT. Re-measured 2026-08-23: restartCount **12**, lastState OOMKilled, exit 137, most recent
+  # at 15:00:05Z. 8Gi did not stop the loop, it slowed it — so read the paragraph above as the reasoning
+  # that led here, not as a resolution. Two consequences worth knowing before trusting this store:
+  #   * Every restart is a hole in the estate's logs, metrics AND traces at once, and the only thing
+  #     that could report the hole is the thing that died. `chart/alerting/rules.yml` carries 23 rules
+  #     and NONE on GreptimeDB or the Collector, so nothing pages on this today.
+  #   * The Collector's OTLP exporters declare no `sending_queue` (see otel-collector.yaml), so
+  #     whatever was in flight at each OOM was dropped rather than retried.
+  # Raising the ceiling again is the obvious move and is probably still not the answer: nothing has
+  # measured WHICH subsystem allocates (mito compaction vs OTLP ingest burst vs parquet preload), and
+  # a limit raised without that is a guess with a bigger number. Bounding query memory
+  # is the other lever nobody has pulled.
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 8Gi }

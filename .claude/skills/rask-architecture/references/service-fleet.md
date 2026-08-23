@@ -11,11 +11,14 @@ The frontend's Vite proxy targets `:8888` (the gateway) for `compute`/`studio`/`
 does NOT start) and `explorer`/`annotator` have no `/api` proxy at all — they reach
 `:8101`/`:8102`/`:8103` through their own BFF. See `rask-frontend`.
 
-## Three HTTP entrypoints are thin shells over `make_service_app`
+## Five HTTP entrypoints are thin shells over `make_service_app`
 
-`compute`, `controlplane` and `ingest` import routers (+ maybe a lifespan) from a domain
-package and call `service_kit.make_service_app` — no business logic in the entrypoint.
-`gateway` builds `FastAPI(...)` itself (it is a proxy, not a router host), and the seven
+`compute`, `controlplane`, `flows`, `ingest` and `notifications` import routers (+ maybe a
+lifespan) from a domain package and call `service_kit.make_service_app` — no business logic in
+the entrypoint. Count by CALL SITE, not by import: `gateway` names the factory in three comments
+and calls it nowhere. `gateway` builds `FastAPI(...)` itself (it is a proxy, not a router host),
+though it does call `service_kit.setup_otel` directly, so it is on the shared telemetry path
+even while it is off the shared app-factory path, and the seven
 lance-plane services (`catalog`, `lineage`, `medallion` ×2 apps, `maintenance`, `viewer`,
 `search`, `annotator`) build `FastAPI(...)` in `main.py`/`service.py`/`producer.py`/`mover.py`
 over their own `core/config.py` settings. See rask-architecture's "Two layouts are sanctioned".

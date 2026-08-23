@@ -2,9 +2,13 @@
 
 **Working plan, 2026-08-17.** Delete this file when the decision below is made and executed.
 
-**The one-line state:** `chart/values.yaml:2030` says `alerting.enabled: false`. Fifteen alert rules
-exist, are valid, are proven to fire against synthetic series — and are evaluated by nothing. Nobody
-is paged for anything, ever.
+**The one-line state:** `chart/values.yaml:2176` says `alerting.enabled: false`. Twenty-three alert
+rules exist, are valid, are proven to fire against synthetic series — and are evaluated by nothing.
+Nobody is paged for anything, ever.
+
+> Three figures below were restated 2026-08-23 by the dapr/otel work, which moved them: the rule count
+> (15 → **23**, eight added — outbox age, workflow lanes, bus health), the values.yaml line, and the
+> telemetry-health row. **The decision this file asks for is untouched and still open.**
 
 That is not a gap in the sense of "missing work". Everything except the decision is already built.
 
@@ -14,12 +18,12 @@ That is not a gap in the sense of "missing work". Everything except the decision
 
 | Piece | State |
 | --- | --- |
-| `chart/alerting/rules.yml` | **15 alerts**, all with a `for:` window |
+| `chart/alerting/rules.yml` | **23 alerts**, all with a `for:` window |
 | `chart/alerting/rules_test.yml` | synthetic-series tests — the rules are proven to FIRE, not merely to parse |
 | `make alert-rules-check` | `promtool check rules` + `promtool test rules`, wired and green |
 | `chart/templates/alerting.yaml` | renders vmalert + Alertmanager + both ConfigMaps |
 | `alerting.vmalertImage` / `alertmanagerImage` | pinned (`vmalert:v1.106.1`, `alertmanager:v0.28.0`) |
-| Telemetry itself | **running 19 days** — OTel Collector, GreptimeDB, Perses all up, `observability.enabled: true` |
+| Telemetry itself | **NOT healthy — corrected 2026-08-23.** Collector and Perses are up, but `rask-greptimedb-standalone-0` is at **restartCount 12, OOMKilled**, still looping at the raised 8Gi ceiling. This row previously read "running 19 days", which was uptime measured on a pod that had been restarting throughout. It sharpens the case rather than weakening it: the one store that would hold the evidence for any alert is itself the thing failing unwatched, and none of the 23 rules covers it |
 
 So the rules are written, tested, templated and imaged. The estate collects telemetry and draws
 dashboards. The only thing absent is the component that turns a series into a page.
