@@ -1102,6 +1102,33 @@ problem on its own; writing derived values into `os.environ` is. Options, in inc
 Whichever is chosen, the fixture has to capture-and-restore rather than assert-the-ambient — that half
 is a bug regardless of which option wins.
 
+## E15 — the `testing-python` skill describes a repository layout that no longer exists
+
+*Added 2026-08-22 from the test audit. It is a MARKETPLACE skill (`ra-skills`), so the fix belongs
+upstream — CLAUDE.md: "you change one by editing it in ra-skills". Recorded here because CLAUDE.md
+routes ALL Python test work to it.*
+
+Verified against the current tree:
+
+| the skill says | the estate has |
+| --- | --- |
+| `testpaths` = seven dirs incl. `packages/htr/tests`, `components/services/{core,volumes_api,search_api,ray_api}/tests`, `components/apps/runner/tests` | **21 testpaths**, and SIX of the seven it names do not exist — `components/` was removed and `htr` became a sealed runner |
+| "`slow` is the only custom marker" | **15 markers**, `slow` plus `e2e` plus 13 per-suite e2e selectors |
+| a single-test command against `packages/htr/tests/...` | errors out — the path is gone |
+
+**Why this matters more than an ordinary stale doc.** Pytest import mode here is `importlib` with an
+EXPLICIT `testpaths` list, which the skill itself calls out as load-bearing: "a new brick's `tests/` dir
+runs only after you add its path to `testpaths`". So an engineer who follows the skill writes a test into
+a directory nothing collects, and the suite stays green — the same silent-loss shape as every
+unreachable-suite finding in the test audit, one level up. Its *technique* half (async is explicit, moto
+for S3, respx for HTTPX, `uv run pytest` never `uvx pytest`) is still correct and still worth following;
+it is the CONFIG block that is fiction.
+
+The upstream fix is mechanical: replace the `testpaths`/markers block with the current one and repoint
+the single-test example. The estate-side half — that nothing detects this drift — has no clean answer
+while the skill lives in another repository, and inventing a gate that reaches into a marketplace
+checkout would be worse than the drift.
+
 ## Appendix A — every finding, by scope
 
 The table below is the complete, verified list. `→` names the epic each finding was filed under.

@@ -26,8 +26,12 @@ build:
 	uv sync --all-packages
 	bun --cwd=frontend run build
 
-# Python tests via pytest; the frontends have no unit suite — `make frontend-check`
-# (svelte-check) is their gate.
+# Python tests via pytest. THE FRONTENDS DO HAVE A UNIT SUITE and this line used to deny it: 128
+# tracked vitest files across the 18 packages that declare a `test` script. `make test` does not run
+# them — `bun --cwd=frontend run test` does, and CI runs both — so the honest statement is that this
+# target covers ONE plane, not that the other plane has nothing to cover. Pinned by
+# tests/unit/test_makefile_claims.py, because a comment is exactly the kind of assertion that rots
+# without one.
 # `not e2e`: tests/e2e-py is collectable (so the collection gate in
 # tests/unit/test_e2e_collection_gate.py can see it) but its suites need a LIVE deployed
 # stack — run them via `make e2e-ci` / `make e2e-ray-ci` / the per-suite targets.

@@ -1575,11 +1575,31 @@ the fix.** Three of the meta-gates written after v1 (M7, M8, M9) fail open.
   pyproject declares 15. Its single-test command errors out. An engineer following it writes a test into
   a directory the explicit `testpaths` list will never collect. It is a marketplace skill, so the fix
   belongs upstream in `AI-Riksarkivet/ra-skills`, not here.
+  **MIGRATED 2026-08-22** — confirmed still true today (its `testpaths` block names six directories that
+  do not exist, and the root pyproject declares 15 markers, not one). It is a MARKETPLACE skill from
+  `ra-skills`, which CLAUDE.md says is changed by editing it there, so it cannot be fixed from this
+  repository. Work item and the exact corrections → `open_python-audit.md` § E15. **This is the audit's
+  highest-leverage documentation defect** and worth stating plainly: CLAUDE.md routes *all* Python test
+  work to that skill, and it tells an engineer to write tests into directories the explicit `testpaths`
+  list will never collect — the same silent-loss shape as every unreachable-suite finding above, one
+  level up.
 - **`.claude/skills/rask-frontend`** — the zone-contract figures contradict themselves five lines apart
   and both are wrong; the known-red baseline names one failure while instructing the reader to check it
   is "still the *only* red." It is 8 tests across 3 files.
+  **NO-OP 2026-08-22** — already corrected by `e6a6053b` ("docs: correct four claims the frontend gates
+  just disproved"). Re-measured today: the suite is **22 files, 22 passed, 1270 tests**, which is what
+  the skill now says; the "still the *only* red" instruction is gone. Verified rather than assumed,
+  because the skill's own sentence tells the reader to re-measure instead of trusting it.
 - **`Makefile:29`** asserts "the frontends have no unit suite" — contradicted by 125 tracked vitest files
   and 2,223 passing tests across the 13 packages that declare a `test` script.
+  **FIXED + ENFORCED 2026-08-22** — re-measured HIGHER than filed: **128** vitest files across **18**
+  packages declaring a `test` script (the audit said 125 across 13). The comment now says what is true —
+  `make test` covers ONE plane, and `bun --cwd=frontend run test` covers the other — rather than denying
+  the second plane exists. Pinned by `tests/unit/test_makefile_claims.py`; RED: restoring the phrase
+  fails **exit 1** quoting both counts. The gate is deliberately narrow (it pins the claims that were
+  measured wrong, not prose in general) and carries its own exit condition: if the frontend suite ever
+  genuinely shrank to nothing, the gate says to delete itself rather than keep asserting a negative
+  about an empty set.
 - **`ci.yml:262-266`** documents the models e2e harness as landed (#112). It is not (H4).
 - **`.dagger/test.go`**'s doc comment is *correct* and says the runners are not covered — the honest
   documentation of an open hole. Worth copying, not fixing.
