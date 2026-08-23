@@ -113,18 +113,53 @@ function keysOfCall(text: string, index: number): string[] | null {
 	return keys.includes('…') ? null : keys;
 }
 
-/** Every `X({...}).refresh()` inside a `.remote.ts`, with the keys it passed. */
+/** Every `X({...}).refresh()` inside a `.remote.ts`, with the keys it passed.
+ *
+ * WALKS BACKWARDS FROM `.refresh()` rather than matching the whole call with a regex. The regex form
+ * was `(\w+)\(\s*\{[^)]*\}\s*\)\s*\.refresh\(\)`, and `[^)]*` cannot cross a `)` — so any key
+ * literal containing a CALL (`fetchAccess({ id: currentId() })`) ended the match early and the site
+ * was invisible. Measured: **40 `.refresh()` sites in the estate's `.remote.ts` files, 15 matched.**
+ * The gate judged 37% of the sites while its own anti-vacuity guard passed, which is the shape this
+ * whole audit is about — a guard counts what the scanner FOUND, so it can never see what the scanner
+ * missed.
+ *
+ * A backward walk has no window to tune and no nesting it cannot cross: find `.refresh()`, step back
+ * over the balanced `(...)`, then take the identifier in front of it. `keysOfCall` already parses the
+ * argument with a depth counter, so it was never the limiting half.
+ */
 function refreshCalls() {
 	const found: { zone: string; file: string; fn: string; keys: string[] }[] = [];
 	for (const { zone, file, text } of FILES) {
 		if (!file.endsWith('.remote.ts')) continue;
-		for (const m of text.matchAll(/(\w+)\(\s*\{[^)]*\}\s*\)\s*\.refresh\(\)/g)) {
-			// `noUncheckedIndexedAccess` types a capture group as `string | undefined` — the group is
-			// non-optional in the pattern, but the type system cannot know that. Guarding once here is
-			// what lets `fn` be used twice below without the `as string` this line used to carry.
-			const fn = m[1];
+		for (const m of text.matchAll(/\.refresh\(\s*\)/g)) {
+			let i = m.index - 1;
+			while (i >= 0 && /\s/.test(text[i] as string)) i--;
+			// `foo.refresh()` on a plain variable is not a keyed call and is correctly skipped.
+			if (text[i] !== ')') continue;
+
+			let depth = 0;
+			let open = -1;
+			for (let j = i; j >= 0; j--) {
+				const c = text[j] as string;
+				if (c === ')') depth++;
+				else if (c === '(') {
+					depth--;
+					if (depth === 0) {
+						open = j;
+						break;
+					}
+				}
+			}
+			if (open < 0) continue;
+
+			let k = open - 1;
+			while (k >= 0 && /\s/.test(text[k] as string)) k--;
+			const end = k + 1;
+			while (k >= 0 && /[\w$]/.test(text[k] as string)) k--;
+			const fn = text.slice(k + 1, end);
 			if (!fn) continue;
-			const keys = keysOfCall(text, m.index + fn.length);
+
+			const keys = keysOfCall(text, open);
 			if (keys) found.push({ zone, file, fn, keys });
 		}
 	}

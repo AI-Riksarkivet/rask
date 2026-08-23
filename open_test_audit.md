@@ -783,9 +783,21 @@ tenth runner with a `pyproject.toml` and no `tests/` fires the roster naming `zz
 - **`no-networkidle.test.ts:41`** — scans only `microfrontends/<zone>/e2e`, so the estate's surviving
   `waitUntil: 'networkidle'` calls sit outside it. Three of the seven zones (`compute`, `studio`,
   `models`) have no `e2e/` at HEAD, so the gate is vacuous for them too — up from two in v1.
+  **ENFORCED 2026-08-22** (with M11) — widened to `tests/e2e` and `@rask/ui/harness`, which immediately
+  caught two survivors including `mfe.spec.ts:47`, on the very navigation whose result it asserts. A
+  second fix was needed for the second one: the file matcher required `.spec`/`.test`/`.e2e` in the
+  name, which a zone's `e2e/` needs (ordinary source sits beside its specs) and a DEDICATED browser
+  tree does not. 9 passed.
 - **`single-flight-keys.test.ts:121`** — the refresh-site regex `\{[^)]*\}` cannot match a key literal
   containing a call, so the gate judges 15 of the estate's 40 `.refresh()` sites while its own
   anti-vacuity guard passes.
+  **ENFORCED 2026-08-22** — confirmed exactly (40 sites, 15 matched) and replaced with a BACKWARD WALK
+  from `.refresh()`: step back over the balanced `(...)`, take the identifier in front. **15 → 37.**
+  The three still unmatched are `.refresh()` mentions inside COMMENTS, which the walk skips by
+  construction (prose has no preceding `)`) — so it judges all 37 real call sites. `keysOfCall` already
+  parsed its argument with a depth counter and was never the limiting half; the site FINDER was.
+  This is the audit's recurring shape in its purest form: an anti-vacuity guard counts what the scanner
+  FOUND, so it can never see what the scanner missed.
 - **`test_oidc_discovery_parity.py:41`** — the `OIDCVerifier\((.*?)\n\s*\)` regex anchors on a newline
   before the closing paren, so a single-line construction is invisible to the scan; the `>= 5` floor
   against 8 found doors then absorbs three disappearances.
