@@ -139,6 +139,10 @@ export const ZONE_STACKS: Record<string, ZoneStack> = {
 			LINEAGE_API: url(port('MOCK_LINEAGE_PORT')),
 			GREPTIME_API: url(port('MOCK_OBS_PORT')),
 			NATS_MONITOR_API: url(port('MOCK_OBS_PORT')),
+			// The GATEWAY, for the promotions surface. Same mock as GREPTIME/NATS — the paths never
+			// collide. Required rather than optional: `gatewayJSON` defaults to localhost:8888, a real
+			// port on a dev host, so an unset var lets `make dev-zone` read a LIVE gateway.
+			RASK_GATEWAY_URL: url(port('MOCK_OBS_PORT')),
 			LANCE_BACKEND: url(port('MOCK_CATALOG_PORT')),
 		}),
 	},
