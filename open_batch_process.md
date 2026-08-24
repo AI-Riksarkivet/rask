@@ -65,14 +65,17 @@ workflow history as an output and again per dependent.
 **B11 — boot-env vs live-spec, two columns, written down.** Done here rather than deferred; the
 columns are below.
 
-**B14 — one `transform_batch`, two drivers, one drift pin.** Deferred, and it is the largest genuine
-debt on this list. The medallion ships two independent implementations of the bronze→silver transform
-(`medallion/services/compute.py` and `scripts/ray_stage_job.py`) whose tabular paths nothing compares,
-so they can drift silently and the drift shows up as a Ray-lane result that differs from the
-in-process one. Unifying them is a real refactor across an image boundary — the Ray script is baked
-into `ray-cluster.dockerfile` and cannot import the service. Recorded as debt with its cost, because
-the honest fix is a shared module both can import, not a test that compares two behaviours after the
-fact.
+**B14 — one `transform_batch`, two drivers, one drift pin.** **DONE (`5a8dd3b7`).** The derivers
+(`is_image`, `derive_thumbnail`, `derive_embedding`) and the blob-field pair moved to
+`service_kit.lakehouse` behind an optional `service-kit[media]` extra, and both drivers now import ONE
+implementation. The stated blocker — "the Ray script is baked into the cluster image and cannot import
+the service" — was true and beside the point: it can import `service_kit`, which it already did for
+`stamp_stage`.
+
+The drift-pin test became an IDENTITY test (the script must reference the shared function objects)
+plus a second test asserting the local names are GONE rather than merely unused, because a dormant
+copy is a copy. No Lance path was touched: `lr.read_lance` / `lr.write_lance` / `blob_array` are
+unchanged, and both documented paths stand.
 
 **B15 — bound dashboard reads.** Closed as ruled. Its first lever, source-bounding, is done
 (`MAX_JOBS`/`MAX_TASKS` in `ray_kit/dashboard.py`, with the 81,155-job OOM measurement attached).

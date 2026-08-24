@@ -61,6 +61,32 @@ advanced to version 7, and `gateprobe-gold` received `catalog`. The stated block
 credential but by calling from INSIDE the mover pod, where it is already in the environment; the
 secret never left the cluster, which is the only form of this that respects the secret rule.
 
-So this item is no longer blocked on a proof. What is left is the change itself, and it is still a
-change to every estate: retiring the lane-matching guards. See `docs/architecture/medallion-cascade.md`
+So this item is no longer blocked on a proof. What is left is the change itself — and reading it
+against the medallion's own record (2026-08-24) turns up a CONFLICT this item never acknowledged.
+
+**A STANDING RULING CONTRADICTS THE HEADLINE.** `docs/architecture/medallion-cascade.md` §10 —
+"DECIDED — the two cascade heads are distinct events, and both must fire" — rules that
+`/bronze-arrival` and `/publication-arrival` describe different work: different datasets, and a
+version RANGE the ingest head has no concept of. Unifying them "would collide two legitimate cascades
+onto one `instance_id`, and Dapr would answer the second as a duplicate — silently dropping one of two
+pieces of work that must both happen." So `table_published` CANNOT become the single trigger without
+overturning that ruling, and this item may not simply proceed.
+
+**BUT THE GUARD AND THE HEADLINE ARE SEPARABLE, which neither document noticed.** The lane-matching
+guard exists for a narrower reason than the trigger question: two ingest lanes (`bronze$events`,
+`bronze$pages`) share the `medallion.bronze` topic, so every mover subscribed to it sees both and must
+filter. `subTopic` is ALREADY per-mover config in the chart (`medallion.bronze` / `medallion.silver` /
+`medallion.media`), so a third option exists that §10 does not foreclose:
+
+> Give each LANE its own subTopic. An arrival then reaches only the mover that wants it, the guard
+> becomes unnecessary, and BOTH cascade heads keep firing exactly as §10 requires.
+
+That is still a change to every estate — every mover's `subTopic` and every publisher's topic move
+together, or triggers go nowhere — but it delivers this item's actual goal without touching the
+ruling.
+
+**OWNER DECISION NEEDED, and this item is blocked on it, not on effort:** per-lane subTopics, or
+overturn §10 and unify the heads?
+
+Retiring the lane-matching guards. See `docs/architecture/medallion-cascade.md`
 for why BOTH cascade heads must fire meanwhile; that is a ruling, not an interim state.
