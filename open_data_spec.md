@@ -296,22 +296,44 @@ unsafe before the §9(c) decision. Nothing here is parallelisable just because i
 
 | # | change | state |
 |---|---|---|
-| 1 | Ingest writes **External** blob descriptors by default | OPEN — mechanism measured (§9(a2)); prerequisite for 3 |
-| 2 | Name the blob thresholds; register the external base at create | OPEN — moved to the CATALOG's create door (§9(a2)) |
-| 3 | Stop materialising blobs in the mover | OPEN — blocked on 1 |
+| 1 | Ingest writes **External** blob descriptors by default | **DONE** `3c8032e5` — measured 0.64% of corpus vs 100.71% |
+| 2 | Name the blob thresholds; register the external base at create | **DONE** `3c8032e5` + `8c24c7f3` |
+| 3 | Stop materialising blobs in the mover | OPEN — **UNBLOCKED**, 1 has landed |
 | 4 | Tier→tier becomes `add_columns`, not overwrite | OPEN — measured safe |
-| 5 | Kill `GateOutcome.TRIGGER`; one enforcement point | **IN FLIGHT** — uncommitted, 48 fixtures red |
+| 5 | Kill `GateOutcome.TRIGGER`; one enforcement point | **DONE** `ce821949` |
 | 6 | Drop the chart fallback in `effective_gate`; drop `medallion.movers[]` | OPEN |
 | 7 | Rename lane → transform | OPEN |
 | 8 | Split the gate: Ray writes an attestation, catalog runs the floor | OPEN — now on the DEFAULT path |
 | 9 | Add `cascade_run` — one workflow per batch | OPEN |
 | 10 | Tiers become tags on one dataset | UNBLOCKED 2026-08-24 — §9(c) decided: gold is a tag |
 
-1. **Ingest writes External descriptors by default** — see 3 below. MEASURED as a PREREQUISITE for
+1. **Ingest writes External descriptors by default — DONE (`3c8032e5`).** The adapter declares the
+   base (the seam that already answers `partition_key_for`); `s3-prefix` declares its BUCKET,
+   `local-dir` its confined root, and `lance-append` declares NOTHING because its fetcher synthesises
+   Arrow IPC and the payload exists at no URI. Measured through the real ingest path over a 1 MB
+   corpus: external bronze 6,428 B (0.64%), managed 1,007,056 B (100.71%), both resolving 20/20.
+   See 3 below. MEASURED as a PREREQUISITE for
    the mover change, not a parallel one (§9(a)): a managed descriptor carried between datasets
    resolves to nothing, silently. The measurement is `scripts/measure_blob_descriptor_carry_forward.py`:
    MANAGED resolves **0 of 20** rows and raises nothing; EXTERNAL resolves 20 of 20.
-2. **Name the blob thresholds; register the external base at create** — `ingest/lander.py`.
+2. **Register the external base at create — DONE (`3c8032e5`), and it is ONE change with 1.**
+   `initial_bases` is create-mode only, so a dataset that did not register its base at create can
+   never accept an external descriptor; the two cannot land apart. **And it is operator-gated.** A
+   source root is CLIENT-SUPPLIED (`options.bucket` comes off the ingest request), so ingest reads
+   the same `LANCE_EXTERNAL_BLOB_BASES` allowlist the catalog already enforces — without it, the
+   cascade's own `read_blobs` becomes a server-side read primitive for any URI a caller can name,
+   the SSRF `chart/values.yaml`'s `vending.externalBlobBases` comment refuses. An unapproved base
+   degrades to MANAGED, loudly.
+
+   **The thresholds are named too (`8c24c7f3`), and the numbers this spec inherited were wrong.**
+   The estate's comment claimed Lance's defaults were 16 KiB / 2 MiB and concluded "a scanned
+   archival page lands in `dedicated`". Bisected on pylance 10.0.0: **inline < 64 KiB, packed
+   64 KiB–4 MiB, dedicated ≥ 4 MiB** — a 20 KB payload lands inline and a 3 MB page lands PACKED, so
+   page images were sharing sidecars while the estate believed each had its own. Now PINNED at the
+   measured values, so a pylance retune cannot move every payload silently — which matters here
+   specifically because the guide stores these in the dataset SCHEMA and rejects an append naming
+   different ones. The descriptor `kind` numbering was assumed and is now measured too:
+   **0 inline, 1 packed, 2 dedicated, 3 external.**
 3. **Stop materialising blobs in the mover** — `compute.py::_carry_forward`. Safe ONLY once 1 has
    landed. Removes 2 of the 3 corpus copies. The descriptor must be mapped onto the prepared write
    struct; the shapes differ (read gives `struct<kind, position, size, blob_id, blob_uri>`, write
