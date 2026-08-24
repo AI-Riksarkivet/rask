@@ -58,33 +58,77 @@ def _same_tier_settings(tmp_path: Path) -> MedallionSettings:
         "MEDALLION_COMPUTE_ENABLED": "true",
         "MEDALLION_FROM_URI": str(tmp_path / "silver.lance"),
         "MEDALLION_TO_URI": str(tmp_path / "enriched.lance"),
+        # REQUIRED since the second door was removed: publishing is the only way to promote, and it
+        # needs a catalog. Every mover the chart renders has one; a lane without one is the ungoverned
+        # mode, which writes and never promotes.
+        "MEDALLION_CATALOG_URL": "http://catalog.invalid",
     }
     return MedallionSettings(**env)
 
 
+def _stub_catalog(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[dict[str, object]]:
+    """Stand in for the catalog, which is now the ONLY door a stage may promote through.
+
+    Before the second enforcement point was removed these tests needed no catalog: the mover fired
+    the next stage's topic itself. It cannot any more, so a stage promotes only by publishing — hence
+    both this stub AND `MEDALLION_CATALOG_URL` on the settings, because `gate_decision` will not
+    choose PUBLISH without a catalog and the stub would then never be called.
+
+    A stage with no catalog does NOT retry. It acks and does not promote (`GateOutcome.UNGOVERNED`),
+    because redelivery cannot set an env var — this docstring said "RETRYs" while that was true of an
+    intermediate state, and it was corrected rather than left standing. Same pattern as
+    `test_cascade_via_publish.py`.
+    """
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(transform.catalog_register, "register_stage_output", lambda **_: None)
+    # The lane's REAL output URI. Returning a path the lane never writes makes the predecessor
+    # unreadable and the stage RETRY -- a stub that lies about the vended location tests nothing.
+    monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "enriched.lance"))
+    monkeypatch.setattr(transform.catalog_register, "publish_stage_output", lambda **k: published.append(k))
+    return published
+
+
 class TestTheMoverImposesNoTierLadder:
-    def test_a_silver_to_silver_lane_runs(self, upstream: Path) -> None:
+    def test_a_silver_to_silver_lane_runs(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, upstream: Path) -> None:
+        _stub_catalog(monkeypatch, upstream)
         dapr = _Dapr()
 
         result = asyncio.run(transform.handle_stage(cast("Any", dapr), _same_tier_settings(upstream), {"data": {"token": "t"}}))
 
-        assert result == {"status": "SUCCESS"}, f"a same-tier derivation was refused: {result}"
+        # NOT `== SUCCESS`, and the difference is the point. That assertion passed only because the
+        # mover used to fire the next topic itself, bypassing the gate. With one door the lane reaches
+        # the gate like any other, and a destination with no predecessor is a FIRST PROMOTION -- a band
+        # reason, so it HOLDs for a person ("a destination we cannot read is given a person's attention
+        # rather than a silent promote", compute.py:272). What this test exists to prove is that a
+        # same-tier lane is not refused FOR BEING SAME-TIER, and a drop would say so by name.
+        assert result != {"status": "DROP"}, f"a same-tier derivation was refused as another lane's: {result}"
+        assert "medallion_stage_other_lane" not in caplog.text
 
-    def test_it_really_derived_a_second_dataset(self, upstream: Path) -> None:
+    def test_it_really_derived_a_second_dataset(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
         """Not merely "did not error" — the point of a derivation lane is a new governed table."""
+        _stub_catalog(monkeypatch, upstream)
         asyncio.run(transform.handle_stage(cast("Any", _Dapr()), _same_tier_settings(upstream), {"data": {"token": "t"}}))
 
         assert (upstream / "enriched.lance").exists()
         assert lance.dataset(str(upstream / "enriched.lance")).count_rows() == 3
 
-    def test_it_triggers_its_own_downstream(self, upstream: Path) -> None:
+    def test_it_feeds_its_own_downstream(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
         """A derivation is a cascade hop like any other, so it must be able to feed the next one —
-        otherwise a chain of derivations would need something outside the mover to drive it."""
+        otherwise a chain of derivations would need something outside the mover to drive it.
+
+        THE MECHANISM CHANGED, THE PROPERTY DID NOT. This asserted the mover published
+        `medallion.silver.enriched` itself. That was the SECOND enforcement point: promoting without
+        the catalog ruling. The hop is now fed by the catalog's tag move, which emits
+        `table_published` for the publication head to route — so what must be asserted is that the
+        stage PUBLISHED, not that the mover fired a topic.
+        """
+        published = _stub_catalog(monkeypatch, upstream)
         dapr = _Dapr()
 
         asyncio.run(transform.handle_stage(cast("Any", dapr), _same_tier_settings(upstream), {"data": {"token": "t"}}))
 
-        assert "medallion.silver.enriched" in dapr.topics
+        assert published, "a derivation must still feed its downstream — through the catalog's tag move"
+        assert dapr.topics == [] or "medallion.silver.enriched" not in dapr.topics, "the mover must not fire the next stage itself; that is the second door"
 
 
 class TestTheTiersThemselvesAreStillThree:

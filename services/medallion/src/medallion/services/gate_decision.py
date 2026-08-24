@@ -23,7 +23,8 @@ class GateOutcome(StrEnum):
     BLOCK = "block"  # a failed assertion: corrupt, and no approval makes it right
     HOLD = "hold"  # a band breach: unusual rather than broken, so a person is asked
     PUBLISH = "publish"  # let the catalog's gate rule, and its tag move is the trigger
-    TRIGGER = "trigger"  # fire the next-stage topic directly
+    UNGOVERNED = "ungoverned"  # no catalog at all: nothing may advance a tag, and nothing will
+    MISCONFIGURED = "misconfigured"  # a catalog and a downstream, but no target to publish
     NOTHING = "nothing"  # terminal (gold has no downstream) — nothing to fire, nothing to refuse
 
 
@@ -31,8 +32,8 @@ def gate_decision(
     *,
     failed_assertions: Sequence[str],
     band_reasons: Sequence[str],
-    cascade_via_publish: bool,
     has_target: bool,
+    has_catalog: bool,
     has_pub_topic: bool,
 ) -> GateOutcome:
     """The one place the promotion order is decided.
@@ -52,15 +53,47 @@ def gate_decision(
     finding blocks with its names intact, an unusual-but-valid promotion can be withheld for a person,
     and neither costs the other.
 
-    **Otherwise the stage promotes** by whichever mechanism drives this estate, and a stage with
-    neither a publish target nor a topic is terminal rather than broken.
+    **Otherwise the stage promotes through the catalog, which is the only door.** `publication.py`
+    states the rule: every writer must publish the same way or each reimplements the contract and
+    they drift, and it is the only place a concurrent advance is detectable, because
+    `UpdateTableTag` returns `ConcurrentModification` while a tag file has no format-level CAS.
+
+    **There used to be a second door.** `TRIGGER` fired the next stage's topic from the mover,
+    promoting without the catalog ruling, and a flag (`MEDALLION_CASCADE_VIA_PUBLISH`, default
+    False) chose between them — so the DEFAULT deployment used the door that module says must not
+    exist. Both the outcome and the flag are gone.
+
+    **PUBLISHING NEEDS A CATALOG, and that precondition has to be stated here now.** It used to be
+    carried by `MEDALLION_CASCADE_VIA_PUBLISH`, whose settings validator refused the flag without a
+    reachable catalog — so while two doors existed, the publish branch could never be reached without
+    one. Deleting the flag deleted that guard with it, and `has_target` does not replace it:
+    a target is a table id and a committed version, neither of which implies anything can move a tag.
+    `publish_stage_output` RAISES on an empty catalog URL, so without this the ungoverned deployment
+    the estate supports answered every trigger RETRY, forever, on a redelivery that cannot set an env
+    var.
+
+    **Two ways to have no door, and they are different facts.** `UNGOVERNED` is a whole deployment
+    with no catalog: the write already warned (`medallion_stage_output_UNGOVERNED`, with a span
+    attribute to alert on), the bytes landed, and nothing will promote because nothing CAN. It is a
+    supported mode, so it ACKS. `MISCONFIGURED` is a governed deployment that has a catalog and a
+    downstream topic and no target to publish — which the chart cannot render, so it means someone
+    built a stage that can never advance. Collapsing them would report a dev laptop and a broken
+    production stage as the same thing.
+
+    `NOTHING` keeps its silence because it is not an error — gold has no downstream, so there is
+    genuinely nothing to fire, catalog or not.
     """
     if failed_assertions:
         return GateOutcome.BLOCK
     if band_reasons:
         return GateOutcome.HOLD
-    if cascade_via_publish and has_target:
+    if has_target and has_catalog:
         return GateOutcome.PUBLISH
-    if has_pub_topic:
-        return GateOutcome.TRIGGER
-    return GateOutcome.NOTHING
+    # Terminal BEFORE the two no-door cases: gold has no downstream, so neither a missing catalog nor
+    # a missing target is a fact about it. Reporting a terminal stage as ungoverned would warn on
+    # every gold write in a dev estate.
+    if not has_pub_topic:
+        return GateOutcome.NOTHING
+    if not has_catalog:
+        return GateOutcome.UNGOVERNED
+    return GateOutcome.MISCONFIGURED

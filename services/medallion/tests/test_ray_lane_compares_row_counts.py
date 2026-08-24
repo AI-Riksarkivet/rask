@@ -102,7 +102,7 @@ def test_a_forged_count_cannot_promote_something_corrupt() -> None:
     # A forger sets pre_row_count so the band sees nothing unusual...
     assert _band(row_count=104, from_writer=None, from_trigger=100) == []
     # ...and the assertion still blocks, because the band never gated that.
-    assert gate_decision(failed_assertions=["not_null"], band_reasons=[], cascade_via_publish=True, has_target=True, has_pub_topic=True) is GateOutcome.BLOCK
+    assert gate_decision(failed_assertions=["not_null"], band_reasons=[], has_target=True, has_catalog=True, has_pub_topic=True) is GateOutcome.BLOCK
 
 
 @pytest.mark.parametrize("carried", [100, 0, None])

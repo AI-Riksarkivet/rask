@@ -135,28 +135,39 @@ def test_run_id_is_project_qualified_so_tenants_never_collide() -> None:
     assert acme != globex
 
 
-def test_mover_emits_lineage_then_triggers_next_stage() -> None:
+def test_mover_emits_lineage_and_fires_NO_next_stage_trigger() -> None:
+    """ONE publish, and it is the lineage event. There is no second door.
+
+    Renamed and inverted, not trimmed. It asserted `len(dapr.calls) == 2` — the lineage event AND the
+    mover publishing `medallion.silver` itself, which promoted the stage without the catalog ever
+    ruling on it. That was the second enforcement point `catalog/services/publication.py` exists to
+    prevent, and it was the DEFAULT path because MEDALLION_CASCADE_VIA_PUBLISH defaulted False.
+
+    Asserting the COUNT is the point: a test that merely stopped checking the trigger would pass just
+    as well if the mover started publishing something else.
+    """
     dapr = _FakeDapr()
     event = {"data": {"token": "abc123", "dataset": "bronze$events", "namespace": "bronze"}}
 
     status = asyncio.run(mover.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, event))
 
     assert status == {"status": "SUCCESS"}
-    assert len(dapr.calls) == 2  # the lineage event, then the next-stage trigger
-    lineage, trigger = dapr.calls
+    assert len(dapr.calls) == 1, f"the mover published more than the lineage event: {[c['topic'] for c in dapr.calls]}"
+    (lineage,) = dapr.calls
     assert lineage["topic"] == "lineage.events.v1"
     assert lineage["data"]["inputs"][0]["name"] == "bronze$events"
     assert lineage["data"]["outputs"][0]["name"] == "silver$features"
     # runId is a spec-valid UUID (deterministic on operation+token); the readable token rides the facet.
     assert lineage["data"]["run"]["runId"] == run_id_for("embed_features-abc123")
     assert lineage["data"]["run"]["facets"]["lance"]["token"] == "abc123"
-    assert trigger["topic"] == "medallion.silver"
-    assert trigger["data"] == {"token": "abc123", "dataset": "silver$features", "namespace": "silver"}
+    assert not any(c["topic"] == "medallion.silver" for c in dapr.calls), (
+        "the mover fired the next stage itself — promotion is the catalog's tag move, and only that"
+    )
 
 
 def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: pytest.MonkeyPatch) -> None:
     """ray_enabled: handle_stage submits the Ray job, measures the written dataset, and emits the SAME
-    lineage (measured version AND column edges) + triggers the next stage — the in-process contract, via Ray.
+    lineage (measured version AND column edges) and fires NO trigger — the in-process contract, via Ray.
 
     The Ray branch must read back with ``measure_stage``, not a bare ``measure``: the transform happened
     out-of-process, so the column edges are reconstructed from the on-disk schemas. A bare measure would
@@ -213,7 +224,9 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
     assert status == {"status": "SUCCESS"}
     # The measure reads BOTH ends — it needs the upstream schema to reconstruct the edges.
     assert measured_uris == {"from": "/tmp/from", "to": "/tmp/to"}
-    lineage, trigger = dapr.calls  # emit then next-stage trigger
+    # ONE publish on this lane too: the Ray path is submit-and-ack, so the job's own registered commit
+    # is what wakes the next tier. The mover firing a topic here would be the same second door.
+    (lineage,) = dapr.calls
     # R26: the consume-layer provenance document rides the submission, so the JOB stamps it in its own
     # commit — the distributed path cannot produce a dataset the in-process path would have stamped.
     # The doc handed to the DISPATCH (pass 1) is the one the job stamps, and its run_id must be the
@@ -225,7 +238,10 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
     facets = lineage["data"]["outputs"][0]["facets"]
     assert facets["version"]["datasetVersion"] == "7"  # the measured version
     assert facets["columnLineage"]["fields"]["id"]["inputFields"][0]["field"] == "id"
-    assert trigger["topic"] == "medallion.silver"
+    assert not any(c["topic"] == "medallion.silver" for c in dapr.calls), (
+        "the Ray lane fired the next stage from the mover — submit-and-ack means the JOB's registered "
+        "commit wakes the next tier, and the catalog's tag move is the only promotion"
+    )
 
 
 def test_mover_ray_branch_retries_when_the_watcher_cannot_be_dispatched(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -465,7 +481,7 @@ def test_mover_allowed_when_authorized(monkeypatch: pytest.MonkeyPatch) -> None:
     dapr = _FakeDapr()
     status = asyncio.run(mover.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}, fga_client=cast(Any, object())))
     assert status == {"status": "SUCCESS"}
-    assert len(dapr.calls) == 2  # authorized → lineage + next trigger
+    assert len(dapr.calls) == 1  # authorized → the lineage event, and nothing else
 
 
 def test_mover_retries_on_fga_outage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -526,16 +542,27 @@ def test_a_failed_complete_publish_is_not_a_run_failure() -> None:
     )
 
 
-def test_mover_does_not_fail_run_when_only_the_trigger_publish_fails() -> None:
-    # CONTRACT (review of 73af2fd): if the COMPLETE emit SUCCEEDS but the downstream trigger publish fails,
-    # the run completed — it must NOT be flipped to FAIL. Only RETRY (redelivery re-emits the idempotent
-    # COMPLETE + re-publishes the trigger). fail_at=1 → the COMPLETE lands, the trigger publish raises.
-    dapr = _AttemptDapr(fail_at=1)
+def test_the_mover_makes_exactly_ONE_publish_and_it_is_the_COMPLETE() -> None:
+    """The one-door property, asserted at the wire rather than at the decision.
+
+    THIS TEST'S ORIGINAL SUBJECT NO LONGER EXISTS, and converting it beats deleting it. It was
+    `test_mover_does_not_fail_run_when_only_the_trigger_publish_fails`: with `fail_at=1` the COMPLETE
+    landed and the SECOND publish — the downstream trigger — raised, and the contract was that a run
+    whose data committed must not be flipped to FAIL. There is no second publish now, so `fail_at=1`
+    has nothing to fail and the case is unreachable.
+
+    The principle it protected (a publish failure after a committed write must not fabricate a FAIL)
+    is still covered one step earlier by the `fail_at=0` sibling above. What is NOT covered anywhere
+    else is the property this file is now the only witness to: the mover's publish COUNT. `gate_decision`
+    can be reasoned about in isolation; what reaches the broker cannot, and a reintroduced second door
+    would show up here first.
+    """
+    dapr = _AttemptDapr(fail_at=99)  # nothing fails; the subject is what gets published at all
     status = asyncio.run(mover.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}))
-    assert status == {"status": "RETRY"}
-    # Attempts are exactly COMPLETE then the trigger — NO FAIL event (no spurious FAIL for a done run).
-    assert [e.get("eventType", "trigger") for e in dapr.attempts] == ["COMPLETE", "trigger"]
-    assert not any(e.get("eventType") == "FAIL" for e in dapr.attempts)
+    assert status == {"status": "SUCCESS"}
+    assert [e.get("eventType", "trigger") for e in dapr.attempts] == ["COMPLETE"], (
+        "the mover published something besides its COMPLETE lineage event — the second door is back"
+    )
 
 
 def test_bronze_arrival_carries_the_originator_onto_the_trigger() -> None:

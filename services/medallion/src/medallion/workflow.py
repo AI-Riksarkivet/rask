@@ -1033,7 +1033,7 @@ def publish_promotion(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> 
 
     spec = PromotionSpec.model_validate(payload)
     settings = get_settings()
-    if spec.version and settings.cascade_via_publish:
+    if spec.version:
         _resume_publish(
             catalog_url=settings.catalog_url,
             table_id=spec.to_dataset,

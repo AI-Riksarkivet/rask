@@ -29,16 +29,16 @@ def _decide(
     *,
     failed_assertions: Sequence[str] = (),
     band_reasons: Sequence[str] = (),
-    cascade_via_publish: bool = True,
     has_target: bool = True,
+    has_catalog: bool = True,
     has_pub_topic: bool = False,
 ) -> GateOutcome:
     """A clean publishing stage, with one aspect varied per test."""
     return gate_decision(
         failed_assertions=failed_assertions,
         band_reasons=band_reasons,
-        cascade_via_publish=cascade_via_publish,
         has_target=has_target,
+        has_catalog=has_catalog,
         has_pub_topic=has_pub_topic,
     )
 
@@ -47,16 +47,24 @@ def test_a_clean_stage_publishes_when_publishing_drives_the_cascade() -> None:
     assert _decide() is GateOutcome.PUBLISH
 
 
-def test_a_clean_stage_triggers_when_a_topic_drives_the_cascade() -> None:
-    assert _decide(cascade_via_publish=False, has_pub_topic=True) is GateOutcome.TRIGGER
+def test_a_clean_stage_still_publishes_when_a_topic_also_exists() -> None:
+    """There is ONE door. A downstream topic does not offer a second way to promote.
+
+    This asserted TRIGGER while `GateOutcome.TRIGGER` existed -- the mover firing the next stage's
+    topic itself, promoting without the catalog ruling. That was the second enforcement point
+    `publication.py` exists to prevent, and it was the DEFAULT path because
+    MEDALLION_CASCADE_VIA_PUBLISH defaulted False. The stage still promotes; it promotes through the
+    catalog.
+    """
+    assert _decide(has_pub_topic=True) is GateOutcome.PUBLISH
 
 
 def test_a_failed_assertion_blocks() -> None:
-    assert _decide(failed_assertions=("key_non_null",), cascade_via_publish=False) is GateOutcome.BLOCK
+    assert _decide(failed_assertions=("key_non_null",)) is GateOutcome.BLOCK
 
 
 def test_a_band_breach_holds_on_a_trigger_driven_cascade() -> None:
-    assert _decide(band_reasons=("row_delta",), cascade_via_publish=False, has_pub_topic=True) is GateOutcome.HOLD
+    assert _decide(band_reasons=("row_delta",), has_pub_topic=True) is GateOutcome.HOLD
 
 
 def test_a_band_breach_holds_even_when_publishing_drives_the_cascade() -> None:
@@ -72,7 +80,7 @@ def test_a_band_breach_holds_even_when_publishing_drives_the_cascade() -> None:
     what it WOULD say, tag untouched, and reaches this function already holding `failed_assertions`.
     So a breach can hold, and a corrupt batch still blocks by name.
     """
-    assert _decide(band_reasons=("row_delta",), cascade_via_publish=True, has_target=True) is GateOutcome.HOLD
+    assert _decide(band_reasons=("row_delta",), has_target=True) is GateOutcome.HOLD
 
 
 def test_a_block_outranks_a_hold() -> None:
@@ -83,12 +91,45 @@ def test_a_block_outranks_a_hold() -> None:
 def test_a_hold_outranks_a_trigger() -> None:
     """Where the band CAN act: a topic-driven cascade fires the next stage itself, so withholding the
     trigger genuinely withholds the promotion."""
-    assert _decide(band_reasons=("first_promotion",), cascade_via_publish=False, has_pub_topic=True) is GateOutcome.HOLD
+    assert _decide(band_reasons=("first_promotion",), has_pub_topic=True) is GateOutcome.HOLD
 
 
 def test_no_target_and_no_topic_is_terminal() -> None:
     """Gold has no next stage; there is nothing to fire and nothing to refuse."""
-    assert _decide(cascade_via_publish=True, has_target=False, has_pub_topic=False) is GateOutcome.NOTHING
+    assert _decide(has_target=False, has_pub_topic=False) is GateOutcome.NOTHING
+
+
+def test_publishing_requires_a_catalog() -> None:
+    """A target is a table id and a committed version. Neither implies anything can move a tag.
+
+    This precondition used to be carried by `MEDALLION_CASCADE_VIA_PUBLISH`, whose settings validator
+    refused the flag without a reachable catalog — so while two doors existed the publish branch could
+    not be reached without one. Deleting the flag deleted the guard, and because
+    `publish_stage_output` RAISES on an empty catalog URL, every ungoverned mover answered its trigger
+    RETRY, forever, on a redelivery that cannot set an env var. Found by running the suite, not by
+    reading the diff.
+    """
+    assert _decide(has_catalog=False, has_pub_topic=True) is GateOutcome.UNGOVERNED
+
+
+def test_an_ungoverned_terminal_stage_is_still_just_terminal() -> None:
+    """Gold has no downstream, so a missing catalog is not a fact about it.
+
+    Ordering, not a special case: `NOTHING` is returned before either no-door branch. Otherwise every
+    gold write on a dev laptop would warn that its promotion will not fire, when there was never a
+    promotion to fire.
+    """
+    assert _decide(has_catalog=False, has_pub_topic=False) is GateOutcome.NOTHING
+
+
+def test_a_catalog_and_a_downstream_but_no_target_is_MISCONFIGURED() -> None:
+    """The chart cannot render this, which is exactly why it must be loud rather than terminal.
+
+    Distinct from UNGOVERNED on purpose. That is a whole deployment with no catalog — a supported
+    mode that acks. This is a governed deployment carrying a stage that can never advance, and
+    collapsing the two would report a dev laptop and a broken production stage identically.
+    """
+    assert _decide(has_target=False, has_pub_topic=True) is GateOutcome.MISCONFIGURED
 
 
 @pytest.mark.parametrize("outcome", list(GateOutcome))
@@ -96,9 +137,11 @@ def test_every_outcome_is_reachable(outcome: GateOutcome) -> None:
     """A branch no input can produce is dead code wearing a name."""
     reachable = {
         _decide(failed_assertions=("x",)),
-        _decide(band_reasons=("x",), cascade_via_publish=False, has_pub_topic=True),
+        _decide(band_reasons=("x",), has_pub_topic=True),
         _decide(),
-        _decide(cascade_via_publish=False, has_pub_topic=True),
-        _decide(cascade_via_publish=True, has_target=False),
+        _decide(has_pub_topic=True),
+        _decide(has_target=False),
+        _decide(has_target=False, has_pub_topic=True),
+        _decide(has_catalog=False, has_pub_topic=True),
     }
     assert outcome in reachable

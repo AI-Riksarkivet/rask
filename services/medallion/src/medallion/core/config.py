@@ -158,7 +158,6 @@ class MedallionSettings(BaseSettings):
     #: OPT-IN, because it needs a reachable catalog the mover can authenticate to and `lane_routes`
     #: declared. An estate missing either would simply stop cascading, and a migration seam is honest
     #: where a silent fallback would not be. It should die once every estate runs on it.
-    cascade_via_publish: bool = Field(default=False, alias="MEDALLION_CASCADE_VIA_PUBLISH")
     # Ingest ceilings (audit 2026-07-12): the media ingest refuses (400) rather than OOM when a
     # source prefix exceeds these. Defaults generous for the demo; tune per deployment.
     ingest_max_objects: int = Field(default=10_000, alias="MEDALLION_INGEST_MAX_OBJECTS")
@@ -365,12 +364,18 @@ class MedallionSettings(BaseSettings):
         stop. Falling back to the old trigger instead would be the silent fallback this seam exists to
         avoid; saying so at startup is the honest version.
         """
-        if self.cascade_via_publish and not (self.compute_enabled and self.catalog_url):
-            missing = [name for name, ok in (("MEDALLION_COMPUTE_ENABLED", self.compute_enabled), ("MEDALLION_CATALOG_URL", bool(self.catalog_url))) if not ok]
-            raise ValueError(
-                f"MEDALLION_CASCADE_VIA_PUBLISH needs {' and '.join(missing)}: the tag move IS the trigger, "
-                "so a stage that writes nothing or cannot reach the catalog would stop the cascade silently"
-            )
+        # The catalog's tag move is the ONLY way a stage promotes, so a mover that writes nothing or
+        # cannot reach the catalog stops the cascade -- silently, which is the failure class this
+        # estate keeps producing. Say it at startup instead. This used to be conditional on
+        # MEDALLION_CASCADE_VIA_PUBLISH; that flag chose between two enforcement points and is gone.
+        # NO CATALOG REQUIREMENT HERE, deliberately. This used to refuse a mover that had
+        # MEDALLION_CASCADE_VIA_PUBLISH on without a reachable catalog -- a real invariant while the
+        # flag chose between two enforcement points. The flag is gone, and generalising the check to
+        # "every writing mover needs a catalog" would delete a mode the estate supports and pins:
+        # an UNGOVERNED deployment writes to its configured URIs with no catalog at all
+        # (`test_an_ungoverned_deployment_still_uses_its_configured_URI`,
+        # `test_no_catalog_url_still_writes_to_its_configured_uri`). Such a mover writes and never
+        # promotes, which is correct: promotion is a tag move and there is no tag without a catalog.
         return self
 
     @model_validator(mode="after")

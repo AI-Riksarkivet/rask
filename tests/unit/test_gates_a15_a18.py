@@ -22,6 +22,8 @@ import pytest
 import yaml
 from dapr.aio.clients import DaprClient
 from medallion.core.config import MedallionSettings
+from medallion.services import transform
+from medallion.services.catalog_register import PublishOutcome
 from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
 
@@ -255,14 +257,29 @@ def test_a18_a_HELD_batch_publishes_NOTHING_downstream(tmp_path: Path) -> None:
     assert stage_triggers == [], "a held batch woke the downstream stage"
 
 
-def test_a18_a_HELD_batch_still_leaves_a_lineage_record(tmp_path: Path) -> None:
+def test_a18_a_HELD_batch_still_leaves_a_lineage_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A hold must be VISIBLE. Silence is indistinguishable from a run that never started.
 
     The medallion's original defect in miniature: it emitted only on COMPLETE, so a failure left no
     record at all. A held batch is a decision the estate made about data — it belongs in the graph.
+
+    THE HOLD NOW COMES FROM THE CATALOG, and this test had to move with it. It used to hand the mover
+    a required column that does not exist and let the mover's own `assert_quality` refuse. Under one
+    door the mover measures and does not rule (its assertions still populate the
+    `dataQualityAssertions` facet, which is why the audit half is unchanged), so a refusal has exactly
+    one source: `publish` answering `published=False`.
+
+    The property under test is A18 itself — that a refusal reaches the GRAPH — not which component
+    refused. Wiring the refusal to its real source is what keeps that property tested rather than
+    quietly untested, which is what deleting the assertion would have done.
     """
     _bronze(tmp_path)
-    settings = _mover(tmp_path, quality_enabled=True, quality_required_columns="a_column_that_does_not_exist")
+    settings = _mover(tmp_path, catalog_url="http://catalog.invalid")
+    monkeypatch.setattr(
+        transform.catalog_register,
+        "publish_stage_output",
+        lambda **_: PublishOutcome(published=False, failed_assertions=["a_column_that_does_not_exist"]),
+    )
     dapr = _FakeDapr()
 
     asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok"}}))

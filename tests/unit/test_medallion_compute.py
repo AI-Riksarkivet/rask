@@ -142,8 +142,16 @@ def test_handle_stage_writes_real_data_and_emits_the_real_version(tmp_path: Any)
     assert stats["rowCount"] == 4
     assert stats["size"] > 0
     assert "OutputStatisticsOutputDatasetFacet" in stats["_schemaURL"]
-    # …and the next-stage trigger fired so the cascade continues.
-    assert any(p["topic"] == "silver.ready" for p in dapr.published)
+    # …and the mover fired NO next-stage topic. This asserted the opposite while `GateOutcome.TRIGGER`
+    # existed: the mover published `silver.ready` itself, promoting without the catalog ruling. That
+    # was the second enforcement point `catalog/services/publication.py` exists to prevent, and it was
+    # the DEFAULT path because MEDALLION_CASCADE_VIA_PUBLISH defaulted False.
+    #
+    # Inverted rather than deleted, because "the assertion went away" and "the door went away" read
+    # identically in a diff, and only one of them is what happened.
+    assert not any(p["topic"] == "silver.ready" for p in dapr.published), (
+        "the mover fired the next stage itself — there is ONE door, and it is the catalog's tag move"
+    )
 
 
 def test_handle_stage_compute_off_writes_no_data(tmp_path: Any) -> None:
@@ -387,8 +395,23 @@ def _quality_mover_settings(from_uri: str, to_uri: str) -> MedallionSettings:
     )
 
 
-def test_quality_gate_blocks_promotion_on_failed_assertion(tmp_path: Any) -> None:
-    # Upstream carries a null id; the gate fails not_null → DROP, run recorded, next stage NOT triggered.
+def test_a_failed_assertion_is_RECORDED_by_the_mover_and_RULED_ON_by_the_catalog(tmp_path: Any) -> None:
+    """The mover measures; it does not rule. Both halves are asserted here.
+
+    This test used to expect DROP: the mover ran `assert_quality` on its own write and blocked the
+    promotion itself. That was the second enforcement point — it answered the same question the
+    catalog answers, with different consequences, and a stage could refuse a version the catalog had
+    never been asked about.
+
+    Nothing is lost by moving the verdict, and that is the part worth being precise about. The
+    mover's block only ever withheld the next-stage TRIGGER, and there is no trigger any more; the
+    catalog's `publish` refusal is what withholds a promotion now, and it is asserted at the PUBLISH
+    branch. This mover has no catalog at all, so there is no promotion to withhold — it acks.
+
+    What must NOT be lost is the audit fact, and that is why `assert_quality` still runs: the failed
+    `not_null` is stamped into the `dataQualityAssertions` facet on the run event, so the graph
+    records what the data looked like at the hop even though the hop did not rule on it.
+    """
     silver = str(tmp_path / "silver")
     lance.write_dataset(pa.table({"id": pa.array([1, None], pa.int64()), "p": ["a", "b"]}), silver, mode="overwrite")
     gold = str(tmp_path / "gold")
@@ -396,12 +419,15 @@ def test_quality_gate_blocks_promotion_on_failed_assertion(tmp_path: Any) -> Non
     dapr = _FakeDapr()
 
     result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t"}}))
-    assert result == {"status": "DROP"}  # quality-blocked
+    # Ungoverned: no catalog, so nothing can move a tag and redelivery cannot conjure one. ACK, not
+    # RETRY — the ungoverned write already warned, loudly, where it happened.
+    assert result == {"status": "SUCCESS"}
 
-    # The lineage WAS emitted with the failed assertion (auditable) — but the next-stage trigger did NOT.
+    # The audit fact survived the move.
     lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
     facet = lineage["data"]["outputs"][0]["facets"]["dataQualityAssertions"]
     assert any(a["assertion"] == "not_null" and a["success"] is False for a in facet["assertions"])
+    # And no second door opened.
     assert not any(p["topic"] == "gold.ready" for p in dapr.published)
 
 
@@ -418,7 +444,10 @@ def test_quality_gate_promotes_on_clean_data(tmp_path: Any) -> None:
     lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
     facet = lineage["data"]["outputs"][0]["facets"]["dataQualityAssertions"]
     assert all(a["success"] for a in facet["assertions"])
-    assert any(p["topic"] == "gold.ready" for p in dapr.published)  # promoted
+    # Clean data does NOT buy a mover-fired promotion — there is one door and this mover has no
+    # catalog to reach it. Asserted as an absence for the same reason as the failed-assertion case:
+    # a deleted line and a deleted door look the same in a diff.
+    assert not any(p["topic"] == "gold.ready" for p in dapr.published)
 
 
 def test_quality_off_emits_no_assertions_facet(tmp_path: Any) -> None:

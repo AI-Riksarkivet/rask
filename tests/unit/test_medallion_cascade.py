@@ -206,6 +206,30 @@ def _mover_settings(hop: tuple[str, str, str, str, str], uris: dict[str, str], *
     )
 
 
+def _next_trigger_from_publication(hop: tuple[str, str, str, str, str], previous: dict[str, Any]) -> dict[str, Any]:
+    """What the CATALOG's publication head hands the next hop, built explicitly.
+
+    Under one door a mover publishes nothing but its lineage event: the next tier is woken by the
+    catalog's publish, which `/publication-arrival` turns into this trigger
+    (`services/publication_trigger.py`). These tests drive movers directly with no catalog in the
+    loop, so the hand-off has to be constructed rather than read off `dapr.published[-1]`.
+
+    Constructed rather than deleted, because the thing worth testing is that a hop consumes what the
+    NEXT mechanism produces. A loop that silently reused one trigger for every hop would still pass
+    and would stop testing the hand-off entirely.
+    """
+    _op, _from_ns, _from_ds, to_ns, to_ds = hop
+    trigger = {"token": previous["token"], "dataset": to_ds, "namespace": to_ns}
+    # `publication_trigger` copies the project onto the trigger when the catalog names it on the
+    # event (`extra.project`), and omits the key entirely when it does not — byte-identical for a
+    # projectless estate. Mirrored exactly here.
+    if previous.get("project"):
+        trigger["project"] = previous["project"]
+    if previous.get("originator"):
+        trigger["originator"] = previous["originator"]
+    return trigger
+
+
 def test_project_cascade_routes_into_the_project_warehouse_and_qualifies_lineage(tmp_path: Any) -> None:
     """#84 happy path, head→gold: /produce {project} seeds the PROJECT warehouse, /bronze-arrival copies
     the project onto the stage trigger, every mover resolves its URIs off the registry (the env decoy URIs
@@ -240,9 +264,14 @@ def test_project_cascade_routes_into_the_project_warehouse_and_qualifies_lineage
         assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": trigger})) == {"status": "SUCCESS"}
         assert lance.dataset(str(wh / "medallion" / to_ns)).to_table().num_rows > 0
         assert not Path(decoys[to_ns]).exists()
+        # ONE DOOR: the mover promotes nothing itself. This read the next trigger off
+        # `dapr.published[-1]` because the mover published it — the second enforcement point.
         if settings.pub_topic:
-            trigger = dapr.published[-1]["data"]
-            assert trigger["project"] == "acme"  # propagated down the whole cascade
+            assert not any(p["topic"] == settings.pub_topic for p in dapr.published), (
+                f"the mover published {settings.pub_topic} itself — promotion is the catalog's tag move"
+            )
+            trigger = _next_trigger_from_publication(hop, trigger)
+            assert trigger["project"] == "acme"  # still propagated down the whole cascade
 
     gold = lance.dataset(str(wh / "medallion" / "gold")).to_table()
     assert set(gold.column("stage").to_pylist()) == {"gold"}
@@ -389,7 +418,11 @@ def test_matching_lane_trigger_still_runs(tmp_path: Any) -> None:
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger))
 
     assert status == {"status": "SUCCESS"}
-    assert any(p["topic"] == "medallion.silver" for p in dapr.published)
+    # The subject is the LANE GUARD accepting its own lane, and the observable proof of that used to
+    # be the mover firing `medallion.silver`. That door is gone, so the proof is the write itself plus
+    # the absence of the `medallion_stage_other_lane` drop its sibling test above asserts.
+    assert lance.dataset(str(tmp_path / "silver")).to_table().num_rows == 2
+    assert not any(p["topic"] == "medallion.silver" for p in dapr.published)
 
 
 def test_trigger_without_a_dataset_is_still_accepted(tmp_path: Any) -> None:
@@ -444,8 +477,16 @@ def test_projectless_cascade_is_byte_identical_even_with_routing_configured(tmp_
     # The env URI was used; the provisioned project warehouse stayed untouched.
     assert lance.dataset(uris["silver"]).to_table().num_rows > 0
     assert not (wh / "medallion").exists()
-    # EXACT equality on the next-stage trigger too.
-    assert dapr.published[-1]["data"] == {"token": token, "dataset": "silver$features", "namespace": "silver"}
+    # EXACT equality on the trigger the NEXT tier would receive. It used to be read off
+    # `dapr.published[-1]` because the mover published it; one door means the catalog's publication
+    # head builds it instead, so the shape is asserted against that builder. The property under test
+    # is unchanged and is the whole point of the test: a projectless estate carries NO project key.
+    assert not any(p["topic"] == settings.pub_topic for p in dapr.published), "the mover published a next-stage trigger"
+    assert _next_trigger_from_publication(_HOPS[0], {"token": token}) == {
+        "token": token,
+        "dataset": "silver$features",
+        "namespace": "silver",
+    }
     silver_event = next(p["data"] for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["outputs"][0]["name"] == "silver$features")
     assert silver_event["outputs"][0]["namespace"] == "silver"
     assert "project" not in silver_event["run"]["facets"]["lance"]

@@ -141,7 +141,18 @@ class TestARefusalBecomesTheHold:
 
 
 class TestTheDefaultIsUntouched:
-    def test_off_by_default_the_mover_still_fires_the_trigger(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
+    def test_there_is_no_flag_and_no_second_door(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
+        """THE MIGRATION IS OVER, so the seam is gone.
+
+        This asserted the opposite: with MEDALLION_CASCADE_VIA_PUBLISH unset the mover fired
+        `medallion.silver` itself and never called the catalog. That was honest as a MIGRATION SEAM,
+        which is how this module's header describes it -- but it made the DEFAULT deployment promote
+        through the door `publication.py` says must not exist, and left two enforcement points for one
+        contract.
+
+        The flag is removed, so the setting cannot turn the second door back on. A stage promotes
+        through the catalog or it does not promote.
+        """
         called: list[Any] = []
         monkeypatch.setattr(transform.catalog_register, "register_stage_output", lambda **_: None)
         monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "vended.lance"))
@@ -150,5 +161,5 @@ class TestTheDefaultIsUntouched:
 
         asyncio.run(transform.handle_stage(cast(Any, dapr), _settings(upstream, MEDALLION_CASCADE_VIA_PUBLISH="false"), _event()))
 
-        assert called == []
-        assert "medallion.silver" in dapr.topics
+        assert called, "the catalog must be asked to publish even with the retired flag set to false"
+        assert "medallion.silver" not in dapr.topics, "the mover must never fire the next stage itself"

@@ -45,7 +45,6 @@ from medallion.services.gate_decision import GateOutcome, gate_decision
 from medallion.services.lane import UndeclaredLaneError, resolve_lane_async
 from medallion.services.promotion import promotion_lineage
 from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, uri_within
-from service_kit import dapr_publish
 from service_kit.governed import fga
 from service_kit.lakehouse import outbox
 from service_kit.lakehouse.quality import Assertion, assert_quality
@@ -640,9 +639,17 @@ async def handle_stage(
                     span.set_attribute("lance.version", result.version)
                     span.set_attribute("lance.row_count", result.row_count)
                     span.set_attribute("lance.size_bytes", result.size_bytes)
-                # Skipped when the CATALOG gates: running both would answer the same question twice
-                # with different consequences, and the tag is the one that matters.
-                if settings.quality_enabled and not settings.cascade_via_publish:
+                # THE MOVER MEASURES; IT DOES NOT RULE. Under one door the catalog decides whether a
+                # version may be promoted, so these assertions no longer gate anything — see
+                # `failed_assertions` below, which is deliberately not derived from them.
+                #
+                # They still RUN, because they are the only producer of the `dataQualityAssertions`
+                # facet on the run event emitted below. Deleting them with the gate would have removed
+                # an audit fact from lineage as a side effect of moving a decision, and a reader of the
+                # graph would have no record of what the data looked like at the hop. Spec change 8
+                # replaces this with an attestation the Ray job writes and the catalog reads; until
+                # then the measurement lives here and the verdict does not.
+                if settings.quality_enabled:
                     assertions = await run_in_threadpool(
                         assert_quality,
                         to_uri,
@@ -723,7 +730,7 @@ async def handle_stage(
             topic_name=settings.lineage_topic,
             timeout_seconds=settings.publish_timeout_seconds,
         )
-        # 2. THE BAND, evaluated BEFORE any promotion. Under `cascade_via_publish` the publish IS the
+        # 2. THE BAND, evaluated BEFORE any promotion. The publish IS the
         # promotion — the catalog's tag move is what wakes the next stage — so a breach noticed after
         # that tag has moved cannot un-move it. Evaluated here and RULED ON by `gate_decision`, which
         # owns the ordering; it used to be an `elif` beneath the publish branch, where it never ran.
@@ -774,8 +781,14 @@ async def handle_stage(
         # one call, byte-identical to before. The second scan is bought only where it decides
         # something: separating "unusual" from "corrupt", which is precisely the distinction the review
         # cannot make on its own.
-        failed_assertions = [a.assertion for a in assertions if not a.success] if assertions else []
-        if band_reasons and settings.cascade_via_publish and to_dataset and result is not None:
+        # NOT derived from `assertions` above. That was the mover ruling on its own write — the
+        # second enforcement point `publication.py` exists to prevent — and it let a stage BLOCK a
+        # promotion the catalog had never been asked about. The catalog is the only source of a
+        # verdict now, and it speaks in exactly two places: the `gate_only` probe below (bought only
+        # when a band breach makes the distinction worth paying for), and the real publish, whose
+        # refusal is handled at the PUBLISH branch.
+        failed_assertions: list[str] = []
+        if band_reasons and to_dataset and result is not None:
             verdict = await run_in_threadpool(
                 partial(
                     catalog_register.publish_stage_output,
@@ -797,8 +810,11 @@ async def handle_stage(
         decision = gate_decision(
             failed_assertions=failed_assertions,
             band_reasons=band_reasons,
-            cascade_via_publish=settings.cascade_via_publish,
             has_target=bool(to_dataset) and result is not None,
+            # PUBLISHING NEEDS A CATALOG. `publish_stage_output` raises on an empty URL, and this
+            # precondition used to ride on MEDALLION_CASCADE_VIA_PUBLISH's validator; deleting the
+            # flag deleted the guard, and every ungoverned mover answered RETRY forever.
+            has_catalog=bool(settings.catalog_url),
             has_pub_topic=bool(settings.pub_topic),
         )
         # 3. A failed assertion BLOCKS — record it, do not trigger the next stage, so a bad batch
@@ -836,25 +852,48 @@ async def handle_stage(
             if not outcome.published:
                 quality_blocked = True
                 quality_reasons = outcome.failed_assertions
-        # 4. Trigger the next stage (unless terminal — gold has no pub_topic — or blocked by the gate).
-        elif decision is GateOutcome.TRIGGER:
-            next_trigger = {
-                "token": token,
-                "dataset": settings.to_dataset,
-                "namespace": settings.to_namespace,
-            }
-            if project:  # #84: PROPAGATE the tenant down the cascade; omitted (byte-identical) when unset
-                next_trigger["project"] = project
-            if trigger.originator:  # the human the cascade is for, carried the whole way down
-                next_trigger["originator"] = trigger.originator
-            await dapr_publish.publish_event(
-                dapr,
-                timeout_seconds=settings.publish_timeout_seconds,
-                pubsub_name=settings.pubsub,
-                topic_name=settings.pub_topic,
-                data=json.dumps(next_trigger),
-                data_content_type="application/json",
+        # 4. NO CATALOG AT ALL: a supported mode, so it ACKS rather than retrying.
+        #
+        # The write already said so, loudly, at the point it happened — `medallion_stage_output_UNGOVERNED`
+        # with a `lance.catalog.ungoverned` span attribute to alert on. This says the OTHER half: the
+        # downstream will not fire either, because promotion is a tag move and there is no tag without
+        # a catalog. It does NOT set `quality_blocked`: a deployment with no catalog is not a batch
+        # with bad data, and emitting a promotion-hold FAIL run per message would fill the lineage
+        # graph of a dev estate with holds nobody can clear.
+        elif decision is GateOutcome.UNGOVERNED:
+            log.warning(
+                "medallion_stage_ungoverned_no_promotion",
+                extra={
+                    "transition": transition,
+                    "token": token,
+                    "pub_topic": settings.pub_topic,
+                    "missing": "MEDALLION_CATALOG_URL",
+                },
             )
+        # 5. A downstream with a catalog and no publish target CANNOT promote, and must say so.
+        #
+        # This branch used to fire `settings.pub_topic` directly -- a SECOND enforcement point, which
+        # is exactly the drift `catalog/services/publication.py` exists to prevent: "each
+        # reimplements the contract and they drift". It was also the DEFAULT path, because
+        # MEDALLION_CASCADE_VIA_PUBLISH defaulted False.
+        #
+        # It is not replaced by a quieter fallback. A stage that can never promote must not look like
+        # a stage with no data -- that silence is the shape of every defect found on 2026-08-24.
+        elif decision is GateOutcome.MISCONFIGURED:
+            log.error(
+                "medallion_stage_cannot_promote",
+                extra={
+                    "transition": transition,
+                    "token": token,
+                    "pub_topic": settings.pub_topic,
+                    "to_dataset": settings.to_dataset,
+                },
+            )
+            quality_blocked = True
+            quality_reasons = [
+                f"stage {transition} has a downstream topic ({settings.pub_topic}) but no publish target, "
+                "so it cannot promote through the catalog -- the only door that may advance a tag"
+            ]
     except UnresolvableProjectError as exc:
         # Deterministic (#84): redelivery cannot conjure an active warehouse for the project, so mirror
         # the quality-gate contract — record the FAIL run (the audit trail, idempotent on the

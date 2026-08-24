@@ -23,7 +23,6 @@ def _publishing_estate(monkeypatch: pytest.MonkeyPatch) -> None:
     import medallion.core.config as config
 
     settings = config.MedallionSettings(
-        MEDALLION_CASCADE_VIA_PUBLISH="true",
         MEDALLION_COMPUTE_ENABLED="true",
         MEDALLION_CATALOG_URL="http://catalog.test",
         MEDALLION_FROM_URI="/tmp/a.lance",

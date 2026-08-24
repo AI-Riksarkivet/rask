@@ -84,7 +84,11 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # fixed to bronze, which is what let a silver publication fire a bronze trigger.
     ("services/medallion/src/medallion/services/publication_trigger.py", "topic"): "trigger",
     ("services/medallion/src/medallion/services/train.py", "settings.train_topic"): "trigger",
-    ("services/medallion/src/medallion/services/transform.py", "settings.pub_topic"): "trigger",
+    # `transform.py` (settings.pub_topic) IS DELIBERATELY ABSENT. The mover fired the next stage's
+    # topic itself — a SECOND enforcement point beside the catalog's tag move, and the DEFAULT one
+    # because MEDALLION_CASCADE_VIA_PUBLISH shipped False. Deleted with `GateOutcome.TRIGGER`; the
+    # cascade advances only through `publication_trigger.py` above. This registry's stale-entry check
+    # is what forced the row to be removed rather than left behind describing a door that is gone.
     ("services/medallion/src/medallion/workflow.py", "settings.sub_topic"): "trigger",
     # The withheld next-stage trigger, released by an approval. A TRIGGER like every other cascade
     # publish: losing one stalls the cascade, it does not lose a committed fact.

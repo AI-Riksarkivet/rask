@@ -48,8 +48,8 @@ def _decide(uri: str, *, band_reasons: tuple[str, ...] = ()) -> tuple[GateOutcom
     outcome = gate_decision(
         failed_assertions=failed,
         band_reasons=band_reasons,
-        cascade_via_publish=True,
         has_target=True,
+        has_catalog=True,
         has_pub_topic=True,
     )
     return outcome, failed
