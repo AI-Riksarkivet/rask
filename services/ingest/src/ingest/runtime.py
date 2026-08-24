@@ -24,6 +24,15 @@ import pyarrow as pa
 from lance import blob_field
 
 
+#: Blob-v2 placement thresholds, PINNED at the values pylance 10.0.0 applies by default rather than
+#: inherited from it. See the BRONZE_SCHEMA comment for the measurement and for why an inherited
+#: default is a hazard here specifically: the guide stores these in the dataset schema and REJECTS an
+#: append that names different ones, so a library retune would split an existing table's writes from
+#: its reads with no code change anywhere.
+BLOB_INLINE_SIZE_THRESHOLD = 64 * 1024  # < 64 KiB stays in the .lance data file
+BLOB_DEDICATED_SIZE_THRESHOLD = 4 * 1024 * 1024  # >= 4 MiB gets its own .blob file
+
+
 if TYPE_CHECKING:
     from ingest.workflow import ChunkSpec, RunSpec
 
@@ -44,9 +53,30 @@ if TYPE_CHECKING:
 #                                        re-copied by every compaction of the fragment
 #
 # Evaluation is dedicated-FIRST, then inline (counterintuitive, and stated in the docstring).
-# Thresholds are left at Lance's defaults (16 KiB / 2 MiB): a scanned archival page lands in
-# `dedicated`, a thumbnail or a born-digital text page lands in `packed` or `inline`, which is the
-# behaviour we want and did not have to invent.
+#
+# THE THRESHOLDS ARE NAMED HERE, and the numbers this comment used to give were WRONG. It said
+# "Lance's defaults (16 KiB / 2 MiB)" and concluded "a scanned archival page lands in `dedicated`".
+# Measured on pylance 10.0.0 by writing one row per size band and reading back the descriptor kind
+# (`tests/test_blob_placement_thresholds.py` keeps that measurement running):
+#
+#   inline     < 64 KiB          (a 20 KB payload landed INLINE, above the claimed 16 KiB ceiling)
+#   packed     64 KiB .. 4 MiB
+#   dedicated  >= 4 MiB          (a 3 MB scanned page landed PACKED, not dedicated)
+#
+# So the conclusion was false in the direction that matters: the estate believed its page images were
+# each getting a dedicated sidecar, and they were sharing packed ones.
+#
+# They are now PINNED rather than inherited, at the values measured above — behaviour is unchanged
+# today, and a pylance release that retunes its defaults can no longer move every payload between
+# tiers silently. That matters more than it looks: the guide states these thresholds are stored in
+# the dataset SCHEMA and that "appends that explicitly provide different threshold metadata for the
+# same column are rejected", so an inherited default that shifts under an upgrade splits an existing
+# table's writes from its reads with no code change anywhere.
+#
+# Bronze is EXTERNAL since `3c8032e5` (§4.1), so for most corpora these govern nothing: an external
+# descriptor stores a URI and no placement tier applies. They still decide the MANAGED path — the
+# `lance-append` kind, whose Arrow-IPC payloads exist at no URI, and any run whose declared base an
+# operator has not approved.
 #
 # Placement is transparent to readers — the shapes round-trip identically through `read_blobs`,
 # `take_blobs` and `read_blob_ranges` — so this is a pure write-side choice that can be retuned for
@@ -125,7 +155,12 @@ BRONZE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.int64()),
         pa.field("source_uri", pa.string()),
-        blob_field("payload", nullable=False),
+        blob_field(
+            "payload",
+            nullable=False,
+            inline_size_threshold=BLOB_INLINE_SIZE_THRESHOLD,
+            dedicated_size_threshold=BLOB_DEDICATED_SIZE_THRESHOLD,
+        ),
         pa.field("sha256", pa.string()),
         # The listing fingerprint (S3 ETag) at the moment this row was WITNESSED — distinct from
         # `sha256`, which fixes the fetched BYTES. Different jobs: the etag is identity material
