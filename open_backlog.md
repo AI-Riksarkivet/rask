@@ -7,6 +7,76 @@ Pinned 2026-08-24. Each item says what it needs, not just what it is.
 
 ---
 
+## PINNED &mdash; what these two files are, and what they are not
+
+Read this before treating "close the backlog" as "the lakehouse is done". They are not the same size
+of thing.
+
+```
+open_backlog.md      ->  residues. 8 small items + 1 blocked question.
+                         Closing all of it changes NO architecture.
+
+open_data_spec.md 8  ->  the 10 ordered changes. THIS is the lakehouse.
+                         #1-#4 are "a tier is a readiness state, not a copy".
+                         That is the difference between a real lakehouse and
+                         an ETL that writes your bytes three times.
+
+neither file         ->  the honest gap: a batch as ONE queryable object,
+                         backfill/replay of a tier, row/column masking, and
+                         per-workload dependency isolation on Ray.
+```
+
+| # | change | state |
+| --- | --- | --- |
+| 1 | ingest writes External blob descriptors | **DONE** `3c8032e5` — 0.64% of corpus vs 100.71% |
+| 2 | name blob thresholds; register the base at create | **DONE** `3c8032e5` + `8c24c7f3` |
+| 3 | stop materialising blobs in the mover | OPEN — **and it is one change with 4**, see below |
+| 4 | tier→tier becomes `add_columns`, not overwrite | OPEN — **one change with 3** |
+| 5 | kill `GateOutcome.TRIGGER`, one enforcement point | **DONE** `ce821949` |
+| 6 | drop chart fallback in `effective_gate`; drop `movers[]` | OPEN — **half of it is not implementable as written**, see below |
+| 7 | rename lane → transform | OPEN — 253 files, ~1,027 occurrences, breaking config rename |
+| 8 | split the gate: Ray attests, catalog runs the floor | OPEN — out of scope by owner decision |
+| 9 | `cascade_run` workflow — a batch becomes ONE object | OPEN — out of scope by owner decision |
+| 10 | tiers become tags on one dataset | UNBLOCKED — §9(c) decided: gold is a tag. Not started |
+
+### Three findings the numbering hides, all measured rather than argued
+
+**3 and 4 are ONE change, of items-8/9 magnitude.** §4.2 says the transform adds derived columns to
+the SAME dataset — so `transform_stage(from_uri, to_uri, mode="overwrite")` stops writing a second
+dataset at all. That changes what a tier IS: the stage's output identity, its lineage input/output
+pair, what the gate publishes a version OF, and the whole `MEDALLION_TO_URI` / `movers[]` surface.
+Doing 3 alone would build descriptor-carrying machinery that 4 then deletes — and pylance exposes no
+accessor for a dataset's registered bases (probed: no `bases`, no `manifest`, and the base path is
+not in the manifest bytes), so that machinery would need operator config the one-dataset design makes
+unnecessary.
+
+**6's second half is not implementable as specified.** `chart/templates/medallion.yaml:246` renders a
+Deployment PER MOVER from `.Values.medallion.movers`, and `dapr-statestore.yaml:96` derives each
+mover's Dapr statestore scope from the same list (its own comment: "the MOVERS' app-ids are DERIVED,
+not listed … adding a mover cannot silently produce one that fails to dispatch"). Helm renders at
+template time; a declared lane record lives in object storage. **A chart cannot enumerate movers it
+cannot read.** Dropping `medallion.movers[]` needs a runtime controller that creates Deployments from
+lane records — a new component, not a config cleanup. 6's FIRST half (the `effective_gate` chart
+fallback) is implementable but is the same question item 5 answered: the chart's settings are the
+UNGOVERNED mode, and `gate.py`'s module note argues at length that a gate must fall back where a lane
+refuses. Dropping it would refuse or un-gate every estate that has declared nothing.
+
+**7 is a breaking config rename, not a tidy-up.** 253 files, ~1,027 occurrences (804 Python, 169
+frontend, 54 chart/yaml), including env vars and chart values that deployed estates are set to.
+
+**And the standing flag.** The Ray lane is on and verified end to end, and it rides an unresolved
+architectural question: it works because `.docker/ray-cluster.dockerfile` installs the platform's
+Lance trio beside the HTR workload's CUDA stack &mdash; one fat shared image. `CLAUDE.md` names that
+exact pattern as not-the-answer ("A workload's awkward dependencies are ITS problem &mdash; never
+solved by fattening a shared image") and records the replacement as an OPEN owner decision: the
+2026-08-17 `runtime_env` ruling was superseded 2026-08-23 and nothing replaced it. The lane being on
+does not settle it. It raises the cost of leaving it unsettled, because a second workload now lands
+in the same image.
+
+**Live status board:** https://claude.ai/code/artifact/4c3bfd64-3c73-470a-83b6-3496c1f07178
+
+---
+
 ## CLOSED SINCE THIS FILE WAS PINNED
 
 ### The Ray lane ships ON — **DONE** (`679e3bcb`, `e6c7357c`)
