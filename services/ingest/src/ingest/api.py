@@ -314,6 +314,13 @@ class RunStatusResponse(BaseModel):
 
     run_id: str
     status: str
+    #: WHAT THIS RUN WROTE. Exposed rather than derived: the ingest service dispatched the run and
+    #: already holds the answer on `RunRecord`, which has carried both since it was written — only
+    #: this response dropped them. Without them `/compute/ingest/<run_id>` shows a COMPLETE run with
+    #: a committed version and can link to nothing, because the wire never says which dataset it is.
+    #: Re-deriving from lineage would make the link depend on the provenance chain it exists to reach.
+    project: str
+    dataset: str
     units_total: int
     units_done: int
     errors: dict[str, str]
@@ -530,6 +537,8 @@ async def get_ingest(
         units_total=record.units_total,
         units_done=record.units_done,
         errors=record.errors,
+        project=record.project,
+        dataset=record.dataset,
         committed_version=record.committed_version,
         # The refusal OUTRANKS the ordinary defect string: "we could not check" must never be
         # rendered as "we checked and it was fine".

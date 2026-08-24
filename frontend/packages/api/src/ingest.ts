@@ -32,6 +32,11 @@ export type IngestAccepted = v.InferOutput<typeof IngestAcceptedSchema>;
 export const IngestRunSchema = v.object({
 	run_id: v.string(),
 	status: v.string(),
+	// What the run WROTE. Optional with a null fallback because a run recorded before the service
+	// exposed these fields has neither, and a required field would turn every historical row into a
+	// parse error — the failure mode that blanked the jobs board when `metadata` was made required.
+	project: v.nullable(v.optional(v.string()), null),
+	dataset: v.nullable(v.optional(v.string()), null),
 	units_total: v.number(),
 	units_done: v.number(),
 	errors: v.record(v.string(), v.string()),

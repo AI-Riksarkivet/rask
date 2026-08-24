@@ -202,6 +202,25 @@
 							{/if}
 						</dd>
 					{/if}
+
+					<!-- WHERE THE RUN'S PROVENANCE LIVES. Cross-zone (lineage is a lakehouse surface), so
+					     `data-sveltekit-reload` is mandatory: without it SvelteKit soft-navigates into a
+					     route this zone does not own and the link 404s. `@rask/zone-contract`'s
+					     cross-zone-reload test is what enforces that, not a lint rule.
+
+					     Rendered only when the wire names a dataset. A run recorded before the service
+					     exposed it has none, and a guessed link is worse than no link. -->
+					{#if run.dataset}
+						<dt class="text-muted-foreground">Lineage</dt>
+						<dd class="font-mono">
+							<a
+								href={`/lakehouse/lineage/datasets/${encodeURIComponent(run.dataset)}`}
+								data-sveltekit-reload
+								data-slot="run-lineage"
+								class="hover:underline">{run.project ? `${run.project}/` : ''}{run.dataset}</a
+							>
+						</dd>
+					{/if}
 				</dl>
 
 				{#if run.publish_error}
