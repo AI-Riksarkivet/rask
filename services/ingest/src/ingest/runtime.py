@@ -158,6 +158,49 @@ def warehouse_root() -> str:
     return os.getenv("RASK_INGEST_WAREHOUSE") or str(Path(tempfile.gettempdir()) / "rask-ingest")
 
 
+def external_blob_base_allowlist() -> list[str]:
+    """The base URIs an ingest run may point a blob descriptor at. Empty = none approved.
+
+    THE SAME ALLOWLIST POSTURE THE CATALOG ALREADY TAKES (`LANCE_EXTERNAL_BLOB_BASES`), and for the
+    same reason, which is a security property rather than tidiness. A source's root is
+    CLIENT-SUPPLIED — `options.bucket` comes off the ingest request — so an adapter's declared base
+    is an untrusted value. Writing it into a dataset manifest unchecked would make the cascade's own
+    `read_blobs` a server-side read primitive for any URI a caller can name, which is exactly the
+    SSRF the chart's `vending.externalBlobBases` comment describes and refuses.
+
+    Deliberately shares the catalog's variable name: in-cluster the same operator decision has to
+    hold at both doors, and two names for one approval list is how they drift apart.
+    """
+    raw = os.getenv("LANCE_EXTERNAL_BLOB_BASES", "")
+    return [b.strip() for b in raw.split(",") if b.strip()]
+
+
+def approved_external_base(candidate: str | None) -> str | None:
+    """`candidate` if an operator has approved it, else None (MANAGED — lance owns the bytes).
+
+    Falls back rather than raising, and says so LOUDLY. The precedent is
+    `medallion_stage_output_UNGOVERNED`: an unapproved base is a DEPLOYMENT gap, not bad data, and
+    raising would turn a missing env var into a run that can never succeed no matter how often it is
+    retried. Managed is the safe direction — it costs storage, and it cannot dangle or be pointed at
+    an internal host.
+
+    A prefix match, not equality: an approved `s3://corpus/` covers `s3://corpus/vol/A`. The trailing
+    separator is normalised so `s3://corpusx` cannot pass as a match for `s3://corpus`.
+    """
+    if not candidate:
+        return None
+    approved = external_blob_base_allowlist()
+    for base in approved:
+        normalised = base if base.endswith("/") else f"{base}/"
+        if candidate == base.rstrip("/") or candidate.startswith(normalised):
+            return candidate
+    _log.warning(
+        "ingest_external_base_not_approved",
+        extra={"candidate": candidate, "approved": approved, "placement": "managed", "missing": "LANCE_EXTERNAL_BLOB_BASES"},
+    )
+    return None
+
+
 def dataset_uri(spec: RunSpec) -> str:
     """Resolve a run to the location it writes — I2's "no hardcoded dataset paths".
 
@@ -214,7 +257,27 @@ def ensure_dataset_at(spec: RunSpec) -> tuple[str, int]:
     which reads the dataset's own current version, and never sends a `read_version` anywhere.
     """
     catalog = _catalog()
-    location = str(catalog.ensure(spec.namespace, spec.dataset))
+    # THE PLACEMENT DECISION, resolved at the ONE moment it can be acted on. `initial_bases` is
+    # create-mode only, so whether this dataset may hold external blob descriptors is settled by this
+    # call or never (`open_data_spec.md` §4.1). The kind's own adapter answers it — the same seam
+    # that already answers `partition_key_for` — because only the adapter knows what contains its
+    # unit keys.
+    #
+    # Passed positionally through `ensure`, not resolved inside the catalog: a catalog that had to
+    # know about source kinds would be the source knowledge re-welded into the write path, which is
+    # what I1 removed.
+    from ingest.sources import SourceSpec, external_base_for
+
+    source_spec = SourceSpec(kind=spec.kind, project=spec.project, dataset=spec.dataset, options=spec.options)
+    location = str(
+        catalog.ensure(
+            spec.namespace,
+            spec.dataset,
+            # GATED, never trusted: the adapter says what it WOULD need, the operator's allowlist
+            # says whether that is approved. An unapproved base degrades to managed with a warning.
+            external_base=approved_external_base(external_base_for(source_spec)),
+        )
+    )
     describe_version = getattr(catalog, "describe_version", None)
     read_version = int(describe_version(spec.namespace, spec.dataset)) if describe_version is not None else 0
     return location, read_version
@@ -300,8 +363,22 @@ async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
         # key with), so selecting here puts no new source knowledge on the wire and none at all in
         # `ingest.fetch` — which resolves schemes and must never learn about sources.
         register_builtin_sources()
+        from ingest.sources import SourceSpec, external_base_for
+
+        chunk_spec = SourceSpec(kind=chunk.kind, project=chunk.project, dataset=chunk.dataset, options=chunk.options)
         worker = Worker(queue, fetcher_for(chunk.kind) or UriFetcher(), PayloadValidator(), name=chunk.chunk_id, sizing=chunk.sizing)
-        outcome = await worker.drain_chunk(chunk.run_id, chunk.chunk_id, chunk.expected_units, chunk.dataset_uri)
+        # THE PLACEMENT, resolved from the same chunk and through the same operator gate as the
+        # create did (`ensure_dataset_at`). Resolved here rather than read back off the dataset
+        # because pylance exposes no accessor for a manifest's registered bases — `add_bases` writes
+        # them and nothing reads them — so the two callers must agree by construction. They do:
+        # both ask the ADAPTER, and both pass the answer through `approved_external_base`.
+        outcome = await worker.drain_chunk(
+            chunk.run_id,
+            chunk.chunk_id,
+            chunk.expected_units,
+            chunk.dataset_uri,
+            external_base=approved_external_base(external_base_for(chunk_spec)),
+        )
         # BOUNDED HERE, at the first point the result becomes workflow history. The map is keyed by
         # UNIT, so a chunk whose every key is corrupt carries one entry per page — and this dict is
         # then persisted as the activity result, returned by the child, merged by the parent and fed

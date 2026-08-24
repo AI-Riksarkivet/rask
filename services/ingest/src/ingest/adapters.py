@@ -279,6 +279,51 @@ def _s3_prefix_lineage(spec: SourceSpec) -> LineageInput:
 # compaction (measured, 5 fragments → 1).
 
 
+# ── external blob bases: WHERE this kind's bytes already live (open_data_spec.md §4.1) ────────
+#
+# One function per kind, registered beside the factory, for the same reason the partition rules are:
+# only the adapter knows what a unit key means, so only the adapter can say what contains it.
+#
+# A base makes bronze store the URI instead of the bytes. Measured on a 4 MB / 20-row corpus
+# (`scripts/measure_external_blob_carry_forward.py`): external bronze is 3,232 B — 0.1% of the corpus
+# — against 4,002,901 B for the managed form, and the descriptor still resolves 20/20 after being
+# carried into a second dataset, which is what lets silver and gold stop copying too.
+#
+# The base is the CONTAINER of every unit key, not the run's prefix: keys are full URIs, and Lance
+# stores `blob_uri` RELATIVE to the base it matched.
+
+
+def _s3_prefix_external_base(spec: SourceSpec) -> str | None:
+    """The BUCKET, not `options.prefix`.
+
+    Every key this kind produces is `s3://<bucket>/<object>`, so the bucket is the one root
+    guaranteed to contain all of them — including a run with no prefix at all, where a
+    prefix-derived base would be the bucket anyway. Using the prefix would also mean two runs over
+    two prefixes of one bucket registering two bases for the same store.
+    """
+    bucket = str(spec.options.get("bucket") or "")
+    return f"s3://{bucket}" if bucket else None
+
+
+def _local_dir_external_base(spec: SourceSpec) -> str | None:
+    """The configured root, resolved and confined exactly as the adapter itself resolves it.
+
+    `confine_to_local_root` rather than the raw option: the base is written into the dataset manifest
+    and is what Lance will accept blob URIs against, so a base that escaped the configured root would
+    widen what this dataset may point at — the confinement has to hold at BOTH doors, not just the
+    one that reads files.
+    """
+    root = str(spec.options.get("root") or "")
+    if not root:
+        return None
+    return str(confine_to_local_root(root))
+
+
+# `lance-append` registers NO base, and that is a real answer rather than an omission: its fetcher
+# SYNTHESISES each unit's bytes as Arrow IPC from dataset fragments, so the payload exists at no URI
+# and there is nothing for an external descriptor to point at. It must own its bytes.
+
+
 def _s3_prefix_partition(spec: SourceSpec, key: str) -> str | None:
     """The containing FOLDER of the object — the owner's "partition on folder level".
 
@@ -314,6 +359,7 @@ def register_builtin_sources() -> None:
             lineage_input=_local_dir_lineage,
             # The containing directory — the local twin of the S3 folder rule.
             partition_of=_local_dir_partition,
+            external_base_of=_local_dir_external_base,
             label="Local directory",
             description="A directory tree on the worker. Deterministic and offline — the lane's fixture source.",
             options=[
@@ -328,6 +374,7 @@ def register_builtin_sources() -> None:
             build=_s3_prefix,
             lineage_input=_s3_prefix_lineage,
             partition_of=_s3_prefix_partition,
+            external_base_of=_s3_prefix_external_base,
             label="S3 prefix",
             description="Every object under a bucket prefix, through the estate's provider-agnostic client — RustFS, MinIO, HCP or AWS.",
             options=[

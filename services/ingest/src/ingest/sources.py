@@ -105,6 +105,33 @@ class PartitionOf(Protocol):
 
 
 @runtime_checkable
+class ExternalBaseOf(Protocol):
+    """The ROOT every one of this kind's unit keys lives under — or None to own the bytes.
+
+    Registered beside the adapter for the same reason `partition_of` and `lineage_input` are: only
+    the adapter knows what a unit key means, and therefore what contains it. The worker resolves
+    units by URI SCHEME and must not learn about buckets or directories.
+
+    This is the placement decision of `open_data_spec.md` §4.1, made per corpus rather than
+    defaulted. A base means the bronze `payload` column stores an EXTERNAL descriptor — the URI, not
+    the bytes — so the corpus is stored once instead of once per tier (measured: 0.1% of corpus on
+    disk against 100.1% for the managed form, `scripts/measure_external_blob_carry_forward.py`).
+
+    **Returning None is not a fallback, it is a real answer, and one kind genuinely needs it.**
+    `lance-append` SYNTHESISES its payload — its fetcher builds Arrow IPC from dataset fragments, so
+    those bytes exist at no URI and there is nothing for a descriptor to point at. A source whose
+    lifecycle is not the estate's is the other case §4.1 names. Both must own their bytes.
+
+    The base is registered in the dataset's MANIFEST at create time, and Lance refuses an external
+    URI outside a registered base (`allow_external_blob_outside_bases` defaults False, and this
+    estate must never set it True — outside a base, lifecycle "remains their responsibility" and the
+    pointer can dangle with nothing watching).
+    """
+
+    def __call__(self, spec: SourceSpec) -> str | None: ...
+
+
+@runtime_checkable
 class FetcherFactory(Protocol):
     """How this kind turns one unit KEY into bytes, when a URI scheme cannot say it.
 
@@ -143,6 +170,7 @@ class _Registration(BaseModel):
     descriptor: SourceDescriptor
     partition_of: PartitionOf | None = None
     fetcher: FetcherFactory | None = None
+    external_base_of: ExternalBaseOf | None = None
 
 
 _REGISTRY: dict[str, _Registration] = {}
@@ -158,6 +186,7 @@ def register(
     options: Sequence[SourceOption] = (),
     partition_of: PartitionOf | None = None,
     fetcher: FetcherFactory | None = None,
+    external_base_of: ExternalBaseOf | None = None,
 ) -> None:
     """Register a source kind. Called at import time by the adapter modules themselves.
 
@@ -175,6 +204,7 @@ def register(
         descriptor=SourceDescriptor(kind=kind, label=label or kind, description=description, options=list(options)),
         partition_of=partition_of,
         fetcher=fetcher,
+        external_base_of=external_base_of,
     )
 
 
@@ -210,6 +240,20 @@ def partition_key_for(spec: SourceSpec, key: str) -> str | None:
     if reg is None or reg.partition_of is None:
         return None
     return reg.partition_of(spec, key)
+
+
+def external_base_for(spec: SourceSpec) -> str | None:
+    """This kind's external blob base, or None when the kind must own its bytes.
+
+    Unlike `partition_key_for`, an unknown kind here is NOT harmless-by-default in the same way, but
+    the answer is the same and for a stronger reason: None means MANAGED, which copies the bytes.
+    That is the conservative direction — it costs storage, where the opposite mistake (claiming a
+    base a kind's keys do not live under) is refused at write by Lance, per unit, after the fetch.
+    """
+    reg = _REGISTRY.get(spec.kind)
+    if reg is None or reg.external_base_of is None:
+        return None
+    return reg.external_base_of(spec)
 
 
 def fetcher_for(kind: str) -> Fetcher | None:

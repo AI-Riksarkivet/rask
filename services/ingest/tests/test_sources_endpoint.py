@@ -82,7 +82,10 @@ def test_each_kind_declares_the_options_its_adapter_READS(sources: list[SourceDe
         # underscore and the twin suffixes are naming, not identity. Missing a suffix invents a
         # PHANTOM kind — `_iiif_partition` first registered here as kind `iiif-partition`, whose
         # options are described nowhere, so this gate failed on a function that was entirely correct.
-        kind = func.name.lstrip("_").removesuffix("_lineage").removesuffix("_partition").replace("_", "-")
+        # `_external_base` is the third twin (the §4.1 blob placement) and arrived the same way: it
+        # read `options["root"]`, which local-dir DOES describe, and this gate reported it as an
+        # undescribed option of a kind that does not exist.
+        kind = func.name.lstrip("_").removesuffix("_lineage").removesuffix("_partition").removesuffix("_external_base").replace("_", "-")
         for node in ast.walk(func):
             is_options_get = (
                 isinstance(node, ast.Call)

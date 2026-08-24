@@ -260,7 +260,10 @@ def test_ensure_dataset_at_returns_the_catalogs_version_with_the_location(monkey
     from ingest import runtime
 
     class _Catalog:
-        def ensure(self, namespace: str, dataset: str) -> str:
+        def ensure(self, namespace: str, dataset: str, external_base: str | None = None) -> str:
+            # `external_base` is accepted because the real seam takes it (§4.1 change 2: the blob
+            # base is registered at CREATE or never). A double that omitted it would let the
+            # production call site drift away from every catalog implementation, silently.
             return "s3://wh/pages.lance"
 
         def describe_version(self, namespace: str, dataset: str) -> int:
@@ -290,7 +293,7 @@ def test_a_RETRIED_finalize_presents_the_SAME_read_version_and_never_re_reads_it
             self.presented: list[int] = []
             self.describe_calls = 0
 
-        def ensure(self, namespace: str, dataset: str) -> str:
+        def ensure(self, namespace: str, dataset: str, external_base: str | None = None) -> str:
             return str(tmp_path / "pages.lance")
 
         def describe_version(self, namespace: str, dataset: str) -> int:

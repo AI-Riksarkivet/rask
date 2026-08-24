@@ -67,6 +67,11 @@ class CreationFlags(TypedDict):
 # `source_rowid` reference in silver/gold (D2) depend on stable row ids existing from version 1.
 CREATION_FLAGS: CreationFlags = {"data_storage_version": "2.2", "enable_stable_row_ids": True}
 
+#: The manifest name for the one external blob base a bronze dataset registers. A NAME, not a path:
+#: `DatasetBasePath(path, name)` takes both, and the name is what a later reader sees when it asks
+#: which bases a dataset may point at. One per dataset because one bronze dataset has one source.
+_EXTERNAL_BASE_NAME = "source"
+
 
 class CommitResult(BaseModel):
     """What the lander reports back to the workflow's finalize activity."""
@@ -278,13 +283,37 @@ def write_unit_fragments(dataset_uri: str, batch: pa.Table) -> list[str]:
     return [json.dumps(f.to_json()) for f in written]
 
 
-def create_empty(dataset_uri: str, schema: pa.Schema) -> int:
+def create_empty(dataset_uri: str, schema: pa.Schema, external_base: str | None = None) -> int:
     """Step 1 of the creation two-step — an empty dataset carrying the creation-time flags.
 
     Server-side in production (the catalog owns CREATE); exposed here so the same code path is
     exercisable in tests and by the §7.11 verification script.
+
+    `external_base` REGISTERS the root that this dataset's blob descriptors may point at
+    (`open_data_spec.md` §4.1, change 2). It belongs HERE and nowhere else for a reason that is easy
+    to get wrong: `initial_bases` is **CREATE-MODE ONLY** — lance refuses it on append and overwrite
+    — and this is the estate's only create door for a bronze dataset. Registering it at the append
+    site instead would be a silent no-op, and the first external write would then be refused against
+    a dataset that looked correctly configured.
+
+    Omitted (None) means MANAGED: lance owns the bytes, using its inline/packed/dedicated
+    thresholds. That is the right answer for a source whose payload exists at no URI — see
+    `adapters._lance_append` — and the wrong one everywhere else, because it stores the corpus once
+    per tier (measured 100.1% of corpus against 0.1%,
+    `scripts/measure_external_blob_carry_forward.py`).
+
+    **`allow_external_blob_outside_bases` is deliberately NOT set.** Its default False is what makes
+    an unregistered URI a loud refusal at write rather than a pointer nobody is watching: outside a
+    registered base, "lifecycle management for these objects remains their responsibility".
     """
-    ds = lance.write_dataset(schema.empty_table(), dataset_uri, mode="create", **CREATION_FLAGS)
+    bases = [lance.DatasetBasePath(external_base, _EXTERNAL_BASE_NAME)] if external_base else None
+    ds = lance.write_dataset(
+        schema.empty_table(),
+        dataset_uri,
+        mode="create",
+        initial_bases=bases,
+        **CREATION_FLAGS,
+    )
     return ds.version
 
 

@@ -146,7 +146,12 @@ class AcceptAll:
         return None if payload else "empty payload"
 
 
-def units_to_table(units: Sequence[tuple[str, bytes]], partitions: Sequence[str | None] | None = None, tokens: Sequence[str | None] | None = None) -> pa.Table:
+def units_to_table(
+    units: Sequence[tuple[str, bytes]],
+    partitions: Sequence[str | None] | None = None,
+    tokens: Sequence[str | None] | None = None,
+    external_base: str | None = None,
+) -> pa.Table:
     """Build the bronze batch: the data AS RECEIVED plus the acquisition facts.
 
     Bronze is faithful to source (§3.5) — no decoding, no conversion. `id` is a stable hash of the
@@ -160,6 +165,21 @@ def units_to_table(units: Sequence[tuple[str, bytes]], partitions: Sequence[str 
     `take_blobs` / `read_blob_ranges` for readers, so the viewer could only ever load whole rows.
     The code this plane replaced already got this right (`medallion/services/ingest.py:31`).
 
+    **`external_base` chooses the PLACEMENT** (`open_data_spec.md` §4.1, change 1). With a base, the
+    payload column stores an EXTERNAL descriptor — the source URI — and lance copies nothing: 0.1% of
+    the corpus on disk against 100.1% for the managed form, and the descriptor still resolves after
+    being carried into silver and gold, which is what stops the estate holding three copies
+    (`scripts/measure_external_blob_carry_forward.py`).
+
+    The keys ARE the URIs — `source_uri` below is the same list — so this is a placement change, not
+    a data change: bronze remains faithful to source either way. The bytes are still FETCHED, because
+    validation and the `sha256` fixity column both read them; fetching to hash is not copying into
+    the lakehouse, and nothing is written twice.
+
+    Without a base the bytes are stored, which is correct for a kind whose payload exists at no URI
+    (`lance-append` synthesises Arrow IPC from fragments) and for a source whose lifecycle is not
+    the estate's.
+
     `partitions` is positional-parallel to `units` and OPTIONAL: omitted (or None entries) writes
     nulls, which is what a source with no meaningful grouping should produce. The values are the
     ADAPTER's — see `sources.partition_key_for` — and this function deliberately does not derive them
@@ -168,6 +188,7 @@ def units_to_table(units: Sequence[tuple[str, bytes]], partitions: Sequence[str 
     import hashlib
 
     from lance import blob_array
+    from lance.blob import Blob
 
     from ingest.identity import unit_id
     from ingest.runtime import BRONZE_SCHEMA, BRONZE_STAGE
@@ -188,7 +209,11 @@ def units_to_table(units: Sequence[tuple[str, bytes]], partitions: Sequence[str 
         {
             "id": pa.array(ids, pa.int64()),
             "source_uri": pa.array([k for k, _ in units], pa.string()),
-            "payload": blob_array([p for _, p in units]),
+            # EXTERNAL when a base is registered, MANAGED otherwise. `Blob.from_uri` with no
+            # position/size means the WHOLE object — passing a zero size instead asks for a
+            # zero-length slice and yields an empty read with no error, which is the silent failure
+            # this estate keeps producing.
+            "payload": blob_array([Blob.from_uri(k) for k, _ in units] if external_base else [p for _, p in units]),
             # Fixity (#99): over the PAYLOAD as fetched — hashed here, before the write, never read
             # back from Lance afterwards. Distinct from `id`, which hashes the KEY: one names the
             # row, the other asserts the bytes. See the schema comment in runtime.py.
@@ -296,7 +321,7 @@ class Worker:
             return None, reason
         return task.key, payload
 
-    async def drain_chunk(self, run_id: str, chunk_id: str, expected: int, dataset_uri: str) -> ChunkOutcome:
+    async def drain_chunk(self, run_id: str, chunk_id: str, expected: int, dataset_uri: str, external_base: str | None = None) -> ChunkOutcome:
         """Pull units until `expected` are accounted for, then signal the waiting workflow.
 
         Counts errors toward completion deliberately: a chunk whose units all failed must still
@@ -349,7 +374,7 @@ class Worker:
             units, msgs_to_ack, parts, toks = pending, pending_msgs, pending_parts, pending_tokens
             pending, pending_msgs, pending_bytes, pending_parts, pending_tokens = [], [], 0, [], []
 
-            written = write_unit_fragments(dataset_uri, units_to_table(units, parts, toks))
+            written = write_unit_fragments(dataset_uri, units_to_table(units, parts, toks, external_base))
             # EVERY unit in the batch, not `units[0][0]`. The manifest is the finalizer's only record
             # of which rows a fragment holds, so naming one member left the other N-1 invisible and a
             # partially-acked batch committed its units TWICE

@@ -42,7 +42,7 @@ class LocalCatalog:
     def ensure_dataset(self, project: str, dataset: str, schema: pa.Schema | None = None) -> str:
         raise NotImplementedError("resolved through dataset_uri(); ensure_at() is the path-based form")
 
-    def ensure(self, project: str, dataset: str) -> str:
+    def ensure(self, project: str, dataset: str, external_base: str | None = None) -> str:
         """The ID-based form, so the local and service catalogs present ONE seam.
 
         The service vends a location; this composes the dev fallback from env and then creates
@@ -52,14 +52,20 @@ class LocalCatalog:
         """
         from ingest.runtime import warehouse_root
 
-        return self.ensure_at(f"{warehouse_root().rstrip('/')}/{project}/{dataset}.lance")
+        return self.ensure_at(f"{warehouse_root().rstrip('/')}/{project}/{dataset}.lance", external_base)
 
-    def ensure_at(self, uri: str) -> str:
+    def ensure_at(self, uri: str, external_base: str | None = None) -> str:
         """Create the dataset EMPTY if absent.
 
         The creation-time flags (`enable_stable_row_ids`, `data_storage_version=2.2`) are set here or
         never: they are silent no-ops afterwards (`file_format.md:4011-4013 + guide.md:228-229`), and CDF
         plus every silver `source_rowid` reference depends on them existing from version 1.
+
+        `external_base` joins them, and for the same reason: `initial_bases` is CREATE-MODE ONLY, so
+        the root a dataset's blob descriptors may point at is registered here or never
+        (`open_data_spec.md` §4.1). Unlike the flags above there is no A14-style assertion for it —
+        a dataset created without a base is not broken, it is MANAGED, which is a supported placement
+        and the right one for a source whose bytes exist at no URI.
         """
         if _is_object_store(uri):
             # An object store has no directories to create, and Path("s3://b/k") collapses to the
@@ -71,13 +77,13 @@ class LocalCatalog:
 
                 lance.dataset(uri)
             except Exception:
-                create_empty(uri, self._schema)
+                create_empty(uri, self._schema, external_base)
             assert_creation_contract(uri)
             return uri
 
         if not Path(uri).exists():
             Path(uri).parent.mkdir(parents=True, exist_ok=True)
-            create_empty(uri, self._schema)
+            create_empty(uri, self._schema, external_base)
         # A14 is ENFORCED here, not merely available. A dataset that pre-dates the contract — or was
         # created by any other writer — reaches this path too, and the whole point is that the flags
         # cannot be added afterwards: refusing at the head of a run is the last moment the operator
