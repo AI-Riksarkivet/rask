@@ -24,20 +24,24 @@ Proven live from the browser on a table that existed in no configuration anywher
 
 ---
 
-## NEEDS A MEASUREMENT, NOT A DECISION
+### batch B9 — the dispatch ceiling — **DONE** (`c93183c1`)
 
-### batch B9 — `RASK_WF_INLINE_MAX_BYTES`
+The owner supplied the scale this item was waiting on — "over 10 million images, 50,000 hours of
+video" (2026-08-24) — and measuring against it found a live DEFECT, not a missing knob. A real
+`ChunkSpec.model_dump()` serialises to 317 B, so at `CHUNK_SIZE=1000` the ceiling was **9,923,000
+units**: a 10M-image corpus reached 3.02 MiB against the 3 MiB dispatch budget and would have been
+REFUSED at the enumeration seam. Note the direction — `enumerate_chunks` returns ONE result holding
+every chunk, so a SMALLER chunk size means MORE descriptors and a LOWER ceiling.
 
-Measure `enumerate_chunks`' serialized result at advertised scale, then set the threshold. The 120 MB
-figure in the plan text is admitted arithmetic. **Shipping a guessed value is what the invariant
-explicitly forbids**, so this waits on a live estate at scale rather than on effort.
+`CHUNK_SIZE` 1000 → 10000, chosen by the suite's own 5x-headroom rule rather than by preference.
 
-Related leak, bounded but not removed: `services/flows` caps `NodeResult.payload_text` at 256 KiB and
+Still open, and untouched by this: `services/flows` caps `NodeResult.payload_text` at 256 KiB and
 still writes that document into workflow history as an output, and again per dependent.
 
 ---
 
 ## NEEDS A QUESTION ANSWERED FIRST
+
 
 ### ingest #3 — the source pin
 
@@ -54,6 +58,18 @@ Establish that first; the fix follows from the answer.
 ---
 
 ## LANDED (kept here until the parent items close)
+
+- **The promotion review had never worked in-cluster** — live fix + `b2f3af6e`. `lance-statestore`
+  is scoped, and the DEPLOYED Component was missing `medallion-producer`. The chart has been right
+  since `a71c12a5` and helm's own stored manifest carries the app-id; the cluster object did not,
+  because helm only patches fields that changed BETWEEN releases, so an out-of-band edit to an
+  otherwise-stable field is never corrected. Every held promotion answered INTERNAL and then
+  NIL-DEREFERENCED daprd (dapr 1.18.1), taking the cascade head's whole sidecar down — 3 crashes in
+  33 minutes. Live object reconciled and verified: the review now schedules and the sidecar has
+  restart count 0. `probe_actor_state_store` was added at all six runtime-hosting lifespans so the
+  next occurrence says so instead of logging "Workflow engine started" and dying later.
+  **NOT YET DEPLOYED** — the probe is committed and green in the suite; it starts reporting when the
+  images are rebuilt and rolled.
 
 - **B14 — one `transform_batch`** — `5a8dd3b7`. The derivers moved to `service_kit.lakehouse.media`
   behind a `service-kit[media]` extra; both drivers import ONE implementation. The drift-pin test
