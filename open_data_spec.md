@@ -183,12 +183,12 @@ barely uses — so a gold-only reader is grantable without copying a payload.
 
 **VERIFIED in the tree, and it is an asymmetry inside our own estate, not a missing feature.**
 
-Two planes already use Dapr Workflow the way the docs prescribe:
+The ingest plane already uses Dapr Workflow the way the docs prescribe &mdash; on the same kind of work,
+over the same kind of data:
 
 | plane | pattern | evidence |
 | --- | --- | --- |
 | **ingest** | child workflow per chunk, `when_all` fan-in | `ingest/workflow.py:14`, `worker.py:4` |
-| **flows** | `when_all` per wave | `flows/workflow.py:95` |
 | **medallion cascade** | **none** | `transform.py:850` &mdash; `publish_event(topic_name=settings.pub_topic)` |
 
 The cascade hands stage to stage by **publishing to a topic**. There is a workflow *inside* one stage
@@ -202,8 +202,8 @@ daemon &mdash; that wakes on an arrival, acts, publishes, and forgets.
   only thread is a `token` copied from event to event.
 - **No cancellation.** Nothing to terminate. A wrong batch runs to completion.
 - **No cost or duration per batch.** Only per stage, and only if a Ray job happened.
-- **No fan-out per partition.** Ingest can do this; the cascade cannot, so a 10M-image corpus is one
-  serial hop per tier.
+- **No fan-out per partition.** Ingest fans out child workflows per chunk over the same corpus; the
+  cascade cannot, so 10M images is one serial hop per tier.
 - **No `continue_as_new`** &mdash; recorded as S2 and unlanded.
 - **A drop between stages is invisible.** This is not theoretical: it is the shape of three defects
   found on 2026-08-24 (`706c8ce3`, `2e308f7f`, and the unbound-namespace bug in &sect;9b). A workflow
@@ -213,9 +213,10 @@ daemon &mdash; that wakes on an arrival, acts, publishes, and forgets.
 child `stage_run` per edge, `wait_for_external_event` for the hold. It makes a batch a THING &mdash;
 queryable, cancellable, costable &mdash; which is what the other two planes already have.
 
-**Do not read this as "Dapr Workflow is under-adopted."** It is adopted, correctly, twice. The
-cascade is the one place that reaches for a message where the estate's own precedent reaches for a
-workflow.
+**Do not read this as "Dapr Workflow is under-adopted."** Ingest adopts it correctly, on the same
+class of work. The cascade is the place that reaches for a message where the estate's own precedent
+reaches for a workflow &mdash; and ingest is the precedent that matters, because it fans out over a
+corpus, which is exactly what the cascade cannot do.
 
 ---
 
