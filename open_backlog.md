@@ -79,6 +79,28 @@ Establish that first; the fix follows from the answer.
 
 ---
 
+## CARRIED FROM `open_batch_process.md` (that file is retired; these rulings are not)
+
+Every item in that plan doc is DONE or ruled, so the file was deleted. Two rulings outlive it and are
+kept here because a future reader needs the REASON, not just the verdict:
+
+- **B7 — resolve once, carry the value. DEFERRED, and the audit overstated it.** `submit_stage`
+  re-calls `resolve_lane_async`, but `submit_stage` is an ACTIVITY: its result is recorded in history
+  and replayed, so this is not a determinism break. It costs clarity and one extra resolution per
+  submit, not correctness. Apply the invariant the next time that signature changes; it does not
+  justify touching the submit path on its own.
+- **B8 — vocabulary-validated `TransformSpec` fields. DEFERRED.** The record exists and validates;
+  what is missing is `actor.resources`, `batch_bytes`, `enabled` and an `exclude_unset` merge. Every
+  one is a knob for a workload that would declare it, and the estate ships no declared lane using
+  them. **Adding config nothing reads is the dead-config defect this plane has been bitten by twice**
+  — the orphan-scan lever with no path from values, and a state-store scope naming an app-id that did
+  not exist. The fields land with their first consumer.
+
+Done there and needing nothing further: B4 (`f41bedea`, `549c348c`), B9 (`c93183c1`), B11,
+B14 (`5a8dd3b7`), B15 (closed as ruled).
+
+---
+
 ## SMALLER, UNBLOCKED
 
 - **`RASK_INGEST_LANCE_ROOT` is empty**, so the `lance-append` source kind is advertised in the live

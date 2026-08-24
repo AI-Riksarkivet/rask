@@ -1,5 +1,9 @@
 # open_ingest_design — what is still outstanding
 
+> **THIS FILE STAYS.** Item #3 (the source pin) cannot land: it is REFUTED, and a real fix needs a
+> fact nobody has established — whether every corpus has a catalog node at all. Every other item here
+> has landed (#4: `ff71aedb`, `568b8fa9`). Delete this file when #3 is answered.
+
 **Working plan.** Delete this file when the items below have landed or been ruled out by the owner.
 It exists because `docs/` asserts SETTLED, and these are not: they are deferred features, one
 refutation that still has no replacement, and two changes blocked on a live estate. They were briefly
