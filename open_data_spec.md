@@ -315,10 +315,29 @@ What is ESTABLISHED:
   project on that event did NOT come from a binding.
 - `bind86` was the approving session's **active project** at the time.
 
-What is NOT established: whether the project was attributed from the caller's UI context, from a
-fallback, or from something else. **Do not fix this from the hypothesis.** Reproduce first: write a
-table into an unbound top namespace and read the `extra.project` the catalog stamps on its
-`table_published` event.
+**REPRODUCED 2026-08-24 — the mechanism is now proven.** Read straight off the catalog's own
+control-event ring buffer (`GET /v1/events`), `extra.project` per `table_published`:
+
+```
+table:acme-bronze$item3proof   project: acme      qualified   -> correct
+table:acme-bronze$agnostic     project: acme      qualified   -> correct
+table:acme-silver$agnostic     project: acme      qualified   -> correct
+table:silver$features          project: bind86    UNBOUND     -> WRONG
+```
+
+Every namespace a warehouse binds resolves to its own project. The one namespace nothing binds —
+bare `silver` — was attributed to **`bind86`**, a tenant it has no relationship with. That is the
+event `publication_trigger.py` turns into a stage trigger, which is why `silver-to-gold` attempted
+`bind86-gold$catalog`.
+
+**The defect is one sentence: an unbound top namespace resolves to an arbitrary project instead of
+refusing.** It is not in the promotion path, not in the mover, and not a race — it is the catalog's
+project resolution failing OPEN on a namespace it cannot place.
+
+**Fix shape:** resolution must return "no project" for an unbound namespace, and every consumer must
+treat that as a refusal. `publication_trigger` should DROP such an event with a named reason rather
+than publishing a trigger carrying a project it guessed. This is the estate's own fail-closed reflex,
+which is applied at every other rung and not at this one.
 
 **Why it matters beyond one run:** `medallion.fgaEnabled` defaults to `false`. FGA refused this
 write; on a default deployment nothing would. And whatever the mechanism, an **unbound namespace
