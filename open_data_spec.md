@@ -261,9 +261,12 @@ nothing reads it to make a decision.**
 
 - **(a) Can a blob column cross datasets as a descriptor without re-wrap?** Undocumented. Change 1
   depends on it.
-- **(b) Does `add_columns` on a table that HAS a blob column avoid rewriting?** Undocumented — the
-  no-rewrite guarantee is quoted as scoped to "operations that rewrite entire rows", and extending it
-  to `add_columns` is inference. Change 4 depends on it.
+- **(b) `add_columns` on a table that HAS a blob column — ANSWERED, MEASURED 2026-08-24 on pylance
+  10.0.0.** It does **not** rewrite. A 300-row 2.2 dataset with a real blob column: before, one
+  203,554 B data file + one 20,000,000 B sidecar; after adding two string columns, the original data
+  file and the sidecar are **byte-identical**, and the cost is one new 4,623 B data file plus a
+  manifest and a transaction record. `MODIFIED in place: 0`, `REMOVED: 0`, blob delta `0 B`.
+  Changes 1 and 4 are sound. Script: `scripts/measure_add_columns_on_blob_table.py`.
 - **(c) Is gold physically zoned?** `gold_warehouse_enabled` (a separate gold bucket) is
   **incompatible** with gold-as-a-tag. Owner decision, unmade.
 - **(d) Row/column-level authz.** Today the tier split substitutes for it — "gold-only access" is
