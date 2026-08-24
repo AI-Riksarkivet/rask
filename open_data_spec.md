@@ -302,7 +302,7 @@ unsafe before the §9(c) decision. Nothing here is parallelisable just because i
 | 4 | Tier→tier becomes `add_columns`, not overwrite | **DONE** `e4d2ea6b` — and a redelivery writes nothing |
 | 5 | Kill `GateOutcome.TRIGGER`; one enforcement point | **DONE** `ce821949` |
 | 6 | The effective gate NAMES ITS SOURCE (both halves as-written refuted) | **DONE** `0e3275c4` |
-| 7 | Rename lane → transform | OPEN |
+| 7 | Rename lane → transform | **DONE** `5cb121b9` — one of the word's THREE meanings |
 | 8 | Split the gate: Ray writes an attestation, catalog runs the floor | OPEN — now on the DEFAULT path |
 | 9 | Add `cascade_run` — one workflow per batch | OPEN |
 | 10 | Tiers become tags on one dataset | UNBLOCKED 2026-08-24 — §9(c) decided: gold is a tag |
@@ -405,7 +405,17 @@ unsafe before the §9(c) decision. Nothing here is parallelisable just because i
    a set one is how nobody can tell what is governing their data."* `EffectiveGate` now carries
    `gate_source` (`"declared"` / `"chart"`), READ-ONLY in the protocol so it cannot be assigned, and
    the mover logs `medallion_gate_resolved` with it on every dispatch.
-7. **Rename lane → transform.**
+7. **Rename lane → transform — DONE (`5cb121b9`), and it was never mechanical.** The word carries
+   THREE unrelated meanings here and only one was the target: the DECLARED RECORD (renamed), an
+   EXECUTION PATH ("the Ray lane", "the media lane" — 67 uses, untouched), and a VIEWER TEXT LANE in
+   the annotator (untouched). `plane` also contains `lane` as a substring — 1085 occurrences
+   including `dataplane`/`controlplane` — so a blanket substitution produces `ptransform`.
+
+   The rename was already HALF-DONE, which is what made it worth finishing: the module was
+   `transform_specs.py` and the model `TransformSpec`, while the field, resolver, settings and wire
+   shape all still said lane. **Nothing breaks on upgrade** — stored records, `MEDALLION_LANE*` and
+   the catalog door all still accept the old spelling through `AliasChoices`, because the models are
+   `extra="forbid"` and a refused declaration means a mover silently runs the chart's program.
 8. **Split the gate:** Ray `verify` job writes an attestation; catalog reads it and runs the floor.
    **Promoted 2026-08-24**: the Ray lane now defaults ON (`e6c7357c`), so "the gate resolver is wired
    on the in-process path only" stopped being a gap on an opt-in path and became the default
