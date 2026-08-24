@@ -7,34 +7,20 @@ Pinned 2026-08-24. Each item says what it needs, not just what it is.
 
 ---
 
-## BLOCKED ON AN OWNER DECISION
+## CLOSED SINCE THIS FILE WAS PINNED
 
-### ingest #4 — `table_published` as the single cascade trigger
+### ingest #4 — what a mover reads — **DONE** (`ff71aedb`, `568b8fa9`)
 
-**A standing ruling contradicts this item, and it must be resolved before any code moves.**
+The owner answered the decision this file recorded, and the answer made the item smaller than either
+option it offered. Neither per-lane subTopics nor unifying the cascade heads was the fix: the head
+recognised exactly one hard-coded dataset and published nothing for anything else, so the guard this
+item wanted retired was never even reached.
 
-`docs/architecture/medallion-cascade.md` §10 — *"DECIDED — the two cascade heads are distinct events,
-and both must fire"* — rules that `/bronze-arrival` and `/publication-arrival` describe different work:
-different datasets, and a version RANGE the ingest head has no concept of. It states that unifying
-them *"would collide two legitimate cascades onto one `instance_id`, and Dapr would answer the second
-as a duplicate — silently dropping one of two pieces of work that must both happen."*
+What changed is where a mover's INPUT comes from — the lane record instead of its env. `stage_run`
+was already a parameterised Dapr Workflow worker; the daemon was four lines computing its input
+before scheduling it. `medallion-cascade.md` §10 is untouched: both cascade heads still fire.
 
-**What ingest #4 actually wants is narrower than the ruling forbids.** The lane-matching guard exists
-because two ingest lanes (`bronze$events`, `bronze$pages`) share the `medallion.bronze` topic, so every
-mover subscribed to it sees both and must filter. `subTopic` is ALREADY per-tier config
-(`medallion.bronze` / `medallion.silver` / `medallion.media`), so a third option exists that §10 does
-not foreclose:
-
-> **Give each LANE its own subTopic.** The guard becomes unnecessary because an arrival only reaches
-> the mover that wants it. Both cascade heads keep firing. §10 is untouched.
-
-That is still a change to EVERY estate — every mover's `subTopic` and every publisher's topic move
-together, or triggers go nowhere.
-
-**Decision needed:** per-lane topics (respects §10), or overturn §10 and unify the heads?
-
-**Blocks:** item 5 (the whole loop from the UI). A UI-declared lane stops at bronze today because the
-guard DROPs its arrival as another lane's.
+Proven live from the browser on a table that existed in no configuration anywhere.
 
 ---
 

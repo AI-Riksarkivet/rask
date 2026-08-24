@@ -85,42 +85,40 @@ That is still a change to every estate — every mover's `subTopic` and every pu
 together, or triggers go nowhere — but it delivers this item's actual goal without touching the
 ruling.
 
-**BOTH FRAMINGS ABOVE ARE WRONG, and driving the loop live on 2026-08-24 is what showed it.**
+**DONE (2026-08-24) — `ff71aedb`, `568b8fa9`. The headline was wrong and the fix was elsewhere.**
 
-The cascade was driven end to end FROM THE BROWSER — `/compute/etl` -> `acme-bronze$events` ->
-`medallion_stage_moved` -> silver published -> `aggregate_gold` -> `acme-gold$catalog` published ->
-`medallion_promotion_held_for_review`. It works. What it does NOT do is cascade a table under any
-other name, and the cause is neither the lane-matching guard nor the trigger topology:
+Driving the loop live disproved both this item's framing and the two alternatives it prompted. The
+cause was never the lane-matching guard nor the trigger topology:
 
 ```python
-# ingest_trigger.py:54 — the cascade head recognises EXACTLY ONE dataset
+# ingest_trigger.py:54 — the head recognised EXACTLY ONE dataset
 expected = {project_namespace(project, settings.bronze_dataset): settings.bronze_dataset}
-...
-return None      # anything else: ack, and drive nothing
+return None      # anything else: ack, and publish nothing
 ```
 
-A table named anything but the configured `bronze_dataset` produces NO TRIGGER AT ALL. The mover's
-guard is never reached, because nothing is ever published to it. Retiring the guard therefore fixes
-nothing — and would make it worse: `transform.py:272` shows a mover reads `settings.from_dataset`
-from its OWN ENV, so an arrival for another table would make it re-transform its configured input
-under the other table's token, emitting real-looking lineage for work that did not happen.
+A table under any other name produced NO TRIGGER AT ALL, so the guard was never reached. And the
+guard could not simply be retired: `transform.py` showed a mover reads `settings.from_dataset` from
+its OWN ENV, so an arrival for another table would have made it re-transform its configured input
+under the other table's token — real-looking lineage for work that never happened.
 
-**So the real question is not which topic carries the trigger. It is whether a mover's INPUT comes
-from the arrival or from its env.** Today it is pinned by env, which is why one mover serves exactly
-one edge and an arbitrary table has nobody watching it.
+**What actually changed.** Not the trigger topic. Where a mover's INPUT comes from:
 
-**OPTION C — arrival-driven input.** The trigger names the dataset; the lane record (keyed by it)
-says what to run; the mover becomes a worker for whatever arrives with a declaration instead of a
-daemon wired to one edge. This is what "make `table_published` the single cascade trigger" was
-reaching for, and neither this doc nor §10 said so.
+* The lane record now decides both ends (`resolve_stage_identity`). `TransformSpec` had always
+  declared `from_id`/`to_id` and the mover had always ignored both — two sources of truth for one
+  lane with the governed one losing.
+* The head fires for any table a lane declares. The declaration is the OPT-IN, so "why didn't my
+  table cascade" answers "no lane declares it", with an audited door to change that.
+* The guard accepts BOTH the env dataset and the declared `from_id`. Both, not either — replacing
+  would silently retire a working lane the moment somebody declared a second one.
 
-Its cost is the honest reason to decide before starting: the FGA check, the lineage identities and
-the quality gate all currently derive from `settings.from_namespace` / `to_namespace`. Every one of
-them would have to come from the resolved lane instead. That is the largest single change on this
-list.
+`stage_run` needed no change at all: it was already a fully parameterised Dapr Workflow worker. The
+daemon was the four lines that computed its input from env before scheduling it.
 
-**OWNER DECISION NEEDED, and this item is blocked on it, not on effort:** option C, per-lane subTopics, or
-overturn §10 and unify the heads?
+**Proven live, from the browser.** A lane was declared for `acme-bronze$agnostic`, a table that
+existed in no configuration anywhere. `/compute/etl` created it, the head published, the mover wrote
+`acme-silver$agnostic` — the record's `to_id`, NOT the env's `silver$features` — and the gate held
+the promotion. Lineage shows `acme-silver$agnostic` created by `service-bronze-to-silver` with
+`acme-bronze$agnostic` upstream.
 
 Retiring the lane-matching guards. See `docs/architecture/medallion-cascade.md`
 for why BOTH cascade heads must fire meanwhile; that is a ruling, not an interim state.
