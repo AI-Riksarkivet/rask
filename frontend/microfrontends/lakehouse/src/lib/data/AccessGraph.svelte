@@ -27,8 +27,6 @@
 
 	let { dataset }: { dataset: string } = $props();
 
-
-
 	let nodes = $state.raw<AccessNodeType[]>([]);
 	let edges = $state.raw<Edge[]>([]);
 	let graph = $state<AccessGraph | null>(null);
@@ -37,9 +35,6 @@
 	let status = $state<'loading' | 'ok' | 'denied' | 'offline'>('loading');
 	let mgUser = $state('');
 
-
-
-
 	// #143, same treatment as `@rask/ui`'s GrantsPanel — this component carries a SECOND copy of the
 	// grant/revoke UI, which is how the wrong denial message survived in two places. Keyed by dataset,
 	// so one object's verdicts never gate another's buttons after a navigation. Declared AFTER the
@@ -47,9 +42,6 @@
 	// relying on that.
 	let perms = $state<{ for: string; map: Record<string, boolean> } | null>(null);
 	const permMap = $derived(perms?.for === dataset ? perms.map : null);
-
-
-
 
 	function rebuild(g: AccessGraph): void {
 		const obj = g.object;
@@ -125,7 +117,6 @@
 		}
 		if (graph) rebuild(graph);
 	}
-
 </script>
 
 <div class="ag" {@attach enter({ y: 6 })}>

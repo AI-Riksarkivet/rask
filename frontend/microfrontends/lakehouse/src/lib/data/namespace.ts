@@ -21,16 +21,48 @@ export type MyPermissions = components['schemas']['MyPermissionsResponse'];
 export type ManagedAccess = components['schemas']['ManagedAccessResponse'];
 export type PolicyRequest = components['schemas']['PolicyRequest'];
 
-/** The FGA object kinds the catalog's access surface is mounted on — the owner-tier gate is
- * `can_drop` for a table, `can_delete` for a namespace (same bar, per-type relation). */
+/** The FGA object kinds the catalog's FULL access surface is mounted on — the owner-tier gate is
+ * `can_drop` for a table, `can_delete` for a namespace (same bar, per-type relation).
+ *
+ * Deliberately NOT widened to warehouse/project: `access/list`, `check`, `grant`, `revoke` and
+ * `graph` exist only for these two, so a wider type here would advertise routes that 404. */
 export type AccessKind = 'table' | 'namespace';
+
+/** The kinds the PERMISSION SELF-VIEW (`access/my-permissions`) is mounted on — a superset, because
+ * warehouse and project gained one so the UI could render a disabled action with its reason instead
+ * of a button that 403s on click (ruling #143). */
+export type PermissionKind = AccessKind | 'warehouse' | 'project';
+
+/** kind -> URL segment. NOT the identity function, and that is the whole reason this exists: the
+ * catalog mounts the warehouse access router at `/v1/warehouse` (SINGULAR) and the project one at
+ * `/v1/projects` (PLURAL, matching the projects module's own prefix). Deriving the path from the
+ * kind directly yields `/v1/project/...`, which 404s — a failure that would read as "you have no
+ * permissions here" rather than as a wrong URL, i.e. it would render every action disabled. */
+export const PERMISSION_SEGMENT: Record<PermissionKind, string> = {
+	table: 'table',
+	namespace: 'namespace',
+	warehouse: 'warehouse',
+	project: 'projects',
+};
 
 // The access wire contracts (#51/#68/#72/#81). Mirrors of the generated response models, as schemas —
 // the remote functions parse against these, so the browser can never render an unparsed shape.
 /** #51 the review: every relation the model defines on the type, with who holds it. */
 export const AccessListSchema = v.object({
 	object: v.string(),
-	grants: v.array(v.object({ relation: v.string(), users: v.array(v.string()) })),
+	// `truncated` per relation PLUS a roll-up (diff2 F10 item 8). The server gained both when the
+	// silent `listUsersMaxResults` ceiling was closed; this schema did not, so the browser dropped the
+	// flag and rendered a partial review as a complete one — which is the whole defect that finding is
+	// about, surviving on the half nobody checked. Defaulted rather than required so a pre-fix catalog
+	// still parses.
+	truncated: v.optional(v.boolean(), false),
+	grants: v.array(
+		v.object({
+			relation: v.string(),
+			users: v.array(v.string()),
+			truncated: v.optional(v.boolean(), false),
+		}),
+	),
 });
 /** #68 the check verdict — `user` echoes the RESOLVED subject (bare id → `user:<id>`). */
 export const AccessCheckSchema = v.object({

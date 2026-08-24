@@ -20,7 +20,13 @@
 	import AccessGraph from './AccessGraph.svelte';
 	import { fetchProducers } from '$lib/api';
 	import type { ProducerInfo } from '@rask/api/lineage';
-	import { checkAccess, fetchAccess, fetchMyPermissions, grantAccess, revokeAccess } from './remote/access-objects.remote';
+	import {
+		checkAccess,
+		fetchAccess,
+		fetchMyPermissions,
+		grantAccess,
+		revokeAccess,
+	} from './remote/access-objects.remote';
 	import { deriveQuality, type QualityBadge } from '$lib/quality';
 	import ReadersPanel from '$lib/ReadersPanel.svelte';
 	import { partErrored, type Policy, type TableStats, type TableDetail } from './catalog';

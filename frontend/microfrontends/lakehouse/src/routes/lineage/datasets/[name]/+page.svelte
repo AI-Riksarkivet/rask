@@ -13,7 +13,13 @@
 	import ReadersPanel from '$lib/ReadersPanel.svelte';
 	import RunInputs from '$lib/lineage/RunInputs.svelte';
 	import { fetchDownstream, fetchProducers, fetchUpstream } from '$lib/api';
-	import { checkAccess, fetchAccess, fetchMyPermissions, grantAccess, revokeAccess } from '$lib/data/remote/access-objects.remote';
+	import {
+		checkAccess,
+		fetchAccess,
+		fetchMyPermissions,
+		grantAccess,
+		revokeAccess,
+	} from '$lib/data/remote/access-objects.remote';
 	import type { DatasetRef, ProducerInfo } from '@rask/api/lineage';
 	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
 

@@ -35,7 +35,6 @@
 		return `${LH}/catalog/tables/${encodeURIComponent(rung.id)}`;
 	};
 
-
 	// `zoneLayoutLoad` defaults the cookie to '' — an empty string is "no project is open", which is a
 	// real state of the estate and not a loading one.
 	const project = $derived(data.activeProject);
@@ -110,9 +109,9 @@
 		<div class="bg-card rounded-lg border px-5 py-8">
 			<p class="mb-1 text-sm font-medium">No active project.</p>
 			<p class="text-muted-foreground max-w-[62ch] text-sm">
-				This overview is per project — a project's hierarchy, and the warehouses claiming it. Open one
-				and this page becomes its summary. The rest of the zone does not need one: Catalog and Lineage
-				list every table, namespace and run your grants allow, across the estate.
+				This overview is per project — a project's hierarchy, and the warehouses claiming it. Open
+				one and this page becomes its summary. The rest of the zone does not need one: Catalog and
+				Lineage list every table, namespace and run your grants allow, across the estate.
 			</p>
 			<p class="mt-4 text-sm">
 				<a class="underline underline-offset-4" href="/projects" data-sveltekit-reload>

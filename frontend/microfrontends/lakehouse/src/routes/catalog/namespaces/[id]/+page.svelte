@@ -352,8 +352,8 @@
 			<section>
 				<h2>Maintenance policy</h2>
 				<p class="mut">
-					A namespace policy governs every dataset under <span class="mono">{ns}</span> unless a table policy
-					overrides it; tag-pinned versions (e.g. blessed) are never cleaned up.
+					A namespace policy governs every dataset under <span class="mono">{ns}</span> unless a table
+					policy overrides it; tag-pinned versions (e.g. blessed) are never cleaned up.
 				</p>
 				{#if editingPolicy}
 					<div class="policy-edit">
@@ -407,7 +407,8 @@
 					<p class="mut">{policyDenied}</p>
 				{:else if policyPart === 'unavailable'}
 					<p class="mut">
-						Policy unavailable right now — not shown to avoid an overwriting edit against a stale read.
+						Policy unavailable right now — not shown to avoid an overwriting edit against a stale
+						read.
 					</p>
 				{:else if policy}
 					<div class="refs">
@@ -426,10 +427,18 @@
 						     the native attribute — it would kill the tooltip and drop the control from the
 						     tab order. Until the self-view answers (`permsSettled` false) they render live,
 						     since "not answered yet" is not "denied". -->
-						<GatedAction allowed={!permsSettled || mayEditPolicy} action="Edit policy" reason={REASON_EDIT}>
+						<GatedAction
+							allowed={!permsSettled || mayEditPolicy}
+							action="Edit policy"
+							reason={REASON_EDIT}
+						>
 							<button class="btn ghost" onclick={startPolicyEdit}>Edit</button>
 						</GatedAction>
-						<GatedAction allowed={!permsSettled || mayEditPolicy} action="Remove policy" reason={REASON_EDIT}>
+						<GatedAction
+							allowed={!permsSettled || mayEditPolicy}
+							action="Remove policy"
+							reason={REASON_EDIT}
+						>
 							<button
 								class="btn ghost danger"
 								disabled={(!permsSettled || mayEditPolicy) && busy}
@@ -442,7 +451,11 @@
 				{:else}
 					<p class="mut">
 						No policy — the sweep applies the global defaults.
-						<GatedAction allowed={!permsSettled || mayEditPolicy} action="Set policy" reason={REASON_EDIT}>
+						<GatedAction
+							allowed={!permsSettled || mayEditPolicy}
+							action="Set policy"
+							reason={REASON_EDIT}
+						>
 							<button class="btn ghost" onclick={startPolicyEdit}>Set policy</button>
 						</GatedAction>
 					</p>
@@ -465,9 +478,9 @@
 				     second reason. -->
 				{#if grantsCentralized}
 					<p class="mut managed">
-						Granting here is <strong>centralized</strong>. Owners of this namespace keep every other power
-						and cannot hand out access; a grant-manager on the warehouse above does that. Clearing it is
-						theirs too — a policy you can switch off from inside is not a policy.
+						Granting here is <strong>centralized</strong>. Owners of this namespace keep every other
+						power and cannot hand out access; a grant-manager on the warehouse above does that.
+						Clearing it is theirs too — a policy you can switch off from inside is not a policy.
 					</p>
 				{/if}
 				<GrantsPanel dataset={ns} kind="namespace" client={grantsClient} />
@@ -497,7 +510,8 @@
 								<ul class="edges">
 									{#each grantEdges as e (`${e.source}:${e.relation}`)}
 										<li class="mono">
-											<span class="subject" title={graphNode(e.source).title}>{graphNode(e.source).label}</span
+											<span class="subject" title={graphNode(e.source).title}
+												>{graphNode(e.source).label}</span
 											>
 											<span class="chip rel">{e.relation}</span>
 											<span class="mut">on {graphNode(e.target).label}</span>
@@ -510,7 +524,8 @@
 									{#each containerEdges as e (`${e.relation}:${e.target}`)}
 										<li class="mono">
 											<span class="mut">{e.relation} →</span>
-											<span class="subject" title={graphNode(e.target).title}>{graphNode(e.target).label}</span
+											<span class="subject" title={graphNode(e.target).title}
+												>{graphNode(e.target).label}</span
 											>
 										</li>
 									{/each}

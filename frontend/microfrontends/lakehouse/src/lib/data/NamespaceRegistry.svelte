@@ -101,11 +101,18 @@
 			const ns = namespaceOfTable(t);
 			m.set(ns, (m.get(ns) ?? 0) + 1);
 		}
-		return [...m.entries()]
-			// A namespace with no binding shows `—`, not a blank: unbound is a real state (the resolver
-			// falls back to the default root) and rendering it as absence hides it.
-			.map(([ns, count]): Row => ({ ns, count, stage: stageOf(ns), warehouse: bindings?.[ns] ?? null }))
-			.sort((a, b) => a.ns.localeCompare(b.ns));
+		return (
+			[...m.entries()]
+				// A namespace with no binding shows `—`, not a blank: unbound is a real state (the resolver
+				// falls back to the default root) and rendering it as absence hides it.
+				.map(([ns, count]): Row => ({
+					ns,
+					count,
+					stage: stageOf(ns),
+					warehouse: bindings?.[ns] ?? null,
+				}))
+				.sort((a, b) => a.ns.localeCompare(b.ns))
+		);
 	});
 
 	// Tables inside the namespace queued for drop — sizes the Cascade choice honestly.
@@ -268,7 +275,11 @@
 	     unreachable from here. `—` for unbound, which is a real state (the resolver falls back to the
 	     default root), not missing data. -->
 	{#if row.warehouse}
-		<a class="wh" href={`${base}/catalog/warehouses/${row.warehouse}`} onclick={(e) => e.stopPropagation()}>
+		<a
+			class="wh"
+			href={`${base}/catalog/warehouses/${row.warehouse}`}
+			onclick={(e) => e.stopPropagation()}
+		>
 			{row.warehouse}
 		</a>
 	{:else}<span class="mut">—</span>{/if}
@@ -279,9 +290,9 @@
 		aria-label={`Drop namespace ${row.ns}`}
 		disabled={busy}
 		onclick={(e) => {
-	e.stopPropagation();
-	openDrop(row.ns);
-}}
+			e.stopPropagation();
+			openDrop(row.ns);
+		}}
 	>
 		<Trash2 size={12} /> drop
 	</button>
@@ -290,7 +301,10 @@
 <div class="page">
 	<header>
 		<h1>Namespaces</h1>
-		<span class="sub mono">grouped from the catalog registry, estate-wide — every namespace your grants allow · &lt;namespace&gt;$&lt;table&gt;</span>
+		<span class="sub mono"
+			>grouped from the catalog registry, estate-wide — every namespace your grants allow ·
+			&lt;namespace&gt;$&lt;table&gt;</span
+		>
 		<a
 			class="new"
 			href={`${base}/catalog/warehouses`}
@@ -307,8 +321,8 @@
 		     means "a read this page depends on is unavailable". Sharing a selector made a spec's strict
 		     locator match two elements the moment both could appear. -->
 		<div class="banner degraded" data-testid="bindings-unavailable">
-			Namespace bindings unavailable — this list shows only namespaces that already hold a table, so a
-			bound-but-empty one may be missing.
+			Namespace bindings unavailable — this list shows only namespaces that already hold a table, so
+			a bound-but-empty one may be missing.
 		</div>
 	{/if}
 	{#if banner}

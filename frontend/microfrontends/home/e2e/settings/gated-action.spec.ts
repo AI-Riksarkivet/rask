@@ -52,7 +52,9 @@ test('the main menu: an admin gets a live Settings, a non-admin gets it DISABLED
 	await nav(page).screenshot({ path: `${SHOTS}/143-navbar-nonadmin.png` });
 });
 
-test('the disabled entry hands out NO panel rows — shown, but not opened into', async ({ page }) => {
+test('the disabled entry hands out NO panel rows — shown, but not opened into', async ({
+	page,
+}) => {
 	// The fail-closed half, and the one a careless refactor loses. Settings carries a panel whose rows
 	// reach /settings/access — the platform's whole tuple store. Showing the entry must not show those.
 	await seed(page, { 'GET /v1/me': NON_ADMIN });

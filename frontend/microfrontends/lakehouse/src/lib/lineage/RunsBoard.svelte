@@ -186,7 +186,9 @@
 <div class="page">
 	<header>
 		<h1>Runs</h1>
-		<span class="sub">the durable run board, estate-wide — each run's current state, folded last-wins</span>
+		<span class="sub"
+			>the durable run board, estate-wide — each run's current state, folded last-wins</span
+		>
 	</header>
 
 	{#if unauthorized}

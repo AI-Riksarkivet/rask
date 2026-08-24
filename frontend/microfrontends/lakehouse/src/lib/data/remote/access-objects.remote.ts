@@ -8,6 +8,7 @@ import {
 	AccessListSchema,
 	ManagedAccessSchema,
 	MyPermissionsSchema,
+	PERMISSION_SEGMENT,
 	type AccessCheck,
 	type AccessGrant,
 	type AccessGraph,
@@ -15,6 +16,7 @@ import {
 	type AccessList,
 	type ManagedAccess,
 	type MyPermissions,
+	type PermissionKind,
 } from '../namespace';
 
 import { catalogJSON, parsed } from '$lib/server/doors';
@@ -38,6 +40,22 @@ const enc = encodeURIComponent;
 
 /** The client module's `AccessKind` as a wire option list — `satisfies` keeps the two from drifting. */
 const KINDS = ['table', 'namespace'] as const satisfies readonly AccessKind[];
+
+/** The self-view is mounted on more kinds than the rest of the access surface — warehouse and
+ *  project gained one so the UI can disable an action with its reason rather than discover it from a
+ *  403 (ruling #143). Its own picklist, so widening the self-view cannot silently widen `access/list`
+ *  or `access/grant` into routes that do not exist. */
+const PERMISSION_KINDS = [
+	'table',
+	'namespace',
+	'warehouse',
+	'project',
+] as const satisfies readonly PermissionKind[];
+
+const PermissionTargetSchema = v.object({
+	kind: v.picklist(PERMISSION_KINDS),
+	id: v.string(),
+});
 
 /** The FGA object an access call targets — `kind` picks the catalog surface, never the gate. */
 const TargetSchema = v.object({
@@ -76,10 +94,15 @@ export const fetchManagedAccess = query(
  *  the page at all. Upward visibility changed that — a single-table grantee can now navigate to the
  *  namespace above their table — so the page has to be able to ask. */
 export const fetchMyPermissions = query(
-	TargetSchema,
+	PermissionTargetSchema,
 	async ({ kind, id }): Promise<ApiResult<MyPermissions>> =>
 		parsed(
-			await catalogJSON(`/v1/${kind}/${enc(id)}/access/my-permissions`, { method: 'POST' }),
+			// PERMISSION_SEGMENT, not `kind`: the catalog mounts warehouse at `/v1/warehouse` and
+			// project at `/v1/projects`, so the identity mapping 404s on project — and a 404 here reads
+			// as "no permissions", which would render every action on the page disabled.
+			await catalogJSON(`/v1/${PERMISSION_SEGMENT[kind]}/${enc(id)}/access/my-permissions`, {
+				method: 'POST',
+			}),
 			MyPermissionsSchema,
 		),
 );

@@ -250,9 +250,9 @@
 		class="btn ghost"
 		disabled={busy}
 		onclick={(e) => {
-	e.stopPropagation();
-	toggleActive(w);
-}}
+			e.stopPropagation();
+			toggleActive(w);
+		}}
 	>
 		{statusOf(w) === 'active' ? 'deactivate' : 'activate'}
 	</button>
@@ -261,9 +261,9 @@
 		disabled={busy}
 		aria-label={`Delete warehouse ${w.id}`}
 		onclick={(e) => {
-	e.stopPropagation();
-	openDelete(w);
-}}
+			e.stopPropagation();
+			openDelete(w);
+		}}
 	>
 		delete
 	</button>
@@ -273,7 +273,10 @@
 	<header>
 		<WarehouseIcon size={16} />
 		<h1>Warehouses</h1>
-		<span class="sub mono">every warehouse your grants allow, across projects · bucket-per-warehouse tenancy · project-admin gated</span>
+		<span class="sub mono"
+			>every warehouse your grants allow, across projects · bucket-per-warehouse tenancy ·
+			project-admin gated</span
+		>
 	</header>
 
 	{#if banner}
@@ -310,9 +313,9 @@
 			<form
 				class="row"
 				onsubmit={(e) => {
-	e.preventDefault();
-	provision();
-}}
+					e.preventDefault();
+					provision();
+				}}
 			>
 				<input
 					class="mono"
@@ -342,9 +345,9 @@
 			<form
 				class="row"
 				onsubmit={(e) => {
-	e.preventDefault();
-	bind();
-}}
+					e.preventDefault();
+					bind();
+				}}
 			>
 				<Select
 					bind:value={bindDraft.warehouse}
@@ -367,7 +370,8 @@
 				</button>
 			</form>
 			<p class="mut">
-				Binding routes a top-level namespace's tables to the warehouse's bucket (immutable once set).
+				Binding routes a top-level namespace's tables to the warehouse's bucket (immutable once
+				set).
 			</p>
 		</section>
 	{/if}
@@ -400,7 +404,8 @@
 			<dd class="mono">{drawerRow.root_uri}</dd>
 			<dt>status</dt>
 			<dd>
-				<span class="chip mono" class:off={statusOf(drawerRow) !== 'active'}>{statusOf(drawerRow)}</span
+				<span class="chip mono" class:off={statusOf(drawerRow) !== 'active'}
+					>{statusOf(drawerRow)}</span
 				>
 			</dd>
 			<dt>class</dt>

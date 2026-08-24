@@ -95,7 +95,12 @@ test('renders the project record and every record that shadows it', async ({ pag
 	await expect(ns).toContainText('acme-bucket/u1_gold$pages');
 	await expect(ns).toContainText('off'); // compact_enabled:false is a STATE, not an absence
 
-	await page.screenshot({ path: `${SHOTS}/65-policies-project.png`, fullPage: true });
+	// SCROLL FIRST, and shoot the SECTION rather than the page. `fullPage: true` produced a shot of
+	// the Hierarchy block with Maintenance below the fold: the AppShell scrolls an inner container,
+	// so the page itself is viewport-height and "full page" means the viewport.
+	const maint = page.getByRole('heading', { name: 'Maintenance' });
+	await maint.scrollIntoViewIfNeeded();
+	await page.screenshot({ path: `${SHOTS}/65-policies-project.png` });
 });
 
 test('each record row crosses INTO the lakehouse zone with data-sveltekit-reload', async ({

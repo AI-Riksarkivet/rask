@@ -110,13 +110,11 @@
 	// ── the DataTable (goal cond 4) ──
 	type Row = { id: string; namespace: string; stage: StageInfo | null };
 	const rows = $derived.by((): Row[] => {
-		const all = (tables ?? []).map(
-			(id): Row => ({
-				id,
-				namespace: namespaceOfTable(id),
-				stage: stageOfTable(id),
-			}),
-		);
+		const all = (tables ?? []).map((id): Row => ({
+			id,
+			namespace: namespaceOfTable(id),
+			stage: stageOfTable(id),
+		}));
 		return stageFilter ? all.filter((r) => r.stage?.stage === stageFilter) : all;
 	});
 
@@ -219,7 +217,10 @@
 <div class="page">
 	<header>
 		<h1>Tables</h1>
-		<span class="sub mono">the catalog registry, estate-wide — every table your grants allow · &lt;namespace&gt;$&lt;table&gt;</span>
+		<span class="sub mono"
+			>the catalog registry, estate-wide — every table your grants allow ·
+			&lt;namespace&gt;$&lt;table&gt;</span
+		>
 		{#if !unauthorized}
 			<button class="new" onclick={() => (declaring = !declaring)}>
 				<Plus size={12} /> Declare table
@@ -232,9 +233,9 @@
 		<form
 			class="declare"
 			onsubmit={(e) => {
-	e.preventDefault();
-	runDeclare();
-}}
+				e.preventDefault();
+				runDeclare();
+			}}
 		>
 			<input class="mono" bind:value={declNs} placeholder="namespace" aria-label="Namespace" />
 			<input class="mono" bind:value={declName} placeholder="table name" aria-label="Table name" />
@@ -273,12 +274,12 @@
 				ariaLabel="Stage filter"
 				placeholder="any stage"
 				options={[
-	{ value: '', label: 'any stage' },
-	{ value: 'raw', label: 'raw' },
-	{ value: 'bronze', label: 'bronze' },
-	{ value: 'silver', label: 'silver' },
-	{ value: 'gold', label: 'gold' },
-]}
+					{ value: '', label: 'any stage' },
+					{ value: 'raw', label: 'raw' },
+					{ value: 'bronze', label: 'bronze' },
+					{ value: 'silver', label: 'silver' },
+					{ value: 'gold', label: 'gold' },
+				]}
 			/>
 		</div>
 		<DataTable
@@ -315,7 +316,8 @@
 			</dd>
 		</dl>
 		<div class="jumps">
-			<a class="btn" href={`${base}/catalog/tables/${encodeURIComponent(drawerRow.id)}`}>Open detail</a
+			<a class="btn" href={`${base}/catalog/tables/${encodeURIComponent(drawerRow.id)}`}
+				>Open detail</a
 			>
 			<!-- R18 table previewer: deep-link onto the detail pane's preview tab, which drives the
 			     existing /capi query machinery (first-N rows on the shared data-table). -->
