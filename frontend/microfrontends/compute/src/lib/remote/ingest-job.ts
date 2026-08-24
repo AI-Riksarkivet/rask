@@ -37,3 +37,28 @@ export function isIngestJob(job: unknown): boolean {
 	const value = typeof job === 'string' ? job : '';
 	return value === INGEST_JOB || value.endsWith(`/${INGEST_JOB}`);
 }
+
+/**
+ * The lineage graph's id for the bronze dataset an ingest run wrote.
+ *
+ * SAME OFF-BY-A-QUALIFIER AS `isIngestJob` ABOVE, one field over, and it produced an emptier page
+ * than an error would have. The ingest service records what a person typed — `project: 'acme'`,
+ * `dataset: 'item3proof'` — while the lineage graph stores the catalog identifier the write actually
+ * landed under, `acme-bronze$item3proof`. Linking with the bare name resolved to a real route that
+ * rendered "No producing runs recorded for this dataset yet", so the run detail offered a Lineage
+ * link whose destination said the run did not exist. Measured 2026-08-24: the bare name showed 0
+ * runs, the qualified name showed 8.
+ *
+ * The `-bronze$` shape is the ingest plane's stated contract, not a guess — the ETL form tells the
+ * user "Lands as `<project>-bronze$<table>`" before they submit, and ingest has no other landing
+ * tier: raw is the external world and silver/gold are the cascade's to write.
+ *
+ * Returns null when either half is missing, because the caller must render NO link rather than a
+ * guessed one — the same rule the run detail already applies to a run with no dataset.
+ */
+export function bronzeDatasetId(project: unknown, dataset: unknown): string | null {
+	const p = typeof project === 'string' ? project.trim() : '';
+	const d = typeof dataset === 'string' ? dataset.trim() : '';
+	if (!p || !d) return null;
+	return `${p}-bronze$${d}`;
+}

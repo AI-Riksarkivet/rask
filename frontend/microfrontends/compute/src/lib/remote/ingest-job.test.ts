@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { INGEST_JOB, isIngestJob } from './ingest-job';
+import { INGEST_JOB, bronzeDatasetId, isIngestJob } from './ingest-job';
 
 /**
  * The board said "No ingest runs" while the graph held every run that had ever succeeded.
@@ -46,5 +46,23 @@ describe('isIngestJob', () => {
 		expect(isIngestJob(undefined)).toBe(false);
 		expect(isIngestJob(null)).toBe(false);
 		expect(isIngestJob(42)).toBe(false);
+	});
+});
+
+describe('bronzeDatasetId', () => {
+	it('qualifies what the user typed into what the graph stores', () => {
+		// The measured case: the run detail linked `item3proof` (0 runs) instead of this (8 runs).
+		expect(bronzeDatasetId('acme', 'item3proof')).toBe('acme-bronze$item3proof');
+	});
+
+	it('returns null rather than a half-built id, so the caller renders no link', () => {
+		expect(bronzeDatasetId('acme', '')).toBeNull();
+		expect(bronzeDatasetId('', 'item3proof')).toBeNull();
+		expect(bronzeDatasetId(undefined, 'item3proof')).toBeNull();
+		expect(bronzeDatasetId('acme', null)).toBeNull();
+	});
+
+	it('trims, because a trailing space silently produces a dataset id nothing matches', () => {
+		expect(bronzeDatasetId(' acme ', ' item3proof ')).toBe('acme-bronze$item3proof');
 	});
 });
