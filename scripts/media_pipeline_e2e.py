@@ -35,10 +35,9 @@ with contextlib.suppress(NameError):  # NameError => run from stdin; services/ a
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "services"))
 
 from medallion.schemas.events import build_run_event
-from medallion.services import media
 from medallion.services.ingest import ingest_to_bronze
 
-from service_kit.lakehouse import blobs, schema
+from service_kit.lakehouse import blobs, media, schema
 from service_kit.lakehouse.sinks import S3Sink
 from service_kit.lakehouse.sources import S3Source
 

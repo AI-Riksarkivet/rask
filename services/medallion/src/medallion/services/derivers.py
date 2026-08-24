@@ -20,7 +20,7 @@ from collections.abc import Callable
 
 import pyarrow as pa
 
-from medallion.services import media
+from service_kit.lakehouse import media
 
 
 #: A per-modality deriver: the carried table + one blob column's payloads -> the table with artifacts.

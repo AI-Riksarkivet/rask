@@ -1,21 +1,18 @@
-"""Drift-pin for the Ray stage job's INLINED blob/deriver primitives.
+"""The Ray stage job uses the SHARED primitives — it no longer carries copies to pin (B14).
 
-``scripts/ray_stage_job.py`` is a standalone script baked into the Ray image (no ``services/`` imports —
-lance_ray is Ray-image-only), so for the MEDIA path it INLINES the blob-v2 detection + the thumbnail /
-embedding derivation instead of importing ``service_kit.lakehouse.blobs`` / ``medallion.services.media``. That is the
-repo's self-contained-ray-job convention (``ray_train_job`` inlines ``run_id_for`` the same way).
+This file used to be a drift-pin: the script inlined `_is_image`, `_derive_thumbnail`,
+`_derive_embedding` and the blob-field pair, and these tests asserted each copy stayed
+byte-identical to the services'. That is a test comparing two behaviours after the fact, which is
+what B14 records as the WRONG fix — it detects divergence rather than preventing it, and only in the
+cases someone thought to assert.
 
-Inlining is only safe if it CANNOT DRIFT from the in-process path — otherwise a media dataset would get a
-different thumbnail/embedding depending on whether the stage ran on Ray or in-process. This test pins the
-inlined mirrors byte-for-byte against the authoritative ``services`` implementations, so any change to one
-side without the other fails here. It also confirms *why* the inline exists is real, not assumed:
-medallion-producer strips blob-v2 typing on read at every version we have pinned — 0.4.2 (verified live 2026-07-13)
-and 0.5.0, whose datasource says so in the source: "Blob v2 extension columns are exposed as plain
-LargeBinary bytes" (R27, 2026-07-28). The Ray path must therefore re-wrap via
-pylance), and the deriver is our business logic, never something lance-ray provides.
+The copies are gone. `service_kit.lakehouse.media` and `service_kit.lakehouse.blobs` hold ONE
+implementation each, and both drivers import them: the medallion service directly, and this script
+too, because the Ray cluster image ships `service-kit` (it already imported `stamp_stage` from it).
 
-Loaded via ``spec_from_file_location`` (the script isn't an importable package); lance_ray is imported
-lazily inside ``main`` so the module — hence these primitives — loads cleanly in the unit venv.
+So what is left to test is IDENTITY, not agreement: the script must reference the shared function
+objects, and a future edit that reintroduces a local copy fails here. The behavioural tests for the
+derivers themselves live with the implementation, where they belong.
 """
 
 from __future__ import annotations
@@ -28,7 +25,6 @@ from types import ModuleType
 import pyarrow as pa
 import pytest
 from lance import blob_array, blob_field
-from medallion.services import media
 
 from service_kit.lakehouse import blobs
 
@@ -55,36 +51,6 @@ def png_bytes() -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (40, 30), (123, 200, 50)).save(buffer, format="PNG")
     return buffer.getvalue()
-
-
-def test_inlined_thumbnail_matches_services(png_bytes: bytes) -> None:
-    """The Ray job's ``_derive_thumbnail`` is byte-identical to ``media.derive_thumbnail``."""
-    assert job._derive_thumbnail(png_bytes) == media.derive_thumbnail(png_bytes)
-
-
-def test_inlined_embedding_matches_services(png_bytes: bytes) -> None:
-    """The Ray job's ``_derive_embedding`` is identical to ``media.derive_embedding`` (same dims + values)."""
-    assert job._derive_embedding(png_bytes) == media.derive_embedding(png_bytes)
-    assert len(job._derive_embedding(png_bytes)) == media.EMBEDDING_DIMS == job._EMBEDDING_DIMS
-
-
-def test_inlined_is_image_matches_services(png_bytes: bytes) -> None:
-    """The Ray job's ``_is_image`` agrees with ``media.is_image`` on both an image and non-image bytes."""
-    assert job._is_image(png_bytes) is media.is_image(png_bytes) is True
-    assert job._is_image(b"not-an-image") is media.is_image(b"not-an-image") is False
-
-
-def test_inlined_blob_detection_matches_common() -> None:
-    """The Ray job's ``_is_blob_field`` / ``_blob_field_names`` agree with ``service_kit.lakehouse.blobs`` on a real schema.
-
-    Built with the same ``blob_field`` the ingest uses, so a blob column is detected identically on the Ray
-    path and the in-process path — the gate that sends a media stage down the pylance round-trip."""
-    schema = pa.schema([pa.field("id", pa.int64()), blob_field("payload"), pa.field("uri", pa.string())])
-    assert job._blob_field_names(schema) == blobs.blob_field_names(schema) == ["payload"]
-    for field in schema:
-        assert job._is_blob_field(field) == blobs.is_blob_field(field)
-    # And the constant the detection keys on hasn't drifted from service_kit.lakehouse.blobs.
-    assert job._BLOB_V2_EXTENSION_NAME == blobs.BLOB_V2_EXTENSION_NAME
 
 
 def test_media_transform_round_trips_blob_and_derives(tmp_path: Path, png_bytes: bytes) -> None:
@@ -186,3 +152,27 @@ def test_media_transform_stamps_the_lineage_column(tmp_path: Path, png_bytes: by
     out = lance.dataset(str(tmp_path / "dst"))
     assert out.schema.field("lineage").type.extension_name == "arrow.json"
     assert out.to_table(columns=["id"], filter="json_get_string(lineage, 'run_id') = 'r-9'").num_rows == 2
+
+
+def test_the_script_uses_the_shared_primitives_rather_than_copies() -> None:
+    """Identity, not agreement — the property B14 asks for.
+
+    A copy that merely *behaves* the same is what this file used to check. Asserting the script
+    references the shared function objects means a reintroduced local copy fails immediately, rather
+    than passing until it drifts in a way somebody remembered to assert.
+    """
+    from service_kit.lakehouse import media as shared_media
+    from service_kit.lakehouse.blobs import blob_field_names as shared_blob_field_names
+
+    job = _load_job()
+
+    assert job.media is shared_media
+    assert job.blob_field_names is shared_blob_field_names
+
+
+def test_the_script_declares_no_local_deriver_copy() -> None:
+    """The inlined names are GONE, not merely unused — a dormant copy is a copy."""
+    job = _load_job()
+
+    for gone in ("_derive_thumbnail", "_derive_embedding", "_is_image", "_open_guarded", "_is_blob_field"):
+        assert not hasattr(job, gone), f"{gone} is back — B14 asks for one implementation, not two"

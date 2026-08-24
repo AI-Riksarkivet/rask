@@ -59,9 +59,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "services"))
 from lance import blob_array, blob_field
 from lineage.schemas import LineageGraph, Producers, Runs
 from lineage.seed import build_events
-from medallion.services import media
 
-from service_kit.lakehouse import blobs
+from service_kit.lakehouse import blobs, media
 
 
 def _load_demo_env() -> None:

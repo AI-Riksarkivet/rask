@@ -9,10 +9,9 @@ import lance
 import pyarrow as pa
 import pytest
 from lance import blob_array, blob_field
-from medallion.services import media
 from PIL import Image, UnidentifiedImageError
 
-from service_kit.lakehouse import blobs
+from service_kit.lakehouse import blobs, media
 
 
 def _png(color: tuple[int, int, int] = (10, 20, 30), size: tuple[int, int] = (64, 48)) -> bytes:

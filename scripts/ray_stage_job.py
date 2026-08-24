@@ -41,10 +41,8 @@ Env: FROM_URI TO_URI STAGE [LINEAGE_JSON]  S3_ENDPOINT S3_KEY S3_SECRET [S3_REGI
 from __future__ import annotations
 
 import contextlib
-import io
 import os
 import sys
-import warnings
 from collections.abc import Iterator
 from typing import Any
 
@@ -53,30 +51,22 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 from lance import blob_array, blob_field
 
-
 # lance_ray ships in the Ray image, NOT our services' venv — imported LAZILY (inside the tabular branch
 # of main) so the deriver primitives below stay importable in the unit venv for the drift-pin test
 # (tests/unit/test_ray_stage_job.py), exactly as ray_train_job keeps `lance` out of its module top.
+# --- blob + deriver primitives: IMPORTED, not inlined (B14) --------------------------------------
+# These were copies kept byte-identical to the services by a drift-pin test. A test comparing two
+# behaviours after the fact is what B14 records as the WRONG fix: it detects divergence, it does not
+# prevent it, and it only detects the cases someone thought to assert.
+#
+# Both drivers can import `service_kit` — this script already did, for `stamp_stage` — so the
+# implementations moved there and both now call ONE function. `media` rides the optional
+# `service-kit[media]` extra, which the ray-cluster image installs.
+from service_kit.lakehouse import media
+from service_kit.lakehouse.blobs import blob_field_names
 
-# --- blob + deriver primitives, inlined + drift-pinned to services (test_ray_stage_job.py) --------------
-# Kept byte-identical to service_kit.lakehouse.blobs.is_blob_field / medallion.services.media so the Ray path and the
-# in-process path derive the SAME thumbnail/embedding; the pin test fails if either side drifts.
-_BLOB_V2_EXTENSION_NAME = "lance.blob.v2"  # == service_kit.lakehouse.blobs.BLOB_V2_EXTENSION_NAME
+
 _LINEAGE_COLUMN = "lineage"  # == compute._LINEAGE_COLUMN (R26)
-_THUMBNAIL_SIZE = (128, 128)  # == media.THUMBNAIL_SIZE
-_EMBEDDING_DIMS = 8  # == media.EMBEDDING_DIMS
-
-
-def _is_blob_field(field: pa.Field) -> bool:
-    """Mirror of service_kit.lakehouse.blobs.is_blob_field: registered extension name, else the raw field metadata."""
-    if getattr(field.type, "extension_name", None) == _BLOB_V2_EXTENSION_NAME:
-        return True
-    metadata = field.metadata or {}
-    return metadata.get(b"ARROW:extension:name") == _BLOB_V2_EXTENSION_NAME.encode()
-
-
-def _blob_field_names(schema: pa.Schema) -> list[str]:
-    return [f.name for f in schema if _is_blob_field(f)]
 
 
 def _storage_options() -> dict[str, str]:
@@ -146,47 +136,6 @@ def _stamp_stage(table: pa.Table, stage: str, lineage: str = "") -> pa.Table:
     return stamp_stage(table, stage=stage, lineage=lineage)
 
 
-def _open_guarded(payload: bytes):  # -> PIL.Image.Image
-    """Mirror of media._open_guarded: decompression-bomb-guarded open (Pillow default only trips at 2×)."""
-    from PIL import Image
-
-    Image.MAX_IMAGE_PIXELS = 64_000_000
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", Image.DecompressionBombWarning)
-        return Image.open(io.BytesIO(payload))
-
-
-def _derive_thumbnail(image_bytes: bytes) -> bytes:
-    """Mirror of media.derive_thumbnail: a downscaled inline PNG thumbnail."""
-    from PIL import Image  # noqa: F401 — ensures the guarded open above ran Image config
-
-    with _open_guarded(image_bytes) as image:
-        thumb = image.convert("RGB")
-        thumb.thumbnail(_THUMBNAIL_SIZE)
-        buffer = io.BytesIO()
-        thumb.save(buffer, format="PNG")
-        return buffer.getvalue()
-
-
-def _derive_embedding(image_bytes: bytes) -> list[float]:
-    """Mirror of media.derive_embedding: deterministic luminance downsample to _EMBEDDING_DIMS floats."""
-    from PIL import Image
-
-    with _open_guarded(image_bytes) as image:
-        columns = image.convert("L").resize((_EMBEDDING_DIMS, 1), resample=Image.Resampling.BILINEAR)
-        return [value / 255.0 for value in columns.tobytes()]
-
-
-def _is_image(payload: bytes) -> bool:
-    """Mirror of media.is_image: decode-probe the payload (verify headers, any failure → not an image)."""
-    try:
-        with _open_guarded(payload) as image:
-            image.verify()
-    except Exception:
-        return False
-    return True
-
-
 def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: str, lineage: str = "") -> None:
     """The MEDIA path: pylance-native blob round-trip + inline image derivation, then a 2.2 stable-id write.
 
@@ -204,7 +153,7 @@ def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: s
     forward as a null blob with null artifacts.
     """
     ds = lance.dataset(from_uri, storage_options=so)
-    blob_cols = _blob_field_names(ds.schema)
+    blob_cols = blob_field_names(ds.schema)
     # with_row_id so the head can mint source_rowid from the SAME aligned scan (a carried source_rowid is a
     # plain column already in this read); mirrors compute._carry_forward's blob path.
     aligned = ds.scanner(
@@ -245,13 +194,13 @@ def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: s
     # NULL payload (absent bytes, not bad bytes) keeps its row with null artifacts.
     for payloads in first_payloads.values():
         probe = next((p for p in payloads if p is not None), None)
-        if probe is not None and _is_image(probe):
-            thumbnails = [None if p is None else _derive_thumbnail(p) for p in payloads]
-            embeddings = [None if p is None else _derive_embedding(p) for p in payloads]
+        if probe is not None and media.is_image(probe):
+            thumbnails = [None if p is None else media.derive_thumbnail(p) for p in payloads]
+            embeddings = [None if p is None else media.derive_embedding(p) for p in payloads]
             out = out.append_column(pa.field("thumbnail", pa.large_binary()), pa.array(thumbnails, pa.large_binary()))
             out = out.append_column(
-                pa.field("embedding", pa.list_(pa.float32(), _EMBEDDING_DIMS)),
-                pa.array(embeddings, type=pa.list_(pa.float32(), _EMBEDDING_DIMS)),
+                pa.field("embedding", pa.list_(pa.float32(), media.EMBEDDING_DIMS)),
+                pa.array(embeddings, type=pa.list_(pa.float32(), media.EMBEDDING_DIMS)),
             )
             break  # one media column per stage (matches derivers._DERIVERS' first-match contract)
 
@@ -371,7 +320,7 @@ def main() -> None:
 def _run_stage(from_uri: str, to_uri: str, stage: str, so: dict[str, str], *, lineage: str = "") -> None:
     upstream = lance.dataset(from_uri, storage_options=so)
 
-    if _blob_field_names(upstream.schema):
+    if blob_field_names(upstream.schema):
         # MEDIA path: lance_ray strips blob typing on write, so round-trip + derive via pylance (below).
         _media_transform(from_uri, to_uri, so, stage=stage, lineage=lineage)
     elif "source_rowid" not in upstream.schema.names:
