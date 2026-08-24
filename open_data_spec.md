@@ -12,6 +12,18 @@ vendored `lance_docs/`, Iceberg/Lakekeeper/Nessie, and rask's own code.
 
 ---
 
+## Scope
+
+**IN: ingest &middot; batch processing &middot; compute &middot; lakehouse/catalog.** That is the pipeline this spec
+governs &mdash; bytes landing, features computed, versions promoted, and the catalog that records it.
+
+**OUT: the `models` plane, the `flows` plane, the annotator, the explorer.** They consume the
+lakehouse; they do not define it. A comparison against them proves nothing about this pipeline, and
+drawing one invites a fix in the wrong plane. Where a precedent is needed, it is **ingest** &mdash; same
+corpus, same scale, same durability problem.
+
+---
+
 ## 0. The constraints this spec obeys
 
 1. **THE LAKEHOUSE IS NOT TIED TO COMPUTE.** Owner ruling, 2026-08-24. The lakehouse exists whether
