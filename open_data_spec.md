@@ -298,7 +298,7 @@ unsafe before the §9(c) decision. Nothing here is parallelisable just because i
 |---|---|---|
 | 1 | Ingest writes **External** blob descriptors by default | **DONE** `3c8032e5` — measured 0.64% of corpus vs 100.71% |
 | 2 | Name the blob thresholds; register the external base at create | **DONE** `3c8032e5` + `8c24c7f3` |
-| 3 | Stop materialising blobs in the mover | OPEN — **UNBLOCKED**, 1 has landed |
+| 3 | Stop materialising blobs in the mover | **DONE** `8e77107b` — 3 tiers cost 0.58% vs 300.52% |
 | 4 | Tier→tier becomes `add_columns`, not overwrite | OPEN — measured safe |
 | 5 | Kill `GateOutcome.TRIGGER`; one enforcement point | **DONE** `ce821949` |
 | 6 | Drop the chart fallback in `effective_gate`; drop `medallion.movers[]` | OPEN |
@@ -334,7 +334,21 @@ unsafe before the §9(c) decision. Nothing here is parallelisable just because i
    specifically because the guide stores these in the dataset SCHEMA and rejects an append naming
    different ones. The descriptor `kind` numbering was assumed and is now measured too:
    **0 inline, 1 packed, 2 dedicated, 3 external.**
-3. **Stop materialising blobs in the mover** — `compute.py::_carry_forward`. Safe ONLY once 1 has
+3. **Stop materialising blobs in the mover — DONE (`8e77107b`).** Measured through the real
+   cascade, bronze→silver→gold over one corpus, gold resolving 20/20 in both placements:
+   **EXTERNAL 11,671 B total (0.58% of corpus)** against **MANAGED 6,010,448 B (300.52%)** — which
+   confirms this document's "three copies" claim to the decimal, and is 515× less storage.
+
+   **The blocker was that a pointer could not be RESOLVED, and the fix was where the base is
+   recorded.** `blob_uri` is base-relative and pylance exposes no accessor for a dataset's registered
+   bases, so ingest now stamps `rask.blob.external_base` into schema metadata at create (the #21
+   self-describing-data precedent; verified to survive create and append). **The RAM problem goes
+   with it**: `derive_artifacts` dispatches on the first non-null payload, so the probe reads ONE row
+   and the full read happens only when a deriver matched — a gold aggregation over ten million page
+   images now reads one image, not ten million. The MANAGED path is unchanged and still tested: a
+   payload that exists at no URI has nowhere to point.
+
+   Original note, retained: `compute.py::_carry_forward`. Safe ONLY once 1 has
    landed. Removes 2 of the 3 corpus copies. The descriptor must be mapped onto the prepared write
    struct; the shapes differ (read gives `struct<kind, position, size, blob_id, blob_uri>`, write
    demands `struct<kind, data, uri, blob_id, blob_size, position>` — `blob.rs:166`).
