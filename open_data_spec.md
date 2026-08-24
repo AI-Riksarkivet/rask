@@ -291,24 +291,71 @@ nothing reads it to make a decision.**
 
 ## 8. Ordered changes
 
+Status as of 2026-08-24. **Ordered, and the order is load-bearing** — 3 is unsafe before 1, and 10 is
+unsafe before the §9(c) decision. Nothing here is parallelisable just because it is small.
+
+| # | change | state |
+|---|---|---|
+| 1 | Ingest writes **External** blob descriptors by default | OPEN — prerequisite for 3 |
+| 2 | Name the blob thresholds; register the external base at create | OPEN |
+| 3 | Stop materialising blobs in the mover | OPEN — blocked on 1 |
+| 4 | Tier→tier becomes `add_columns`, not overwrite | OPEN — measured safe |
+| 5 | Kill `GateOutcome.TRIGGER`; one enforcement point | **IN FLIGHT** — uncommitted, 48 fixtures red |
+| 6 | Drop the chart fallback in `effective_gate`; drop `medallion.movers[]` | OPEN |
+| 7 | Rename lane → transform | OPEN |
+| 8 | Split the gate: Ray writes an attestation, catalog runs the floor | OPEN — now on the DEFAULT path |
+| 9 | Add `cascade_run` — one workflow per batch | OPEN |
+| 10 | Tiers become tags on one dataset | BLOCKED on §9(c) |
+
 1. **Ingest writes External descriptors by default** — see 3 below. MEASURED as a PREREQUISITE for
    the mover change, not a parallel one (§9(a)): a managed descriptor carried between datasets
-   resolves to nothing, silently.
+   resolves to nothing, silently. The measurement is `scripts/measure_blob_descriptor_carry_forward.py`:
+   MANAGED resolves **0 of 20** rows and raises nothing; EXTERNAL resolves 20 of 20.
 2. **Name the blob thresholds; register the external base at create** — `ingest/lander.py`.
 3. **Stop materialising blobs in the mover** — `compute.py::_carry_forward`. Safe ONLY once 1 has
    landed. Removes 2 of the 3 corpus copies. The descriptor must be mapped onto the prepared write
-   struct; the shapes differ.
+   struct; the shapes differ (read gives `struct<kind, position, size, blob_id, blob_uri>`, write
+   demands `struct<kind, data, uri, blob_id, blob_size, position>` — `blob.rs:166`).
+   **This is the answer to "why do 10M images materialise into RAM".** The line is
+   `compute.py:406` — `payloads = aligned.column(f.name).to_pylist()` — and it is per-stage, so the
+   corpus is pulled into the mover's heap once per tier edge.
 4. **Replace tier-to-tier overwrite with `add_columns`** — `compute.py::transform_stage`,
    `scripts/ray_stage_job.py`. Also removes the per-stage index rebuild, which exists only because
-   indices do not survive an overwrite.
+   indices do not survive an overwrite. Measured no-rewrite by
+   `scripts/measure_add_columns_on_blob_table.py`: `add_columns` appends new data files per fragment
+   and leaves the existing ones untouched.
 5. **Kill `GateOutcome.TRIGGER`; `cascade_via_publish` becomes the only path.** Two enforcement
-   points is the drift `publication.py` exists to prevent.
+   points is the drift `publication.py` exists to prevent. **IN FLIGHT** — `gate_decision.py`,
+   `transform.py`, `config.py` and `workflow.py` are edited and uncommitted; `TRIGGER` is replaced by
+   `MISCONFIGURED` (a downstream exists but no publish target reaches it, which is a configuration
+   fault to REPORT, not a second door to fire through). 48 `tests/unit` fixtures are red across 8
+   files, and they share one shape: every one builds a mover with **no catalog**, which the chart
+   cannot produce. The fixtures need catalog doubles; the change does not need re-deciding.
 6. **Drop the chart fallback in `effective_gate`; drop `medallion.movers[]`.** One declaration each.
 7. **Rename lane → transform.**
 8. **Split the gate:** Ray `verify` job writes an attestation; catalog reads it and runs the floor.
+   **Promoted 2026-08-24**: the Ray lane now defaults ON (`e6c7357c`), so "the gate resolver is wired
+   on the in-process path only" stopped being a gap on an opt-in path and became the default
+   behaviour — a declared band is silently ignored for every stage, and the lane author cannot see
+   that the floor came from the chart.
 9. **Add `cascade_run`** — one workflow per batch, child `stage_run` per edge. Makes a batch
-   queryable and cancellable, which today it is not.
+   queryable and cancellable, which today it is not. See §4b: the cascade is topic-chained, so no run
+   identity survives a tier boundary — the ingest plane already does this correctly with child
+   workflows and `when_all`, and the cascade is the odd one out.
 10. **Tiers become tags on one dataset.** *Requires the §9(c) decision first.*
+
+### What landed 2026-08-24 and is NOT in the list above
+
+Neither of these is a spec change; both are preconditions the list assumed and the estate did not have.
+
+- **Ray 2.58.0 across all five declarations** (`679e3bcb`), including a `<2.58` CEILING in
+  `runners/htr` that would have left the one runner shipping a Serve deployment behind the chart's
+  claim. Built image verified: `ray-cluster:ray258-679e3bcb` → ray 2.58.0, pylance 10.0.0, lance_ray.
+- **The Ray lane defaults ON** (`e6c7357c`), which is what makes changes 4 and 8 matter by default
+  rather than for whoever opted in. It rides one unresolved owner decision — the shared Ray image is
+  fattened with the platform's Lance trio beside a workload's CUDA stack, which `CLAUDE.md` names as
+  not-the-answer with the replacement OPEN since the 2026-08-17 `runtime_env` ruling was superseded
+  2026-08-23.
 
 ---
 

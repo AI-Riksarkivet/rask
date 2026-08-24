@@ -9,6 +9,43 @@ Pinned 2026-08-24. Each item says what it needs, not just what it is.
 
 ## CLOSED SINCE THIS FILE WAS PINNED
 
+### The Ray lane ships ON — **DONE** (`679e3bcb`, `e6c7357c`)
+
+Two things landed together because neither is worth anything alone: the version the estate runs, and
+whether it runs the lane at all.
+
+**Ray 2.58.0 everywhere.** Five declarations named three versions. Four were floors 2.58.0 satisfies
+on its own; the fifth was a CEILING that excluded it — `runners/htr` pinned `>=2.57,<2.58`, with no
+comment and no test. "Bump the pins" would therefore have left the one runner that actually ships a
+Serve deployment on 2.57.0 while the chart told KubeRay 2.58.0 — the exact drift
+`test_the_chart_tells_kuberay_the_ray_version_the_image_actually_ships` exists to catch, except a
+runner has its OWN lock and that gate reads the ROOT one. Both locks regenerated. The
+`ray-lance` base moved 2.56.1 → 2.58.0 with the real registry digest, not a carried-over one.
+
+**And the built image was verified rather than assumed** — `ray-cluster:ray258-679e3bcb` reports
+`2.58.0` / pylance `10.0.0` / `lance_ray`. Two traps on the way there, both already documented and
+both still live: the Dagger CLI had auto-provisioned a config-less engine, so `publish` spoke HTTPS
+to the plain-HTTP dev registry and died — `make dagger-engine` is the fix, and it must be re-run
+after a CLI upgrade; and the first build reported **exit 0 while failing**, because the exit code
+read through a `| tail`.
+
+**The lane defaults ON.** Both blockers that held it off are closed, and one was never real in the
+form it was recorded — the OFF gate's docstring described the chart's head as the HTR/CUDA image with
+"no pylance", which stopped being true on 2026-08-17. The blocker that actually gated it was the
+FIXED env dict in `ray_submit.py`: a mover could reach a working cluster and still not describe its
+own work. It now resolves entrypoint/params/code_version from the lane declaration and namespaces the
+workload's half as `RASK_PARAM_*`.
+
+**Carrying an unresolved question, and this is the part to rule on.** The lane works because
+`.docker/ray-cluster.dockerfile` installs the platform's Lance trio BESIDE the HTR workload's CUDA
+stack — one fat shared image. `CLAUDE.md` names that pattern as not-the-answer, and records the
+replacement as an OPEN OWNER DECISION: the 2026-08-17 `runtime_env` ruling was SUPERSEDED
+2026-08-23 and nothing replaced it. Per-workload baked images, a second Ray cluster, or something
+else — unnamed. The lane being on does not settle it; it raises the cost of leaving it unsettled,
+because a second workload now lands in the same image.
+
+---
+
 ### ingest #4 — what a mover reads — **DONE** (`ff71aedb`, `568b8fa9`)
 
 The owner answered the decision this file recorded, and the answer made the item smaller than either
@@ -106,9 +143,16 @@ B14 (`5a8dd3b7`), B15 (closed as ruled).
 - **`RASK_INGEST_LANCE_ROOT` is empty**, so the `lance-append` source kind is advertised in the live
   registry and cannot be used. Either configure the root or stop advertising the kind.
 - **`scripts/ray_lance_job.py` is not baked** into `.docker/ray-cluster.dockerfile`. A lane naming it
-  dies `exit 2` with nothing pointing at the image.
+  dies `exit 2` with nothing pointing at the image. **PROMOTED by the lane defaulting ON** (`e6c7357c`):
+  this was reachable only by someone who had opted into Ray; it is now reachable by default, and
+  `exit 2 / can't open file` names neither the lane nor the image.
 - **The gate resolver is wired on the in-process path only.** The Ray lane is submit-and-ack, so its
   gate runs later off the catalog's publish; it still reads the chart's band, not the declared one.
+  **PROMOTED by the lane defaulting ON** (`e6c7357c`) — this is no longer a gap on an opt-in path. It
+  is the DEFAULT path, so a declared band is now silently ignored for every stage by default, and a
+  lane author reading their own declaration has no way to see that the floor came from the chart.
+  Spec change 8 (split the gate: Ray writes an attestation, the catalog runs the floor) is the real
+  fix; this item is the interim symptom and should close WITH it, not before.
 - **Two run-like nav labels.** `Ingest ▸ Runs` (ingest runs) and `Workloads ▸ Jobs` (Ray jobs) are
   near-synonymous in a sidebar. Rename to "Ingest runs" / "Batch jobs".
 - **A lane cannot show its own health.** `/compute/lanes` shows what a lane DECLARES and nothing about
