@@ -17,6 +17,7 @@
 	import { getRayJobs } from '$lib/remote/compute.remote';
 	import { SortHeader } from '@rask/ui/sort-header';
 	import { Card } from '@rask/ui/card';
+	import { page } from '$app/state';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
 
 	// THE ONE PATTERN (see lib/remote/compute.remote.ts): a cached remote query,
@@ -27,6 +28,10 @@
 	const error = $derived(jobsQuery.error ? String(jobsQuery.error) : null);
 
 	let filter = $state<'all' | RayJob['status']>('all');
+	// THE LANE FILTER, seeded from `?lane=`. `$derived` rather than `$state` + an effect so the
+	// board follows a navigation (a different lane's Runs link) instead of keeping the first value
+	// it happened to load with; reassignable since 5.25, so the chip below can still clear it.
+	let laneFilter = $derived(page.url.searchParams.get('lane') ?? '');
 	let sortKey = $state('started');
 	let sortDir = $state<'asc' | 'desc'>('desc');
 
@@ -70,7 +75,14 @@
 
 	const jobs = $derived.by(() => {
 		const all = payload?.jobs ?? [];
-		const f = filter === 'all' ? all : all.filter((j) => j.status === filter);
+		const byStatus = filter === 'all' ? all : all.filter((j) => j.status === filter);
+		// A job carries its lane in Ray's own `metadata` (rask.lane, stamped by the medallion's
+		// submit path). Jobs with no lane are EXCLUDED when a lane is being asked for — an
+		// unstamped run is not "some lane's", it is nobody's.
+		const f =
+			laneFilter === ''
+				? byStatus
+				: byStatus.filter((j) => j.metadata?.['rask.lane'] === laneFilter);
 		const dir = sortDir === 'asc' ? 1 : -1;
 		return [...f].sort((x, y) => {
 			const a = jobVal(x, sortKey);
@@ -138,6 +150,20 @@
 
 		{#if payload?.ok}
 			<section class="flex flex-wrap gap-2">
+				<!-- A FILTER MUST BE VISIBLE. Arriving from a lane's Runs link silently shows a subset;
+				     without this chip the board looks like the cluster has three jobs. Clicking it
+				     clears the filter and drops the query param, so the URL and the view agree. -->
+				{#if laneFilter}
+					<button
+						class="border-primary bg-primary/10 text-primary rounded-md border px-2.5 py-1 text-xs transition"
+						onclick={() => {
+							laneFilter = '';
+							void goto(`${base}/jobs`, { replaceState: true, noScroll: true });
+						}}
+					>
+						lane: {laneFilter} ✕
+					</button>
+				{/if}
 				<button
 					class={`rounded-md border px-2.5 py-1 text-xs transition ${filter === 'all' ? 'border-primary bg-primary/10 text-primary' : 'hover:bg-accent'}`}
 					onclick={() => (filter = 'all')}

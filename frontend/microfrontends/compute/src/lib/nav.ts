@@ -71,7 +71,7 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 					//
 					// `seg` not `exact`: it lights up for `/compute/ingest/<run_id>` too, which is the
 					// detail page this list links into.
-					title: 'Runs',
+					title: 'Ingest runs',
 					href: '/compute/ingest',
 					match: seg('/compute/ingest'),
 					icon: ListTree,
@@ -81,7 +81,7 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 		{
 			label: 'Workloads',
 			items: [
-				{ title: 'Jobs', href: '/compute/jobs', match: seg('/compute/jobs'), icon: ListTree },
+				{ title: 'Batch jobs', href: '/compute/jobs', match: seg('/compute/jobs'), icon: ListTree },
 				// A lane declares WHAT a job runs — its Ray entrypoint and params. It sits beside Jobs
 				// because that is where a person watching a run goes to change what the run does; a
 				// declaration in one zone and its execution in another was the split that made this

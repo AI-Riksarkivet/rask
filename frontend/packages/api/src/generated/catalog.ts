@@ -904,6 +904,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/project/{id}/gate/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Gate
+         * @description Stop overriding — the chart's settings govern again. Never writes zeros; see the module note.
+         */
+        post: operations["delete_gate_v1_project__id__gate_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/project/{id}/gate/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Describe Gate
+         * @description This project's declared gate, or ``null`` when the chart's settings still govern.
+         *
+         *     ``null`` rather than a populated default: a caller must be able to tell "nothing is declared" —
+         *     where a `helm upgrade` is still the only lever — from "declared, and these are the values".
+         */
+        post: operations["describe_gate_v1_project__id__gate_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/project/{id}/gate/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Gate
+         * @description Declare (or re-declare) this project's gate settings — admin-gated; idempotent.
+         */
+        post: operations["set_gate_v1_project__id__gate_set_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/project/{id}/policy/delete": {
         parameters: {
             query?: never;
@@ -4481,7 +4544,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "transform_set" | "transform_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "promotion_review_requested";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "transform_set" | "transform_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "promotion_review_requested";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -4496,7 +4559,7 @@ export interface components {
              * Object Type
              * @enum {string}
              */
-            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "annotation_task" | "transform";
+            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "annotation_task" | "transform" | "gate";
             /**
              * Occurred At
              * Format: date-time
@@ -5902,6 +5965,49 @@ export interface components {
             multi_match?: components["schemas"]["MultiMatchQuery"] | null;
             phrase?: components["schemas"]["PhraseQuery"] | null;
         };
+        /**
+         * GateSpecRequest
+         * @description Declare one project's gate. The project comes from the gated PATH, never from here.
+         *
+         *     Omitting ``project`` is the security half, exactly as on ``TransformSpecRequest``: a
+         *     body-supplied project would let an admin of one tenant pass ``can_administer`` on their own
+         *     project while rewriting somebody else's gate.
+         *
+         *     Field semantics live on ``service_kit.lakehouse.gate_specs.GateSpec``, which is the model this
+         *     validates into and the one the medallion reads. One definition, two services.
+         */
+        GateSpecRequest: {
+            /**
+             * Key Column
+             * @default id
+             */
+            key_column: string;
+            /** Required Columns */
+            required_columns?: string[];
+            /**
+             * Review Band
+             * @default 0.25
+             */
+            review_band: number;
+            /**
+             * Review Enabled
+             * @default false
+             */
+            review_enabled: boolean;
+        };
+        /** GateSpecResponse */
+        GateSpecResponse: {
+            /** Key Column */
+            key_column: string;
+            /** Project */
+            project: string;
+            /** Required Columns */
+            required_columns?: string[];
+            /** Review Band */
+            review_band: number;
+            /** Review Enabled */
+            review_enabled: boolean;
+        };
         /** GcPreview */
         GcPreview: {
             /** Current Version */
@@ -6897,6 +7003,11 @@ export interface components {
         PublishRequest: {
             /** Accept Assertions */
             accept_assertions?: string[];
+            /**
+             * Gate Only
+             * @default false
+             */
+            gate_only: boolean;
             /** Key Column */
             key_column: string;
             /** Required Columns */
@@ -9598,6 +9709,117 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateNamespaceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_gate_v1_project__id__gate_delete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_gate_v1_project__id__gate_describe_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateSpecResponse"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_gate_v1_project__id__gate_set_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GateSpecRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateSpecResponse"];
                 };
             };
             /** @description Validation Error */
