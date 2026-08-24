@@ -81,10 +81,19 @@ spec:
             # emitter must register no route rather than subscribe to a topic nothing publishes on.
             - { name: MEDALLION_CONTROL_PUBSUB, value: "{{ required "pubsub.controlName must be set when catalog.controlEmit is on — an empty value silently disables the medallion publication head" .Values.pubsub.controlName }}-{{ .Values.medallion.producer.daprAppId }}" }
             {{- end }}
-            {{- if .Values.medallion.projectsEnabled }}
+            {{- $lanesDeclared := false }}
+            {{- range .Values.medallion.movers }}{{- if .lane }}{{- $lanesDeclared = true }}{{- end }}{{- end }}
+            {{- if or .Values.medallion.projectsEnabled $lanesDeclared }}
             # #84 per-tenant routing (opt-in): the catalog's warehouse-registry root. A `project`-carrying
             # /produce resolves that project's ACTIVE warehouse and seeds <root>/medallion/bronze there;
             # project-less requests keep the shared URIs below byte-identically.
+            #
+            # ALSO required whenever ANY mover declares a `lane`, which is why `$lanesDeclared` widens the
+            # condition. The cascade HEAD consults declarations to decide whether an unrecognised table is
+            # a lane's entry point (`ingest_trigger.py::_has_declared_lane` -> `list_specs`), and that read
+            # goes through this root. Gated on `projectsEnabled` alone, the head could not see a single
+            # declaration, so a declared lane's table arrived and published nothing — the whole record was
+            # unreachable from the deployed chart.
             - { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ .Values.rustfs.bucket }}" }
             {{- end }}
             # Ray TRAIN head (#115): values-wired passthrough (docs/RAY-TRAIN.md; defaults mirror
@@ -307,11 +316,32 @@ spec:
             - { name: MEDALLION_AUTHOR, value: {{ .author | quote }} }
             - { name: MEDALLION_SUB_TOPIC, value: {{ .subTopic | quote }} }
             - { name: MEDALLION_PUB_TOPIC, value: {{ .pubTopic | quote }} }
-            {{- if $root.Values.medallion.projectsEnabled }}
+            {{- if .lane }}
+            # WHICH DECLARED LANE this mover runs. OPT-IN per row, and deliberately absent by default:
+            # `core/config.py` documents that an estate which has declared nothing must behave
+            # byte-for-byte as before, and that a named-but-UNDECLARED lane is a REFUSAL rather than a
+            # fallback to the env below. Defaulting this to `.name` would therefore break every mover
+            # the moment the chart shipped.
+            #
+            # Set it, and `entrypoint`/`params`/`code_version` come from the catalog's admin-gated,
+            # audited record instead of this Deployment — so WHAT a lane runs changes through the door
+            # with no helm upgrade. The binding of a POD to an EDGE stays deploy-time, which is the same
+            # place every orchestrator binds a code location; only the program is runtime-governed.
+            #
+            # Until 2026-08-24 this variable was rendered by NO template, so `settings.lane` was always
+            # "" in-cluster, every mover took the env branch, and `/compute/lanes` wrote records that
+            # nothing read. The door was live and its property was not obtained.
+            - { name: MEDALLION_LANE, value: {{ .lane | quote }} }
+            {{- end }}
+            {{- if or $root.Values.medallion.projectsEnabled .lane }}
             # #84 per-tenant routing (opt-in): a `project`-carrying stage trigger resolves this stage's
             # from/to URIs off the warehouse registry (<project-root>/medallion/<namespace>) instead of
             # the env URIs below; project-less triggers keep them byte-identically. Without this env a
             # project trigger is DROPPED fail-closed.
+            #
+            # A lane-bound mover needs it for a second reason: `services/lane.py` reads the declaration
+            # straight off this root (never through a catalog client), so without it resolution raises
+            # UndeclaredLaneError naming an empty control root.
             - { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ $root.Values.rustfs.bucket }}" }
             {{- if and $root.Values.medallion.goldWarehouse (eq .toNamespace "gold") }}
             # Gold SERVING warehouse (docs/DECISIONS.md "Medallion tiers"): ONLY the terminal silver→gold
