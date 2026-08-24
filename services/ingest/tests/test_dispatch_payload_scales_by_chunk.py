@@ -92,9 +92,20 @@ class TestThePayloadIsPerChunkNotPerUnit:
 
 
 class TestTheBudgetStillBites:
-    def test_a_ten_million_unit_run_is_over_budget(self) -> None:
-        """The ceiling is real, not decorative — it refuses ~7.2M units up."""
-        assert _serialized(10_000_000) > CHUNK_DISPATCH_BUDGET_BYTES
+    def test_a_run_far_past_the_advertised_scale_is_over_budget(self) -> None:
+        """The ceiling is real, not decorative — it still refuses, just further out.
+
+        NUMBER CHANGED, INVARIANT UNCHANGED (2026-08-24). This asserted 10M refused, which was true
+        at CHUNK_SIZE=1000 and became FALSE when the estate's own scale turned out to be "over 10
+        million images" (owner) — a corpus already in the building serialised to 3.02 MiB against
+        the 3 MiB budget and would have been refused at the enumeration seam. CHUNK_SIZE went to
+        10000 and the ceiling to ~99M.
+
+        What this test protects is that a ceiling EXISTS, so it now asserts at a scale past the new
+        one rather than at the old boundary. Deleting it would remove the only guard against the
+        budget being quietly raised to whatever the payload happens to be.
+        """
+        assert _serialized(200_000_000) > CHUNK_DISPATCH_BUDGET_BYTES
 
     def test_the_budget_sits_below_the_grpc_ceiling(self) -> None:
         """Deliberately under, not at: what grpc weighs is this payload PLUS the durabletask envelope,

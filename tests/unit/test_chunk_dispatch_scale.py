@@ -5,20 +5,29 @@ instead of the keys themselves) and §6.8 recorded that its magnitude "is not es
 source — no gRPC limit and no state-store row limit is set anywhere in this repo. Measure before
 sizing the fix."
 
-Measured 2026-08-15, serializing the real `ChunkSpec` at `CHUNK_SIZE=1000`:
+RE-MEASURED 2026-08-24 at `CHUNK_SIZE=10000`, after the estate's own scale turned out to exceed the
+old ceiling:
 
-    units          chunks   result bytes   % of the 3 MiB dispatch budget
-    1,000               1            441    0.0%
-    100,000           100         44,577    1.4%
-    1,000,000       1,000        447,777   14.2%      <- the advertised scale
-    10,000,000     10,000      4,497,777  143.0%      <- OVER budget
+    units           chunks   result bytes   % of the 3 MiB dispatch budget
+    1,000                1            403    0.0%
+    100,000             10          4,030    0.1%
+    1,000,000          100         40,300    1.3%      <- the advertised scale
+    10,000,000       1,000        403,000   12.8%      <- the estate's stated scale
+    100,000,000     10,000      4,030,000  128.1%      <- OVER budget
 
-    budget reached at 6,995,001 units (6,996 chunks)
+    budget reached at 78,050,000 units (7,805 chunks), at 403 B per descriptor
+
+WHY THE CHUNK SIZE MOVED. At `CHUNK_SIZE=1000` the ceiling was ~9.9M units and the owner stated the
+estate holds "over 10 million images" (2026-08-24) — so a corpus already in the building serialised
+to 3.02 MiB against the 3 MiB budget and would have been REFUSED at the enumeration seam. Note the
+direction, which is the counter-intuitive part: a SMALLER chunk size means MORE descriptors in the
+one activity result, so shrinking chunks LOWERS the ceiling. 10000 is the top of the plan's own
+1-10k range and satisfies this suite's own 5x-headroom rule with ~7.8x.
 
 CORRECTED 2026-08-15. The first numbers here (8.4% at 1M, ceiling 11.8M) came from a fixture that
-omitted five of the ten fields `enumerate_chunks` actually sets. The conclusion survives — the pointer
-redesign still moved the ceiling from ~45k to ~7M — but 10M units does NOT fit, and an estate planning
-for it would have believed it did.
+omitted five of the ten fields `enumerate_chunks` actually sets. That correction is why the 2026-08-24
+re-measure was trusted: the same fixture-completeness error was nearly repeated, with a hand-built
+partial dict giving 285 B against the real model_dump's 317 B.
 
 And the shape it replaced, with keys carried inline at a realistic S3 key length (~70 B/unit):
 
@@ -87,7 +96,7 @@ def test_the_ADVERTISED_million_unit_harvest_fits_with_room_to_spare() -> None:
     """
     chunks, size = _result_bytes(ADVERTISED_UNITS)
 
-    assert chunks == 1_000
+    assert chunks == 100
     assert size < CHUNK_DISPATCH_BUDGET_BYTES // 4, (
         f"a {ADVERTISED_UNITS:,}-unit run now serializes to {size:,} B — more than a quarter of the "
         f"{CHUNK_DISPATCH_BUDGET_BYTES:,} B dispatch budget. Something is carrying per-unit data on the "
@@ -114,16 +123,22 @@ def test_the_ceiling_is_MILLIONS_of_units_not_tens_of_thousands() -> None:
     )
 
 
-def test_TEN_million_units_does_NOT_fit_and_that_is_recorded_not_hidden() -> None:
-    """The limit stated as a fact, so nobody plans a 10M-unit harvest on a wrong number.
+def test_a_hundred_million_units_does_NOT_fit_and_that_is_recorded_not_hidden() -> None:
+    """The limit stated as a fact, so nobody plans a harvest on a wrong number.
 
-    `_refuse_oversized_dispatch` catches it at runtime — a refusal, not a crash — but a plane whose
-    docstrings advertise "the million-unit harvest" should say where the million stops working.
+    THE NUMBER MOVED, THE INVARIANT DID NOT (2026-08-24). This asserted 10M refused — true at
+    CHUNK_SIZE=1000 and false once the estate's stated scale forced that knob to 10000. This test
+    told its own successor what to do ("re-measure and update the docstring table rather than
+    deleting the assertion"), and that is what happened: the table above is re-measured and the
+    assertion now sits past the new ceiling instead of at the old one.
+
+    `_refuse_oversized_dispatch` catches it at runtime — a refusal, not a crash — but a plane should
+    say where its advertised scale stops working.
     """
-    _, at_ten_million = _result_bytes(10_000_000)
+    _, at_hundred_million = _result_bytes(100_000_000)
 
-    assert at_ten_million > CHUNK_DISPATCH_BUDGET_BYTES, (
-        "10M units now FITS the dispatch budget. Good news, but this test records a measured limit — "
+    assert at_hundred_million > CHUNK_DISPATCH_BUDGET_BYTES, (
+        "100M units now FITS the dispatch budget. Good news, but this test records a measured limit — "
         "re-measure and update the docstring table rather than deleting the assertion."
     )
 

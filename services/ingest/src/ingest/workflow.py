@@ -71,10 +71,28 @@ if TYPE_CHECKING:
 # state store, large enough that a million-unit run does not spawn a million children. The plan's
 # own figure (open_ingest.md: "child workflow per ~1-10k keys").
 #
+# RAISED 1000 -> 5000 (2026-08-24) BECAUSE THE ESTATE'S OWN SCALE DID NOT FIT. This value sets the
+# dispatch ceiling, and the arithmetic is not obvious in either direction: `enumerate_chunks` returns
+# ONE activity result holding every chunk, so a SMALLER chunk size means MORE descriptors and a
+# LARGER payload. Measured — a pointer-form descriptor serialises to 317 bytes, so at 1000 the
+# ceiling was 9,923,000 units, and this estate holds "over 10 million images" (owner, 2026-08-24).
+# A corpus already in the building serialised to 3.02 MiB against the 3 MiB budget and would have
+# been REFUSED, surfacing as RESOURCE_EXHAUSTED from inside the SDK on a workflow that then retries
+# four times and wedges, with nothing naming a knob.
+#
+# 10000 puts the ceiling near 99M units and stays at the top of the plan's own 1-10k range. The
+# number is chosen by this suite's OWN rule, not by preference: `test_the_headroom_is_at_least_five
+# _times_the_advertised_scale` requires 5x headroom over the advertised scale, and with that scale
+# now 10M (owner, 2026-08-24) 5000 gave 49.6M — marginally UNDER its own bar. 10000 gives ~10x.
+# The cost is real and bounded: a chunk is the unit of RETRY, so a failed chunk now re-drains up to
+# 10000 units instead of 1000, and fan-out narrows tenfold. Both are the right trade against a run
+# that cannot start at all. `test_dispatch_ceiling_at_real_scale.py` pins the headroom so a
+# descriptor that grows fails there, naming this knob, rather than in production.
+#
 # Annotated `int` because it is a KNOB, not an identity: unannotated, its declared type is the
 # literal 1000, and rebinding it — which the chunk-boundary test does, to slice at 3 without writing
 # a 1000-file fixture — is then a type error rather than the intended tuning.
-CHUNK_SIZE: int = 1000
+CHUNK_SIZE: int = 10000
 
 # Retries are the activity's, not a hand-rolled loop: Dapr owns the backoff and the replay.
 ACTIVITY_RETRY = wf.RetryPolicy(
