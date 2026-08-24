@@ -53,13 +53,23 @@ SPECS_PREFIX = "_transforms"
 #: nothing naming the image.
 BAKED_JOBS_DIR = "/home/ray/jobs/"
 
+#: The job scripts `.docker/ray-cluster.dockerfile` ACTUALLY bakes — the image the chart's KubeRay
+#: cluster runs.
+#:
+#: THE DIRECTORY IS NOT ENOUGH, which is what this closes. The validator below used to accept any
+#: path under `BAKED_JOBS_DIR`, so a declaration naming `ray_lance_job.py` — a real script, baked
+#: into `.docker/ray-lance.dockerfile` for the standalone demo but NOT into the cluster image —
+#: passed the door and then died `exit 2 / can't open file` on the cluster, with nothing in the
+#: failure naming the image. A refusal at declaration time is the last moment that is cheap.
+#:
+#: Held here rather than derived, because this library runs inside a container that has no
+#: dockerfile to read. `tests/unit/test_ray_job_images.py` asserts the two agree, so the drift this
+#: constant could introduce fails a test instead of a cluster.
+BAKED_CLUSTER_JOBS = frozenset({"ray_stage_job.py", "ray_train_job.py", "ray_dummy_job.py"})
+
 #: DNS-safe, lowercase, bounded. The name becomes an object-store key fragment and rides into
 #: identifiers elsewhere; a traversing or shell-shaped name must never reach either.
 TRANSFORM_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
-
-#: Kept as an alias because the name is imported elsewhere and a rename that breaks an import is a
-#: rename that gets reverted. Remove once no caller names it.
-TRANSFORM_NAME_RE = TRANSFORM_NAME_RE
 
 #: The prefix the submit path adds when forwarding params as env vars. A declared key carrying it
 #: already would either double-prefix or — if a future submit path forgot to re-prefix — escape the
@@ -104,6 +114,18 @@ class TransformSpec(BaseModel):
             raise ValueError(
                 f"entrypoint {value!r} does not reference a baked job under {BAKED_JOBS_DIR!r}; "
                 "Ray documents runtime_env as development-only, so a transform must name a script the deployed image contains"
+            )
+        # AND IT MUST BE ONE THE CLUSTER IMAGE ACTUALLY CARRIES. The directory check alone accepted
+        # `ray_lance_job.py` — a real script, baked into the standalone demo image but not into the
+        # one the chart runs — and the run then died `exit 2 / can't open file` on the cluster with
+        # nothing naming the image. Refusing here names the script AND what is available.
+        named = next((token for token in value.split() if BAKED_JOBS_DIR in token), "")
+        script = named.rsplit("/", 1)[-1]
+        if script not in BAKED_CLUSTER_JOBS:
+            raise ValueError(
+                f"entrypoint {value!r} names {script!r}, which the cluster image does not bake; "
+                f"available: {sorted(BAKED_CLUSTER_JOBS)}. Add it to .docker/ray-cluster.dockerfile "
+                "or name one of these — an unbaked script fails as `exit 2` on the cluster, naming nothing."
             )
         return value
 

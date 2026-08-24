@@ -48,7 +48,9 @@
 	// is registered" so a deployment without s3-prefix keeps a working form.
 	const kind = $derived(
 		chosen ??
-			(sources.some((s) => s.kind === 's3-prefix') ? 's3-prefix' : (sources[0]?.kind ?? '')),
+			(sources.some((s) => s.kind === 's3-prefix' && s.available !== false)
+				? 's3-prefix'
+				: (sources.find((s) => s.available !== false)?.kind ?? sources[0]?.kind ?? '')),
 	);
 
 	let dataset = $state('');
@@ -236,8 +238,15 @@
 					bind:value={() => kind, (next) => (chosen = next)}
 					disabled={busy}
 				>
+					<!-- SHOWN DISABLED, NEVER HIDDEN. A kind this deployment cannot run (lance-append with
+					     no RASK_INGEST_LANCE_ROOT) used to be offered and then refuse every submit, naming
+					     an env var to whoever was filling in the form. Dropping it from the list would be
+					     worse: an absent option is indistinguishable from a feature that was never built,
+					     so nobody learns a knob would enable it. The reason rides in the label. -->
 					{#each sources as source (source.kind)}
-						<option value={source.kind}>{source.label}</option>
+						<option value={source.kind} disabled={source.available === false}>
+							{source.label}{source.available === false ? ` — ${source.unavailable_reason ?? 'unavailable here'}` : ''}
+						</option>
 					{/each}
 				</select>
 				{#if selected?.description}

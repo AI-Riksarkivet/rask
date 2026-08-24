@@ -19,6 +19,25 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from service_kit.lancekit.blobs import BLOB_V2_EXTENSION_NAME, blob_field_names, is_blob_field, schema_has_blob
+
+
+#: Re-exported deliberately: callers import these FROM here and the names are part of this module's
+#: surface, so ruff must not read them as unused.
+__all__ = [
+    "BLOB_V2_EXTENSION_NAME",
+    "EXTERNAL_BASE_KEY",
+    "EXTERNAL_KIND",
+    "blob_column_resolves",
+    "blob_field_names",
+    "carry_external_descriptor",
+    "dangling_blob_columns",
+    "external_base_of",
+    "is_blob_field",
+    "read_aligned_table",
+    "schema_has_blob",
+    "stamp_external_base",
+]
 
 if TYPE_CHECKING:
     import lance
@@ -26,7 +45,12 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 #: Arrow extension name Lance stamps on a blob-v2 column (lance_docs/guide.md — Version Compatibility).
-BLOB_V2_EXTENSION_NAME = "lance.blob.v2"
+#:
+#: RE-EXPORTED from `lancekit.blobs`, which is the ONE implementation. The four-function detection
+#: seam existed three times in this repo — here, in `lancekit`, and in `ratch.core` — and three
+#: copies of "which Arrow extension name marks a blob column" is three places for the answer to
+#: drift. `lancekit` is the canonical one because it is the standalone, dependency-light seam by
+#: contract; this module keeps only what it adds on top.
 
 #: The descriptor `kind` for an EXTERNAL blob — the payload lives at a URI the dataset does not own.
 #: Measured, not documented: 0 inline, 1 packed, 2 dedicated, 3 external.
@@ -93,29 +117,6 @@ def carry_external_descriptor(descriptor: object, base: str) -> object | None:
     if size:
         return Blob(uri=absolute, position=descriptor.get("position") or 0, size=size)
     return Blob.from_uri(absolute)
-
-
-def is_blob_field(field: pa.Field) -> bool:
-    """True when ``field`` is a Lance blob-v2 column (requires file format >= 2.2).
-
-    Prefers the registered extension type's ``extension_name`` (present when ``lance`` is imported,
-    which every service does) and falls back to the raw ``ARROW:extension:name`` field metadata for
-    a schema decoded in a process where the extension is not registered.
-    """
-    if getattr(field.type, "extension_name", None) == BLOB_V2_EXTENSION_NAME:
-        return True
-    metadata = field.metadata or {}
-    return metadata.get(b"ARROW:extension:name") == BLOB_V2_EXTENSION_NAME.encode()
-
-
-def schema_has_blob(schema: pa.Schema) -> bool:
-    """True when any field in ``schema`` is a Lance blob-v2 column."""
-    return any(is_blob_field(field) for field in schema)
-
-
-def blob_field_names(schema: pa.Schema) -> list[str]:
-    """Names of the blob-v2 columns in ``schema`` (empty when there are none)."""
-    return [field.name for field in schema if is_blob_field(field)]
 
 
 def read_aligned_table(

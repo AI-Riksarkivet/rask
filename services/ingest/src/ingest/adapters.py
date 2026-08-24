@@ -339,6 +339,21 @@ def _s3_prefix_partition(spec: SourceSpec, key: str) -> str | None:
     return head or None
 
 
+def lance_append_unusable() -> str | None:
+    """Why `lance-append` cannot run here, or None when it can.
+
+    It reads datasets from under `RASK_INGEST_LANCE_ROOT` and that root defaults to EMPTY, so on a
+    stock deployment the kind was advertised by the registry and refused every run — naming an
+    environment variable to whoever was filling in the form. The reason now travels with the kind
+    instead, and the form renders it disabled (the estate's "show disabled, never hide" ruling).
+
+    NOT fixed by pointing the root at the lakehouse bucket: `chart/templates/fleet.yaml` warns that
+    doing so "gets a second, unlineaged copy path" into governed data. It wants its own ungoverned
+    exports area, which is a deployment decision, not a default.
+    """
+    return None if os.getenv(LANCE_ROOT_ENV, "").strip() else f"{LANCE_ROOT_ENV} is not set — this deployment has no ungoverned Lance root to read from"
+
+
 def register_builtin_sources() -> None:
     """Idempotent: safe to call from the app factory and from a test.
 
@@ -398,6 +413,7 @@ def register_builtin_sources() -> None:
             fetcher=_lance_append_fetcher,
             label="Lance dataset",
             description="Every fragment of an ungoverned .lance dataset, each landed as one bronze row carrying its rows as Arrow IPC.",
+            unusable=lance_append_unusable,
             options=[
                 SourceOption(
                     name="uri",

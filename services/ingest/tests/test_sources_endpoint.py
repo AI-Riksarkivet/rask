@@ -127,3 +127,55 @@ def test_a_builtin_kind_carries_a_human_label(sources: list[SourceDescriptor]) -
     """
     unlabelled = sorted(entry.kind for entry in sources if entry.kind in BUILTIN_KINDS and entry.label == entry.kind)
     assert unlabelled == [], f"kinds rendering their registry key as a label: {unlabelled}"
+
+
+def _served(monkeypatch: pytest.MonkeyPatch) -> dict[str, SourceDescriptor]:
+    """The descriptors AS SERVED, keyed by kind — the same door the fixture above uses.
+
+    Not `describe_sources()` directly, for the reason that fixture states: the registry is populated
+    by an import-time side effect inside the factory, so calling it directly proves the descriptors
+    exist while saying nothing about whether the app serves them. Availability is resolved per
+    REQUEST, which is precisely the thing that has to be true through the door.
+    """
+    monkeypatch.setenv("RASK_API_PREFIX", "/api")
+    response = TestClient(create_app()).get("/api/sources")
+    assert response.status_code == 200, response.text
+    return {entry["kind"]: SourceDescriptor.model_validate(entry) for entry in response.json()}
+
+
+def test_a_kind_this_deployment_cannot_run_is_ADVERTISED_with_its_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`lance-append` reads from `RASK_INGEST_LANCE_ROOT`, which defaults to EMPTY.
+
+    So on a stock deployment the registry advertised a kind that refused every run, and the refusal
+    named an environment variable to whoever was filling in the form. The reason now travels with the
+    descriptor.
+
+    ADVERTISED, not hidden — the estate's "show disabled, never hide" ruling. An option that vanishes
+    is indistinguishable from a feature that was never built, so nobody reading the form can learn
+    that a knob would enable it.
+    """
+    monkeypatch.delenv("RASK_INGEST_LANCE_ROOT", raising=False)
+    by_kind = _served(monkeypatch)
+
+    assert "lance-append" in by_kind, "an unusable kind must still be listed — hiding it loses the reason"
+    assert by_kind["lance-append"].available is False
+    assert "RASK_INGEST_LANCE_ROOT" in (by_kind["lance-append"].unavailable_reason or ""), "the reason must name the knob"
+
+
+def test_the_same_kind_is_available_once_the_root_IS_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolved per REQUEST, not at registration — the registry is built at import, so a knob set
+    after the process started must not leave the form advertising the old answer."""
+    monkeypatch.setenv("RASK_INGEST_LANCE_ROOT", "/data/exports")
+    by_kind = _served(monkeypatch)
+
+    assert by_kind["lance-append"].available is True
+    assert by_kind["lance-append"].unavailable_reason is None
+
+
+def test_the_kinds_that_need_nothing_are_unaffected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A precondition belongs to the kind that has one; the rest must not acquire a state."""
+    monkeypatch.delenv("RASK_INGEST_LANCE_ROOT", raising=False)
+    by_kind = _served(monkeypatch)
+
+    assert by_kind["local-dir"].available is True
+    assert by_kind["s3-prefix"].available is True

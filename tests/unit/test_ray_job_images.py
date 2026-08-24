@@ -38,8 +38,14 @@ def _dockerfile() -> str:
     return _DOCKERFILE.read_text(encoding="utf-8")
 
 
-def _baked_jobs() -> set[str]:
-    """The script basenames the image COPYs into ``/home/ray/jobs/``."""
+def _lance_image_baked_jobs() -> set[str]:
+    """The script basenames `.docker/ray-lance.dockerfile` COPYs into ``/home/ray/jobs/``.
+
+    RENAMED FROM `_baked_jobs`, which is why this comment exists: a SECOND `_baked_jobs` was defined
+    later in this file for the CLUSTER dockerfile, and in Python the later definition wins. Every
+    call resolved to the cluster parser, so the test above — which says it checks the ray-lance
+    image — had silently been checking a different image. Two helpers, two names.
+    """
     baked: set[str] = set()
     for line in _dockerfile().splitlines():
         stripped = line.strip()
@@ -64,7 +70,7 @@ def _entrypoint_jobs() -> dict[str, str]:
 
 def test_every_submit_entrypoint_is_baked_into_the_ray_image() -> None:
     """A settings default that names a job the image does not carry is a submit-time 404 on the cluster."""
-    baked = _baked_jobs()
+    baked = _lance_image_baked_jobs()
     missing = {name: job for name, job in _entrypoint_jobs().items() if job not in baked}
     assert not missing, f"entrypoints naming jobs absent from {_DOCKERFILE.name}: {missing} (baked: {sorted(baked)})"
 
@@ -134,7 +140,7 @@ def _submitted_jobs() -> set[str]:
     return found
 
 
-def _baked_jobs() -> set[str]:
+def _cluster_baked_jobs() -> set[str]:
     """Every script the cluster image copies into `/home/ray/jobs/`."""
     text = _CLUSTER_DOCKERFILE.read_text(encoding="utf-8")
     baked: set[str] = set()
@@ -147,7 +153,7 @@ def _baked_jobs() -> set[str]:
 
 
 def test_every_submitted_ray_job_is_baked_into_the_cluster_image() -> None:
-    submitted, baked = _submitted_jobs(), _baked_jobs()
+    submitted, baked = _submitted_jobs(), _cluster_baked_jobs()
 
     assert submitted, "no `jobs/<name>.py` submission found anywhere — the scan is broken, not the estate"
     assert baked, "the cluster image copies nothing into /home/ray/jobs — the COPY moved and this gate is vacuous"
@@ -166,5 +172,26 @@ def test_every_baked_ray_job_exists_on_disk() -> None:
     Cheaper to catch here than in a 238-second image build, and it is how a renamed script leaves a
     dangling COPY behind.
     """
-    missing = sorted(name for name in _baked_jobs() if not (_REPO / "scripts" / name).is_file())
+    missing = sorted(name for name in _cluster_baked_jobs() if not (_REPO / "scripts" / name).is_file())
     assert not missing, f"{_CLUSTER_DOCKERFILE.name} copies scripts that do not exist: {missing}"
+
+
+def test_the_declared_transform_door_knows_what_the_cluster_image_bakes() -> None:
+    """`BAKED_CLUSTER_JOBS` must equal what `.docker/ray-cluster.dockerfile` actually COPYs.
+
+    The door validates a declaration's entrypoint against that constant, which is held in
+    `service_kit` because the library runs inside a container with no dockerfile to read. That is a
+    drift risk, and this is the thing that makes the drift fail a test rather than a cluster: a job
+    added to the image but not the constant is refused at declaration time for no reason, and one
+    removed from the image but left in the constant is accepted and then dies `exit 2` on the
+    cluster — which is exactly the failure the constant was added to prevent.
+    """
+    from service_kit.lakehouse.transform_specs import BAKED_CLUSTER_JOBS
+
+    baked = {name for name in _cluster_baked_jobs() if name.endswith(".py")}
+    assert baked, "the cluster dockerfile bakes no .py jobs — the scan is broken, not the estate"
+    assert set(BAKED_CLUSTER_JOBS) == baked, (
+        f"BAKED_CLUSTER_JOBS is {sorted(BAKED_CLUSTER_JOBS)} but ray-cluster.dockerfile bakes {sorted(baked)}. "
+        "A declaration door that disagrees with the image either refuses a valid job or accepts one that "
+        "cannot run."
+    )

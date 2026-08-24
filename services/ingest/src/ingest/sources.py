@@ -66,12 +66,25 @@ class SourceOption(BaseModel):
 
 
 class SourceDescriptor(BaseModel):
-    """A registered kind as the outside world sees it: its key and what it needs."""
+    """A registered kind as the outside world sees it: its key, what it needs, and whether it WORKS."""
 
     kind: str
     label: str
     description: str | None = None
     options: list[SourceOption] = Field(default_factory=list)
+    #: Whether this deployment can actually run this kind right now.
+    #:
+    #: ADVERTISED-BUT-UNUSABLE IS THE STATE THIS FIXES. `lance-append` is registered unconditionally
+    #: while `RASK_INGEST_LANCE_ROOT` defaults to empty, so a form built from this list offered a
+    #: kind that refuses every run — and the refusal named a missing env var to a person who cannot
+    #: set one.
+    #:
+    #: Advertised rather than HIDDEN, because the estate's ruling is "show disabled, never hide": a
+    #: kind that vanishes is indistinguishable from one that was never built, and an operator
+    #: reading the form has no way to learn that a knob would enable it. The reason travels with it.
+    available: bool = True
+    #: Why not, when `available` is False — rendered beside the disabled option. Names the knob.
+    unavailable_reason: str | None = None
 
 
 #: The three registry callables are `@runtime_checkable` because `_Registration` STORES them: a
@@ -102,6 +115,18 @@ class PartitionOf(Protocol):
     """
 
     def __call__(self, spec: SourceSpec, key: str) -> str | None: ...
+
+
+@runtime_checkable
+class UnusableReason(Protocol):
+    """Why THIS deployment cannot run this kind, or ``None`` when it can.
+
+    Declared beside the factory for the same reason `partition_of` and `external_base_of` are: the
+    precondition is the adapter's own business, and a registry that had to know each kind's
+    environment would grow a branch per source.
+    """
+
+    def __call__(self) -> str | None: ...
 
 
 @runtime_checkable
@@ -171,6 +196,7 @@ class _Registration(BaseModel):
     partition_of: PartitionOf | None = None
     fetcher: FetcherFactory | None = None
     external_base_of: ExternalBaseOf | None = None
+    unusable: UnusableReason | None = None
 
 
 _REGISTRY: dict[str, _Registration] = {}
@@ -187,6 +213,7 @@ def register(
     partition_of: PartitionOf | None = None,
     fetcher: FetcherFactory | None = None,
     external_base_of: ExternalBaseOf | None = None,
+    unusable: UnusableReason | None = None,
 ) -> None:
     """Register a source kind. Called at import time by the adapter modules themselves.
 
@@ -205,6 +232,7 @@ def register(
         partition_of=partition_of,
         fetcher=fetcher,
         external_base_of=external_base_of,
+        unusable=unusable,
     )
 
 
@@ -281,7 +309,24 @@ def describe_sources() -> list[SourceDescriptor]:
     source-agnostic; `S3PrefixSource` had been written, tested and unreachable for months for exactly
     that class of reason. A registry nothing can read is a registry that drifts.
     """
-    return [_REGISTRY[kind].descriptor for kind in sorted(_REGISTRY)]
+    return [_availability(_REGISTRY[kind].descriptor) for kind in sorted(_REGISTRY)]
+
+
+def _availability(descriptor: SourceDescriptor) -> SourceDescriptor:
+    """`descriptor` with `available`/`unavailable_reason` resolved against THIS deployment.
+
+    Resolved at describe time, not at registration: the registry is built at import and the
+    environment is read per request, so a knob set after the process started must not leave the form
+    advertising the old answer. It is a `getenv` per kind on an admin-frequency endpoint.
+
+    The check lives with the KIND that needs it, via `unusable_reason`, so a new source declares its
+    own precondition beside its factory — the same rule `partition_of` and `external_base_of` follow.
+    """
+    registration = _REGISTRY[descriptor.kind]
+    reason = registration.unusable() if registration.unusable else None
+    if reason is None:
+        return descriptor
+    return descriptor.model_copy(update={"available": False, "unavailable_reason": reason})
 
 
 def iter_units(adapter: SourceAdapter) -> Iterator[SourceObject]:

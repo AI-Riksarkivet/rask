@@ -171,6 +171,12 @@ export const SourceDescriptorSchema = v.object({
 	label: v.string(),
 	description: v.nullable(v.optional(v.string()), null),
 	options: v.array(SourceOptionSchema),
+	/** Whether THIS deployment can run the kind right now. Defaulted so a door that predates the
+	 *  field still parses — an older ingest service reports no availability, and "assume usable" is
+	 *  the behaviour that existed before it. */
+	available: v.optional(v.boolean(), true),
+	/** Why not — rendered beside the disabled option, naming the knob that would enable it. */
+	unavailable_reason: v.nullable(v.optional(v.string()), null),
 });
 export type SourceDescriptor = v.InferOutput<typeof SourceDescriptorSchema>;
 
