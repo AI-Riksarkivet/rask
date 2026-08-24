@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from catalog.core.vending import VendedCredentials
 from catalog.services import models as registry
@@ -800,20 +800,20 @@ class TrashEntry(BaseModel):
 
 
 class TransformSpecRequest(BaseModel):
-    """Declare one lane. The project comes from the gated PATH, never from here.
+    """Declare one transform. The project comes from the gated PATH, never from here.
 
     Omitting ``project`` is the security half, not an ergonomic one: a body-supplied project would
     let an admin of one tenant pass the ``can_administer`` gate on their own project while writing a
-    lane into somebody else's.
+    transform into somebody else's.
 
     Field semantics — including why an entrypoint must reference a script baked into the image — live
     on ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates
     into and the one the mover reads. One definition, two services.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    lane: str
+    name: str = Field(validation_alias=AliasChoices("name", "lane"))
     from_id: str
     to_id: str
     entrypoint: str
@@ -821,12 +821,12 @@ class TransformSpecRequest(BaseModel):
     code_version: str = ""
 
 
-class TransformLaneRequest(BaseModel):
-    """Name one lane — the body of describe/delete."""
+class TransformNameRequest(BaseModel):
+    """Name one transform — the body of describe/delete."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    lane: str
+    name: str = Field(validation_alias=AliasChoices("name", "lane"))
 
 
 class GateSpecRequest(BaseModel):
@@ -857,7 +857,8 @@ class GateSpecResponse(BaseModel):
 
 
 class TransformSpecResponse(BaseModel):
-    lane: str
+    model_config = ConfigDict(populate_by_name=True)
+    name: str = Field(validation_alias=AliasChoices("name", "lane"))
     project: str
     from_id: str
     to_id: str
@@ -867,12 +868,13 @@ class TransformSpecResponse(BaseModel):
 
 
 class TransformDeleteResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     #: ``deleted`` when a record was removed, ``absent`` when there was none. Delete is idempotent, so
     #: both are 200 — the field is what lets a caller tell "I removed it" from "it was already gone"
     #: without inferring it from a status code that is the same either way.
     status: str
     project: str
-    lane: str
+    name: str = Field(validation_alias=AliasChoices("name", "lane"))
 
 
 class ProjectTransformsResponse(BaseModel):

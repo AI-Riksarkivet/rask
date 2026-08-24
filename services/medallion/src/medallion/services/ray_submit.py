@@ -26,7 +26,7 @@ import os
 import httpx
 
 from medallion.core.config import MedallionSettings
-from medallion.services.lane import resolve_lane_async
+from medallion.services.transform_spec import resolve_transform_async
 from ray_kit import submit as rk
 
 
@@ -91,7 +91,7 @@ async def submit_stage_job(
     """
     # A named-but-undeclared lane RAISES rather than falling back: a fallback would run the chart's
     # old program under the declaration's name. Unset lane keeps the chart settings.
-    spec = await resolve_lane_async(settings, project=project)
+    spec = await resolve_transform_async(settings, project=project)
     entrypoint = spec.entrypoint if spec else settings.ray_entrypoint
     job_params = spec.params if spec else settings.ray_job_params
     code_version = spec.code_version if spec else settings.ray_code_version
@@ -162,7 +162,7 @@ async def submit_stage_job(
     # Empty values are OMITTED rather than sent blank: a service-triggered cascade has no person behind
     # it, and `""` is not an identity — a reader must never mistake it for one. Ray's metadata is
     # `Dict[str, str]`, so every value here is already a string.
-    # `rask.lane` joins the identity keys for the reason the block above already gives: a reader
+    # `rask.transform` joins the identity keys for the reason the block above already gives: a reader
     # OUTSIDE the job needs it after the job is gone. The job page shows what a run is DOING, and
     # without the lane it could name the stage but not the declaration — the entrypoint and params
     # the run is actually executing — so a person watching a job had no path back to the record that
@@ -176,7 +176,7 @@ async def submit_stage_job(
             ("rask.project", project),
             ("rask.token", token or ""),
             ("rask.stage", stage),
-            ("rask.lane", spec.lane if spec else ""),
+            ("rask.transform", spec.name if spec else ""),
         )
         if value
     }
@@ -205,7 +205,7 @@ async def submit_stage_job(
         await rk.submit_or_reattach(client, submission_id, body)
     log.info(
         "ray_stage_job_submitted",
-        extra={"submission_id": submission_id, "stage": stage, "lane": spec.lane if spec else "", "declared": spec is not None},
+        extra={"submission_id": submission_id, "stage": stage, "lane": spec.name if spec else "", "declared": spec is not None},
     )
     return submission_id
 

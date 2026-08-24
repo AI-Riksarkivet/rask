@@ -130,7 +130,7 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
     # WHICH LANE was published. Undeclared namespaces are acked and driven nowhere: a table outside
     # the cascade is published all the time, and waking bronze for it fires compute no lane owns.
     source = _source_namespace(str(data.get("object_id") or ""), DELIMITER, project)
-    topic = settings.lane_routes.get(source or "")
+    topic = settings.transform_routes.get(source or "")
     if not topic:
         log.debug("medallion_publication_not_a_lane", extra={"object_id": data.get("object_id"), "source": source})
         return _SUCCESS

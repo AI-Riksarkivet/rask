@@ -42,7 +42,7 @@ class _Dapr:
 
 
 def _settings(**over: Any) -> MedallionSettings:
-    return MedallionSettings(MEDALLION_LANE_ROUTES=dict(ROUTES), **over)
+    return MedallionSettings(transform_routes=dict(ROUTES), **over)
 
 
 def _event(object_id: str, project: str | None = "acme") -> dict[str, Any]:
@@ -145,4 +145,4 @@ class TestTheDeploymentPath:
         about the path a pod actually takes."""
         monkeypatch.setenv("MEDALLION_LANE_ROUTES", json.dumps(ROUTES))
 
-        assert MedallionSettings().lane_routes == ROUTES
+        assert MedallionSettings().transform_routes == ROUTES

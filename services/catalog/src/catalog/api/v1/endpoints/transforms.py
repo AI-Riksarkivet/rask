@@ -35,7 +35,7 @@ from catalog.core.identifiers import CONTROL_ID_RE
 from catalog.schemas import (
     ProjectTransformsResponse,
     TransformDeleteResponse,
-    TransformLaneRequest,
+    TransformNameRequest,
     TransformSpecRequest,
     TransformSpecResponse,
 )
@@ -68,7 +68,7 @@ def _as_request_validation(exc: ValidationError) -> RequestValidationError:
     and must read as one, so the errors are translated rather than the rules duplicated onto the
     request model (where the two copies would drift, and the mover's copy is the one that matters).
 
-    ``loc`` is prefixed with ``body`` so the field renders as ``body.lane``, matching every other
+    ``loc`` is prefixed with ``body`` so the field renders as ``body.name``, matching every other
     422 this service emits.
     """
     return RequestValidationError(
@@ -84,8 +84,8 @@ def _as_request_validation(exc: ValidationError) -> RequestValidationError:
     )
 
 
-def _unknown_lane(project: str, lane: str) -> RequestValidationError:
-    """The 422 an undeclared lane earns — shaped so the handler renders ``body.lane``.
+def _unknown_transform(project: str, name: str) -> RequestValidationError:
+    """The 422 an undeclared transform earns — shaped so the handler renders ``body.name``.
 
     Built rather than raised inline so the message is identical everywhere a lane is resolved: the
     operator sees the same sentence whether they typed the key at this door or a mover resolved it
@@ -95,9 +95,9 @@ def _unknown_lane(project: str, lane: str) -> RequestValidationError:
         [
             {
                 "type": "value_error",
-                "loc": ("body", "lane"),
-                "msg": f"no transform is declared for lane {lane!r} in project {project!r}; declare it first via POST /v1/project/{project}/transform/set",
-                "input": lane,
+                "loc": ("body", "name"),
+                "msg": f"no transform is declared as {name!r} in project {project!r}; declare it first via POST /v1/project/{project}/transform/set",
+                "input": name,
             }
         ]
     )
@@ -131,12 +131,12 @@ async def set_transform(
     except ValidationError as exc:
         raise _as_request_validation(exc) from None
     await run_in_threadpool(transform_specs.put_spec, settings.registry_root, settings.storage_options(), spec)
-    log.info("transform_spec_set", extra={"project": project, "lane": spec.lane, "code_version": spec.code_version})
+    log.info("transform_spec_set", extra={"project": project, "transform": spec.name, "code_version": spec.code_version})
     await emit_control(
         control,
         action="transform_set",
         object_type="transform",
-        object_id=f"{project}/{spec.lane}",
+        object_id=f"{project}/{spec.name}",
         actor=f"user:{token.sub}" if token else None,
         extra={"from_id": spec.from_id, "to_id": spec.to_id, "code_version": spec.code_version},
     )
@@ -146,7 +146,7 @@ async def set_transform(
 @project_router.post("/{id}/transform/describe", response_model_exclude_none=True)
 async def describe_transform(
     id: str,
-    body: TransformLaneRequest,
+    body: TransformNameRequest,
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
@@ -154,16 +154,16 @@ async def describe_transform(
     """One lane's declaration — admin-gated; **422 naming the key** when the lane is undeclared."""
     project = _validated_project(id)
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    spec = await run_in_threadpool(transform_specs.get_spec, settings.registry_root, settings.storage_options(), project, body.lane)
+    spec = await run_in_threadpool(transform_specs.get_spec, settings.registry_root, settings.storage_options(), project, body.name)
     if spec is None:
-        raise _unknown_lane(project, body.lane)
+        raise _unknown_transform(project, body.name)
     return TransformSpecResponse.model_validate(spec.model_dump())
 
 
 @project_router.post("/{id}/transform/delete", response_model_exclude_none=True)
 async def delete_transform(
     id: str,
-    body: TransformLaneRequest,
+    body: TransformNameRequest,
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
@@ -177,17 +177,17 @@ async def delete_transform(
     """
     project = _validated_project(id)
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    existed = await run_in_threadpool(transform_specs.delete_spec, settings.registry_root, settings.storage_options(), project, body.lane)
-    log.info("transform_spec_deleted", extra={"project": project, "lane": body.lane, "existed": existed})
+    existed = await run_in_threadpool(transform_specs.delete_spec, settings.registry_root, settings.storage_options(), project, body.name)
+    log.info("transform_spec_deleted", extra={"project": project, "transform": body.name, "existed": existed})
     await emit_control(
         control,
         action="transform_deleted",
         object_type="transform",
-        object_id=f"{project}/{body.lane}",
+        object_id=f"{project}/{body.name}",
         actor=f"user:{token.sub}" if token else None,
         extra={"existed": existed},
     )
-    return TransformDeleteResponse(status="deleted" if existed else "absent", project=project, lane=body.lane)
+    return TransformDeleteResponse(status="deleted" if existed else "absent", project=project, name=body.name)
 
 
 @projects_router.get("/{id}/transforms", response_model_exclude_none=True)
@@ -205,7 +205,7 @@ async def list_transforms(
     project = _validated_project(id)
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
     specs = await run_in_threadpool(transform_specs.list_specs, settings.registry_root, settings.storage_options(), project)
-    specs.sort(key=lambda s: s.lane)
+    specs.sort(key=lambda s: s.name)
     log.info("transform_specs_listed", extra={"project": project, "transforms": len(specs)})
     return ProjectTransformsResponse(
         project=project,

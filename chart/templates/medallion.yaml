@@ -81,14 +81,14 @@ spec:
             # emitter must register no route rather than subscribe to a topic nothing publishes on.
             - { name: MEDALLION_CONTROL_PUBSUB, value: "{{ required "pubsub.controlName must be set when catalog.controlEmit is on — an empty value silently disables the medallion publication head" .Values.pubsub.controlName }}-{{ .Values.medallion.producer.daprAppId }}" }
             {{- end }}
-            {{- $lanesDeclared := false }}
-            {{- range .Values.medallion.movers }}{{- if .lane }}{{- $lanesDeclared = true }}{{- end }}{{- end }}
-            {{- if or .Values.medallion.projectsEnabled $lanesDeclared }}
+            {{- $transformsDeclared := false }}
+            {{- range .Values.medallion.movers }}{{- if .transform }}{{- $transformsDeclared = true }}{{- end }}{{- end }}
+            {{- if or .Values.medallion.projectsEnabled $transformsDeclared }}
             # #84 per-tenant routing (opt-in): the catalog's warehouse-registry root. A `project`-carrying
             # /produce resolves that project's ACTIVE warehouse and seeds <root>/medallion/bronze there;
             # project-less requests keep the shared URIs below byte-identically.
             #
-            # ALSO required whenever ANY mover declares a `lane`, which is why `$lanesDeclared` widens the
+            # ALSO required whenever ANY mover declares a `lane`, which is why `$transformsDeclared` widens the
             # condition. The cascade HEAD consults declarations to decide whether an unrecognised table is
             # a lane's entry point (`ingest_trigger.py::_has_declared_lane` -> `list_specs`), and that read
             # goes through this root. Gated on `projectsEnabled` alone, the head could not see a single
@@ -161,7 +161,7 @@ spec:
                 {{- $_ := set $routes .fromNamespace .subTopic }}
               {{- end }}
             {{- end }}
-            - { name: MEDALLION_LANE_ROUTES, value: {{ toJson $routes | quote }} }
+            - { name: MEDALLION_TRANSFORM_ROUTES, value: {{ toJson $routes | quote }} }
             {{- if .Values.medallion.cascadeViaPublish }}
             - { name: MEDALLION_CASCADE_VIA_PUBLISH, value: "true" }
             {{- /* The producer needs the catalog for the PROMOTION RESUME, not for a stage of its
@@ -316,7 +316,7 @@ spec:
             - { name: MEDALLION_AUTHOR, value: {{ .author | quote }} }
             - { name: MEDALLION_SUB_TOPIC, value: {{ .subTopic | quote }} }
             - { name: MEDALLION_PUB_TOPIC, value: {{ .pubTopic | quote }} }
-            {{- if .lane }}
+            {{- if .transform }}
             # WHICH DECLARED LANE this mover runs. OPT-IN per row, and deliberately absent by default:
             # `core/config.py` documents that an estate which has declared nothing must behave
             # byte-for-byte as before, and that a named-but-UNDECLARED lane is a REFUSAL rather than a
@@ -328,12 +328,12 @@ spec:
             # with no helm upgrade. The binding of a POD to an EDGE stays deploy-time, which is the same
             # place every orchestrator binds a code location; only the program is runtime-governed.
             #
-            # Until 2026-08-24 this variable was rendered by NO template, so `settings.lane` was always
+            # Until 2026-08-24 this variable was rendered by NO template, so `settings.transform` was always
             # "" in-cluster, every mover took the env branch, and `/compute/lanes` wrote records that
             # nothing read. The door was live and its property was not obtained.
-            - { name: MEDALLION_LANE, value: {{ .lane | quote }} }
+            - { name: MEDALLION_TRANSFORM, value: {{ .transform | quote }} }
             {{- end }}
-            {{- if or $root.Values.medallion.projectsEnabled .lane }}
+            {{- if or $root.Values.medallion.projectsEnabled .transform }}
             # #84 per-tenant routing (opt-in): a `project`-carrying stage trigger resolves this stage's
             # from/to URIs off the warehouse registry (<project-root>/medallion/<namespace>) instead of
             # the env URIs below; project-less triggers keep them byte-identically. Without this env a

@@ -684,7 +684,7 @@ def test_a_DECLARED_lane_overrides_the_charts_entrypoint_and_params(monkeypatch:
         {},
         TransformSpec.model_validate(
             {
-                "lane": "dummy",
+                "name": "dummy",
                 "project": "acme",
                 "from_id": "bronze$events",
                 "to_id": "silver$dummy",
@@ -701,7 +701,7 @@ def test_a_DECLARED_lane_overrides_the_charts_entrypoint_and_params(monkeypatch:
             "compute_enabled": True,
             "ray_enabled": True,
             "to_namespace": "silver",
-            "lane": "dummy",
+            "transform": "dummy",
             "control_root": str(tmp_path),
             # The chart's half, all of which the declaration must beat.
             "ray_entrypoint": "python /home/ray/jobs/ray_stage_job.py",
@@ -726,7 +726,7 @@ def test_a_NAMED_but_UNDECLARED_lane_SUBMITS_NOTHING(monkeypatch: pytest.MonkeyP
     and report success — the mover would look healthy, the lane would look governed, and the wrong
     transform would run. Better to submit nothing and retry once an admin declares it.
     """
-    from medallion.services.lane import UndeclaredLaneError
+    from medallion.services.transform_spec import UndeclaredTransformError
 
     api = _FakeJobsAPI()
     monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
@@ -735,13 +735,13 @@ def test_a_NAMED_but_UNDECLARED_lane_SUBMITS_NOTHING(monkeypatch: pytest.MonkeyP
             "compute_enabled": True,
             "ray_enabled": True,
             "to_namespace": "silver",
-            "lane": "never-declared",
+            "transform": "never-declared",
             "control_root": str(tmp_path),
             "ray_entrypoint": "python /home/ray/jobs/ray_stage_job.py",
         }
     )
 
-    with pytest.raises(UndeclaredLaneError, match="never-declared"):
+    with pytest.raises(UndeclaredTransformError, match="never-declared"):
         asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", project="acme"))
 
     assert api.posts == [], "a job was submitted for a lane nobody declared"

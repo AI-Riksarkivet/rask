@@ -16,7 +16,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Self
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.control_events import CONTROL_TOPIC
@@ -144,7 +144,18 @@ class MedallionSettings(BaseSettings):
     #:
     #: Empty means drive nothing. A deployment that declares no lanes has no cascade to wake, and
     #: guessing bronze is the defect this replaces.
-    lane_routes: dict[str, str] = Field(default_factory=dict, alias="MEDALLION_LANE_ROUTES")
+    #: ACCEPTS THE OLD ENV SPELLING (§8 change 7). A rename that silently stops reading a deployed
+    #: estate's configuration is not a rename, it is an outage: the field would fall back to its
+    #: default and the cascade would drive nothing, with nothing red anywhere — and `extra="ignore"`
+    #: means the old key is DROPPED rather than refused, so there would be nothing to see.
+    #:
+    #: THE FIELD NAME IS LISTED FIRST AND THAT IS NOT DECORATION. `validation_alias` REPLACES the
+    #: accepted keys outright — `populate_by_name` does not apply to it — so without the name here,
+    #: constructing settings by field name silently yields the default. Found by a test, which had
+    #: been passing the name and getting the chart's entrypoint back.
+    transform_routes: dict[str, str] = Field(
+        default_factory=dict, validation_alias=AliasChoices("transform_routes", "MEDALLION_TRANSFORM_ROUTES", "MEDALLION_LANE_ROUTES")
+    )
     #: Move data by PUBLISHING it, instead of by firing the next-stage trigger.
     #:
     #: The two gates ran identical assertions with different consequences: the catalog's withholds the
@@ -155,7 +166,7 @@ class MedallionSettings(BaseSettings):
     #: With this on, the mover registers, publishes, and stops. The tag move emits `table_published`,
     #: the publication head routes it to the next lane, and the cascade has ONE trigger and ONE gate.
     #:
-    #: OPT-IN, because it needs a reachable catalog the mover can authenticate to and `lane_routes`
+    #: OPT-IN, because it needs a reachable catalog the mover can authenticate to and `transform_routes`
     #: declared. An estate missing either would simply stop cascading, and a migration seam is honest
     #: where a silent fallback would not be. It should die once every estate runs on it.
     # Ingest ceilings (audit 2026-07-12): the media ingest refuses (400) rather than OOM when a
@@ -276,9 +287,9 @@ class MedallionSettings(BaseSettings):
     #: nothing behaves byte-for-byte as before rather than quietly running under a new scheme.
     #:
     #: Named-but-UNDECLARED is a REFUSAL, never a fallback to the settings above — see
-    #: ``medallion.services.lane``. A fallback would run the old program under the declaration's name
+    #: ``medallion.services.transform_spec``. A fallback would run the old program under the declaration's name
     #: while an operator believed the record governed it, with nothing anywhere red.
-    lane: str = Field(default="", alias="MEDALLION_LANE")
+    transform: str = Field(default="", validation_alias=AliasChoices("transform", "MEDALLION_TRANSFORM", "MEDALLION_LANE"))
     # Where a mover REGISTERS its output table — the catalog service, and the
     # catalog's own connection root so the location can be expressed RELATIVELY (the dir backend
     # refuses absolute URIs — the #75 lesson). Both empty by default: the lane fails at the

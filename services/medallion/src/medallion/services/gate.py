@@ -2,7 +2,7 @@
 
 The catalog writes a :class:`~service_kit.lakehouse.gate_specs.GateSpec` through an admin-gated
 door; this is where the medallion reads one back. Object-store-backed for the same reason
-``lane.resolve_lane`` is: the gate runs on a path that holds no catalog client, and a mover pod that
+``lane.resolve_transform`` is: the gate runs on a path that holds no catalog client, and a mover pod that
 has never met the catalog must still be able to resolve the record from the control root alone.
 
 **Opt-in, and the default is load-bearing.** No declared record means ``None``, and the chart's

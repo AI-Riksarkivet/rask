@@ -42,8 +42,8 @@ from medallion.services import gate as gate_svc
 from medallion.services.compute import existing_row_count, measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.gate_decision import GateOutcome, gate_decision
-from medallion.services.lane import UndeclaredLaneError, resolve_lane_async
 from medallion.services.promotion import promotion_lineage
+from medallion.services.transform_spec import UndeclaredTransformError, resolve_transform_async
 from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, uri_within
 from service_kit.governed import fga
 from service_kit.lakehouse import outbox
@@ -318,7 +318,7 @@ async def handle_stage(
     # `trigger.project` RAW, not the validated `project` below — that resolution happens after this
     # guard, and moving it earlier would change the fail-closed ordering it exists for. An absent or
     # wrong project simply finds no record, and the guard falls back to env-only: the old behaviour.
-    declared_lane = await resolve_lane_async(settings, project=trigger.project or "") if settings.lane else None
+    declared_lane = await resolve_transform_async(settings, project=trigger.project or "") if settings.transform else None
     accepted = accepted_input_names(env_from_dataset=settings.from_dataset, declared=declared_lane)
     if arrived is not None and arrived not in accepted:
         # OBSERVABLE, at INFO and on a counter. A DROP is an ack: Dapr neither redelivers nor
@@ -358,7 +358,7 @@ async def handle_stage(
     # these four names, so they follow the declaration automatically.
     try:
         identity = resolve_stage_identity(settings, spec=declared_lane, project=project)
-    except (UndeclaredLaneError, ValueError) as exc:
+    except (UndeclaredTransformError, ValueError) as exc:
         # A named-but-undeclared lane, or a declared id with no namespace. Both are DETERMINISTIC —
         # redelivery cannot make a missing record appear — so DROP rather than RETRY, and say which.
         log.warning(

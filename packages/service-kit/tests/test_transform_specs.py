@@ -33,7 +33,7 @@ from service_kit.lakehouse.transform_specs import TransformSpec
 
 def _spec(**overrides: object) -> TransformSpec:
     base: dict[str, object] = {
-        "lane": "dummy",
+        "name": "dummy",
         "project": "acme",
         "from_id": "bronze$events",
         "to_id": "silver$dummy",
@@ -109,15 +109,15 @@ def test_listing_is_scoped_and_skips_an_unreadable_record(tmp_path: Path) -> Non
     """One corrupt record must never void the others — a lane listing that silently emptied would
     read as "this project declares nothing" while its lanes keep running."""
     root = str(tmp_path)
-    transform_specs.put_spec(root, {}, _spec(lane="a"))
-    transform_specs.put_spec(root, {}, _spec(lane="b"))
-    transform_specs.put_spec(root, {}, _spec(project="other", lane="c"))
+    transform_specs.put_spec(root, {}, _spec(name="a"))
+    transform_specs.put_spec(root, {}, _spec(name="b"))
+    transform_specs.put_spec(root, {}, _spec(project="other", name="c"))
     corrupt = tmp_path / transform_specs.SPECS_PREFIX / "acme-corrupt.json"
     corrupt.write_text("{not json", encoding="utf-8")
 
     listed = transform_specs.list_specs(root, {}, "acme")
 
-    assert sorted(s.lane for s in listed) == ["a", "b"]
+    assert sorted(s.name for s in listed) == ["a", "b"]
 
 
 # --- the platform-level invariants a declaration must satisfy --------------------------------------
@@ -144,7 +144,7 @@ def test_an_unsafe_lane_key_is_REFUSED(lane: str) -> None:
     """The lane becomes an object-store key and an FGA-adjacent identifier; a traversing or
     shell-shaped name must never reach either."""
     with pytest.raises(ValidationError):
-        _spec(lane=lane)
+        _spec(name=lane)
 
 
 def test_params_are_strings_because_the_platform_forwards_them_as_env() -> None:
@@ -153,7 +153,7 @@ def test_params_are_strings_because_the_platform_forwards_them_as_env() -> None:
     with pytest.raises(ValidationError):
         TransformSpec.model_validate(
             {
-                "lane": "dummy",
+                "name": "dummy",
                 "project": "acme",
                 "from_id": "bronze$events",
                 "to_id": "silver$dummy",

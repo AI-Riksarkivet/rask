@@ -209,7 +209,7 @@ def test_the_lane_is_DECLARED_through_the_admin_gated_catalog_door(catalog: str)
     response = requests.post(
         f"{catalog}/v1/project/{PROJECT}/transform/set",
         json={
-            "lane": LANE,
+            "name": LANE,
             "from_id": f"{PROJECT}-bronze$events",
             "to_id": f"{PROJECT}-silver${LANE}",
             "entrypoint": BAKED_ENTRYPOINT,
@@ -236,7 +236,7 @@ def test_an_UNDECLARED_lane_is_422_naming_the_key(catalog: str) -> None:
     """
     response = requests.post(
         f"{catalog}/v1/project/{PROJECT}/transform/describe",
-        json={"lane": f"nosuchlane-{uuid.uuid4().hex[:8]}"},
+        json={"name": f"nosuchlane-{uuid.uuid4().hex[:8]}"},
         headers=_headers(),
         timeout=30,
     )
@@ -252,7 +252,7 @@ def test_a_runtime_env_style_entrypoint_CANNOT_be_declared(catalog: str) -> None
     response = requests.post(
         f"{catalog}/v1/project/{PROJECT}/transform/set",
         json={
-            "lane": "would-be-devmode",
+            "name": "would-be-devmode",
             "from_id": f"{PROJECT}-bronze$events",
             "to_id": f"{PROJECT}-silver$devmode",
             "entrypoint": "python ./my_local_transform.py",

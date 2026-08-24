@@ -44,7 +44,7 @@ from service_kit.lakehouse.transform_specs import TransformSpec
 def _spec(from_id: str) -> TransformSpec:
     return TransformSpec.model_validate(
         {
-            "lane": "agnostic",
+            "name": "agnostic",
             "project": "acme",
             "from_id": from_id,
             "to_id": "acme-silver$agnostic",

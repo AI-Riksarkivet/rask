@@ -30,7 +30,7 @@ class _Dapr:
 
 def _settings() -> MedallionSettings:
     # The head drives only DECLARED lanes now; without a route it publishes nothing at all.
-    return MedallionSettings(MEDALLION_LANE_ROUTES={"bronze": "medallion.bronze"})
+    return MedallionSettings(transform_routes={"bronze": "medallion.bronze"})
 
 
 def _event(object_id: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:

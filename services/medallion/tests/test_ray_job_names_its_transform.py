@@ -58,7 +58,7 @@ async def test_declared_lane_is_stamped_on_the_job(captured: dict[str, Any], mon
 
     spec = TransformSpec.model_validate(
         {
-            "lane": "browserlane",
+            "name": "browserlane",
             "project": "acme",
             "from_id": "acme-bronze$events",
             "to_id": "acme-silver$browserlane",
@@ -71,7 +71,7 @@ async def test_declared_lane_is_stamped_on_the_job(captured: dict[str, Any], mon
     async def _resolve(_settings: Any, *, project: str = "") -> TransformSpec:
         return spec
 
-    monkeypatch.setattr(ray_submit, "resolve_lane_async", _resolve)
+    monkeypatch.setattr(ray_submit, "resolve_transform_async", _resolve)
 
     await ray_submit.submit_stage_job(
         _settings(lane="browserlane"),
@@ -82,7 +82,7 @@ async def test_declared_lane_is_stamped_on_the_job(captured: dict[str, Any], mon
         project="acme",
     )
 
-    assert captured["body"]["metadata"]["rask.lane"] == "browserlane"
+    assert captured["body"]["metadata"]["rask.transform"] == "browserlane"
 
 
 @pytest.mark.asyncio
@@ -96,7 +96,7 @@ async def test_an_undeclared_run_omits_the_key_rather_than_sending_a_blank(captu
     async def _resolve(_settings: Any, *, project: str = "") -> None:
         return None
 
-    monkeypatch.setattr(ray_submit, "resolve_lane_async", _resolve)
+    monkeypatch.setattr(ray_submit, "resolve_transform_async", _resolve)
 
     await ray_submit.submit_stage_job(
         _settings(),
@@ -107,4 +107,4 @@ async def test_an_undeclared_run_omits_the_key_rather_than_sending_a_blank(captu
         project="acme",
     )
 
-    assert "rask.lane" not in captured["body"]["metadata"]
+    assert "rask.transform" not in captured["body"]["metadata"]

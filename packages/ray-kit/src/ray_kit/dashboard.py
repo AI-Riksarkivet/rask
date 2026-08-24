@@ -209,7 +209,7 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
 #: What survives is the run's IDENTITY — who it was for, which tenant, which stage, which
 #: declaration. Not the work token, which names nothing a reader needs and is the one value the
 #: original strip existed to contain.
-_IDENTITY_KEYS = frozenset({"rask.lane", "rask.stage", "rask.project", "rask.originator"})
+_IDENTITY_KEYS = frozenset({"rask.transform", "rask.stage", "rask.project", "rask.originator"})
 
 
 async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str, *, max_jobs: int = MAX_JOBS) -> RayJobsPayload:

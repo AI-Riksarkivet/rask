@@ -82,12 +82,12 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 			label: 'Workloads',
 			items: [
 				{ title: 'Batch jobs', href: '/compute/jobs', match: seg('/compute/jobs'), icon: ListTree },
-				// A lane declares WHAT a job runs — its Ray entrypoint and params. It sits beside Jobs
+				// A transform declares WHAT a job runs — its Ray entrypoint and params. It sits beside Jobs
 				// because that is where a person watching a run goes to change what the run does; a
 				// declaration in one zone and its execution in another was the split that made this
 				// unusable. The RECORD still lives in the catalog, admin-gated and audited — only the
 				// caller moved (overturns 21b17f1a's "compute observes Ray, it does not drive it").
-				{ title: 'Lanes', href: '/compute/lanes', match: seg('/compute/lanes'), icon: Route },
+				{ title: 'Transforms', href: '/compute/transforms', match: seg('/compute/transforms'), icon: Route },
 				{ title: 'Serve', href: '/compute/serve', match: seg('/compute/serve'), icon: ServerCog },
 				// NO 'Inference' ROW. #131 moved an inference PLAYGROUND here from /models/playground on
 				// the reasoning that running a deployment is a compute verb — which was right about the

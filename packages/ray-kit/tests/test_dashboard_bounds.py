@@ -196,7 +196,7 @@ async def test_metadata_projection_keeps_identity_and_discards_the_rest() -> Non
     """
     bulky = {
         "metadata": {
-            "rask.lane": "dummy",
+            "rask.transform": "dummy",
             "rask.stage": "silver",
             **{f"workload{i}": "x" * 100 for i in range(50)},
         },
@@ -205,7 +205,7 @@ async def test_metadata_projection_keeps_identity_and_discards_the_rest() -> Non
 
     payload = await dashboard.list_jobs(_client(jobs), _DASH)
 
-    assert payload.jobs[0].metadata == {"rask.lane": "dummy", "rask.stage": "silver"}
+    assert payload.jobs[0].metadata == {"rask.transform": "dummy", "rask.stage": "silver"}
 
 
 @pytest.mark.asyncio
@@ -216,10 +216,10 @@ async def test_the_work_token_never_survives_the_projection() -> None:
     the allowlist is explicit rather than a `rask.` prefix — a prefix keeps the token, which is the
     one value the original strip was written to contain.
     """
-    bulky = {"metadata": {"rask.lane": "dummy", "rask.token": "s3cret-work-token", "rask.project": "acme"}}
+    bulky = {"metadata": {"rask.transform": "dummy", "rask.token": "s3cret-work-token", "rask.project": "acme"}}
     jobs = [_FakeJobDetails("job-1", start_time=1, bulky=bulky)]
 
     payload = await dashboard.list_jobs(_client(jobs), _DASH)
 
     assert "rask.token" not in payload.jobs[0].metadata
-    assert payload.jobs[0].metadata == {"rask.lane": "dummy", "rask.project": "acme"}
+    assert payload.jobs[0].metadata == {"rask.transform": "dummy", "rask.project": "acme"}

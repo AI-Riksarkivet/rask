@@ -5,12 +5,12 @@
 	import { GatedAction } from '@rask/ui/gated-action';
 	import { Input } from '@rask/ui/input';
 	import { Textarea } from '@rask/ui/textarea';
-	import { formatParams, parseParams, type LaneSpec } from '$lib/lanes';
+	import { formatParams, parseParams, type TransformSpec } from '$lib/transforms';
 	import { parseColumns } from '$lib/gates';
 	import { clearGate, getGate, setGate } from '$lib/remote/gates.remote';
-	import { deleteLane, listLanes, setLane } from '$lib/remote/lanes.remote';
+	import { deleteTransform, listTransforms, setLane } from '$lib/remote/transforms.remote';
 
-	const lanes = $derived(listLanes());
+	const transforms = $derived(listTransforms());
 	const gate = $derived(getGate());
 	// The record or null; null means the DEPLOYMENT governs, which is a different statement from a
 	// band of zero and is rendered as such.
@@ -80,9 +80,9 @@
 		);
 	}
 
-	// The draft is local state, not derived from the query: editing an existing lane pre-fills this
+	// The draft is local state, not derived from the query: editing an existing transform pre-fills this
 	// form, and a refresh landing mid-edit must not overwrite what a person is typing.
-	let lane = $state('');
+	let transform = $state('');
 	let fromId = $state('');
 	let toId = $state('');
 	let entrypoint = $state('');
@@ -97,12 +97,12 @@
 
 	const parsedParams = $derived(parseParams(paramsText));
 	const complete = $derived(
-		lane.trim() !== '' && fromId.trim() !== '' && toId.trim() !== '' && entrypoint.trim() !== '',
+		transform.trim() !== '' && fromId.trim() !== '' && toId.trim() !== '' && entrypoint.trim() !== '',
 	);
 	const submittable = $derived(complete && parsedParams.bad.length === 0 && !busy);
 
-	function edit(spec: LaneSpec) {
-		lane = spec.lane;
+	function edit(spec: TransformSpec) {
+		transform = spec.name;
 		fromId = spec.from_id;
 		toId = spec.to_id;
 		entrypoint = spec.entrypoint;
@@ -112,7 +112,7 @@
 	}
 
 	function reset() {
-		lane = fromId = toId = entrypoint = codeVersion = paramsText = '';
+		transform = fromId = toId = entrypoint = codeVersion = paramsText = '';
 		outcome = null;
 	}
 
@@ -128,11 +128,11 @@
 			tone: 'fail',
 			text:
 				result.status === 403
-					? 'Refused: declaring a lane needs `can_administer` on this project. A lane names an entrypoint that will EXECUTE on the shared Ray cluster against this tenant’s data, so it is an administrative act.'
+					? 'Refused: declaring a transform needs `can_administer` on this project. A transform names an entrypoint that will EXECUTE on the shared Ray cluster against this tenant’s data, so it is an administrative act.'
 					: result.status === 400
 						? (result.detail ?? 'No active project.')
 						: result.status === 422
-							? `That lane name does not resolve. ${result.detail ?? ''}`.trim()
+							? `That transform name does not resolve. ${result.detail ?? ''}`.trim()
 							: `Could not save (${result.status}). ${result.detail ?? ''}`.trim(),
 		};
 	}
@@ -142,7 +142,7 @@
 		busy = true;
 		outcome = null;
 		const result = await setLane({
-			lane: lane.trim(),
+			name: transform.trim(),
 			from_id: fromId.trim(),
 			to_id: toId.trim(),
 			entrypoint: entrypoint.trim(),
@@ -152,7 +152,7 @@
 		busy = false;
 		report(
 			result,
-			`Declared “${lane.trim()}” — a mover set to MEDALLION_LANE=${lane.trim()} now resolves this record instead of its Deployment env.`,
+			`Declared “${transform.trim()}” — a mover set to MEDALLION_LANE=${transform.trim()} now resolves this record instead of its Deployment env.`,
 		);
 	}
 
@@ -160,7 +160,7 @@
 		if (busy) return;
 		busy = true;
 		outcome = null;
-		const result = await deleteLane({ lane: name });
+		const result = await deleteTransform({ name });
 		busy = false;
 		report(
 			result,
@@ -169,37 +169,37 @@
 	}
 </script>
 
-<svelte:head><title>Transform lanes · lance</title></svelte:head>
+<svelte:head><title>Transform transforms · lance</title></svelte:head>
 
 <div class="flex flex-col gap-4 p-4">
 	<div>
-		<h1 class="text-lg font-semibold">Transform lanes</h1>
+		<h1 class="text-lg font-semibold">Transform transforms</h1>
 		<p class="text-muted-foreground text-sm">
-			A lane is one governed medallion edge — read a table, run an entrypoint, write another. This
-			is the door that declares what a lane runs, so it changes here, audited and admin-gated,
-			rather than by editing a Deployment. Ray is one of two ways to execute a lane, not what a lane
+			A transform is one governed medallion edge — read a table, run an entrypoint, write another. This
+			is the door that declares what a transform runs, so it changes here, audited and admin-gated,
+			rather than by editing a Deployment. Ray is one of two ways to execute a transform, not what a transform
 			is.
 		</p>
 	</div>
 
-	{#if lanes.error}
+	{#if transforms.error}
 		<Card class="p-4">
 			<p class="text-destructive text-sm">The catalog could not be reached.</p>
 		</Card>
-	{:else if lanes.loading}
-		<p class="text-muted-foreground text-sm">Loading lanes…</p>
-	{:else if lanes.current && !lanes.current.ok}
+	{:else if transforms.loading}
+		<p class="text-muted-foreground text-sm">Loading transforms…</p>
+	{:else if transforms.current && !transforms.current.ok}
 		<Card class="p-4">
 			<p class="text-destructive text-sm">
-				{lanes.current.status === 403
-					? 'You do not hold `can_administer` on this project, so its lanes cannot be listed. This is a denial, not an empty estate.'
-					: lanes.current.status === 404
-						? 'The catalog answered 404 for the lane door. That is the DOOR being absent, not this project: a catalog build predating the transform endpoints serves no /transform routes at all. Check the deployed catalog image before reading this as "no lanes".'
-						: (lanes.current.detail ?? `Could not list lanes (${lanes.current.status}).`)}
+				{transforms.current.status === 403
+					? 'You do not hold `can_administer` on this project, so its transforms cannot be listed. This is a denial, not an empty estate.'
+					: transforms.current.status === 404
+						? 'The catalog answered 404 for the transform door. That is the DOOR being absent, not this project: a catalog build predating the transform endpoints serves no /transform routes at all. Check the deployed catalog image before reading this as "no transforms".'
+						: (transforms.current.detail ?? `Could not list transforms (${transforms.current.status}).`)}
 			</p>
 		</Card>
-	{:else if lanes.current}
-		{@const rows = lanes.current.data.transforms}
+	{:else if transforms.current}
+		{@const rows = transforms.current.data.transforms}
 		<Card class="flex flex-col gap-3 p-4">
 			<div class="flex items-center gap-2">
 				<h2 class="font-medium">Declared</h2>
@@ -208,15 +208,15 @@
 
 			{#if rows.length === 0}
 				<p class="text-muted-foreground text-sm">
-					No lane is declared. Every mover is still running whatever its Deployment env names —
+					No transform is declared. Every mover is still running whatever its Deployment env names —
 					which nothing here can enumerate, review or gate.
 				</p>
 			{:else}
 				<div class="flex flex-col divide-y">
-					{#each rows as spec (spec.lane)}
+					{#each rows as spec (spec.name)}
 						<div class="flex flex-col gap-1 py-3 first:pt-0 last:pb-0">
 							<div class="flex flex-wrap items-center gap-2">
-								<span class="font-mono text-sm font-medium">{spec.lane}</span>
+								<span class="font-mono text-sm font-medium">{spec.name}</span>
 								<span class="text-muted-foreground font-mono text-xs">
 									{spec.from_id} → {spec.to_id}
 								</span>
@@ -236,11 +236,11 @@
 								<Button
 									variant="outline"
 									size="sm"
-									href={`/compute/jobs?lane=${encodeURIComponent(spec.lane)}`}>Runs</Button
+									href={`/compute/jobs?transform=${encodeURIComponent(spec.name)}`}>Runs</Button
 								>
 								<Button variant="outline" size="sm" onclick={() => edit(spec)}>Edit</Button>
 								<GatedAction allowed={!busy} action="Delete" reason="A write is already in flight.">
-									<Button variant="destructive" size="sm" onclick={() => remove(spec.lane)}>
+									<Button variant="destructive" size="sm" onclick={() => remove(spec.name)}>
 										Delete
 									</Button>
 								</GatedAction>
@@ -252,8 +252,8 @@
 		</Card>
 	{/if}
 
-	<!-- THE GATE, beside the lanes: both are project-level, so one config surface rather than a
-	     second nav leaf. A lane says WHAT runs; the gate says whether its output may publish. -->
+	<!-- THE GATE, beside the transforms: both are project-level, so one config surface rather than a
+	     second nav leaf. A transform says WHAT runs; the gate says whether its output may publish. -->
 	<Card class="flex flex-col gap-3 p-4">
 		<div class="flex items-center gap-2">
 			<h2 class="font-medium">Quality gate</h2>
@@ -340,7 +340,7 @@
 	</Card>
 
 	<Card class="flex flex-col gap-3 p-4">
-		<h2 class="font-medium">Declare a lane</h2>
+		<h2 class="font-medium">Declare a transform</h2>
 		<p class="text-muted-foreground text-sm">
 			Saving an existing name REPLACES that record — the door is an upsert, so this form is both
 			create and edit.
@@ -348,8 +348,8 @@
 
 		<div class="grid gap-3 sm:grid-cols-2">
 			<label class="flex flex-col gap-1 text-sm">
-				<span>Lane</span>
-				<Input bind:value={lane} placeholder="bronze-to-silver" />
+				<span>Transform</span>
+				<Input bind:value={transform} placeholder="bronze-to-silver" />
 			</label>
 			<label class="flex flex-col gap-1 text-sm">
 				<span>Code version <span class="text-muted-foreground">(optional)</span></span>
@@ -379,7 +379,7 @@
 			<Textarea bind:value={paramsText} rows={4} placeholder={paramsPlaceholder} />
 			<span class="text-muted-foreground text-xs">
 				Forwarded into the job as RASK_PARAM_*. The platform never reads them. NEVER put a
-				credential here — this record is readable by anyone who can read the lane; a workload
+				credential here — this record is readable by anyone who can read the transform; a workload
 				resolves secrets from the Dapr secret store.
 			</span>
 		</label>
@@ -393,14 +393,14 @@
 		<div class="flex gap-2">
 			<GatedAction
 				allowed={submittable}
-				action="Save lane"
+				action="Save transform"
 				reason={busy
 					? 'A write is already in flight.'
 					: parsedParams.bad.length > 0
 						? 'Every parameter line must read KEY=value.'
-						: 'Lane, both tables and an entrypoint are required.'}
+						: 'Transform, both tables and an entrypoint are required.'}
 			>
-				<Button onclick={save}>{busy ? 'Saving…' : 'Save lane'}</Button>
+				<Button onclick={save}>{busy ? 'Saving…' : 'Save transform'}</Button>
 			</GatedAction>
 			<Button variant="outline" onclick={reset}>Clear</Button>
 		</div>

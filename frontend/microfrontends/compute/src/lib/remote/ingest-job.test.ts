@@ -26,7 +26,7 @@ describe('isIngestJob', () => {
 		expect(isIngestJob(INGEST_JOB)).toBe(true);
 	});
 
-	it('does NOT match a different lane that merely ends in similar text', () => {
+	it('does NOT match a different job name that merely ends in similar text', () => {
 		// The `/` in the suffix check is what makes this false. Without it the board would quietly
 		// adopt another plane's runs — the mirrored failure, and a harder one to notice than an empty
 		// board because it looks like data.

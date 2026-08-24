@@ -41,7 +41,7 @@ def _settings(**over: object) -> Any:
 
 def _spec(**over: object) -> TransformSpec:
     body: dict[str, Any] = {
-        "lane": "dummy",
+        "name": "dummy",
         "project": "acme",
         "from_id": "acme-bronze$events",
         "to_id": "acme-silver$dummy",

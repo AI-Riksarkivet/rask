@@ -45,7 +45,7 @@ def _declare(tmp_path: Path, lane: str, from_id: str) -> None:
         {},
         TransformSpec.model_validate(
             {
-                "lane": lane,
+                "name": lane,
                 "project": "acme",
                 "from_id": from_id,
                 "to_id": "acme-silver$out",

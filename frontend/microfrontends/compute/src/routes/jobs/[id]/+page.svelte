@@ -60,7 +60,7 @@
 	// Ray omits `metadata` entirely for a job submitted without any, so every read is optional —
 	// `@rask/api`'s ray schema made that field REQUIRED once and a single metadata-less job blanked
 	// the whole board.
-	const laneName = $derived(job?.metadata?.['rask.lane'] ?? '');
+	const transformName = $derived(job?.metadata?.['rask.transform'] ?? '');
 	const stageName = $derived(job?.metadata?.['rask.stage'] ?? '');
 	// Param query — created once the job payload names its Ray job_id; server-filtered (#140).
 	const tasksQuery = $derived(job?.job_id ? getJobTasks({ jobId: job.job_id }) : null);
@@ -244,7 +244,7 @@
 					</span>
 				</div>
 
-				<!-- WHICH DECLARATION produced this run. `rask.lane` is stamped by the medallion's submit
+				<!-- WHICH DECLARATION produced this run. `rask.transform` is stamped by the medallion's submit
 				     path into Ray's own `metadata`, which is readable from OUTSIDE the job and AFTER it
 				     fails — the read this page makes. Before it existed the page could name the stage but
 				     not the entrypoint and params the run was actually executing, so a person watching a
@@ -252,14 +252,14 @@
 
 				     ABSENT is a real state, not a gap to paper over: a mover with no MEDALLION_LANE runs
 				     the chart's settings and there IS no record to link to. The row is omitted rather than
-				     rendering a lane named nothing. -->
-				{#if laneName}
+				     rendering a transform named nothing. -->
+				{#if transformName}
 					<div class="flex flex-wrap items-center gap-2 px-4 pb-3 text-xs">
-						<span class="text-muted-foreground">lane</span>
+						<span class="text-muted-foreground">transform</span>
 						<a
-							href="/compute/lanes"
+							href="/compute/transforms"
 							class="text-foreground hover:underline font-mono font-medium"
-							data-slot="job-lane">{laneName}</a
+							data-slot="job-transform">{transformName}</a
 						>
 						{#if stageName}
 							<span class="text-muted-foreground">· stage {stageName}</span>

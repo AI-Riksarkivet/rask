@@ -3,20 +3,20 @@ import * as v from 'valibot';
 import { ACTIVE_PROJECT_COOKIE } from '@rask/api/bff';
 import type { ApiResult } from '@rask/api/client';
 import {
-	LaneDraftSchema,
-	LaneListSchema,
-	LaneSpecSchema,
-	type LaneList,
-	type LaneSpec,
-} from '$lib/lanes';
+	TransformDraftSchema,
+	TransformListSchema,
+	TransformSpecSchema,
+	type TransformList,
+	type TransformSpec,
+} from '$lib/transforms';
 import { catalogJSON, parsed } from '$lib/server/doors';
 
-// Transport: the zone's CATALOG door. A lane declaration is a governed catalog record — stored
+// Transport: the zone's CATALOG door. A transform declaration is a governed catalog record — stored
 // beside table policies and grants, gated on `project:<id>#can_administer`, and landed on the #41
 // audit trail — so it rides the same seam every other catalog read/write in this zone does.
 //
 // WHY REMOTE FUNCTIONS AND NOT `+server.ts`. The estate's transport ruling is one transport per
-// payload KIND: typed values ride remote functions, bytes ride `+server.ts`. A lane is six short
+// payload KIND: typed values ride remote functions, bytes ride `+server.ts`. A transform is six short
 // fields in and a small JSON record out — a value on both sides.
 //
 // WHY THE BEARER IS LOAD-BEARING. Every one of these four doors checks `can_administer` EXPLICITLY
@@ -32,7 +32,7 @@ const enc = encodeURIComponent;
 // the obvious mistake and it FAILS ASYMMETRICALLY — the list answers 200 and only the writes 404,
 // so the page looks wired until someone tries to save. Verified live 2026-08-23.
 
-/** The active project, or `''`. Every zone visit happens INSIDE a project (#103) and the lane doors
+/** The active project, or `''`. Every zone visit happens INSIDE a project (#103) and the transform doors
  *  take it from the gated PATH, so a missing cookie is a REFUSAL rather than an estate-wide read. */
 function activeProject(): string {
 	return getRequestEvent().cookies.get(ACTIVE_PROJECT_COOKIE) ?? '';
@@ -44,60 +44,60 @@ function noProject<T>(): ApiResult<T> {
 	return {
 		ok: false,
 		status: 400,
-		detail: 'No active project — pick one before declaring a lane.',
+		detail: 'No active project — pick one before declaring a transform.',
 	};
 }
 
-/** Every lane declared in the active project. Admin-gated: a non-admin gets 403, which the page
+/** Every transform declared in the active project. Admin-gated: a non-admin gets 403, which the page
  *  renders as a denial with its reason rather than as an empty list (#143 — show disabled, never
- *  hide; an empty table would read as "no lanes exist", which is a different and false statement). */
-export const listLanes = query(async (): Promise<ApiResult<LaneList>> => {
+ *  hide; an empty table would read as "no transforms exist", which is a different and false statement). */
+export const listTransforms = query(async (): Promise<ApiResult<TransformList>> => {
 	const project = activeProject();
-	if (project === '') return noProject<LaneList>();
-	return parsed(await catalogJSON(`/v1/projects/${enc(project)}/transforms`), LaneListSchema);
+	if (project === '') return noProject<TransformList>();
+	return parsed(await catalogJSON(`/v1/projects/${enc(project)}/transforms`), TransformListSchema);
 });
 
-/** Declare or replace one lane.
+/** Declare or replace one transform.
  *
  * `set` is an UPSERT at the door, so this is both create and edit — the catalog keys on
- * (project, lane) and a second set under the same name replaces the record rather than 409ing.
+ * (project, transform) and a second set under the same name replaces the record rather than 409ing.
  * Single-flights its own list read so the table re-renders from the server's answer rather than
  * from an assumption about what the write did — `void`, never `await`, so the refresh cannot gate
  * the mutation's own return. */
-export const setLane = command(LaneDraftSchema, async (draft): Promise<ApiResult<LaneSpec>> => {
+export const setLane = command(TransformDraftSchema, async (draft): Promise<ApiResult<TransformSpec>> => {
 	const project = activeProject();
-	if (project === '') return noProject<LaneSpec>();
+	if (project === '') return noProject<TransformSpec>();
 	const result = parsed(
 		await catalogJSON(`/v1/project/${enc(project)}/transform/set`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify(draft),
 		}),
-		LaneSpecSchema,
+		TransformSpecSchema,
 	);
-	void listLanes().refresh();
+	void listTransforms().refresh();
 	return result;
 });
 
-/** Delete one lane by name.
+/** Delete one transform by name.
  *
- * An unknown lane is 422 NAMING THE KEY, not 404 — the URL is right and the key inside it is not,
+ * An unknown transform is 422 NAMING THE KEY, not 404 — the URL is right and the key inside it is not,
  * which is malformed in exactly the way a bad enum value is. The page surfaces that distinction
  * rather than flattening both to "gone". */
-export const deleteLane = command(
-	v.object({ lane: v.pipe(v.string(), v.trim(), v.minLength(1)) }),
-	async ({ lane }): Promise<ApiResult<LaneSpec>> => {
+export const deleteTransform = command(
+	v.object({ name: v.pipe(v.string(), v.trim(), v.minLength(1)) }),
+	async ({ name }): Promise<ApiResult<TransformSpec>> => {
 		const project = activeProject();
-		if (project === '') return noProject<LaneSpec>();
+		if (project === '') return noProject<TransformSpec>();
 		const result = parsed(
 			await catalogJSON(`/v1/project/${enc(project)}/transform/delete`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ lane }),
+				body: JSON.stringify({ name }),
 			}),
-			LaneSpecSchema,
+			TransformSpecSchema,
 		);
-		void listLanes().refresh();
+		void listTransforms().refresh();
 		return result;
 	},
 );

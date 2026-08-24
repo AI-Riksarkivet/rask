@@ -34,7 +34,7 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 _SUB = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
 
 VALID: dict[str, Any] = {
-    "lane": "dummy",
+    "name": "dummy",
     "from_id": "bronze$events",
     "to_id": "silver$dummy",
     "entrypoint": "python /home/ray/jobs/ray_dummy_job.py",
@@ -92,7 +92,7 @@ def test_declaring_a_lane_persists_it_and_answers_with_the_stored_record(client:
     response = client.post("/v1/project/acme/transform/set", json=VALID)
 
     assert response.status_code == 200, response.text
-    assert response.json()["lane"] == "dummy"
+    assert response.json()["name"] == "dummy"
     assert response.json()["project"] == "acme", "the project must come from the gated path, not the body"
 
     # Read back through the registry directly — no request, no app, no shared memory. This is the
@@ -121,7 +121,7 @@ def test_declaring_is_idempotent(client: TestClient, control_root: str) -> None:
 # --- the 422 that names the key -------------------------------------------------------------------
 
 
-def test_an_unknown_lane_is_422_NAMING_the_key(client: TestClient) -> None:
+def test_an_unknown_transform_is_422_NAMING_the_key(client: TestClient) -> None:
     """The headline property of condition 1.
 
     Not 404: the URL is right and the key inside it is not, which is the same class of fault as a bad
@@ -130,13 +130,13 @@ def test_an_unknown_lane_is_422_NAMING_the_key(client: TestClient) -> None:
     """
     client.post("/v1/project/acme/transform/set", json=VALID)
 
-    response = client.post("/v1/project/acme/transform/describe", json={"lane": "nosuchlane"})
+    response = client.post("/v1/project/acme/transform/describe", json={"name": "nosuchlane"})
 
     assert response.status_code == 422, response.text
     body = response.json()
     assert body["status"] == 422
     fields = [e["field"] for e in body["errors"]]
-    assert "body.lane" in fields, f"the 422 must name the lane field; got {fields}"
+    assert "body.name" in fields, f"the 422 must name the transform field; got {fields}"
     assert "nosuchlane" in body["errors"][0]["message"], "the message must name the undeclared key"
 
 
@@ -149,7 +149,7 @@ def test_an_undeclarable_entrypoint_is_422_at_the_DOOR(client: TestClient) -> No
 
 
 def test_an_unsafe_lane_key_is_422(client: TestClient) -> None:
-    response = client.post("/v1/project/acme/transform/set", json={**VALID, "lane": "../escape"})
+    response = client.post("/v1/project/acme/transform/set", json={**VALID, "name": "../escape"})
 
     assert response.status_code == 422, response.text
 
@@ -202,8 +202,8 @@ def test_the_gate_runs_on_the_PATH_project(client: TestClient, monkeypatch: pyte
 def test_delete_is_idempotent_and_distinguishes_removed_from_absent(client: TestClient) -> None:
     client.post("/v1/project/acme/transform/set", json=VALID)
 
-    first = client.post("/v1/project/acme/transform/delete", json={"lane": "dummy"})
-    second = client.post("/v1/project/acme/transform/delete", json={"lane": "dummy"})
+    first = client.post("/v1/project/acme/transform/delete", json={"name": "dummy"})
+    second = client.post("/v1/project/acme/transform/delete", json={"name": "dummy"})
 
     assert (first.status_code, first.json()["status"]) == (200, "deleted")
     assert (second.status_code, second.json()["status"]) == (200, "absent")
@@ -211,14 +211,33 @@ def test_delete_is_idempotent_and_distinguishes_removed_from_absent(client: Test
 
 def test_listing_is_scoped_to_the_project(client: TestClient, control_root: str) -> None:
     client.post("/v1/project/acme/transform/set", json=VALID)
-    client.post("/v1/project/acme/transform/set", json={**VALID, "lane": "second"})
+    client.post("/v1/project/acme/transform/set", json={**VALID, "name": "second"})
     transform_specs.put_spec(
         control_root,
         {},
-        transform_specs.TransformSpec.model_validate({**VALID, "project": "globex", "lane": "theirs"}),
+        transform_specs.TransformSpec.model_validate({**VALID, "project": "globex", "name": "theirs"}),
     )
 
     listed = client.get("/v1/projects/acme/transforms").json()
 
     assert listed["project"] == "acme"
-    assert [t["lane"] for t in listed["transforms"]] == ["dummy", "second"]
+    assert [t["name"] for t in listed["transforms"]] == ["dummy", "second"]
+
+
+def test_the_OLD_wire_spelling_is_still_accepted(client: TestClient) -> None:
+    """§8 change 7 renamed `lane` to `name` on this door. A caller still sending `lane` must work.
+
+    The frontend ships in the same release and was updated with it, but this door is public and an
+    external caller was not. `populate_by_name` plus `AliasChoices("name", "lane")` is what makes the
+    rename a rename rather than a breaking change — and the models are `extra="forbid"`, so without
+    the alias the old body would be REFUSED rather than ignored.
+
+    Asserted through the HTTP door, not on the model, because the model is not what an external
+    caller talks to.
+    """
+    declared = client.post(
+        "/v1/project/acme/transform/set",
+        json={"lane": "legacy", "from_id": "bronze$events", "to_id": "silver$legacy", "entrypoint": "/home/ray/jobs/ray_stage_job.py"},
+    )
+    assert declared.status_code == 200, declared.text
+    assert declared.json()["name"] == "legacy", "the old spelling was accepted but answered under a different name"

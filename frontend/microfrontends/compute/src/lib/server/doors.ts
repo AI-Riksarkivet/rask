@@ -34,7 +34,7 @@ export function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult
 
 /** Parse a successful wire payload; a shape drift is a 502-flavoured failure, never a cast.
  *
- * Added with the lane surface (the 21b17f1a overturn): execution config now lives in this zone, so
+ * Added with the transform surface (the 21b17f1a overturn): execution config now lives in this zone, so
  * this zone parses the catalog's answer rather than trusting it. */
 export function parsed<T>(
 	result: ApiResult<unknown>,

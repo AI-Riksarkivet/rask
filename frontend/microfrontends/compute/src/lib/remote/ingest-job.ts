@@ -6,7 +6,7 @@
  */
 
 /** The lineage job name every ingest run shares (`ingest.lineage.JOB_NAME`). Correlation is by run id;
- *  the NAME is what groups the lane, and it is the only server-side handle for "runs of this plane" —
+ *  the NAME is what groups the ingest plane's runs, and it is the only server-side handle for "runs of this plane" —
  *  the lineage board is estate-wide and carries catalog drops, movers and training runs. */
 export const INGEST_JOB = 'ingest.run';
 

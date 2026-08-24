@@ -30,7 +30,7 @@ def _Settings() -> MedallionSettings:  # noqa: N802 — kept call-compatible wit
     CATALOG identifier was the lane name. A stub that cannot express the thing under test will always
     agree with whatever the code does.
     """
-    return MedallionSettings(MEDALLION_LANE_ROUTES=dict(ROUTES))
+    return MedallionSettings(transform_routes=dict(ROUTES))
 
 
 class _Dapr:
