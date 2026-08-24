@@ -768,6 +768,22 @@ async def handle_stage(
                 previous_row_count=previous_rows,
                 band=gate.review_band,
             )
+            # WHICH RECORD WON, said out loud (§8 change 6). The catalog's policy ruling requires it:
+            # "Any surface showing an effective policy must say which record won; an inherited value
+            # rendered identically to a set one is how nobody can tell what is governing their data."
+            # A declared band of 0.25 and the chart's default of 0.25 were indistinguishable here, so
+            # a lane author who declared a gate had no way to confirm it was the one being applied.
+            log.info(
+                "medallion_gate_resolved",
+                extra={
+                    "transition": transition,
+                    "project": project,
+                    "gate_source": gate.gate_source,
+                    "review_band": gate.review_band,
+                    "review_enabled": gate.review_enabled,
+                    "breached": bool(band_reasons),
+                },
+            )
         # ASK THE CATALOG'S GATE BEFORE DECIDING — but ONLY when the band would hold. The publish IS
         # the promotion on this path, so a review that runs after it has nothing left to withhold, and
         # one that runs before it cannot name what it is reviewing unless it can ask. `gate_only`

@@ -64,6 +64,16 @@ class GateSpec(BaseModel):
     #: the pre-review behaviour and still a legitimate choice for a tenant with nobody to ask.
     review_enabled: bool = False
 
+    @property
+    def gate_source(self) -> str:
+        """Always ``"declared"`` — this record IS the declaration.
+
+        A property, not a field, deliberately: the model is `extra="forbid"` and this must never
+        become part of the stored record. A source that could be written into the JSON is a source a
+        writer could lie about, and the whole value of the field is that it cannot be.
+        """
+        return "declared"
+
     @field_validator("project", "key_column")
     @classmethod
     def _safe_identifier(cls, value: str) -> str:
