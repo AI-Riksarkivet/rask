@@ -2006,7 +2006,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pylance", extra = ["otel"] },
     { name = "ray-kit" },
-    { name = "service-kit", extra = ["governed", "lakehouse"] },
+    { name = "service-kit", extra = ["governed", "lakehouse", "media"] },
     { name = "storage" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -2033,7 +2033,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pylance", extras = ["otel"], specifier = ">=10.0.0" },
     { name = "ray-kit", editable = "packages/ray-kit" },
-    { name = "service-kit", extras = ["governed", "lakehouse"], editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed", "lakehouse", "media"], editable = "packages/service-kit" },
     { name = "storage", editable = "packages/storage" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
@@ -4115,6 +4115,9 @@ lancekit = [
     { name = "pyarrow" },
     { name = "pylance", extra = ["otel"] },
 ]
+media = [
+    { name = "pillow" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -4136,6 +4139,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-logging", specifier = ">=0.65b0" },
     { name = "opentelemetry-instrumentation-requests", specifier = ">=0.65b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.44.0" },
+    { name = "pillow", marker = "extra == 'media'", specifier = ">=10" },
     { name = "pyarrow", marker = "extra == 'lakehouse'" },
     { name = "pyarrow", marker = "extra == 'lancekit'" },
     { name = "pydantic", specifier = ">=2.7" },
@@ -4146,7 +4150,7 @@ requires-dist = [
     { name = "storage", editable = "packages/storage" },
     { name = "tenacity", marker = "extra == 'governed'", specifier = ">=9.1.4" },
 ]
-provides-extras = ["governed", "lakehouse", "lancekit"]
+provides-extras = ["governed", "lakehouse", "media", "lancekit"]
 
 [[package]]
 name = "setuptools"
