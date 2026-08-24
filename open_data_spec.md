@@ -301,7 +301,7 @@ unsafe before the §9(c) decision. Nothing here is parallelisable just because i
 | 3 | Stop materialising blobs in the mover | **DONE** `8e77107b` — 3 tiers cost 0.58% vs 300.52% |
 | 4 | Tier→tier becomes `add_columns`, not overwrite | **DONE** `e4d2ea6b` — and a redelivery writes nothing |
 | 5 | Kill `GateOutcome.TRIGGER`; one enforcement point | **DONE** `ce821949` |
-| 6 | Drop the chart fallback in `effective_gate`; drop `medallion.movers[]` | OPEN |
+| 6 | The effective gate NAMES ITS SOURCE (both halves as-written refuted) | **DONE** `0e3275c4` |
 | 7 | Rename lane → transform | OPEN |
 | 8 | Split the gate: Ray writes an attestation, catalog runs the floor | OPEN — now on the DEFAULT path |
 | 9 | Add `cascade_run` — one workflow per batch | OPEN |
@@ -378,7 +378,33 @@ unsafe before the §9(c) decision. Nothing here is parallelisable just because i
    fault to REPORT, not a second door to fire through). 48 `tests/unit` fixtures are red across 8
    files, and they share one shape: every one builds a mover with **no catalog**, which the chart
    cannot produce. The fixtures need catalog doubles; the change does not need re-deciding.
-6. **Drop the chart fallback in `effective_gate`; drop `medallion.movers[]`.** One declaration each.
+6. **DONE (`0e3275c4`) — but not as written. Both halves were refuted by measurement, and what
+   the item actually wanted was ATTRIBUTION.**
+
+   **Half one — "drop the chart fallback in `effective_gate`" — REFUTED.** A `GateSpec` is scoped per
+   PROJECT (`project: str`, `extra="forbid"`, keyed by project in the record path) while
+   `chart/values.yaml` carries `requiredColumns` per MOVER: `"id"` for bronze-to-silver against
+   `"id,thumbnail,embedding"` for media-to-silver, because one derives artifacts the other does not.
+   Dropping the fallback would either un-gate those columns or force one list across movers with
+   different outputs. The drift it feared is also already prevented: `effective_gate` returns a
+   record WHOLE, never merged, so there is no per-field mixing to drift.
+
+   **Half two — "drop `medallion.movers[]`" — NOT IMPLEMENTABLE as a config change.**
+   `chart/templates/medallion.yaml:246` renders a Deployment PER MOVER from that list, and
+   `dapr-statestore.yaml:96` derives each mover's Dapr statestore scope from it (its own comment:
+   "the MOVERS' app-ids are DERIVED, not listed … adding a mover cannot silently produce one that
+   fails to dispatch"). Helm renders at template time; a declared lane record lives in object
+   storage. **A chart cannot enumerate movers it cannot read.** This needs a runtime controller that
+   creates Deployments from lane records — a new component, and an owner decision, not a cleanup.
+
+   **What was genuinely missing, and is now done.** Two sources with one shape: a declared
+   `review_band` of 0.25 and the chart's default of 0.25 were byte-identical, so a lane author could
+   not confirm their gate was the one applied and nobody investigating a held promotion could tell
+   which record to edit. The catalog's own policy ruling already requires the fix — *"Any surface
+   showing an effective policy must say which record won; an inherited value rendered identically to
+   a set one is how nobody can tell what is governing their data."* `EffectiveGate` now carries
+   `gate_source` (`"declared"` / `"chart"`), READ-ONLY in the protocol so it cannot be assigned, and
+   the mover logs `medallion_gate_resolved` with it on every dispatch.
 7. **Rename lane → transform.**
 8. **Split the gate:** Ray `verify` job writes an attestation; catalog reads it and runs the floor.
    **Promoted 2026-08-24**: the Ray lane now defaults ON (`e6c7357c`), so "the gate resolver is wired
