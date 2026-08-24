@@ -295,6 +295,38 @@ nothing reads it to make a decision.**
 
 ---
 
+## 9b. An open defect, mechanism NOT yet proven
+
+**A governed write was attempted against the wrong tenant, and FGA is the only thing that stopped it.**
+
+Observed live 2026-08-24: after an approved promotion, `silver-to-gold` attempted
+`bind86-gold$catalog` on a run that was `acme`'s, five times, each `403 Forbidden`. The authorization
+boundary held. The project resolution did not.
+
+What is ESTABLISHED:
+
+- `publish_promotion` (`workflow.py:1036`) takes the **tag-move** path and returns. It does **not**
+  publish a stage trigger. An earlier diagnosis in this session said it did; that was wrong.
+- The trigger's project is `extra.project` on the catalog's `table_published` event
+  (`publication_trigger.py:129`), which the module says is "resolved by the catalog through the
+  warehouse binding".
+- The table in question was `silver$features` — **unqualified**. No warehouse binds a bare `silver`:
+  `acme-bucket` binds `acme-bronze`/`acme-silver`/`acme-gold`, `bind86-wh` binds nothing. So the
+  project on that event did NOT come from a binding.
+- `bind86` was the approving session's **active project** at the time.
+
+What is NOT established: whether the project was attributed from the caller's UI context, from a
+fallback, or from something else. **Do not fix this from the hypothesis.** Reproduce first: write a
+table into an unbound top namespace and read the `extra.project` the catalog stamps on its
+`table_published` event.
+
+**Why it matters beyond one run:** `medallion.fgaEnabled` defaults to `false`. FGA refused this
+write; on a default deployment nothing would. And whatever the mechanism, an **unbound namespace
+should fail closed** rather than resolve to some project — that is the estate's reflex everywhere
+else, and it is not being applied here.
+
+---
+
 ## 10. What is already right and must survive
 
 `publication.py` (commit ≠ publication, tag-as-truth, the `publishing` holding tag, CAS via
