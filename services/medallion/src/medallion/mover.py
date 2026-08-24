@@ -28,6 +28,7 @@ from medallion.api.events import register_stage_route
 from medallion.core.config import apply_dapr_secrets, get_settings
 from service_kit import setup_logging
 from service_kit.governed import fga
+from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lakehouse.ns_errors import install_problem_handlers
@@ -86,6 +87,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             runtime.start()  # spawns the worker's own threads; does not block the event loop
             app.state.workflow_runtime = runtime
             log.info("dapr workflow runtime started")
+            # The line above is TRUE and INSUFFICIENT: the runtime starts whether or not this
+            # app-id can reach an actor state store, and without one the first call fails (and,
+            # on dapr 1.18.1, panics the sidecar). Ask the sidecar what it can actually see.
+            await probe_actor_state_store(capability="this mover cannot run a stage")
         except Exception:
             # Non-fatal, same reasoning as ingest: a service that refuses to start because its sidecar
             # is not up yet turns an ordering blip into a CrashLoopBackOff. A stage that cannot

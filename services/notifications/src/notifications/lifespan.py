@@ -25,6 +25,7 @@ from notifications.config import get_notifications_settings
 from notifications.inbox_actor import InboxActor
 from notifications.watch_actor import WatchIndexActor
 from service_kit.config import Settings
+from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.actor_warmup import warm_actor_proxy_factory
 from service_kit.governed.dapr_auth import guard_actor_routes
 from service_kit.schemas.health import Readiness, ReadinessStatus
@@ -149,6 +150,10 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
                 # Advisory: the routes already gate on `actors_registered`, so a cold factory is a
                 # slow first call, never a wrong answer.
                 await warm_actor_proxy_factory()
+                # Everything above is PROCESS-LOCAL and cannot fail for a missing actor state
+                # store: registration never touches the sidecar, so this reports success while
+                # every actor call still refuses. Ask the sidecar what it can actually see.
+                await probe_actor_state_store(capability="the inbox cannot hold anything and the bell will never fill")
             except Exception:
                 app.state.actors_registered = False
                 log.exception("notifications: actor registration failed — the inbox will 503")

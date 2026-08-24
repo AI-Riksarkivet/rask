@@ -19,6 +19,7 @@ from ingest.health import router as health_router
 from ingest.provenance import LineageProvenanceReader
 from ingest.queue_health import router as queue_health_router
 from ingest.runs import SCHEDULE_TIMEOUT_SECONDS, InMemoryRunStore, ScheduleUnavailable
+from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -205,6 +206,10 @@ def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanF
             runtime.start()
             app.state.workflow_runtime = runtime
             logger.info("dapr workflow runtime started")
+            # The line above is TRUE and INSUFFICIENT: the runtime starts whether or not this
+            # app-id can reach an actor state store, and without one the first call fails (and,
+            # on dapr 1.18.1, panics the sidecar). Ask the sidecar what it can actually see.
+            await probe_actor_state_store(capability="no ingest run can start")
         except Exception:
             # Deliberately non-fatal. The health probe answers process liveness (see health.py), and
             # a service that refuses to start because its sidecar is not up yet turns an ordering

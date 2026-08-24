@@ -36,6 +36,7 @@ from medallion.api.train import router as train_router
 from medallion.core.config import apply_dapr_secrets, get_settings
 from service_kit import setup_logging
 from service_kit.governed import fga
+from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.audit import configure_audit
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.oidc import OIDCVerifier
@@ -117,6 +118,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # ONE client for the app, not one per request — the decision door reads it from here.
             app.state.workflow_client = wf.DaprWorkflowClient()
             log.info("dapr workflow runtime started (promotion review)")
+            # The line above is TRUE and INSUFFICIENT: the runtime starts whether or not this
+            # app-id can reach an actor state store, and without one the first call fails (and,
+            # on dapr 1.18.1, panics the sidecar). Ask the sidecar what it can actually see.
+            await probe_actor_state_store(capability="held promotions cannot be reviewed")
         except Exception:
             # Non-fatal, the mover's reasoning: refusing to start because the sidecar is not up yet
             # turns an ordering blip into a CrashLoopBackOff. A hold that cannot be scheduled RETRYs

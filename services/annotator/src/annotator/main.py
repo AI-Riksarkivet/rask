@@ -25,6 +25,7 @@ from service_kit import setup_logging
 from service_kit.control_emit import make_control_emitter, set_process_control_emitter
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
+from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.actor_warmup import warm_actor_proxy_factory
 from service_kit.governed.dapr_auth import guard_actor_routes
 from service_kit.governed.oidc import OIDCVerifier
@@ -136,6 +137,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # EVENT LOOP. Measured in the notifications service, where it made a wall-clock budget
             # unenforceable; this plane has the same call shape, so it gets the same warm-up.
             await warm_actor_proxy_factory()
+            # Everything above is PROCESS-LOCAL and cannot fail for a missing actor state
+            # store: registration never touches the sidecar, so this reports success while
+            # every actor call still refuses. Ask the sidecar what it can actually see.
+            await probe_actor_state_store(capability="the annotation task plane cannot hold a task")
         except Exception:
             app.state.actors_registered = False
             logger.exception("annotator: actor registration failed — the task plane will 503")

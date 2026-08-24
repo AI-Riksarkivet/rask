@@ -29,6 +29,7 @@ from fastapi import FastAPI
 from flows.config import build_flows_settings
 from flows.dependencies import FlowRunReader, FlowScheduler, ScheduleUnconfirmed
 from service_kit.config import Settings
+from service_kit.governed.actor_state_store import probe_actor_state_store
 
 
 log = logging.getLogger(__name__)
@@ -112,6 +113,10 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
                 # "running" forever. They are set together so they cannot drift apart.
                 app.state.workflow_reader = DaprFlowRunReader()
                 log.info("dapr workflow runtime started — runs are durable")
+                # Everything above is PROCESS-LOCAL and cannot fail for a missing actor state
+                # store: registration never touches the sidecar, so this reports success while
+                # every actor call still refuses. Ask the sidecar what it can actually see.
+                await probe_actor_state_store(capability="the studio flow-builder's durable lane cannot run")
             except Exception:
                 # Deliberately non-fatal, and the reason is the same one `ingest` records: a service
                 # that refuses to start because its sidecar is not up YET turns an ordering blip into
