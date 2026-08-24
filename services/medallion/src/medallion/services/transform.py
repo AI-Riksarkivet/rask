@@ -212,6 +212,42 @@ def resolve_stage_identity(settings: Any, *, spec: Any, project: str) -> StageId
     )
 
 
+def accepted_input_names(*, env_from_dataset: str, declared: Any | None) -> set[str]:
+    """Every spelling of this mover's input that a legitimate arrival may carry.
+
+    TWO SPELLINGS OF ONE NAME EXIST, and the halves of the cascade disagree about which they use.
+    `publication_trigger` publishes the arrival TENANT-STRIPPED -- a publication of
+    ``table:acme-bronze$agnostic`` arrives as ``bronze$agnostic``, because the tenant travels
+    separately on ``trigger.project`` and the lane string is meant to be the same for every tenant.
+    A ``TransformSpec.from_id`` written through the catalog's lane door is CATALOG-QUALIFIED
+    (``acme-bronze$agnostic``): the form the door validates, the record stores, and every surface
+    renders.
+
+    So a lane declared in the natural spelling was UNREACHABLE. Measured live 2026-08-24, same lane
+    and same ingest with one field changed: ``acme-bronze$agnostic`` produced no mover activity at
+    all, ``bronze$agnostic`` produced publish 200 -> quality_blocked -> held_for_review.
+
+    WIDENED, NOT REWRITTEN, and the direction matters. The catalog-qualified id stays canonical --
+    it is what a person reads and what the door validates -- and the mover additionally accepts the
+    tier-qualified form its own upstream publishes. Widening cannot make a previously-accepted
+    arrival fail, so this lands safely ahead of unifying the publisher, which is the real fix and a
+    change to a wire contract.
+
+    The strip is on the ``<project>-`` BOUNDARY, never the bare project name: ``PROJECT_PATTERN``
+    permits hyphens, so stripping ``acme`` from ``acmebronze$x`` would match a lane nobody declared.
+    """
+    accepted = {env_from_dataset}
+    if declared is None:
+        return accepted
+    from_id = str(declared.from_id)
+    accepted.add(from_id)
+    project = str(getattr(declared, "project", "") or "")
+    prefix = f"{project}-"
+    if project and from_id.startswith(prefix):
+        accepted.add(from_id[len(prefix) :])
+    return accepted
+
+
 async def handle_stage(
     dapr: DaprClient,
     settings: MedallionSettings,
@@ -299,9 +335,7 @@ async def handle_stage(
     # guard, and moving it earlier would change the fail-closed ordering it exists for. An absent or
     # wrong project simply finds no record, and the guard falls back to env-only: the old behaviour.
     declared_lane = await resolve_lane_async(settings, project=trigger.project or "") if settings.lane else None
-    accepted = {settings.from_dataset}
-    if declared_lane is not None:
-        accepted.add(declared_lane.from_id)
+    accepted = accepted_input_names(env_from_dataset=settings.from_dataset, declared=declared_lane)
     if arrived is not None and arrived not in accepted:
         # OBSERVABLE, at INFO and on a counter. A DROP is an ack: Dapr neither redelivers nor
         # dead-letters, so if the app records nothing the event simply ceases to exist. Before this
