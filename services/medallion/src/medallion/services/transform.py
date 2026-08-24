@@ -38,6 +38,7 @@ from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_refused, record_stage_completion, record_transition
 from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register, promotion_band, promotion_hold
+from medallion.services import gate as gate_svc
 from medallion.services.compute import existing_row_count, measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.gate_decision import GateOutcome, gate_decision
@@ -651,10 +652,16 @@ async def handle_stage(
             # authoritative, while `pre_row_count` is pass 1's older reading of the same thing. Both
             # absent is still FIRST_PROMOTION, so an unreadable destination keeps asking.
             previous_rows = promotion_band.resolve_previous_row_count(observed=result.previous_row_count, carried=trigger.pre_row_count)
+            # THE DECLARED GATE WINS. A project that declared one through the catalog's admin-gated
+            # door governs its own band; one that declared nothing keeps the chart's settings,
+            # byte-for-byte. Resolved here rather than at boot because the record is editable while
+            # the pod runs — that is the whole point of the door, and reading it per-dispatch is what
+            # makes a threshold change take effect without a `helm upgrade`.
+            gate = gate_svc.effective_gate(settings, await gate_svc.resolve_gate_async(settings, project=project))
             band_reasons = promotion_band.review_reasons(
                 row_count=result.row_count,
                 previous_row_count=previous_rows,
-                band=settings.promotion_review_band,
+                band=gate.review_band,
             )
         # ASK THE CATALOG'S GATE BEFORE DECIDING — but ONLY when the band would hold. The publish IS
         # the promotion on this path, so a review that runs after it has nothing left to withhold, and

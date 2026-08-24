@@ -55,6 +55,10 @@ ControlAction = Literal[
     # exists to replace. `policy_set` sits on exactly this line for exactly this reason.
     "transform_set",
     "transform_deleted",
+    # A project's quality-gate settings changed through the catalog door. Audited for the same
+    # reason a lane declaration is: it decides whether a promotion waits for a human.
+    "gate_set",
+    "gate_deleted",
     "namespace_created",
     "namespace_dropped",
     "table_created",
@@ -135,7 +139,7 @@ ControlAction = Literal[
 #: `annotation_task` is deliberately NOT `table`: a task is a unit of work inside an annotation project,
 #: not a governed lakehouse object, and conflating them would send the console to invalidate a table view
 #: for an assignment that changed no data.
-ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "annotation_task", "transform"]
+ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "annotation_task", "transform", "gate"]
 
 
 class CatalogControlEvent(BaseModel):

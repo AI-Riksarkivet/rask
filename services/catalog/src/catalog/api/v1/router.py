@@ -13,6 +13,7 @@ from catalog.api.v1.endpoints import (
     credentials,
     data,
     events,
+    gates,
     indices,
     maintenance,
     me,
@@ -62,6 +63,7 @@ for _module in (
     publication,
     user_state,
     stores,
+    gates,
     transforms,
 ):
     api_router.include_router(_module.router)

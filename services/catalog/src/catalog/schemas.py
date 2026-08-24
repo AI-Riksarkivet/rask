@@ -829,6 +829,33 @@ class TransformLaneRequest(BaseModel):
     lane: str
 
 
+class GateSpecRequest(BaseModel):
+    """Declare one project's gate. The project comes from the gated PATH, never from here.
+
+    Omitting ``project`` is the security half, exactly as on ``TransformSpecRequest``: a
+    body-supplied project would let an admin of one tenant pass ``can_administer`` on their own
+    project while rewriting somebody else's gate.
+
+    Field semantics live on ``service_kit.lakehouse.gate_specs.GateSpec``, which is the model this
+    validates into and the one the medallion reads. One definition, two services.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    key_column: str = "id"
+    required_columns: list[str] = Field(default_factory=list)
+    review_band: float = 0.25
+    review_enabled: bool = False
+
+
+class GateSpecResponse(BaseModel):
+    project: str
+    key_column: str
+    required_columns: list[str] = Field(default_factory=list)
+    review_band: float
+    review_enabled: bool
+
+
 class TransformSpecResponse(BaseModel):
     lane: str
     project: str
