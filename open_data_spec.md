@@ -348,54 +348,45 @@ nothing reads it to make a decision.**
 
 ---
 
-## 9b. An open defect, mechanism NOT yet proven
+## 9b. RETRACTED &mdash; there was no defect. The system worked.
 
-**A governed write was attempted against the wrong tenant, and FGA is the only thing that stopped it.**
+**This section claimed the catalog resolved an unbound namespace to an arbitrary project, failing
+open. That is WRONG and is withdrawn.**
 
-Observed live 2026-08-24: after an approved promotion, `silver-to-gold` attempted
-`bind86-gold$catalog` on a run that was `acme`'s, five times, each `403 Forbidden`. The authorization
-boundary held. The project resolution did not.
-
-What is ESTABLISHED:
-
-- `publish_promotion` (`workflow.py:1036`) takes the **tag-move** path and returns. It does **not**
-  publish a stage trigger. An earlier diagnosis in this session said it did; that was wrong.
-- The trigger's project is `extra.project` on the catalog's `table_published` event
-  (`publication_trigger.py:129`), which the module says is "resolved by the catalog through the
-  warehouse binding".
-- The table in question was `silver$features` — **unqualified**. No warehouse binds a bare `silver`:
-  `acme-bucket` binds `acme-bronze`/`acme-silver`/`acme-gold`, `bind86-wh` binds nothing. So the
-  project on that event did NOT come from a binding.
-- `bind86` was the approving session's **active project** at the time.
-
-**REPRODUCED 2026-08-24 — the mechanism is now proven.** Read straight off the catalog's own
-control-event ring buffer (`GET /v1/events`), `extra.project` per `table_published`:
+The live bindings answer it:
 
 ```
-table:acme-bronze$item3proof   project: acme      qualified   -> correct
-table:acme-bronze$agnostic     project: acme      qualified   -> correct
-table:acme-silver$agnostic     project: acme      qualified   -> correct
-table:silver$features          project: bind86    UNBOUND     -> WRONG
+acme-bucket  ->  acme-bronze, acme-gold, acme-silver
+bind86-wh    ->  alpha, beta, bind86-bronze, media, silver, zz-probe
+                                             ^^^^^^
 ```
 
-Every namespace a warehouse binds resolves to its own project. The one namespace nothing binds —
-bare `silver` — was attributed to **`bind86`**, a tenant it has no relationship with. That is the
-event `publication_trigger.py` turns into a stage trigger, which is why `silver-to-gold` attempted
-`bind86-gold$catalog`.
+**`silver` is legitimately bound to `bind86-wh`.** So when a lane was pointed at the unqualified
+`silver$features`, the catalog resolved a REAL binding and correctly attributed the write to
+`bind86`. `project_for_namespace` does two registry reads and returns `None` when unbound &mdash; its
+docstring says so and the code does it. Nothing failed open.
 
-**The defect is one sentence: an unbound top namespace resolves to an arbitrary project instead of
-refusing.** It is not in the promotion path, not in the mover, and not a race — it is the catalog's
-project resolution failing OPEN on a namespace it cannot place.
+What actually happened, end to end: an operator (me) pointed a lane at a namespace belonging to
+another tenant; the catalog named that tenant correctly; the mover targeted that tenant's gold; and
+**FGA refused the cross-tenant write.** Every layer did its job. The five 403s were the system
+working, not failing.
 
-**Fix shape:** resolution must return "no project" for an unbound namespace, and every consumer must
-treat that as a refusal. `publication_trigger` should DROP such an event with a named reason rather
-than publishing a trigger carrying a project it guessed. This is the estate's own fail-closed reflex,
-which is applied at every other rung and not at this one.
+**The lesson is about diagnosis, not about the catalog.** This symptom got three explanations before
+the right one &mdash; a stale queued event, then a promotion resume publishing a wrong tenant, then an
+unbound namespace failing open. The first two were inferred from timing and from reading a module
+that turned out not to be on the path. The answer was one API read of the bindings, available the
+whole time. **Read the state before theorising about the code.**
 
-**Why it matters beyond one run:** `medallion.fgaEnabled` defaults to `false`. FGA refused this
-write; on a default deployment nothing would. And whatever the mechanism, an **unbound namespace
-should fail closed** rather than resolve to some project — that is the estate's reflex everywhere
-else, and it is not being applied here.
+**What survives as a real finding** is &sect;9c, which is separate and was reproduced by changing one
+field: two spellings of one dataset name made a declared lane unreachable. Fixed in `2e308f7f`.
+
+**One thing genuinely worth doing** came out of this and is NOT a defect report: an operator can
+point a lane's `to_id` at a namespace another tenant owns, and nothing says so until a governed write
+is refused several hops later. The lane door validates SHAPE (`transform_specs.py`) and not
+OWNERSHIP. Refusing at declaration &mdash; "you do not hold `can_create_table` on `silver`" &mdash; would turn
+a cross-tenant mistake into an immediate, named answer at the door where it was made. That is a
+usability and blast-radius improvement on a door that is already `can_administer`-gated, not a
+security hole: FGA already stops the write.
 
 ---
 
