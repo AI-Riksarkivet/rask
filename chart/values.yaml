@@ -947,9 +947,24 @@ medallion:
   # bronze -> silver -> gold all COMPLETE, with S1's watcher doing exactly its job
   # (dispatched_to_workflow -> ray_stage_job_submitted -> job_terminal -> wake the mover).
   #
-  # Still `false` by default because the chart does not DEPLOY a ray-lance cluster; a default that
-  # points at a cluster the chart does not create is the bug this comment exists to prevent.
-  ray: false
+  # ON by default since 2026-08-24. It was `false` on the argument that the chart deploys no
+  # Lance-capable cluster — a default aimed at a cluster the chart does not create. That argument is
+  # now FALSE, and it was falsified by reading the running estate rather than the file: the chart's
+  # OWN KubeRay head (`rask-ray-*-head-svc`, image `ray-cluster`) answers `import lance` with pylance
+  # 10.0.0 and carries `lance_ray`. It never was the HTR image the old comment described.
+  #
+  # The second blocker is closed too, and it is the one that mattered. `ray_submit.py` shipped a FIXED
+  # env dict, so a mover could reach a working cluster and still not describe its own work; it now
+  # resolves `entrypoint`/`params`/`code_version` from the lane declaration and namespaces the
+  # workload's half as `RASK_PARAM_*` (the prefix applied at the submitter, so a lane cannot name its
+  # way to S3_SECRET). Measured end to end 2026-08-24: a real stage job
+  # (`stage-ray-silver-3beb0dd2…`) ran as a Dapr Workflow, the watcher polled the head's
+  # `/api/jobs/<id>` 200, the orchestration COMPLETED and the mover moved the stage.
+  #
+  # UPGRADING an existing release from off->on still needs the mover restart the block above
+  # describes — the sidecars cached the old `lance-statestore` scope list. A FRESH install is
+  # unaffected: the Component and the flag render together, so the sidecars come up already scoped.
+  ray: true
   # DERIVED from the RayService this chart renders, not a hardcoded hostname. `ray-lance-head` was the
   # on-kind demo's raw head and does not exist in a KubeRay deployment — measured 2026-08-15, it fails
   # DNS from inside a pod while `rask-ray-head-svc` answers `/api/version` with ray 2.56.1.

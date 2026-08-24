@@ -2746,39 +2746,47 @@ def test_the_ray_cluster_image_can_read_the_lakehouse() -> None:
         )
 
 
-def test_the_ray_lane_is_OFF_until_a_LANCE_CAPABLE_cluster_exists() -> None:
-    """The Ray lane may only default ON against a cluster that can actually run the job. None exists.
+def test_the_ray_lane_is_ON_now_that_the_cluster_and_the_job_CONTRACT_both_exist() -> None:
+    """The Ray lane defaults ON. Both blockers that kept it off are closed, and both were MEASURED.
 
-    This gate previously asserted the opposite. It was written on the argument that Ray IS the compute
-    plane and that leaving the lane off made S1's watcher dead code — which is still true, and still
-    not sufficient. The configuration it produced could never work, and that was MEASURED, not argued:
+    This gate has now asserted each answer in turn, which is the point of writing the reason down
+    rather than the verdict. It first demanded ON (argument: Ray is the compute plane, and an off lane
+    makes S1's watcher dead code). It was flipped to demand OFF when that configuration was measured
+    and could not work. It demands ON again because the two named blockers were fixed — not because
+    the original argument came back into fashion.
 
-      * `rayAddress` derives to the chart's KubeRay head, whose image is
-        `.docker/ray-cluster.dockerfile` — the HTR/CUDA image built from `runners/htr`. It carries
-        torch and htrflow and no pylance.
-      * Every submitted stage job died. First `exit 2 / can't open file` (the scripts were not baked),
-        then, once they were, `exit 1 / ModuleNotFoundError: No module named 'lance'`.
-      * With the lane OFF the cascade completed on the first drive — bronze -> silver -> gold, all
-        three COMPLETE in the graph (2026-08-15 20:59). That was the first successful run ever; before
-        it only the FAIL path had fired, which read as missing data rather than a broken image.
+    **Blocker 1 — the image — was never real in the form it was written down.** The OFF docstring said
+    `rayAddress` derives to a head running `.docker/ray-cluster.dockerfile`, "the HTR/CUDA image built
+    from `runners/htr` ... torch and htrflow and no pylance", and that every stage job died
+    `ModuleNotFoundError: No module named 'lance'`. That was true of the image AT THE TIME and stopped
+    being true on 2026-08-17, when the cluster image started installing the platform compute trio
+    beside the workload's lock. Read from the running estate 2026-08-24, the chart's own KubeRay head
+    answers `import lance` with **pylance 10.0.0** and imports **lance_ray**. Pinned independently by
+    `test_the_ray_cluster_image_can_read_the_lakehouse`.
 
-    The lane is designed against `.docker/ray-lance.dockerfile` ("a thin CPU Ray image for the
-    medallion compute seam"), deployed separately as `ray-lance-head` by `deploy/ray-lance-demo.yaml`.
-    The chart does not deploy it, so ON-by-default aimed every mover at a cluster that cannot run the
-    work — a failure that surfaces only when a trigger arrives.
+    **Blocker 2 — the job env contract — is the one that actually gated this, and it is closed.**
+    A capable image is necessary and not sufficient: `ray_submit.py` shipped a FIXED `env_vars` dict,
+    so a mover could reach a working cluster and still not describe its own work — a second workload
+    either reused the first one's variable names or forced a platform edit. `submit_stage_job` now
+    resolves `entrypoint`, `params` and `code_version` from the LANE DECLARATION
+    (`services/lane.py::resolve_lane_async`, which REFUSES a named-but-undeclared lane rather than
+    falling back to the chart's program), and namespaces the workload's half as `RASK_PARAM_<key>`.
+    The prefix is applied at the submitter, never trusted from config, so a lane cannot choose a name
+    that collides with `S3_SECRET`, `LINEAGE_JSON` or an `OTEL_*` key.
 
-    `compute` stays ON and is asserted here: it is what the in-process lane needs, and the settings
-    validator refuses `ray` without it anyway.
+    **And the whole path was driven, not reasoned about.** 2026-08-24, against the live release with
+    the lane on: `stage-ray-silver-3beb0dd2fcbd44a0b5e356dc2aeaaa39-e4b061d30061` ran as a Dapr
+    Workflow, the watcher polled `rask-ray-head-svc:8265/api/jobs/<id>` 200, the orchestration reported
+    `COMPLETED`, and the mover logged `medallion_stage_moved`.
 
-    STEP 0 LANDED 2026-08-17: the image blocker is CLOSED. `.docker/ray-cluster.dockerfile` now
-    installs the platform compute trio (lance-ray / pylance / pyarrow) beside the workload's own lock,
-    pinned to the same versions as `.docker/ray-lance.dockerfile` and the fleet. That capability is
-    pinned by `test_the_ray_cluster_image_can_read_the_lakehouse` below, so it cannot silently regress.
+    `compute` stays ON and is still asserted: the settings validator refuses `ray` without it, and it
+    is what the in-process lane needs.
 
-    The lane STAYS OFF here, and this is not conservatism. A capable image is necessary and not
-    sufficient: `ray_submit.py` still ships a fixed env dict that cannot carry a per-lane parameter,
-    so a mover could reach the cluster and still not describe its own work. Flip this when the job env
-    contract exists, and change it with the evidence — not before.
+    NOT asserted here, and deliberately: that an OFF->ON *upgrade* is safe. It is not, on its own —
+    daprd caches the actor state store at sidecar start, so movers enabled in the same upgrade that
+    adds them to `lance-statestore`'s scopes come up against the old list. That is an operational
+    ordering property of a live release, not a property of the rendered manifest, so it lives in the
+    values comment where the operator reads it. A FRESH install renders both together and is fine.
     """
     docs = _rendered_docs()
     movers = [
@@ -2791,12 +2799,12 @@ def test_the_ray_lane_is_OFF_until_a_LANCE_CAPABLE_cluster_exists() -> None:
     assert movers, "no medallion movers rendered — the fixture cannot prove anything"
     for container in movers:
         env = {e["name"]: e.get("value") for e in container["env"]}
-        assert env.get("MEDALLION_COMPUTE_ENABLED") == "true", "the in-process compute lane must be on — it is what runs the cascade today"
-        assert env.get("MEDALLION_RAY_ENABLED") != "true", (
-            "the Ray lane is ON by default, but the chart deploys no Lance-capable Ray cluster. Every stage "
-            "job dies ModuleNotFoundError: No module named 'lance' against the HTR image. See this test's docstring."
-        )
         assert env.get("MEDALLION_COMPUTE_ENABLED") == "true", "ray without compute fails the settings validator at boot"
+        assert env.get("MEDALLION_RAY_ENABLED") == "true", (
+            "the Ray lane is OFF by default. Both blockers are closed (a Lance-capable cluster image, "
+            "and a per-lane job env contract), so an off lane means every stage runs in-process and "
+            "S1's watcher is dead code. See this test's docstring."
+        )
 
 
 def test_the_ray_address_names_a_service_the_chart_actually_creates() -> None:
