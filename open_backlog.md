@@ -208,27 +208,44 @@ B14 (`5a8dd3b7`), B15 (closed as ruled).
 
 ---
 
-## SMALLER, UNBLOCKED
+## SMALLER, UNBLOCKED — ALL CLOSED 2026-08-25
 
-- **`RASK_INGEST_LANCE_ROOT` is empty**, so the `lance-append` source kind is advertised in the live
-  registry and cannot be used. Either configure the root or stop advertising the kind.
-- **`scripts/ray_lance_job.py` is not baked** into `.docker/ray-cluster.dockerfile`. A lane naming it
-  dies `exit 2` with nothing pointing at the image. **PROMOTED by the lane defaulting ON** (`e6c7357c`):
-  this was reachable only by someone who had opted into Ray; it is now reachable by default, and
-  `exit 2 / can't open file` names neither the lane nor the image.
-- **The gate resolver is wired on the in-process path only.** The Ray lane is submit-and-ack, so its
-  gate runs later off the catalog's publish; it still reads the chart's band, not the declared one.
-  **PROMOTED by the lane defaulting ON** (`e6c7357c`) — this is no longer a gap on an opt-in path. It
-  is the DEFAULT path, so a declared band is now silently ignored for every stage by default, and a
-  lane author reading their own declaration has no way to see that the floor came from the chart.
-  Spec change 8 (split the gate: Ray writes an attestation, the catalog runs the floor) is the real
-  fix; this item is the interim symptom and should close WITH it, not before.
-- **Two run-like nav labels.** `Ingest ▸ Runs` (ingest runs) and `Workloads ▸ Jobs` (Ray jobs) are
-  near-synonymous in a sidebar. Rename to "Ingest runs" / "Batch jobs".
-- **A lane cannot show its own health.** `/compute/lanes` shows what a lane DECLARES and nothing about
-  what it did — a lane failing every run looks identical to a healthy one.
-- **The lane→runs link is unfiltered.** It points at `/compute/jobs`, not that lane's jobs.
-  `rask.lane` is on the metadata now, so the filter is available.
-- **`is_blob_field` is defined twice** — `service_kit/lakehouse/blobs.py` and
-  `service_kit/lancekit/blobs.py`. The same class of duplication B14 just removed.
-- **compute and studio ship no `e2e/` harness at all.**
+Every item below is landed with a sha or ruled out with its reason. Three were already done and had
+simply never been struck off, which is its own lesson about a list nobody re-reads.
+
+- **`RASK_INGEST_LANCE_ROOT` is empty, so `lance-append` is advertised and unusable** —
+  **LANDED `77433514`.** Neither of the two options this item offered was taken, because both are
+  wrong: setting the root at the lakehouse bucket "gets a second, unlineaged copy path" into governed
+  data (`chart/templates/fleet.yaml` says so), and hiding the kind violates *show disabled, never
+  hide* — an option that vanishes is indistinguishable from a feature that was never built.
+  `SourceDescriptor` now carries `available` + `unavailable_reason`, the form renders it disabled
+  with the reason, and the precondition is declared beside the factory like `partition_of`.
+- **`scripts/ray_lance_job.py` is not baked into `.docker/ray-cluster.dockerfile`** —
+  **LANDED `77433514`**, and not by baking it. The entrypoint validator checked only the DIRECTORY,
+  so the declaration passed and died `exit 2 / can't open file` on the cluster naming nothing. It now
+  validates against `BAKED_CLUSTER_JOBS` and the refusal names the script AND what is available.
+  A test pins the constant against the dockerfile.
+- **The gate resolver is wired on the in-process path only** — **RULED OUT, closes with §8 item 8.**
+  The real fix is the attestation split (Ray writes it, the catalog runs the floor); a second gate
+  resolver on the submit path would be exactly the two-enforcement-points drift item 5 removed. Item
+  8 is out of scope by owner decision, and this closes WITH it, not before.
+- **Two run-like nav labels** — **ALREADY DONE.** `nav.ts` reads `'Ingest runs'` and `'Batch jobs'`.
+- **A transform cannot show its own health** — **RULED OUT as a feature, not a residue.** It needs a
+  data source that does not exist: per-transform run outcomes over time. The Ray dashboard knows a
+  JOB's status and lineage knows a RUN's, and neither is keyed by transform. Closing it means
+  deciding which of those becomes the source and adding a query; that is a piece of work with a
+  design, not a loose end. `rask.transform` on the job metadata is the join key when someone does it.
+- **The transform→runs link is unfiltered** — **ALREADY DONE.** The link carries
+  `?transform=<name>` and `JobsBoard` filters on `rask.transform`, excluding unstamped jobs
+  deliberately (an unstamped run is nobody's, not "some transform's").
+- **`is_blob_field` is defined twice** — **LANDED `77433514`**, and it was defined THREE times. The
+  duplication's stated reason ("the backend must not import the pipeline package") inverted when
+  `ratch` took a dependency on `service-kit[lancekit]`. One implementation, two re-exports.
+- **compute and studio ship no `e2e/` harness** — **RULED OUT as a scope decision, stated rather than
+  implied.** Both zones start under `make dev-zone` but unmocked, so an e2e suite needs seed-driven
+  mock upstreams built first (`e2e/dev-seed.ts`, which `lakehouse`/`explorer`/`annotator`/`models`
+  have and these do not). The cost is real and worth naming: **the compute zone's ETL form, transform
+  declaration door and jobs board have no browser-level coverage at all**, so a change to any of them
+  is verified by unit tests and by hand.
+
+---
