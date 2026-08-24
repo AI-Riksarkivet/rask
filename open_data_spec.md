@@ -238,11 +238,13 @@ nothing reads it to make a decision.**
 
 ## 8. Ordered changes
 
-1. **Stop materialising blobs in the mover** — `compute.py::_carry_forward`. Removes 2 of 3 corpus
-   copies before any redesign. *Blocked on §9(a).*
+1. **Ingest writes External descriptors by default** — see 3 below. MEASURED as a PREREQUISITE for
+   the mover change, not a parallel one (§9(a)): a managed descriptor carried between datasets
+   resolves to nothing, silently.
 2. **Name the blob thresholds; register the external base at create** — `ingest/lander.py`.
-3. **Ingest writes External descriptors by default; managed becomes opt-in per corpus** —
-   `ingest/lander.py`, `worker.py`, `fetch.py`.
+3. **Stop materialising blobs in the mover** — `compute.py::_carry_forward`. Safe ONLY once 1 has
+   landed. Removes 2 of the 3 corpus copies. The descriptor must be mapped onto the prepared write
+   struct; the shapes differ.
 4. **Replace tier-to-tier overwrite with `add_columns`** — `compute.py::transform_stage`,
    `scripts/ray_stage_job.py`. Also removes the per-stage index rebuild, which exists only because
    indices do not survive an overwrite.
@@ -259,8 +261,24 @@ nothing reads it to make a decision.**
 
 ## 9. Must be measured or decided — do not design past these
 
-- **(a) Can a blob column cross datasets as a descriptor without re-wrap?** Undocumented. Change 1
-  depends on it.
+- **(a) Blob descriptors across datasets — ANSWERED, MEASURED 2026-08-24 on pylance 10.0.0.**
+  It depends on the KIND, and the failure mode of the wrong one is silent.
+  - **EXTERNAL (kind=3) CARRIES.** 20/20 rows resolve in a second dataset. The descriptor names a
+    URI the dataset never owned, so nothing about it is dataset-local.
+  - **MANAGED (Packed/Dedicated) DOES NOT.** The write SUCCEEDS and 0/20 rows resolve, with no
+    error anywhere. `blob_id: 1, blob_uri: ''` is meaningless outside the dataset owning that
+    sidecar. A silent empty read, not a failure.
+  - **The read and write shapes are NOT symmetric.** A scan returns
+    `struct<kind, position, size, blob_id, blob_uri>`; a write demands the prepared form
+    `struct<kind, data, uri, blob_id, blob_size, position>` (`blob.rs:166`). Round-tripping a
+    scanned descriptor is refused outright; the mapping between them is pure metadata and moves
+    no bytes.
+
+  **Consequence, and it couples changes 1 and 3:** a mover can stop copying ONLY if the payload is
+  External. Making ingest write External descriptors (change 3) is therefore a PREREQUISITE for
+  change 1, not an independent improvement — and dropping the materialisation while bronze is still
+  managed would produce silver tables whose every blob read returns nothing, with nothing red.
+  Script: `scripts/measure_blob_descriptor_carry_forward.py`.
 - **(b) `add_columns` on a table that HAS a blob column — ANSWERED, MEASURED 2026-08-24 on pylance
   10.0.0.** It does **not** rewrite. A 300-row 2.2 dataset with a real blob column: before, one
   203,554 B data file + one 20,000,000 B sidecar; after adding two string columns, the original data
