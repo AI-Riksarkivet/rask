@@ -39,6 +39,18 @@ class RayJob(BaseModel):
     start_time: int | None = None
     end_time: int | None = None
     batches: list[str] = Field(default_factory=list)
+    #: THE JOB'S IDENTITY, as the submitter stamped it. The medallion writes `rask.originator`,
+    #: `rask.project`, `rask.token`, `rask.stage` and `rask.lane` here rather than into
+    #: `runtime_env.env_vars`, because `metadata` comes back on `GET /api/jobs/<id>` and is therefore
+    #: readable from OUTSIDE the job and AFTER it fails — the read a job page makes.
+    #:
+    #: Dropping it made every one of those keys die at this boundary: written by the medallion,
+    #: returned by Ray, and discarded here before any reader saw one. Measured on the live estate, a
+    #: job carrying `rask.lane: dummy` came back through `/api/ray/jobs` with no `metadata` key.
+    #:
+    #: DEFAULTS TO `{}`, never required: Ray omits the key entirely for a job submitted without
+    #: metadata, and most jobs are.
+    metadata: dict[str, str] = Field(default_factory=dict)
     logs_url: str | None = None
     # Failure cause — already on Ray's JobDetails and carried through `d.dict()`
     # + extra="allow", just declared here so it's typed and surfaced. exit 137 =

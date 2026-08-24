@@ -198,6 +198,12 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
     return RayHealth(ok=True, dashboard_url=dashboard_url, client_ray_version=ray.__version__)
 
 
+#: The one metadata namespace this projection keeps — see the projection in `list_jobs`. A prefix
+#: rather than an explicit key list so a new `rask.` identity key needs no change here, while a
+#: workload's own keys stay out regardless of how many it stamps.
+_IDENTITY_PREFIX = "rask."
+
+
 async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str, *, max_jobs: int = MAX_JOBS) -> RayJobsPayload:
     started = time.perf_counter()
     if client is None:
@@ -236,6 +242,24 @@ async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str, *, m
         # so `model_dump()` doesn't exist. See `schemas/ray.py` for the rationale.
         payload = d.dict()
         payload["batches"] = _parse_batches(d.entrypoint)
+        # IDENTITY KEPT, BULK DROPPED. `metadata` is an arbitrary user dict, so carrying it whole
+        # reopens exactly the unbounded-growth hole `MAX_JOBS` closed — a job may stamp any number
+        # of keys of any size. But the medallion puts a job's IDENTITY here on purpose
+        # (`rask.originator`/`project`/`token`/`stage`/`lane`), because `metadata` is what survives
+        # to `GET /api/jobs/<id>` and is readable after the job fails.
+        #
+        # So the projection is by PREFIX, not all-or-nothing: the handful of `rask.` keys the estate
+        # renders survive, everything else is dropped at this boundary. A job whose metadata is
+        # entirely foreign keeps no metadata at all, which is what the bulk-drop test asserts and
+        # still asserts unchanged.
+        # Reuse `payload` — a second `d.dict()` would double the per-job cost this loop exists to
+        # bound. OMITTED entirely when nothing survives, rather than left as `{}`: a job with no
+        # rask identity carries no metadata, which is what the bulk-drop invariant asserts.
+        identity = {k: v for k, v in (payload.get("metadata") or {}).items() if k.startswith(_IDENTITY_PREFIX)}
+        if identity:
+            payload["metadata"] = identity
+        else:
+            payload.pop("metadata", None)
         payload["logs_url"] = f"{dashboard_url}/#/jobs/{d.submission_id}" if d.submission_id else None
         jobs.append(RayJob.model_validate(payload))
     # `total` + `truncated` so the cap is VISIBLE. A silently shortened list reads as "the cluster
