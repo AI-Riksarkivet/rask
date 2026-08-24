@@ -24,6 +24,7 @@ from dapr.aio.clients import DaprClient
 from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.metrics import record_transition
 from service_kit import dapr_publish
+from service_kit.lakehouse import transform_specs
 from service_kit.lakehouse.warehouse_registry import is_safe_project
 
 
@@ -54,9 +55,45 @@ def _bronze_write_dataset(event: dict[str, Any], settings: MedallionSettings, pr
     expected = {project_namespace(project, settings.bronze_dataset): settings.bronze_dataset}
     outputs = event.get("outputs") or []
     for output in outputs:
-        if isinstance(output, dict) and output.get("namespace") == expected_namespace and output.get("name") in expected:
-            return expected[str(output.get("name"))]
+        if not isinstance(output, dict):
+            continue
+        name = str(output.get("name") or "")
+        if output.get("namespace") == expected_namespace and name in expected:
+            return expected[name]
+        # THE DECLARATION IS THE OPT-IN. Before this, the head recognised exactly one hard-coded
+        # dataset and acked everything else without publishing — so a table created from the UI
+        # produced NO trigger at all, the mover's guard was never reached, and an agnostic platform
+        # behaved as a fixed pipeline needing a values edit per table.
+        #
+        # A table a lane DECLARES is now a cascade head too. Deliberately not "publish everything and
+        # let movers filter": that spends delivery on work nobody declared, and leaves "why didn't my
+        # table cascade" with no visible answer. With this, the answer is "no lane declares it", and
+        # there is an audited door to change that.
+        #
+        # Returned UNQUALIFIED-AS-DECLARED — the declared `from_id` verbatim — because the mover now
+        # resolves its own identity from the same record (`resolve_stage_identity`), so both sides
+        # read one string from one source.
+        if name and _has_declared_lane(settings, project=project, table_id=name):
+            return name
     return None
+
+
+def _has_declared_lane(settings: MedallionSettings, *, project: str, table_id: str) -> bool:
+    """Whether any lane in this project declares ``table_id`` as its input.
+
+    Never raises: a control root that cannot be read must not stop the CONFIGURED dataset from
+    cascading, so an unreadable registry degrades to "nothing extra is declared" rather than taking
+    the head down. Logged, because a registry that cannot be read is a real fault.
+    """
+    control_root = getattr(settings, "control_root", "")
+    if not project or not control_root:
+        return False
+    try:
+        specs = transform_specs.list_specs(control_root, settings.storage_options(), project)
+    except Exception:  # noqa: BLE001 — a registry read must not break the cascade head
+        log.exception("cascade_head_lane_lookup_failed", extra={"project": project, "table_id": table_id})
+        return False
+    return any(spec.from_id == table_id for spec in specs)
 
 
 def _cascade_token(event: dict[str, Any]) -> str:

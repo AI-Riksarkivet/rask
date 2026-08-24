@@ -24,7 +24,7 @@ import logging
 import time
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 from dapr.aio.clients import DaprClient
@@ -42,6 +42,7 @@ from medallion.services import gate as gate_svc
 from medallion.services.compute import existing_row_count, measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.gate_decision import GateOutcome, gate_decision
+from medallion.services.lane import UndeclaredLaneError, resolve_lane_async
 from medallion.services.promotion import promotion_lineage
 from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, uri_within
 from service_kit import dapr_publish
@@ -159,6 +160,58 @@ def _stage_workflow_exists(client: Any, instance_id: str) -> bool:
         return False
 
 
+class StageIdentity(NamedTuple):
+    """The four names one stage run reads and writes.
+
+    A NamedTuple rather than four bare returns because every downstream use — the FGA object, the
+    lineage identities, both URIs — takes them as a SET, and a caller that picks up three of four
+    from a declaration and one from env produces a pair that exists in neither place.
+    """
+
+    from_namespace: str
+    from_dataset: str
+    to_namespace: str
+    to_dataset: str
+
+
+def _namespace_of(table_id: str) -> str:
+    """The namespace half of a governed table id (`acme-bronze$events` -> `acme-bronze`).
+
+    REFUSES an id with no namespace rather than falling back to the env's. A declared dataset paired
+    with an undeclared namespace is exactly the silent mismatch the record exists to remove, and a
+    guess here would be indistinguishable from a correct resolution at every later step.
+    """
+    namespace, sep, _ = table_id.partition("$")
+    if not sep or not namespace:
+        raise ValueError(f"table id {table_id!r} names no namespace — expected '<namespace>$<table>'")
+    return namespace
+
+
+def resolve_stage_identity(settings: Any, *, spec: Any, project: str) -> StageIdentity:
+    """What this run reads and writes: the DECLARED record when there is one, else the env.
+
+    The `stage_run` workflow is already parameterised by `from_uri`/`to_uri`, so this is the only
+    place a mover was pinned to a single edge. With a record, a mover becomes a worker for whatever
+    that record declares; without one it behaves byte-for-byte as it always did.
+
+    Taken WHOLE, never merged: `from_id` carries its own namespace, so both halves come from the same
+    source. See `_namespace_of` for why a missing namespace refuses instead of borrowing the env's.
+    """
+    if spec is not None:
+        return StageIdentity(
+            from_namespace=_namespace_of(spec.from_id),
+            from_dataset=spec.from_id,
+            to_namespace=_namespace_of(spec.to_id),
+            to_dataset=spec.to_id,
+        )
+    return StageIdentity(
+        from_namespace=project_namespace(project, settings.from_namespace),
+        from_dataset=project_namespace(project, settings.from_dataset),
+        to_namespace=project_namespace(project, settings.to_namespace),
+        to_dataset=project_namespace(project, settings.to_dataset),
+    )
+
+
 async def handle_stage(
     dapr: DaprClient,
     settings: MedallionSettings,
@@ -268,11 +321,25 @@ async def handle_stage(
             extra={"transition": transition, "token": token, "project": project},
         )
         return _DROP
-    # Lineage + FGA identities — project-qualified when a tenant trigger, exactly the env values when not.
-    from_namespace = project_namespace(project, settings.from_namespace)
-    from_dataset = project_namespace(project, settings.from_dataset)
-    to_namespace = project_namespace(project, settings.to_namespace)
-    to_dataset = project_namespace(project, settings.to_dataset)
+    # WHAT THIS RUN READS AND WRITES — the declared lane record when there is one, else the env,
+    # project-qualified exactly as before. This is the line that decided a mover served one edge:
+    # `stage_run` has always been parameterised by from_uri/to_uri, so the pinning lived here and
+    # nowhere else. Everything below — the FGA object, the lineage identities, both URIs — reads
+    # these four names, so they follow the declaration automatically.
+    try:
+        identity = resolve_stage_identity(settings, spec=await resolve_lane_async(settings, project=project), project=project)
+    except (UndeclaredLaneError, ValueError) as exc:
+        # A named-but-undeclared lane, or a declared id with no namespace. Both are DETERMINISTIC —
+        # redelivery cannot make a missing record appear — so DROP rather than RETRY, and say which.
+        log.warning(
+            "medallion_stage_lane_unresolvable",
+            extra={"transition": transition, "token": token, "project": project, "error": str(exc)},
+        )
+        return _DROP
+    from_namespace = identity.from_namespace
+    from_dataset = identity.from_dataset
+    to_namespace = identity.to_namespace
+    to_dataset = identity.to_dataset
 
     if fga_client is not None:
         try:
