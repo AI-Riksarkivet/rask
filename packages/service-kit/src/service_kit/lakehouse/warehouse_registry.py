@@ -122,6 +122,34 @@ def project_namespace(project: str, name: str) -> str:
     return f"{project}-{name}" if project else name
 
 
+def lane_key(project: str, qualified: str) -> str:
+    """The TENANT-FREE lane key for a project-qualified dataset id -- the inverse of
+    :func:`project_namespace` when the project is KNOWN.
+
+    ``("acme", "acme-bronze$events")`` -> ``"bronze$events"``. Empty project, or a name that does not
+    carry that project's prefix, returns ``qualified`` unchanged.
+
+    THIS IS NOT THE UNSOUND INVERSE the module warns about above. Recovering the project FROM a name
+    is ambiguous -- ``PROJECT_PATTERN`` permits hyphens, so ``acme-bronze-silver`` could be project
+    ``acme`` or ``acme-bronze``. Here the project is supplied by the caller (the trigger carries it,
+    the record stores it), so the only judgement is a prefix test on the ``-`` BOUNDARY. Stripping on
+    the bare project name instead would turn ``acmebronze$x`` into ``bronze$x`` and match a lane
+    nobody declared.
+
+    WHY IT EXISTS. A stage trigger's ``dataset`` is a LANE KEY: the same string for every tenant, with
+    the tenant travelling separately on ``trigger.project``. That convention was already established
+    -- ``publication_trigger`` published the CATALOG identifier once and every tenant's publication
+    was dropped as another lane's -- but ``ingest_trigger``'s declared-lane branch still returned the
+    catalog id verbatim, so ONE function returned two different kinds of thing depending on which
+    branch fired. A lane declared through the door was then reachable from one head and not the other.
+
+    Lives beside :func:`project_namespace` for the reason stated there: a naming convention two
+    services must agree on cannot live inside one of them.
+    """
+    prefix = f"{project}-"
+    return qualified[len(prefix) :] if project and qualified.startswith(prefix) else qualified
+
+
 def namespace_tiers(qualified: str) -> frozenset[str]:
     """Which governed tiers a namespace name contains, as hyphen-delimited segments.
 

@@ -25,7 +25,7 @@ from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.metrics import record_transition
 from service_kit import dapr_publish
 from service_kit.lakehouse import transform_specs
-from service_kit.lakehouse.warehouse_registry import is_safe_project
+from service_kit.lakehouse.warehouse_registry import is_safe_project, lane_key
 
 
 log = logging.getLogger(__name__)
@@ -70,11 +70,19 @@ def _bronze_write_dataset(event: dict[str, Any], settings: MedallionSettings, pr
         # table cascade" with no visible answer. With this, the answer is "no lane declares it", and
         # there is an audited door to change that.
         #
-        # Returned UNQUALIFIED-AS-DECLARED — the declared `from_id` verbatim — because the mover now
-        # resolves its own identity from the same record (`resolve_stage_identity`), so both sides
-        # read one string from one source.
+        # Returned as a LANE KEY, tenant-free, exactly like the configured branch above.
+        #
+        # This used to return the declared `from_id` VERBATIM (a catalog id), on the reasoning that
+        # the mover resolves its identity from the same record so both sides read one string. That
+        # reasoning is sound for IDENTITY and wrong for the TRIGGER: a trigger's `dataset` is a lane
+        # key -- the same string for every tenant, with the tenant travelling separately on
+        # `trigger.project`. `publication_trigger` learned that the hard way (it published the
+        # catalog identifier once and every tenant's publication was dropped as another lane's), and
+        # this branch never followed. The result was ONE function returning two different kinds of
+        # thing depending on which branch fired, so a lane declared through the door was reachable
+        # from this head and not from the publication head.
         if name and _has_declared_lane(settings, project=project, table_id=name):
-            return name
+            return lane_key(project, name)
     return None
 
 

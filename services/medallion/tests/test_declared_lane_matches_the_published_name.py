@@ -26,10 +26,12 @@ MEASURED, same lane, same ingest, one field changed:
     from_id = acme-bronze$agnostic  ->  mover logs NOTHING, cascade dead
     from_id = bronze$agnostic       ->  publish 200, quality_blocked, held_for_review
 
-The guard is widened rather than the record rewritten: the catalog-qualified id stays canonical
-(it is what the door validates and what a person reads), and the mover additionally accepts the
-tier-qualified form its own upstream publishes. Widening cannot make a previously-accepted arrival
-fail, which is the property that makes this safe to land before the publisher is unified.
+THE FIX IS ONE CONVENTION, not a widened guard. A trigger's ``dataset`` is a LANE KEY -- tenant-free,
+identical for every tenant, with the tenant on ``trigger.project``. A ``TransformSpec.from_id`` is a
+CATALOG IDENTIFIER, because it must resolve at ``/v1/table/{id}``. Comparing one against the other was
+a type error. `ingest_trigger`'s declared branch -- the ONE publisher that broke the convention -- now
+emits a lane key like its own sibling branch, and the guard compares lane keys only, converting the
+record's id once through the shared ``lane_key`` helper.
 """
 
 from __future__ import annotations
@@ -62,10 +64,15 @@ def test_a_catalog_qualified_lane_accepts_the_tier_qualified_arrival() -> None:
     )
 
 
-def test_the_catalog_qualified_form_is_still_accepted() -> None:
-    """Widening, never narrowing -- the canonical id must keep working."""
+def test_the_catalog_id_is_NOT_a_lane_key() -> None:
+    """The type distinction, pinned. A catalog id in this set is what caused the defect.
+
+    ``acme-bronze$agnostic`` is what you pass to ``/v1/table/{id}``; it is never what a trigger
+    carries. Accepting it here would re-admit the ambiguity the fix removes.
+    """
     accepted = accepted_input_names(env_from_dataset="bronze$events", declared=_spec("acme-bronze$agnostic"))
-    assert "acme-bronze$agnostic" in accepted
+    assert "acme-bronze$agnostic" not in accepted
+    assert accepted == {"bronze$events", "bronze$agnostic"}
 
 
 def test_the_env_dataset_survives_a_declared_lane() -> None:
@@ -96,3 +103,21 @@ def test_a_project_that_is_a_prefix_of_the_namespace_is_not_mangled() -> None:
     accepted = accepted_input_names(env_from_dataset="bronze$events", declared=_spec("acmebronze$x"))
     assert "acmebronze$x" in accepted
     assert "bronze$x" not in accepted
+
+
+def test_the_shared_helper_strips_only_on_the_project_boundary() -> None:
+    """`lane_key` is the sound inverse of `project_namespace`, and only on the `-` boundary.
+
+    The unsound inverse -- recovering a project FROM a name -- is ruled out by the estate's canon,
+    because PROJECT_PATTERN permits hyphens. Here the project is KNOWN, so the only judgement is a
+    prefix test; doing it on the bare project name would turn `acmebronze$x` into `bronze$x`.
+    """
+    from service_kit.lakehouse.warehouse_registry import lane_key, project_namespace
+
+    assert lane_key("acme", "acme-bronze$events") == "bronze$events"
+    assert lane_key("acme", "acmebronze$x") == "acmebronze$x"
+    assert lane_key("", "bronze$events") == "bronze$events"
+    assert lane_key("acme", "bronze$events") == "bronze$events"
+    # round-trip: qualify then de-qualify is identity for a known project
+    for name in ("bronze$events", "silver$features", "gold$catalog"):
+        assert lane_key("acme", project_namespace("acme", name)) == name

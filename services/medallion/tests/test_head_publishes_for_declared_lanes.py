@@ -65,12 +65,24 @@ def test_the_configured_dataset_still_fires(tmp_path: Path) -> None:
 
 
 def test_a_declared_table_now_fires(tmp_path: Path) -> None:
-    """The change: a lane declaring this table makes its write a cascade head."""
+    """The change: a lane declaring this table makes its write a cascade head.
+
+    THE ASSERTED VALUE CHANGED, THE INTENT DID NOT. This originally asserted the CATALOG id
+    (``acme-bronze$uiloop``), because the declared branch returned ``from_id`` verbatim. That was the
+    defect: a trigger's ``dataset`` is a LANE KEY -- tenant-free, identical for every tenant, with the
+    tenant on ``trigger.project`` -- and the sibling branch for the configured pair had always
+    returned one. One function, two kinds of return value, so a lane declared through the door was
+    reachable from this head and not from the publication head.
+
+    Still pinned here: a declared table FIRES (non-None) and an undeclared one does not. Added: it
+    fires under the one convention, which is what stops the two halves drifting apart again.
+    """
     _declare(tmp_path, "uiloop", "acme-bronze$uiloop")
 
     got = _bronze_write_dataset(_event("acme-bronze", "acme-bronze$uiloop"), _settings(tmp_path), "acme")
 
-    assert got == "acme-bronze$uiloop"
+    assert got is not None, "a declared table must still be a cascade head"
+    assert got == "bronze$uiloop", "the trigger carries a lane key, never a catalog id"
 
 
 def test_an_undeclared_table_still_publishes_nothing(tmp_path: Path) -> None:
