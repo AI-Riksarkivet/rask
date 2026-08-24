@@ -346,6 +346,41 @@ else, and it is not being applied here.
 
 ---
 
+## 9c. A second proven defect: two spellings of one dataset name
+
+**PROVEN 2026-08-24 by driving both spellings through the live cascade.**
+
+`publication_trigger.py:137` publishes the arrival under the **tenant-stripped** name:
+
+```python
+"dataset": f"{source}{DELIMITER}{table}",   # -> "bronze$agnostic"
+```
+
+while a `TransformSpec.from_id` written through the lane door is the **catalog-qualified** name
+(`acme-bronze$agnostic`) -- the form every other surface uses, and the only form the catalog's own
+doors accept. `transform.py`'s guard compares the arrival against
+`{settings.from_dataset} | {declared_lane.from_id}`, so the two never match.
+
+Measured, same lane, same ingest, one field changed:
+
+```
+from_id = acme-bronze$agnostic   ->  mover logs NOTHING. cascade dead.
+from_id = bronze$agnostic        ->  publish 200, quality_blocked, held_for_review
+```
+
+**The miss is invisible.** `medallion_publication_not_a_lane` logs at **DEBUG** and the handler
+returns SUCCESS, so a lane that can never fire looks identical to an idle one -- the same
+failure shape as the `MEDALLION_LANE`-never-rendered defect (`706c8ce3`) and the self-denying
+lineage link (`78812a5b`).
+
+**Fix shape (not applied):** one spelling. The catalog-qualified id is the right one, since it is
+what the door validates, what the record stores, and what every other surface shows; the head should
+publish it and the mover should compare it, with the tenant carried separately as it already is.
+Whichever way it goes, a lane whose `from_id` matches no route must be **refused at declaration**,
+not silently unreachable at runtime.
+
+---
+
 ## 10. What is already right and must survive
 
 `publication.py` (commit ≠ publication, tag-as-truth, the `publishing` holding tag, CAS via
