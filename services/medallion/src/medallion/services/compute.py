@@ -29,7 +29,7 @@ from lance.indices.builder import IndexConfig
 from lineage_kit.consume import LineageDoc, LineageEdge, as_json_rows
 from pydantic import BaseModel, Field
 
-from medallion.services.derivers import ARTIFACT_COLUMNS, derive_artifacts
+from medallion.services.derivers import ARTIFACT_COLUMNS, derive_artifacts, is_derivable
 from service_kit.lakehouse import blobs, schema
 
 
@@ -320,6 +320,13 @@ def transform_stage(
         out = out.append_column(pa.field(_LINEAGE_COLUMN, pa.json_()), _lineage_column(lineage, out.num_rows))
     # 2.2 + stable row ids like seed_bronze: every dataset the cascade writes is on the current format (so a blob
     # column never trips "Blob v2 requires file version >= 2.2" mid-cascade) and keeps durable row identity.
+    # THE TARGET MUST REGISTER THE SAME BASE, or every carried pointer is refused at write.
+    #
+    # `initial_bases` is create-mode only and this is an overwrite, so it is supplied on the FIRST
+    # write of a tier and ignored afterwards — which is correct: a tier that already exists already
+    # registered it, and pylance rejects re-registering on overwrite. `mode="overwrite"` on a
+    # non-existent dataset creates it, which is the path that matters here.
+    carried_base = blobs.external_base_of(ds)
     lance.write_dataset(
         _with_declared_id(out, dataset_id),
         to_uri,
@@ -327,6 +334,7 @@ def transform_stage(
         storage_options=storage_options,
         data_storage_version="2.2",
         enable_stable_row_ids=True,
+        initial_bases=[lance.DatasetBasePath(carried_base, _EXTERNAL_BASE_NAME)] if carried_base and not _dataset_exists(to_uri, storage_options) else None,
     )
     if lineage is not None:
         _index_lineage(to_uri, storage_options)
@@ -385,6 +393,22 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
     if not blob_cols:
         return _stamp_stage(_carry_source_rowid(_drop_inherited_lineage(ds.to_table(with_row_id=True))), stage), {}
 
+    # EXTERNAL UPSTREAM: FORWARD THE POINTER, DO NOT RE-PERSIST THE BYTES (§4.1/§4.2, change 3).
+    #
+    # When the upstream declares an external base, its payloads live at URIs the dataset does not own,
+    # and every tier that copied them was storing the corpus again to express a readiness state.
+    # Measured over one corpus: bronze 0.16% + silver 0.19% carried this way, against ~100% per tier
+    # materialised. The descriptor is mapped, not copied — the read and write shapes differ, and both
+    # of the differences fail silently if got wrong (see `carry_external_descriptor`).
+    #
+    # The DERIVERS still get bytes; they are just no longer a side effect of carrying. A read for a
+    # model is not a copy into the lakehouse, which is exactly the distinction §4.2 draws.
+    external_base = blobs.external_base_of(ds)
+    if external_base:
+        return _carry_forward_external(ds, stage, blob_cols, external_base)
+
+    # MANAGED UPSTREAM: the bytes exist nowhere else, so carrying them IS the only option.
+    #
     # ONE aligned scan for tabular AND blob columns — cardinality-preserving (nulls arrive as None) and
     # half the IO of the old scan-plus-read_blobs pair. Full-materialises payloads into memory, which is
     # fine for this in-process fake-Ray stand-in over the cascade's small overwrite-written datasets; a
@@ -418,6 +442,84 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
     fields.append(pa.field(_STAGE_COLUMN, pa.string()))
     columns[_STAGE_COLUMN] = pa.array([stage] * rows, pa.string())
     return pa.table(columns, schema=pa.schema(fields)), blob_payloads
+
+
+#: The manifest name a cascade tier registers its inherited external base under. One base per
+#: dataset, matching what ingest registers, so a descriptor's `blob_id` stays unambiguous.
+_EXTERNAL_BASE_NAME = "source"
+
+
+def _dataset_exists(uri: str, storage_options: dict[str, str]) -> bool:
+    """Whether `uri` already holds a dataset — the create-vs-overwrite question `initial_bases` asks.
+
+    A read, not a stat: an object store has no directories, and `Path("s3://b/k")` collapses to a
+    relative path (the same trap `ingest.catalog.ensure_at` documents).
+    """
+    try:
+        lance.dataset(uri, storage_options=storage_options)
+    except Exception:  # noqa: BLE001 — absent, unreadable, or not a dataset: all mean "create"
+        return False
+    return True
+
+
+def _carry_forward_external(ds: lance.LanceDataset, stage: str, blob_cols: list[str], external_base: str) -> tuple[pa.Table, dict[str, list[bytes | None]]]:
+    """Carry an external blob column by POINTER, and read its bytes only if a deriver wants them.
+
+    Two separate wins, and they are worth naming apart because only the first is change 3:
+
+    **The copy goes.** The output carries descriptors resolved against the upstream's declared base,
+    so the tier costs a few KB instead of the corpus. `blob_array` accepts the mapped `Blob` values
+    and Lance writes pointers.
+
+    **And the RAM goes, for every stage that was never going to derive anything.** `derive_artifacts`
+    dispatches on the FIRST non-null payload and passes tabular / unrecognised content straight
+    through — yet the managed path materialises EVERY payload before asking. Here the probe reads one
+    row, and the full read happens only when a deriver actually matched. A gold aggregation over ten
+    million page images now reads one image, not ten million.
+    """
+    table = ds.to_table(columns=[f.name for f in ds.schema if f.name not in _RESTAMPED_COLUMNS], with_row_id=True)
+    rows = table.num_rows
+    columns: dict[str, Any] = {}
+    fields: list[pa.Field] = []
+    for f in ds.schema:
+        if f.name in _RESTAMPED_COLUMNS:
+            continue
+        if f.name in blob_cols:
+            carried = [blobs.carry_external_descriptor(d, external_base) for d in table.column(f.name).to_pylist()]
+            fields.append(blob_field(f.name))
+            columns[f.name] = blob_array(carried)
+        else:
+            fields.append(table.schema.field(f.name))
+            columns[f.name] = table.column(f.name)
+    if _SOURCE_ROWID_COLUMN not in columns:
+        fields.append(pa.field(_SOURCE_ROWID_COLUMN, pa.uint64()))
+        columns[_SOURCE_ROWID_COLUMN] = table.column("_rowid").cast(pa.uint64())
+    fields.append(pa.field(_STAGE_COLUMN, pa.string()))
+    columns[_STAGE_COLUMN] = pa.array([stage] * rows, pa.string())
+    out = pa.table(columns, schema=blobs.stamp_external_base(pa.schema(fields), external_base))
+    return out, _payloads_if_derivable(ds, blob_cols, rows)
+
+
+def _payloads_if_derivable(ds: lance.LanceDataset, blob_cols: list[str], rows: int) -> dict[str, list[bytes | None]]:
+    """The bytes, but ONLY when a deriver will actually consume them.
+
+    `derive_artifacts` keys its dispatch on the first non-null payload of the first blob column
+    (sorted), and returns the table untouched for tabular, unrecognised or already-derived content.
+    So probing one row answers whether the full read is worth paying for, and on the overwhelmingly
+    common path it is not.
+
+    Returns `{}` when nothing matches, which `derive_artifacts` reads as "nothing to derive" — the
+    same answer it reaches today after materialising the whole corpus to find out.
+    """
+    if not rows:
+        return {}
+    column = min(blob_cols)
+    probe = blobs.read_aligned_table(ds, columns=[column]).column(column).to_pylist()
+    first = next((payload for payload in probe if payload is not None), None)
+    if first is None or not is_derivable(first):
+        return {}
+    aligned = blobs.read_aligned_table(ds, columns=blob_cols)
+    return {name: aligned.column(name).to_pylist() for name in blob_cols}
 
 
 def _drop_inherited_lineage(table: pa.Table) -> pa.Table:

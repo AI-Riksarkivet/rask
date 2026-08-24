@@ -28,6 +28,72 @@ log = logging.getLogger(__name__)
 #: Arrow extension name Lance stamps on a blob-v2 column (lance_docs/guide.md — Version Compatibility).
 BLOB_V2_EXTENSION_NAME = "lance.blob.v2"
 
+#: The descriptor `kind` for an EXTERNAL blob — the payload lives at a URI the dataset does not own.
+#: Measured, not documented: 0 inline, 1 packed, 2 dedicated, 3 external.
+EXTERNAL_KIND = 3
+
+#: Schema-metadata key naming the external base a dataset's blob URIs are relative to.
+#:
+#: THIS EXISTS BECAUSE PYLANCE EXPOSES NO WAY TO READ A DATASET'S REGISTERED BASES. `add_bases`
+#: writes them and nothing reads them back; the base path is not recoverable from the manifest
+#: either (probed on pylance 10.0.0). And it has to be recoverable, because a scanned descriptor's
+#: `blob_uri` is BASE-RELATIVE — carrying one into another dataset verbatim is refused with
+#: "outside registered external bases", so a mover cannot forward a pointer it cannot resolve.
+#:
+#: Stamped into the SCHEMA rather than kept in config for the same reason #21 puts the lineage
+#: coordinates there: the data becomes self-describing, and a mover that has never met the service
+#: that wrote it can still resolve the pointer from the dataset alone. Verified to survive both
+#: `create` and `append`.
+EXTERNAL_BASE_KEY = b"rask.blob.external_base"
+
+
+def external_base_of(ds: lance.LanceDataset) -> str | None:
+    """The external base this dataset's blob URIs are relative to, or None if it owns its bytes.
+
+    None is the MANAGED answer and is not an error: a dataset whose payloads exist at no URI (an
+    Arrow-IPC fragment landed by `lance-append`, a source whose lifecycle is not the estate's) must
+    own them, and a caller reading None should copy rather than refuse.
+    """
+    raw = (ds.schema.metadata or {}).get(EXTERNAL_BASE_KEY)
+    return raw.decode() if raw else None
+
+
+def stamp_external_base(schema: pa.Schema, base: str | None) -> pa.Schema:
+    """`schema` carrying `base` in its metadata — the write half of :func:`external_base_of`.
+
+    Merges rather than replaces: the estate stamps other self-describing coordinates into the same
+    map (#21's `lineage.*`), and a replace here would silently destroy them.
+    """
+    if not base:
+        return schema
+    return schema.with_metadata({**(schema.metadata or {}), EXTERNAL_BASE_KEY: base.encode()})
+
+
+def carry_external_descriptor(descriptor: object, base: str) -> object | None:
+    """One scanned descriptor, mapped onto the shape a WRITE takes. None when it is not external.
+
+    THE READ AND WRITE SHAPES ARE NOT SYMMETRIC, which is why this is a mapping and not a copy. A
+    scan returns ``struct<kind, position, size, blob_id, blob_uri>``; a write takes a ``Blob``. Two
+    details in between are silent if got wrong, and both were got wrong first:
+
+    * ``blob_uri`` is RELATIVE to the base (``page-000.bin``, not a URI). Passing it through is
+      refused at write — loudly, which is the good case.
+    * ``size == 0`` means THE WHOLE OBJECT. Passing it back as a slice length asks for zero bytes and
+      yields an empty read with no error at all — the silent case.
+    """
+    from lance.blob import Blob
+
+    if not isinstance(descriptor, dict) or descriptor.get("kind") != EXTERNAL_KIND:
+        return None
+    relative = descriptor.get("blob_uri")
+    if not relative:
+        return None
+    absolute = f"{base.rstrip('/')}/{relative}"
+    size = descriptor.get("size") or 0
+    if size:
+        return Blob(uri=absolute, position=descriptor.get("position") or 0, size=size)
+    return Blob.from_uri(absolute)
+
 
 def is_blob_field(field: pa.Field) -> bool:
     """True when ``field`` is a Lance blob-v2 column (requires file format >= 2.2).

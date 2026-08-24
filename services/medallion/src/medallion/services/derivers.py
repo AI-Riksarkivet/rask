@@ -85,6 +85,20 @@ def _image_artifacts(table: pa.Table, payloads: list[bytes | None]) -> pa.Table:
 _DERIVERS: tuple[tuple[Callable[[bytes], bool], Deriver], ...] = ((media.is_image, _image_artifacts),)
 
 
+def is_derivable(payload: bytes) -> bool:
+    """Whether ANY registered deriver would claim this payload.
+
+    Public because the caller needs to answer "are these bytes worth reading at all" BEFORE reading
+    them. `derive_artifacts` asks the same question of the same `_DERIVERS` table, but only after its
+    caller has already materialised every payload to hand it one — which is the whole cost when the
+    answer is no, and it is no for tabular, audio-until-a-deriver-exists, and anything unrecognised.
+
+    Kept here rather than exported as `_DERIVERS` so the dispatch table stays private to the module
+    that owns it: a new modality adds a row, and no caller has to learn the shape.
+    """
+    return any(probe(payload) for probe, _ in _DERIVERS)
+
+
 def derive_artifacts(table: pa.Table, blob_payloads: dict[str, list[bytes | None]]) -> pa.Table:
     """Derive whatever the stage's blob content supports; pass everything else through untouched.
 

@@ -36,6 +36,8 @@ import pyarrow as pa
 from lance import LanceOperation
 from pydantic import BaseModel
 
+from service_kit.lakehouse import blobs
+
 
 logger = logging.getLogger(__name__)
 
@@ -307,6 +309,13 @@ def create_empty(dataset_uri: str, schema: pa.Schema, external_base: str | None 
     registered base, "lifecycle management for these objects remains their responsibility".
     """
     bases = [lance.DatasetBasePath(external_base, _EXTERNAL_BASE_NAME)] if external_base else None
+    # STAMPED INTO THE SCHEMA, not merely registered. pylance exposes no way to read a dataset's
+    # registered bases back (`add_bases` writes them, nothing reads them; the path is not recoverable
+    # from the manifest either), and a scanned descriptor's `blob_uri` is BASE-RELATIVE — so without
+    # this a mover cannot forward the pointer it just read, and the cascade would have to copy the
+    # bytes it was built to stop copying. Same reason #21 stamps the lineage coordinates here: the
+    # data describes itself.
+    schema = blobs.stamp_external_base(schema, external_base)
     ds = lance.write_dataset(
         schema.empty_table(),
         dataset_uri,
