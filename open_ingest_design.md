@@ -85,7 +85,41 @@ That is still a change to every estate — every mover's `subTopic` and every pu
 together, or triggers go nowhere — but it delivers this item's actual goal without touching the
 ruling.
 
-**OWNER DECISION NEEDED, and this item is blocked on it, not on effort:** per-lane subTopics, or
+**BOTH FRAMINGS ABOVE ARE WRONG, and driving the loop live on 2026-08-24 is what showed it.**
+
+The cascade was driven end to end FROM THE BROWSER — `/compute/etl` -> `acme-bronze$events` ->
+`medallion_stage_moved` -> silver published -> `aggregate_gold` -> `acme-gold$catalog` published ->
+`medallion_promotion_held_for_review`. It works. What it does NOT do is cascade a table under any
+other name, and the cause is neither the lane-matching guard nor the trigger topology:
+
+```python
+# ingest_trigger.py:54 — the cascade head recognises EXACTLY ONE dataset
+expected = {project_namespace(project, settings.bronze_dataset): settings.bronze_dataset}
+...
+return None      # anything else: ack, and drive nothing
+```
+
+A table named anything but the configured `bronze_dataset` produces NO TRIGGER AT ALL. The mover's
+guard is never reached, because nothing is ever published to it. Retiring the guard therefore fixes
+nothing — and would make it worse: `transform.py:272` shows a mover reads `settings.from_dataset`
+from its OWN ENV, so an arrival for another table would make it re-transform its configured input
+under the other table's token, emitting real-looking lineage for work that did not happen.
+
+**So the real question is not which topic carries the trigger. It is whether a mover's INPUT comes
+from the arrival or from its env.** Today it is pinned by env, which is why one mover serves exactly
+one edge and an arbitrary table has nobody watching it.
+
+**OPTION C — arrival-driven input.** The trigger names the dataset; the lane record (keyed by it)
+says what to run; the mover becomes a worker for whatever arrives with a declaration instead of a
+daemon wired to one edge. This is what "make `table_published` the single cascade trigger" was
+reaching for, and neither this doc nor §10 said so.
+
+Its cost is the honest reason to decide before starting: the FGA check, the lineage identities and
+the quality gate all currently derive from `settings.from_namespace` / `to_namespace`. Every one of
+them would have to come from the resolved lane instead. That is the largest single change on this
+list.
+
+**OWNER DECISION NEEDED, and this item is blocked on it, not on effort:** option C, per-lane subTopics, or
 overturn §10 and unify the heads?
 
 Retiring the lane-matching guards. See `docs/architecture/medallion-cascade.md`
