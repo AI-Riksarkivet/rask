@@ -6,9 +6,79 @@
 	import { Input } from '@rask/ui/input';
 	import { Textarea } from '@rask/ui/textarea';
 	import { formatParams, parseParams, type LaneSpec } from '$lib/lanes';
+	import { parseColumns } from '$lib/gates';
+	import { clearGate, getGate, setGate } from '$lib/remote/gates.remote';
 	import { deleteLane, listLanes, setLane } from '$lib/remote/lanes.remote';
 
 	const lanes = $derived(listLanes());
+	const gate = $derived(getGate());
+	// The record or null; null means the DEPLOYMENT governs, which is a different statement from a
+	// band of zero and is rendered as such.
+	const declared = $derived(gate.current?.ok ? gate.current.data : null);
+
+	// SEEDED BY $derived, NOT BY AN EFFECT. Since 5.25 a `$derived` may be reassigned, which is
+	// exactly this case: the server's value is the starting point, a keystroke overwrites it, and a
+	// change to the record re-seeds. Doing it in an `$effect` needed a `seeded` flag to stop a
+	// refresh clobbering what someone was typing — state written from an effect to paper over the
+	// absence of a starting value, which is the malpractice the autofixer names.
+	//
+	// `getGate` is not polled, so the only thing that moves `declared` is this page's own write, and
+	// re-seeding from the server's answer after a save is what we want rather than what we guard.
+	let gateKeyColumn = $derived(declared?.key_column ?? 'id');
+	let gateColumns = $derived((declared?.required_columns ?? []).join(', '));
+	let gateBand = $derived(declared ? String(declared.review_band) : '0.25');
+	let gateReview = $derived(declared?.review_enabled ?? false);
+	let gateBusy = $state(false);
+	let gateOutcome = $state<{ tone: 'ok' | 'fail'; text: string } | null>(null);
+
+	const bandNumber = $derived(Number(gateBand));
+	const bandValid = $derived(
+		gateBand.trim() !== '' && Number.isFinite(bandNumber) && bandNumber >= 0,
+	);
+	const gateSubmittable = $derived(bandValid && gateKeyColumn.trim() !== '' && !gateBusy);
+
+	function reportGate(result: { ok: boolean; status?: number; detail?: string }, done: string) {
+		gateOutcome = result.ok
+			? { tone: 'ok', text: done }
+			: {
+					tone: 'fail',
+					text:
+						result.status === 403
+							? 'Refused: changing a gate needs `can_administer` on this project. A band decides whether a promotion waits for a human, so it is an administrative act.'
+							: result.status === 400
+								? (result.detail ?? 'No active project.')
+								: `Could not save (${result.status}). ${result.detail ?? ''}`.trim(),
+				};
+	}
+
+	async function saveGate() {
+		if (!gateSubmittable) return;
+		gateBusy = true;
+		gateOutcome = null;
+		const result = await setGate({
+			key_column: gateKeyColumn.trim(),
+			required_columns: parseColumns(gateColumns),
+			review_band: bandNumber,
+			review_enabled: gateReview,
+		});
+		gateBusy = false;
+		reportGate(
+			result,
+			`Gate declared — a band of ${bandNumber} governs this project's promotions from the next dispatch. No redeploy.`,
+		);
+	}
+
+	async function resetGate() {
+		if (gateBusy) return;
+		gateBusy = true;
+		gateOutcome = null;
+		const result = await clearGate({});
+		gateBusy = false;
+		reportGate(
+			result,
+			'Cleared — the deployment\u2019s own settings govern again. A delete, not a write of zeros.',
+		);
+	}
 
 	// The draft is local state, not derived from the query: editing an existing lane pre-fills this
 	// form, and a refresh landing mid-edit must not overwrite what a person is typing.
@@ -177,6 +247,93 @@
 			{/if}
 		</Card>
 	{/if}
+
+	<!-- THE GATE, beside the lanes: both are project-level, so one config surface rather than a
+	     second nav leaf. A lane says WHAT runs; the gate says whether its output may publish. -->
+	<Card class="flex flex-col gap-3 p-4">
+		<div class="flex items-center gap-2">
+			<h2 class="font-medium">Quality gate</h2>
+			{#if declared}
+				<Badge variant="secondary">declared</Badge>
+			{:else}
+				<Badge variant="outline">deployment defaults</Badge>
+			{/if}
+		</div>
+		<p class="text-muted-foreground text-sm">
+			Decides whether a stage's output may publish. Until this door existed every value here was env
+			on a mover pod, so moving a threshold meant a values-file edit and a redeploy.
+			{#if !declared}
+				Nothing is declared, so this project runs on its deployment's own settings — the values
+				below are what would be saved, not what is in force.
+			{/if}
+		</p>
+
+		<div class="grid gap-3 sm:grid-cols-2">
+			<label class="flex flex-col gap-1 text-sm">
+				<span>Key column</span>
+				<Input bind:value={gateKeyColumn} placeholder="id" />
+			</label>
+			<label class="flex flex-col gap-1 text-sm">
+				<span>Review band</span>
+				<Input bind:value={gateBand} placeholder="0.25" />
+				<span class="text-muted-foreground text-xs">
+					A ratio, not a row count: 0.25 means a quarter. A promotion whose row count moves further
+					than this waits for a human.
+				</span>
+			</label>
+		</div>
+
+		<label class="flex flex-col gap-1 text-sm">
+			<span
+				>Required columns <span class="text-muted-foreground">(comma or newline separated)</span
+				></span
+			>
+			<Input bind:value={gateColumns} placeholder="id, payload" />
+			<span class="text-muted-foreground text-xs">
+				Each becomes a `column_declared` assertion, so a transform that quietly stops emitting one
+				is caught here rather than by whoever consumes it.
+			</span>
+		</label>
+
+		<label class="flex items-center gap-2 text-sm">
+			<input type="checkbox" bind:checked={gateReview} class="accent-primary" />
+			<span>Hold a breach for a human</span>
+			<span class="text-muted-foreground text-xs">
+				Off means a breach is logged and published anyway.
+			</span>
+		</label>
+
+		{#if !bandValid && gateBand.trim() !== ''}
+			<p class="text-destructive text-sm">The band must be a number and cannot be negative.</p>
+		{/if}
+
+		<div class="flex gap-2">
+			<GatedAction
+				allowed={gateSubmittable}
+				action="Save gate"
+				reason={gateBusy
+					? 'A write is already in flight.'
+					: 'A key column and a non-negative band are required.'}
+			>
+				<Button onclick={saveGate}>{gateBusy ? 'Saving…' : 'Save gate'}</Button>
+			</GatedAction>
+			<GatedAction
+				allowed={!gateBusy && declared !== null}
+				action="Use deployment defaults"
+				reason={gateBusy
+					? 'A write is already in flight.'
+					: 'Nothing is declared — the deployment already governs.'}
+			>
+				<Button variant="outline" onclick={resetGate}>Use deployment defaults</Button>
+			</GatedAction>
+		</div>
+
+		{#if gateOutcome}
+			<p class={gateOutcome.tone === 'ok' ? 'text-sm' : 'text-destructive text-sm'}>
+				{gateOutcome.text}
+			</p>
+		{/if}
+	</Card>
 
 	<Card class="flex flex-col gap-3 p-4">
 		<h2 class="font-medium">Declare a lane</h2>
