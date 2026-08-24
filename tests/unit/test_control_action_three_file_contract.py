@@ -68,6 +68,10 @@ def _control_actions() -> set[str]:
 #: prevent — and matching a name shape instead of the fact is the defect class this audit keeps finding.
 _UNTARGETED_ACTIONS: frozenset[str] = frozenset(
     {
+        # A gate declaration changes an OBJECT's configuration, not a person's standing — the same
+        # shape as `transform_*` below. Nobody's access moved, so there is nobody to tell.
+        "gate_deleted",
+        "gate_set",
         "namespace_created",
         "namespace_dropped",
         "namespace_protected",

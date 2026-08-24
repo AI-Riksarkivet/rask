@@ -206,3 +206,20 @@ async def test_metadata_projection_keeps_identity_and_discards_the_rest() -> Non
     payload = await dashboard.list_jobs(_client(jobs), _DASH)
 
     assert payload.jobs[0].metadata == {"rask.lane": "dummy", "rask.stage": "silver"}
+
+
+@pytest.mark.asyncio
+async def test_the_work_token_never_survives_the_projection() -> None:
+    """`rask.token` is stamped by the medallion's submitter and must NOT reach a jobs-board row.
+
+    This is why `metadata` was stripped whole before the projection existed, and it is the reason
+    the allowlist is explicit rather than a `rask.` prefix — a prefix keeps the token, which is the
+    one value the original strip was written to contain.
+    """
+    bulky = {"metadata": {"rask.lane": "dummy", "rask.token": "s3cret-work-token", "rask.project": "acme"}}
+    jobs = [_FakeJobDetails("job-1", start_time=1, bulky=bulky)]
+
+    payload = await dashboard.list_jobs(_client(jobs), _DASH)
+
+    assert "rask.token" not in payload.jobs[0].metadata
+    assert payload.jobs[0].metadata == {"rask.lane": "dummy", "rask.project": "acme"}

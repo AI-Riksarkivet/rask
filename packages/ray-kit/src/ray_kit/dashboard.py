@@ -198,10 +198,18 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
     return RayHealth(ok=True, dashboard_url=dashboard_url, client_ray_version=ray.__version__)
 
 
-#: The one metadata namespace this projection keeps — see the projection in `list_jobs`. A prefix
-#: rather than an explicit key list so a new `rask.` identity key needs no change here, while a
-#: workload's own keys stay out regardless of how many it stamps.
-_IDENTITY_PREFIX = "rask."
+#: The metadata keys this projection keeps — an EXPLICIT ALLOWLIST, not a prefix.
+#:
+#: A `rask.` prefix was tried first and is wrong: the medallion's submitter also stamps
+#: ``rask.token`` (`ray_submit.py`), so a prefix match puts that token into every jobs-board row —
+#: precisely the leak `test_ray_job_wire_parity` was written to prevent, and precisely why
+#: `metadata` was stripped whole before this. An allowlist cannot regress that way: a new key is
+#: kept only when someone adds it here and says why.
+#:
+#: What survives is the run's IDENTITY — who it was for, which tenant, which stage, which
+#: declaration. Not the work token, which names nothing a reader needs and is the one value the
+#: original strip existed to contain.
+_IDENTITY_KEYS = frozenset({"rask.lane", "rask.stage", "rask.project", "rask.originator"})
 
 
 async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str, *, max_jobs: int = MAX_JOBS) -> RayJobsPayload:
@@ -255,7 +263,7 @@ async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str, *, m
         # Reuse `payload` — a second `d.dict()` would double the per-job cost this loop exists to
         # bound. OMITTED entirely when nothing survives, rather than left as `{}`: a job with no
         # rask identity carries no metadata, which is what the bulk-drop invariant asserts.
-        identity = {k: v for k, v in (payload.get("metadata") or {}).items() if k.startswith(_IDENTITY_PREFIX)}
+        identity = {k: v for k, v in (payload.get("metadata") or {}).items() if k in _IDENTITY_KEYS}
         if identity:
             payload["metadata"] = identity
         else:

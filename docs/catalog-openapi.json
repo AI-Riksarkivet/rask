@@ -2687,6 +2687,8 @@
               "policy_deleted",
               "transform_set",
               "transform_deleted",
+              "gate_set",
+              "gate_deleted",
               "namespace_created",
               "namespace_dropped",
               "table_created",
@@ -2747,7 +2749,8 @@
               "namespace",
               "table",
               "annotation_task",
-              "transform"
+              "transform",
+              "gate"
             ],
             "title": "Object Type",
             "type": "string"
@@ -5955,6 +5958,71 @@
         "title": "FtsQuery",
         "type": "object"
       },
+      "GateSpecRequest": {
+        "additionalProperties": false,
+        "description": "Declare one project's gate. The project comes from the gated PATH, never from here.\n\nOmitting ``project`` is the security half, exactly as on ``TransformSpecRequest``: a\nbody-supplied project would let an admin of one tenant pass ``can_administer`` on their own\nproject while rewriting somebody else's gate.\n\nField semantics live on ``service_kit.lakehouse.gate_specs.GateSpec``, which is the model this\nvalidates into and the one the medallion reads. One definition, two services.",
+        "properties": {
+          "key_column": {
+            "default": "id",
+            "title": "Key Column",
+            "type": "string"
+          },
+          "required_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Columns",
+            "type": "array"
+          },
+          "review_band": {
+            "default": 0.25,
+            "title": "Review Band",
+            "type": "number"
+          },
+          "review_enabled": {
+            "default": false,
+            "title": "Review Enabled",
+            "type": "boolean"
+          }
+        },
+        "title": "GateSpecRequest",
+        "type": "object"
+      },
+      "GateSpecResponse": {
+        "properties": {
+          "key_column": {
+            "title": "Key Column",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "required_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Columns",
+            "type": "array"
+          },
+          "review_band": {
+            "title": "Review Band",
+            "type": "number"
+          },
+          "review_enabled": {
+            "title": "Review Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project",
+          "key_column",
+          "review_band",
+          "review_enabled"
+        ],
+        "title": "GateSpecResponse",
+        "type": "object"
+      },
       "GcPreview": {
         "properties": {
           "current_version": {
@@ -8151,6 +8219,11 @@
             },
             "title": "Accept Assertions",
             "type": "array"
+          },
+          "gate_only": {
+            "default": false,
+            "title": "Gate Only",
+            "type": "boolean"
           },
           "key_column": {
             "maxLength": 128,
@@ -14966,6 +15039,316 @@
         "summary": "Undrop Namespace",
         "tags": [
           "namespace"
+        ]
+      }
+    },
+    "/v1/project/{id}/gate/delete": {
+      "post": {
+        "description": "Stop overriding \u2014 the chart's settings govern again. Never writes zeros; see the module note.",
+        "operationId": "delete_gate_v1_project__id__gate_delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Delete Gate V1 Project  Id  Gate Delete Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Gate",
+        "tags": [
+          "gate"
+        ]
+      }
+    },
+    "/v1/project/{id}/gate/describe": {
+      "post": {
+        "description": "This project's declared gate, or ``null`` when the chart's settings still govern.\n\n``null`` rather than a populated default: a caller must be able to tell \"nothing is declared\" \u2014\nwhere a `helm upgrade` is still the only lever \u2014 from \"declared, and these are the values\".",
+        "operationId": "describe_gate_v1_project__id__gate_describe_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GateSpecResponse"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Describe Gate V1 Project  Id  Gate Describe Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Describe Gate",
+        "tags": [
+          "gate"
+        ]
+      }
+    },
+    "/v1/project/{id}/gate/set": {
+      "post": {
+        "description": "Declare (or re-declare) this project's gate settings \u2014 admin-gated; idempotent.",
+        "operationId": "set_gate_v1_project__id__gate_set_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateSpecRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateSpecResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Gate",
+        "tags": [
+          "gate"
         ]
       }
     },

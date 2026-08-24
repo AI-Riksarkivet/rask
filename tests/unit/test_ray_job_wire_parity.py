@@ -40,13 +40,19 @@ _TS_SCHEMA = REPO_ROOT / "frontend/packages/api/src/ray.ts"
 #: Fields the TS schema declares that the Python model deliberately does not send, with the reason.
 #: An entry here is a claim someone has to justify — the same contract as the medallion's emit
 #: exemptions.
-_TS_ONLY = {
-    "metadata": (
-        "stripped by RayJob's `extra=\"ignore\"` on purpose. Ray's JobDetails carries an arbitrary "
-        "user dict, and the medallion's own submitter puts `rask.token` in it (ray_submit.py:166), so "
-        "retaining it would put a token into every jobs-board row. The SPA declares it OPTIONAL with a "
-        "`{}` default so the same parser can also read Ray's dashboard directly, where it IS present."
-    ),
+_TS_ONLY: dict[str, str] = {
+    # EMPTY, and the history is the point. `metadata` lived here because `RayJob` stripped it whole:
+    # Ray's `JobDetails` carries an arbitrary user dict and the medallion stamps `rask.token` into
+    # it, so retaining it whole put a work token in every jobs-board row.
+    #
+    # It is no longer TS-only. `RayJob` declares `metadata`, and `dashboard.list_jobs` PROJECTS it
+    # through an explicit allowlist (`_IDENTITY_KEYS`) that keeps lane/stage/project/originator and
+    # drops everything else — the token included. The asymmetry this entry explained is gone; the
+    # property it protected is now enforced in `test_dashboard_bounds` by two tests, one for the bulk
+    # and one naming the token specifically.
+    #
+    # A prefix match was tried first and was WRONG for exactly the reason this entry recorded: it
+    # kept `rask.token`. That is why the allowlist is explicit.
 }
 
 
