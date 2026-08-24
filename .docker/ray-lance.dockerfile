@@ -4,7 +4,7 @@
 # for a distributed Lance read→transform→write job submitted via `ray job submit` (see make ray-demo).
 # Build context = repo root (RA/rask convention):
 #   docker build $(BUILD_ARGS) -f .docker/ray-lance.dockerfile -t ray-lance:dev .
-FROM rayproject/ray:2.56.1-py312-cpu@sha256:56a97670c40913b7169c2b6e63be2e40c6724fcbb8fb85ce2a4040a4b5238492
+FROM rayproject/ray:2.58.0-py312-cpu@sha256:c3c9573c5c6bfe4127885f79622d6a32064d34cafc7d156ec728aab8657be250
 
 # Fully pinned for reproducibility — this trio is version-sensitive (lance_ray's write_lance / index paths
 # target specific pylance signatures; see docs/RAY.md). --no-cache-dir keeps the layer lean; the base

@@ -1518,12 +1518,12 @@ ray:
     token: ""
   # MUST MATCH WHAT THE IMAGE SHIPS, and the lock is the source of truth for that:
   # .docker/ray-cluster.dockerfile builds with `uv sync --package ratch` from the root uv.lock, and
-  # packages/ratch requires ray[data,default]>=2.57. This read 2.56.1 while the container ran 2.57.0 —
+  # packages/ratch requires ray[data,default]>=2.58. This read 2.56.1 while the container ran 2.57.0 —
   # so the KubeRay operator, which uses rayVersion for its own compatibility gating (see authOptions
   # below, which needs >= 2.52.0), was reasoning about a cluster that did not exist. The drift was
   # silent until tests/unit/test_invariants.py::test_the_chart_tells_kuberay_the_ray_version_the_image_actually_ships
   # started comparing the two; bump this WITH the lock, never on its own.
-  rayVersion: "2.57.0"
+  rayVersion: "2.58.0"
   image:
     # `ray-cluster`: names the KubeRay cluster image, distinct from the fleet's
     # Ray-plane SERVICE image (`ray` under R20, `compute` since R22)

@@ -14,7 +14,7 @@ kind + `ray job submit`, proving Lance's distributed capabilities against RustFS
 
 | Piece | File |
 | ----- | ---- |
-| Thin CPU Ray image (`rayproject/ray:2.56.1-py312-cpu` + `lance-ray==0.5.0` + `pylance==9.0.0`) | `.docker/ray-lance.dockerfile` |
+| Thin CPU Ray image (`rayproject/ray:2.58.0-py312-cpu` + `lance-ray==0.5.0` + `pylance==9.0.0`) | `.docker/ray-lance.dockerfile` |
 | A real Ray head (GCS 6379, dashboard/job API 8265) + Service, single node | `deploy/ray-lance-demo.yaml` |
 | The submitted job — a genuine distributed Lance pipeline | `scripts/ray_lance_job.py` |
 | One-shot driver | `make ray-demo` (and `make ray-demo-clean`) |
