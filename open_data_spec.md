@@ -296,8 +296,8 @@ unsafe before the §9(c) decision. Nothing here is parallelisable just because i
 
 | # | change | state |
 |---|---|---|
-| 1 | Ingest writes **External** blob descriptors by default | OPEN — prerequisite for 3 |
-| 2 | Name the blob thresholds; register the external base at create | OPEN |
+| 1 | Ingest writes **External** blob descriptors by default | OPEN — mechanism measured (§9(a2)); prerequisite for 3 |
+| 2 | Name the blob thresholds; register the external base at create | OPEN — moved to the CATALOG's create door (§9(a2)) |
 | 3 | Stop materialising blobs in the mover | OPEN — blocked on 1 |
 | 4 | Tier→tier becomes `add_columns`, not overwrite | OPEN — measured safe |
 | 5 | Kill `GateOutcome.TRIGGER`; one enforcement point | **IN FLIGHT** — uncommitted, 48 fixtures red |
@@ -305,7 +305,7 @@ unsafe before the §9(c) decision. Nothing here is parallelisable just because i
 | 7 | Rename lane → transform | OPEN |
 | 8 | Split the gate: Ray writes an attestation, catalog runs the floor | OPEN — now on the DEFAULT path |
 | 9 | Add `cascade_run` — one workflow per batch | OPEN |
-| 10 | Tiers become tags on one dataset | BLOCKED on §9(c) |
+| 10 | Tiers become tags on one dataset | UNBLOCKED 2026-08-24 — §9(c) decided: gold is a tag |
 
 1. **Ingest writes External descriptors by default** — see 3 below. MEASURED as a PREREQUISITE for
    the mover change, not a parallel one (§9(a)): a managed descriptor carried between datasets
@@ -342,7 +342,9 @@ unsafe before the §9(c) decision. Nothing here is parallelisable just because i
    queryable and cancellable, which today it is not. See §4b: the cascade is topic-chained, so no run
    identity survives a tier boundary — the ingest plane already does this correctly with child
    workflows and `when_all`, and the cascade is the odd one out.
-10. **Tiers become tags on one dataset.** *Requires the §9(c) decision first.*
+10. **Tiers become tags on one dataset.** The §9(c) decision it waited on was made 2026-08-24:
+    gold is a TAG / PROJECTION, not a physical zone. The chart's gold serving warehouse becomes a
+    serving view over the one dataset rather than a copy of it. Unblocked, not started.
 
 ### What landed 2026-08-24 and is NOT in the list above
 
@@ -379,17 +381,49 @@ Neither of these is a spec change; both are preconditions the list assumed and t
   change 1, not an independent improvement — and dropping the materialisation while bronze is still
   managed would produce silver tables whose every blob read returns nothing, with nothing red.
   Script: `scripts/measure_blob_descriptor_carry_forward.py`.
+
+  **(a2) HOW ingest writes External, and what carrying one actually costs — MEASURED 2026-08-24,
+  pylance 10.0.0.** The mechanism exists and is one argument; the three mechanics around it are not
+  obvious and each one fails differently.
+
+  | | dataset on disk (4 MB corpus, 20 rows) | resolves |
+  | --- | --- | --- |
+  | External bronze | **3,232 B — 0.1%** | 20/20 |
+  | Managed bronze | 4,002,901 B — 100.1% | 20/20 |
+  | External carried → silver | **3,233 B — another 0.1%** | **20/20** |
+  | Managed carried → silver | 2,262 B | **0/20, silently** |
+
+  - `lance.blob_array` accepts `Blob.from_uri(...)` (or a bare `str`) and, with
+    `external_blob_mode="reference"` (the default), stores the URI instead of the bytes.
+  - **`initial_bases` is CREATE-MODE ONLY**, and `allow_external_blob_outside_bases` defaults False —
+    so an unregistered URI is REFUSED at write, loudly, which is the right direction. But in rask the
+    CATALOG creates datasets and the lander only appends (the creation two-step,
+    `ingest/lander.py`), so **registering the external base belongs to the catalog's create door,
+    not the lander.** Change 2 moves accordingly.
+  - **`blob_uri` in a scanned descriptor is BASE-RELATIVE** (`page-000.bin`, not a URI). Carrying it
+    forward verbatim fails with *"outside registered external bases"*; the carry must resolve
+    `blob_id` → base path → join before rewriting. This is the concrete content of "the shapes
+    differ" above, and it is why change 3 is a real change rather than a deletion.
+  - **`size == 0` means "the whole object".** Passing it back as a slice length asks for zero bytes
+    and yields an empty read with no error — the same silence as the managed case.
 - **(b) `add_columns` on a table that HAS a blob column — ANSWERED, MEASURED 2026-08-24 on pylance
   10.0.0.** It does **not** rewrite. A 300-row 2.2 dataset with a real blob column: before, one
   203,554 B data file + one 20,000,000 B sidecar; after adding two string columns, the original data
   file and the sidecar are **byte-identical**, and the cost is one new 4,623 B data file plus a
   manifest and a transaction record. `MODIFIED in place: 0`, `REMOVED: 0`, blob delta `0 B`.
   Changes 1 and 4 are sound. Script: `scripts/measure_add_columns_on_blob_table.py`.
-- **(c) Is gold physically zoned?** `gold_warehouse_enabled` (a separate gold bucket) is
-  **incompatible** with gold-as-a-tag. Owner decision, unmade.
-- **(d) Row/column-level authz.** Today the tier split substitutes for it — "gold-only access" is
-  expressible only because gold is a different table. Collapsing tiers needs `materialized_view` to
-  carry that weight.
+- **(c) Is gold physically zoned? — DECIDED 2026-08-24 (owner): NO. Gold is a tag / projection.**
+  `gold_warehouse_enabled` (a separate gold bucket) was the incompatible alternative and is not the
+  direction. **Change 10 is therefore UNBLOCKED** — it was the only item waiting on this. The
+  chart's gold serving warehouse becomes a SERVING VIEW over the one dataset rather than a physical
+  copy of it, which is the same claim the External-blob measurement makes about the corpus: a tier
+  is a readiness state, and the estate should not hold three copies of anything to express one.
+- **(d) Row/column-level authz — DECIDED 2026-08-24 (owner): DEFER, with the reason recorded.**
+  Today the tier split substitutes for it — "gold-only access" is expressible only because gold is a
+  different table. That substitution stops working once (c) collapses the tiers, so the honest
+  sequencing is: land the collapse, then decide what carries the weight (`materialized_view` is the
+  candidate). Building masking BEFORE the tiers settle means building it twice. This is a deferral
+  with a trigger, not an open question: it re-opens when change 10 lands.
 - **(e) Lance branch merge/fast-forward semantics**, and whether branch blob refs participate in the
   source's reachability. Absent from every source read. Do not build WAP-over-branches until measured.
 
