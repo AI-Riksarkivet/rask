@@ -320,6 +320,29 @@ def transform_stage(
         out = out.append_column(pa.field(_LINEAGE_COLUMN, pa.json_()), _lineage_column(lineage, out.num_rows))
     # 2.2 + stable row ids like seed_bronze: every dataset the cascade writes is on the current format (so a blob
     # column never trips "Blob v2 requires file version >= 2.2" mid-cascade) and keeps durable row identity.
+    # ADDITIVE RE-RUN: ADD THE NEW COLUMNS, DO NOT REWRITE THE TIER (change 4).
+    #
+    # `_index_lineage`'s own docstring states the cost this removes: the index "must be (re)built
+    # after every stage write because the cascade writes mode="overwrite", which drops the dataset's
+    # indices". An overwrite also rewrites every carried column to produce bytes identical to the ones
+    # already there. When this run only ADDS columns to rows that are already present, neither is
+    # necessary — `add_columns` appends new data files per fragment and leaves the existing ones
+    # untouched (measured: `scripts/measure_add_columns_on_blob_table.py`).
+    #
+    # GUARDED ON ROW IDENTITY, NOT ROW COUNT. `add_columns` aligns POSITIONALLY, so attaching derived
+    # values to a tier whose rows have shifted would misfile every one of them — silently, and in a
+    # governed dataset. `source_rowid` is the identity the estate already mints for exactly this
+    # question, so the two are compared element-wise and anything but an exact match falls back to the
+    # overwrite that was always correct.
+    additive = _additive_columns(out, to_uri, storage_options)
+    if additive is not None:
+        if additive:
+            lance.dataset(to_uri, storage_options=storage_options).add_columns(out.select(additive))
+        result = measure(to_uri, storage_options).model_copy(update={"previous_row_count": previous_rows})
+        result.column_map = _column_map(ds.schema, out.column_names, set(blob_payloads))
+        log.info("medallion_stage_added_columns", extra={"to_uri": to_uri, "columns": additive})
+        return result
+
     # THE TARGET MUST REGISTER THE SAME BASE, or every carried pointer is refused at write.
     #
     # `initial_bases` is create-mode only and this is an overwrite, so it is supplied on the FIRST
@@ -343,6 +366,42 @@ def transform_stage(
     # stage's blob columns (the deriver source). The mover attaches the single upstream dataset identity.
     result.column_map = _column_map(ds.schema, out.column_names, set(blob_payloads))
     return result
+
+
+def _additive_columns(out: pa.Table, to_uri: str, storage_options: dict[str, str]) -> list[str] | None:
+    """The columns to ADD, or ``None`` when this run must overwrite instead.
+
+    An empty list is a real answer and the most common one: the target already holds every column
+    over exactly these rows, so there is nothing to write at all. That is the at-least-once
+    redelivery case, and before this it rewrote an entire tier to reproduce bytes that were already
+    on disk.
+
+    Every other condition here is a way `add_columns`' POSITIONAL alignment could be wrong, and each
+    falls back rather than guessing:
+
+    * the target must exist — otherwise there is nothing to add to;
+    * the target's columns must be a SUBSET of this run's. A target holding a column this run does
+      not produce means the shape changed, and only a rewrite can reconcile it;
+    * both sides must carry `source_rowid`, the row identity the estate mints, and it must match
+      ELEMENT-WISE. Equal row counts are not enough: an upstream that replaced one row with another
+      keeps the count and moves the meaning, and an addition would then attach derived values to the
+      wrong rows — silently, in a governed dataset.
+
+    Returns ``None`` on any read failure. A tier that cannot be inspected gets the overwrite, which is
+    what it got before this existed.
+    """
+    if _SOURCE_ROWID_COLUMN not in out.column_names:
+        return None
+    try:
+        target = lance.dataset(to_uri, storage_options=storage_options)
+        existing = set(target.schema.names)
+        if not existing <= set(out.column_names) or _SOURCE_ROWID_COLUMN not in existing:
+            return None
+        if target.to_table(columns=[_SOURCE_ROWID_COLUMN]).column(_SOURCE_ROWID_COLUMN).to_pylist() != out.column(_SOURCE_ROWID_COLUMN).to_pylist():
+            return None
+        return [name for name in out.column_names if name not in existing]
+    except Exception:  # noqa: BLE001 — absent, unreadable, or not a dataset: all mean "overwrite"
+        return None
 
 
 def _column_map(in_schema: pa.Schema, out_names: list[str], blob_cols: set[str]) -> list[tuple[str, str, str]]:
