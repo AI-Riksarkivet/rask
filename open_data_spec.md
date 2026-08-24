@@ -299,7 +299,7 @@ unsafe before the §9(c) decision. Nothing here is parallelisable just because i
 | 1 | Ingest writes **External** blob descriptors by default | **DONE** `3c8032e5` — measured 0.64% of corpus vs 100.71% |
 | 2 | Name the blob thresholds; register the external base at create | **DONE** `3c8032e5` + `8c24c7f3` |
 | 3 | Stop materialising blobs in the mover | **DONE** `8e77107b` — 3 tiers cost 0.58% vs 300.52% |
-| 4 | Tier→tier becomes `add_columns`, not overwrite | OPEN — measured safe |
+| 4 | Tier→tier becomes `add_columns`, not overwrite | **DONE** `e4d2ea6b` — and a redelivery writes nothing |
 | 5 | Kill `GateOutcome.TRIGGER`; one enforcement point | **DONE** `ce821949` |
 | 6 | Drop the chart fallback in `effective_gate`; drop `medallion.movers[]` | OPEN |
 | 7 | Rename lane → transform | OPEN |
@@ -355,7 +355,18 @@ unsafe before the §9(c) decision. Nothing here is parallelisable just because i
    **This is the answer to "why do 10M images materialise into RAM".** The line is
    `compute.py:406` — `payloads = aligned.column(f.name).to_pylist()` — and it is per-stage, so the
    corpus is pulled into the mover's heap once per tier edge.
-4. **Replace tier-to-tier overwrite with `add_columns`** — `compute.py::transform_stage`,
+4. **Replace tier-to-tier overwrite with `add_columns` — DONE (`e4d2ea6b`).** Three paths where
+   there was one: a target missing columns over matching rows gets `add_columns` for exactly those;
+   a target that already holds every column over matching rows gets **nothing written at all**;
+   anything else falls back to the overwrite. **The no-op is the case that matters** — Dapr delivers
+   at least once, so a completed stage re-runs routinely, and that re-run used to rewrite the tier,
+   drop its index and commit a version recording that nothing had happened.
+
+   **The guard is the substance, not a precaution.** `add_columns` aligns POSITIONALLY, so row COUNT
+   is not sufficient — an upstream that replaces one row with another keeps the count and moves the
+   meaning. `source_rowid` is compared element-wise, and any mismatch takes the overwrite.
+
+   Original note, retained: `compute.py::transform_stage`,
    `scripts/ray_stage_job.py`. Also removes the per-stage index rebuild, which exists only because
    indices do not survive an overwrite. Measured no-rewrite by
    `scripts/measure_add_columns_on_blob_table.py`: `add_columns` appends new data files per fragment
