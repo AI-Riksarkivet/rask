@@ -84,3 +84,19 @@ def test_an_id_without_a_namespace_is_refused_rather_than_guessed() -> None:
     dataset with an undeclared namespace — the failure this record exists to remove."""
     with pytest.raises(ValueError):
         resolve_stage_identity(_settings(), spec=_spec(from_id="events"), project="acme")
+
+
+def test_the_env_dataset_is_still_accepted_alongside_a_declaration() -> None:
+    """A mover pointed at a declared lane must not stop serving its configured edge.
+
+    The guard accepts BOTH: the env `from_dataset` an estate has always used, and the declared
+    lane's `from_id`. Replacing rather than adding would silently retire a working lane the moment
+    someone declared a second one — a migration hazard disguised as a config change.
+    """
+    ident_env = resolve_stage_identity(_settings(), spec=None, project="acme")
+    ident_declared = resolve_stage_identity(_settings(), spec=_spec(), project="acme")
+
+    assert ident_env.from_dataset == "acme-bronze$events"
+    assert ident_declared.from_dataset == "acme-bronze$events"
+    # the declaration changes the OUTPUT here, which is what makes the two distinguishable
+    assert ident_env.to_dataset != ident_declared.to_dataset

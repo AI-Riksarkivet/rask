@@ -290,7 +290,19 @@ async def handle_stage(
     # Absent → no claim → proceed. The field is a discriminator, not a requirement: an external bronze
     # writer may omit it, and triggers queued before this field existed must still drain at rollout.
     arrived = trigger.dataset
-    if arrived is not None and arrived != settings.from_dataset:
+    # THE DECLARED LANE IS ALSO THIS MOVER'S INPUT. The guard used to compare only against the raw
+    # env `from_dataset`, so a mover pointed at a declared lane dropped its own arrivals: the head
+    # published `acme-bronze$agnostic`, the env still said `bronze$events`, and the two never matched.
+    # Resolved here rather than after, because a DROP decided on stale identity is indistinguishable
+    # from a correct one — it acks, and the work simply ceases to exist.
+    # `trigger.project` RAW, not the validated `project` below — that resolution happens after this
+    # guard, and moving it earlier would change the fail-closed ordering it exists for. An absent or
+    # wrong project simply finds no record, and the guard falls back to env-only: the old behaviour.
+    declared_lane = await resolve_lane_async(settings, project=trigger.project or "") if settings.lane else None
+    accepted = {settings.from_dataset}
+    if declared_lane is not None:
+        accepted.add(declared_lane.from_id)
+    if arrived is not None and arrived not in accepted:
         # OBSERVABLE, at INFO and on a counter. A DROP is an ack: Dapr neither redelivers nor
         # dead-letters, so if the app records nothing the event simply ceases to exist. Before this
         # guard, a bronze$pages arrival drove this mover into a deterministic FAIL — and that FAIL is
@@ -327,7 +339,7 @@ async def handle_stage(
     # nowhere else. Everything below — the FGA object, the lineage identities, both URIs — reads
     # these four names, so they follow the declaration automatically.
     try:
-        identity = resolve_stage_identity(settings, spec=await resolve_lane_async(settings, project=project), project=project)
+        identity = resolve_stage_identity(settings, spec=declared_lane, project=project)
     except (UndeclaredLaneError, ValueError) as exc:
         # A named-but-undeclared lane, or a declared id with no namespace. Both are DETERMINISTIC —
         # redelivery cannot make a missing record appear — so DROP rather than RETRY, and say which.
