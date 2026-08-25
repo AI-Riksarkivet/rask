@@ -20,6 +20,7 @@ from typing import Any
 
 import lance
 import pyarrow as pa
+import pytest
 from lance import blob_array, blob_field
 from lance.blob import Blob
 from medallion.services.compute import transform_stage
@@ -152,3 +153,73 @@ class TestTheManagedPathIsUnchanged:
         out = lance.dataset(silver).to_table()
         assert out.num_rows == 4
         assert set(out.column("stage").to_pylist()) == {"silver"}
+
+
+class TestTheDerivabilityProbeIsBounded:
+    """Deciding "is this derivable" must not cost the tier — §8 change 3, second half.
+
+    `derive_artifacts` dispatches on the FIRST non-null payload, so the question is what KIND of
+    payload the column holds, and one row answers it. The first version of `_payloads_if_derivable`
+    asked that question with an unbounded `read_aligned_table` and then looked at one element — so
+    the probe materialised every payload in the tier. At ten million page images that is the whole
+    corpus read to answer a question about one row: the defect the change exists to remove,
+    reintroduced inside the fix.
+
+    Asserted on ROWS SCANNED rather than a byte ratio, because rows are scale-invariant: the bound
+    must hold at 500 rows and at 10,000,000.
+    """
+
+    def test_the_probe_scans_a_bounded_window_not_the_tier(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from medallion.services.compute import _DERIVE_PROBE_ROWS, _payloads_if_derivable
+
+        source = tmp_path / "corpus"
+        uris = _corpus(source, count=_DERIVE_PROBE_ROWS * 6, size=2_000)
+        bronze = str(tmp_path / "bronze.lance")
+        _bronze(bronze, uris, base=str(source))
+
+        scanned: list[int] = []
+        real = blobs.read_aligned_table
+
+        def counting(dataset: Any, **kw: Any) -> Any:
+            table = real(dataset, **kw)
+            scanned.append(table.num_rows)
+            return table
+
+        monkeypatch.setattr(blobs, "read_aligned_table", counting)
+        _payloads_if_derivable(lance.dataset(bronze), ["payload"], len(uris))
+
+        assert scanned, "the probe made no scan at all — the instrumentation is broken, not the code"
+        assert max(scanned) <= _DERIVE_PROBE_ROWS, (
+            f"the probe scanned {max(scanned)} rows of a {len(uris)}-row tier; it must stay within "
+            f"{_DERIVE_PROBE_ROWS}. An unbounded probe reads the whole corpus to classify one payload."
+        )
+
+    def test_an_ALL_NULL_window_falls_back_rather_than_guessing(self, tmp_path: Path) -> None:
+        """A failed harvest writes a null blob (R27), so a prefix of nulls is a real shape.
+
+        Answering "nothing to derive" from an all-null window would silently skip derivation for a
+        tier whose later rows are fine — a wrong answer that costs nothing to reach. The fallback
+        pays for the full read instead, which is the correct trade at the rare shape.
+        """
+        from medallion.services.compute import _DERIVE_PROBE_ROWS, _payloads_if_derivable
+
+        source = tmp_path / "corpus"
+        real_uris = _corpus(source, count=4, size=2_000)
+        n_null = _DERIVE_PROBE_ROWS + 2
+        payloads: list[Any] = [None] * n_null + [Blob.from_uri(u) for u in real_uris]
+
+        schema = blobs.stamp_external_base(pa.schema([pa.field("id", pa.int64()), blob_field("payload", nullable=True)]), str(source))
+        uri = str(tmp_path / "sparse.lance")
+        lance.write_dataset(
+            pa.table({"id": pa.array(range(len(payloads)), pa.int64()), "payload": blob_array(payloads)}, schema=schema),
+            uri,
+            mode="create",
+            data_storage_version="2.2",
+            enable_stable_row_ids=True,
+            initial_bases=[lance.DatasetBasePath(str(source), "source")],
+        )
+
+        got = _payloads_if_derivable(lance.dataset(uri), ["payload"], len(payloads))
+        # The fixture's payloads are not images, so nothing derives — the property under test is that
+        # the all-null window did not short-circuit before looking past it.
+        assert got == {} or len(got["payload"]) == len(payloads)

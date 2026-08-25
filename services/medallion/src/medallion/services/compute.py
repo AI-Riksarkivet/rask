@@ -503,6 +503,12 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
     return pa.table(columns, schema=pa.schema(fields)), blob_payloads
 
 
+#: How many rows the derivability probe reads. Bounded because the question is "what KIND of payload
+#: is in this column", which one row answers — while an unbounded read answers it by materialising
+#: the tier. Larger than 1 so a prefix of failed harvests (null blobs, R27) does not force the
+#: fallback on a healthy tier.
+_DERIVE_PROBE_ROWS = 64
+
 #: The manifest name a cascade tier registers its inherited external base under. One base per
 #: dataset, matching what ingest registers, so a descriptor's `blob_id` stays unambiguous.
 _EXTERNAL_BASE_NAME = "source"
@@ -569,12 +575,29 @@ def _payloads_if_derivable(ds: lance.LanceDataset, blob_cols: list[str], rows: i
 
     Returns `{}` when nothing matches, which `derive_artifacts` reads as "nothing to derive" — the
     same answer it reaches today after materialising the whole corpus to find out.
+
+    **THE PROBE IS BOUNDED, and the first version of this function was not.** It called
+    `read_aligned_table` with no limit and then looked at one element — so deciding "is this
+    derivable" read every payload in the tier. At ten million page images that is the whole corpus
+    materialised to answer a question about one row: exactly the defect this function exists to
+    remove, reintroduced inside the fix, with a docstring claiming the opposite.
+
+    An all-null WINDOW falls back to the full read rather than guessing. A failed harvest writes a
+    null blob (R27), so a prefix of nulls is a real shape, and answering "nothing to derive" from it
+    would silently skip derivation for a tier whose later rows are fine. Rare, and correctness wins.
     """
     if not rows:
         return {}
     column = min(blob_cols)
-    probe = blobs.read_aligned_table(ds, columns=[column]).column(column).to_pylist()
-    first = next((payload for payload in probe if payload is not None), None)
+    window = blobs.read_aligned_table(ds, columns=[column], limit=_DERIVE_PROBE_ROWS)
+    first = next((payload for payload in window.column(column).to_pylist() if payload is not None), None)
+    if first is None and rows > _DERIVE_PROBE_ROWS:
+        # The window was ALL NULL and there are more rows behind it. Cannot answer cheaply; pay for
+        # the full read rather than skip a derivation that may be owed.
+        full = blobs.read_aligned_table(ds, columns=blob_cols)
+        payloads = {name: full.column(name).to_pylist() for name in blob_cols}
+        probe_all = next((p for p in payloads[column] if p is not None), None)
+        return payloads if probe_all is not None and is_derivable(probe_all) else {}
     if first is None or not is_derivable(first):
         return {}
     aligned = blobs.read_aligned_table(ds, columns=blob_cols)

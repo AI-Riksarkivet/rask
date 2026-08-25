@@ -124,6 +124,7 @@ def read_aligned_table(
     *,
     columns: list[str] | None = None,
     with_row_id: bool = False,
+    limit: int | None = None,
 ) -> pa.Table:
     """One ROW-ALIGNED scan whose blob-v2 columns arrive as ``large_binary`` bytes, **nulls included**.
 
@@ -140,11 +141,16 @@ def read_aligned_table(
     maintain, one scan instead of two, and the payload list can be handed straight back to
     :func:`lance.blob_array` (which accepts ``None`` entries) to re-wrap a blob column for a 2.2 write.
 
+    ``limit`` bounds the scan. It exists because a caller that only needs to LOOK at a payload — to
+    decide whether a deriver applies, say — otherwise materialises the whole corpus to answer a
+    question about one row. Unbounded stays the default: every caller that consumes payloads by row
+    position needs all of them, and a silent cap there would misalign the output.
+
     Prefer this over ``read_blobs``/``take_blobs`` whenever payloads are consumed BY ROW POSITION. The
     take-path remains correct for single-row serving (``ids=[rowid]``, where an empty result IS the null
     signal) — see :func:`blob_column_resolves` and the viewer's blob endpoints.
     """
-    return ds.scanner(columns=columns, blob_handling="all_binary", with_row_id=with_row_id).to_table()
+    return ds.scanner(columns=columns, blob_handling="all_binary", with_row_id=with_row_id, limit=limit).to_table()
 
 
 def blob_column_resolves(ds: lance.LanceDataset, column: str) -> bool:
