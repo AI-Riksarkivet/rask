@@ -105,6 +105,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.fga = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
     # Durable ingest (#25) is the Dapr subscription wired below (declarative — the sidecar drives it);
     # there is no consumer task to manage here. The HTTP /api/v1/lineage path stays for external producers.
+    #
+    # The RELAY's publisher, and only when the outbox is on. The drain re-publishes a recovered event so a
+    # subscriber that never saw it still acts on it — without this the relay repairs the GRAPH while the
+    # cascade it was meant to restart stays halted. Built here rather than per drain (one channel per
+    # process, the same rule as the AGE pool), and skipped entirely when `outbox_uri` is empty so a
+    # deployment with the outbox off opens no sidecar channel it will never use.
+    app.state.dapr = None
+    if settings.outbox_uri:
+        from dapr.aio.clients import DaprClient
+
+        app.state.dapr = DaprClient()
     app.state.startup_complete = True
     try:
         yield
@@ -116,6 +127,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if fga_client is not None:
             with suppress(Exception):
                 await fga_client.close()
+        dapr_client = getattr(app.state, "dapr", None)
+        if dapr_client is not None:
+            with suppress(Exception):
+                await dapr_client.close()
         with suppress(Exception):
             await pool.close()
 

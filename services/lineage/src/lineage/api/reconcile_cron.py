@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from pydantic import ValidationError
 
-from lineage.api.dependencies import RepositoryDep, SettingsDep
+from lineage.api.dependencies import PublisherDep, RepositoryDep, SettingsDep
 from lineage.core.config import declared_columns_map, storage_options
 from lineage.core.reconcile import (
     BACKFILLABLE_STATES,
@@ -33,6 +33,7 @@ from lineage.core.reconcile import (
 )
 from lineage.models import RunEvent, author_sub_from_payload
 from lineage.services.consumer import record_event_best_effort
+from service_kit import dapr_publish
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.lakehouse import outbox, outbox_metrics
 
@@ -43,6 +44,7 @@ log = logging.getLogger(__name__)
 async def _on_cron(
     repository: RepositoryDep,
     settings: SettingsDep,
+    publisher: PublisherDep,
     _: Annotated[None, Depends(require_dapr_token)],
 ) -> dict[str, Any]:
     """One reconciliation sweep, triggered by a Dapr cron tick: back-fill any dropped Lance writes.
@@ -90,7 +92,7 @@ async def _on_cron(
         drained = 0
         if settings.outbox_uri:
             try:
-                drained = await _drain_outbox(repository, settings, opts)
+                drained = await _drain_outbox(repository, settings, opts, publisher)
             except Exception as exc:
                 log.warning("lineage_outbox_drain_failed", extra={"error": str(exc)})
         # Opt-in Run retention (§4) — prune old graph runs while we still hold the single-flight lock,
@@ -156,7 +158,7 @@ async def _on_cron(
     }
 
 
-async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: dict[str, str]) -> int:
+async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: dict[str, str], publisher: object | None = None) -> int:
     """Re-ingest + delete every staged lineage event (#4) — the full-event recovery half of the outbox.
 
     An unparseable (poison) object is dropped so it can't wedge the drain. A well-formed event is ingested
@@ -204,6 +206,33 @@ async def _drain_outbox(repository: RepositoryDep, settings: SettingsDep, opts: 
         # absent from the /events audit surface — exactly the run the outbox exists to save. The feed INSERT
         # is ON CONFLICT DO NOTHING on the natural key, so a later genuine redelivery won't duplicate.
         await record_event_best_effort(repository, event)
+        # RE-PUBLISH, then drop. Ingesting alone repairs the GRAPH and leaves every SUBSCRIBER unaware:
+        # medallion's `/bronze-arrival` reacts to this announcement, so a head event recovered but never
+        # re-published means provenance is restored while the bronze->silver->gold run it should have
+        # started stays halted forever. The relay is the only thing that can restart it.
+        #
+        # BEFORE the drop, never after: a publish that fails must leave the staged object for the next
+        # tick, which is the whole point of staging. The re-ingest on that tick is a no-op (MERGE on
+        # run_id), so retrying costs nothing.
+        #
+        # A duplicate is expected and safe. A staged object can mean "published, then the delete failed",
+        # so this may re-deliver something subscribers already saw — which is exactly the at-least-once
+        # contract they are built for: the graph MERGEs, the feed is ON CONFLICT DO NOTHING, the inbox
+        # keys on `runId@STATE`, and the cascade carries an idempotency token.
+        if publisher is not None:
+            await dapr_publish.publish_event(
+                publisher,
+                timeout_seconds=settings.dapr_publish_timeout_seconds,
+                pubsub_name=settings.dapr_pubsub,
+                topic_name=settings.dapr_topic,
+                # The STAGED BYTES, never `event.model_dump_json()`. The model is the parsed Python
+                # shape (`run_id`, `event_type`); the wire is OpenLineage (`runId`, `eventType`). Round-
+                # tripping through the model re-publishes a document no subscriber can parse — a silent
+                # corruption of the very event this path exists to save. Byte-identical redelivery is
+                # also the honest thing: subscribers see exactly what they would have seen first time.
+                data=event_json,
+                data_content_type="application/json",
+            )
         await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, run_id)
         drained += 1
     # Always emit — adding 0 CREATES the series, so a dashboard/alert has data from the first tick instead

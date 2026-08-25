@@ -69,6 +69,12 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # LINEAGE — an event DESCRIBING a committed write. Losing one means the data landed and the graph
     # never learned of it, so these must be staged through `outbox.publish_lineage_with_outbox`.
     ("services/maintenance/src/maintenance/core/lineage_emit.py", "self._topic"): "lineage-bare",
+    # LINEAGE-RELAY — the outbox's OWN redelivery, and deliberately not "lineage-bare". The event it
+    # publishes was already staged (that is where the drain read it from), so it is the durable path's
+    # delivery half rather than a producer skipping the outbox. Publishing the STAGED BYTES verbatim,
+    # before the staged object is dropped, is what makes a recovered event restart a halted cascade
+    # instead of merely repairing the graph.
+    ("services/lineage/src/lineage/api/reconcile_cron.py", "settings.dapr_topic"): "lineage-relay",
     # CONTROL — a governance refresh hint. `service_kit/control_events.py` declares these best-effort by
     # contract: a consumer re-reads state through the governed path, so a dropped one costs a re-read.
     # ONE row where there were two: the catalog and maintenance copies collapsed into the shared

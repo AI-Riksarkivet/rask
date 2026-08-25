@@ -130,6 +130,12 @@ class _Settings:
     def __init__(self, uri: str, drain_limit: int = 500) -> None:
         self.outbox_uri = uri
         self.outbox_drain_limit = drain_limit  # the P1.2 per-tick cap (0 = unbounded)
+        # What the relay re-publishes a recovered event to. Present on the double because the drain
+        # reads them: a double missing a field the code under test uses fails as an AttributeError
+        # swallowed by the tick's error boundary, which reads as a product bug rather than a gap here.
+        self.dapr_pubsub = "lineage-pubsub"
+        self.dapr_topic = "lineage.events.v1"
+        self.dapr_publish_timeout_seconds = 5.0
 
 
 def test_relay_drain_reingests_valid_and_drops_poison(tmp_path: Any) -> None:
@@ -291,3 +297,81 @@ def test_an_object_staged_under_the_old_key_still_drains(tmp_path: Any) -> None:
 
     outbox.drop_event(uri, {}, keys[0])
     assert list(outbox.list_events(uri, {})) == []
+
+
+def test_the_drain_RE_PUBLISHES_so_a_recovered_event_can_restart_a_halted_cascade(tmp_path: Any, monkeypatch: Any) -> None:
+    """Ingesting alone repairs the GRAPH and leaves every subscriber unaware.
+
+    The catalog's write announcement is what medallion's `/bronze-arrival` subscription reacts to, so a
+    lost head event does not merely under-report provenance -- the whole bronze->silver->gold run never
+    happens. The relay recovering it into the graph fixes the record and leaves the run halted forever,
+    which is provenance restored and work still undone. Re-publishing is what makes the outbox a recovery
+    mechanism rather than an audit repair.
+
+    Ordering is asserted, not assumed: the publish must happen BEFORE the staged object is dropped, so a
+    publish that fails leaves the event for the next tick. The re-ingest then is a no-op (MERGE on run_id).
+    """
+    from lineage.api import reconcile_cron
+    from medallion.schemas.events import build_run_event
+
+    uri = _uri(tmp_path)
+    event = build_run_event(
+        operation="ingest_events",
+        author="alice",
+        job_namespace="medallion",
+        inputs=[("bronze", "bronze$events")],
+        output_namespace="bronze",
+        output_name="bronze$events",
+        version=2,
+        token="t1",
+    )
+    run_id = event["run"]["runId"]
+    outbox.stage_event(uri, {}, run_id, json.dumps(event))
+
+    published: list[dict[str, Any]] = []
+    still_staged_at_publish: list[int] = []
+
+    async def _fake_publish(_client: Any, **kwargs: Any) -> None:
+        published.append(kwargs)
+        # The staged object must still exist HERE. If the drop came first, a failed publish would have
+        # destroyed the event's only durable copy -- the exact loss the outbox exists to prevent.
+        still_staged_at_publish.append(len(list(outbox.list_events(uri, {}))))
+
+    monkeypatch.setattr(reconcile_cron.dapr_publish, "publish_event", _fake_publish)
+
+    drained = asyncio.run(reconcile_cron._drain_outbox(cast("Any", _Repo()), cast("Any", _Settings(uri)), {}, object()))
+
+    assert drained == 1
+    assert len(published) == 1, "a recovered event was ingested but never re-published -- the cascade stays halted"
+    assert published[0]["topic_name"] == "lineage.events.v1"
+    assert published[0]["pubsub_name"] == "lineage-pubsub"
+    assert json.loads(published[0]["data"])["run"]["runId"] == run_id
+    assert still_staged_at_publish == [1], "the staged object was dropped before the publish succeeded"
+    assert list(outbox.list_events(uri, {})) == []  # ...and dropped once it did
+
+
+def test_the_drain_without_a_publisher_still_ingests(tmp_path: Any) -> None:
+    """A deployment with the outbox on but no publisher wired must not lose the recovery it already has.
+
+    `get_publisher` answers None when the lifespan built no client, and the drain's re-publish is guarded
+    on it. The graph repair is the half that worked before this change and must keep working.
+    """
+    from lineage.api.reconcile_cron import _drain_outbox
+    from medallion.schemas.events import build_run_event
+
+    uri = _uri(tmp_path)
+    event = build_run_event(
+        operation="ingest_events",
+        author="alice",
+        job_namespace="medallion",
+        inputs=[("bronze", "bronze$events")],
+        output_namespace="bronze",
+        output_name="bronze$events",
+        version=2,
+        token="t1",
+    )
+    outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
+
+    repo = _Repo()
+    assert asyncio.run(_drain_outbox(cast("Any", repo), cast("Any", _Settings(uri)), {}, None)) == 1
+    assert repo.ingested == [event["run"]["runId"]]

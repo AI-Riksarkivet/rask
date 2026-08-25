@@ -94,6 +94,11 @@ class LineageSettings(BaseSettings):
     dapr_enabled: bool = Field(default=False, alias="LINEAGE_DAPR_ENABLED")
     dapr_pubsub: str = Field(default="lineage-pubsub", alias="LINEAGE_DAPR_PUBSUB")
     dapr_topic: str = Field(default="lineage.events.v1", alias="LINEAGE_DAPR_TOPIC")
+    #: Bounds the relay's re-publish of a drained event. The drain runs inside the tick's single-flight
+    #: lock, so an unbounded publish against a hung sidecar would hold that lock and stall every later
+    #: tick — the relay failing hardest exactly when a backlog means it matters most, which is the same
+    #: failure the bounded drain was introduced to avoid.
+    dapr_publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LINEAGE_DAPR_PUBLISH_TIMEOUT_SECONDS")
     # Dead-letter topic for the ingest subscription (Dapr-native DLQ). "" (default) = none — the
     # pre-existing behavior. Ships together with the chart's Resiliency retry policy (a DLQ without
     # one dead-letters on the FIRST failure per Dapr's documented default). Lineage's recovery story
