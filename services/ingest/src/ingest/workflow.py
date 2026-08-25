@@ -662,7 +662,18 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
             results = yield fanout
 
         parsed = [ChunkResult.model_validate(r) for r in results]
-        fragments = [f for r in parsed for f in r.fragments]
+        # BOUNDED ON THE RETURN LEG TOO (DWF-ACT-004). `enumerate_chunks` is refused above its
+        # budget; this direction had no guard at all, and it is the larger of the two: every child's
+        # serialised FragmentMetadata is flattened here and handed to `finalize` as one activity
+        # input, so it is persisted in history AND re-delivered on every parent replay.
+        #
+        # The carried list is a FALLBACK, not the commit: `finalize_run` commits what
+        # `discover_staged` finds ("STORAGE TRUTH, and it is the ONLY truth") and reads this only
+        # when staging returns nothing. A staging-prefix pointer cannot replace it — the pointer is
+        # worthless in exactly the case the fallback exists for — so the ruling (owner, 2026-08-25)
+        # is to keep the fallback while it fits and drop it LOUDLY past the budget rather than build
+        # a message grpc refuses.
+        fragments, fallback_dropped = _bound_carried_fragments([f for r in parsed for f in r.fragments], run_id=spec.run_id)
         # BOUNDED at the merge, not merely at each child. N chunks each carrying up to
         # MAX_REPORTED_ERRORS entries is still N * MAX_REPORTED_ERRORS in the parent's history, and
         # the parent's dict is the one that rides into `finalize`'s input and out again as the run's
@@ -690,6 +701,9 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
             input={
                 "spec": spec.model_dump(),
                 "fragments": fragments,
+                # So `finalize_run` can tell "this run genuinely wrote nothing" from "its fallback
+                # was too large to carry" — the two look identical from an empty list.
+                "fallback_dropped": fallback_dropped,
                 "errors": errors,
                 "errors_total": errors_total,
                 "units_total": units_total,
@@ -855,9 +869,40 @@ GRPC_MAX_MESSAGE_BYTES: int = 4 * 1024 * 1024
 #: envelope pushed it over — which is the failure this exists to make impossible.
 CHUNK_DISPATCH_BUDGET_BYTES: int = 3 * 1024 * 1024
 
+#: The SAME ceiling, on the return leg. An activity RESULT crosses the sidecar as one gRPC message
+#: exactly as its input does, and the fan-in's merged fragment list rides into `finalize` as an
+#: activity input on top of that — so it is measured against the identical budget rather than a
+#: second number that could drift upward and re-open the wedge. See
+#: `services/ingest/tests/test_fanin_return_ceiling.py`.
+FANIN_RETURN_BUDGET_BYTES: int = CHUNK_DISPATCH_BUDGET_BYTES
+
 #: The key a refusal is carried under. A dict, where the success path returns a list, so the body can
 #: tell them apart structurally rather than by inspecting contents.
 REFUSAL_KEY: Final[str] = "__refused__"
+
+
+def _bound_carried_fragments(fragments: list[str], *, run_id: str) -> tuple[list[str], bool]:
+    """The merged fallback list, or nothing plus a flag saying it was dropped.
+
+    Returns `(carried, dropped)`. Dropping is not a silent truncation: a HALF list would be worse
+    than none, because `finalize_run`'s fallback commits what it is handed and a partial fallback is
+    a partial commit presented as a whole one. All or nothing, and the caller carries the fact.
+
+    Measured against the serialised form because that is what crosses the wire — a length check on
+    the list would pass a few enormous manifests and refuse many small ones.
+    """
+    if not fragments:
+        return fragments, False
+    size = len(json.dumps(fragments))
+    if size <= FANIN_RETURN_BUDGET_BYTES:
+        return fragments, False
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "ingest_fanin_fallback_dropped",
+        extra={"run_id": run_id, "bytes": size, "budget": FANIN_RETURN_BUDGET_BYTES, "fragments": len(fragments)},
+    )
+    return [], True
 
 
 def _refuse_oversized_dispatch(chunks: list[dict[str, Any]], *, units: int, max_units: int) -> dict[str, Any] | None:
@@ -1084,6 +1129,7 @@ def finalize(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str,
         payload.get("fragments") or [],
         payload.get("errors") or {},
         read_version=int(payload.get("read_version") or 0),
+        fallback_dropped=bool(payload.get("fallback_dropped")),
     )
     # Carried into the terminal output so a FINISHED run still reports what it set out to do — the
     # custom status is the live view, this is the permanent one.

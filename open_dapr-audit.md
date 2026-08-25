@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **2 of 48 closed.** Findings marked **FIXED** below carry the commit and the test that
+> **4 of 48 closed.** Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
 > **FIXED means fixed in HEAD, NOT running in the estate.** The Cascade Status Board
@@ -122,6 +122,11 @@ I measured the record myself rather than accepting the figure: built the real br
 Where I DISAGREE is that the finding is too generous. The parent's history carries the list twice: once inside each child's `SubOrchestrationInstanceCompleted` output (`workflow.py:793  fragments=[str(fragment) for fragment in (drained.get("fragments") or ())]`) and again in the `finalize` TaskScheduled input at 692. At ~446 bytes per fragment per copy the parent's own work item crosses 4 MiB at roughly 4,700 fragments, not 9,400. Fragments per run = units / min(fragment_rows, fragment_bytes / payload size), and `sizing.py:53-58` gives the real defaults — `RASK_INGEST_FRAGMENT_ROWS` 1024, `RASK_INGEST_FRAGMENT_BYTES` 256 MiB — so the 20 MB scans `sizing.py:36` says the byte ceiling exists for give 13 rows/fragment and the wedge lands near 61,000 units, and even the small-record extreme (1024 rows/fragment) crosses at ~4.8M against docstrings that advertise million-unit harvests (workflow.py:903-905, 779-785).
 
 Failure sequence: every chunk fetches, validates, stages and acks; the last child completes; the sidecar tries to hand the parent a work item whose `pastEvents` exceed 4 MiB; the worker's channel raises RESOURCE_EXHAUSTED, the stream reconnects (`_durabletask/worker.py:524-526`), the sidecar redelivers the same oversized item after lock expiry, forever. A permanently stuck instance after the whole harvest's bytes have been paid for, with nothing naming a knob — exactly what `_refuse_oversized_dispatch` exists to make impossible in the other direction. Severity critical is right by the rubric (stuck instance). The three named tests do measure only descriptors — `test_dispatch_payload_scales_by_chunk.py` builds `ChunkSpec` dicts and its only mention of fragments is the `sizing` fixture at lines 42-44.
+
+
+**FIXED 2026-08-25 — same fix.** This is the same defect the `det-ingest` lane filed; one bound
+closes both. Recorded on both rows rather than merged, so the count stays honest about what was
+found and what was fixed.
 
 </details>
 
@@ -336,6 +341,30 @@ workflow.py:856  `CHUNK_DISPATCH_BUDGET_BYTES: int = 3 * 1024 * 1024`
 I reproduced the 395-byte measurement independently with pylance against a 5-column bronze-shaped table: `json.dumps(write_fragments(...)[0].to_json())` -&gt; 395 bytes. The arithmetic holds at HEAD, and CHUNK_SIZE is now 10000 (:96), so 10M units is exactly the ~1,000 children the finding assumes. Text default `fragment_rows=1024` (sizing.py:60) over the owner-stated scale (workflow.py:78-79, `this estate holds "over 10 million images" (owner, 2026-08-24)`) -&gt; 9,766 fragments x 395 B = 3.86 MB, already over CHUNK_DISPATCH_BUDGET_BYTES (:856) and 92% of GRPC_MAX_MESSAGE_BYTES (:850). The media path is not hypothetical — sizing.py's own docstring says "1024 twenty-megabyte pages is a 20 GB fragment ... so `fragment_bytes` closes the batch first on anything image-shaped", and `default_fragment_bytes() = 256 MiB` over 20 MB pages closes at ~13 rows/fragment, giving ~769k fragments in one `finalize` input.
 
 The dead-weight half is confirmed by the code's own comment at runtime.py:405-413: "STORAGE TRUTH, and it is the ONLY truth" — `all_fragments = discover_staged(uri, spec.run_id)` is authoritative and the carried list is consumed only by `if not all_fragments and fragments:` (the unreadable-staging fallback that logs `ingest_staging_unreadable_using_carried_fragments`). No test covers the return leg: test_dispatch_ceiling_at_real_scale.py, test_dispatch_payload_scales_by_chunk.py and test_enumeration_dispatch_ceiling.py all measure the dispatch direction only. Critical stands: the failure lands after every byte was fetched, validated and staged, and the redelivered work item rebuilds the same oversized response.
+
+
+**FIXED 2026-08-25.** The return leg is now measured against `FANIN_RETURN_BUDGET_BYTES`, defined
+as `= CHUNK_DISPATCH_BUDGET_BYTES` so the two legs cannot drift apart — both cross the sidecar as
+one gRPC message, so both answer to one number. `_bound_carried_fragments` measures the SERIALISED
+list and drops ALL or NOTHING: a half list would be worse than none, because the fallback commits
+what it is handed and a partial fallback is a partial commit presented as a whole one.
+
+**The finding's suggested fix was wrong, and reading `finalize_run` is what showed it.** The carried
+list is not what gets committed — `discover_staged` is ("STORAGE TRUTH, and it is the ONLY truth"),
+an exact-cover selection that deselects superseded fragments; unioning the two caused the
+"four units in, six rows out" duplication `test_partial_ack_duplication.py` closed. The carried list
+is reached ONLY when staging returns nothing, so the suggested staging-prefix POINTER is worthless
+in exactly the case the fallback exists for. Owner ruling (2026-08-25): bound and keep the fallback.
+
+A second-order consequence had to be closed with it: a dropped fallback meeting unreadable staging
+would have fallen into `finalize_run`'s ordinary "nothing to commit" no-op and read as an empty
+run. `fallback_dropped` now rides into `finalize` and that case logs
+`ingest_staging_unreadable_and_fallback_dropped` at ERROR.
+
+Pinned by `services/ingest/tests/test_fanin_return_ceiling.py` (4 tests, all RED first):
+carries-while-it-fits, drops-past-the-budget, one-ceiling-for-both-legs, and the dropped-fallback
+report. Measured ~395 B per fragment manifest at `fragment_rows=1024`, so the budget lands near 8M
+rows — inside the estate's stated 10M-image scale.
 
 </details>
 
@@ -1602,8 +1631,6 @@ This is one of the most deliberately-audited pub/sub surfaces I have reviewed, a
   the same files are cited by id rather than restated.
 - `open_fastapi-audit.md` — the HTTP-surface sweep; the management-endpoint lane here and the
   authn/authz lane there both touch the workflow doors, and each defers to the other.
-- `open_data_spec.md` §8 — the ordered architectural changes. Several medallion findings here will be
-  overtaken by changes #5 and #8; where that is true the finding says so.
 - `.claude/skills/rask-notifications` — the producer contract the notifications-actor lane is judged against.
 - `docs/RESILIENCE.md` — records the catalog outbox gap as the estate's **#1 weakness**; the `pubsub`
   critical here is that gap, re-measured, with the observation that the shipped B4 reconcile restores

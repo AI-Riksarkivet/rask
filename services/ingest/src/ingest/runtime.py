@@ -486,7 +486,7 @@ async def reconcile_from_queue(chunk: ChunkSpec) -> dict[str, Any]:
         await queue.close()
 
 
-def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *, read_version: int = 0) -> dict[str, Any]:
+def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *, read_version: int = 0, fallback_dropped: bool = False) -> dict[str, Any]:
     """Commit the run's fragments as ONE version, through the lander.
 
     `COMPLETE_WITH_ERRORS` is a real terminal state, not a failure: a run where 3 of 10,000 pages
@@ -535,6 +535,17 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *,
         )
         seen: set[str] = set()
         all_fragments = [f for f in fragments if not (f in seen or seen.add(f))]
+
+    if not all_fragments and fallback_dropped:
+        # THE TWO EMPTIES ARE NOT THE SAME FACT. An empty `fragments` normally means "this run wrote
+        # nothing", and the no-op below is right for it. But the fan-in also empties the list when the
+        # merged fallback exceeded the gRPC budget, and reaching HERE in that state means staging was
+        # unreadable too — so the run did write rows and neither source can name them. That is the
+        # exact silent loss the bound was allowed to introduce, and it must not read as an empty run.
+        _log.error(
+            "ingest_staging_unreadable_and_fallback_dropped",
+            extra={"run_id": spec.run_id, "dataset_uri": uri},
+        )
 
     if not all_fragments:
         # NOTHING TO COMMIT IS A NO-OP, NOT A COMMIT OF NOTHING — and this guard exists because the

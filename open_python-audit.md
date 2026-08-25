@@ -2704,8 +2704,7 @@ above rather than contradicted here, so no reader can take the stale version:
 2. The **"one `print()`"** count is now three.
 3. The **"zero legacy typing"** claim covered only half its rule — see `WP-01`.
 
-One thing the re-verification could NOT settle, and which a reader should know: the working tree carries
-an in-flight refactor (`open_data_spec.md` §8 change #5, "kill `GateOutcome.TRIGGER`, one enforcement
-point"). Several `medallion` findings here — `MED-004`, `MED-005` and the promotion-gate findings in
-particular — sit on code that change is actively rewriting. Re-check those against the committed result
-rather than against this file.
+One thing the re-verification could NOT settle, and which a reader should know: the medallion cascade was
+being actively rewritten while this audit was re-verified, and that work has since landed. Several
+`medallion` findings here — `MED-004`, `MED-005` and the promotion-gate findings in particular — sit on
+code it touched. Re-check those against the current tree rather than against this file.
