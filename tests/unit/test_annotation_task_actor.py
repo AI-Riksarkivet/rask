@@ -13,7 +13,7 @@ and that a lapsed lease never costs an annotator their draft.
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
@@ -251,10 +251,68 @@ async def test_assign_pins_the_task_and_arms_nothing() -> None:
 
 @pytest.mark.asyncio
 async def test_saving_a_draft_renews_the_lease() -> None:
-    actor = await _seeded()
-    await actor.fire(_verified({"event": "claim", "actor": "gina", "lease_seconds": 60}))
-    await actor.fire(_verified({"event": "save_draft", "actor": "gina", "lease_seconds": 60}))
-    assert len(actor.reminders) == 2, "save_draft must re-arm, not let the lease run down"
+    """The REAL door: the canvas calls `PUT /tasks/{id}/draft` -> `AnnotationTaskActor.save_draft`.
+
+    Until 2026-08-25 this test drove `actor.fire({"event": "save_draft"})` and passed, while the door
+    the product actually calls renewed nothing. `bulk-events.ts:24` excludes save_draft from the
+    events door in as many words ("save_draft belongs to the canvas"), so the branch it exercised is
+    unreachable from the frontend: an annotator saving every 60s for half an hour made 30 successful
+    writes, none of which re-armed anything, and at `lease_seconds` the reminder fired, nulled
+    `assignee` and returned the task to the pool. Her next save 409'd and another annotator could
+    claim it out from under her.
+
+    Asserting on the STORED task rather than the return value, because `save_draft` returns the
+    draft: a renewal that never reached TASK_KEY would satisfy any assertion made on what it hands
+    back, and the reminder is armed against what is persisted.
+    """
+    actor = await _claimed()
+    before = Task.model_validate_json(actor.sm.store[TASK_KEY]).lease_expires_at
+    armed_before = len(actor.reminders)
+
+    await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []}))
+
+    after = Task.model_validate_json(actor.sm.store[TASK_KEY]).lease_expires_at
+    assert len(actor.reminders) == armed_before + 1, "save_draft must re-arm the lease reminder"
+    assert actor.reminders[-1][0] == LEASE_REMINDER
+    assert before is not None and after is not None, "a CLAIMED task carries an expiry"
+    assert after > before, "save_draft must push lease_expires_at forward"
+
+
+@pytest.mark.asyncio
+async def test_the_events_door_and_the_canvas_door_agree_about_renewal() -> None:
+    """Both `save_draft` doors renew, by the same rule. One of them lying is how this hid for months.
+
+    `fire({"event": "save_draft"})` is kept as a heartbeat door for a caller with no draft to write;
+    it renewed correctly all along. The claim under test is that the two stay the SAME answer, so a
+    future change to one is caught rather than silently halving the invariant again.
+
+    Driven from identical state with an identical `lease_seconds`, and compared on both observable
+    effects: the reminder that gets armed, and the expiry that gets stored. Note the renewal honours
+    the REQUESTED seconds, so a shorter one legitimately moves the expiry closer -- which is why this
+    asserts the two doors agree rather than that time always moves forward.
+    """
+
+    async def _renew_via(door: str) -> tuple[tuple[str, float], float]:
+        actor = await _seeded()
+        await actor.fire(_verified({"event": "claim", "actor": "gina", "lease_seconds": 60}))
+        armed_by_claim = len(actor.reminders)
+        payload = {"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [], "lease_seconds": 600}
+        if door == "canvas":
+            await actor.save_draft(_verified(payload))
+        else:
+            await actor.fire(_verified({"event": "save_draft", "actor": "gina", "lease_seconds": 600}))
+        stored = Task.model_validate_json(actor.sm.store[TASK_KEY])
+        assert len(actor.reminders) == armed_by_claim + 1, f"the {door} door did not re-arm"
+        assert stored.lease_expires_at is not None
+        return actor.reminders[-1], (stored.lease_expires_at - datetime.now(UTC)).total_seconds()
+
+    canvas_reminder, canvas_remaining = await _renew_via("canvas")
+    events_reminder, events_remaining = await _renew_via("events")
+
+    assert canvas_reminder == events_reminder == (LEASE_REMINDER, 600.0)
+    # Same formula, so the two land within a second of each other; an exact equality would flake on
+    # the clock read between them.
+    assert abs(canvas_remaining - events_remaining) < 1.0, (canvas_remaining, events_remaining)
 
 
 @pytest.mark.asyncio

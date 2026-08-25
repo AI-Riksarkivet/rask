@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **1 of 48 closed.** Findings marked **FIXED** below carry the commit and the test that
+> **2 of 48 closed.** Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
 > **FIXED means fixed in HEAD, NOT running in the estate.** The Cascade Status Board
@@ -224,6 +224,26 @@ The real draft writer `AnnotationTaskActor.save_draft` (actor.py:339-402) ends a
         return draft.model_dump(mode="json")
 ```
 — it never touches `task.lease_expires_at`, never calls `_arm_lease`, never writes TASK_KEY. The production path is confirmed: `annotator.svelte.ts:1731 _syncTaskDraft` -&gt; `draft-sync.ts:46 saveDraft` -&gt; `tasks.remote.ts:104 PUT /tasks/{id}/draft` -&gt; `tasks.py:379 await actor.save_draft(...)` (and `tasks.py:455` for import, same). I grepped the whole annotator zone for a client that POSTs `event: "save_draft"` to `/tasks/{id}/events`: there is none — every occurrence is an EXCLUSION (`bulk-events.ts:24 NOT_BULK = ['assign','request_changes','save_draft']`, `TaskQueue.svelte:391`, `QuickView.svelte:56`). No renewal/heartbeat exists anywhere: grep for `renew|heartbeat|keepalive` across `services/annotator/src` and the zone returns only the three prose comments that assert the false invariant (machines.py:53, actor.py:74, actor.py:444). Defaults make it reachable in ordinary use: `Task.lease_seconds: int = 1800` (models.py:238) and autosave fires on `AUTOSAVE_IDLE_MS = 4000` — 30 minutes of continuous saving re-arms nothing, `receive_reminder` (actor.py:424-437) then loads a still-CLAIMED task and fires `lease_expired`, nulling `assignee`/`lease_expires_at`. The next save hits `if task.state is not TaskState.CLAIMED: raise IllegalTransition("draft", task.state.value, "save_draft")` -&gt; 409, and the task is back in the pool where another annotator can claim it and whole-shape-set-replace the draft — the exact loss the module docstrings promise against. `tests/unit/test_annotation_task_actor.py:253-257` asserts the property through `fire()`, the door no client uses, so the suite stays green over the defect. Severity critical stands: a documented invariant is false on the only live path and in-progress work is taken from an active annotator.
+
+
+**FIXED 2026-08-25.** `AnnotationTaskActor.save_draft` now renews: it sets
+`lease_expires_at` from `payload.lease_seconds or task.lease_seconds`, calls `_arm_lease`
+BEFORE persisting (the same arm-early rule `fire` follows — if the store then fails the reminder
+is armed against a still-CLAIMED task, which is safe, while the reverse order strands a claimed
+task with no self-expiry), and commits the draft and the renewed task in one `_store`.
+
+The RED test was the EXISTING one, corrected rather than added:
+`test_saving_a_draft_renews_the_lease` drove `actor.fire({'event': 'save_draft'})` — a door
+`bulk-events.ts` explicitly excludes — so it asserted the right property through a path the
+product never takes. Pointed at `actor.save_draft(...)` it failed with
+`AssertionError: save_draft must re-arm the lease reminder — assert 1 == (1 + 1)`, the claim's
+reminder being the only one armed. It now asserts on the STORED task, because `save_draft`
+returns the draft and a renewal that never reached `TASK_KEY` would satisfy any assertion made
+on the return value.
+
+`test_the_events_door_and_the_canvas_door_agree_about_renewal` is new and pins the two doors to
+one answer, since the finding's real shape was two implementations disagreeing. The two
+docstrings stating the false invariant as fact were corrected in the same change.
 
 </details>
 

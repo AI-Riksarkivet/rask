@@ -71,7 +71,7 @@ logger = logging.getLogger(__name__)
 TASK_KEY = "task"
 DRAFT_KEY = "draft"
 
-#: The lease reminder's name. One per actor, re-registered on each claim/save (renewing the lease) and
+#: The lease reminder's name. One per actor, re-registered on each claim, and on each draft save through `save_draft` (renewing the lease) and
 #: unregistered the moment the task leaves CLAIMED.
 LEASE_REMINDER = "lease"
 
@@ -271,7 +271,7 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         elif event == "save_draft":
             seconds = int(payload.get("lease_seconds") or task.lease_seconds)
             task.lease_expires_at = now + timedelta(seconds=seconds)
-            await self._arm_lease(seconds)  # a save RENEWS the lease
+            await self._arm_lease(seconds)  # a save RENEWS the lease (so does `save_draft`, the door the canvas uses)
         elif event == "submit":
             task.submitted_by, task.submitted_at = actor, now
             task.assignee, task.lease_expires_at = None, None
@@ -397,8 +397,23 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
             updated_at=datetime.now(UTC),
             origin=payload.get("origin", "human"),
         )
+        # A SAVE RENEWS THE LEASE, and it must happen HERE. `fire`'s `save_draft` branch renews too,
+        # but nothing reaches it: the canvas calls `PUT /tasks/{id}/draft` -> this method, and
+        # `bulk-events.ts` excludes save_draft from the events door in as many words ("save_draft
+        # belongs to the canvas"). So the renewal lived on a path the product never takes while this
+        # one wrote drafts and touched neither `lease_expires_at` nor the reminder: an annotator
+        # saving every 60s for half an hour made 30 successful writes, none of which re-armed
+        # anything, and at `lease_seconds` the reminder expired the task out from under her.
+        seconds = int(payload.get("lease_seconds") or task.lease_seconds)
+        task.lease_expires_at = datetime.now(UTC) + timedelta(seconds=seconds)
+        # Arm BEFORE persisting, the same rule `fire` follows. If the store then fails, the reminder
+        # is armed against a task that is still CLAIMED — safe. The reverse order strands a claimed
+        # task with no self-expiry, which is the hole the lease reminder exists to close.
+        await self._arm_lease(seconds)
         await self._state_manager.set_state(DRAFT_KEY, draft.model_dump_json())
-        await self._state_manager.save_state()
+        # One save commits both the draft and the renewed task: a draft that persisted without its
+        # renewal would put the two back out of step, which is the defect arriving from the far side.
+        await self._store(task)
         return draft.model_dump(mode="json")
 
     async def get_draft(self) -> dict[str, Any] | None:
