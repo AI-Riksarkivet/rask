@@ -39,8 +39,8 @@ from dapr.aio.clients import DaprClient
 from opentelemetry import metrics
 from pydantic import BaseModel
 
-from service_kit import dapr_publish
 from service_kit.governed import fga
+from service_kit.lakehouse import outbox
 from service_kit.lakehouse.schema import SchemaFields
 from service_kit.lakehouse.warehouse_registry import is_safe_project
 from service_kit.openlineage import (
@@ -642,23 +642,47 @@ class DaprEmitter(_BaseLineageEmitter):
     anti-forgery ``enforce_author`` guard is only for the open HTTP endpoint).
     """
 
-    def __init__(self, client: DaprClient, pubsub: str, topic: str, *, job_namespace: str, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        client: DaprClient,
+        pubsub: str,
+        topic: str,
+        *,
+        job_namespace: str,
+        timeout_seconds: float,
+        outbox_uri: str = "",
+        storage_options: dict[str, str] | None = None,
+    ) -> None:
         self._client = client
         self._pubsub = pubsub
         self._topic = topic
         self._job_namespace = job_namespace
         self._timeout_seconds = timeout_seconds
+        self._outbox_uri = outbox_uri
+        self._storage_options = storage_options or {}
 
     async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:
         try:
-            # Bounded so a hung sidecar can't pin the inline-awaited emit on the create/write request path.
-            await dapr_publish.publish_event(
+            # STAGED, then published, then dropped on ack (#4). The emit is inline-awaited and
+            # best-effort AFTER the Lance write commits, so a crash between the write and the publish
+            # used to lose the event outright: the data exists on storage and the graph never learns of
+            # it. Worse than a provenance hole — the medallion `/bronze-arrival` subscription reacts to
+            # this announcement, so a lost one means the whole bronze->silver->gold run silently never
+            # happens. docs/RESILIENCE.md gap #1 names this the estate's #1 weakness and names the
+            # transactional outbox as what "closes the window fully".
+            #
+            # Degrades to exactly the previous plain publish when `outbox_uri` is empty, which is the
+            # default — so this is inert until a deployment sets LANCE_LINEAGE_OUTBOX_URI. Bounded by
+            # the same timeout, so a hung sidecar still cannot pin the request path.
+            await outbox.publish_lineage_with_outbox(
                 self._client,
-                timeout_seconds=self._timeout_seconds,
+                outbox_uri=self._outbox_uri,
+                storage_options=self._storage_options,
+                run_id=str((event.get("run") or {}).get("runId") or ""),
+                event_json=json.dumps(event),
                 pubsub_name=self._pubsub,
                 topic_name=self._topic,
-                data=json.dumps(event),
-                data_content_type="application/json",
+                timeout_seconds=self._timeout_seconds,
             )
         except Exception as exc:
             _emit_failed.add(1, {"lance.catalog.transport": "dapr"})
@@ -677,13 +701,23 @@ def make_emitter(
     job_namespace: str,
     timeout_seconds: float = 5.0,
     project_resolver: ProjectResolver | None = None,
+    outbox_uri: str = "",
+    storage_options: dict[str, str] | None = None,
 ) -> LineageEmitter:
     """Select the lineage transport: ``dapr`` (durable pub/sub via the sidecar) or ``http`` (direct POST);
     no-op when disabled or unwired (a half-configured transport must never silently become the other)."""
     if not enabled:
         return NoopEmitter()
     if transport == "dapr" and dapr is not None:
-        emitter: _BaseLineageEmitter = DaprEmitter(dapr, pubsub, topic, job_namespace=job_namespace, timeout_seconds=timeout_seconds)
+        emitter: _BaseLineageEmitter = DaprEmitter(
+            dapr,
+            pubsub,
+            topic,
+            job_namespace=job_namespace,
+            timeout_seconds=timeout_seconds,
+            outbox_uri=outbox_uri,
+            storage_options=storage_options,
+        )
         emitter._project_resolver = project_resolver
         return emitter
     if transport == "http" and url and client is not None:

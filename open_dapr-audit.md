@@ -471,6 +471,34 @@ outcome, so left alone it would have silently covered nothing.
 
 **Verifier (ADJUSTED).** services/catalog/src/catalog/core/lineage_emit.py:663-665 is exactly as quoted: `except Exception as exc: _emit_failed.add(1, {"lance.catalog.transport": "dapr"}); log.warning("lineage_publish_failed", ...)` — no re-raise, and make_emitter/chart wire this transport in production (chart/templates/services.yaml:114 `- { name: LANCE_LINEAGE_TRANSPORT, value: "dapr" }`). The module docstring lines 23-24 do say "the catalog has no DB for a transactional outbox", and services/catalog/src/catalog/services/warehouses.py:9-10 does cite the object-store shape ("Stateless-over-object-store, the same shape as ``service_kit/lakehouse/outbox.py``"), so the stated reason is indeed stale — but immaterial, per medallion-cascade.md §11. services/ingest/src/ingest/lineage.py:157-160 confirms the production chain: "It was not needed. The CATALOG announces the write — `lance-catalog/insert.bronze$events` ... which is exactly what the medallion's `/bronze-arrival` filters on". services/lineage/src/lineage/api/reconcile_cron.py:159-207 confirms the drain calls `await repository.ingest_event(event)` and `await record_event_best_effort(repository, event)` then `outbox.drop_event(...)` — no publish to lineage.events.v1. No medallion cron exists: `grep -rln bindings.cron chart/` returns only notifications-cron.yaml, compute-prune-cron.yaml, ingest-cron.yaml, maintenance.yaml and services.yaml (lineage).
 
+
+**FIXED 2026-08-25 (staging half).** `catalog/core/lineage_emit.py`'s `DaprEmitter` now stages
+through `service_kit.lakehouse.outbox.publish_lineage_with_outbox` — stage, publish, drop on ack —
+behind a new `LANCE_LINEAGE_OUTBOX_URI`. The helper degrades to exactly the previous plain publish
+when the URI is unset, and unset is the default, so this is inert until a deployment opts in.
+
+**A CORRECTION TO THIS FINDING'S OWN FRAMING.** It said `docs/RESILIENCE.md` "explicitly rules out
+the obvious remedy". It does not. RESILIENCE.md gap #1 says the transactional outbox *"closes the
+window fully for producers that stage the event before publishing"* — it ENDORSES this remedy. What
+it names as the *Full fix* is a different thing: making the Ray job the durable producer, so the
+component that owns the write also owns the emit. The audit's claim came from a verifier note that
+was never checked against the source.
+
+**Proven two ways, because one was not enough.** The estate's ratchet
+(`test_the_set_of_bare_lineage_publishes_does_not_grow`) went RED when the catalog's
+`_PUBLISH_INTENT` entry was removed — `these publish sites are not classified` naming
+`lineage_emit.py:655` — and green once the bare site was gone. But that gate proves only that no
+bare publish REMAINS; it would pass equally if the emit had been deleted. So
+`test_the_dapr_emitter_STAGES_the_event_rather_than_publishing_it_bare` asserts the other half: it
+still publishes, it publishes staged, and the staged object is keyed on the right `run_id` — a wrong
+key stages under a name the relay cannot find, which is this same loss one layer down.
+
+**STILL OPEN, two named parts.** (1) The RELAY half of the owner ruling: `_drain_outbox` ingests a
+drained event into lineage but does not RE-PUBLISH it, so a recovered head event repairs provenance
+without restarting the halted cascade. (2) `maintenance/core/lineage_emit.py` is the twin bare
+publisher — `_PUBLISH_INTENT` pins exactly two and this closes one. Both are tracked as their own
+work rather than folded in here.
+
 </details>
 
 ### Warning — 16

@@ -172,6 +172,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         job_namespace=settings.lineage_job_namespace,
         timeout_seconds=settings.lineage_emit_timeout_seconds,
         project_resolver=_resolve_project,
+        outbox_uri=settings.lineage_outbox_uri,
+        storage_options=settings.storage_options(),
     )
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). Publishes through
     # the same local sidecar (reuse/lazily build the Dapr client). The per-replica ring buffer is ALWAYS

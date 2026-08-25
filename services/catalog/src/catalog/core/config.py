@@ -380,6 +380,17 @@ class Settings(BaseSettings):
             f"{_STORAGE_PREFIX}virtual_hosted_style_request": str(self.s3_virtual_hosted).lower(),
         }
 
+    #: Stage lineage events here before publishing (docs/RESILIENCE.md gap #1, the estate's #1
+    #: weakness). EMPTY = today's behaviour exactly: `publish_lineage_with_outbox` degrades to a plain
+    #: publish when this is unset, so the wiring is inert until a deployment opts in.
+    #:
+    #: Why it matters HERE specifically: the catalog's emit is inline-awaited and best-effort AFTER the
+    #: Lance write commits, so a crash between the write and the publish loses the event. The data
+    #: exists and the graph never learns of it — and because the catalog's write announcement is what
+    #: the medallion `/bronze-arrival` subscription reacts to, a lost one does not merely under-report
+    #: provenance: the whole bronze->silver->gold run silently never happens.
+    lineage_outbox_uri: str = Field(default="", alias="LANCE_LINEAGE_OUTBOX_URI")
+
     def storage_options(self) -> dict[str, str]:
         """Return the ``storage.*`` properties with the prefix stripped, for pylance."""
         return {key[len(_STORAGE_PREFIX) :]: value for key, value in self.namespace_properties().items() if key.startswith(_STORAGE_PREFIX)}

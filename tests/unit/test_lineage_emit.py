@@ -263,6 +263,51 @@ def test_http_emitter_posts_the_event() -> None:
     assert client.posted["run"]["facets"]["author"]["sub"] == "alice"
 
 
+def test_the_dapr_emitter_STAGES_the_event_rather_than_publishing_it_bare(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The catalog's emit is the cascade HEAD, and losing one does not merely dent provenance.
+
+    docs/RESILIENCE.md gap #1 calls this the estate's #1 weakness: the emit is inline-awaited and
+    best-effort AFTER the Lance write commits, so a crash between the write and the publish loses the
+    event. The data exists on storage, the graph never learns of it — and because medallion's
+    `/bronze-arrival` subscription reacts to this very announcement, the whole bronze->silver->gold
+    run silently never happens. The doc names the transactional outbox as what "closes the window
+    fully", and this asserts the catalog now goes through it.
+
+    The invariants ratchet (`test_the_set_of_bare_lineage_publishes_does_not_grow`) proves no BARE
+    publish site remains, which is the structural half — but it would pass just as well if the emit
+    had been deleted outright. This is the other half: it still publishes, and it publishes STAGED.
+    """
+    import asyncio as _asyncio
+
+    from catalog.core import lineage_emit as module
+
+    calls: list[dict[str, object]] = []
+
+    async def _fake_outbox(_publisher: object, **kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(module.outbox, "publish_lineage_with_outbox", _fake_outbox)
+    emitter = DaprEmitter(
+        cast("Any", object()),
+        "pubsub",
+        "lineage.events.v1",
+        job_namespace="lance-catalog",
+        timeout_seconds=5.0,
+        outbox_uri="s3://staging/outbox",
+        storage_options={"region": "eu-north-1"},
+    )
+    _asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1, run_id="r-1"))
+
+    assert len(calls) == 1, "the catalog emit did not reach the outbox"
+    staged = calls[0]
+    assert staged["outbox_uri"] == "s3://staging/outbox"
+    assert staged["storage_options"] == {"region": "eu-north-1"}
+    assert staged["topic_name"] == "lineage.events.v1"
+    # The run id is what the staged object is keyed on, so a wrong one stages under a name the relay
+    # cannot find — the loss this fix exists to prevent, arriving one layer down.
+    assert staged["run_id"] == "r-1"
+
+
 def test_http_emitter_uses_shared_run_id() -> None:
     # #21: the catalog passes the same run id it stamped into the Lance file, so the file points at
     # its exact creating run in the lineage graph.

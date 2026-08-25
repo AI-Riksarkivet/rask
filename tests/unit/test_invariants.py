@@ -68,7 +68,6 @@ MAKEFILE = REPO / "Makefile"
 _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # LINEAGE — an event DESCRIBING a committed write. Losing one means the data landed and the graph
     # never learned of it, so these must be staged through `outbox.publish_lineage_with_outbox`.
-    ("services/catalog/src/catalog/core/lineage_emit.py", "self._topic"): "lineage-bare",
     ("services/maintenance/src/maintenance/core/lineage_emit.py", "self._topic"): "lineage-bare",
     # CONTROL — a governance refresh hint. `service_kit/control_events.py` declares these best-effort by
     # contract: a consumer re-reads state through the governed path, so a dropped one costs a re-read.
