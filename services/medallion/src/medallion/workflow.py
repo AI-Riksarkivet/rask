@@ -213,6 +213,15 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     # may be running perfectly, so this is a LOST WATCH, not a job failure — reporting `failed` would
     # send an operator hunting a healthy job. Fall through to the abandoned path below, whose
     # vocabulary already means exactly "we stopped watching, the job may still land".
+    # `watch_lost` rather than overloading `status`, because `None` already means something else:
+    # `job_status` returns it for a 404, deliberately, so the not-yet-registered race is survivable.
+    # While the guard below read `status is not None`, ONE 404 ended the watch on the first poll and
+    # the next tier was never woken — the opposite of what the comment above promises. Dropping the
+    # clause instead would be worse: the `except` path does NOT increment `polls`, so an unreachable
+    # dashboard would `continue_as_new` forever without ever reaching `max_polls`.
+    #
+    # Replay-safe: it is recomputed from the same history on every replay, never carried across turns.
+    watch_lost = False
     try:
         status = yield ctx.call_activity(poll_stage, input={"submission_id": submission_id}, retry_policy=ACTIVITY_RETRY)
         polls = spec.polls_done + 1
@@ -220,10 +229,11 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         if not ctx.is_replaying:
             log.error("medallion_stage_watch_lost", extra={"submission_id": submission_id, "polls": polls})
         status = None
+        watch_lost = True
 
     # STILL RUNNING and budget left: hand the rest to a fresh turn. Everything above is awaited, which
     # matters — `continue_as_new` restarts immediately and DISCARDS any task started but not awaited.
-    if not _is_terminal(status) and status is not None and polls < spec.max_polls:
+    if not watch_lost and not _is_terminal(status) and polls < spec.max_polls:
         ctx.continue_as_new(spec.model_copy(update={"submission_id": submission_id, "polls_done": polls, "started_at": started_at}).model_dump())
         return {}
 
@@ -666,6 +676,9 @@ def train_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     # may be training perfectly, so this is a LOST WATCH — it falls through to `abandoned`, whose
     # vocabulary already means "we stopped watching; it may still land". Reporting `failed` would be a
     # lie about somebody's four-hour run.
+    # Same two-Nones split as `stage_run` — see the comment there. A 404 on somebody's four-hour
+    # training run is exactly the case where ending the watch early is least affordable.
+    watch_lost = False
     try:
         status = yield ctx.call_activity(poll_train, input={"submission_id": spec.submission_id}, retry_policy=ACTIVITY_RETRY)
         polls = spec.polls_done + 1
@@ -673,8 +686,9 @@ def train_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         if not ctx.is_replaying:
             log.error("medallion_train_watch_lost", extra={"submission_id": spec.submission_id, "polls": polls})
         status = None
+        watch_lost = True
 
-    if not _is_terminal(status) and status is not None and polls < spec.max_polls:
+    if not watch_lost and not _is_terminal(status) and polls < spec.max_polls:
         ctx.continue_as_new(spec.model_copy(update={"polls_done": polls}).model_dump())
         return {}
 
@@ -910,7 +924,33 @@ def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Gener
     # tiers the chart ships terminal — silver-to-gold (`toDataset: gold$catalog`, `requiredAction:
     # can_promote`) and media-to-silver — so a person approved, no tag moved, and the
     # `emit_promotion_outcome` below recorded PROMOTED anyway. Wrong data and a lying audit trail.
-    yield ctx.call_activity(publish_promotion, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+    # AN ERROR BOUNDARY, for the same reason `stage_run` wraps `publish_stage_ready`: the only durable
+    # record of this decision is written BELOW, and an exhausted retry policy raising through here
+    # took the instance terminal FAILED and skipped it. `publish_stage_output` raises `RegisterError`
+    # on any catalog 4xx/5xx, and the reachable trigger is not transient -- the approval window is 72
+    # hours by default, and a version published while the approver deliberated makes the catalog
+    # refuse to move `published` backwards, identically on all five attempts.
+    #
+    # Recorded as its own status, never swallowed into PROMOTED: the tag did NOT move. A lying audit
+    # trail is worse than the crash it replaces, because nothing downstream can detect it.
+    #
+    # `str(exc)` is replay-safe -- a failed activity's message is reconstructed from history, so a
+    # replay derives the same reason string rather than re-running the catalog call.
+    promotion_failure: str | None = None
+    try:
+        yield ctx.call_activity(publish_promotion, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+    except Exception as exc:  # noqa: BLE001 — the boundary is the point; any activity failure must still reach lineage
+        promotion_failure = str(exc) or exc.__class__.__name__
+
+    if promotion_failure is not None:
+        reasons = [*spec.reasons, promotion_failure]
+        yield ctx.call_activity(
+            emit_promotion_outcome,
+            input={"spec": spec.model_dump(), "outcome": {"status": "PROMOTION_FAILED", "decided_by": decided_by, "reasons": reasons}},
+            retry_policy=ACTIVITY_RETRY,
+        )
+        return {"status": "PROMOTION_FAILED", "decided_by": decided_by, "reasons": reasons}
+
     yield ctx.call_activity(
         emit_promotion_outcome,
         input={"spec": spec.model_dump(), "outcome": {"status": "PROMOTED", "decided_by": decided_by}},
@@ -1102,7 +1142,9 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]
     spec = PromotionSpec.model_validate(payload["spec"])
     outcome = payload["outcome"]
     settings = get_settings()
-    # PROMOTED | REJECTED | BLOCKED — a closed set decided by the review activity, never caller input.
+    # PROMOTED | REJECTED | BLOCKED | EXPIRED | PROMOTION_FAILED — a closed set decided by the review
+    # body, never caller input. PROMOTION_FAILED means the person APPROVED and the publish was
+    # refused: the decision is real, the tag did not move, and only a distinct status can say both.
     record_promotion_outcome(str(outcome["status"]))
     approved = outcome["status"] == "PROMOTED"
     event = build_run_event(
@@ -1116,7 +1158,9 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]
         project=spec.project or None,
         originator=spec.originator or None,
         event_type="COMPLETE" if approved else "FAIL",
-        error_message=None if approved else f"promotion {outcome['status'].lower()}: {', '.join(outcome.get('reasons') or []) or 'quality review'}",
+        error_message=None
+        if approved
+        else f"promotion {outcome['status'].lower().replace('promotion_', '')}: {', '.join(outcome.get('reasons') or []) or 'quality review'}",
     )
     lance = event["run"]["facets"].setdefault("lance", {})
     lance["promotion_status"] = outcome["status"]

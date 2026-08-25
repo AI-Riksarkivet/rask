@@ -443,3 +443,77 @@ async def test_a_pick_is_voided_when_its_target_leaves_accepted() -> None:
     # …and a later re-accept does not bring it back.
     await actor.task_state_changed({"task_id": "g1-r1", "state": "accepted"})
     assert (await _state(actor))["adjudications"] == {}
+
+
+# --------------------------------------------------------------------------------------------------
+# A dropped task stays dropped
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_task_cannot_REPORT_ITSELF_BACK_into_the_index() -> None:
+    """The wedge. `drop_task` leaves the task's own actor alone on the stated ground that "an
+    orphaned task document is inert" — and it is not. It keeps an armed `lease` reminder and calls
+    `_report_state` on every transition, and `task_state_changed` re-inserted any id it was handed.
+
+    The sequence that bites: a task naming a renamed dataset can never be submitted or skipped, so it
+    is CLAIMED with a 1800 s lease armed; the manager drops it, which is exactly the wedge `drop_task`
+    exists to clear; half an hour later the lease fires, the task reports `unassigned`, and the index
+    has it back. `may_publish` is false again and the refusal names nothing.
+    """
+    actor = _Actor()
+    await actor.create(_project())
+    await actor.send(_item("t0"))
+    await actor.task_state_changed({"task_id": "t0", "state": str(TaskState.CLAIMED)})
+    await actor.drop_task({"task_id": "t0"})
+
+    # The orphan's lease expires and it reports where it landed, exactly as it always does.
+    await actor.task_state_changed({"task_id": "t0", "state": str(TaskState.UNASSIGNED)})
+
+    index = json.loads(actor.sm.store[INDEX_KEY])
+    assert "t0" not in index, f"the dropped task reported itself back into the index: {index}"
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_task_does_not_re_block_the_publish() -> None:
+    """The consequence the tombstone actually protects, stated as the manager sees it."""
+    actor = _Actor()
+    await actor.create(_project())
+    await actor.send(_item("t0"))
+    await actor.send(_item("t1"))
+    await actor.task_state_changed({"task_id": "t0", "state": str(TaskState.ACCEPTED)})
+    await actor.task_state_changed({"task_id": "t1", "state": str(TaskState.CLAIMED)})
+    await actor.drop_task({"task_id": "t1"})
+    await actor.fire({"event": "freeze"})
+
+    await actor.task_state_changed({"task_id": "t1", "state": str(TaskState.UNASSIGNED)})
+
+    await actor.fire({"event": "publish", "namespace": "acme-silver", "token": "tok-1"})
+    assert (await _state(actor))["state"] == str(ProjectState.PUBLISHING), "a removed task re-blocked a legal publish"
+
+
+@pytest.mark.asyncio
+async def test_an_UNKNOWN_task_is_still_recorded_rather_than_rejected() -> None:
+    """The half the tombstone must not break: a task whose `send` half-completed must stay visible to
+    the publish precondition, which is the one thing the index exists to prevent losing."""
+    actor = _Actor()
+    await actor.create(_project())
+
+    await actor.task_state_changed({"task_id": "ghost", "state": str(TaskState.CLAIMED)})
+
+    assert json.loads(actor.sm.store[INDEX_KEY]) == {"ghost": str(TaskState.CLAIMED)}
+
+
+@pytest.mark.asyncio
+async def test_RE_SENDING_a_dropped_id_lifts_its_tombstone() -> None:
+    """A re-add is deliberate. Without this the new task would be live in the index and permanently
+    unable to report where it landed — a worse wedge than the one being fixed."""
+    actor = _Actor()
+    await actor.create(_project())
+    await actor.send(_item("t0"))
+    await actor.drop_task({"task_id": "t0"})
+
+    await actor.send(_item("t0"))
+    await actor.task_state_changed({"task_id": "t0", "state": str(TaskState.ACCEPTED)})
+
+    assert json.loads(actor.sm.store[INDEX_KEY]) == {"t0": str(TaskState.ACCEPTED)}

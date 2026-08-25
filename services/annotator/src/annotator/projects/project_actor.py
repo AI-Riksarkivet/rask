@@ -54,6 +54,11 @@ logger = logging.getLogger(__name__)
 #: the project document is small and read on every call, the index grows with the corpus.
 PROJECT_KEY = "project"
 INDEX_KEY = "index"
+#: Task ids the manager REMOVED. A third key rather than a sentinel in the index, because every
+#: reader of `index` treats each entry as a live task — `_counts`, the publish precondition and the
+#: saga's enumeration would all have to learn the sentinel, and one that forgot would resurrect the
+#: task in exactly the place the tombstone exists to protect.
+DROPPED_KEY = "dropped"
 
 #: The publish watchdog's name. Registered at the `publish` transition and kept armed (repeating)
 #: until the project reaches a terminal state. It is what gives the saga's "safe to call again after
@@ -148,13 +153,21 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
         has, raw = await self._state_manager.try_get_state(INDEX_KEY)
         return dict(json.loads(raw)) if has and raw else {}
 
-    async def _store(self, project: AnnotationProject, index: dict[str, str] | None = None) -> None:
+    async def _load_dropped(self) -> set[str]:
+        has, raw = await self._state_manager.try_get_state(DROPPED_KEY)
+        return set(json.loads(raw)) if has and raw else set()
+
+    async def _store(self, project: AnnotationProject, index: dict[str, str] | None = None, dropped: set[str] | None = None) -> None:
         project.updated_at = datetime.now(UTC)
         # Counts are DERIVED here, never accumulated. An incremented counter and an index are two
         # truths, and they disagree the first time one write lands and the other does not.
         if index is not None:
             project.counts = _counts(index)
             await self._state_manager.set_state(INDEX_KEY, json.dumps(index))
+        if dropped is not None:
+            # Sorted so the persisted bytes are stable — a set's iteration order is not, and an
+            # unstable serialisation makes every save look like a change to anything diffing state.
+            await self._state_manager.set_state(DROPPED_KEY, json.dumps(sorted(dropped)))
         await self._state_manager.set_state(PROJECT_KEY, project.model_dump_json())
         await self._state_manager.save_state()
 
@@ -294,7 +307,10 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
             return {"task_id": task.task_id, "created": False, "counts": _counts(index)}
 
         index[task.task_id] = str(task.state)
-        await self._store(project, index=index)
+        # Re-sending a REMOVED id is a deliberate re-add, so it lifts its own tombstone — otherwise
+        # the new task would be live in the index and permanently unable to report where it landed.
+        dropped = await self._load_dropped()
+        await self._store(project, index=index, dropped=dropped - {task.task_id} if task.task_id in dropped else None)
         return {"task_id": task.task_id, "created": True, "counts": _counts(index)}
 
     async def task_state_changed(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -303,10 +319,22 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
         Unknown task ids are recorded rather than rejected: the alternative is that a task whose
         `send` half-completed becomes permanently invisible to the publish precondition, which is the
         one thing the index exists to prevent.
+
+        A DROPPED id is the exception, and it has to be, because `drop_task` deliberately leaves the
+        task's own actor alone. That actor is not inert: it keeps an armed `lease` reminder and calls
+        `_report_state` on every transition. So a claimed-then-dropped task reported itself back into
+        the index roughly half an hour later, `may_publish` went false again, and `fire("publish")`
+        refused with nothing naming the task the manager had already removed. Worse if the tick landed
+        during PUBLISHING: the saga enumerated it and failed a legal publish.
+
+        "Unknown" and "removed" are different answers, and only the tombstone can tell them apart.
         """
         task_id = str(payload["task_id"])
         state = TaskState(payload["state"])
         project = await self._require()
+        dropped = await self._load_dropped()
+        if task_id in dropped:
+            return {"task_id": task_id, "state": str(state), "counts": project.counts, "dropped": True}
         index = await self._load_index()
         index[task_id] = str(state)
         # A canonical pick is void the moment its target leaves `accepted` (audit finding: a pick
@@ -334,6 +362,9 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
 
         An adjudication pointing at the dropped task goes with it — the same reasoning as
         `task_state_changed`: a pick whose target no longer exists would canonicalize nothing.
+
+        A TOMBSTONE goes with it too. The orphaned actor still reports its transitions, and without a
+        record that this id was removed on purpose, `task_state_changed` puts it straight back.
         """
         task_id = str(payload["task_id"])
         project = await self._require()
@@ -343,10 +374,11 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
             # caller asked for.
             return {"task_id": task_id, "removed": False, "total": len(index)}
         del index[task_id]
+        dropped = await self._load_dropped() | {task_id}
         for group, adjudication in list(project.adjudications.items()):
             if adjudication.task_id == task_id:
                 del project.adjudications[group]
-        await self._store(project, index=index)
+        await self._store(project, index=index, dropped=dropped)
         return {"task_id": task_id, "removed": True, "total": len(index)}
 
     async def record_publish(self, payload: dict[str, Any]) -> dict[str, Any]:

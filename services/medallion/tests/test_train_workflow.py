@@ -248,3 +248,39 @@ def test_every_train_activity_is_registered() -> None:
     names = {a.__name__ for a in ACTIVITIES}
     assert {"poll_train", "report_train_outcome"} <= names
     assert train_run in WORKFLOWS
+
+
+class TestA404DoesNotAbandonSomebodysTrainingRun:
+    """The same two-Nones conflation `stage_run` carried, on the workflow where it costs most.
+
+    `job_status` returns `None` for an unknown submission id by design, and the `except` branch also
+    assigned `None` for an exhausted retry policy — so the guard's `status is not None` clause read a
+    single dashboard 404 as "stop watching". On a four-hour training run that means the outcome is
+    reported `abandoned` while the job trains on perfectly well, and nothing ever reports its result.
+    """
+
+    def test_a_404_burns_one_poll_and_the_watch_CONTINUES(self) -> None:
+        ctx = _Ctx({"poll_train": [None, "SUCCEEDED"]})
+
+        outcome = _drive(ctx, _spec())
+
+        assert outcome["verdict"] == "succeeded", f"a transient 404 abandoned the run; actions were {ctx.actions}"
+        assert ctx.actions.count("call_activity(poll_train)") == 2
+
+    def test_repeated_404s_are_bounded_by_max_polls(self) -> None:
+        ctx = _Ctx({"poll_train": [None] * 50})
+
+        outcome = _drive(ctx, _spec(max_polls=3))
+
+        assert outcome["verdict"] == "abandoned"
+        assert ctx.actions.count("call_activity(poll_train)") == 3
+
+    def test_an_EXHAUSTED_retry_still_abandons_immediately(self) -> None:
+        """`polls` is not incremented on that path, so treating it as a 404 would loop forever."""
+        ctx = _Ctx({"poll_train": ["RUNNING"]})
+        ctx.raise_on = "poll_train"
+
+        outcome = _drive(ctx, _spec())
+
+        assert outcome["verdict"] == "abandoned"
+        assert ctx.actions.count("call_activity(poll_train)") == 1

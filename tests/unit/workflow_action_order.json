@@ -39,6 +39,7 @@
     "call_activity(emit_promotion_outcome)",
     "call_activity(emit_promotion_outcome)",
     "call_activity(publish_promotion)",
+    "call_activity(emit_promotion_outcome)",
     "call_activity(emit_promotion_outcome)"
   ],
   "services/medallion/src/medallion/workflow.py::stage_run": [

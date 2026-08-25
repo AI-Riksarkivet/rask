@@ -260,7 +260,14 @@ async def show(
     wf_client = _client(getattr(request.app.state, "workflow_client", None))
     spec = await run_in_threadpool(_live_spec, wf_client, instance_id)
     gate = _fga_gate(request)
-    if gate is not None and subject:
+    if gate is not None:
+        # `and subject` used to sit here, which read as a guard and acted as a bypass: a caller with
+        # NO credential resolves `subject=None`, so the gate was SKIPPED rather than failed and the
+        # promotion's datasets and failed assertions came back 200. `authenticate_subject`'s own
+        # docstring states the contract this now keeps -- "a caller with no verified identity gets
+        # `None` and the door refuses" -- and `decide`, on this router, already refused exactly here.
+        if not subject:
+            raise PermissionDeniedError("reading a held promotion requires a signed-in caller; sign in and retry")
         await gate(subject=subject, obj=promotion_object(spec))
     return PromotionUnderReview(
         instance_id=instance_id,

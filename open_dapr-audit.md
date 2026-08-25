@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **10 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **14 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -594,6 +594,34 @@ The deterministic trigger checks out: publication.py:216-222
 ```
 with `approval_hours: int = 72` (workflow.py:829) and PromotionSpec.version's own comment anticipating "a later commit may have landed while the approver was deciding". Retrying a backwards publish cannot succeed, so all five attempts fail identically and the exception leaves the generator: `emit_promotion_outcome` at :906 never runs, `record_promotion_outcome` never fires (workflow.py:1085), no lineage event is written, and `_live_spec` then answers `TableNotFoundError(f"promotion {instance_id!r} is no longer under review ({name})")` (api/promotions.py:112-114). Reachable today on bronze-to-silver (pubTopic `medallion.silver`, values.yaml:1081), which is the one mover whose `pub_topic` gate lets `publish_promotion` run at all. Warning is the right severity: the decision is lost, but the tag is not wrongly moved.
 
+
+**FIXED 2026-08-25.** The call is wrapped the way `stage_run` wraps `publish_stage_ready`, and the
+failure is emitted as a distinct `PROMOTION_FAILED` outcome carrying the catalog's reason, so both
+the decision and its failure reach lineage and the metric.
+
+**It is not swallowed into PROMOTED, and that was the design question.** The tag did not move. A
+`PROMOTED` record would be a lying audit trail, which is strictly worse than the crash it replaces —
+a missing record is detectable, a false one is not. `emit_promotion_outcome` maps the new status to a
+FAIL event, not a COMPLETE, because `approved` is `status == "PROMOTED"`.
+
+**The trigger is deterministic, which is why retrying could never have covered it.** The approval
+window defaults to 72 hours and `PromotionSpec.version` anticipates a later commit landing while the
+approver deliberates; the catalog then refuses to move `published` backwards, identically on all five
+ACTIVITY_RETRY attempts.
+
+`str(exc)` is replay-safe — a failed activity's message is reconstructed from history, so a replay
+derives the same reason rather than re-running the catalog call. The emitter's "closed set" comment
+was corrected in the same edit rather than left naming three of five statuses.
+
+Three tests, driven through a harness that THROWS at the yield point — a driver that only returns
+values cannot exercise an error boundary at all.
+
+**Deploy note (the action-order gate fired, and the answer is "no drain").** `promotion_review`'s
+action sequence gained one trailing `emit_promotion_outcome`. Every recorded position is unchanged,
+and the new action sits on a branch that previously took the instance terminal FAILED — so no
+in-flight instance can hold history at the position that moved. The snapshot is regenerated on that
+reasoning, not because the gate is noisy.
+
 </details>
 
 <details><summary><b>`request_approval` mints a fresh dedupe key per execution, so a re-executed activity double-notifies the approver</b> <i>(act-medallion, rule DWF-ACT-002, CONFIRMED)</i></summary>
@@ -684,6 +712,30 @@ with the docstring "Unknown task ids are recorded rather than rejected". `drop_t
             await proxy.task_state_changed({"task_id": task.task_id, "state": str(task.state)})
 ```
 writing `index['T'] = 'unassigned'`. `unassigned` is non-terminal, so `may_publish` flips false and `fire("publish")` raises "publish (tasks are not all terminal)" (project_actor.py:227) naming nothing. Variant (b) also holds: `saga.collect` enumerates `listing["tasks"]` and `_refuse_if_not_terminal` (saga.py:273-275) raises `PublishRefusal` on the resurrected id. Variant (a) holds too — a frozen project can no longer be dropped from (DROPPABLE_STATES), so recovery is open -&gt; drop -&gt; freeze. Warning is the right severity: recovery exists but is undiscoverable.
+
+
+**FIXED 2026-08-25.** `drop_task` now writes a durable tombstone — a third actor state key,
+`dropped` — and `task_state_changed` returns a no-op for an id in it instead of re-inserting.
+
+**The tombstone, not the alternative the finding also offered.** Reaching across to retire the task
+actor (unregister its lease reminder, mark it retired) would reintroduce exactly the second write
+`drop_task`'s docstring rejects — one that can half-fail and leave the index disagreeing with
+reality. The tombstone is a single write in the same `save_state()` transaction as the removal.
+
+**A third key rather than a sentinel in the index**, because every reader of `index` treats each
+entry as a live task — `_counts`, the publish precondition, the saga's enumeration — and one that
+forgot the sentinel would resurrect the task in the exact place the tombstone exists to protect.
+
+**`send` lifts its own tombstone**, which the finding did not raise and which would otherwise be a
+worse wedge than the original: a re-added task would be live in the index and permanently unable to
+report where it landed.
+
+**"Unknown" and "removed" are now different answers**, which was the finding's actual demand. The
+half that must not break is pinned: a task whose `send` half-completed is still recorded rather than
+rejected.
+
+Four tests. The two wedge tests were observed RED with the tombstone check removed and green with it
+restored; the other two are regression guards that pass either way, by design.
 
 </details>
 
@@ -921,6 +973,21 @@ against ray_kit/submit.py:157-158 —
 
 **Verifier (ADJUSTED).** workflow.py:226 `if not _is_terminal(status) and status is not None and polls &lt; spec.max_polls:`; :222 `status = None` in the `except`; :206-208 `# ... and `job_status` answers None for an unknown id precisely so that race is not fatal.`; ray_kit/submit.py:157-158 `if response.status_code == 404: return None`. Reproduced with the repo harness (`services/medallion/tests/test_stage_workflow.py::_Ctx`/`_drive`, poll_stage=[None,'SUCCEEDED']): actions `submit_stage, create_timer(30s), poll_stage, report_stage_outcome`, outcome verdict `abandoned`, polls 1. Counter-evidence to the 'silent' claim: :239 `yield ctx.call_activity(report_stage_outcome, ...)` on that same branch, and :423 `record_stage_outcome(outcome.verdict, ...)` inside it. Counter-evidence to the reachability claim: :214 `yield ctx.create_timer(...)` before the first poll, and submit_stage's comment at :277-282 ('RETURN WHAT THE SUBMITTER POSTED — never re-derive it').
 
+
+**FIXED 2026-08-25 — both watches.** `watch_lost` is now its own local, and the continuation guard
+reads `if not watch_lost and not _is_terminal(status) and polls < spec.max_polls:` in `stage_run`
+and `train_run` alike.
+
+**The verifier's warning about the naive edit was right and is worth keeping visible:** simply
+dropping the `status is not None` clause would have been a worse bug than the one it fixed. The
+`except` path does not increment `polls`, so an unreachable dashboard would `continue_as_new`
+forever without ever reaching `max_polls`. The two `None`s had to be told apart, not merged.
+
+Six tests, three per workflow: a 404 burns one poll and the watch continues; repeated 404s are
+bounded by `max_polls`; an exhausted retry still abandons on the first turn. The `train_run` three
+passed on first run because the fix was already in — so the old guard was restored, they were
+observed RED, and the fix reinstated. A test that has never failed proves nothing.
+
 </details>
 
 <details><summary><b>train_run is scheduled into the producer, which starts no WorkflowRuntime under the default chart — the training watcher never runs</b> <i>(mgt, rule N/A, ADJUSTED)</i></summary>
@@ -992,6 +1059,24 @@ promotions.py:262-264 `gate = _fga_gate(request)\n    if gate is not None and su
 ```
 
 **Verifier (CONFIRMED).** produce_auth.py:157-158 `if not authorization:\n        return None` — the dependency returns `None` for a caller with no header, before the OIDC-enabled-but-unwired 503 branch at :159 and before any verification. promotions.py:251-263 `@router.get("/promotions/{instance_id}")\nasync def show(… subject: Annotated[str | None, Depends(authenticate_subject)]) -&gt; PromotionUnderReview:\n    wf_client = _client(getattr(request.app.state, "workflow_client", None))\n    spec = await run_in_threadpool(_live_spec, wf_client, instance_id)\n    gate = _fga_gate(request)\n    if gate is not None and subject:` — with FGA on and no credential, `subject` is None, the `and subject` short-circuits, and the 200 body carries `project`, `from_dataset`, `to_dataset`, `reasons`, `approval_hours`. The route is reachable: gateway/__init__.py:162 `("/api/promotions", "/promotions", *medallion)`; `router = APIRouter(tags=["promotions"])` declares no dependencies and producer.py adds no auth middleware (`grep -n "dependencies=\|add_middleware" producer.py` returns nothing). The sibling on the same router refuses the same caller — promotions.py:189 `raise PermissionDeniedError("a promotion decision must name the person who made it; sign in and retry")` — so this is an asymmetry, not a documented dev-open path (the documented dev-open path is `_fga_gate` returning None when FGA is off, which the `gate is not None` half already covers). Warning is the right grade: read-only metadata for one promotion, and the caller must already know the `promotion-&lt;token&gt;` id.
+
+
+**FIXED 2026-08-25.** `if gate is not None and subject:` became `if gate is not None:` with an
+explicit refusal when `subject` is falsy. The `and subject` read as a guard and acted as a bypass:
+no credential resolves `subject=None`, so the `can_promote` check was SKIPPED rather than failed.
+
+**This is the route keeping a contract its own dependency already wrote down.**
+`authenticate_subject`'s docstring says "A caller with no verified identity gets `None` and the door
+refuses" — `decide`, on the same router, refuses at exactly this point ("a promotion decision must
+name the person who made it"). Only `show` diverged, and it is the one that returns data.
+
+**The dev-open posture is deliberately unchanged and pinned by a test.** With no FGA client on
+`app.state`, `_fga_gate` returns `None` and the route stays open, as every other door in this service
+does when authorization is off estate-wide. The fix refuses an anonymous caller when authorization is
+ON; it does not invent a stricter posture for one route.
+
+Four tests in `test_promotion_read_is_gated.py`, covering the unauthenticated refusal, the permitted
+read (an approver cannot answer what they cannot read), the denied read, and the dev-open posture.
 
 </details>
 

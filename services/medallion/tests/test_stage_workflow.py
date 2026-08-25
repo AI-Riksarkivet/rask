@@ -838,3 +838,48 @@ def test_the_stage_outcome_span_carries_the_CASCADE_identity_and_the_verdict(mon
         "a failed stage leaves its activity span UNSET, so trace-based error search shows a clean estate "
         "while the cascade dies. The activity RETURNS the verdict rather than raising, so daprd cannot know."
     )
+
+
+class TestA404IsNotTheEndOfTheWatch:
+    """`job_status` returns `None` for an unknown submission id BY DESIGN, and two docstrings in this
+    file promise that is survivable — ":206-208 `job_status` answers None for an unknown id precisely
+    so that race is not fatal". It was not survivable. One local, `status`, carried two meanings: "the
+    dashboard 404'd" and "the poll activity exhausted ACTIVITY_RETRY" (the `except` assigned `None`
+    too), and the continuation guard read `status is not None`. So a single 404 ended the watch on the
+    FIRST poll, `publish_stage_ready` never ran, and the next tier was never woken.
+
+    The `status is not None` clause could not simply be dropped, which is why this needed its own
+    local rather than a one-word edit: on the exception path `polls` is NOT incremented, so a
+    persistently unreachable dashboard would `continue_as_new` forever without reaching `max_polls`.
+    The two Nones have to be told apart, not merged.
+    """
+
+    def test_a_404_burns_one_poll_and_the_watch_CONTINUES(self) -> None:
+        """The wedge. `[None, "SUCCEEDED"]` used to abandon without ever asking the second time."""
+        ctx = _Ctx({"submit_stage": ["sub-1"], "poll_stage": [None, "SUCCEEDED"]})
+
+        outcome = _drive(ctx, _spec())
+
+        assert outcome["verdict"] == "succeeded", f"a transient 404 ended the watch; actions were {ctx.actions}"
+        assert ctx.actions.count("call_activity(poll_stage)") == 2, "the second poll was never requested"
+        assert "call_activity(publish_stage_ready)" in ctx.actions, "the next tier was never woken"
+
+    def test_repeated_404s_are_bounded_by_max_polls_not_unbounded(self) -> None:
+        """The budget is what the ceiling is for. A dashboard that 404s forever must still stop."""
+        ctx = _Ctx({"submit_stage": ["sub-1"], "poll_stage": [None] * 50})
+
+        outcome = _drive(ctx, _spec(max_polls=3))
+
+        assert outcome["verdict"] == "abandoned"
+        assert ctx.actions.count("call_activity(poll_stage)") == 3, "a 404 must consume a poll of the budget"
+
+    def test_an_EXHAUSTED_retry_still_abandons_immediately(self) -> None:
+        """The half that must not change. An exhausted policy does NOT increment `polls`, so treating
+        it like a 404 would loop `continue_as_new` forever against an unreachable dashboard."""
+        ctx = _Ctx({"submit_stage": ["sub-1"], "poll_stage": ["RUNNING"]})
+        ctx.raise_on = "poll_stage"
+
+        outcome = _drive(ctx, _spec())
+
+        assert outcome["verdict"] == "abandoned"
+        assert ctx.actions.count("call_activity(poll_stage)") == 1, "a lost watch must not retry the turn"
