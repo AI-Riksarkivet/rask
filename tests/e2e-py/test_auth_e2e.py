@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import uuid
 
 import pytest
 import requests
@@ -171,12 +172,27 @@ def test_oidc_and_openfga_authorization_chain(server: str) -> None:
     # 403 below could pass for an unrelated reason (a locked root), and the `_grant` on
     # `namespace:e2ens` that follows was inert against it. That is precisely the defect the comment
     # above says was removed, reintroduced in a different disguise by the fix that removed it.
-    child = f"e2ens{DELIMITER}e2child"
-    assert requests.post(f"{server}/v1/namespace/{child}/create", headers=headers, json={}, timeout=10).status_code == 403
+    # …AND ON A PARENT THIS CALLER PROVABLY HOLDS NO RUNG ON — which `e2ens` is not, structurally
+    # rather than on this one estate. Creating a namespace seeds the CREATOR as its `owner`
+    # (`seed_ownership`), and the model reduces the create door to the rung ownership already carries
+    # (`define can_create_namespace: writer`, `define writer: … or owner`). So the caller that made
+    # `e2ens` can always create under it, and the 403 this asserts could never fire. Measured live
+    # 2026-08-25: the nested create under `e2ens` came back 200.
+    #
+    # Revoking that owner tuple would not rescue it either: `writer` also inherits `from parent`, and
+    # the namespace hangs off the very warehouse the caller had to hold the create rung on to make it.
+    # A parent with NO tuples and NO ancestry is the only one where the parent check is the only thing
+    # that can answer — so the deny is unambiguous rather than merely observed.
+    orphan = f"e2orphan{uuid.uuid4().hex[:8]}"
+    child = f"{orphan}{DELIMITER}e2child"
+    denied = requests.post(f"{server}/v1/namespace/{child}/create", headers=headers, json={}, timeout=10)
+    assert denied.status_code == 403, f"a nested create under an unowned parent must be denied; got {denied.status_code}: {denied.text[:200]}"
 
-    # Grant writer ON THE PARENT → the nested create reaches the backend (200, or 409 if it exists).
-    _grant(store, model, sub, "writer", obj)
-    assert requests.post(f"{server}/v1/namespace/{child}/create", headers=headers, json={}, timeout=10).status_code in (200, 409)
+    # Grant writer ON THAT PARENT → the nested create is no longer denied. It may still be refused for
+    # a NON-authz reason (the parent does not exist), which is the point: the 403 is gone.
+    _grant(store, model, sub, "writer", f"namespace:{orphan}")
+    allowed = requests.post(f"{server}/v1/namespace/{child}/create", headers=headers, json={}, timeout=10)
+    assert allowed.status_code not in (401, 403), f"the writer grant on the parent must lift the deny; got {allowed.status_code}: {allowed.text[:200]}"
 
     # Grant reader → describe succeeds.
     _grant(store, model, sub, "reader", obj)
