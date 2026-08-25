@@ -89,21 +89,28 @@ def test_a_timed_out_run_does_NOT_fall_through_to_finalize() -> None:
     tree = ast.parse(src.read_text(encoding="utf-8"))
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "ingest_run")
 
-    # The timeout branch is the `if winner is deadline:` body. It must contain a `return` and must not
-    # call `finalize`.
+    # The early-exit block is `if terminal is not None:` — ONE body now shared by the deadline and by
+    # operator cancellation, because both must stop the children, release the queue and record a FAIL.
+    # It must return, and must not reach `finalize`.
+    #
+    # This gate used to look for `if winner is deadline:` specifically. That branch now only DECIDES
+    # the outcome; the acting is downstream and shared. Widening it to the shared block is what keeps
+    # the gate covering both exits instead of silently covering neither.
     branch = next(
         (
             node
             for node in ast.walk(fn)
-            if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and isinstance(node.test.left, ast.Name) and node.test.left.id == "winner"
+            if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and isinstance(node.test.left, ast.Name) and node.test.left.id == "terminal"
         ),
         None,
     )
-    assert branch is not None, "no `winner is deadline` branch — the deadline is not acted on"
+    assert branch is not None, "no `if terminal is not None:` block — neither early exit is acted on"
 
     names = {n.id for n in ast.walk(branch) if isinstance(n, ast.Name)}
-    assert any(isinstance(n, ast.Return) for n in ast.walk(branch)), "the timeout branch does not return — it falls through to finalize"
-    assert "finalize" not in names, "the timeout branch calls finalize — that commits a PARTIAL harvest as if it were whole"
+    assert any(isinstance(n, ast.Return) for n in ast.walk(branch)), "the early-exit block does not return — it falls through to finalize"
+    assert "finalize" not in names, "the early-exit block calls finalize — that commits a PARTIAL harvest as if it were whole"
+    assert "terminate_chunks" in names, "the early exit releases the queue without stopping the fan-out first (§2.4)"
+    assert "emit_terminal" in names, "the early exit leaves no terminal record — the run would simply vanish"
 
 
 # ── the status must actually REACH the door ──────────────────────────────────

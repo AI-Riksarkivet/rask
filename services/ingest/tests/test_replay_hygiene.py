@@ -37,8 +37,38 @@ from dapr.ext.workflow import DaprWorkflowContext, WorkflowActivityContext
 from ingest.workflow import ERRORS_TRUNCATED_KEY, MAX_REPORTED_ERRORS, ChunkSpec, RunLimits, RunSpec, bound_errors, chunk_run, ingest_run, resolve_limits
 
 
+_FANOUT: list[Any] = []
+
+
+def _remember_fanout(_tasks: Any) -> Any:
+    """`when_all`'s result, kept so a test can hand the fan-in its chunk results.
+
+    The workflow now reads them via `fanout.get_result()` rather than from the value sent into
+    the yield, because the fan-in races cancellation and the sent value is the WINNER."""
+    task = _Task()
+    _FANOUT.append(task)
+    return task
+
+
 class _Task:
     """A stand-in for a durabletask task — identity is all `when_any` comparisons use."""
+
+    def __init__(self) -> None:
+        self.result: Any = None
+
+    def get_result(self) -> Any:
+        return self.result
+
+
+def _finish_fanout(gen: Any, results: list[dict[str, Any]]) -> Any:
+    """Complete the fan-out with `results`, then let the race resolve to it.
+
+    The fan-in now races cancellation, so the value sent into the yield is the WINNER and the chunk
+    results are read from `fanout.get_result()`. Sending them directly would make the workflow treat
+    a list of chunk results as the winning task.
+    """
+    _FANOUT[-1].result = results
+    return gen.send(_FANOUT[-1])
 
 
 class _Ctx:
@@ -61,6 +91,12 @@ class _Ctx:
     def call_child_workflow(self, fn: Any, *, input: Any = None, instance_id: str | None = None) -> _Task:  # noqa: A002
         return _Task()
 
+    def wait_for_external_event(self, _name: str) -> _Task:
+        """The cancellation seam. `terminate` raises this instead of killing the instance, so the
+        run reaches its own cleanup — a fake that omits it fails as an AttributeError swallowed by
+        the error boundary, which reads as a product bug rather than a fixture gap."""
+        return _Task()
+
     def create_timer(self, _delta: Any) -> _Task:
         self.timers += 1
         return _Task()
@@ -79,7 +115,7 @@ def _plain_fanout(monkeypatch: pytest.MonkeyPatch) -> None:
     workflow only ever YIELDS the wrapper, so a bare task is a faithful double at this seam."""
     from ingest import workflow as wf_module
 
-    monkeypatch.setattr(wf_module.wf, "when_all", lambda tasks: _Task())
+    monkeypatch.setattr(wf_module.wf, "when_all", _remember_fanout)
     monkeypatch.setattr(wf_module.wf, "when_any", lambda tasks: _Task())
 
 
@@ -248,7 +284,7 @@ def test_finalize_is_handed_the_read_version_ensure_dataset_resolved() -> None:
     ctx = _Ctx()
     gen = _drive_to_fanout(ctx, limits={"max_run_hours": 0.0, "max_units": 0})
 
-    gen.send([{"chunk_id": "c0", "units_done": 2, "fragments": ["{}"], "errors": {}, "errors_total": 0}])
+    _finish_fanout(gen, [{"chunk_id": "c0", "units_done": 2, "fragments": ["{}"], "errors": {}, "errors_total": 0}])
 
     name, payload = ctx.activities[-1]
     assert name == "finalize"
@@ -388,7 +424,7 @@ def test_the_PARENT_merge_stays_bounded_across_chunks_and_reports_the_true_total
         {"chunk_id": f"c{n}", "fragments": [], "errors": {f"c{n}-k{i}": "corrupt TIFF" for i in range(MAX_REPORTED_ERRORS)}, "errors_total": 900}
         for n in range(2)
     ]
-    gen.send(chunk_results)
+    _finish_fanout(gen, chunk_results)
 
     name, payload = ctx.activities[-1]
     assert name == "finalize"

@@ -636,30 +636,59 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
         # million-unit runs, so a live default would break the legitimate long harvest this is meant to
         # protect — the deployment opts in, exactly like the other ceilings. The value is `limits`, an
         # ACTIVITY RESULT, and never env read here: whether a timer exists must not change under a replay.
-        if limits.max_run_hours > 0:
-            deadline = ctx.create_timer(timedelta(hours=limits.max_run_hours))
-            winner = yield wf.when_any([fanout, deadline])
-            if winner is deadline:
-                # Terminal, and it does NOT fall through to `finalize`: committing a partial harvest under
-                # a deadline would publish a dataset nobody asked for and mark it complete. The run is
-                # recorded as failed WITH its reason, and the staged fragments stay staged — recoverable
-                # by a re-run, which converges on the same rows because the unit ids are content-derived.
-                timed_out: dict[str, Any] = RunOutcome(
-                    status="FAILED",
-                    errors={"run": f"exceeded the {limits.max_run_hours}h ceiling (RASK_INGEST_MAX_RUN_HOURS) with {units_total} units enumerated"},
-                    errors_total=1,
-                ).model_dump()
-                # STOP THE CHILDREN BEFORE RECLAIMING THEIR QUEUE. `emit_terminal` releases the run's
-                # JetStream subject and DELETES the per-run durable (`runtime.release_run_units` →
-                # `queue.release_run`) — the exact consumer every live `drain_chunk` is pulling from.
-                # Abandoning the fan-out and then pulling the queue out from under it is §2.4.
-                yield ctx.call_activity(terminate_chunks, input={"child_ids": child_ids}, retry_policy=ACTIVITY_RETRY)
-                terminal_emitted = True
-                yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": timed_out}, retry_policy=ACTIVITY_RETRY)
-                return timed_out
-            results = fanout.get_result()
-        else:
-            results = yield fanout
+        # CANCELLATION IS A TERMINAL PATH, NOT A KILL — and it has to be raced whether or not this
+        # deployment sets a deadline, so the fan-in is one `when_any` in both branches.
+        #
+        # `terminate_workflow(run_id)` used to be the whole of `POST /v1/ingests/{id}/terminate`. It
+        # sets the instance TERMINATED and never resumes the generator, so `emit_terminal` — the ONLY
+        # caller of `release_run_units` — never runs. The run's JetStream subject and its per-run
+        # durable consumer were left behind permanently (WORK_QUEUE retention means a message leaves
+        # only when acked, and no consumer for that run id is ever created again), and no FAIL record
+        # reached lineage: the run simply vanished. This is the `messages: 1, consumers: 0` the
+        # release comment in `emit_terminal` records from the live estate.
+        #
+        # Asking the run to stop costs what the ruling accepted knowingly: terminate is asynchronous
+        # now, so a parent wedged before its select will not honour it. What it buys is ONE cleanup
+        # path — the deadline branch below already does exactly the right sequence, and cancellation
+        # joins it rather than inventing a second one.
+        cancel = ctx.wait_for_external_event(CANCEL_EVENT)
+        deadline = ctx.create_timer(timedelta(hours=limits.max_run_hours)) if limits.max_run_hours > 0 else None
+        winner = yield wf.when_any([fanout, cancel] if deadline is None else [fanout, deadline, cancel])
+
+        # ONE terminal sequence for BOTH early exits. They differ only in the reason, and the whole
+        # finding is that a second exit skipped the cleanup this one does — so they share the code
+        # rather than agreeing by inspection. `terminal_emitted` has to be set BETWEEN the two calls
+        # (a failing `terminate_chunks` should still reach the outer boundary's FAIL emit, while a
+        # failing `emit_terminal` must not be answered with a second, contradicting record), which is
+        # why this is inline rather than a delegated helper.
+        terminal: dict[str, Any] | None = None
+        if deadline is not None and winner is deadline:
+            # Does NOT fall through to `finalize`: committing a partial harvest under a deadline would
+            # publish a dataset nobody asked for and mark it complete. The staged fragments stay
+            # staged — recoverable by a re-run, which converges because unit ids are content-derived.
+            terminal = RunOutcome(
+                status="FAILED",
+                errors={"run": f"exceeded the {limits.max_run_hours}h ceiling (RASK_INGEST_MAX_RUN_HOURS) with {units_total} units enumerated"},
+                errors_total=1,
+            ).model_dump()
+        elif winner is cancel:
+            terminal = RunOutcome(
+                status="FAILED",
+                errors={"run": f"terminated by operator{_cancel_detail(cancel.get_result())} with {units_total} units enumerated"},
+                errors_total=1,
+            ).model_dump()
+
+        if terminal is not None:
+            # STOP THE CHILDREN BEFORE RECLAIMING THEIR QUEUE. `emit_terminal` releases the run's
+            # JetStream subject and DELETES the per-run durable (`runtime.release_run_units` →
+            # `queue.release_run`) — the exact consumer every live `drain_chunk` is pulling from.
+            # Abandoning the fan-out and then pulling the queue out from under it is §2.4.
+            yield ctx.call_activity(terminate_chunks, input={"child_ids": child_ids}, retry_policy=ACTIVITY_RETRY)
+            terminal_emitted = True
+            yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": terminal}, retry_policy=ACTIVITY_RETRY)
+            return terminal
+
+        results = fanout.get_result()
 
         parsed = [ChunkResult.model_validate(r) for r in results]
         # BOUNDED ON THE RETURN LEG TOO (DWF-ACT-004). `enumerate_chunks` is refused above its
@@ -879,6 +908,27 @@ FANIN_RETURN_BUDGET_BYTES: int = CHUNK_DISPATCH_BUDGET_BYTES
 #: The key a refusal is carried under. A dict, where the success path returns a list, so the body can
 #: tell them apart structurally rather than by inspecting contents.
 REFUSAL_KEY: Final[str] = "__refused__"
+
+
+#: The external event `POST /v1/ingests/{id}/terminate` raises. Named here rather than at the two
+#: sites that use it, because the workflow and the route must agree on the string or the run hangs
+#: until its deadline with nothing saying why (DWF-MGT-006).
+CANCEL_EVENT: str = "cancel"
+
+
+def _cancel_detail(reason: object) -> str:
+    """The operator's reason, as a suffix, or nothing. Never raises on a shape it did not expect.
+
+    The event payload is whatever the terminate route sent, and a run must not fail to record its own
+    termination because somebody posted a bare string where a dict was expected.
+    """
+    if isinstance(reason, dict):
+        detail = str(reason.get("reason") or "")
+    elif isinstance(reason, str):
+        detail = reason
+    else:
+        detail = ""
+    return f": {detail}" if detail else ""
 
 
 def _bound_carried_fragments(fragments: list[str], *, run_id: str) -> tuple[list[str], bool]:

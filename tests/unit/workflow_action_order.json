@@ -18,6 +18,7 @@
     "call_activity(emit_terminal)",
     "when_all",
     "call_child_workflow(chunk_run)",
+    "wait_for_external_event(CANCEL_EVENT)",
     "create_timer(timedelta(hours=limits.max_run_hours))",
     "when_any",
     "call_activity(terminate_chunks)",

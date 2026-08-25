@@ -66,6 +66,17 @@ class _Ctx:
         self.child_ids.append(instance_id)
         return _Task()
 
+    cancel: _Task | None = None
+
+    def wait_for_external_event(self, _name: str) -> _Task:
+        """The cancellation seam. `terminate` raises this instead of killing the instance, so the
+        run reaches its own cleanup — a fake that omits it fails as an AttributeError swallowed by
+        the error boundary, which reads as a product bug rather than a fixture gap.
+
+        Kept on the context so a test can hand it back as the winner, the way the deadline timer is."""
+        self.cancel = _Task()
+        return self.cancel
+
     def create_timer(self, _delta: Any) -> _Task:
         # Held, because the workflow decides the deadline branch by IDENTITY (`winner is deadline`),
         # so the test has to be able to hand the same object back.
@@ -181,3 +192,41 @@ def test_terminate_chunks_counts_what_it_actually_stopped(monkeypatch: pytest.Mo
 
 def test_no_children_is_a_cheap_no_op() -> None:
     assert terminate_chunks(cast(Any, object()), {"child_ids": []}) == {"terminated": 0, "requested": 0}
+
+
+def test_OPERATOR_CANCELLATION_stops_the_children_and_leaves_a_FAIL_record() -> None:
+    """`terminate` is a terminal PATH now, not a kill — §2.4's sequence, reached deliberately.
+
+    `terminate_workflow(run_id)` set the instance TERMINATED and never resumed the generator, so
+    `emit_terminal` -- the ONLY caller of `release_run_units` -- never ran. The run's JetStream
+    subject and its per-run durable consumer were left behind permanently, and lineage got no FAIL:
+    the run simply vanished. That is the `messages: 1, consumers: 0` the release comment records from
+    the live estate.
+
+    The order is the whole point and is asserted, not assumed: children stopped BEFORE the queue is
+    reclaimed, because `emit_terminal` deletes the consumer every live `drain_chunk` is pulling from.
+    """
+    ctx = _Ctx()
+    gen = _drive_to_fanout(ctx, [{"keys": ["a"]}])
+    assert ctx.cancel is not None, "the run never subscribed to cancellation — terminate has nothing to raise"
+    ctx.cancel.result = {"reason": "wrong prefix"}
+
+    gen.send(ctx.cancel)
+
+    names = [n for n, _ in ctx.activities]
+    assert names[-1] == "terminate_chunks", f"the children were not stopped first — calls were {names}"
+    assert ctx.activities[-1][1]["child_ids"] == ["r-abandon-c0"]
+
+    # ...and the run reaches its own terminal record rather than vanishing. Two more sends: one
+    # completes `terminate_chunks` and yields `emit_terminal`, the next completes that and returns.
+    gen.send(None)
+    outcome = None
+    try:
+        gen.send(None)
+    except StopIteration as stop:
+        outcome = stop.value
+    names = [n for n, _ in ctx.activities]
+    assert names[-1] == "emit_terminal", f"cancellation left no terminal record — calls were {names}"
+    assert outcome is not None and outcome["status"] == "FAILED"
+    assert "terminated by operator" in outcome["errors"]["run"]
+    assert "wrong prefix" in outcome["errors"]["run"], "the operator's reason was dropped"

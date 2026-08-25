@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **4 of 48 closed.** Findings marked **FIXED** below carry the commit and the test that
+> **5 of 48 closed.** Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
 > **FIXED means fixed in HEAD, NOT running in the estate.** The Cascade Status Board
@@ -389,6 +389,39 @@ workflow.py:1122  `_run_async(release_run_units(spec.run_id))`  (inside `emit_te
 The consequence is stated by the code itself. workflow.py:1104-1119: "RELEASE WHAT THIS RUN LEFT QUEUED, on every terminal path ... The live estate sat at `messages: 1, consumers: 0` for hours with every other signal green." queue.py:316-322: "WORK_QUEUE retention is what makes it permanent: a message leaves only when it is ACKED, no consumer will ever be created for that run id again, and nothing sweeps the stream. Every other signal stays green." queue_health.py's `_derive_stranded` says the same and is explicitly a report, not a sweep ("This REPORTS; it never gates"). I found no reconciler, cron or sweep that releases a run's subject — cron.py is the incremental-trigger scheduler, not a queue reaper.
 
 The three riders check out: `_lineage().terminal(...)` exists only inside `emit_terminal` (workflow.py:1153); `purge_staged` is called only from the two `finalize` paths (runtime.py:452, 507); and runs.py:214 maps `"TERMINATED": "FAILED"` while `_failure_detail` has no engine failure field to read for a terminated instance, so the door answers FAILED with an empty `errors`. test_terminate_stops_a_live_run.py asserts only route registration, POST-only, 404, 202, the "not immediate" body, `authorize_ingest` in the source and the `to_thread` hop — nothing about release, lineage or staging. Critical stands: permanently stranded queue work plus a dropped terminal lineage event, leaving the accept-time START orphaned.
+
+
+**FIXED 2026-08-25.** Terminate is a terminal PATH now, not a kill. The route raises a `cancel`
+external event and the fan-in races it beside the fan-out and the deadline; both early exits
+then share ONE terminal block — `terminate_chunks`, `terminal_emitted = True`, `emit_terminal`,
+return FAILED. They share the code rather than agreeing by inspection, because the whole finding
+was that a second exit skipped the cleanup the first one does.
+
+Written first as a delegated generator, which was wrong: `terminal_emitted` must be set BETWEEN
+the two calls (a failing `terminate_chunks` should still reach the outer boundary's FAIL emit,
+while a failing `emit_terminal` must not be answered with a second contradicting record), and a
+`yield from` cannot set the caller's local at that point.
+
+**DEPLOY NOTE — this one needs a drain.** The change inserts exactly one action,
+`wait_for_external_event(CANCEL_EVENT)`, at index 9: immediately after the fan-out dispatch,
+which is where a run SITS while its chunks drain — the longest phase of an ingest run. An
+in-flight instance there at deploy time replays into `_get_wrong_action_name_error`, raised
+outside the generator where no error boundary catches it, and goes terminal FAILED. **Drain
+in-flight ingest runs before rolling this out.** Accepted knowingly (owner, 2026-08-25);
+`tests/unit/workflow_action_order.json` is regenerated and the gate at
+`tests/unit/test_workflow_action_order.py` is what forced the question. The estate still has no
+versioning seam (`is_patched`, named workflow versions), which that gate names as the real fix.
+
+Accepted cost of the design: terminate is ASYNCHRONOUS — it asks the run to stop at its next
+select rather than stopping it, so a parent wedged before that point will not honour it.
+
+Pinned by `test_OPERATOR_CANCELLATION_stops_the_children_and_leaves_a_FAIL_record`, which
+asserts the ORDER (children stopped before the queue is reclaimed) and that the operator's
+reason survives into the FAIL record. 12 tests across 5 files were updated: racing cancellation
+means the fan-in reads `fanout.get_result()` rather than the value sent into the yield, so every
+harness encoding the old protocol changed. The AST gate in `test_run_deadline` was WIDENED
+rather than repointed — it looked for `if winner is deadline:`, which now only decides the
+outcome, so left alone it would have silently covered nothing.
 
 </details>
 

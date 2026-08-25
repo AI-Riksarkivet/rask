@@ -28,8 +28,38 @@ if TYPE_CHECKING:
     from dapr.ext.workflow import DaprWorkflowContext
 
 
+_FANOUT: list[Any] = []
+
+
+def _remember_fanout(_tasks: Any) -> Any:
+    """`when_all`'s result, kept so a test can hand the fan-in its chunk results.
+
+    The workflow now reads them via `fanout.get_result()` rather than from the value sent into
+    the yield, because the fan-in races cancellation and the sent value is the WINNER."""
+    task = _Task()
+    _FANOUT.append(task)
+    return task
+
+
 class _Task:
     """A stand-in for a durabletask task — identity is all `when_any` comparisons use."""
+
+    def __init__(self) -> None:
+        self.result: Any = None
+
+    def get_result(self) -> Any:
+        return self.result
+
+
+def _finish_fanout(gen: Any, results: list[dict[str, Any]]) -> Any:
+    """Complete the fan-out with `results`, then let the race resolve to it.
+
+    The fan-in now races cancellation, so the value sent into the yield is the WINNER and the chunk
+    results are read from `fanout.get_result()`. Sending them directly would make the workflow treat
+    a list of chunk results as the winning task.
+    """
+    _FANOUT[-1].result = results
+    return gen.send(_FANOUT[-1])
 
 
 class _Ctx:
@@ -58,6 +88,12 @@ class _Ctx:
     def call_child_workflow(self, fn: Any, *, input: Any = None, instance_id: str | None = None) -> _Task:  # noqa: A002
         return _Task()
 
+    def wait_for_external_event(self, _name: str) -> _Task:
+        """The cancellation seam. `terminate` raises this instead of killing the instance, so the
+        run reaches its own cleanup — a fake that omits it fails as an AttributeError swallowed by
+        the error boundary, which reads as a product bug rather than a fixture gap."""
+        return _Task()
+
     def create_timer(self, _delta: Any) -> _Task:
         return _Task()
 
@@ -82,7 +118,7 @@ def _plain_fanout(monkeypatch: pytest.MonkeyPatch) -> None:
     only ever YIELDS its return value, so a bare task is a faithful double at this seam."""
     from ingest import workflow as wf_module
 
-    monkeypatch.setattr(wf_module.wf, "when_all", lambda tasks: _Task())
+    monkeypatch.setattr(wf_module.wf, "when_all", _remember_fanout)
     monkeypatch.setattr(wf_module.wf, "when_any", lambda tasks: _Task())
 
 
@@ -175,7 +211,7 @@ def test_a_PERMANENTLY_REFUSED_finalize_also_leaves_a_FAIL_record() -> None:
     gen = _drive_to_fanout(ctx)
 
     # Fan-in SUCCEEDS: one chunk result, no errors -> the workflow proceeds to finalize.
-    gen.send([{"chunk_id": "c0", "units_done": 2, "fragments": [], "errors": {}}])
+    _finish_fanout(gen, [{"chunk_id": "c0", "units_done": 2, "fragments": [], "errors": {}}])
     assert ctx.activities[-1][0] == "finalize"
 
     # finalize exhausts its retries -> the runtime throws the recorded failure.
@@ -200,7 +236,7 @@ def test_the_SUCCESS_path_is_untouched_by_the_boundary() -> None:
     ctx = _Ctx()
     gen = _drive_to_fanout(ctx)
 
-    gen.send([{"chunk_id": "c0", "units_done": 2, "fragments": [], "errors": {}}])  # fan-in result -> finalize
+    _finish_fanout(gen, [{"chunk_id": "c0", "units_done": 2, "fragments": [], "errors": {}}])  # fan-in result -> finalize
     ok = {"status": "COMPLETE", "rows": 2, "committed_version": 9, "errors": {}}
     gen.send(ok)  # finalize's outcome -> emit_terminal
 

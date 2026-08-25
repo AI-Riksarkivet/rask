@@ -36,8 +36,38 @@ from dapr.ext.workflow import DaprWorkflowContext
 from ingest.workflow import CHUNK_DISPATCH_BUDGET_BYTES, FANIN_RETURN_BUDGET_BYTES, ingest_run
 
 
+_FANOUT: list[Any] = []
+
+
+def _remember_fanout(_tasks: Any) -> Any:
+    """`when_all`'s result, kept so a test can hand the fan-in its chunk results.
+
+    The workflow now reads them via `fanout.get_result()` rather than from the value sent into
+    the yield, because the fan-in races cancellation and the sent value is the WINNER."""
+    task = _Task()
+    _FANOUT.append(task)
+    return task
+
+
 class _Task:
     """A stand-in for a durabletask task — identity is all the `when_*` comparisons use."""
+
+    def __init__(self) -> None:
+        self.result: Any = None
+
+    def get_result(self) -> Any:
+        return self.result
+
+
+def _finish_fanout(gen: Any, results: list[dict[str, Any]]) -> Any:
+    """Complete the fan-out with `results`, then let the race resolve to it.
+
+    The fan-in now races cancellation, so the value sent into the yield is the WINNER and the chunk
+    results are read from `fanout.get_result()`. Sending them directly would make the workflow treat
+    a list of chunk results as the winning task.
+    """
+    _FANOUT[-1].result = results
+    return gen.send(_FANOUT[-1])
 
 
 class _Ctx:
@@ -52,6 +82,12 @@ class _Ctx:
         return _Task()
 
     def call_child_workflow(self, fn: Any, *, input: Any = None, instance_id: str | None = None) -> _Task:  # noqa: A002
+        return _Task()
+
+    def wait_for_external_event(self, _name: str) -> _Task:
+        """The cancellation seam. `terminate` raises this instead of killing the instance, so the
+        run reaches its own cleanup — a fake that omits it fails as an AttributeError swallowed by
+        the error boundary, which reads as a product bug rather than a fixture gap."""
         return _Task()
 
     def create_timer(self, _delta: Any) -> _Task:
@@ -73,7 +109,7 @@ def _plain_fanout(monkeypatch: pytest.MonkeyPatch) -> None:
     only ever YIELDS the wrapper, so a bare task is a faithful double at this seam."""
     from ingest import workflow as wf_module
 
-    monkeypatch.setattr(wf_module.wf, "when_all", lambda tasks: _Task())
+    monkeypatch.setattr(wf_module.wf, "when_all", _remember_fanout)
     monkeypatch.setattr(wf_module.wf, "when_any", lambda tasks: _Task())
 
 
@@ -99,7 +135,7 @@ def _drive_to_finalize(ctx: _Ctx, results: list[dict[str, Any]]) -> None:
     gen.send({"max_run_hours": 0.0, "max_units": 0})
     gen.send(HANDLE)
     gen.send([{"keys": ["a", "b"]}])
-    gen.send(results)
+    _finish_fanout(gen, results)
 
 
 def _chunk_result(fragments: list[str]) -> dict[str, Any]:

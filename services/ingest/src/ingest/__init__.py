@@ -333,11 +333,31 @@ class _DaprWorkflowTerminator:
     beside it: the alternative is a route that cannot be exercised without a sidecar.
     """
 
-    def terminate(self, run_id: str) -> bool:
-        """True when the engine accepted the termination; False when it had nothing to stop."""
+    def terminate(self, run_id: str, reason: str = "") -> bool:
+        """Ask the run to end. True when the engine accepted the request.
+
+        RAISES AN EVENT rather than terminating the instance, and that is the whole fix.
+        `terminate_workflow` sets the instance TERMINATED and never resumes the generator, so
+        `emit_terminal` — the ONLY caller of `release_run_units` — never runs. The run's JetStream
+        subject and its per-run durable consumer were left behind permanently (WORK_QUEUE retention
+        means a message leaves only when acked, and no consumer for that run id is created again),
+        and no FAIL record reached lineage: the run simply vanished. That is the
+        `messages: 1, consumers: 0` state `emit_terminal`'s release comment records from the live
+        estate.
+
+        The cost, accepted knowingly (owner ruling, 2026-08-25): this is asynchronous. It asks the
+        run to stop at its next select rather than stopping it, so a parent wedged before that point
+        will not honour it. What it buys is ONE cleanup path — the deadline branch already does the
+        right sequence, and cancellation joins it instead of inventing a second one.
+
+        The event NAME must match `ingest.workflow.CANCEL_EVENT`; a typo hangs the run until its
+        deadline with nothing saying why, which is why both sides read the one constant.
+        """
         import dapr.ext.workflow as wf
 
-        wf.DaprWorkflowClient().terminate_workflow(run_id)
+        from ingest.workflow import CANCEL_EVENT
+
+        wf.DaprWorkflowClient().raise_workflow_event(run_id, CANCEL_EVENT, data={"reason": reason})
         return True
 
 
