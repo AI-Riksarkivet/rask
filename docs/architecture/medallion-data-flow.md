@@ -198,9 +198,9 @@ segment, never fetch the file.
 
 ---
 
-## Open decisions
+## Decisions, all closed
 
-One, and it is the owner's. It is not work waiting to be scheduled.
+None. All three that stood here are closed below, with the evidence that closed them.
 
 ### Per-workload dependency isolation on Ray — SETTLED 2026-08-25
 
@@ -226,29 +226,44 @@ zones) and named per application as `serveApplications[].image` → `runtime_env
 the built image: `/opt/runner-venv/bin/python` imports `runner.htrflow_service`, `/opt/venv/bin/python`
 imports lance 10.0.0 and ray 2.58.0, and the two do not see each other — which is the seal, not a gap.
 
-### Does every corpus have a catalog node?
+### Does every corpus have a catalog node? — ANSWERED 2026-08-25: NO
 
-Carried from the retired ingest backlog, because the question outlives the item that needed it. The
-annotator's `ItemSource.where` is a MEDIA-REGISTRY key validated against bare ids, so qualifying it
-refuses every send; sending the bare name instead makes the catalog authorize an object that does not
-exist, and FGA denies before it checks existence, so the whole publish fails (observed live
-2026-08-03). Both directions were tried and both broke.
+Established by reading the code rather than assuming, and re-verified by three independent passes.
 
-A real fix resolves the pin server-side from registry id to catalog id, or carries a second field —
-and **which one is correct depends on whether every corpus has a catalog node at all**, which has
-never been established. Establish that, and the fix follows from the answer.
+A corpus is **not a record anywhere** — it is a directory. `DatasetRegistry.list_ids()`
+(`service_kit/lancekit/registry.py`) is `store.list_lance_stems(root, ...)`, i.e. a glob of `*.lance`
+locally or an S3 common-prefix listing; `get(id)` is a `store.exists` stat. Nothing anywhere creates a
+catalog namespace or table when a corpus comes into existence, and `catalog_table_id` is a
+settings-derived NAMING CONVENTION, not a link to a node that must exist.
 
-### Tiers as tags on one dataset
+So a corpus can — and on this estate routinely does — exist with no catalog node at all.
 
-§9(c) decided gold is a tag rather than a physical zone, which unblocks the idea. Items 3 and 4 then
-banked most of its value: the storage win is already realised (0.58%), and a tier already grows by
-`add_columns` rather than a rewrite.
+**That settles the annotator's `ItemSource.where` fix, which was waiting on this.** Resolving the pin
+server-side from registry id to catalog id is the wrong branch: it presupposes a node that is often
+absent, and FGA denies before it checks existence, so the failure would read as a permissions fault
+rather than a missing object. The correct fix carries a SECOND field with the catalog identifier
+alongside the registry key, so an un-catalogued corpus still sends.
 
-What remains is **a data migration, not a refactor**. Collapsing bronze/silver/gold into one dataset
-changes what a tier IS: the stage's output identity, its lineage input/output pair, what the gate
-publishes a version OF, and the `MEDALLION_TO_URI` / `movers[]` surface — and every existing estate
-has three tables holding data. That is an owner decision with a migration attached, and it should be
-taken deliberately rather than arrived at.
+### Tiers as tags on one dataset — STRUCK 2026-08-25
+
+§9(c) decided gold is a tag rather than a physical zone, which unblocked the idea, and items 3 and 4
+then banked its value: the storage win is already realised (0.58%) and a tier already grows by
+`add_columns` rather than a rewrite. What remained was a data migration, so it was worth checking what
+other catalogs actually do before paying for one.
+
+**No major catalog expresses medallion tiers as tags or branches on one table.** Unity, Iceberg,
+Nessie, Polaris, Lakekeeper and DuckLake all keep the layers as separate tables in separate
+namespaces/schemas. Branches and tags exist in those systems for a different job entirely —
+**write-audit-publish**: stage a write in isolation, validate it, publish atomically as a
+metadata-only merge.
+
+Which is the point: **rask already does WAP.** The gate → catalog PUBLISH → tag move IS that pattern,
+applied at every tier boundary, and the catalog already exposes `/v1/table/{id}/branches/*`. The
+mechanism tags are for is in use; collapsing the tiers would spend a live migration to adopt a shape
+nobody uses, and would cost the reasons the separation exists — reprocessing silver logic without
+re-reading source, per-layer ACID and time travel, and many gold tables from one silver.
+
+Kept as three physical tiers. Gold-as-a-tag applies to the SERVING view, not to storage.
 
 ## Retracted, with the measurement that retracted it
 
