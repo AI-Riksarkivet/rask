@@ -722,7 +722,7 @@ seed-medallion-namespaces: ## Provision the cascade's TOP-LEVEL catalog namespac
 	@# that binds to a warehouse and `require_warehouse_scoped` refuses it from the table door. Meanwhile
 	@# scripts/seed_medallion_fga.sh grants on every cascade namespace, so authorization passed for
 	@# namespaces the catalog had never heard of and the media lane died 404 on silver-media$$features.
-	uv run python scripts/seed_medallion_namespaces.py
+	uv run python scripts/seed_medallion_namespaces.py --warehouse "$(SEED_WAREHOUSE)"
 
 seed-corpus: ## Seed the demo corpus into the volume the media plane actually READS
 	./scripts/seed-corpus.sh
