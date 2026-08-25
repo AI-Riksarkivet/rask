@@ -6,6 +6,17 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
+> **PROGRESS (live).** This backlog is being drained under a `/goal` run.
+> **1 of 48 closed.** Findings marked **FIXED** below carry the commit and the test that
+> pins them. The file is deleted when the count reaches 48.
+>
+> **FIXED means fixed in HEAD, NOT running in the estate.** The Cascade Status Board
+> (2026-08-25) measured the deployed images: ingest and notifications are **351 commits
+> behind**, flows 494, compute/controlplane/assist 728; only the lakehouse plane is on HEAD.
+> Every fix below is proven offline against HEAD source and reaches the running cluster only
+> when its plane is rebuilt. Read a FIXED row as "the defect is out of the code", never as
+> "the behaviour is correct in production".
+
 ## Why this exists separately from `open_python-audit.md`
 
 That audit swept the estate by SCOPE — one auditor per service, held to a 17-rule calibration sheet
@@ -266,6 +277,19 @@ proxies.py:225
 (7) No test can see it — `services/notifications/tests/test_channels.py:550-588` drives `make_push` against an in-process `_DigestInbox`; grep for `_send_digest` across the suite returns nothing.
 
 Two corrections that do not change the verdict: the surrounding docstring (inbox_actor.py:581-601) is a recorded decision about holding the turn for an SMTP send, and it genuinely never considers that the send path's first act re-enters this actor — so it is not a sanctioning comment for this defect. And the finding's parenthetical is wrong about the chart: `chart/templates/notifications-channels.yaml` renders each binding only `{{- if (($ch.email).enabled) }}` / `slack.enabled`, and `IngressSettings.enabled_channels` defaults to `""` (api/settings.py:128) — so the trigger condition is an opt-in deployment with channels enabled AND a subject with `digest_seconds`, not every deployment. Within that condition the failure is deterministic: every digested notification is drained and never sent, and the actor's turn is stalled 60s per pointer.
+
+
+**FIXED 2026-08-25.** `digest_push()` is replaced by `digest_push_into(inbox)`, and
+`_send_digest` hands it `self`: `make_push`'s `open_inbox` now returns THIS actor instead of a
+`TypedActorProxy` to it, so `get_prefs` and `claim_channel` are ordinary in-turn method calls
+with identical semantics and no sidecar hop. A `DigestInbox` Protocol names the shape both
+implementations satisfy. Pinned by
+`services/notifications/tests/test_inbox_actor.py::test_the_digest_drain_does_not_re_enter_its_own_actor`,
+which asserts both halves — no proxy is opened for this actor's own subject, AND the digest
+still reaches the channel exactly once. Before the fix that test failed with
+`AssertionError: re-entrant actor call: the digest opened a proxy to its own inbox`, behind the
+swallowed `inbox_digest_send_failed`. The test double also gained `set_state`, absent until the
+digest paths were driven end to end.
 
 </details>
 

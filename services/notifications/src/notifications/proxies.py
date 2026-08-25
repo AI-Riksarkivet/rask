@@ -16,7 +16,7 @@ Every call into an inbox goes through :func:`inbox_for`, and every inbox id thro
 import logging
 from collections.abc import Awaitable, Callable
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from notifications.errors import InboxUnreadable
 from notifications.inbox_actor import INBOX_ACTOR_TYPE, InboxActorInterface
@@ -208,18 +208,45 @@ def channel_push() -> "Callable[[str, dict[str, Any]], Awaitable[None]] | None":
     return None if table is None else make_push(table, open_inbox=inbox_for)
 
 
-@lru_cache(maxsize=1)
-def digest_push() -> "Callable[[str, dict[str, Any]], Awaitable[None]] | None":
-    """The pusher the DIGEST DRAIN uses — identical, except that it does not defer.
+class DigestInbox(Protocol):
+    """What the digest pusher needs of an inbox, regardless of how it reaches one.
 
-    A separate accessor rather than a parameter on `channel_push`, because that one is
-    `lru_cache(maxsize=1)`: a parameter would make the two variants evict each other on every
-    alternating call. Two cached entries over ONE table is the shape that costs nothing.
+    A Protocol because there are genuinely two implementations and they differ in the one way that
+    matters here: `TypedActorProxy` reaches the actor THROUGH the sidecar (a turn), while the actor
+    passed to `digest_push_into` IS the actor (no turn). Naming the shape rather than the class is
+    what lets the drain hand over `self` without either side importing the other.
+    """
 
-    Handing the drain the DEFERRING pusher is what made a digested notification unsendable — it
-    re-armed the very window it had just been drained from. See `make_push`.
+    async def get_prefs(self) -> dict[str, Any]: ...
+
+    async def claim_channel(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+    async def arm_digest(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+
+def digest_push_into(inbox: DigestInbox) -> "Callable[[str, dict[str, Any]], Awaitable[None]] | None":
+    """The DIGEST DRAIN's pusher, sending through the inbox object it is handed.
+
+    Two differences from `channel_push`, and both are load-bearing.
+
+    It does not DEFER. Handing the drain the deferring pusher is what made a digested notification
+    unsendable -- every pointer it had just drained met the same conditions again and re-armed the
+    very window it came from. See `make_push`.
+
+    It does not OPEN A PROXY. The drain runs inside `InboxActor`'s own reminder turn, and daprd holds
+    that actor's turn lock for the whole callback. `make_push`'s first act is `open_inbox(subject)`
+    followed by `await inbox.get_prefs()`; with `inbox_for` that resolves to
+    `InboxActor/<encode_subject(subject)>` -- the same type and the same id -- so the call blocked on
+    the lock the callback already held, until DAPR_HTTP_TIMEOUT_SECONDS, and the exception was
+    swallowed. Because `drain_digest` had already closed the window, every digested notification was
+    drained and never sent, permanently. Passing the actor ITSELF makes `get_prefs` and
+    `claim_channel` ordinary in-turn method calls with identical semantics and no sidecar hop.
+
+    Deliberately NOT `lru_cache`d, unlike its sibling: the argument is a live actor instance, and
+    caching on it would pin one subject's actor for the life of the process. The table underneath is
+    cached, so the only per-call work is building the closure.
     """
     from notifications.api.channels import make_push
 
     table = _channel_table()
-    return None if table is None else make_push(table, open_inbox=inbox_for, defer=False)
+    return None if table is None else make_push(table, open_inbox=lambda _subject: inbox, defer=False)

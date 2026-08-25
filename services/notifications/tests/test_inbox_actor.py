@@ -54,6 +54,16 @@ class _FakeStateManager:
             return (True, self.staged[key])
         return (key in self.store, self.store.get(key))
 
+    async def set_state(self, key: str, value: str) -> None:
+        """The un-TTL'd write. Staged like its sibling — `save_state` is still what commits.
+
+        Absent until the digest paths were driven end to end, which is its own small lesson: the
+        double modelled only the partitions the tests happened to reach, so `set_prefs`, `arm_digest`
+        and `drain_digest` -- every writer that does NOT expire -- were unreachable from here.
+        """
+        self.staged[key] = value
+        self.ttls[key] = None
+
     async def set_state_ttl(self, key: str, value: str, ttl_in_seconds: int | None) -> None:
         self.staged[key] = value
         self.ttls[key] = ttl_in_seconds
@@ -1022,3 +1032,55 @@ def test_comparing_a_naive_instant_to_an_aware_one_raises_rather_than_mis_sortin
     in the wrong place."""
     with pytest.raises(TypeError):
         _ = sorted([datetime(2026, 8, 9, 12, 0, tzinfo=UTC), datetime(2026, 8, 9, 13, 0)])
+
+
+# ── the digest drain must not re-enter its own actor ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_the_digest_drain_does_not_re_enter_its_own_actor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_send_digest` runs inside the reminder's turn, so it must not call back into this actor.
+
+    daprd holds the actor's turn lock for the whole `remind/digest` callback. The send path's FIRST
+    act was `open_inbox(subject)` -> `inbox_for(subject)`, which builds a proxy to
+    `InboxActor/<encode_subject(subject)>` -- the same type and the same id -- and then awaited
+    `GetPrefs` on it. With reentrancy disabled (nothing in services/, packages/ or chart/ configures
+    it, so daprd's default applies) that call blocks on the lock this callback already holds until
+    DAPR_HTTP_TIMEOUT_SECONDS, and the exception is swallowed by the `except Exception` below it.
+
+    The damage is permanent, not just slow: `drain_digest` has already written
+    `DIGEST_KEY={'pending': False}`, so the window is closed and only a NEW arrival re-arms it. Every
+    digested notification is drained and never sent.
+
+    Two claims, because either alone is passable by a broken fix: no proxy is opened for this
+    actor's own subject, AND the digest still actually reaches the channel.
+    """
+    from notifications import proxies
+
+    opened: list[str] = []
+    delivered: list[tuple[str, str]] = []
+
+    def _recording_inbox_for(subject: str) -> object:
+        opened.append(subject)
+        raise AssertionError(f"re-entrant actor call: the digest opened a proxy to its own inbox ({subject!r})")
+
+    async def _fake_sender(*, destination: str, subject_line: str, body: str) -> None:
+        delivered.append((destination, subject_line))
+
+    monkeypatch.setattr(proxies, "inbox_for", _recording_inbox_for)
+    monkeypatch.setattr(proxies, "_channel_table", lambda: {"email": _fake_sender})
+    for cached in ("channel_push", "digest_push", "digest_push_into"):
+        fn = getattr(proxies, cached, None)
+        if fn is not None and hasattr(fn, "cache_clear"):
+            fn.cache_clear()
+
+    actor = _Actor()
+    await actor.set_prefs({"channels": ["email"], "destinations": {"email": "alice@example.test"}, "digest_seconds": 60})
+    assert await actor.deliver(_delivery("run-1")) == {"delivered": True, "unread": 1, "rows": 1}
+
+    await actor._send_digest()
+
+    assert opened == [], f"the digest re-entered its own actor via inbox_for: {opened}"
+    assert opened == [], f"the digest re-entered its own actor via inbox_for: {opened}"
+    assert len(delivered) == 1, f"the digest did not reach the channel exactly once: {delivered}"
+    assert delivered[0][0] == "alice@example.test"

@@ -599,11 +599,14 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         at the runtime's own pace forever, and the rows are still in the inbox: the bell is correct
         whatever the channel plane does.
         """
-        # `digest_push`, NOT `channel_push`: the drain must not be handed the pusher that defers, or
-        # every pointer it just drained meets the same conditions again and re-arms this very window.
-        from notifications.proxies import digest_push
+        # `digest_push_into(self)`, NOT `channel_push`, and not a pusher that opens a PROXY.
+        # Not the deferring pusher: every pointer it just drained would meet the same conditions
+        # again and re-arm this very window. And not a proxy: `make_push` opens the inbox and awaits
+        # `get_prefs` on it, so `inbox_for` would resolve to THIS actor id and block on the turn lock
+        # this callback already holds. Handed `self`, both reads are ordinary in-turn calls.
+        from notifications.proxies import digest_push_into
 
-        push = digest_push()
+        push = digest_push_into(self)
         if push is None:
             return
         try:
