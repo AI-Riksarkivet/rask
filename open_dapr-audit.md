@@ -7,7 +7,8 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **7 of 48 closed — the critical tier is complete.** Findings marked **FIXED** below carry the commit and the test that
+> **10 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
 > **FIXED means fixed in HEAD, NOT running in the estate.** The Cascade Status Board
@@ -58,7 +59,7 @@ severity or framing was corrected by the verifier, and the corrected form is wha
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `det-medallion` — medallion — workflow bodies (DWF-DET) | 4 | 0 | 1 | 3 | 15 |
 | `det-ingest` — ingest — workflow bodies (DWF-DET) | 5 | 2 | 1 | 2 | 16 |
-| `det-act-flows` — flows — workflow + activities (DWF-DET + DWF-ACT) | 3 | 0 | 2 | 1 | 23 |
+| `det-act-flows` — flows — workflow + activities (DWF-DET + DWF-ACT) | 3 | 0 | 2 (both FIXED) | 1 | 23 |
 | `act-medallion` — medallion — activities (DWF-ACT) | 8 | 1 | 2 | 5 | 6 |
 | `act-ingest` — ingest — activities (DWF-ACT) | 5 | 1 | 1 | 3 | 6 |
 | `mgt` — management endpoints, all three apps (DWF-MGT) | 10 | 0 | 5 | 5 | 10 |
@@ -776,6 +777,24 @@ Coverage gap confirmed: services/flows/tests/test_executor.py:432-433 is `with p
 
 Note for the record: this is already a filed audit item, `FLOWS-NODE-ESCAPE` (open_python-audit.md:1456, rated HIGH — "`run_node` catches only `NodeError`, so a bad `regexReplace` 500s the entire run and orphans its sibling nodes"). It is filed and still open at HEAD, not fixed, so the finding stands as written. Severity `warning` is right: the workflow goes FAILED, not stuck, and no side effect is duplicated.
 
+**FIXED 2026-08-25.** The `try` in `_regex` now spans the APPLY, not just the compile: both
+`regex.error` (a pattern that compiles but fails to apply, e.g. `sub(r"\9", …)`) and the new
+`TimeoutError` are raised as `NodeError`. Independently, `run_node`'s boundary widened from
+`except NodeError` to `except Exception`, so the NEXT unconverted exception degrades one node
+instead of the run.
+
+**Both halves were needed, and the second is the durable one.** Fixing only `_regex` fixes the
+regex node; widening only the boundary would hide the specific bug behind a generic message. Before
+this, a bad `regexReplace` escaped `except NodeError`, propagated out of the activity, burned three
+`NODE_RETRY` attempts against input no retry can fix, and failed the orchestration with **no node
+states at all** — so the builder saw a dead run with nothing naming the node that killed it.
+
+Tests: `test_a_pattern_that_compiles_but_FAILS_TO_APPLY_is_a_node_failure` (the exact escaping
+input, RED against the committed source) and
+`test_a_node_that_raises_ANYTHING_fails_as_state_not_as_a_raise` (pins the widened boundary).
+
+**Closed in `open_python-audit.md` too**, where this is filed as `FLOWS-NODE-ESCAPE`.
+
 </details>
 
 <details><summary><b>FLOWS-REDOS-ON-LOOP is only half fixed: the subject-length cap cannot bound nested-quantifier backtracking, so one node poisons the workflow history and survives every pod restart</b> <i>(det-act-flows, rule DWF-ACT-006, ADJUSTED)</i></summary>
@@ -819,6 +838,31 @@ What I am correcting:
 (2) **Scope.** This is not an activity-scope defect. `_regex` is in the SHARED executor called by both lanes; the inline lane (routes.py:213) hangs the pod identically with no Dapr involved. Framing it as an activity finding narrows a defect that is broader.
 (3) **Reachability caveat the finding omits.** `POST /flows/runs` is FGA-gated on the estate `writer` tier (routes.py:150-155, `security.EXECUTE = "writer"`), so on a governed stack this is an authenticated-writer DoS, not an open door. The audit's "`/api/*` has no auth" premise is stale. It IS open in the default posture — flows/security.py:20-21: "With auth off (every knob defaults off) the subject is ``anon`` and the checker is permissive".
 (4) **The poison-pill escalation is inferred, not reproduced.** The liveness probe exists (chart/templates/fleet.yaml:231-235, `/api/health`, period 20 s, timeout 5 s) so the kill is real, and Dapr activity work items are redelivered after a worker dies — but I did not exercise a redelivery cycle, so "permanent crashloop" should be stated as a consequence of Dapr redelivery semantics rather than as a measured outcome.
+
+**FIXED 2026-08-25.** `_regex` now compiles and applies through the `regex` module with an
+explicit `timeout=_REGEX_BUDGET_SECONDS` (2.0) on both the `sub()` and `finditer()` arms, and a
+`TimeoutError` is converted to a node failure like any other bad input. `re` is retained for the
+service's own fixed patterns (`APP_PATTERN`, the ALTO parsing, `pick_path`) — those are not
+caller-supplied and swapping them would be churn.
+
+**The measurement corrected the code's own comment, which is why this could not be closed by
+reading.** The cap's comment claimed the blow-up is `O(2^N)` *in the subject*, making 256 KiB the
+load-bearing defence. It is exponential in the PATTERN: `re` against `(a+)+$` took **76.5 s at a
+subject of thirty characters**, nowhere near the cap. `regex` answered in 0.0003 s at every n. So
+the engine swap is the fix and the `timeout=` is the backstop; the cap stays as what it actually
+is, a memory bound, and its comment now says so.
+
+**`regex` is declared in `services/flows/pyproject.toml`, not relied on transitively.** The
+dependency block directly above records that the image builds `uv sync --package flows` alone, so a
+transitive dependency that resolves locally is absent in the image — the exact crash-loop the ingest
+door already paid for once.
+
+Test: `test_a_CATASTROPHIC_pattern_cannot_stall_the_process` bounds the wall clock, so a future
+revert to `re` reds rather than silently restoring the stall.
+
+**Closed in `open_python-audit.md` too** — this sweep re-derived `FLOWS-REDOS-ON-LOOP` more
+precisely than the original entry, and leaving the older, wrong-reasoned row open would leave two
+claims standing.
 
 </details>
 
@@ -966,6 +1010,28 @@ routes.py:96 `@router.post(\n    "/runs",` and routes.py:226 `@router.get("/runs
 ```
 
 **Verifier (CONFIRMED).** `grep -n "@router\." services/flows/src/flows/routes.py` returns exactly four rows: `:82 @router.get("/catalog")`, `:88 @router.post("/validate")`, `:96 @router.post(` (`/runs`), `:226 @router.get("/runs/{run_id}", response_model=RunState)`. `grep -rn "terminate_workflow|pause_workflow|resume_workflow" services/` finds no hit anywhere under `services/flows`. The durable lane is real (routes.py:186-201, the `create_workflow_instance` branch) and `workflow.py:45 @wfr.workflow(name="flow_run")` fans out `run_node` with `retry_policy=NODE_RETRY` (workflow.py:38, 3 attempts) against `serve_timeout` (config.py:40 `serve_timeout: float = Field(default=180.0, alias="RASK_FLOWS_SERVE_TIMEOUT")`), so the run is bounded and the finder's own warning grade is right: the missing lever, not an unbounded hang. DWF-MGT-003 as cited.
+
+**FIXED 2026-08-25.** `POST /flows/runs/{run_id}/terminate` now exists, behind the same
+`security.EXECUTE` gate `POST /runs` uses — whoever may spend the estate's GPU may stop spending
+it — and driven through `asyncio.to_thread` like every other blocking SDK call in the service.
+
+**The fix is deliberately NOT a copy of ingest's, and the difference is the whole point.** ingest's
+terminate had to become a `cancel` EVENT because `terminate_workflow` skips the rest of the
+generator, and the skipped tail contained `emit_terminal` — the only caller of `release_run_units`,
+which returns the run's JetStream consumer. flows holds no queue and no consumer: `flow_run_workflow`
+fans out `run_node` activities and returns the collected states. There is no cleanup a skipped path
+could leak, so the hard `terminate_workflow` is correct here and the event seam would be ceremony.
+Recording this because "the twin finding got the event fix, so this one does too" is exactly the
+travelling-fix error the ingest lane already paid for.
+
+**The 202 body states the SDK's real semantics** (`further scheduling stops, but work already in
+flight may still complete`), pinned by an assertion, because an operator told "terminated" would
+reasonably believe the Serve replicas are free, and they are not — the SDK is explicit that
+terminating has no effect on an in-flight activity execution.
+
+Tests: `test_a_durable_run_can_be_TERMINATED` and
+`test_terminate_without_an_engine_is_UNAVAILABLE_not_a_silent_success` — the second because
+answering 202 with no sidecar would tell an operator a runaway was stopped when nothing was called.
 
 </details>
 

@@ -10,6 +10,14 @@ dependencies = [
     # (another workspace member pulls openfga-sdk in) and NOT enough for the image, whose venv is
     # `uv sync --package flows` alone — the exact crash-loop the ingest door already paid for.
     "service-kit[governed]",
+    # The regex NODE's engine, and declared here for the reason the comment above already paid for:
+    # the image's venv is `uv sync --package flows` alone, so a transitive dep from another workspace
+    # member is present locally and ABSENT in the image. `regex` is a superset of `re` (every pattern
+    # a user has drawn keeps its meaning) and is not a naive backtracker: measured on `(a+)+$` against
+    # "a"*n+"X", `re` took 76.5s at n=30 while `regex` answered in 0.0003s. It also accepts a
+    # `timeout=` the stdlib has no equivalent for, which is the backstop for whatever it does not
+    # optimise. `re` stays for the fixed internal patterns, which no caller influences.
+    "regex>=2024.5.15",
     "httpx>=0.27",
     "uvicorn>=0.30",
     # The durable lane. A run is a topological fan-out over nodes that call models — exactly the

@@ -102,6 +102,14 @@ class FlowRunReader:
     def state(self, run_id: str) -> dict[str, object] | None:
         raise NotImplementedError
 
+    def terminate(self, run_id: str) -> None:
+        """Stop scheduling further work for a run. Sync, like `state`, and driven through a thread.
+
+        On the READER rather than a separate seam because both answer the same question — "reach the
+        engine about one run" — and a second class would be a second thing to wire, stub and forget.
+        """
+        raise NotImplementedError
+
 
 FlowsSettingsDep = Annotated[FlowsSettings, Depends(get_flows_settings)]
 HttpDep = Annotated[httpx.AsyncClient, Depends(get_http)]

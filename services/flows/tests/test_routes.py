@@ -12,6 +12,7 @@ where it is checked against the real app's openapi.
 """
 
 from collections.abc import Iterator
+from http import HTTPStatus
 from typing import Any
 
 import httpx
@@ -361,3 +362,50 @@ def test_an_oversized_graph_is_REFUSED_at_the_door_with_the_node_NAMED(client: T
     assert body["status"] == 422
     assert body["problems"], "refused with an EMPTY problems list — the builder has nothing to paint"
     assert any("b" in p and str(MAX_NODE_FAN_IN) in p for p in body["problems"]), f"the 422 must name the offending node AND the ceiling: {body['problems']}"
+
+
+class _RecordingReader:
+    """A run reader that records terminations. `state` answers None so the route falls to the cache."""
+
+    def __init__(self) -> None:
+        self.terminated: list[str] = []
+
+    def state(self, _run_id: str) -> dict[str, object] | None:
+        return None
+
+    def terminate(self, run_id: str) -> None:
+        self.terminated.append(run_id)
+
+
+def test_a_durable_run_can_be_TERMINATED(client: TestClient) -> None:
+    """DWF-MGT-003: flows exposed start and status and no way to stop.
+
+    `flow_run_workflow` fans out `run_node` activities against LIVE Ray Serve endpoints, so a wide
+    graph aimed at a wedged Serve deployment occupies replicas for `serve_timeout` x NODE_RETRY per
+    node per wave — and a pod restart does not help, because the instance is durable and resumes. The
+    only way to stop it was to wait.
+
+    A HARD terminate is right here and was NOT right for ingest, which is why this is not a copy of
+    that fix: ingest's `terminate_workflow` skipped `emit_terminal`, the only caller of
+    `release_run_units`, and stranded the run's JetStream consumer. flows holds no queue and no
+    consumer — it fans out activities and returns — so there is no cleanup a skipped path could leak.
+    """
+    reader = _RecordingReader()
+    client.app.state.workflow_reader = reader  # type: ignore[attr-defined]
+
+    resp = client.post("/api/flows/runs/run-abc/terminate")
+
+    assert resp.status_code == HTTPStatus.ACCEPTED
+    assert reader.terminated == ["run-abc"]
+    # The body states the SDK's real semantics rather than implying a completed stop: a caller told
+    # "terminated" would reasonably free the Serve replicas in their head, and they are not free.
+    assert "in flight" in resp.json()["detail"]
+
+
+def test_terminate_without_an_engine_is_UNAVAILABLE_not_a_silent_success(client: TestClient) -> None:
+    """No reader means no sidecar. Answering 202 would tell an operator the runaway was stopped."""
+    client.app.state.workflow_reader = None  # type: ignore[attr-defined]
+
+    resp = client.post("/api/flows/runs/run-abc/terminate")
+
+    assert resp.status_code == HTTPStatus.SERVICE_UNAVAILABLE

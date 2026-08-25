@@ -279,6 +279,23 @@ class DaprFlowRunReader(FlowRunReader):
         # enum. The two disagree on their vocabulary; one accessor keeps the mapping below honest.
         return dict(state.to_json())
 
+    def terminate(self, run_id: str) -> None:
+        """Ask the engine to stop scheduling this run's remaining work.
+
+        A HARD terminate is correct HERE, and deliberately not the shape ingest needed. ingest's
+        terminate had to become a cancellation EVENT because `terminate_workflow` never resumes the
+        generator, so its `emit_terminal` — the only caller of `release_run_units` — never ran and the
+        run's JetStream consumer was stranded. `flow_run_workflow` holds no queue, no consumer and no
+        external resource: it fans out activities and returns. There is nothing for a skipped
+        finally-path to leak, so the simple call is the right one.
+
+        Not idempotent-checked: the SDK answers an unknown or already-terminal instance without
+        raising, and the route reports acceptance rather than an outcome.
+        """
+        import dapr.ext.workflow as wf
+
+        wf.DaprWorkflowClient().terminate_workflow(run_id)
+
 
 def _log_late_schedule(call: asyncio.Task[None]) -> None:
     """Drain a schedule call the request stopped waiting for, so its outcome reaches the log."""

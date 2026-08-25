@@ -11,12 +11,14 @@ reuse the app-scoped client while an activity gets a short-lived one on its own 
 
 import asyncio
 import json
+import logging
 import re
 import time
 from typing import cast
 from xml.sax.saxutils import unescape
 
 import httpx
+import regex
 
 from flows.graph import topo_waves, upstreams
 from flows.models import (
@@ -28,6 +30,9 @@ from flows.models import (
     Payload,
     RunState,
 )
+
+
+log = logging.getLogger(__name__)
 
 
 #: A Serve application name, as it appears in the route prefix. Validated rather than trusted: the
@@ -243,11 +248,20 @@ def _extract(node: FlowNode, inputs: list[Payload]) -> Payload:
     return Payload(text=value if isinstance(value, str) else json.dumps(value, indent=2, ensure_ascii=False))
 
 
-#: The regex arm's subject-length cap. Python's `re` is backtracking: a nested-quantifier pattern
-#: over N chars is O(2^N)-ish, and the pattern AND the subject are both caller-influenced. Running
-#: off the loop does not stop a GIL stall, so bounding the input is the load-bearing defence
-#: (open_python-audit FLOWS-REDOS-ON-LOOP). 256 KiB dwarfs any real ALTO/transcription payload.
+#: The regex arm's subject-length cap. It bounds MEMORY and nothing else — the comment here used to
+#: claim it was the load-bearing defence against backtracking, reasoning that a nested-quantifier
+#: pattern is "O(2^N) in the subject". That reasoning was wrong: the blow-up is exponential in the
+#: PATTERN, not the subject. Measured on `(a+)+$` against `"a"*n + "X"`, `re` took 0.30s at n=22,
+#: 4.86s at n=26 and 76.5s at n=30 — roughly 16x per four PATTERN-matched characters, at a subject
+#: length of thirty. A 256 KiB cap is irrelevant to that. Kept because it is cheap and a real memory
+#: bound; it is simply not the reason the stall cannot happen any more.
 _REGEX_MAX_SUBJECT = 256 * 1024
+
+#: Wall-clock budget for one regex arm. A BACKSTOP, not the primary defence: `regex` is not a naive
+#: backtracker and answered the measurement above in 0.0003s at every n, so the engine swap is what
+#: closes FLOWS-REDOS-ON-LOOP. This bounds whatever it does not optimise, turning a stall into an
+#: ordinary node failure the builder can see instead of a wedged pod.
+_REGEX_BUDGET_SECONDS = 2.0
 
 
 def _regex(node: FlowNode, inputs: list[Payload]) -> Payload:
@@ -260,14 +274,27 @@ def _regex(node: FlowNode, inputs: list[Payload]) -> Payload:
     if len(payload.text) > _REGEX_MAX_SUBJECT:
         raise NodeError(f"regex input too large: {len(payload.text)} chars (max {_REGEX_MAX_SUBJECT}) — split the flow upstream")
     try:
-        compiled = re.compile(pattern)
-    except re.error as exc:
+        compiled = regex.compile(pattern)
+    except regex.error as exc:
         raise NodeError(f"bad pattern: {exc}") from exc
-    if node.config.get("regexMode") == "replace":
-        replacement = node.config.get("regexReplace")
-        return Payload(text=compiled.sub(replacement if isinstance(replacement, str) else "", payload.text))
-    # Capture group 1 when the pattern has one, else the whole match — matching the frontend.
-    return Payload(text="\n".join(m.group(1) if m.lastindex else m.group(0) for m in compiled.finditer(payload.text)))
+    # The APPLY is inside the boundary too, not just the compile. A pattern can compile and still
+    # raise when used: `re.compile(r"(a)").sub(r"\\9", "aaa")` raises `re.error: invalid group
+    # reference 9`, which is caller input and therefore a NodeError, not a crash. Outside the try it
+    # escaped `run_node`'s `except NodeError`, propagated out of the activity, burned three
+    # NODE_RETRY attempts on input no retry can fix, and failed the whole orchestration with no node
+    # states — the precise outcome workflow.py says must not happen for a user-input refusal.
+    try:
+        if node.config.get("regexMode") == "replace":
+            replacement = node.config.get("regexReplace")
+            return Payload(text=compiled.sub(replacement if isinstance(replacement, str) else "", payload.text, timeout=_REGEX_BUDGET_SECONDS))
+        # Capture group 1 when the pattern has one, else the whole match — matching the frontend.
+        return Payload(text="\n".join(m.group(1) if m.lastindex else m.group(0) for m in compiled.finditer(payload.text, timeout=_REGEX_BUDGET_SECONDS)))
+    except regex.error as exc:
+        raise NodeError(f"bad pattern: {exc}") from exc
+    except TimeoutError as exc:
+        # The budget, not a crash: a pattern the engine cannot answer quickly is the caller's input,
+        # so it fails this NODE and the rest of the graph carries on.
+        raise NodeError(f"regex exceeded its {_REGEX_BUDGET_SECONDS}s budget — simplify the pattern") from exc
 
 
 async def run_node(job: NodeJob, *, client: httpx.AsyncClient) -> NodeResult:
@@ -289,6 +316,16 @@ async def run_node(job: NodeJob, *, client: httpx.AsyncClient) -> NodeResult:
         )
     except NodeError as exc:
         return NodeResult(state=NodeRunState(status="failed", ms=_elapsed_ms(started), error=str(exc)))
+    except Exception as exc:
+        # A NODE FAILS AS STATE, NEVER AS A RAISE — that is this module's stated contract, and a
+        # boundary that only catches NodeError enforces it only for the failures somebody remembered
+        # to convert. Anything else escaped into the activity, where the durable lane retries it three
+        # times against input no retry can fix and then fails the orchestration with no node states at
+        # all: the builder sees a dead run and cannot tell which node killed it. The specific leak
+        # found was `re.error` from `sub()`, now converted at source; this is the general guard so the
+        # next one does not need finding first.
+        log.exception("flows_node_crashed", extra={"node": job.node.id, "kind": job.node.kind})
+        return NodeResult(state=NodeRunState(status="failed", ms=_elapsed_ms(started), error=f"{type(exc).__name__}: {exc}"))
     # BOTH fields are capped by the model, at different ceilings: `output_text` at the 4 000-char
     # DISPLAY cap, `payload_text` at `MAX_PAYLOAD_CHARS` (256 KiB) because it is the document the
     # graph carries on — and, in the durable lane, the value written to the workflow history once as

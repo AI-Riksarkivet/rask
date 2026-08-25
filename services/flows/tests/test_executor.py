@@ -1,6 +1,8 @@
 """Node dispatch and the inline executor. The Serve boundary is mocked at the TRANSPORT (respx),
 so every assertion is about the request that would actually reach the cluster."""
 
+import time
+
 import httpx
 import pytest
 import respx
@@ -478,3 +480,71 @@ def test_regex_refuses_an_oversized_subject_by_name() -> None:
         _regex(node, [big])
     small = _regex(node, [Payload(text="aaa")])
     assert small.text  # a bounded subject still runs
+
+
+@pytest.mark.asyncio
+async def test_a_pattern_that_compiles_but_FAILS_TO_APPLY_is_a_node_failure(client: httpx.AsyncClient) -> None:
+    """`re.error` from `sub()`, not from `compile()` — the half the boundary did not cover.
+
+    `_regex` wrapped only the compile. A replacement string is expanded when the pattern is APPLIED,
+    so `re.compile(r"(a)").sub(r"\\9", "aaa")` raises `re.error: invalid group reference 9` from a
+    line that sat outside the try. `re.error` is not a `NodeError`, so `run_node`'s boundary did not
+    catch it either: it propagated out of the activity, the durable lane burned three NODE_RETRY
+    attempts on input no retry can fix, and the orchestration went FAILED with no node states — the
+    builder sees a dead run and cannot tell which node killed it.
+
+    Before the fix this test failed rather than erroring usefully: `pytest.raises(NodeError)` does not
+    catch `re.error`.
+    """
+    node = FlowNode(id="r", kind="regex", config={"regexMode": "replace", "regexPattern": "(a)", "regexReplace": r"\9"})
+    async with client:
+        with pytest.raises(NodeError, match="bad pattern"):
+            await dispatch(node, [Payload(text="aaa")], None, client=client, serve_url=SERVE)
+
+
+@pytest.mark.asyncio
+async def test_a_node_that_raises_ANYTHING_fails_as_state_not_as_a_raise(client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The module's contract is that a node fails as STATE. A boundary catching only `NodeError`
+    enforced that only for the failures somebody remembered to convert.
+
+    The specific leak found was `re.error`, fixed at source above. This is the general guard, so the
+    next unconverted exception degrades one node instead of killing the run: the durable lane retries
+    a raise three times and then fails the whole orchestration with no node states.
+    """
+    from flows import executor
+
+    async def _boom(*_a: object, **_k: object) -> object:
+        raise RuntimeError("something nobody converted")
+
+    monkeypatch.setattr(executor, "dispatch", _boom)
+    job = NodeJob(node=FlowNode(id="n", kind="regex", config={}), inputs=[], seed=None, serve_url=SERVE, serve_timeout=5.0)
+    async with client:
+        result = await run_node(job, client=client)
+
+    assert result.state.status == "failed", "an unconverted exception escaped the node boundary"
+    assert "RuntimeError" in (result.state.error or ""), "the failure must name what went wrong"
+
+
+@pytest.mark.asyncio
+async def test_a_CATASTROPHIC_pattern_cannot_stall_the_process(client: httpx.AsyncClient) -> None:
+    """FLOWS-REDOS-ON-LOOP's other half: the input cap never bounded the backtracking.
+
+    The old comment claimed the 256 KiB subject cap was the load-bearing defence, reasoning the
+    blow-up is "O(2^N) in the subject". It is exponential in the PATTERN. Measured with stdlib `re` on
+    `(a+)+$` against `"a"*n + "X"`: 0.30s at n=22, 4.86s at n=26, 76.5s at n=30 — a subject of THIRTY
+    characters, nowhere near the cap. And `asyncio.to_thread` cannot help, because `re` holds the GIL
+    while it backtracks, so one drawn node stalls the whole flows process.
+
+    The node now runs on `regex`, which is not a naive backtracker (0.0003s at every n above) and
+    accepts a `timeout=` as a backstop. This asserts the outcome rather than the mechanism: the node
+    ANSWERS, quickly, whichever of the two saves it.
+    """
+    node = FlowNode(id="r", kind="regex", config={"regexPattern": r"(a+)+$"})
+    started = time.perf_counter()
+    async with client:
+        await dispatch(node, [Payload(text="a" * 30 + "X")], None, client=client, serve_url=SERVE)
+    elapsed = time.perf_counter() - started
+
+    # stdlib `re` needed 76.5s for exactly this input. Two seconds is a ceiling no correct
+    # implementation approaches and a floor no stalled one clears.
+    assert elapsed < 2.0, f"the regex node took {elapsed:.1f}s — the backtracking bound is not holding"

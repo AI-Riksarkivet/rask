@@ -127,7 +127,7 @@ Authorization that is missing, asymmetric, or forgeable, plus secrets that leave
 
 #### The high-severity items in this epic
 
-<details><summary><b>FLOWS-REDOS-ON-LOOP</b> [**PARTIAL**] — Caller-supplied regex is compiled and executed on the event loop — a `regex` node freezes the whole flows process <i>(flows-fleet, security, effort M)</i></summary>
+<details><summary><b>FLOWS-REDOS-ON-LOOP</b> [**FIXED 2026-08-25**] — Caller-supplied regex is compiled and executed on the event loop — a `regex` node freezes the whole flows process <i>(flows-fleet, security, effort M)</i></summary>
 
 **Sites:** `services/flows/src/flows/executor.py:247`, `services/flows/src/flows/executor.py:253`, `services/flows/src/flows/executor.py:251`, `services/flows/src/flows/executor.py:167`, `services/flows/src/flows/executor.py:327` *(+1 more)*
 
@@ -141,6 +141,16 @@ Authorization that is missing, asymmetric, or forgeable, plus secrets that leave
 **Re-verified 2026-08-24 — PARTIAL (severity now none).** Every pure-CPU arm now runs off the loop, exactly as the epic's Fix prescribed. executor.py:171 `return Payload(text="\n".join(await asyncio.to_thread(alto_lines, text)))`; :173 `return await asyncio.to_thread(_extract, node, inputs)`; :175 `return await asyncio.to_thread(_regex, node, inputs)`; :182 `return Payload(text=await asyncio.to_thread(compare_texts, texts))`. The load-bearing half — the subject cap — is present: executor.py:250 `_REGEX_MAX_SUBJECT = 256 * 1024` and :260-261 `if len(payload.text) > _REGEX_MAX_SUBJECT: raise NodeError(f"regex input too large: ...")`. Pinned by services/flows/tests/test_executor.py:472-477 (`big = Payload(text="a" * (_REGEX_MAX_SUBJECT + 1))` / `pytest.raises(NodeError, match="too large")`). Fixed by df52e874 `fix(async): the five confirmed blocking-on-the-event-loop defects (E2 batch)`, which cites this finding id in the code comment at executor.py:163-168. The comment is honest that a thread does not stop a GIL stall and names the cap as the real defence. [refuted-fix: STILL REPRODUCES at services/flows/src/flows/executor.py:270 (and :268). The off-loop half is real (executor.py:169-182 `return await asyncio.to_thread(_regex, node, inputs)`), but the half the finding itself calls load-bearing is not. The audit's Fix reads: "cap the subject length, and EITHER reject nested-quantifier patterns OR move the match behind an `asyncio.wait_for` on a thread. A thread does not stop the GIL stall, so the length cap is the load-bearing half." The shipped cap is `_REGEX_MAX_SUBJECT = 256 * 1024` (executor.py:250), enforced at :260-261 -- 262144 chars. The documented attack is "one POST /api/flows/runs with a 40-character seed takes the flows pod out", which sails under that cap by four orders of magnitude. `grep -n 'wait_for|quantifier|re2' services/flows/src/flows/executor.py` finds no timeout and no pattern rejection: the only things between the caller's pattern and the engine are the length check and `compiled = re.compile(pattern)` (:263), then `compiled.finditer(payload.text)` (:270) / `compiled.sub(...)` (:268).  REPRODUCED against the current tree. A script driving the real `flows.executor.dispatch` with `FlowNode(kind='regex', config={'regexPattern': r'(a+)+$'})` and `Payload(text='a'*40 + '!')`, wrapped in `asyncio.wait_for(..., timeout=8)`, with a 50ms heartbeat task printing every second, output:      subject len 41 cap 262144 under cap: True     <nothing further; killed by `timeout 45`, exit=124>  Not one heartbeat tick in 45s of wall clock, and the 8-second `wait_for` never fired. That is the mechanism intact: `asyncio.to_thread` moves the call off the loop, but CPython's `re` does not release the GIL, so the worker thread freezes the event loop anyway -- including `/api/health`, the reason the finding says the liveness probe cannot save the pod.  The cited pinning test shows what was actually built: services/flows/tests/test_executor.py:472-477 asserts only that `_REGEX_MAX_SUBJECT + 1` chars raises "too large". Nothing asserts that a small subject with a catastrophic pattern terminates -- because it does not.]
 
 **Current sites:** `services/flows/src/flows/executor.py:169-182`, `services/flows/src/flows/executor.py:250`, `services/flows/src/flows/executor.py:260`
+
+**FIXED 2026-08-25 (Dapr sweep).** Closed by the engine swap, not by another cap: `_regex`
+compiles and applies through the `regex` module with `timeout=2.0` on the `sub()` and `finditer()`
+arms. The Dapr sweep re-derived this row and found the reasoning in the original remediation — and
+in the shipped code comment — WRONG: the blow-up is exponential in the PATTERN, not the subject.
+Measured against `(a+)+$`: `re` took **76.5 s at a thirty-character subject**, nowhere near the
+256 KiB cap that was described as the load-bearing defence; `regex` answered in 0.0003 s at every n.
+The cap stays, redescribed as the memory bound it actually is. Pinned by
+`test_a_CATASTROPHIC_pattern_cannot_stall_the_process`. Full write-up was in `open_dapr-audit.md`
+(deleted on completion of that backlog).
 
 </details>
 
@@ -455,7 +465,7 @@ Three separate defects share one root: routes that invent their own error shape,
 
 #### The high-severity items in this epic
 
-<details><summary><b>FLOWS-NODE-ESCAPE</b> [**OPEN**] — `run_node` catches only `NodeError`, so a bad `regexReplace` 500s the entire run and orphans its sibling nodes <i>(flows-fleet, error-handling, effort S)</i></summary>
+<details><summary><b>FLOWS-NODE-ESCAPE</b> [**FIXED 2026-08-25**] — `run_node` catches only `NodeError`, so a bad `regexReplace` 500s the entire run and orphans its sibling nodes <i>(flows-fleet, error-handling, effort S)</i></summary>
 
 **Sites:** `services/flows/src/flows/executor.py:273`, `services/flows/src/flows/executor.py:249`, `services/flows/src/flows/executor.py:327`, `services/flows/src/flows/activities.py:40`
 
@@ -469,6 +479,13 @@ Three separate defects share one root: routes that invent their own error shape,
 **Re-verified 2026-08-24 — OPEN (severity now high).** `run_node`'s handler is unchanged: executor.py:281-291 is `try: out = await dispatch(...)` / `except NodeError as exc:` — NodeError only. `_regex`'s guard still wraps the COMPILE alone (executor.py:262-265 `try: compiled = re.compile(pattern) except re.error as exc: raise NodeError(...)`), while the substitution at executor.py:268 `return Payload(text=compiled.sub(replacement if isinstance(replacement, str) else "", payload.text))` sits outside it. Reproduced at HEAD: `python3 -c "import re; re.compile(r'(\\d+)').sub(r'\\g<9>','1723')"` -> `re.PatternError: invalid group reference 9 at position 3`, and `re.PatternError.__mro__[:3]` is `(re.PatternError, Exception, BaseException)` — it is NOT a NodeError. executor.py:347 is still `results = await asyncio.gather(*(run_node(job, client=client) for job in jobs))` with no `return_exceptions=True`. activities.py:48 `result = asyncio.run(_run(job))` has no guard either, so the same escape raises out of the Dapr activity. The regex arm moved into a thread (executor.py:175 `return await asyncio.to_thread(_regex, node, inputs)`) as part of the FLOWS-REDOS-ON-LOOP fix, which does not change the escape — `asyncio.to_thread` re-raises into the awaiting coroutine. Neither of the two fixes the epic prescribed (`except re.error -> NodeError` around `.sub`, broadening run_node to `except Exception`) was applied, and no test in services/flows/tests pins it.
 
 **Current sites:** `services/flows/src/flows/executor.py:290`, `services/flows/src/flows/executor.py:268`, `services/flows/src/flows/executor.py:347`, `services/flows/src/flows/activities.py:48`
+
+**FIXED 2026-08-25 (Dapr sweep).** Both prescribed halves landed together, which the
+re-verification above noted had not happened: the `try` in `_regex` now spans the APPLY (so
+`regex.error` from `.sub` becomes a `NodeError`), and `run_node`'s boundary widened from
+`except NodeError` to `except Exception` so the next unconverted exception degrades one node rather
+than the run. Pinned by `test_a_pattern_that_compiles_but_FAILS_TO_APPLY_is_a_node_failure` and
+`test_a_node_that_raises_ANYTHING_fails_as_state_not_as_a_raise`.
 
 </details>
 
@@ -1745,8 +1762,8 @@ sites and the evidence as measured at `871b5e14`.
 
 | ID | Status | → | Sev | Cat | Eff | Finding | Sites |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `FLOWS-NODE-ESCAPE` | **OPEN** | E4 | **HIGH** | error-handling | S | `run_node` catches only `NodeError`, so a bad `regexReplace` 500s the entire run and orphans its sibling nodes | `services/flows/src/flows/executor.py:273`, `services/flows/src/flows/executor.py:249` *(+2 more)* |
-| `FLOWS-REDOS-ON-LOOP` | **PARTIAL** | E1 | **HIGH** | security | M | Caller-supplied regex is compiled and executed on the event loop — a `regex` node freezes the whole flows process | `services/flows/src/flows/executor.py:247`, `services/flows/src/flows/executor.py:253` *(+4 more)* |
+| `FLOWS-NODE-ESCAPE` | **FIXED** | E4 | **HIGH** | error-handling | S | `run_node` catches only `NodeError`, so a bad `regexReplace` 500s the entire run and orphans its sibling nodes | `services/flows/src/flows/executor.py:273`, `services/flows/src/flows/executor.py:249` *(+2 more)* |
+| `FLOWS-REDOS-ON-LOOP` | **FIXED** | E1 | **HIGH** | security | M | Caller-supplied regex is compiled and executed on the event loop — a `regex` node freezes the whole flows process | `services/flows/src/flows/executor.py:247`, `services/flows/src/flows/executor.py:253` *(+4 more)* |
 | `GW-URL-DECODE` | **OPEN** | E4 | **HIGH** | error-handling | M | Gateway rebuilds the upstream URL from the percent-DECODED path, corrupting or truncating it (and 500-ing on some inputs) | `services/gateway/src/gateway/__init__.py:315`, `services/gateway/src/gateway/__init__.py:324` *(+2 more)* |
 | `COMPUTE-PROXY-CONTENT-ENCODING` | **OPEN** | E4 | med | error-handling | S | The Serve proxy forwards `content-encoding`/`content-length` from an upstream body httpx has already decompressed | `services/compute/src/compute/proxy.py:45`, `packages/ray-kit/src/ray_kit/dashboard.py:582` *(+1 more)* |
 | `COMPUTE-RAY-CLIENT-RETRY-STORM` | **OPEN** | E3 | med | resilience | S | `get_ray_client` re-runs the blocking `build_client` on every request while Ray is down, with no backoff or negative caching | `services/compute/src/compute/dependencies.py:21`, `services/compute/src/compute/lifespan.py:29` |

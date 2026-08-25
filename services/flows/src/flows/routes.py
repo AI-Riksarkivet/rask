@@ -20,7 +20,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Header
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from flows import executor, security
 from flows.catalog import CATALOG
@@ -221,6 +221,53 @@ async def create_run(
 
     _remember(runs, state, settings.max_runs)
     return state
+
+
+class TerminateAccepted(BaseModel):
+    """202 for a request the ENGINE accepted, not a completed stop.
+
+    The SDK's real semantics, stated in the body rather than implied by the status: further
+    scheduling stops, but an activity already in flight runs to completion. A caller told "terminated"
+    would reasonably assume the Serve replicas were free, and they are not — the same wording
+    `ingest.api.TerminateAccepted` uses, for the same reason.
+    """
+
+    run_id: str
+    detail: str = "further scheduling stops; work already in flight may still complete"
+
+
+@router.post("/runs/{run_id}/terminate", response_model=TerminateAccepted, status_code=HTTPStatus.ACCEPTED)
+async def terminate_run(
+    run_id: str,
+    reader: RunReaderDep,
+    settings: FlowsSettingsDep,
+    subject: security.CurrentSubject,
+    checker: security.CheckerDep,
+) -> TerminateAccepted:
+    """Stop a durable run (DWF-MGT-003).
+
+    Without this a run could be started and read but never stopped. `flow_run_workflow` fans out
+    `run_node` activities against LIVE Ray Serve endpoints, and a wide graph aimed at a wedged Serve
+    deployment occupies replicas for `serve_timeout` x NODE_RETRY per node per wave with no way to
+    intervene — a pod restart does not help, because the instance is durable and resumes.
+
+    THE SAME DOOR as start and read, and the same relation: whoever may spend the estate's GPU on a
+    drawn graph is who may stop spending it. A narrower gate here would mean the person who started a
+    runaway could not stop it.
+
+    AUTHZ BEFORE EXISTENCE, matching `get_run`: no run-id oracle for an unpermitted caller.
+    """
+    obj = settings.fga_root_object
+    allowed = await checker(user=subject, relation=security.EXECUTE, obj=obj)
+    audit("flows_run_terminate", ALLOW if allowed else DENY, subject=subject, resource=obj)
+    if not allowed:
+        raise ForbiddenError(f"'{subject}' lacks '{security.EXECUTE}' on '{obj}' — stopping a run needs the estate writer tier")
+    if reader is None:
+        raise ServiceUnavailableError("the workflow engine is not reachable from this pod")
+    # Through a thread: `DaprWorkflowClient` is synchronous gRPC, and blocking the loop here would
+    # stall every other request on the worker — the same rule `get_run` follows for `state`.
+    await asyncio.to_thread(reader.terminate, run_id)
+    return TerminateAccepted(run_id=run_id)
 
 
 @router.get("/runs/{run_id}", response_model=RunState)
