@@ -1429,4 +1429,3 @@ not a defect — but it should be a decision rather than an omission.
 - `open_dapr-audit.md` — the Dapr sweep. The `authn-authz` lane here and the `mgt` lane there both reach
   the workflow doors; each defers to the other rather than restating.
 - `.claude/skills/rask-services-fleet` — the gateway routing table every exposure claim was checked against.
-

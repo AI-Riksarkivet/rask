@@ -1564,4 +1564,3 @@ This is one of the most deliberately-audited pub/sub surfaces I have reviewed, a
 - `docs/RESILIENCE.md` — records the catalog outbox gap as the estate's **#1 weakness**; the `pubsub`
   critical here is that gap, re-measured, with the observation that the shipped B4 reconcile restores
   provenance but cannot re-fire a halted cascade.
-
