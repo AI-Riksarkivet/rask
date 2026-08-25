@@ -717,6 +717,13 @@ k3s-up: k3s-deps k3s-crds ## Vendor deps, apply CRDs, then install/upgrade the r
 	@echo "UI → http://<node-ip>/   (catch-all ingress; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 	@echo "API → http://<node-ip>/api/ray/health"
 
+seed-medallion-namespaces: ## Provision the cascade's TOP-LEVEL catalog namespaces (needs SEED_CATALOG_TOKEN when auth is on)
+	@# The cascade creates NESTED namespaces on its way down but deliberately never a top-level one --
+	@# that binds to a warehouse and `require_warehouse_scoped` refuses it from the table door. Meanwhile
+	@# scripts/seed_medallion_fga.sh grants on every cascade namespace, so authorization passed for
+	@# namespaces the catalog had never heard of and the media lane died 404 on silver-media$$features.
+	uv run python scripts/seed_medallion_namespaces.py
+
 seed-corpus: ## Seed the demo corpus into the volume the media plane actually READS
 	./scripts/seed-corpus.sh
 

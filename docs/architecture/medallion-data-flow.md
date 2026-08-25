@@ -200,16 +200,31 @@ segment, never fetch the file.
 
 ## Open decisions
 
-Two, and both are the owner's. Neither is work waiting to be scheduled.
+One, and it is the owner's. It is not work waiting to be scheduled.
 
-### Per-workload dependency isolation on Ray
+### Per-workload dependency isolation on Ray — SETTLED 2026-08-25
 
-The Ray lane works because `.docker/ray-cluster.dockerfile` installs the platform's Lance trio beside
-a workload's CUDA stack — one fat shared image. `CLAUDE.md` names that pattern as not-the-answer
-("a workload's awkward dependencies are ITS problem"), and the replacement is unnamed: the 2026-08-17
-`runtime_env` ruling was superseded 2026-08-23 and nothing replaced it. Per-workload baked images, a
-second Ray cluster, or something else. The lane being on does not settle it; it raises the cost of
-leaving it unsettled, because a second workload now lands in the same image.
+Recorded here because the version of this section published on 2026-08-24 was **wrong** and a reader
+may have acted on it. It said the Ray lane "installs the platform's Lance trio beside a workload's
+CUDA stack — one fat shared image". That had not been true since `fd7dd7e0` (2026-08-18): torch,
+ultralytics and transformers are not in the root lock at all, and `ray-cluster` builds
+`packages/ratch` from that lock and installs no runner.
+
+What WAS broken is narrower and was caught by nothing. The workload image `.docker/ray-htr.dockerfile`
+opened `FROM ray-cluster:dev` — a tag in the host daemon — while every build in this repo runs inside
+the Dagger engine, where BuildKit resolves that against a registry. Measured 2026-08-25:
+
+    ! failed to convert Dockerfile to LLB: ray-cluster:dev: pull access denied
+
+So the per-workload image could not be built, nothing referenced it, and `chart/values.yaml` declared
+`importPath: runner.htrflow_service:htrflow_app` while deploying `ray-cluster` — an image with no
+`runner` module.
+
+The resolution is per-workload baked images, built from the parametrized
+`.docker/ray-runner.dockerfile` (`ARG RUNNER`, the shape `frontend.dockerfile` already uses for
+zones) and named per application as `serveApplications[].image` → `runtime_env.image_uri`. Verified in
+the built image: `/opt/runner-venv/bin/python` imports `runner.htrflow_service`, `/opt/venv/bin/python`
+imports lance 10.0.0 and ray 2.58.0, and the two do not see each other — which is the seal, not a gap.
 
 ### Does every corpus have a catalog node?
 

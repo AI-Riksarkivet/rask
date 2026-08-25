@@ -3717,6 +3717,86 @@ def test_every_ray_job_script_is_BAKED_INTO_SOME_image() -> None:
     )
 
 
+def test_the_deployed_ray_image_PROVIDES_every_serve_application_it_declares() -> None:
+    """A declared Serve application names an import path the deployed image must actually contain.
+
+    The sibling gates above cover JOB scripts — files under `/home/ray/jobs/` submitted to the Ray
+    Jobs API. A Serve APPLICATION fails the same way for the same reason and was covered by nothing:
+    `serveConfigV2` hands KubeRay an `import_path`, and if the image cannot import it the application
+    never becomes healthy. The failure surfaces as a RayService stuck reconciling, not as anything
+    naming the image.
+
+    Measured 2026-08-25 on the shipped values: `ray.image.repository` is `ray-cluster` while
+    `ray.serveApplications[0].importPath` is `runner.htrflow_service:htrflow_app`. `fd7dd7e0`
+    (2026-08-18) deliberately emptied `ray-cluster` of every workload dependency — it builds
+    `packages/ratch` from the ROOT lock and installs no runner at all — and moved the workload to
+    `.docker/ray-htr.dockerfile`. The image half of that split landed; the chart was never pointed at
+    the result, so the deployment declares an application the image it runs cannot import.
+
+    This gate is the coupling made explicit: ONE RayService runs ONE image, so the image named here
+    must satisfy every application declared here. That is also why a second workload is a second
+    RayService rather than a second entry — an image containing both is the fattened shared image
+    CLAUDE.md refuses.
+
+    Workload-agnostic by construction: which runner provides which top-level module is read from the
+    tree, never hardcoded, so this reads the same for audio, text, image or a modality nobody has
+    written yet.
+    """
+    import yaml as _yaml
+
+    values = _yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
+    ray = values["ray"]
+    apps = ray.get("serveApplications") or []
+    assert apps, "ray.serveApplications is empty — this gate is now blind; it exists to tie declared applications to the image that runs them"
+
+    repository = ray["image"]["repository"]
+    dockerfile_path = REPO / f".docker/{repository}.dockerfile"
+    assert dockerfile_path.exists(), f"ray.image.repository is {repository!r} but .docker/{repository}.dockerfile does not exist"
+    # `_uncommented`: `ray-cluster.dockerfile` explains in prose that it USED to build from
+    # `runners/htr/uv.lock`, and a raw substring check reads that sentence as an install. A gate that
+    # a comment can satisfy is a gate that passes exactly when the file documents its own violation.
+    head_dockerfile = _uncommented(dockerfile_path.read_text(encoding="utf-8"))
+    # The parametrized per-workload image builds ANY runner from `ARG RUNNER`, so its dockerfile names
+    # none. An application that declares its own `image` is satisfied by it for whichever runner the
+    # tag was built from — the pairing this gate can check statically is that the module EXISTS.
+    runner_image = REPO / ".docker/ray-runner.dockerfile"
+
+    # Which runner ships which top-level module, read from the tree so no workload is named here.
+    provider = {src.name: src.parent.parent.name for src in (REPO / "runners").glob("*/src/*") if src.is_dir()}
+
+    unsatisfied = []
+    for app in apps:
+        module = app["importPath"].split(":")[0].split(".")[0]
+        runner = provider.get(module)
+        if runner is None:
+            unsatisfied.append(f"  {app['name']}: imports {module!r}, which no runners/*/src/ provides")
+            continue
+        if app.get("image"):
+            # Declared its own baked image (rendered as runtime_env.image_uri). It must be buildable:
+            # the parametrized dockerfile is the only thing that builds one, and a runner without its
+            # own lock cannot be sealed into an image at all (`uv sync --locked` is the seal).
+            if not runner_image.exists():
+                unsatisfied.append(f"  {app['name']}: declares image {app['image']!r} but .docker/ray-runner.dockerfile does not exist to build it")
+            elif not (REPO / "runners" / runner / "uv.lock").exists():
+                unsatisfied.append(f"  {app['name']}: declares an image, but runners/{runner} ships no uv.lock — there is no sealed environment to bake")
+        elif f"runners/{runner}" not in head_dockerfile:
+            unsatisfied.append(
+                f"  {app['name']}: imports {module!r} (from runners/{runner}), and declares no image of its own, "
+                f"so it falls back to the head image {repository!r} — which does not install that runner"
+            )
+
+    assert not unsatisfied, (
+        "a declared Serve application names an import path no image it can run provides:\n"
+        + "\n".join(unsatisfied)
+        + "\n\nGive the application its own baked image — `serveApplications[].image`, rendered as "
+        "runtime_env.image_uri and built by\n"
+        "    scripts/dagger-image.sh --runner <runner> --tag ray-<runner>:<tag>\n"
+        "from the parametrized .docker/ray-runner.dockerfile. Do NOT install a second runner into the "
+        "head image to satisfy it — that is the fattened shared image CLAUDE.md refuses, and it is what "
+        "fd7dd7e0 removed."
+    )
+
+
 def test_stage_run_is_a_MONITOR_and_uses_continue_as_new() -> None:
     """A poll loop inside one instance grows history without bound; `continue_as_new` resets it.
 

@@ -25,6 +25,23 @@ spec:
         import_path: {{ $app.importPath }}
         route_prefix: {{ $app.routePrefix }}
         runtime_env:
+          {{- if $app.image }}
+          {{- /* THE PER-WORKLOAD BAKED IMAGE. `image_uri` names a whole prebuilt image for THIS
+               application's replicas (Ray 2.43+), so several workloads share one cluster without
+               sharing one environment — which is what keeps the head image agnostic.
+
+               This is NOT the mechanism the 2026-08-23 ruling rejected. That refuses shipping
+               DEPENDENCIES through runtime_env (the `pip`/`uv` fields, resolving a stack at replica
+               start). Handing a deployment an image built by .docker/ray-runner.dockerfile is the
+               baked-image answer the ruling asks for.
+
+               Unset => the replicas inherit the head's image, which is correct only when the head
+               image already provides the import path. Nothing could tell those two cases apart
+               before: the chart declared `runner.htrflow_service:htrflow_app` while deploying
+               `ray-cluster`, an image emptied of every runner by fd7dd7e0, and the application simply
+               never became healthy. tests/unit/test_invariants.py now refuses that pairing. */}}
+          image_uri: {{ $app.image | quote }}
+          {{- end }}
           env_vars:
             RASK_SERVE_REPLICAS: "{{ $.Values.config.RASK_SERVE_REPLICAS }}"
             {{- /* DERIVED from ray.gpuCount (rask.serveGpuFrac), not passed through: an actor that asks

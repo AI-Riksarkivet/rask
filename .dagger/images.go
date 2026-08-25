@@ -108,6 +108,40 @@ func (m *Rask) Image(
 	})
 }
 
+// RunnerImage builds ONE workload's Ray image: the agnostic platform environment plus one sealed
+// runner, from the single parametrized .docker/ray-runner.dockerfile.
+//
+// The sibling of ZoneImage, and for the same reason: one definition, N images, no file per member.
+// It replaced .docker/ray-htr.dockerfile, which opened `FROM ray-cluster:dev` — a tag in the HOST
+// daemon. This module's builds run inside the Dagger engine and BuildKit resolves that against a
+// registry, so that image could not be built by the only seam this repo builds through, and nothing
+// said so. Dagger's DockerBuild exposes no build-context option, so there is no way to hand it a
+// locally-built base; a self-contained dockerfile is the fix that needs no registry.
+//
+// `runner` is a directory under runners/ that ships its own uv.lock — the lock is what seals the
+// workload's environment away from the root one.
+func (m *Rask) RunnerImage(
+	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo",
+	//          ".localbin", ".playwright-cli", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
+	//          "**/coverage", "**/storybook-static", "**/build"]
+	// +defaultPath="/"
+	src *dagger.Directory,
+	// Runner directory under runners/.
+	runner string,
+	// +optional
+	buildDate string,
+	// +optional
+	vcsRef string,
+	// +optional
+	version string,
+) *dagger.Container {
+	args := append(provenance(buildDate, vcsRef, version), dagger.BuildArg{Name: "RUNNER", Value: runner})
+	return src.DockerBuild(dagger.DirectoryDockerBuildOpts{
+		Dockerfile: ".docker/ray-runner.dockerfile",
+		BuildArgs:  args,
+	})
+}
+
 // ZoneImage builds one micro-frontend zone from the single parametrized frontend dockerfile.
 //
 // `zone` is a directory under frontend/microfrontends and becomes the APP build arg, exactly as

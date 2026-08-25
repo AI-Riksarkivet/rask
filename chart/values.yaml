@@ -1557,6 +1557,18 @@ ray:
     - name: htrflow
       importPath: "runner.htrflow_service:htrflow_app"
       routePrefix: "/htrflow"
+      # The image whose environment satisfies `importPath`, rendered as runtime_env.image_uri so THIS
+      # application's replicas run it while the head stays agnostic. Built by
+      #   scripts/dagger-image.sh --runner htr --tag ray-htr:dev
+      # from the parametrized .docker/ray-runner.dockerfile (platform closure + one sealed runner).
+      #
+      # Empty means "the head image already provides this import path". That was the effective
+      # setting until 2026-08-25 and it was FALSE: fd7dd7e0 emptied `ray-cluster` of every runner on
+      # 2026-08-18 and moved the workload to its own image, but nothing pointed the chart at the
+      # result — so the declared application could never be imported and only the RayService's
+      # reconcile loop knew. Ray pulls this by reference, so it must be a registry address in a real
+      # deployment (k3s side-loads :dev images into containerd, which is why the local default works).
+      image: "ray-htr:dev"
   # Kept for the compute zone's route hint and the NOTES output — the FIRST application's prefix.
   # Not read by the RayService any more; serveApplications above is the source of truth.
   serveRoutePrefix: "/htrflow"

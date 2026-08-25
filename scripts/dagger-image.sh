@@ -9,6 +9,7 @@
 #   scripts/dagger-image.sh --name gateway      --tag gateway:dev
 #   scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
 #   scripts/dagger-image.sh --zone lakehouse    --tag web-lakehouse:dev
+#   scripts/dagger-image.sh --runner htr        --tag ray-htr:dev
 #   scripts/dagger-image.sh --name cnpg-age-ext --tag cnpg-age:dev --arg AGE_REF=v1.5.0
 #
 # DELIVERY: --load (default) exports an OCI tarball and `docker load`s it, which reproduces exactly what
@@ -23,13 +24,14 @@
 # Dagger CLI auto-provision its own — which is correct for --load and would fail only on --push.
 set -euo pipefail
 
-NAME="" ZONE="" TAG="" MODE="load" ADDRESS=""
+NAME="" ZONE="" RUNNER="" TAG="" MODE="load" ADDRESS=""
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --name)    NAME="$2"; shift 2 ;;
     --zone)    ZONE="$2"; shift 2 ;;
+    --runner)  RUNNER="$2"; shift 2 ;;
     --tag)     TAG="$2"; shift 2 ;;
     --arg)     EXTRA_ARGS+=(--build-arg "$2"); shift 2 ;;
     --push)    MODE="push"; ADDRESS="$2"; shift 2 ;;
@@ -37,8 +39,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$NAME" && -z "$ZONE" ]]; then
-  echo "!! need --name <dockerfile stem> or --zone <zone>" >&2; exit 2
+if [[ -z "$NAME" && -z "$ZONE" && -z "$RUNNER" ]]; then
+  echo "!! need --name <dockerfile stem>, --zone <zone>, or --runner <runner>" >&2; exit 2
 fi
 if [[ "$MODE" == "load" && -z "$TAG" ]]; then
   echo "!! --load needs --tag <image:tag>" >&2; exit 2
@@ -65,6 +67,9 @@ VERSION="${VERSION:-${TAG##*:}}"
 
 if [[ -n "$ZONE" ]]; then
   fn=(zone-image --zone="$ZONE")
+elif [[ -n "$RUNNER" ]]; then
+  # One workload's Ray image, from the parametrized .docker/ray-runner.dockerfile.
+  fn=(runner-image --runner="$RUNNER")
 else
   fn=(image --name="$NAME")
 fi
