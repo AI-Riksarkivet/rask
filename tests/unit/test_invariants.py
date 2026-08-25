@@ -3717,6 +3717,81 @@ def test_every_ray_job_script_is_BAKED_INTO_SOME_image() -> None:
     )
 
 
+def test_the_chart_cannot_declare_a_MEDALLION_NAMESPACE_NO_WAREHOUSE_CAN_OWN() -> None:
+    """With warehouses on, every medallion top-level namespace is unprovisionable — measured, not argued.
+
+    Three shipped defaults contradict each other, and the contradiction is total: there is no value of
+    `medallion.buckets` that resolves it.
+
+    1. `catalog.warehouses.enabled: true` makes `require_warehouse_scoped` bind, and it refuses any
+       top-level namespace that belongs to no warehouse (fga_deps.py:797) — `len(segments) > 1` returns
+       early, so only a NESTED namespace escapes.
+    2. A warehouse may not be backed by a reserved bucket: `POST /v1/warehouses` raises
+       "bucket ... is reserved platform storage" (warehouses.py).
+    3. Every medallion stage bucket is reserved, whichever way it is set. Left unset it falls back to
+       `rustfs.bucket` — the catalog root, reserved in-app via `Settings.reserved_bucket_set`. Set in
+       `medallion.buckets` it is reserved BY THE CHART ITSELF: services.yaml appends every value of that
+       map into `LANCE_RESERVED_BUCKETS`.
+
+    So the namespace needs a warehouse, the warehouse needs a non-reserved bucket, and the bucket is
+    reserved either way. Measured on the live estate 2026-08-25: `gold`, `bronze-media` and
+    `silver-media` are all absent, and both doors refuse —
+
+        POST /v1/warehouses/lance-catalog/namespaces -> 403
+        POST /v1/namespace/gold/create               -> 400 "top-level namespace 'gold' must
+                                                             belong to a warehouse"
+
+    `bronze` and `silver` exist only because they predate the guard; they are grandfathered, not proof
+    that the path works.
+
+    TWO CONFIGURATIONS SATISFY THIS GATE, and an estate must choose one:
+      * warehouses OFF — single-bucket by configuration, which is the mode
+        `require_warehouse_scoped`'s own docstring blesses ("the default root is the only correct
+        destination, and demanding a warehouse would be a rule no caller could satisfy");
+      * NESTED medallion namespaces (`<owner>{delim}bronze`), which belong to their parent's warehouse
+        and skip the guard by the `len(segments) > 1` early return. The estate already demonstrates the
+        shape: `acme-bucket` owns `acme-bronze` / `acme-silver` / `acme-gold`.
+    """
+    import yaml as _yaml
+
+    values = _yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
+    medallion = values.get("medallion") or {}
+    warehouses_on = bool(((values.get("catalog") or {}).get("warehouses") or {}).get("enabled"))
+    if not warehouses_on:
+        return  # single-bucket mode: the guard no-ops and the shared root is the correct destination
+
+    declared: list[str] = []
+    head = (medallion.get("producer") or {}).get("bronzeNamespace")
+    if head:
+        declared.append(head)
+    for mover in medallion.get("movers") or []:
+        for key in ("fromNamespace", "toNamespace"):
+            if mover.get(key) and mover[key] not in declared:
+                declared.append(mover[key])
+
+    # A NESTED namespace is the shape the Lance object model describes and the only one that works
+    # here. `require_warehouse_scoped` returns early for `len(segments) > 1` (fga_deps.py:794), so a
+    # child inherits its parent's warehouse and needs no binding of its own; only the single top-level
+    # parent is bound, once. `medallion.buckets` cannot substitute for this — services.yaml appends
+    # every value of that map into LANCE_RESERVED_BUCKETS, and a reserved bucket is precisely what
+    # `POST /v1/warehouses` refuses, so naming a bucket makes the namespace LESS ownable, not more.
+    delimiter = (values.get("catalog") or {}).get("delimiter") or "$"
+    flat = [ns for ns in declared if delimiter not in ns]
+    assert not flat, (
+        "catalog.warehouses.enabled is true, so a TOP-LEVEL namespace must belong to a warehouse — but "
+        "these medallion namespaces are declared flat at the root, and every bucket they could resolve "
+        "to is reserved platform storage no warehouse may back:\n  " + "\n  ".join(flat) + "\n\n"
+        f"Nest them under one parent instead ('<parent>{delimiter}<tier>'), which is both the Lance object "
+        f"model (a namespace recursively contains namespaces and tables; an identifier is the list of "
+        f"names from the root) and the only shape the guard admits — a child skips it entirely, and only "
+        f"the parent is bound to a warehouse, once:\n"
+        f'    POST /v1/warehouses/<id>/namespaces  {{"namespace": "<parent>"}}\n\n'
+        "Or run single-bucket: set catalog.warehouses.enabled=false, the mode require_warehouse_scoped's "
+        "own docstring blesses ('the default root is the only correct destination, and demanding a "
+        "warehouse would be a rule no caller could satisfy')."
+    )
+
+
 def test_the_deployed_ray_image_PROVIDES_every_serve_application_it_declares() -> None:
     """A declared Serve application names an import path the deployed image must actually contain.
 

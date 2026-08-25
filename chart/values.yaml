@@ -838,7 +838,14 @@ medallion:
   # zone (R23): the ingest sources (IIIF, external object storage) live outside the lakehouse entirely.
   # Any non-default bucket listed here is auto-provisioned by rustfs-mkbucket. Same RustFS endpoint/creds
   # serve all buckets; a truly external S3 per zone (own endpoint) is future.
-  buckets: {} # e.g. { gold: lance-sink }
+  # Per-zone bucket override, e.g. { gold: lance-sink } to land the serving tier outside the shared
+  # bucket. Every value here is appended to LANCE_RESERVED_BUCKETS (services.yaml), so naming a bucket
+  # makes it platform storage no tenant may later claim as a warehouse.
+  #
+  # Empty is CORRECT and is the normal case: the medallion namespaces are NESTED
+  # (`<parent>$bronze`), so they inherit their parent namespace's location and warehouse rather than
+  # resolving a bucket of their own. See `producer.bronzeNamespace` for why they are nested.
+  buckets: {}
   # #84 per-tenant medallion routing (OPT-IN). When true, the producer + movers get
   # MEDALLION_CONTROL_ROOT (the catalog's warehouse-registry root — the same s3://<rustfs.bucket> the
   # catalog's LANCE_REST_ROOT names), so a `project`-carrying POST /produce (or stage trigger) resolves
@@ -1056,7 +1063,22 @@ medallion:
     # gateway route — the in-cluster ClusterIP route stays reachable + unauthenticated.
     expose: true
     bronzeDataset: bronze$events
-    bronzeNamespace: bronze
+    # NESTED under one parent namespace, not flat at the root. A Lance namespace recursively
+    # contains namespaces and tables, and an object's identifier is the list of names from the root
+    # (lance_docs/ns_catalog/namespace/object-relationship.md) — so the tiers are children of the
+    # lakehouse namespace, exactly as Unity's ["prod","analytics"] or Polaris's ["prod","team_a","ml"].
+    #
+    # It is also the only shape that works on a warehouses-enabled estate. `require_warehouse_scoped`
+    # demands that a TOP-LEVEL namespace belong to a warehouse, and returns early for `len(segments) > 1`
+    # (fga_deps.py:794) — so a nested tier inherits its parent's warehouse and needs no binding of its
+    # own. Flat `bronze`/`silver`/`gold` could belong to no warehouse and could not be created at all:
+    # measured live 2026-08-25, `gold`, `bronze-media` and `silver-media` were all absent and BOTH doors
+    # refused (403 on the warehouse door, 400 "must belong to a warehouse" on the root door), while
+    # `bronze` and `silver` survived only because they predate the guard.
+    #
+    # The parent `lakehouse` is the ONE object that still needs a warehouse, created once:
+    #     POST /v1/warehouses/<id>/namespaces  {"namespace": "lakehouse"}
+    bronzeNamespace: lakehouse$bronze
     operation: lance_ray_ingest
     author: ray
     bronzeTopic: medallion.bronze
@@ -1078,15 +1100,15 @@ medallion:
     # Optional per-mover `requiredColumns: "id,embedding"` — declared consumer dependencies
     # (data-contract gap #1): the quality gate adds a `column_declared` assertion per name, so a
     # promotion that dropped/renamed a declared column is BLOCKED (the breaking-change detector).
-    - { name: bronze-to-silver, daprAppId: bronze-to-silver, fromNamespace: bronze, fromDataset: bronze$events, toNamespace: silver, toDataset: silver$features, operation: embed_features, author: data_eng, subTopic: medallion.bronze, pubTopic: medallion.silver, requiredAction: can_create_table, serviceIdentity: "service-bronze-to-silver", requiredColumns: "id" }
-    - { name: silver-to-gold, daprAppId: silver-to-gold, fromNamespace: silver, fromDataset: silver$features, toNamespace: gold, toDataset: gold$catalog, operation: aggregate_gold, author: analyst, subTopic: medallion.silver, pubTopic: "", requiredAction: can_promote, serviceIdentity: "service-silver-to-gold", requiredColumns: "id" }
+    - { name: bronze-to-silver, daprAppId: bronze-to-silver, fromNamespace: lakehouse$bronze, fromDataset: lakehouse$bronze$events, toNamespace: lakehouse$silver, toDataset: lakehouse$silver$features, operation: embed_features, author: data_eng, subTopic: medallion.bronze, pubTopic: medallion.silver, requiredAction: can_create_table, serviceIdentity: "service-bronze-to-silver", requiredColumns: "id" }
+    - { name: silver-to-gold, daprAppId: silver-to-gold, fromNamespace: lakehouse$silver, fromDataset: lakehouse$silver$features, toNamespace: lakehouse$gold, toDataset: lakehouse$gold$catalog, operation: aggregate_gold, author: analyst, subTopic: medallion.silver, pubTopic: "", requiredAction: can_promote, serviceIdentity: "service-silver-to-gold", requiredColumns: "id" }
     # The MEDIA lane (multimodal §9): POST /ingest-media on medallion-producer lands bronze-media blobs and
     # publishes medallion.media; this mover's generic compute then derives what the blob CONTENT
     # supports (image → inline thumbnail + embedding; unrecognised media carries through untouched —
     # no media config anywhere, the same binary as every mover). Terminal (pubTopic ""). Own
     # namespaces: mover URIs derive from the namespace, so reusing bronze/silver would collide with
     # the events chain's datasets on the same paths.
-    - { name: media-to-silver, daprAppId: media-to-silver, fromNamespace: bronze-media, fromDataset: bronze-media$objects, toNamespace: silver-media, toDataset: silver-media$features, operation: derive_media, author: data_eng, subTopic: medallion.media, pubTopic: "", requiredAction: can_create_table, serviceIdentity: "service-media-to-silver", requiredColumns: "id,thumbnail,embedding" }
+    - { name: media-to-silver, daprAppId: media-to-silver, fromNamespace: lakehouse$bronze-media, fromDataset: lakehouse$bronze-media$objects, toNamespace: lakehouse$silver-media, toDataset: lakehouse$silver-media$features, operation: derive_media, author: data_eng, subTopic: medallion.media, pubTopic: "", requiredAction: can_create_table, serviceIdentity: "service-media-to-silver", requiredColumns: "id,thumbnail,embedding" }
     # REMOVED 2026-08-17 — the transcription lane. Its in-process compute lived inside the medallion
     # (`htr_stage`/`htr_parse`/`htr_transcribe` + an HTR-shaped `schemas/htr.py`) and was dispatched by
     # a `operation == transcribe_pages` branch in transform.py, so the generic cascade named one
