@@ -32,6 +32,19 @@ dependencies = [
     # which is exactly why this was easy to miss: the SERVING half was fine and the OBSERVING half —
     # the head's dashboard, which belongs to the platform — was not.
     "ray[data,default,serve]>=2.58",
+    # jinja2 is a MISSING UPSTREAM DEPENDENCY of ray[serve] 2.58.0, added here because the extra does
+    # not pull it and `import ray.serve` fails without it. Verified against the installed
+    # distribution rather than assumed:
+    #   * ray-2.58.0.dist-info/METADATA declares jinja2 in NO extra (69 Requires-Dist lines carry
+    #     `extra == "serve"`; none of them is jinja2), and
+    #   * ray/serve/_private/haproxy.py:19 does `from jinja2 import Environment` at module load,
+    #     which `import ray.serve` triggers.
+    # Measured in the built image before this line existed:
+    #   ModuleNotFoundError: No module named 'jinja2'. You can run `pip install "ray[serve]"` ...
+    # -- an error that names the extra it is already installing, which is why it reads as a bad build
+    # rather than an upstream packaging gap. Drop this when Ray declares it (the ray-haproxy feature
+    # that imports it is new in 2.58).
+    "jinja2>=3.1",
     # The `ratch` CLI (cli/_app.py + the seven command modules).
     "typer>=0.12",
     "pydantic>=2.7",
