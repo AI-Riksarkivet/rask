@@ -32,8 +32,16 @@ DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
 # so these headers are harmless; on the auth-ON stack they're what lets the reads through (else 401).
 _LINEAGE_HEADERS = {"dapr-api-token": DAPR_TOKEN, "x-lance-service-identity": "service-web"} if DAPR_TOKEN else {}
 
-SILVER = "silver-media$features"
-BRONZE = "bronze-media$objects"
+#: The media tiers are NESTED under one parent since 2026-08-25 (chart: `lakehouse$bronze-media` ->
+#: `lakehouse$silver-media`). Flat tiers could not be created on a warehouses-enabled estate at all —
+#: `require_warehouse_scoped` demands a warehouse for a top-level namespace and every bucket a
+#: medallion tier resolves to is reserved platform storage — which is why this lane 404'd on
+#: `silver-media$features/create` and had never run. Empty keeps the old flat drive.
+NAMESPACE_PARENT = os.environ.get("LANCE_E2E_NAMESPACE_PARENT", "lakehouse")
+_PREFIX = f"{NAMESPACE_PARENT}$" if NAMESPACE_PARENT else ""
+
+SILVER = f"{_PREFIX}silver-media$features"
+BRONZE = f"{_PREFIX}bronze-media$objects"
 
 pytestmark = [pytest.mark.e2e, pytest.mark.media]
 

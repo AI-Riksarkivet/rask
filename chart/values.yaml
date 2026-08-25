@@ -904,6 +904,10 @@ medallion:
   # Media head demo seeding: /ingest-media writes two sample PNGs into the source prefix before
   # ingesting (the stand-in for an external media drop). Prod points the source at real media and
   # sets this false. Prefix/topic/dataset names use the code defaults.
+  # The media lane's BRONZE namespace, nested like every other tier. It was hardcoded twice in
+  # templates/medallion.yaml (`stageBucket "bronze-media"` and the path segment), so the media chain
+  # kept writing to the flat location after the tiers moved and its mover DROPped every trigger.
+  mediaBronzeNamespace: lakehouse$bronze-media
   mediaSeedSamples: true
   # Event-driven REAL-Ray compute (requires compute + a running Ray cluster — deploy/ray-lance-demo.yaml).
   # When true, each mover submits its stage transform as a `ray job submit` to the ray-lance cluster IN
@@ -1062,7 +1066,13 @@ medallion:
     # the EDGE head then fires only from real bronze ingests via /bronze-arrival. NB this gates only the
     # gateway route — the in-cluster ClusterIP route stays reachable + unauthenticated.
     expose: true
-    bronzeDataset: bronze$events
+    # NESTED to match `bronzeNamespace` below. These two are a PAIR: the producer stamps this dataset
+    # name on the trigger it publishes, and each mover compares it against its own
+    # MEDALLION_FROM_DATASET. A mismatch is not an error anywhere — the mover returns DROP, daprd logs
+    # "DROP status returned from app", and the mover itself logs NOTHING. Measured 2026-08-25: this
+    # still read `bronze$events` while the movers had moved to `lakehouse$…`, so every cascade died at
+    # the first hop with a 200 OK on the wire.
+    bronzeDataset: lakehouse$bronze$events
     # NESTED under one parent namespace, not flat at the root. A Lance namespace recursively
     # contains namespaces and tables, and an object's identifier is the list of names from the root
     # (lance_docs/ns_catalog/namespace/object-relationship.md) — so the tiers are children of the

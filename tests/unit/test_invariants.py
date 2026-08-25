@@ -3717,6 +3717,76 @@ def test_every_ray_job_script_is_BAKED_INTO_SOME_image() -> None:
     )
 
 
+def test_what_the_producer_PUBLISHES_is_what_a_mover_ACCEPTS() -> None:
+    """A lane whose two halves disagree fails with a 200 OK and no log line anywhere.
+
+    The producer stamps `bronzeDataset` / `bronzeNamespace` on the trigger it publishes to
+    `bronzeTopic`. The mover subscribed to that topic compares the claim against its own
+    `fromDataset` / `fromNamespace` and, on a mismatch, returns DROP — which is a SUCCESS ack. The
+    wire looks healthy end to end:
+
+        mover      POST /medallion-event  200 OK      <- the app accepted the delivery
+        mover      POST /dlq-event        200 OK      <- and immediately dead-lettered it
+        daprd      "DROP status returned from app while processing pub/sub event ..."
+
+    and the mover's own log says NOTHING. Measured 2026-08-25, after the tiers were nested: the
+    producer still published `bronze$events` while every mover had moved to `lakehouse$bronze$events`,
+    so the cascade died at the first hop and the only evidence was one warning in a SIDECAR log.
+
+    Pairing them here because they are rendered from different values by different templates and
+    nothing else compares them: they are one contract written in two places.
+    """
+    import yaml as _yaml
+
+    values = _yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
+    medallion = values.get("medallion") or {}
+    producer = medallion.get("producer") or {}
+    movers = medallion.get("movers") or []
+    assert movers, "no movers declared — this gate is now blind"
+
+    topic = producer.get("bronzeTopic")
+    assert topic, "the producer declares no bronzeTopic, so nothing can consume its writes"
+
+    consumers = [m for m in movers if m.get("subTopic") == topic]
+    assert consumers, (
+        f"the producer publishes to {topic!r} and no mover subscribes to it — the head writes bronze "
+        f"and the cascade never starts, with every hop reporting success."
+    )
+
+    mismatched = []
+    for mover in consumers:
+        for producer_key, mover_key in (("bronzeDataset", "fromDataset"), ("bronzeNamespace", "fromNamespace")):
+            want, got = producer.get(producer_key), mover.get(mover_key)
+            if want != got:
+                mismatched.append(f"  {mover.get('name')}: producer.{producer_key}={want!r} but mover.{mover_key}={got!r}")
+
+    assert not mismatched, (
+        f"the producer publishes a lane no mover on {topic!r} accepts:\n" + "\n".join(mismatched) + "\n\n"
+        "The mover DROPs a trigger whose lane claim does not match its own, and DROP acks as success — "
+        "so this fails with 200 OK on every hop and no error in the mover's log. Rename BOTH halves or "
+        "neither."
+    )
+
+    # The media chain is the same contract through a different pair of values, and it drifted the same
+    # way for the same reason: the URI was a literal in the template while the mover's had moved.
+    media_ns = medallion.get("mediaBronzeNamespace")
+    media_consumers = [m for m in movers if m.get("operation") == "derive_media"]
+    for mover in media_consumers:
+        assert media_ns == mover.get("fromNamespace"), (
+            f"medallion.mediaBronzeNamespace={media_ns!r} but the media mover reads "
+            f"{mover.get('fromNamespace')!r} — the head lands blobs where nothing is listening, and the "
+            f"trigger is DROPped with a 200 OK."
+        )
+        # The DATASET is the half that actually gets compared, and it is the half the chart forgot:
+        # MEDALLION_MEDIA_BRONZE_DATASET was rendered nowhere, so the head fell back to the flat code
+        # default `bronze-media$objects` while the mover had moved. The template derives it as
+        # `<namespace>$objects`; assert the same derivation rather than trusting it.
+        assert f"{media_ns}$objects" == mover.get("fromDataset"), (
+            f"the media head stamps dataset {media_ns}$objects but the mover accepts "
+            f"{mover.get('fromDataset')!r} — a lane mismatch DROPs with a 200 OK and logs nothing."
+        )
+
+
 def test_the_chart_cannot_declare_a_MEDALLION_NAMESPACE_NO_WAREHOUSE_CAN_OWN() -> None:
     """With warehouses on, every medallion top-level namespace is unprovisionable — measured, not argued.
 

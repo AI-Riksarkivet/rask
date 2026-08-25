@@ -81,10 +81,10 @@ link namespace:lakehouse 'namespace:lakehouse$silver-media'
 # rung cascade, not just reads — a warehouse *writer* also gains can_write_data on every linked medallion
 # table (that concentric inheritance is the model working as designed, not a leak). Grant warehouse rungs
 # accordingly: humans who should only browse the estate get `reader`, never `writer`.
-link namespace:bronze 'table:bronze$events'
-link namespace:bronze 'table:bronze$pages'
-link namespace:silver 'table:silver$features'
-link namespace:gold 'table:gold$catalog'
+link 'namespace:lakehouse$bronze' 'table:lakehouse$bronze$events'
+link 'namespace:lakehouse$bronze' 'table:lakehouse$bronze$pages'
+link 'namespace:lakehouse$silver' 'table:lakehouse$silver$features'
+link 'namespace:lakehouse$gold' 'table:lakehouse$gold$catalog'
 link 'namespace:lakehouse$bronze-media' 'table:lakehouse$bronze-media$objects'
 link 'namespace:lakehouse$silver-media' 'table:lakehouse$silver-media$features'
 # writers → can_create_table on their stage; the promoter mover → can_promote on gold. The bronze

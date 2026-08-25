@@ -202,7 +202,20 @@ spec:
             # --reuse-values (a stored release predating §9) must render the default, not "" (pydantic
             # bool_parsing boot crash on this producer).
             - { name: MEDALLION_MEDIA_SEED_SAMPLES, value: {{ hasKey .Values.medallion "mediaSeedSamples" | ternary .Values.medallion.mediaSeedSamples true | quote }} }
-            - { name: MEDALLION_MEDIA_BRONZE_URI, value: "s3://{{ include "lance.stageBucket" (list . "bronze-media") }}/medallion/bronze-media" }
+            {{- /* The media bronze namespace comes from values, not a literal. It was written twice
+                 here as "bronze-media" — once as the stageBucket key and once as the path segment —
+                 so when the tiers were nested this URI stayed flat and the media mover DROPped every
+                 trigger (its MEDALLION_FROM_URI had moved and this had not). One value, one place. */}}
+            {{- $mediaBronzeNs := .Values.medallion.mediaBronzeNamespace | default "bronze-media" }}
+            - { name: MEDALLION_MEDIA_BRONZE_URI, value: "s3://{{ include "lance.stageBucket" (list . $mediaBronzeNs) }}/medallion/{{ $mediaBronzeNs }}" }
+            {{- /* The NAMESPACE and DATASET the media head stamps on its trigger. Both were left to
+                 their code defaults (`bronze-media` / `bronze-media$objects`, core/config.py) and the
+                 chart rendered NEITHER — so when the tiers were nested the head kept publishing a flat
+                 lane claim while the media mover had moved to `lakehouse$bronze-media$objects`, and
+                 every media trigger was DROPped with a 200 OK. The URI alone is not the contract: the
+                 mover compares the DATASET name. */}}
+            - { name: MEDALLION_MEDIA_BRONZE_NAMESPACE, value: {{ $mediaBronzeNs | quote }} }
+            - { name: MEDALLION_MEDIA_BRONZE_DATASET, value: "{{ $mediaBronzeNs }}$objects" }
             # The IIIF page head (P7a): /ingest-iiif lands the BRONZE page-image blob dataset beside the
             # events lane's bronze URI (same namespace root, its own dataset directory).
             # Which IIIF Image API the head harvests from. WIRED, not left to the code default: that
