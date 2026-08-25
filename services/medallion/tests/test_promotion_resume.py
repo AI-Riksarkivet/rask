@@ -82,3 +82,26 @@ class TestTheSpecCarriesTheVersion:
         approver's decision unattached to anything."""
         assert PromotionSpec.model_fields["version"].is_required() is False
         assert _spec().version == 7
+
+
+class TestAHoldWithNeitherVersionNorTopicPublishesNothing:
+    def test_it_does_not_fire_a_trigger_at_an_EMPTY_topic(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The edge that removing `promotion_review`'s `if spec.pub_topic:` guard opens up.
+
+        With the caller's guard gone, `publish_promotion` is reached for every approval. A hold taken
+        BEFORE the tag-driven cascade carries `version == 0` and can only resume by trigger — and on a
+        terminal tier there is no topic to fire. Left unguarded that publishes to `topic_name=""`,
+        which is not a promotion, just a malformed publish nothing subscribes to.
+
+        Nothing to promote is a real answer here and is recorded as one, rather than reaching Dapr.
+        """
+        from medallion import workflow
+
+        published: list[dict[str, Any]] = []
+        monkeypatch.setattr(workflow, "_resume_publish", lambda **k: published.append(k))
+        monkeypatch.setattr(workflow, "_run_async", lambda coro: published.append({"trigger": True}))
+        _publishing_estate(monkeypatch)
+
+        workflow.publish_promotion(cast("Any", None), _spec(version=0, pub_topic="").model_dump())
+
+        assert published == [], f"a hold with neither a version nor a topic published something: {published}"

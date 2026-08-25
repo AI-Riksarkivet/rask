@@ -821,8 +821,11 @@ class PromotionSpec(BaseModel):
     from_dataset: str
     to_namespace: str
     to_dataset: str
-    #: Where the next stage listens; empty means terminal — an approval then records the decision and
-    #: promotes nothing, which is the honest outcome for the last tier.
+    #: Where the next stage listens; empty means TERMINAL — no next lane to wake. It does NOT mean
+    #: "promotes nothing", which is what this said while the resume was gated on it: under a
+    #: tag-driven cascade the tag move IS the promotion, and a terminal tier is precisely where it
+    #: matters (the chart gates silver-to-gold on `can_promote` and ships it `pubTopic: ""`).
+    #: `publish_promotion` picks tag-move vs trigger on `version`, never on this.
     pub_topic: str = ""
     #: WHICH assertions failed. On the SPEC, set by the caller from the run's own result — never read
     #: from settings inside the body, where a value could change under a running instance.
@@ -901,8 +904,13 @@ def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Gener
             )
             return {"status": status, "decided_by": decided_by, "reasons": spec.reasons}
 
-    if spec.pub_topic:
-        yield ctx.call_activity(publish_promotion, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+    # NOT gated on `pub_topic`. That condition was written when the topic WAS the promotion
+    # mechanism; under a tag-driven cascade the TAG MOVE is the promotion, and `publish_promotion`
+    # already chooses between the two on `spec.version`. Gating here skipped the resume on exactly the
+    # tiers the chart ships terminal — silver-to-gold (`toDataset: gold$catalog`, `requiredAction:
+    # can_promote`) and media-to-silver — so a person approved, no tag moved, and the
+    # `emit_promotion_outcome` below recorded PROMOTED anyway. Wrong data and a lying audit trail.
+    yield ctx.call_activity(publish_promotion, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
     yield ctx.call_activity(
         emit_promotion_outcome,
         input={"spec": spec.model_dump(), "outcome": {"status": "PROMOTED", "decided_by": decided_by}},
@@ -1046,6 +1054,17 @@ def publish_promotion(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> 
             timeout_seconds=settings.publish_timeout_seconds,
         )
         log.info("medallion_promotion_published", extra={"dataset": spec.to_dataset, "version": spec.version, "accepted": spec.reasons})
+        return
+    if not spec.pub_topic:
+        # Neither a version to publish nor a topic to fire: a hold taken before the tag-driven cascade,
+        # on a tier that has no next lane. Reachable only since the caller stopped filtering on
+        # `pub_topic`. Publishing the trigger below would post to `topic_name=""` — not a promotion,
+        # just a malformed publish nothing subscribes to. Nothing to promote is a real answer, and it
+        # is recorded as one.
+        log.warning(
+            "medallion_promotion_has_no_resume_path",
+            extra={"dataset": spec.to_dataset, "token": spec.token},
+        )
         return
     trigger: dict[str, Any] = {"token": spec.token, "dataset": spec.to_dataset, "namespace": spec.to_namespace}
     if spec.project:

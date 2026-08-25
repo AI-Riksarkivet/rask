@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **5 of 48 closed.** Findings marked **FIXED** below carry the commit and the test that
+> **6 of 48 closed.** Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
 > **FIXED means fixed in HEAD, NOT running in the estate.** The Cascade Status Board
@@ -183,6 +183,34 @@ Invisibility confirmed: test_promotion_resume.py:42 uses `"pub_topic": ""` with 
 
 
 **Re-checked at `b4d9ba3a` (after the audit's base commit).** Still reproduces, and it is no longer an uncommitted edit — the change landed. The line numbers in the evidence below are from the working tree as audited; at `b4d9ba3a` the gate is `services/medallion/src/medallion/workflow.py:904` `if spec.pub_topic:` guarding `:905` `yield ctx.call_activity(publish_promotion, ...)`. The chart still ships `pubTopic: ""` on both terminal movers, so the finding stands unchanged.
+
+
+**FIXED 2026-08-25.** The `if spec.pub_topic:` gate is gone; `publish_promotion` is called on
+every approved path and picks tag-move vs legacy trigger on `spec.version`, which it already did
+internally. The gate was a condition that outlived its world: it was written when the topic WAS
+the promotion mechanism, and under a tag-driven cascade the tag move is.
+
+**This needed an owner ruling, because the code documented the bug as intentional.**
+`PromotionSpec.pub_topic` said "empty means terminal — an approval then records the decision and
+promotes nothing, which is the honest outcome for the last tier", while the field directly below
+it said `version` exists so a resume can publish the reviewed version. The chart settles it:
+`silver-to-gold` ships `toDataset: gold$catalog`, `requiredAction: can_promote`, `pubTopic: ""` —
+the tier gated on *can promote* is the one that promoted nothing. Ruling (owner, 2026-08-25):
+the finding is right; the docstring is stale and is corrected here.
+
+**A second-order edge is closed with it.** Removing the caller's filter makes
+`publish_promotion` reachable for a version-0 hold on a terminal tier — a pre-migration hold with
+no tag to move and no topic to fire — which would have published to `topic_name=""`. That is not
+a promotion, just a malformed publish nothing subscribes to. It now logs
+`medallion_promotion_has_no_resume_path` and returns.
+
+**No replay hazard, unlike the ingest terminate fix.** Removing an `if` around a call does not
+change the action sequence, and `tests/unit/test_workflow_action_order.py` passes unchanged —
+so this deploys without draining in-flight instances.
+
+Two RED tests: `test_an_approved_promotion_on_a_TERMINAL_tier_STILL_MOVES_THE_TAG` (the
+workflow reaches the resume) and `test_it_does_not_fire_a_trigger_at_an_EMPTY_topic` (the edge
+the removal opens).
 
 </details>
 
