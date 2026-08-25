@@ -169,11 +169,11 @@
 	}
 </script>
 
-<svelte:head><title>Transform transforms · lance</title></svelte:head>
+<svelte:head><title>Transforms · lance</title></svelte:head>
 
 <div class="flex flex-col gap-4 p-4">
 	<div>
-		<h1 class="text-lg font-semibold">Transform transforms</h1>
+		<h1 class="text-lg font-semibold">Transforms</h1>
 		<p class="text-muted-foreground text-sm">
 			A transform is one governed medallion edge — read a table, run an entrypoint, write another. This
 			is the door that declares what a transform runs, so it changes here, audited and admin-gated,
