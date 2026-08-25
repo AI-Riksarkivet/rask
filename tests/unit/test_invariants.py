@@ -68,7 +68,6 @@ MAKEFILE = REPO / "Makefile"
 _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # LINEAGE — an event DESCRIBING a committed write. Losing one means the data landed and the graph
     # never learned of it, so these must be staged through `outbox.publish_lineage_with_outbox`.
-    ("services/maintenance/src/maintenance/core/lineage_emit.py", "self._topic"): "lineage-bare",
     # LINEAGE-RELAY — the outbox's OWN redelivery, and deliberately not "lineage-bare". The event it
     # publishes was already staged (that is where the drain read it from), so it is the durable path's
     # delivery half rather than a producer skipping the outbox. Publishing the STAGED BYTES verbatim,
@@ -199,14 +198,19 @@ def test_every_publish_site_declares_what_its_topic_carries() -> None:
 
 
 def test_the_set_of_bare_lineage_publishes_does_not_grow() -> None:
-    """#4 claims 'every lineage publish is staged'. Two are not, and this pins that number.
+    """#4 claims 'every lineage publish is staged'. As of 2026-08-25 that is mechanically TRUE: zero.
 
-    Recorded rather than asserted-away because the fix has a prerequisite: `stage_event` keys the staged
-    object on `<run_id>.json` while the run id excludes event_type, so a COMPLETE and a FAIL for one run
-    share one object — `transform.py` documents that having destroyed a staged COMPLETE. Routing more
-    producers through the outbox before fixing the key would have spread a lossy implementation. That key is
-    fixed now; what remains is the latency trade stated at `_KNOWN_BARE_LINEAGE`. The debt is VISIBLE here
-    instead of silently missed, as it was by the guard this replaces.
+    The set was two — the catalog's and maintenance's emitters — and this pinned the number so the debt
+    was VISIBLE rather than silently missed, as it was by the guard this replaces. Both are now routed
+    through `outbox.publish_lineage_with_outbox`, so `_KNOWN_BARE_LINEAGE` is empty and the assertion
+    below now says something stronger than it used to: not "the debt has not grown" but "there is none".
+
+    It stays as a ratchet rather than being deleted, because an empty set is exactly what a new bare
+    publisher would grow. The fix had a prerequisite that is worth remembering if this ever regresses:
+    `stage_event` keys the staged object on `<run_id>.json` while the run id excludes event_type, so a
+    COMPLETE and a FAIL for one run once shared one object — `transform.py` documents that having
+    destroyed a staged COMPLETE. Routing producers through the outbox before that key was fixed would
+    have spread a lossy implementation. The key is fixed; what remains is the latency trade.
     """
     observed = _observed_publish_sites()
     bare = {module for (module, _topic), location in observed.items() if module in _KNOWN_BARE_LINEAGE}

@@ -525,3 +525,43 @@ def test_an_UNDECLARED_dataset_still_falls_back_to_the_uri(tmp_path: Any) -> Non
 
     assert result.declared_table_id is None
     assert table_id_from_uri(result.uri) == "silver$plain.lance", "the URI derivation must still answer for undeclared datasets"
+
+
+def test_the_maintenance_emitter_STAGES_the_event_rather_than_publishing_it_bare(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The twin of the catalog's emit, and the second of the two `_PUBLISH_INTENT` pinned as bare.
+
+    A sweep's lineage event describes a committed write, so losing one leaves the graph under-reporting
+    work that really happened — the same loss mode as the cascade head, minus the halted run. With both
+    routed, `_KNOWN_BARE_LINEAGE` is empty and #4's claim that "every lineage publish is staged" stops
+    being aspirational.
+
+    The invariants ratchet proves no BARE publish site REMAINS, which would hold just as well if the emit
+    had been deleted. This asserts the other half: it still publishes, staged, keyed on the run id the
+    relay will look for.
+    """
+    import asyncio as _asyncio
+
+    from maintenance.core import lineage_emit as module
+
+    calls: list[dict[str, object]] = []
+
+    async def _fake_outbox(_publisher: object, **kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(module.outbox, "publish_lineage_with_outbox", _fake_outbox)
+    emitter = DaprMaintenanceEmitter(
+        cast(Any, object()),
+        "maintenance-pubsub",
+        "lineage.events.v1",
+        job_namespace="compaction",
+        timeout_seconds=5.0,
+        outbox_uri="s3://staging/outbox",
+        storage_options={"region": "eu-north-1"},
+    )
+    _asyncio.run(emitter._publish({"run": {"runId": "r-sweep"}}, "gold$catalog"))
+
+    assert len(calls) == 1, "the maintenance emit did not reach the outbox"
+    assert calls[0]["outbox_uri"] == "s3://staging/outbox"
+    assert calls[0]["storage_options"] == {"region": "eu-north-1"}
+    assert calls[0]["topic_name"] == "lineage.events.v1"
+    assert calls[0]["run_id"] == "r-sweep"

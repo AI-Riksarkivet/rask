@@ -37,7 +37,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from dapr.aio.clients import DaprClient
 
-from service_kit import dapr_publish
+from service_kit.lakehouse import outbox
 from service_kit.openlineage import ERROR_MESSAGE_FACET_SCHEMA_URL, RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
 
 
@@ -216,12 +216,24 @@ class DaprMaintenanceEmitter:
     holds no broker client. Best-effort: a sidecar/broker outage logs + drops rather than failing the sweep.
     """
 
-    def __init__(self, client: DaprClient, pubsub: str, topic: str, *, job_namespace: str, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        client: DaprClient,
+        pubsub: str,
+        topic: str,
+        *,
+        job_namespace: str,
+        timeout_seconds: float,
+        outbox_uri: str = "",
+        storage_options: dict[str, str] | None = None,
+    ) -> None:
         self._client = client
         self._pubsub = pubsub
         self._topic = topic
         self._job_namespace = job_namespace
         self._timeout_seconds = timeout_seconds
+        self._outbox_uri = outbox_uri
+        self._storage_options = storage_options or {}
 
     async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
         # uuid4 ON PURPOSE: each materially-compacting tick is a distinct successful run (§4 decided —
@@ -257,13 +269,20 @@ class DaprMaintenanceEmitter:
 
     async def _publish(self, event: dict[str, Any], table_id: str) -> None:
         try:
-            await dapr_publish.publish_event(  # bounded so a hung sidecar can't stall the sweep
+            # STAGED, then published, then dropped on ack (#4) — the twin of the catalog's emit. A
+            # sweep's lineage event describes a committed write, so losing one leaves the graph
+            # under-reporting work that really happened. Degrades to exactly the previous plain publish
+            # when `outbox_uri` is unset, which is the default, and stays bounded either way so a hung
+            # sidecar cannot stall the sweep.
+            await outbox.publish_lineage_with_outbox(
                 self._client,
-                timeout_seconds=self._timeout_seconds,
+                outbox_uri=self._outbox_uri,
+                storage_options=self._storage_options,
+                run_id=str((event.get("run") or {}).get("runId") or ""),
+                event_json=json.dumps(event),
                 pubsub_name=self._pubsub,
                 topic_name=self._topic,
-                data=json.dumps(event),
-                data_content_type="application/json",
+                timeout_seconds=self._timeout_seconds,
             )
         except Exception as exc:
             log.warning("maintenance_publish_failed", extra={"table": table_id, "error": str(exc)})
@@ -273,6 +292,8 @@ def make_emitter(
     *,
     enabled: bool,
     dapr: DaprClient | None,
+    outbox_uri: str = "",
+    storage_options: dict[str, str] | None = None,
     pubsub: str,
     topic: str,
     job_namespace: str,
@@ -281,5 +302,13 @@ def make_emitter(
     """Select the emitter: a Dapr pub/sub publisher when enabled + wired, else a no-op (never silently
     publish nowhere — a half-configured transport stays a no-op rather than pretending to emit)."""
     if enabled and dapr is not None:
-        return DaprMaintenanceEmitter(dapr, pubsub, topic, job_namespace=job_namespace, timeout_seconds=timeout_seconds)
+        return DaprMaintenanceEmitter(
+            dapr,
+            pubsub,
+            topic,
+            job_namespace=job_namespace,
+            timeout_seconds=timeout_seconds,
+            outbox_uri=outbox_uri,
+            storage_options=storage_options,
+        )
     return NoopEmitter()

@@ -161,6 +161,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         topic=settings.lineage_topic,
         job_namespace=settings.lineage_job_namespace,
         timeout_seconds=settings.publish_timeout_seconds,
+        outbox_uri=settings.lineage_outbox_uri,
+        storage_options=settings.storage_options(),
     )
     # #79: the expired-trash purge announces each reclamation on the catalog's control topic. A no-op
     # when off — never a half-configured transport that looks like it publishes.

@@ -213,6 +213,12 @@ class MaintenanceSettings(BaseSettings):
         the primary bucket, which is what the catalog defaults to."""
         return self.control_root or f"s3://{self.s3_bucket}"
 
+    #: Stage lineage events here before publishing. EMPTY = today's behaviour exactly, because
+    #: `publish_lineage_with_outbox` degrades to a plain publish when unset — so this is inert until a
+    #: deployment opts in. The twin of the catalog's `LANCE_LINEAGE_OUTBOX_URI`: `_PUBLISH_INTENT`
+    #: pinned exactly two bare lineage publishers and this is the second.
+    lineage_outbox_uri: str = Field(default="", alias="MAINTENANCE_LINEAGE_OUTBOX_URI")
+
     def storage_options(self) -> dict[str, str]:
         """The Lance ``storage_options`` for opening datasets on the (HTTP) S3 endpoint."""
         # Via the shared builder — which also stamps path-style addressing; the hand-rolled copy here had

@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **6 of 48 closed.** Findings marked **FIXED** below carry the commit and the test that
+> **7 of 48 closed — the critical tier is complete.** Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
 > **FIXED means fixed in HEAD, NOT running in the estate.** The Cascade Status Board
@@ -498,6 +498,20 @@ drained event into lineage but does not RE-PUBLISH it, so a recovered head event
 without restarting the halted cascade. (2) `maintenance/core/lineage_emit.py` is the twin bare
 publisher — `_PUBLISH_INTENT` pins exactly two and this closes one. Both are tracked as their own
 work rather than folded in here.
+
+
+**CLOSED 2026-08-25 — all three parts.** (1) `dd848574` staged the catalog's emit through
+`publish_lineage_with_outbox`. (2) `f15b348e` made the relay RE-PUBLISH a drained event before
+dropping it, so a recovered head event restarts the halted cascade instead of only repairing the
+graph — publishing the STAGED BYTES, because `event.model_dump_json()` emits the parsed Python
+shape (`run_id`) where the wire is OpenLineage (`runId`), which would have silently corrupted
+every event this path exists to save. (3) The `maintenance` twin is routed too.
+
+**`_KNOWN_BARE_LINEAGE` IS NOW EMPTY.** `_PUBLISH_INTENT` pinned exactly two bare lineage
+publishers and both are gone, so `#4`'s claim that *every lineage publish is staged* is now
+mechanically enforced rather than aspirational. The ratchet is kept — an empty set is exactly what
+a new bare publisher would grow — and its docstring is corrected, since it opened "Two are not,
+and this pins that number".
 
 </details>
 
