@@ -42,29 +42,9 @@ DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
 PROJECT = os.environ.get("LANCE_E2E_PROJECT", "")
 
 
-#: The parent namespace the medallion tiers are NESTED under (chart: `medallion.producer.bronzeNamespace`
-#: and every mover's from/toNamespace, all `lakehouse$<tier>`). Empty keeps the old flat drive.
-#:
-#: The tiers stopped being top-level on 2026-08-25. They had to: with `catalog.warehouses.enabled`
-#: true, `require_warehouse_scoped` demands that a top-level namespace belong to a warehouse, and
-#: every bucket a medallion tier can resolve to is reserved platform storage no warehouse may back —
-#: so `gold`, `bronze-media` and `silver-media` could not be created at all, and this suite had never
-#: once reached gold. A NESTED tier inherits its parent's warehouse (the guard returns early for
-#: `len(segments) > 1`), which is also the Lance object model: a namespace recursively contains
-#: namespaces, and an identifier is the list of names from the root.
-NAMESPACE_PARENT = os.environ.get("LANCE_E2E_NAMESPACE_PARENT", "lakehouse")
-
-
 def _qualified(tier: str, table: str) -> str:
-    """`lakehouse$bronze$events` nested, `acme-bronze$events` for a tenant, `bronze$events` flat.
-
-    All three are names lineage records verbatim; which one is right is a property of the ESTATE, so
-    it is read from env rather than assumed. A tenant prefix and a nesting parent are different
-    mechanisms and do not compose — a tenant estate qualifies the tier name, a nested one adds a level.
-    """
-    if PROJECT:
-        return f"{PROJECT}-{tier}${table}"
-    return f"{NAMESPACE_PARENT}${tier}${table}" if NAMESPACE_PARENT else f"{tier}${table}"
+    """`bronze$events` on a shared estate, `acme-bronze$events` for a tenant — the names lineage records."""
+    return f"{PROJECT}-{tier}${table}" if PROJECT else f"{tier}${table}"
 
 
 # Governed lineage READS use the app-token SERVICE door as `service-web` (a warehouse reader — the same
@@ -114,14 +94,11 @@ def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
     gold = _qualified("gold", "catalog")
     chain = {_qualified("bronze", "events"), _qualified("silver", "features")}
     # 150s, not 60. NOT a weakened assertion — every condition below is unchanged; this is the WAIT
-    # matching the topology the cascade actually runs on. With `medallion.ray` on, each hop is a Ray
-    # job submission plus a round-trip, and the two hops land ~60s after the produce. Measured
-    # 2026-08-25 across three consecutive runs, all three failed at exactly the boundary with the work
-    # already DONE: the failure message itself reported
-    #   upstream=['lakehouse$silver$features', 'lakehouse$bronze$events'], runs 333->336, expected >= 336
-    # i.e. both conditions true when re-read one poll later. Verified independently against lineage:
-    # gold$catalog's transitive upstream is the full chain. A deadline that expires while the system is
-    # correct tests the clock, not the cascade.
+    # matching the topology the cascade runs on. With `medallion.ray` on, each hop is a Ray job
+    # submission plus a round-trip, and the two hops land ~60s after the produce. Measured 2026-08-25
+    # across three consecutive runs, all three failed at exactly the boundary with the work already
+    # DONE — the failure message itself reported both upstreams present and the run count satisfied
+    # when re-read one poll later.
     deadline = time.monotonic() + 150.0
     upstream: list[str] = []
     #: The last non-200 the read door gave, so a REFUSAL is not reported as an absent cascade. This test

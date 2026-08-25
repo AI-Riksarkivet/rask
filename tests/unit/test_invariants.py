@@ -3787,48 +3787,39 @@ def test_what_the_producer_PUBLISHES_is_what_a_mover_ACCEPTS() -> None:
         )
 
 
-def test_the_chart_cannot_declare_a_MEDALLION_NAMESPACE_NO_WAREHOUSE_CAN_OWN() -> None:
-    """With warehouses on, every medallion top-level namespace is unprovisionable — measured, not argued.
+def test_a_medallion_NAMESPACE_can_actually_belong_to_a_warehouse() -> None:
+    """With warehouses on, a flat tier belongs to nothing — and a PRE-qualified one gets qualified twice.
 
-    Three shipped defaults contradict each other, and the contradiction is total: there is no value of
-    `medallion.buckets` that resolves it.
+    `require_warehouse_scoped` refuses a top-level namespace that belongs to no warehouse, and every
+    bucket a medallion tier could resolve to is reserved platform storage no warehouse may back (the
+    catalog root in-app; anything in `medallion.buckets` by the chart, which appends that map into
+    `LANCE_RESERVED_BUCKETS`). So a bare `bronze` is unownable. Two shapes escape that, and an estate
+    must be in one of them:
 
-    1. `catalog.warehouses.enabled: true` makes `require_warehouse_scoped` bind, and it refuses any
-       top-level namespace that belongs to no warehouse (fga_deps.py:797) — `len(segments) > 1` returns
-       early, so only a NESTED namespace escapes.
-    2. A warehouse may not be backed by a reserved bucket: `POST /v1/warehouses` raises
-       "bucket ... is reserved platform storage" (warehouses.py).
-    3. Every medallion stage bucket is reserved, whichever way it is set. Left unset it falls back to
-       `rustfs.bucket` — the catalog root, reserved in-app via `Settings.reserved_bucket_set`. Set in
-       `medallion.buckets` it is reserved BY THE CHART ITSELF: services.yaml appends every value of that
-       map into `LANCE_RESERVED_BUCKETS`.
+    * **Project-qualified** (`medallion.projectsEnabled`) — `workflow.py::_qualified` prefixes
+      `<project>-` at RUNTIME, so `bronze` becomes `acme-bronze`: still top-level, but owned by that
+      project's warehouse. This is the shape `seed_estate.py` has always built.
+    * **Nested** (`<parent>$bronze`) — the guard returns early for `len(segments) > 1`, so a child
+      inherits its parent's warehouse and only the parent is bound.
 
-    So the namespace needs a warehouse, the warehouse needs a non-reserved bucket, and the bucket is
-    reserved either way. Measured on the live estate 2026-08-25: `gold`, `bronze-media` and
-    `silver-media` are all absent, and both doors refuse —
+    THE TRAP IS DOING BOTH. `_qualified` decides by `dataset.startswith(f"{project}-")`, and a nested
+    name does not start with `<project>-` — it starts with `<parent>$`. Measured live 2026-08-25 on an
+    estate whose project was `lakehouse` and whose tiers had been nested under a parent also called
+    `lakehouse`:
 
-        POST /v1/warehouses/lance-catalog/namespaces -> 403
-        POST /v1/namespace/gold/create               -> 400 "top-level namespace 'gold' must
-                                                             belong to a warehouse"
+        POST /v1/table/lakehouse-lakehouse$gold$catalog/create -> 403
 
-    `bronze` and `silver` exist only because they predate the guard; they are grandfathered, not proof
-    that the path works.
-
-    TWO CONFIGURATIONS SATISFY THIS GATE, and an estate must choose one:
-      * warehouses OFF — single-bucket by configuration, which is the mode
-        `require_warehouse_scoped`'s own docstring blesses ("the default root is the only correct
-        destination, and demanding a warehouse would be a rule no caller could satisfy");
-      * NESTED medallion namespaces (`<owner>{delim}bronze`), which belong to their parent's warehouse
-        and skip the guard by the `len(segments) > 1` early return. The estate already demonstrates the
-        shape: `acme-bucket` owns `acme-bronze` / `acme-silver` / `acme-gold`.
+    Every silver→gold hop failed on a table id that can never exist, and the mover reported only
+    `medallion_stage_failed`. So with projects ON the declaration must stay UNQUALIFIED and unnested —
+    the runtime owns the qualification, and pre-empting it doubles it.
     """
     import yaml as _yaml
 
     values = _yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
     medallion = values.get("medallion") or {}
     warehouses_on = bool(((values.get("catalog") or {}).get("warehouses") or {}).get("enabled"))
-    if not warehouses_on:
-        return  # single-bucket mode: the guard no-ops and the shared root is the correct destination
+    projects_on = bool(medallion.get("projectsEnabled"))
+    delimiter = (values.get("catalog") or {}).get("delimiter") or "$"
 
     declared: list[str] = []
     head = (medallion.get("producer") or {}).get("bronzeNamespace")
@@ -3838,27 +3829,33 @@ def test_the_chart_cannot_declare_a_MEDALLION_NAMESPACE_NO_WAREHOUSE_CAN_OWN() -
         for key in ("fromNamespace", "toNamespace"):
             if mover.get(key) and mover[key] not in declared:
                 declared.append(mover[key])
+    assert declared, "no medallion namespaces declared — this gate is now blind"
 
-    # A NESTED namespace is the shape the Lance object model describes and the only one that works
-    # here. `require_warehouse_scoped` returns early for `len(segments) > 1` (fga_deps.py:794), so a
-    # child inherits its parent's warehouse and needs no binding of its own; only the single top-level
-    # parent is bound, once. `medallion.buckets` cannot substitute for this — services.yaml appends
-    # every value of that map into LANCE_RESERVED_BUCKETS, and a reserved bucket is precisely what
-    # `POST /v1/warehouses` refuses, so naming a bucket makes the namespace LESS ownable, not more.
-    delimiter = (values.get("catalog") or {}).get("delimiter") or "$"
+    if projects_on:
+        # The runtime qualifies. A declaration that is already nested (or already prefixed) is what
+        # produces the doubled id above, so it is refused regardless of the warehouse setting.
+        doubled = [ns for ns in declared if delimiter in ns]
+        assert not doubled, (
+            "medallion.projectsEnabled is true, so `_qualified` prefixes `<project>-` at runtime — but "
+            "these namespaces are already nested, and a nested name does not start with `<project>-`, so "
+            "it gets qualified ANYWAY:\n  " + "\n  ".join(doubled) + "\n\n"
+            "The result is `<project>-<parent>$<tier>`, a table id nothing can create — every hop 403s and "
+            "the mover logs only `medallion_stage_failed`. Declare the bare tier name and let the runtime "
+            "qualify it."
+        )
+        return
+
+    if not warehouses_on:
+        return  # single-bucket: the shared root is the correct destination
+
     flat = [ns for ns in declared if delimiter not in ns]
     assert not flat, (
-        "catalog.warehouses.enabled is true, so a TOP-LEVEL namespace must belong to a warehouse — but "
-        "these medallion namespaces are declared flat at the root, and every bucket they could resolve "
-        "to is reserved platform storage no warehouse may back:\n  " + "\n  ".join(flat) + "\n\n"
-        f"Nest them under one parent instead ('<parent>{delimiter}<tier>'), which is both the Lance object "
-        f"model (a namespace recursively contains namespaces and tables; an identifier is the list of "
-        f"names from the root) and the only shape the guard admits — a child skips it entirely, and only "
-        f"the parent is bound to a warehouse, once:\n"
-        f'    POST /v1/warehouses/<id>/namespaces  {{"namespace": "<parent>"}}\n\n'
-        "Or run single-bucket: set catalog.warehouses.enabled=false, the mode require_warehouse_scoped's "
-        "own docstring blesses ('the default root is the only correct destination, and demanding a "
-        "warehouse would be a rule no caller could satisfy')."
+        "catalog.warehouses.enabled is true and medallion.projectsEnabled is false, so nothing qualifies "
+        "these names and a top-level namespace must belong to a warehouse — but every bucket they could "
+        "resolve to is reserved platform storage no warehouse may back:\n  " + "\n  ".join(flat) + "\n\n"
+        "Turn on medallion.projectsEnabled (the runtime then owns `<project>-<tier>`, owned by that "
+        f"project's warehouse), nest them under one bound parent ('<parent>{delimiter}<tier>'), or run "
+        "single-bucket with catalog.warehouses.enabled=false."
     )
 
 

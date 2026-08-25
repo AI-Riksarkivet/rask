@@ -61,17 +61,11 @@ link() {
 # medallion stage namespaces under the warehouse (so the rung cascade reaches them) — the MEDIA lane's
 # namespaces included: without them the media mover's can_create_table check on namespace:silver-media
 # finds no parent chain and the governed cascade silently DROPs every media trigger (audit blocker).
-# The tiers are NESTED under one parent (chart values: `lakehouse$<tier>`), per the Lance object model
-# — a namespace recursively contains namespaces, and an identifier is the list of names from the root.
-# So the parent hangs off the warehouse and each tier hangs off the PARENT, not off the warehouse:
-# the concentric cascade then reaches a tier through two edges instead of one, which is what lets a
-# grant on the lakehouse namespace govern every tier under it.
-link "$WAREHOUSE" namespace:lakehouse
-link namespace:lakehouse 'namespace:lakehouse$bronze'
-link namespace:lakehouse 'namespace:lakehouse$silver'
-link namespace:lakehouse 'namespace:lakehouse$gold'
-link namespace:lakehouse 'namespace:lakehouse$bronze-media'
-link namespace:lakehouse 'namespace:lakehouse$silver-media'
+link "$WAREHOUSE" namespace:bronze
+link "$WAREHOUSE" namespace:silver
+link "$WAREHOUSE" namespace:gold
+link "$WAREHOUSE" namespace:bronze-media
+link "$WAREHOUSE" namespace:silver-media
 # The cascade DATASETS' table→namespace parent links. The catalog seeds these for tables it creates, but
 # the movers write Lance DIRECTLY — without a parent tuple on table:<dataset> nothing cascades to it, so
 # under LINEAGE_FGA_ENABLED no human (not even a warehouse owner) can can_get_metadata a mover-produced
@@ -81,12 +75,12 @@ link namespace:lakehouse 'namespace:lakehouse$silver-media'
 # rung cascade, not just reads — a warehouse *writer* also gains can_write_data on every linked medallion
 # table (that concentric inheritance is the model working as designed, not a leak). Grant warehouse rungs
 # accordingly: humans who should only browse the estate get `reader`, never `writer`.
-link 'namespace:lakehouse$bronze' 'table:lakehouse$bronze$events'
-link 'namespace:lakehouse$bronze' 'table:lakehouse$bronze$pages'
-link 'namespace:lakehouse$silver' 'table:lakehouse$silver$features'
-link 'namespace:lakehouse$gold' 'table:lakehouse$gold$catalog'
-link 'namespace:lakehouse$bronze-media' 'table:lakehouse$bronze-media$objects'
-link 'namespace:lakehouse$silver-media' 'table:lakehouse$silver-media$features'
+link namespace:bronze 'table:bronze$events'
+link namespace:bronze 'table:bronze$pages'
+link namespace:silver 'table:silver$features'
+link namespace:gold 'table:gold$catalog'
+link namespace:bronze-media 'table:bronze-media$objects'
+link namespace:silver-media 'table:silver-media$features'
 # writers → can_create_table on their stage; the promoter mover → can_promote on gold. The bronze
 # ingest head writes as the PRODUCER's identity (medallion-producer) — the retired raw→bronze mover's writer
 # rung moved here with the collapse (R23).
