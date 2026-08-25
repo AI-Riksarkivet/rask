@@ -41,3 +41,16 @@ explorer:
     # cluster. values.yaml's claim that a single-node cluster "will still bind an RWX claim ...
     # but that is luck, not a contract" is wrong in both halves: it is not luck, and it does not bind.
     accessMode: ReadWriteOnce
+
+# THE RAY THE CASCADE ACTUALLY REACHES. The chart derives `http://<release>-ray-head-svc:8265` from the
+# RayService it renders — and it renders that ONLY under `singleTenant.enabled`, which is off here. So
+# on this estate that name resolves to nothing, every stage dies
+# `RayJobError: [Errno -3] Temporary failure in name resolution`, and the mover reports a FAILED stage
+# with nothing naming DNS as the cause.
+#
+# This lived as a `--set` for one afternoon and was silently dropped by the next `helm upgrade -f`,
+# exactly as this file's header describes happening to the corpus PVC: `--set` values do not survive
+# into `helm get values`, so an upgrade that reuses the live values loses them. Measured 2026-08-25 —
+# two upgrades later the movers were back on `rask-ray-head-svc` and the cascade was dead again.
+medallion:
+  rayAddress: http://ray-lance-head:8265
