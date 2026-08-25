@@ -29,7 +29,7 @@ from notifications.api.cursor import decode_cursor, encode_cursor
 from notifications.api.schemas import DismissResult, InboxFeed, InboxRow, MarkResult, UnreadBadge
 from notifications.api.security import CurrentSubject, VisibilityDep
 from notifications.dependencies import ActorPlaneDep, NotificationsSettingsDep
-from notifications.models import INBOX_PAGE_LIMIT_MAX, InboxDismiss, InboxFilter, InboxMark, InboxPage, InboxQuery, NotificationReason
+from notifications.models import INBOX_PAGE_LIMIT_MAX, InboxDismiss, InboxFilter, InboxMark, InboxPage, InboxPointer, InboxQuery, NotificationReason
 from notifications.proxies import inbox_for
 
 
@@ -44,6 +44,32 @@ _CURSOR_HELP = "An opaque cursor from a previous page's `next_cursor`. Hand it b
 #: The reasons whose DELIVERY skipped the visibility check, and which therefore skip it at render too.
 #: Derived from the lane's own action set so adding a named action cannot leave the two disagreeing.
 _CONTROL_REASONS: Final[frozenset[NotificationReason]] = frozenset(NotificationReason(action) for action in NAMED_ACTIONS)
+
+
+def _is_control_lane(pointer: InboxPointer) -> bool:
+    """Whether this row skipped the visibility check at DELIVERY, and so skips it at render too.
+
+    Normally that is just "its reason is a named action". The second clause exists because the
+    exemption has to survive a reason this build cannot NAME. `InboxPointer._tolerate_a_newer_vocabulary`
+    rewrites an unrecognised reason to `UNKNOWN` — deliberately, so a rollback can still read rows a
+    newer build wrote — and `UNKNOWN` is in no action set, so those rows fell back into the render
+    gate the control lane had exempted them from. The subject holds no grant on the object (that is
+    WHY the lane skips the check), the row was dropped from the feed, and `unread` — counted over all
+    pointers, and answered from the actor's own partition — still counted it. An unclearable badge for
+    the 30-day TTL, which is verbatim the failure the exemption above exists to end.
+
+    The lanes stay distinguishable without a stored field (`extra="forbid"` rightly forbids one): the
+    control lane stamps a CANONICAL id carrying its type (`table:db1$t`, `annotation_task:…`) while a
+    lineage run stamps a bare dataset name. That is the same discriminator `visibility._as_object`
+    already relies on, and its docstring records why a dataset name cannot collide — the estate's are
+    `<namespace>$<table>`, delimiter-joined and colon-free.
+
+    Deliberately narrow: an UNKNOWN reason on a BARE id is still governed, so this cannot become a
+    way to smuggle a lineage row past the render gate.
+    """
+    if pointer.reason in _CONTROL_REASONS:
+        return True
+    return pointer.reason is NotificationReason.UNKNOWN and ":" in pointer.object_id
 
 
 @router.get("/inbox")
@@ -90,8 +116,8 @@ async def get_inbox(
     #
     # DERIVED from `NAMED_ACTIONS` rather than restated, so the two cannot drift: a new named action
     # is exempt here the moment it becomes deliverable there, which is the same edit.
-    governed = {pointer.object_id for pointer in page.pointers if pointer.reason not in _CONTROL_REASONS}
-    allowed = await visibility.visible(subject, governed) | {pointer.object_id for pointer in page.pointers if pointer.reason in _CONTROL_REASONS}
+    governed = {pointer.object_id for pointer in page.pointers if not _is_control_lane(pointer)}
+    allowed = await visibility.visible(subject, governed) | {pointer.object_id for pointer in page.pointers if _is_control_lane(pointer)}
     return InboxFeed(
         # Projected onto the WIRE row, which drops the delivery ledger: what a reader may see is a
         # declared field list, never whatever the storage record happens to carry today.

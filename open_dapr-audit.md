@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **14 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **15 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -775,6 +775,29 @@ The badge is unaffected by the drop: `unread=page.unread` is returned straight f
 Unclearable is right too: `mark_seen` (inbox.py:121-131) takes `InboxMark.notification_ids` (models.py:241-247) — ids "the panel actually rendered" — and `dismiss` takes one id, so a row that never renders can be neither seen nor dismissed. That is verbatim the failure inbox.py:79-85 says the exemption exists to end ("a badge that cannot be cleared by reading, because what it counts is never shown").
 
 No comment anywhere addresses the UNKNOWN×`_CONTROL_REASONS` interaction, so this is not a recorded decision. Severity `warning` is right: it needs a rollback across a build that added a named action (a scenario the code itself documents as having occurred), and the blast radius is the rows carrying the new action, until dismissal is impossible and compaction/TTL clears them.
+
+
+**FIXED 2026-08-25.** The render exemption is now a predicate, `_is_control_lane`, that survives a
+reason this build cannot name: a row is exempt if its reason is a named action, OR if the reason is
+`UNKNOWN` **and** its `object_id` already carries a type prefix.
+
+**The discriminator is borrowed, not invented.** `visibility._as_object` already relies on exactly
+it — the control lane stamps a canonical id (`table:db1$t`, `annotation_task:…`), a lineage run
+stamps a bare `<namespace>$<table>` — and its docstring already records why the two cannot collide.
+No stored field was added, which `extra="forbid"` rightly refuses anyway.
+
+**Deliberately narrow, and pinned as its own case.** An `UNKNOWN` reason on a BARE id stays governed.
+Without that clause the exemption would read "any reason I cannot name", and a lineage row carrying a
+future reason would satisfy it — turning a repair into a disclosure.
+
+Five tests. The two wedge cases were observed RED against the old predicate; the three guards (a
+known control row, a lineage row still governed, an unknown reason on a bare id) pass either way by
+design.
+
+**One test was narrowed after it over-claimed.** The badge-agrees-with-rows assertion first ran on a
+MIXED page, where it also failed for a reason this fix does not address: a lineage row failing
+`can_get_metadata` is filtered and still counted too. That is a real but separate and narrower case.
+The test now runs on a control-only page and says so, rather than claiming a fix it did not make.
 
 </details>
 
