@@ -35,6 +35,7 @@ Security posture (see CHANGELOG in the task notes):
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import NamedTuple
 from urllib.parse import urlsplit
@@ -258,3 +259,27 @@ class OIDCVerifier:
         except (jwt.PyJWTError, jwt.PyJWKClientError, ValidationError) as exc:
             # Never leak the underlying JWT/crypto/validation error to the client.
             raise UnauthenticatedError("Invalid or expired token") from exc
+
+
+async def verify_off_loop(verifier: OIDCVerifier, token: str) -> IDToken:
+    """``verify`` for ``async def`` callers — the ONE place that knows verification blocks.
+
+    :meth:`OIDCVerifier.verify` is synchronous, and on a cold cache or a key rotation it performs OIDC
+    discovery and a JWKS fetch over the network (``httpx.Client(timeout=15.0)`` at :meth:`_resolve`,
+    then PyJWKClient's own fetch). Awaited inline from a coroutine it stalls the entire worker: every
+    in-flight request in the pod, and any liveness probe mounted on the same app.
+
+    A plain ``def`` route calling ``verify`` directly is CORRECT — FastAPI runs it in a threadpool —
+    so this exists for the coroutine call sites only, and the estate's ``def`` doors are unchanged.
+
+    It is a function here, not a method, on purpose: the test doubles across the estate implement
+    ``verify`` and nothing else, so a method would force every fake to grow an async twin that decides
+    its own threading — which is precisely the thing under test. Routing the hop through one function
+    keeps the fakes honest and gives the estate a single place to change if verification ever gains a
+    genuinely async path.
+
+    Why it is centralised at all: the fix kept not travelling. It was written once on the ingest door
+    (``open_python-audit`` ING-02) and the medallion door — a copy of the same ~120-line function —
+    went on blocking, gating the cascade head. A fourth door should not be able to get this wrong.
+    """
+    return await asyncio.to_thread(verifier.verify, token)

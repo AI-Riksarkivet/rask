@@ -33,7 +33,6 @@ reviews, and a door whose allows are invisible cannot be reviewed at all.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import secrets
 from typing import TYPE_CHECKING, Annotated
@@ -45,6 +44,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.dapr_auth import is_public_caller
+from service_kit.governed.oidc import verify_off_loop
 from service_kit.governed.settings import GovernedAuthSettings
 
 
@@ -173,7 +173,11 @@ async def authorize_ingest(
             # cold cache or key rotation — inline it stalled every in-flight request in the pod,
             # probes included (open_python-audit ING-02). Same rule _DaprWorkflowStarter.start
             # already states one module over.
-            token = await asyncio.to_thread(verifier.verify, raw)
+            #
+            # The hop itself moved into `service_kit.governed.oidc` rather than living here: this fix
+            # was written on THIS door and never reached the medallion door, which is a copy of this
+            # function and went on blocking the cascade head. One seam, so a fourth door inherits it.
+            token = await verify_off_loop(verifier, raw)
         except UnauthenticatedError:
             raise UnauthenticatedError("invalid token") from None
         client = getattr(request.app.state, "fga", None)

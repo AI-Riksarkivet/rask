@@ -4975,3 +4975,47 @@ def test_every_alert_rule_has_a_promtool_case() -> None:
     phantom = sorted(exercised - declared)
     assert not untested, f"{len(untested)} alert rule(s) have no promtool case, so nothing proves they fire (or stay quiet) under any series at all: {untested}"
     assert not phantom, f"{len(phantom)} promtool case(s) name an alert that rules.yml does not define — they read as coverage and exercise nothing: {phantom}"
+
+
+def test_no_coroutine_verifies_a_bearer_on_the_event_loop() -> None:
+    """A fourth auth door must not be able to reintroduce the stall that ING-02 fixed twice.
+
+    `OIDCVerifier.verify` is synchronous and, on a cold cache or a key rotation, does OIDC discovery
+    plus a JWKS fetch over the network. From a plain `def` route that is CORRECT — FastAPI threadpools
+    it — so this guard fires only inside `async def`, where an inline call stalls the whole worker:
+    every in-flight request in the pod, and any liveness probe mounted on the same app.
+
+    The motivating history is the one this file exists for. The fix was written on the ingest door
+    (`open_python-audit` ING-02) and verified there; the medallion door is a ~120-line COPY of the same
+    function (DUP-03) and went on blocking the cascade head, plus a second copy in the promotion door.
+    Two of the three call sites were wrong while the claim "the blocking-auth defect is fixed" was
+    true of the one that had been looked at. Coroutines must go through
+    `service_kit.governed.oidc.verify_off_loop`, which owns the hop.
+    """
+    roots = [SERVICES, REPO / "packages"]
+    offenders: list[str] = []
+    for py in sorted(path for root in roots for path in root.rglob("*.py")):
+        if "/tests/" in py.as_posix():
+            continue
+        try:
+            tree = ast.parse(py.read_text(errors="ignore"))
+        except SyntaxError:  # a runner pinned to an older grammar is not this guard's business
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            for inner in ast.walk(node):
+                # A CALL to `<something verifier-ish>.verify(...)`. A bare reference is fine — that is
+                # exactly how `verify_off_loop` hands the callable to `asyncio.to_thread`.
+                if not (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)):
+                    continue
+                if inner.func.attr != "verify":
+                    continue
+                target = inner.func.value
+                name = target.id if isinstance(target, ast.Name) else getattr(target, "attr", "")
+                if "verif" in name.lower():
+                    offenders.append(f"{py.relative_to(REPO)}:{inner.lineno} in async def {node.name}")
+    assert not offenders, (
+        "these coroutines call verifier.verify() inline, stalling the event loop; "
+        "await service_kit.governed.oidc.verify_off_loop(verifier, raw) instead:\n  " + "\n  ".join(offenders)
+    )

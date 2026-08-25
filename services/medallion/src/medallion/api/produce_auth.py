@@ -29,7 +29,7 @@ from medallion.api.dependencies import FgaClientDep, SettingsDep
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.dapr_auth import is_public_caller
-from service_kit.governed.oidc import OIDCVerifier
+from service_kit.governed.oidc import OIDCVerifier, verify_off_loop
 from service_kit.lakehouse.warehouse_registry import PROJECT_PATTERN
 
 
@@ -121,7 +121,13 @@ async def authorize_produce(
         if scheme.lower() != "bearer" or not raw:
             raise UnauthenticatedError("malformed bearer")
         try:
-            token = verifier.verify(raw)
+            # Off the loop: verify() does synchronous OIDC discovery + JWKS fetches (up to 15s) on a
+            # cold cache or key rotation. Inline it stalled every in-flight request in this pod —
+            # `service_kit.probes` is mounted on the same app, so the liveness probe queued behind a
+            # bearer check and the kubelet could restart the pod mid-request. The sibling ingest door
+            # fixed this as ING-02 and the fix did not travel here, which is why the hop now lives in
+            # `service_kit.governed.oidc.verify_off_loop` instead of at the call site.
+            token = await verify_off_loop(verifier, raw)
         except UnauthenticatedError:
             raise UnauthenticatedError("invalid token") from None
         if fga_client is None:  # OIDC on but FGA unwired → fail closed, never an unauthorized trigger
@@ -166,7 +172,10 @@ async def authenticate_subject(
     if scheme.lower() != "bearer" or not raw:
         raise UnauthenticatedError("malformed bearer")
     try:
-        return verifier.verify(raw).sub
+        # Off the loop, for the same reason as `authorize_produce` above: this is the promotion
+        # review's door, and it is a SECOND copy of the verify call — fixing only the produce door
+        # would leave approve/reject stalling the worker.
+        return (await verify_off_loop(verifier, raw)).sub
     except UnauthenticatedError:
         raise UnauthenticatedError("invalid token") from None
 

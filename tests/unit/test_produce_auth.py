@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import threading
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import cast
@@ -121,6 +122,54 @@ def test_invalid_bearer_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_malformed_authorization_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
     _expect(monkeypatch, 401, app_token="s3cr3t", authz="Basic xyz", verifier=_Verifier())
+
+
+# ── the bearer is verified OFF the event loop (open_python-audit ING-02, on this door) ─────────────
+
+
+class _ThreadRecordingVerifier:
+    """Records which thread ``verify`` ran on.
+
+    Asserting "off the loop" by timing is a flake waiting to happen. Thread identity is exact: the
+    coroutine runs on the thread that called ``asyncio.run``, so a verify that lands on THAT thread
+    ran inline on the loop, and one that lands anywhere else was handed to a worker.
+    """
+
+    def __init__(self) -> None:
+        self.thread: int | None = None
+
+    def verify(self, _token: str) -> object:
+        self.thread = threading.get_ident()
+        return SimpleNamespace(sub="alice")
+
+
+def test_the_produce_door_verifies_the_bearer_OFF_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``OIDCVerifier.verify`` does synchronous discovery + JWKS fetches — never on the loop.
+
+    The cascade head's write doors all funnel through this dependency, and ``service_kit.probes`` is
+    mounted on the same app, so an inline verify on a cold cache or a key rotation stalls every
+    in-flight request in the pod AND its own liveness probe. The identical defect was filed and fixed
+    on the sibling ingest door (ING-02); it did not travel here because the two doors are copies.
+    """
+    verifier = _ThreadRecordingVerifier()
+    assert _run(monkeypatch, app_token="s3cr3t", authz="Bearer good", verifier=verifier) == "alice"
+    assert verifier.thread is not None, "verify() was never called — the test proves nothing"
+    assert verifier.thread != threading.get_ident(), "verify() ran on the event loop thread"
+
+
+def test_the_promotion_door_verifies_the_bearer_OFF_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same rule for ``authenticate_subject`` — the promotion review's door, and the second copy.
+
+    It is a separate function with its own ``verifier.verify`` call, so fixing ``authorize_produce``
+    alone would leave the promotion approve/reject routes stalling the loop.
+    """
+    verifier = _ThreadRecordingVerifier()
+    ns = SimpleNamespace(oidc_enabled=True, produce_admin_project="acme")
+    request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(oidc=verifier))))
+    sub = asyncio.run(produce_auth.authenticate_subject(request, cast(MedallionSettings, ns), authorization="Bearer good"))
+    assert sub == "alice"
+    assert verifier.thread is not None, "verify() was never called — the test proves nothing"
+    assert verifier.thread != threading.get_ident(), "verify() ran on the event loop thread"
 
 
 def test_fga_outage_is_503(monkeypatch: pytest.MonkeyPatch) -> None:
