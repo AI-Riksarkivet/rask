@@ -20,6 +20,7 @@ import time
 
 import pytest
 import requests
+from promotion_review import approve_if_held
 
 
 LANCERAY = os.environ.get("LANCE_E2E_LANCERAY_URL", "")
@@ -114,6 +115,10 @@ def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
         headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
     produced = requests.post(f"{lance_ray}/produce", headers=headers, params=params, timeout=8)
     assert produced.status_code == 202 and produced.json()["status"] == "produced", produced.text
+    #: The cascade token, which is also the handle on any promotion this drive holds — the review
+    #: instance id is derived from it (`promotion_review.instance_for`). Kept so the poll below can
+    #: clear a hold instead of timing out behind one.
+    run_token = produced.json().get("token", "")
 
     # ASSERT — the cascade reached gold (its transitive upstream is the full chain) AND it did so from THIS
     # produce: all three stages emitted a fresh run, so the count grew by the producer + 2 movers.
@@ -134,6 +139,11 @@ def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
     #: tell "it did not happen" from "you may not look" sends the next reader after the wrong bug.
     refusal = ""
     while time.monotonic() < deadline:
+        # Clear this drive's promotion hold, if the estate raised one. On an estate running
+        # human-in-the-loop review every FIRST promotion holds — a first promotion has no predecessor,
+        # so the review band reads it as a breach — and the cascade then waits for a human who is not
+        # coming. Approving satisfies governance rather than configuring it away; see promotion_review.
+        approve_if_held(lance_ray, run_token, ADMIN_TOKEN)
         resp = requests.get(f"{lineage}/datasets/{gold}/upstream", headers=_LINEAGE_HEADERS, timeout=8)
         if resp.status_code == 200:
             upstream = [ref["name"] for ref in resp.json().get("related", [])]

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import pathlib
 import threading
 import uuid
 from concurrent.futures import ProcessPoolExecutor
@@ -32,6 +33,7 @@ import pyarrow as pa
 import pytest
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
+from cas_append_worker import append_rows
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
@@ -160,16 +162,6 @@ def test_contended_conditional_put_has_exactly_one_winner_per_round(s3) -> None:
 # ── Tier 3 ─ concurrent Lance appends all land (real manifest-CAS commit path) ─────────────────── #
 
 
-def _append_rows(args: tuple[str, dict[str, str], int, int]) -> None:
-    """A worker PROCESS: append ``n`` rows starting at ``start`` to the Lance dataset at ``uri``. Runs in its
-    own interpreter (ProcessPoolExecutor), so the appends genuinely contend on the manifest commit."""
-    uri, so, start, n = args
-    import lance as _lance
-    import pyarrow as _pa
-
-    _lance.write_dataset(_pa.table({"id": list(range(start, start + n))}), uri, mode="append", storage_options=so)
-
-
 def test_concurrent_lance_appends_all_land(s3) -> None:
     """8 processes each append 100 rows to one dataset. Append⊥Append never LOGICALLY conflicts
     (file_format.md — conflict matrix), but every commit still contends on the manifest CAS; each loser
@@ -192,8 +184,35 @@ def test_concurrent_lance_appends_all_land(s3) -> None:
             enable_stable_row_ids=True,
         )
         # spawn (not fork): lance holds its own threads and is NOT fork-safe — a forked child can deadlock.
-        with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn")) as pool:
-            list(pool.map(_append_rows, [(uri, so, i * per, per) for i in range(workers)]))
+        # A SPAWNED child re-imports this module to unpickle the work item, and it cannot on its own:
+        # the repo runs `--import-mode=importlib`, so this suite is imported as a top-level module from
+        # a directory on NO default sys.path (`tests/e2e-py` is not even a legal package name — the
+        # hyphen). The child died `ModuleNotFoundError: No module named 'tests'`, which reads as a
+        # missing dependency rather than a missing path.
+        #
+        # PYTHONPATH, not an `initializer=`: the initializer is a function IN THIS MODULE, so the child
+        # must already be able to import it to run it — the unpickle fails first, inside spawn's own
+        # bootstrap. PYTHONPATH is applied by the interpreter at startup, before any of that, and spawn
+        # inherits the parent's environment.
+        #
+        # Fork would sidestep all of it and must not be used: lance holds its own threads and a forked
+        # child can deadlock, which is why spawn was chosen here in the first place.
+        here = pathlib.Path(__file__).resolve()
+        inherited = os.environ.get("PYTHONPATH", "")
+        os.environ["PYTHONPATH"] = os.pathsep.join([str(here.parent), str(here.parents[2]), *([inherited] if inherited else [])])
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=multiprocessing.get_context("spawn"),
+            # A SPAWNED child re-imports this module to unpickle `_append_rows`, and it cannot: the repo
+            # runs `--import-mode=importlib`, so the suite is imported as a top-level module from a
+            # directory that is on NO default sys.path (and `tests/e2e-py` is not even a legal package
+            # name — the hyphen). The child died with `ModuleNotFoundError: No module named 'tests'`
+            # while unpickling the call item, which reads as a missing dependency rather than a path.
+            # The initializer runs before the queue is drained, so restoring the two paths there is
+            # enough. Fork would sidestep it and must not be used: lance holds its own threads and a
+            # forked child can deadlock — the reason spawn was chosen in the first place.
+        ) as pool:
+            list(pool.map(append_rows, [(uri, so, i * per, per) for i in range(workers)]))
 
         ds = lance.dataset(uri, storage_options=so)
         assert ds.count_rows() == workers * per, "an append was silently lost — the store did not enforce CAS"

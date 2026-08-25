@@ -21,11 +21,16 @@ import time
 
 import pytest
 import requests
+from promotion_review import approve_if_held
 
 
 LANCERAY = os.environ.get("LANCE_E2E_LANCERAY_URL", "")
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
+#: The configured promotion APPROVER. The media lane publishes silver-media and then holds for review
+#: on a first promotion, exactly as the medallion lane does; the decision door gates on this identity
+#: and a shared service credential deliberately cannot approve its own output.
+ADMIN_TOKEN = os.environ.get("LANCE_E2E_ADMIN_TOKEN", "")
 
 # Governed lineage READS use the app-token SERVICE door as `service-web` (a warehouse reader — the same
 # read-only identity the web BFF uses). On an auth-OFF stack OIDC is off → authenticate() pass-through,
@@ -82,6 +87,9 @@ def test_ingest_media_derives_artifacts_through_the_deployed_cascade(urls: tuple
     runs_after = runs_before
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
+        # Same hold the medallion drive meets — the media lane publishes silver-media and then waits for
+        # a reviewer. See promotion_review for why this approves rather than disables.
+        approve_if_held(lance_ray, token, ADMIN_TOKEN)
         schema = requests.get(f"{lineage}/datasets/{SILVER}/schema", headers=_LINEAGE_HEADERS, timeout=8)
         if schema.status_code == 200:
             fields = {f["name"]: f["type"] for f in schema.json().get("fields", [])}
