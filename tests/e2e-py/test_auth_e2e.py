@@ -44,19 +44,58 @@ def server() -> str:
     return SERVER.rstrip("/")
 
 
+#: Dex's `lance-catalog` client is CONFIDENTIAL, so the password grant needs its secret. Without it
+#: Dex answers `{"error":"invalid_client","error_description":"Invalid client credentials."}` and this
+#: suite died on `KeyError: 'id_token'` — an error naming the response shape rather than the missing
+#: credential. Every other mint in the repo passes it (scripts/auth_chain.sh, verify_merge_lineage.sh,
+#: seed_dev_estate.sh); this one did not. The default is the dev fixture the chart ships
+#: (`chart/values.yaml` frontend.oidc.clientSecret) — a real deployment overrides it.
+CLIENT_ID = os.environ.get("LANCE_E2E_OIDC_CLIENT_ID", "lance-catalog")
+CLIENT_SECRET = os.environ.get("LANCE_E2E_OIDC_CLIENT_SECRET", "lance-catalog-secret")
+
+
+#: The warehouse to create this suite's top-level namespace under, when the estate has warehouses.
+#: Empty targets the shared root door, correct only where `catalog.warehouses.enabled` is off.
+WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
+
+
+def _create_top_level(server: str, name: str, headers: dict[str, str]) -> requests.Response:
+    """Create a top-level namespace through whichever door this estate actually admits.
+
+    Which door is right is a property of the ESTATE, not of this suite. With warehouses enabled the
+    root door answers 400 `top-level namespace '<n>' must belong to a warehouse` — a TOPOLOGY refusal,
+    not an authz one — so the namespace has to come in through its warehouse. Measured 2026-08-25:
+    this suite pinned the root door, and everything nested under the parent it then failed to create
+    404'd, which reads as a missing grant rather than a missing parent.
+    """
+    if WAREHOUSE:
+        return requests.post(
+            f"{server}/v1/warehouses/{WAREHOUSE}/namespaces",
+            headers=headers,
+            json={"namespace": name, "adopt_existing": True},
+            timeout=10,
+        )
+    return requests.post(f"{server}/v1/namespace/{name}/create", headers=headers, json={}, timeout=10)
+
+
 def _token() -> str:
     resp = requests.post(
         f"{DEX}/token",
         data={
             "grant_type": "password",
-            "client_id": "lance-catalog",
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
             "username": "alice@example.com",
             "password": "password",
             "scope": "openid",
         },
         timeout=10,
     )
-    return resp.json()["id_token"]
+    body = resp.json()
+    # Say WHY, not just that a key is absent — a bad secret and an unreachable Dex look identical
+    # through a KeyError, and they need opposite fixes.
+    assert "id_token" in body, f"Dex issued no id_token (HTTP {resp.status_code}): {body}"
+    return body["id_token"]
 
 
 def _sub(token: str) -> str:
@@ -104,7 +143,22 @@ def test_oidc_and_openfga_authorization_chain(server: str) -> None:
     # what `scripts/auth_chain.sh` (the assertions CI runs) has always expected: `expect 200 ... "alice
     # create namespace"`. Two artifacts asserted opposite outcomes for one request; the shell script
     # was right and this was describing production.
-    assert requests.post(f"{server}/v1/namespace/e2ens/create", headers=headers, json={}, timeout=10).status_code in (200, 409)
+    #
+    # ASSERTED AS "not an authz denial", not as 200/409. On an estate with `catalog.warehouses.enabled`
+    # the same request comes back 400 `top-level namespace 'e2ens' must belong to a warehouse` — the
+    # request got PAST authz and was refused on TOPOLOGY, which is this assertion passing, not failing.
+    # Pinning 200/409 encoded a warehouse-less estate into a test whose subject is the auth chain, and
+    # it broke the moment the estate grew warehouses (measured 2026-08-25).
+    allowed = _create_top_level(server, "e2ens", headers)
+    assert allowed.status_code not in (401, 403), (
+        f"a valid token with no tuple must not be DENIED here (lockRootCreate is off on this stack); got {allowed.status_code}: {allowed.text[:200]}"
+    )
+    # The REST of this suite nests under `e2ens`, so it has to exist however this estate makes one.
+    assert allowed.status_code in (200, 409), (
+        f"could not create the parent this suite nests under: {allowed.status_code} {allowed.text[:220]} — "
+        f"on a warehouses-enabled estate a top-level namespace must belong to one, so set "
+        f"LANCE_E2E_WAREHOUSE to a warehouse id you can write to"
+    )
 
     # THE DENY THAT ACTUALLY EXISTS is on the parent, so prove it on a NESTED create.
     #

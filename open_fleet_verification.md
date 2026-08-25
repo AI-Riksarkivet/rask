@@ -63,7 +63,17 @@ Each of these was found by rebuilding, and each is fixed and pushed.
 
 ## Left
 
-### 1. Promotion review blocks three cascade suites — DOING NOW
+### 1. Promotion review blocks cascade suites — DONE (`cdbca2b4`)
+
+Both halves landed. `tests/e2e-py/promotion_review.py` derives this drive's own hold
+(`promotion-{token}`, mirroring `promotions.instance_for`) and approves it, so a suite satisfies
+governance rather than configuring it away; `LANCE_E2E_APPROVE_HOLDS=0` leaves holds standing for an
+estate with review off or a suite whose subject IS the hold. Wired into `medallion` and `media`.
+
+`governed_union` still shows 2 failed — it has its own cascade drive and has not been wired to the
+helper yet. That is the remaining piece of this item.
+
+### OLD-1 (kept for the reasoning)
 
 `medallion`, `media` and `governed_union` all wait for gold. This estate holds every **first**
 promotion for human approval (`first_promotion` trips the 0.25 band, since a first promotion has no
@@ -75,9 +85,24 @@ Not a defect — a test-vs-policy mismatch. Doing both halves:
 - **B.** The suites approve a hold when they meet one, so they pass on *any* estate and exercise the
   governance loop rather than sidestepping it.
 
-### 2. `auth` suite — 1 failed, undiagnosed
+### 2. `auth` suite — two real bugs fixed, one assumption left
 
-Ran for the first time today (needed `LANCE_E2E_AUTH_SERVER`). Not yet looked at.
+Two genuine defects found and fixed:
+
+* Its Dex mint omitted `client_secret`. `lance-catalog` is a CONFIDENTIAL client, so Dex answered
+  `{"error":"invalid_client"}` and the suite died on `KeyError: 'id_token'` — an error naming the
+  response shape rather than the missing credential. Every other mint in the repo passes it.
+* It created its top-level namespace through the root door, which a warehouses-enabled estate refuses
+  400 (`must belong to a warehouse`). Everything nested under the parent it then failed to create
+  404'd, reading as a missing grant rather than a missing parent. Now goes through the warehouse door
+  when `LANCE_E2E_WAREHOUSE` is set.
+
+**Left:** the suite proves the parent-deny by creating `e2ens` and then expecting a nested create to
+be 403. But creating a namespace grants the creator `owner` on it, so on this estate the nested create
+is legitimately 200. The sequence needs a parent the subject does NOT own — that is a rethink of the
+suite's shape, not a line fix, so it is not attempted mid-flight.
+
+Run it with: `LANCE_E2E_AUTH_SERVER`, `LANCE_E2E_DEX`, `LANCE_E2E_WAREHOUSE`.
 
 ### 3. `observability` suite — never produced a result
 
