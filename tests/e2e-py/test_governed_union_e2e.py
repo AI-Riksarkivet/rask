@@ -97,10 +97,22 @@ SILVER_WRITER = (
 #: id that could never exist (see OPERATIONS). Revoking these alongside the rung is what makes the deny
 #: a deny — a strengthening of the assertion, not a relaxation of it.
 def _owner_tuples(user: str, namespace: str, table: str) -> list[dict[str, str]]:
+    """The two owner tuples `seed_ownership` actually writes — warehouse and table, NOT the namespace.
+
+    Listing a tuple that does not exist is not harmless: OpenFGA fails the whole delete BATCH, so
+    including a speculative `owner namespace:<ns>` revoked NOTHING and the "denied" drive sailed
+    through with no deny logged anywhere. Measured 2026-08-25 against the live store:
+
+        before revoke             can_create_table -> True
+        after revoking the rung   can_create_table -> True    (owner still outranks it)
+        after revoking owners too can_create_table -> False
+
+    `namespace` is kept in the signature because the caller reads better naming the tier it is denying.
+    """
+    del namespace  # named by the caller for readability; seed_ownership writes no namespace owner
     return [
         {"user": user, "relation": "owner", "object": WAREHOUSE},
         {"user": user, "relation": "owner", "object": f"table:{table}"},
-        {"user": user, "relation": "owner", "object": f"namespace:{namespace}"},
     ]
 
 
@@ -265,6 +277,35 @@ def _gold_runs(lineage: str, headers: dict[str, str]) -> set[str]:
     if resp.status_code != 200:
         return set()
     return {p["run_id"] for p in resp.json().get("producers", [])}
+
+
+def _quiesced_gold(lineage: str, headers: dict[str, str], *, still_for: float = 45.0, timeout: float = 150.0) -> set[str]:
+    """The gold run set, once it has STOPPED changing — the only honest baseline for a deny window.
+
+    Gold runs cannot be attributed to a drive: the silver→gold trigger's token is minted inside the
+    catalog (see OPERATIONS), so "did THIS drive produce gold" is not answerable by name. What is
+    answerable is "did any new gold run appear while the grant was revoked" — but only if the previous
+    test's cascade has finished first. One Ray hop measures ~30 s, and the suite's tests run in
+    sequence, so the PRIOR test's gold lands squarely inside this one's deny window and is counted as
+    the denied drive's. Measured 2026-08-25: the deny assertion failed with exactly one extra run that
+    the denied drive had not produced.
+
+    `still_for` is 45 s because ONE Ray hop measures ~30 s: the previous sub-phase restores its grant
+    and its cascade then runs on, so a window shorter than a hop still catches that drive's gold. This
+    weakens nothing — the assertion still demands that NO new gold run appears while the grant is
+    revoked; it only makes sure the baseline is taken when nothing is already in flight.
+    """
+    deadline = time.monotonic() + timeout
+    seen = _gold_runs(lineage, headers)
+    stable_since = time.monotonic()
+    while time.monotonic() < deadline:
+        time.sleep(3)
+        now = _gold_runs(lineage, headers)
+        if now != seen:
+            seen, stable_since = now, time.monotonic()
+        elif time.monotonic() - stable_since >= still_for:
+            return seen
+    return seen
 
 
 def _producer_for(lineage: str, headers: dict[str, str], dataset: str, run_id: str) -> dict | None:
@@ -451,7 +492,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     gold_owner = _owner_tuples("user:service-silver-to-gold", _ds("gold"), _ds("gold$catalog"))
     _tuples(fga_store, deletes=[GOLD_VALIDATOR, *gold_owner])
     try:
-        gold_before = _gold_runs(lineage, alice)
+        gold_before = _quiesced_gold(lineage, alice)
         token = _produce(lance_ray)
         silver_rid = _run_id_for("embed_features", token)
 
