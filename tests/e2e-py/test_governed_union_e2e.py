@@ -276,7 +276,13 @@ def _gold_runs(lineage: str, headers: dict[str, str]) -> set[str]:
     resp = requests.get(f"{lineage}/datasets/{_ds('gold$catalog')}/producers", headers=headers, timeout=8)
     if resp.status_code != 200:
         return set()
-    return {p["run_id"] for p in resp.json().get("producers", [])}
+    produced = {p["run_id"] for p in resp.json().get("producers", [])}
+    # COMPLETED runs only. With mover-side FGA on, a denied stage EMITS a FAIL run rather than
+    # vanishing — auditable in lineage, the same rule the quality gate follows — so counting every run
+    # that touched gold makes a correctly-denied promotion look like a leak. The property both halves
+    # of the deny/regrant argument need is whether gold was SUCCESSFULLY produced.
+    states = _run_states(lineage, headers)
+    return {rid for rid in produced if states.get(rid) == "COMPLETE"}
 
 
 def _quiesced_gold(lineage: str, headers: dict[str, str], *, still_for: float = 45.0, timeout: float = 150.0) -> set[str]:
@@ -482,9 +488,13 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
         # First look at the negative (the definitive still-absent re-check comes after the positive
         # control below, once the redelivery window has MEASURABLY elapsed).
         time.sleep(12)
-        assert _run_states(lineage, alice).get(denied_silver_rid) is None, (
-            f"silver run {denied_silver_rid} appeared despite the revoked writer tuple — gate NOT enforcing"
-        )
+        # NOT COMPLETE, rather than absent. With mover-side FGA on (`medallion.fgaEnabled`, this
+        # suite's own documented precondition) a denied stage EMITS a FAIL run instead of vanishing —
+        # the same rule the quality gate follows, "the failed run is still emitted, auditable in
+        # lineage". Measured 2026-08-25: state FAIL where this asserted None. The property the deny
+        # actually has is that the stage never SUCCEEDS, and an absent run satisfies it too.
+        denied_state = _run_states(lineage, alice).get(denied_silver_rid)
+        assert denied_state != "COMPLETE", f"silver run {denied_silver_rid} COMPLETED despite the revoked writer tuple — gate NOT enforcing"
     finally:
         _tuples(fga_store, writes=[SILVER_WRITER, *silver_owner])  # restore even if the assert above fails
 
@@ -532,8 +542,11 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     if remaining > 0:
         time.sleep(remaining)
     final_states = _run_states(lineage, alice)
-    assert final_states.get(denied_silver_rid) is None, (
-        f"silver run {denied_silver_rid} landed AFTER the writer grant was restored — the deny was a RETRY (never actually checked), not a DROP"
+    # Same inversion as above: a denied stage is auditable (FAIL), not invisible. What must never
+    # happen is that it COMPLETES once the grant is back — that would mean the trigger was retried
+    # rather than checked-and-refused.
+    assert final_states.get(denied_silver_rid) != "COMPLETE", (
+        f"silver run {denied_silver_rid} COMPLETED after the writer grant was restored — the deny was a RETRY (never actually checked), not a refusal"
     )
     # The gold negative re-checked the same way: the deny window must have added NO gold run, even now
     # that the grant is back. A DROP acked the trigger, so it can never reappear; a RETRY would.
