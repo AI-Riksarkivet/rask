@@ -98,7 +98,7 @@ def effective_gate(settings: object, spec: GateSpec | None) -> EffectiveGate:
     caller that could not tell a declared `review_band` of 0.25 from the chart's default of 0.25.
 
     Change 6 asked for the fallback to be DROPPED instead, and that is not the right fix; the
-    measurement is recorded in `open_data_spec.md` §8. A `GateSpec` is scoped per PROJECT
+    measurement is recorded in `docs/architecture/medallion-data-flow.md`. A `GateSpec` is scoped per PROJECT
     (`project: str`, `extra="forbid"`) while the chart carries `requiredColumns` per MOVER — `"id"`
     for bronze-to-silver against `"id,thumbnail,embedding"` for media-to-silver, because one derives
     artifacts the other does not. Dropping the fallback would either un-gate those columns or force

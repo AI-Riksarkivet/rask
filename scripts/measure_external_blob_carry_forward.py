@@ -1,6 +1,6 @@
 """MEASURE: can ingest write External blob descriptors, and do they survive a carry-forward?
 
-Item 1 of open_data_spec.md §8. Two questions, both answered by observation:
+Item 1 of docs/architecture/medallion-data-flow.md. Two questions, both answered by observation:
   1. Does `blob_array` given URIs produce EXTERNAL descriptors (bytes not copied into the dataset)?
   2. Does a descriptor read from bronze resolve when written into a SECOND dataset (silver)?
 """

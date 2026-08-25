@@ -63,7 +63,7 @@ class LocalCatalog:
 
         `external_base` joins them, and for the same reason: `initial_bases` is CREATE-MODE ONLY, so
         the root a dataset's blob descriptors may point at is registered here or never
-        (`open_data_spec.md` §4.1). Unlike the flags above there is no A14-style assertion for it —
+        (`docs/architecture/medallion-data-flow.md`). Unlike the flags above there is no A14-style assertion for it —
         a dataset created without a base is not broken, it is MANAGED, which is a supported placement
         and the right one for a source whose bytes exist at no URI.
         """

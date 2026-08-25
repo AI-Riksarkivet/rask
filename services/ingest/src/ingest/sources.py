@@ -137,7 +137,7 @@ class ExternalBaseOf(Protocol):
     the adapter knows what a unit key means, and therefore what contains it. The worker resolves
     units by URI SCHEME and must not learn about buckets or directories.
 
-    This is the placement decision of `open_data_spec.md` §4.1, made per corpus rather than
+    This is the placement decision of `docs/architecture/medallion-data-flow.md`, made per corpus rather than
     defaulted. A base means the bronze `payload` column stores an EXTERNAL descriptor — the URI, not
     the bytes — so the corpus is stored once instead of once per tier (measured: 0.1% of corpus on
     disk against 100.1% for the managed form, `scripts/measure_external_blob_carry_forward.py`).

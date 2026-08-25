@@ -1,4 +1,4 @@
-"""Bronze stores the corpus ONCE, by reference — `open_data_spec.md` §4.1, changes 1 and 2.
+"""Bronze stores the corpus ONCE, by reference — `docs/architecture/medallion-data-flow.md`, changes 1 and 2.
 
 The managed placement copies every source byte into the bronze dataset, and then the cascade copies
 them again into silver and again into gold. Measured on a real corpus that is 100.1% / 100% / 100%:

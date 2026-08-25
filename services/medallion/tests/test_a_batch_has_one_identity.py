@@ -1,4 +1,4 @@
-"""A batch is ONE object across the whole cascade — `open_data_spec.md` §8 change 9.
+"""A batch is ONE object across the whole cascade — `docs/architecture/medallion-data-flow.md` change 9.
 
 Until this landed, bronze, silver and gold were three unrelated runs in the lineage graph with
 nothing joining them. The reason is precise and worth stating, because it looks like `token` should

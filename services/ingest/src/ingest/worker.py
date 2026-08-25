@@ -165,7 +165,7 @@ def units_to_table(
     `take_blobs` / `read_blob_ranges` for readers, so the viewer could only ever load whole rows.
     The code this plane replaced already got this right (`medallion/services/ingest.py:31`).
 
-    **`external_base` chooses the PLACEMENT** (`open_data_spec.md` §4.1, change 1). With a base, the
+    **`external_base` chooses the PLACEMENT** (`docs/architecture/medallion-data-flow.md`, change 1). With a base, the
     payload column stores an EXTERNAL descriptor — the source URI — and lance copies nothing: 0.1% of
     the corpus on disk against 100.1% for the managed form, and the descriptor still resolves after
     being carried into silver and gold, which is what stops the estate holding three copies

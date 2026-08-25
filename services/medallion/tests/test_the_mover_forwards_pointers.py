@@ -1,4 +1,4 @@
-"""A tier costs a few KB, not another corpus — `open_data_spec.md` §4.1/§4.2, change 3.
+"""A tier costs a few KB, not another corpus — `docs/architecture/medallion-data-flow.md`, change 3.
 
 The cascade used to store the corpus once per tier. bronze held the bytes, silver held them again,
 gold held them again — three copies to express three readiness states of one thing. `_carry_forward`

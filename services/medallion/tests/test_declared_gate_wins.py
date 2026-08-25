@@ -91,7 +91,7 @@ class TestTheGateNamesItsSource:
     `extra="forbid"`) while `chart/values.yaml` carries `requiredColumns` per MOVER — `"id"` for
     bronze-to-silver against `"id,thumbnail,embedding"` for media-to-silver, because one derives
     artifacts the other does not. Dropping the fallback would either un-gate those columns or force
-    one list across movers with different outputs. See `open_data_spec.md` §8 item 6.
+    one list across movers with different outputs. See `docs/architecture/medallion-data-flow.md` item 6.
     """
 
     def test_the_chart_gate_says_chart(self, tmp_path: Path) -> None:

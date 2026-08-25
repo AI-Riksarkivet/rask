@@ -1,6 +1,6 @@
 """Can a blob column cross datasets as a DESCRIPTOR, without re-wrapping the bytes?
 
-`open_data_spec.md` section 9(a). Spec change 1 -- stop materialising blobs in the mover --
+`docs/architecture/medallion-data-flow.md` section 9(a). Spec change 1 -- stop materialising blobs in the mover --
 depends on the answer, and no Lance source states it.
 
 The finding that shapes this probe: the READ shape and the WRITE shape are NOT symmetric.

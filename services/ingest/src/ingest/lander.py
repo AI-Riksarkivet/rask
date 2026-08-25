@@ -292,7 +292,7 @@ def create_empty(dataset_uri: str, schema: pa.Schema, external_base: str | None 
     exercisable in tests and by the §7.11 verification script.
 
     `external_base` REGISTERS the root that this dataset's blob descriptors may point at
-    (`open_data_spec.md` §4.1, change 2). It belongs HERE and nowhere else for a reason that is easy
+    (`docs/architecture/medallion-data-flow.md`, change 2). It belongs HERE and nowhere else for a reason that is easy
     to get wrong: `initial_bases` is **CREATE-MODE ONLY** — lance refuses it on append and overwrite
     — and this is the estate's only create door for a bronze dataset. Registering it at the append
     site instead would be a silent no-op, and the first external write would then be refused against

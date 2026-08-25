@@ -279,7 +279,7 @@ def _s3_prefix_lineage(spec: SourceSpec) -> LineageInput:
 # compaction (measured, 5 fragments → 1).
 
 
-# ── external blob bases: WHERE this kind's bytes already live (open_data_spec.md §4.1) ────────
+# ── external blob bases: WHERE this kind's bytes already live (docs/architecture/medallion-data-flow.md) ────────
 #
 # One function per kind, registered beside the factory, for the same reason the partition rules are:
 # only the adapter knows what a unit key means, so only the adapter can say what contains it.

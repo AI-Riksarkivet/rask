@@ -294,7 +294,7 @@ def ensure_dataset_at(spec: RunSpec) -> tuple[str, int]:
     catalog = _catalog()
     # THE PLACEMENT DECISION, resolved at the ONE moment it can be acted on. `initial_bases` is
     # create-mode only, so whether this dataset may hold external blob descriptors is settled by this
-    # call or never (`open_data_spec.md` §4.1). The kind's own adapter answers it — the same seam
+    # call or never (`docs/architecture/medallion-data-flow.md`). The kind's own adapter answers it — the same seam
     # that already answers `partition_key_for` — because only the adapter knows what contains its
     # unit keys.
     #
