@@ -44,6 +44,7 @@ from typing import Any
 
 import pytest
 import requests
+from promotion_review import approve_if_held
 
 
 LANCERAY = os.environ.get("LANCE_E2E_LANCERAY_URL", "")
@@ -61,15 +62,64 @@ S3_BUCKET = os.environ.get("LANCE_E2E_S3_BUCKET", "lance-catalog")
 S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "")
 S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "")
 
-WAREHOUSE = "warehouse:lance_catalog"
-GOLD_VALIDATOR = {"user": "user:service-silver-to-gold", "relation": "validator", "object": "namespace:gold"}
+#: The warehouse alice is granted reader on. A TENANT drive cascades under its project's own zone
+#: warehouse, not the estate root — `seed_medallion_fga.sh` links `warehouse:<zone-wh> -> namespace:
+#: <project>-<tier>` — so a reader grant on the root reaches none of the tenant's stages.
+WAREHOUSE = os.environ.get("LANCE_E2E_FGA_WAREHOUSE", "") or ("warehouse:lakehouse-wh" if os.environ.get("LANCE_E2E_PROJECT") else "warehouse:lance_catalog")
+#: the silver→gold mover's validator rung, on the tier the drive actually targets (can_promote).
+GOLD_VALIDATOR = {
+    "user": "user:service-silver-to-gold",
+    "relation": "validator",
+    "object": "namespace:{}".format(f"{os.environ.get('LANCE_E2E_PROJECT')}-gold" if os.environ.get("LANCE_E2E_PROJECT") else "gold"),
+}
 #: the bronze→silver mover's writer rung — revoked in test 2's writer-gate sub-phase (can_create_table).
-SILVER_WRITER = {"user": "user:service-bronze-to-silver", "relation": "writer", "object": WAREHOUSE}
+#: On a tenant drive this is the NAMESPACE rung, not the warehouse one: the mover also holds
+#: `owner` on the warehouse from `seed_ownership`, so revoking a warehouse-level writer denies nothing.
+SILVER_WRITER = (
+    {
+        "user": "user:service-bronze-to-silver",
+        "relation": "writer",
+        "object": "namespace:{}".format(f"{os.environ.get('LANCE_E2E_PROJECT')}-silver" if os.environ.get("LANCE_E2E_PROJECT") else "silver"),
+    }
+    if os.environ.get("LANCE_E2E_PROJECT")
+    else {"user": "user:service-bronze-to-silver", "relation": "writer", "object": WAREHOUSE}
+)
+
+
+#: THE OWNER TUPLES `seed_ownership` WRITES, which a single-rung revoke cannot see past.
+#:
+#: A mover that CREATED a table is its owner, and owner outranks the rung the deny is aiming at.
+#: Measured live 2026-08-25 with GOLD_VALIDATOR deleted:
+#:     warehouse:lakehouse-wh        user:service-silver-to-gold  owner
+#:     table:lakehouse-gold$catalog  user:service-silver-to-gold  owner
+#:     check can_promote namespace:lakehouse-gold -> allowed = True
+#: so the "denied" drive promoted anyway and the assertion passed only because it was looking for a run
+#: id that could never exist (see OPERATIONS). Revoking these alongside the rung is what makes the deny
+#: a deny — a strengthening of the assertion, not a relaxation of it.
+def _owner_tuples(user: str, namespace: str, table: str) -> list[dict[str, str]]:
+    return [
+        {"user": user, "relation": "owner", "object": WAREHOUSE},
+        {"user": user, "relation": "owner", "object": f"table:{table}"},
+        {"user": user, "relation": "owner", "object": f"namespace:{namespace}"},
+    ]
+
+
 #: JetStream first-redelivery window: backOff[0] == ackWait, pinned to chart/templates/dapr-component.yaml
 #: (backOff: 30s,…). Test 2 must observe a denied run stay absent PAST this, measured — not choreographed.
 REDELIVERY_WINDOW = 30.0
-#: stage operation names (chart values) — each stage's run id is uuid5-derived from "<operation>-<token>".
-OPERATIONS = ("lance_ray_ingest", "embed_features", "aggregate_gold")
+#: Stage operations this drive can NAME BY RUN ID — bronze and silver only, and `aggregate_gold` is
+#: deliberately absent.
+#:
+#: Under `medallion.cascadeViaPublish` the silver→gold hop is driven by the catalog's table_published
+#: event, and `publication_trigger.py:138` mints that trigger's token from the publication `event_id`.
+#: So gold's run id is seeded from a token this suite never sees and cannot compute — measured live as
+#: a 32-hex id where the drive's own tokens are 12-hex. Polling for
+#: `run_id_for("aggregate_gold-<produce token>")` therefore waits for an id that can never exist, and
+#: reports it as "the cascade did not complete" about a cascade that completed.
+#:
+#: Gold is asserted the way the medallion suite asserts it instead: by its UPSTREAM CHAIN, which is
+#: identity-free and true however the token was minted.
+OPERATIONS = ("lance_ray_ingest", "embed_features")
 
 pytestmark = [pytest.mark.e2e, pytest.mark.governed_union]
 
@@ -176,11 +226,24 @@ def alice(stack: tuple[str, str], fga_store: tuple[str, str]) -> Iterator[dict[s
     _tuples(fga_store, deletes=[grant])
 
 
-def _run_id_for(operation: str, token: str) -> str:
-    """The deterministic per-stage run id — uuid5 over "<operation>-<token>", the producer's own scheme
-    (service_kit.openlineage.run_id_for), so one /produce token names every stage run it caused."""
+def _run_id_for(operation: str, token: str, *, project: str | None = None) -> str:
+    """The deterministic per-stage run id, seeded EXACTLY as the producer seeds it.
+
+    Two shapes, and which one applies depends on whether the run carries a project
+    (`medallion/schemas/events.py`):
+
+        run_id_for("\x00".join((project, operation, token)))   # tenant
+        run_id_for(f"{operation}-{token}")                      # single-tenant
+
+    A NUL-bearing seed is unreachable from the `-`-joined one, so using the wrong shape does not
+    mismatch by a little — it names an id that does not exist. Measured 2026-08-25: a tenant drive
+    against the single-tenant seed reported every stage as `None`, which reads as a dead cascade.
+    """
     from service_kit.openlineage import run_id_for
 
+    seed_project = PROJECT if project is None else project
+    if seed_project:
+        return run_id_for("\x00".join((seed_project, operation, token)))
     return run_id_for(f"{operation}-{token}")
 
 
@@ -190,6 +253,20 @@ def _run_states(lineage: str, headers: dict[str, str]) -> dict[str, str]:
     return {r["run_id"]: r.get("state") or "" for r in resp.json().get("runs", [])}
 
 
+def _gold_runs(lineage: str, headers: dict[str, str]) -> set[str]:
+    """Run ids that have produced the gold table — the only handle this suite has on the gold stage.
+
+    Gold's own trigger token is the publication `event_id`, minted inside the catalog and never
+    returned here, so no run id this suite computes can name it (see OPERATIONS). What IS observable is
+    whether a NEW run produced gold, and that is what both halves of the deny/regrant argument actually
+    need: a denied promotion adds none, a restored one adds one.
+    """
+    resp = requests.get(f"{lineage}/datasets/{_ds('gold$catalog')}/producers", headers=headers, timeout=8)
+    if resp.status_code != 200:
+        return set()
+    return {p["run_id"] for p in resp.json().get("producers", [])}
+
+
 def _producer_for(lineage: str, headers: dict[str, str], dataset: str, run_id: str) -> dict | None:
     resp = requests.get(f"{lineage}/datasets/{dataset}/producers", headers=headers, timeout=8)
     if resp.status_code != 200:
@@ -197,16 +274,58 @@ def _producer_for(lineage: str, headers: dict[str, str], dataset: str, run_id: s
     return next((p for p in resp.json().get("producers", []) if p["run_id"] == run_id), None)
 
 
-def _poll(predicate: Callable[[], bool], *, timeout: float = 90.0, message: str | Callable[[], str]) -> None:
+#: The tenant this drive runs for. NOT optional on a publish-driven estate: with
+#: `medallion.cascadeViaPublish` on, the cascade is driven by `publication_trigger`, which ALWAYS
+#: carries a project because the mover cannot resolve its tiers without one. A PROJECTLESS produce
+#: therefore publishes silver and GOLD NEVER FIRES — measured here 2026-08-25 as
+#: {'lance_ray_ingest': 'COMPLETE', 'embed_features': 'COMPLETE', 'aggregate_gold': None}, which the
+#: bare message reported as a broken cascade against a cascade working perfectly for a tenant. The
+#: medallion suite names the same signature in `_projectless_diagnosis`.
+PROJECT = os.environ.get("LANCE_E2E_PROJECT", "")
+#: Producing INTO a named project is a human-authorized act: `produce_auth` takes the service-token
+#: branch as soon as a valid dapr-api-token is present and refuses the cross-project case THERE, before
+#: any bearer is read — so the bearer must go INSTEAD of the token, not alongside it.
+ADMIN_TOKEN = os.environ.get("LANCE_E2E_ADMIN_TOKEN", "")
+
+
+def _ds(name: str) -> str:
+    """Project-qualify a dataset id — `silver$features` -> `<project>-silver$features` for a tenant.
+
+    `workflow.py::_qualified` does this at RUNTIME, so the graph records the qualified name and a suite
+    that asks for the bare one gets nothing back and reports it as an absent cascade.
+    """
+    return f"{PROJECT}-{name}" if PROJECT else name
+
+
+def _bearer(headers: dict[str, str]) -> str:
+    """The raw token out of an ``Authorization: Bearer …`` header — the approver needs the token, not the header."""
+    return headers.get("Authorization", "").removeprefix("Bearer ").strip()
+
+
+def _poll(
+    predicate: Callable[[], bool],
+    *,
+    timeout: float = 90.0,
+    message: str | Callable[[], str],
+    on_tick: Callable[[], object] | None = None,
+) -> None:
     """Poll until ``predicate`` is true, else fail with ``message`` (a callable is evaluated AT failure —
     an f-string call-site message that reads live state would show the PRE-poll state, not the final one).
     A transient TRANSPORT error inside the predicate (one dropped port-forward packet) counts as
     not-ready rather than aborting the whole budget — but ONLY transport errors: an HTTP error status
     (401/403/500 via raise_for_status) is a real regression that must surface immediately, not burn 90s
-    and get misreported as a timeout."""
+    and get misreported as a timeout.
+
+    ``on_tick`` runs once per iteration BEFORE the predicate, and exists for exactly one job: clearing
+    the promotion hold this drive is waiting on. An estate running human-in-the-loop review holds every
+    FIRST promotion (no predecessor row count, so the band reads it as a breach), so the cascade waits
+    for a human and this poll burns its whole budget reporting "did not complete" — about a cascade that
+    completed and was stopped by governance. See tests/e2e-py/promotion_review.py."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
+            if on_tick is not None:
+                on_tick()
             if predicate():
                 return
         except (requests.ConnectionError, requests.Timeout):
@@ -216,7 +335,14 @@ def _poll(predicate: Callable[[], bool], *, timeout: float = 90.0, message: str 
 
 
 def _produce(lance_ray: str) -> str:
-    resp = requests.post(f"{lance_ray}/produce", headers={"dapr-api-token": DAPR_TOKEN}, timeout=30)
+    headers = {"dapr-api-token": DAPR_TOKEN}
+    params: dict[str, str] = {}
+    if PROJECT:
+        # Bearer INSTEAD of the service token — see ADMIN_TOKEN.
+        params["project"] = PROJECT
+        if ADMIN_TOKEN:
+            headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+    resp = requests.post(f"{lance_ray}/produce", headers=headers, params=params, timeout=30)
     assert resp.status_code == 202, resp.text
     return resp.json()["token"]
 
@@ -231,10 +357,10 @@ def test_governed_allow_full_cascade_with_quality_verdicts(stack: tuple[str, str
     token = _produce(lance_ray)
     rids = {op: _run_id_for(op, token) for op in OPERATIONS}
 
-    # All three stage runs land COMPLETE under the seeded service grants — correlated to THIS drive by
-    # the deterministic run ids (not by counts), so a stale graph can't false-pass. The diagnostic is a
+    # Bronze and silver land COMPLETE under the seeded service grants — correlated to THIS drive by the
+    # deterministic run ids (not by counts), so a stale graph can't false-pass. The diagnostic is a
     # CALLABLE so a timeout reports the final observed states, not the pre-poll snapshot (one fetch,
-    # not one per operation — a per-op fetch would be 3 round-trips of 3 different snapshots).
+    # not one per operation — a per-op fetch would be N round-trips of N different snapshots).
     def _states_diag() -> str:
         states = _run_states(lineage, alice)
         return f"governed cascade did not complete for token {token}: { {op: states.get(rid) for op, rid in rids.items()} }"
@@ -242,10 +368,29 @@ def test_governed_allow_full_cascade_with_quality_verdicts(stack: tuple[str, str
     _poll(
         lambda: all(_run_states(lineage, alice).get(rid) == "COMPLETE" for rid in rids.values()),
         message=_states_diag,
+        on_tick=lambda: approve_if_held(lance_ray, token, _bearer(alice)),
     )
 
+    # GOLD IS ASSERTED BY ITS CHAIN, not by a run id — see OPERATIONS. Its trigger's token is the
+    # publication `event_id`, minted inside the catalog and never returned to this drive, so no run id
+    # this suite can compute will ever name it. The upstream chain is identity-free and says the same
+    # thing the run id was there to say: the terminal tier was reached FROM this cascade's own tiers.
+    gold = _ds("gold$catalog")
+    chain = {_ds("bronze$events"), _ds("silver$features")}
+
+    def _chain_diag() -> str:
+        resp = requests.get(f"{lineage}/datasets/{gold}/upstream", headers=alice, timeout=8)
+        seen = [r["name"] for r in resp.json().get("related", [])] if resp.status_code == 200 else []
+        return f"gold never reached the full chain for token {token}: upstream={seen} (HTTP {resp.status_code})"
+
+    def _gold_reached() -> bool:
+        resp = requests.get(f"{lineage}/datasets/{gold}/upstream", headers=alice, timeout=8)
+        return resp.status_code == 200 and chain <= {r["name"] for r in resp.json().get("related", [])}
+
+    _poll(_gold_reached, message=_chain_diag, on_tick=lambda: approve_if_held(lance_ray, token, _bearer(alice)))
+
     # The quality gate ran on real compute output and recorded its verdict on the WROTE edge.
-    silver = _producer_for(lineage, alice, "silver$features", rids["embed_features"])
+    silver = _producer_for(lineage, alice, _ds("silver$features"), rids["embed_features"])
     assert silver is not None
     assert silver["row_count"], f"no measured rows — is medallion.compute on? {silver}"
     assert silver["quality_passed"] is True, silver
@@ -263,7 +408,7 @@ def test_governed_allow_full_cascade_with_quality_verdicts(stack: tuple[str, str
     # Governance is live in the SAME stack: anonymous read 401s; an ungranted user 403s on the route gate.
     assert requests.get(f"{lineage}/runs", timeout=8).status_code == 401
     bob = {"Authorization": f"Bearer {_token('bob@example.com')}"}
-    denied = requests.get(f"{lineage}/datasets/gold$catalog/upstream", headers=bob, timeout=8)
+    denied = requests.get(f"{lineage}/datasets/{_ds('gold$catalog')}/upstream", headers=bob, timeout=8)
     assert denied.status_code == 403, denied.text
 
 
@@ -280,7 +425,8 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     # land bronze (the producer's own ingest, ungated by the mover rung — R23) and stop there: silver's
     # run never lands. This was the audit's untested half — only the validator (can_promote) deny was
     # ever proven.
-    _tuples(fga_store, deletes=[SILVER_WRITER])
+    silver_owner = _owner_tuples("user:service-bronze-to-silver", _ds("silver"), _ds("silver$features"))
+    _tuples(fga_store, deletes=[SILVER_WRITER, *silver_owner])
     try:
         w_token = _produce(lance_ray)
         bronze_rid = _run_id_for("lance_ray_ingest", w_token)
@@ -288,6 +434,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
         _poll(
             lambda: _run_states(lineage, alice).get(bronze_rid) == "COMPLETE",
             message=f"bronze never completed for writer-deny-drive token {w_token}",
+            on_tick=lambda: approve_if_held(lance_ray, w_token, _bearer(alice)),
         )
         # The silver trigger publishes at bronze COMPLETE — stamp the moment the redelivery clock starts.
         silver_denied_at = time.monotonic()
@@ -298,37 +445,40 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
             f"silver run {denied_silver_rid} appeared despite the revoked writer tuple — gate NOT enforcing"
         )
     finally:
-        _tuples(fga_store, writes=[SILVER_WRITER])  # restore even if the assert above fails
+        _tuples(fga_store, writes=[SILVER_WRITER, *silver_owner])  # restore even if the assert above fails
 
     # -- sub-phase B: VALIDATOR deny — revoke the gold validator, the cascade stops at silver.
-    _tuples(fga_store, deletes=[GOLD_VALIDATOR])
+    gold_owner = _owner_tuples("user:service-silver-to-gold", _ds("gold"), _ds("gold$catalog"))
+    _tuples(fga_store, deletes=[GOLD_VALIDATOR, *gold_owner])
     try:
+        gold_before = _gold_runs(lineage, alice)
         token = _produce(lance_ray)
         silver_rid = _run_id_for("embed_features", token)
-        denied_gold_rid = _run_id_for("aggregate_gold", token)
 
         # The cascade reaches silver (writers restored/granted) …
         _poll(
             lambda: _run_states(lineage, alice).get(silver_rid) == "COMPLETE",
             message=f"silver never completed for deny-drive token {token}",
+            on_tick=lambda: approve_if_held(lance_ray, token, _bearer(alice)),
         )
         # The gold trigger publishes at silver COMPLETE — the second redelivery clock starts here.
         gold_denied_at = time.monotonic()
-        # … and the silver→gold mover, denied can_promote, DROPs BEFORE any emit: gold's run never lands.
+        # … and the silver→gold mover, denied can_promote, DROPs BEFORE any emit: NO new gold run lands.
         time.sleep(12)
-        assert _run_states(lineage, alice).get(denied_gold_rid) is None, (
-            f"gold run {denied_gold_rid} appeared despite the revoked validator tuple — gate NOT enforcing"
+        assert _gold_runs(lineage, alice) == gold_before, (
+            f"a new gold run appeared despite the revoked validator tuple — gate NOT enforcing (new: {_gold_runs(lineage, alice) - gold_before})"
         )
     finally:
-        _tuples(fga_store, writes=[GOLD_VALIDATOR])  # restore even if the assert above fails
+        _tuples(fga_store, writes=[GOLD_VALIDATOR, *gold_owner])  # restore even if the assert above fails
 
     # Positive control: with both tuples back, the next drive cascades to gold — the tuple was the only
     # delta each time.
+    gold_before_regrant = _gold_runs(lineage, alice)
     token2 = _produce(lance_ray)
-    gold2 = _run_id_for("aggregate_gold", token2)
     _poll(
-        lambda: _run_states(lineage, alice).get(gold2) == "COMPLETE",
-        message=f"gold did not cascade after re-granting the writer + validator (token {token2})",
+        lambda: _gold_runs(lineage, alice) - gold_before_regrant != set(),
+        message=f"no new gold run after re-granting the writer + validator (token {token2})",
+        on_tick=lambda: approve_if_held(lance_ray, token2, _bearer(alice)),
     )
 
     # Re-assert the negatives only after BOTH denied triggers' redelivery windows have MEASURABLY
@@ -344,8 +494,15 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     assert final_states.get(denied_silver_rid) is None, (
         f"silver run {denied_silver_rid} landed AFTER the writer grant was restored — the deny was a RETRY (never actually checked), not a DROP"
     )
-    assert final_states.get(denied_gold_rid) is None, (
-        f"gold run {denied_gold_rid} landed AFTER the validator grant was restored — the deny was a RETRY (never actually checked), not a DROP"
+    # The gold negative re-checked the same way: the deny window must have added NO gold run, even now
+    # that the grant is back. A DROP acked the trigger, so it can never reappear; a RETRY would.
+    # The gold negative, re-checked once the redelivery window has MEASURABLY elapsed. The comparison
+    # isolates the deny window on purpose: `gold_before_regrant` is the snapshot taken AFTER the deny
+    # and BEFORE the positive control, so the control's own (legitimate) gold run cannot mask a late
+    # arrival from the denied drive. A DROP acked the trigger and can never reappear; a RETRY would.
+    assert gold_before_regrant == gold_before, (
+        f"a gold run from the DENIED drive landed after its window — the deny was a RETRY (never actually "
+        f"checked), not a DROP (late: {gold_before_regrant - gold_before})"
     )
 
 
@@ -400,7 +557,7 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
     token = uuid.uuid4().hex[:12]
     resp = requests.post(
         f"{MOVER_URL.rstrip('/')}/medallion-event",
-        json={"data": {"token": token, "dataset": "bronze$events", "namespace": "bronze"}},
+        json={"data": {"token": token, "dataset": _ds("bronze$events"), "namespace": _ds("bronze")}},
         headers={"dapr-api-token": MOVER_TOKEN},
         timeout=180,
     )
@@ -410,10 +567,10 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
     # verdict rides the WROTE edge — quality_passed false with the failed not_null(id) assertion.
     silver_rid = _run_id_for("embed_features", token)
     _poll(
-        lambda: (_producer_for(lineage, alice, "silver$features", silver_rid) or {}).get("quality_passed") is False,
+        lambda: (_producer_for(lineage, alice, _ds("silver$features"), silver_rid) or {}).get("quality_passed") is False,
         message=f"blocked-batch verdict never appeared on silver$features for token {token}",
     )
-    entry = _producer_for(lineage, alice, "silver$features", silver_rid)
+    entry = _producer_for(lineage, alice, _ds("silver$features"), silver_rid)
     assert entry is not None
     not_null = next(a for a in entry["quality_assertions"] if a["assertion"] == "not_null")
     assert not_null["success"] is False and not_null["column"] == "id"
@@ -444,8 +601,11 @@ def test_media_lane_derives_under_governance(stack: tuple[str, str], alice: dict
     assert resp.status_code == 202, resp.text
     token = resp.json()["token"]
 
-    ingest_rid = _run_id_for("ingest_media", token)
-    derive_rid = _run_id_for("derive_media", token)
+    # project="" — the media lane is estate-only, not project-qualified. `seed_medallion_fga.sh` says
+    # so outright ("media lanes stay estate-only — #84 scope") and the deployed mover targets
+    # `silver-media$features` verbatim, so its runs carry no project to seed with.
+    ingest_rid = _run_id_for("ingest_media", token, project="")
+    derive_rid = _run_id_for("derive_media", token, project="")
     _poll(
         lambda: _run_states(lineage, alice).get(ingest_rid) == "COMPLETE" and _run_states(lineage, alice).get(derive_rid) == "COMPLETE",
         message=f"governed media lane did not flow for token {token}",
@@ -502,6 +662,13 @@ def test_train_lineage_lands_attributed_under_governance(stack: tuple[str, str],
     resp = requests.post(
         f"{lance_ray}/train",
         headers={"dapr-api-token": DAPR_TOKEN, "content-type": "application/json"},
+        # UNQUALIFIED on purpose. The train door resolves a feature dataset by CONVENTION, not through
+        # the catalog: `stage_uri_for` maps `silver$features` -> `<base>/medallion/silver` and its own
+        # docstring calls that demo-tier, noting "a catalog-registered feature table would resolve
+        # through describe instead (future #115 work)". A project-qualified name therefore points at
+        # `<base>/medallion/<project>-silver`, which nothing writes, and the door answers
+        # 422 `cannot resolve feature dataset`. Qualifying here broke a passing test; the door, not the
+        # suite, is what would have to change.
         json={"model": "churn", "features": [{"dataset": "silver$features"}]},
         timeout=30,
     )
@@ -513,7 +680,10 @@ def test_train_lineage_lands_attributed_under_governance(stack: tuple[str, str],
     # The job self-emits START → RUNNING → COMPLETE over the HTTP ingest; correlate by the SAME
     # deterministic scheme the job uses (run_id_for("train-<token>")). Training is heavier than a stage
     # transform (Ray job cold-start + submit-and-ack), so allow a longer budget than the cascade polls.
-    train_rid = _run_id_for("train", token)
+    # project="" — the train door is driven WITHOUT a project (the request above names none), so its
+    # run id is seeded the single-tenant way. `events.py` picks the seed shape from the RUN, not from
+    # how this suite was invoked, and a NUL-bearing seed is unreachable from the `-`-joined one.
+    train_rid = _run_id_for("train", token, project="")
     _poll(
         lambda: _run_states(lineage, alice).get(train_rid) == "COMPLETE",
         timeout=180.0,
@@ -537,6 +707,7 @@ def test_train_lineage_lands_attributed_under_governance(stack: tuple[str, str],
     # namespace:models via the seeded parent), an ungranted user does not.
     up = requests.get(f"{lineage}/datasets/models$churn/upstream", headers=alice, timeout=8)
     up.raise_for_status()
+    # Unqualified for the same reason the request above is — the train door names what it resolved.
     assert "silver$features" in {d["name"] for d in up.json().get("related", [])}, up.json()
     bob = {"Authorization": f"Bearer {_token('bob@example.com')}"}
     assert requests.get(f"{lineage}/datasets/models$churn/upstream", headers=bob, timeout=8).status_code == 403
