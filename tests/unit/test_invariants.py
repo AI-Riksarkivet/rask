@@ -3862,6 +3862,70 @@ def test_the_chart_cannot_declare_a_MEDALLION_NAMESPACE_NO_WAREHOUSE_CAN_OWN() -
     )
 
 
+def test_the_ray_HEAD_image_can_answer_the_operator_about_SERVE() -> None:
+    """A RayService that declares Serve apps needs ray[serve] on the HEAD, or upgrades never finish.
+
+    This is a PLATFORM dependency wearing a workload's clothes, which is why it went unnoticed for two
+    days. Serving an application needs ray[serve] in whatever image runs the replicas — and
+    `runners/htr` correctly declares `ray[data,default,serve]`. But the KubeRay operator does not ask
+    the replicas anything; it polls the HEAD's dashboard for `GetServeDetails`, and that endpoint is
+    only implemented when ray[serve] is installed THERE.
+
+    Measured 2026-08-25 on the live estate, erroring every ~17 minutes since 2026-08-23:
+
+        Reconciler error ... failed to get Serve application statuses from the dashboard.
+        err: GetServeDetails fail: 501 Not Implemented
+             Serve dependencies are not installed. Please run `pip install "ray[serve]"`
+
+    The consequence is not a failed Serve app — it is a stalled UPGRADE. KubeRay's zero-downtime path
+    creates a pending RayCluster, waits for its Serve apps to report healthy, then switches and deletes
+    the old one. A dashboard that cannot answer means "not yet healthy" forever, so the switch never
+    happens and both clusters stay ready side by side (`BothActivePendingClustersExist`) — a silent,
+    permanent doubling of the cluster's cost that nothing surfaces as an error.
+
+    Derived, not hardcoded: the dockerfile names the package it installs, and the package names its
+    extras, so this follows the same chain the build does.
+    """
+    import re
+
+    import yaml as _yaml
+
+    values = _yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
+    ray = values["ray"]
+    if not (ray.get("serveApplications") or []):
+        return  # no Serve applications declared -> the operator never polls for their status
+
+    dockerfile_path = REPO / f".docker/{ray['image']['repository']}.dockerfile"
+    assert dockerfile_path.exists(), f"ray.image.repository names no dockerfile: {dockerfile_path}"
+    dockerfile = _uncommented(dockerfile_path.read_text(encoding="utf-8"))
+
+    packages = re.findall(r"uv sync --package (\S+)", dockerfile)
+    assert packages, f"{dockerfile_path.name} installs no workspace package — this gate cannot see what the head runs"
+
+    missing = []
+    for package in sorted(set(packages)):
+        pyproject = REPO / "packages" / package / "pyproject.toml"
+        if not pyproject.exists():
+            continue
+        # Comments stripped FIRST. The declaration's own rationale quotes the fix verbatim
+        # (`pip install "ray[serve]"`), so a raw scan matches the prose and the gate passes exactly
+        # when the file documents its own violation — the same trap the head-image gate hit.
+        source = "\n".join("" if line.lstrip().startswith("#") else line for line in pyproject.read_text(encoding="utf-8").splitlines())
+        declarations = re.findall(r'"ray\[([^\]]*)\][^"]*"', source)
+        if not declarations:
+            continue
+        if not any("serve" in {extra.strip() for extra in d.split(",")} for d in declarations):
+            missing.append(f"  packages/{package} declares ray[{declarations[0]}] — no `serve` extra")
+
+    assert not missing, (
+        "the chart declares Serve applications, but the head image's package does not install ray[serve]:\n"
+        + "\n".join(missing)
+        + "\n\nThe KubeRay operator polls the HEAD dashboard's GetServeDetails to decide whether a pending "
+        "cluster is healthy. Without ray[serve] that answers 501, the zero-downtime switch never completes, "
+        "and the estate keeps BOTH RayClusters running forever with nothing reporting an error."
+    )
+
+
 def test_the_deployed_ray_image_PROVIDES_every_serve_application_it_declares() -> None:
     """A declared Serve application names an import path the deployed image must actually contain.
 

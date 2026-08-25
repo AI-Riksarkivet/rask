@@ -17,7 +17,21 @@ dependencies = [
     # `ray.job_submission.JobSubmissionClient` (core/jobs.py). Per ray-kit's finding, plain `ray`
     # raises "requires the ray[default] installation" when that client is constructed.
     "lance-ray",
-    "ray[data,default]>=2.58",
+    # `serve` is a PLATFORM requirement of the head image, not a workload's. Whenever a RayService
+    # declares serveApplications, the KubeRay operator polls the HEAD's dashboard for their status —
+    # and without ray[serve] that endpoint answers 501, which stalls a zero-downtime upgrade forever.
+    # Measured 2026-08-25 on the live estate: the operator had been erroring every ~17 minutes since
+    # 2026-08-23 with
+    #     GetServeDetails fail: 501 Not Implemented Serve dependencies are not installed.
+    #     Please run `pip install "ray[serve]"`
+    # so the pending cluster could never be confirmed healthy, the switch never happened, and TWO
+    # ready RayClusters sat side by side burning a node's worth of resources
+    # (status: BothActivePendingClustersExist).
+    #
+    # The workload's own image already carries it (`runners/htr` declares ray[data,default,serve]),
+    # which is exactly why this was easy to miss: the SERVING half was fine and the OBSERVING half —
+    # the head's dashboard, which belongs to the platform — was not.
+    "ray[data,default,serve]>=2.58",
     # The `ratch` CLI (cli/_app.py + the seven command modules).
     "typer>=0.12",
     "pydantic>=2.7",
