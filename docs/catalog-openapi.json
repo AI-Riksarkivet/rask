@@ -9771,8 +9771,8 @@
       },
       "TransformDeleteResponse": {
         "properties": {
-          "lane": {
-            "title": "Lane",
+          "name": {
+            "title": "Name",
             "type": "string"
           },
           "project": {
@@ -9787,29 +9787,29 @@
         "required": [
           "status",
           "project",
-          "lane"
+          "name"
         ],
         "title": "TransformDeleteResponse",
         "type": "object"
       },
-      "TransformLaneRequest": {
+      "TransformNameRequest": {
         "additionalProperties": false,
-        "description": "Name one lane \u2014 the body of describe/delete.",
+        "description": "Name one transform \u2014 the body of describe/delete.",
         "properties": {
-          "lane": {
-            "title": "Lane",
+          "name": {
+            "title": "Name",
             "type": "string"
           }
         },
         "required": [
-          "lane"
+          "name"
         ],
-        "title": "TransformLaneRequest",
+        "title": "TransformNameRequest",
         "type": "object"
       },
       "TransformSpecRequest": {
         "additionalProperties": false,
-        "description": "Declare one lane. The project comes from the gated PATH, never from here.\n\nOmitting ``project`` is the security half, not an ergonomic one: a body-supplied project would\nlet an admin of one tenant pass the ``can_administer`` gate on their own project while writing a\nlane into somebody else's.\n\nField semantics \u2014 including why an entrypoint must reference a script baked into the image \u2014 live\non ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates\ninto and the one the mover reads. One definition, two services.",
+        "description": "Declare one transform. The project comes from the gated PATH, never from here.\n\nOmitting ``project`` is the security half, not an ergonomic one: a body-supplied project would\nlet an admin of one tenant pass the ``can_administer`` gate on their own project while writing a\ntransform into somebody else's.\n\nField semantics \u2014 including why an entrypoint must reference a script baked into the image \u2014 live\non ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates\ninto and the one the mover reads. One definition, two services.",
         "properties": {
           "code_version": {
             "default": "",
@@ -9824,8 +9824,8 @@
             "title": "From Id",
             "type": "string"
           },
-          "lane": {
-            "title": "Lane",
+          "name": {
+            "title": "Name",
             "type": "string"
           },
           "params": {
@@ -9841,7 +9841,7 @@
           }
         },
         "required": [
-          "lane",
+          "name",
           "from_id",
           "to_id",
           "entrypoint"
@@ -9864,8 +9864,8 @@
             "title": "From Id",
             "type": "string"
           },
-          "lane": {
-            "title": "Lane",
+          "name": {
+            "title": "Name",
             "type": "string"
           },
           "params": {
@@ -9885,7 +9885,7 @@
           }
         },
         "required": [
-          "lane",
+          "name",
           "project",
           "from_id",
           "to_id",
@@ -15717,7 +15717,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TransformLaneRequest"
+                "$ref": "#/components/schemas/TransformNameRequest"
               }
             }
           },
@@ -15823,7 +15823,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TransformLaneRequest"
+                "$ref": "#/components/schemas/TransformNameRequest"
               }
             }
           },

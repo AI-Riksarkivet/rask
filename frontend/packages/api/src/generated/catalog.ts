@@ -7678,28 +7678,28 @@ export interface components {
         };
         /** TransformDeleteResponse */
         TransformDeleteResponse: {
-            /** Lane */
-            lane: string;
+            /** Name */
+            name: string;
             /** Project */
             project: string;
             /** Status */
             status: string;
         };
         /**
-         * TransformLaneRequest
-         * @description Name one lane — the body of describe/delete.
+         * TransformNameRequest
+         * @description Name one transform — the body of describe/delete.
          */
-        TransformLaneRequest: {
-            /** Lane */
-            lane: string;
+        TransformNameRequest: {
+            /** Name */
+            name: string;
         };
         /**
          * TransformSpecRequest
-         * @description Declare one lane. The project comes from the gated PATH, never from here.
+         * @description Declare one transform. The project comes from the gated PATH, never from here.
          *
          *     Omitting ``project`` is the security half, not an ergonomic one: a body-supplied project would
          *     let an admin of one tenant pass the ``can_administer`` gate on their own project while writing a
-         *     lane into somebody else's.
+         *     transform into somebody else's.
          *
          *     Field semantics — including why an entrypoint must reference a script baked into the image — live
          *     on ``service_kit.lakehouse.transform_specs.TransformSpec``, which is the model this validates
@@ -7715,8 +7715,8 @@ export interface components {
             entrypoint: string;
             /** From Id */
             from_id: string;
-            /** Lane */
-            lane: string;
+            /** Name */
+            name: string;
             /** Params */
             params?: {
                 [key: string]: string;
@@ -7735,8 +7735,8 @@ export interface components {
             entrypoint: string;
             /** From Id */
             from_id: string;
-            /** Lane */
-            lane: string;
+            /** Name */
+            name: string;
             /** Params */
             params?: {
                 [key: string]: string;
@@ -9957,7 +9957,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TransformLaneRequest"];
+                "application/json": components["schemas"]["TransformNameRequest"];
             };
         };
         responses: {
@@ -9996,7 +9996,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TransformLaneRequest"];
+                "application/json": components["schemas"]["TransformNameRequest"];
             };
         };
         responses: {
