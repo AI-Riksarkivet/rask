@@ -154,6 +154,12 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
     # and omitting it is what the mover reads as "no tenant" — `""` would be refused as garbage.
     if project:
         trigger["project"] = project
+    # THE BATCH IDENTITY, carried across the tier boundary (§8 change 9). This is the hop that used to
+    # lose it: `token` above is minted from the publication event id, so without this every tier is a
+    # fresh run with nothing joining it to the ingest that started the batch.
+    cascade_id = str(extra.get("cascade_id") or "")
+    if cascade_id:
+        trigger["cascade_id"] = cascade_id
     # Omitted rather than blank: `""` would be carried to an inbox actor named "".
     publisher = _publisher(data)
     if publisher:

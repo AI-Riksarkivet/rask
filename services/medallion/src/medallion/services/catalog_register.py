@@ -203,6 +203,7 @@ def publish_stage_output(
     service_identity: str | None = None,
     timeout_seconds: float = 30.0,
     gate_only: bool = False,
+    cascade_id: str = "",
     client: httpx.Client | None = None,
 ) -> PublishOutcome:
     """Ask the catalog to gate `version` and, if it passes, advance the `published` tag.
@@ -234,6 +235,9 @@ def publish_stage_output(
         "required_columns": list(required_columns),
         "accept_assertions": list(accept_assertions),
         "gate_only": gate_only,
+        # Echoed by the catalog onto `table_published`, which is the ONE hop where a batch identity
+        # would otherwise be lost — the publication head mints the next token from the event id.
+        "cascade_id": cascade_id,
     }
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:

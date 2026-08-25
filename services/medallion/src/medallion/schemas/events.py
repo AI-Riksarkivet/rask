@@ -173,6 +173,7 @@ def build_run_event(
     schema_fields: SchemaFields | None = None,
     column_map: list[tuple[str, str, str]] | None = None,
     token: str | None = None,
+    cascade_id: str | None = None,
     project: str | None = None,
     originator: str | None = None,
     event_type: str = "COMPLETE",
@@ -221,6 +222,15 @@ def build_run_event(
         lance_fields["version"] = version
     if token:
         lance_fields["token"] = token
+    # THE BATCH (§8 change 9). `token` identifies THIS hop and is re-minted at every tier boundary by
+    # the publication head; this identifies the whole cascade, so the runs of one batch are joinable
+    # in the graph. Both are carried because they answer different questions: "is this the same
+    # delivery?" and "is this the same batch?".
+    #
+    # Omitted when absent, like every other field here — a run that predates the id, or one driven by
+    # a producer that does not set it, must not carry a batch id of "".
+    if cascade_id:
+        lance_fields["cascade_id"] = cascade_id
     if project:
         lance_fields["project"] = project
     # The HUMAN this run is running for, when `author` is a service. A mover authors with a chart role

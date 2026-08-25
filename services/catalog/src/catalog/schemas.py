@@ -719,6 +719,18 @@ class PublishRequest(BaseModel):
     #: (`STRUCTURAL_ASSERTIONS`) are refused however they are named, and a non-empty list additionally
     #: requires `can_promote` — a rung ABOVE the `can_update_tag` publish itself needs.
     accept_assertions: list[str] = Field(default_factory=list)
+    #: THE BATCH THIS PUBLISH BELONGS TO (§8 change 9). Opaque to the catalog — it is echoed onto the
+    #: `table_published` event and nothing here interprets it.
+    #:
+    #: It exists because a batch had no identity that survived a tier boundary. The cascade is
+    #: topic-chained, and the publication head minted the NEXT trigger's token from the event id, so
+    #: bronze, silver and gold were three unrelated runs in the graph with nothing joining them. A
+    #: person asking "did my ingest finish?" had to follow dataset names by eye.
+    #:
+    #: Carried through the catalog rather than stamped in the dataset because this is the ONLY hop
+    #: where the identity would otherwise be lost: the mover knows it, the next mover needs it, and
+    #: the tag move in between is what wakes the next tier.
+    cascade_id: str = Field(default="", max_length=128)
     #: Ask for the gate's VERDICT without publishing. The identical assertions on the identical
     #: version, with `published` false and the tag untouched — a question, never a write.
     #:

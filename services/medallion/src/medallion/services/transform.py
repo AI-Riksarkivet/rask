@@ -689,6 +689,7 @@ async def handle_stage(
             # ``"column": null`` fails strict DataQualityAssertionsDatasetFacet validation (column: string).
             assertions=[a.model_dump(exclude_none=True) for a in assertions] or None,
             token=token,
+            cascade_id=trigger.cascade_id or None,
             project=project or None,
             originator=trigger.originator or None,
             # The run's model identity + build sha, when the transform declares them. A workload
@@ -818,6 +819,7 @@ async def handle_stage(
                     service_identity=settings.catalog_service_identity,
                     timeout_seconds=settings.publish_timeout_seconds,
                     gate_only=True,
+                    cascade_id=trigger.cascade_id or "",
                     client=catalog_http,
                 )
             )
@@ -863,6 +865,9 @@ async def handle_stage(
                 app_token=settings.app_api_token,
                 service_identity=settings.catalog_service_identity,
                 timeout_seconds=settings.publish_timeout_seconds,
+                # Carried so the NEXT tier inherits it: the catalog echoes this onto
+                # `table_published`, which is what wakes the next mover.
+                cascade_id=trigger.cascade_id or "",
                 client=catalog_http,
             )
             if not outcome.published:
@@ -927,6 +932,7 @@ async def handle_stage(
                 output_namespace=to_namespace,
                 output_name=to_dataset,
                 token=token,
+                cascade_id=trigger.cascade_id or None,
                 project=project or None,
                 originator=trigger.originator or None,
                 event_type="FAIL",
@@ -962,6 +968,7 @@ async def handle_stage(
                 output_namespace=to_namespace,
                 output_name=to_dataset,
                 token=token,
+                cascade_id=trigger.cascade_id or None,
                 project=project or None,
                 originator=trigger.originator or None,
                 event_type="FAIL",
@@ -1001,6 +1008,7 @@ async def handle_stage(
                     output_namespace=to_namespace,
                     output_name=to_dataset,
                     token=token,
+                    cascade_id=trigger.cascade_id or None,
                     project=project or None,
                     originator=trigger.originator or None,
                     event_type="FAIL",
@@ -1049,6 +1057,7 @@ async def handle_stage(
                 output_namespace=to_namespace,
                 output_name=to_dataset,
                 token=f"{token}:quality-hold",
+                cascade_id=trigger.cascade_id or None,
                 project=project or None,
                 originator=trigger.originator or None,
                 event_type="FAIL",

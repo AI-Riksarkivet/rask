@@ -65,6 +65,7 @@ async def publication_extra(
     to_version: int | None,
     location: str,
     accepted: list[str] | None = None,
+    cascade_id: str = "",
 ) -> dict[str, Any]:
     """The `table_published` payload: the version RANGE, the vended location, and the TENANT.
 
@@ -84,6 +85,10 @@ async def publication_extra(
     # byte-identical to before.
     if accepted:
         extra["accepted_assertions"] = list(accepted)
+    # The batch identity, echoed verbatim (§8 change 9). OMITTED when empty, on the same rule as
+    # `project` below: a consumer must be able to tell "no batch identity" from one named "".
+    if cascade_id:
+        extra["cascade_id"] = cascade_id
     project = await lineage.project_for(segments[0]) if segments else None
     if project:
         extra["project"] = project
@@ -178,6 +183,7 @@ async def publish_table(
                 to_version=result.to_version,
                 location=result.table,
                 accepted=result.accepted,
+                cascade_id=body.cascade_id,
             ),
         )
 

@@ -110,6 +110,13 @@ class StageTrigger(BaseModel):
     #: the notifications plane re-derives every recipient's visibility at delivery — so a forged one
     #: can at worst put a row in an inbox whose owner can already see the run's outputs.
     originator: str | None = None
+    #: THE BATCH this stage belongs to (§8 change 9) — one id for every hop of one cascade.
+    #:
+    #: `token` cannot serve: the publication head mints the next trigger's token from the publication
+    #: EVENT id, so it changes at every tier boundary by construction. That is correct for an
+    #: idempotency key (each hop is its own unit of redelivery) and useless as a batch identity, which
+    #: is why both exist.
+    cascade_id: str | None = None
     from_uri: str | None = None
 
     #: S1: the Ray stage job for this trigger reached SUCCEEDED, so the destination is written and the

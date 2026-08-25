@@ -402,6 +402,12 @@ def test_bronze_arrival_fires_the_cascade() -> None:
     assert trigger["topic"] == "medallion.bronze"
     assert trigger["data"] == {
         "token": "tok123",  # threaded from the bronze event's lance.token facet, not its (now-UUID) runId
+        # THE BATCH IDENTITY, minted here because this is where a batch begins (§8 change 9). Seeded
+        # from the same token rather than a fresh uuid, so a redelivered head produces the SAME batch
+        # rather than forking it in two — and so a person holding the ingest token can find the whole
+        # cascade. It diverges from `token` one hop later: the publication head re-mints THAT from the
+        # publication event id at every tier boundary, which is exactly why a second field exists.
+        "cascade_id": "tok123",
         "dataset": "bronze$events",
         "namespace": "bronze",
     }

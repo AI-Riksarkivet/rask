@@ -469,8 +469,16 @@ def test_projectless_cascade_is_byte_identical_even_with_routing_configured(tmp_
     token = bronze_event["run"]["facets"]["lance"]["token"]
 
     assert asyncio.run(handle_bronze_arrival(cast(DaprClient, dapr), producer, {"data": bronze_event})) == {"status": "SUCCESS"}
-    # EXACT equality — the head trigger is the old three-field payload, no project key.
-    assert dapr.published[-1]["data"] == {"token": token, "dataset": "bronze$events", "namespace": "bronze"}
+    # EXACT equality — no PROJECT key, which is what this test is about. The head also mints the
+    # batch identity (§8 change 9), and that is tenant-independent: a projectless estate gets one too,
+    # because "which batch is this run part of" is a question every estate asks. Asserted as an exact
+    # dict rather than a subset so a fourth field cannot appear unnoticed.
+    assert dapr.published[-1]["data"] == {
+        "token": token,
+        "cascade_id": token,
+        "dataset": "bronze$events",
+        "namespace": "bronze",
+    }
 
     settings = _mover_settings(_HOPS[0], uris, control_root=str(control))
     assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": dapr.published[-1]["data"]})) == {"status": "SUCCESS"}

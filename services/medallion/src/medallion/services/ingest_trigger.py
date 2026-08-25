@@ -175,7 +175,19 @@ async def handle_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, e
     if dataset is None:
         return _SUCCESS  # not a bronze ingest — ack so Dapr doesn't redeliver, but drive nothing
     token = _cascade_token(data)
-    trigger = {"token": token, "dataset": dataset, "namespace": settings.bronze_namespace}
+    # THE BATCH IDENTITY IS MINTED HERE (§8 change 9), because this is where a batch begins: one
+    # `/produce`, one bronze write, one cascade. Every tier below carries this same id, so the runs of
+    # one batch are joinable in the graph instead of three unrelated hops sharing only a dataset name.
+    #
+    # SEEDED FROM the bronze-write token rather than a fresh uuid: that token already identifies this
+    # ingest, so a person holding it can find the whole cascade, and a redelivered head produces the
+    # SAME batch id rather than forking the batch in two.
+    trigger = {
+        "token": token,
+        "cascade_id": token,
+        "dataset": dataset,
+        "namespace": settings.bronze_namespace,
+    }
     if project:  # #84: PROPAGATE the tenant onto the stage trigger; omitted (byte-identical) when unset
         trigger["project"] = project
     originator = _cascade_originator(data)
