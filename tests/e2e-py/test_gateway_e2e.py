@@ -55,7 +55,12 @@ def gateway() -> str:
 def test_gateway_own_health_is_upstream_independent(gateway: str) -> None:
     # The edge must answer even if every backend is down — it owns no upstream for /healthz.
     resp = requests.get(f"{gateway}/healthz", timeout=5)
-    assert resp.status_code == 200 and resp.text.strip() == "ok"
+    # JSON, not the bare `ok` this asserted until 2026-08-25. The gateway answers with the shared
+    # `Liveness` model from `service_kit.probes`, exactly as every other service does — so the contract
+    # MOVED (a541d35f) and this now asserts where it moved to. Asserting the PAYLOAD rather than only
+    # the status keeps the point of the test: a 200 with an empty or HTML body is still a broken edge.
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "ok"}, resp.text
 
 
 def test_app_apis_route_through_dapr_service_invocation(gateway: str) -> None:

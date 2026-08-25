@@ -32,14 +32,13 @@ DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
 # so these headers are harmless; on the auth-ON stack they're what lets the reads through (else 401).
 _LINEAGE_HEADERS = {"dapr-api-token": DAPR_TOKEN, "x-lance-service-identity": "service-web"} if DAPR_TOKEN else {}
 
-#: The tenant this cascade runs for. On a projects-enabled estate `workflow.py::_qualified` prefixes
-#: `<project>-` at runtime, so the media tiers land as `<project>-silver-media$features` — the same
-#: mechanism the medallion suite's `_qualified` mirrors. Unset keeps the single-tenant names.
-PROJECT = os.environ.get("LANCE_E2E_PROJECT", "")
-_P = f"{PROJECT}-" if PROJECT else ""
-
-SILVER = f"{_P}silver-media$features"
-BRONZE = f"{_P}bronze-media$objects"
+#: NOT project-qualified, and that is the media lane's actual contract rather than an omission.
+#: `seed_medallion_fga.sh` says it outright — "media lanes stay estate-only (the media pipeline is not
+#: project-qualified — #84 scope)" — and the deployed mover agrees: it targets `silver-media$features`
+#: verbatim. Qualifying these names made the suite look for `<project>-silver-media$features`, a table
+#: nothing writes.
+SILVER = "silver-media$features"
+BRONZE = "bronze-media$objects"
 
 pytestmark = [pytest.mark.e2e, pytest.mark.media]
 

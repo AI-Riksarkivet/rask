@@ -30,6 +30,12 @@ LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 # estate's secret store. This line used to claim the target filled it, which sent a reader looking for a
 # mechanism that was never written.
 DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
+#: A PROJECT-ADMIN bearer, required whenever `PROJECT` names a tenant other than the producer's own
+#: configured one. The shared Dapr app-token carries no tenant identity, so `produce_auth` refuses to let
+#: it produce into an arbitrary project — "the service token cannot produce into another project; use a
+#: project-admin bearer". That refusal is correct: trusting the shared token there would let any holder
+#: write into every tenant. A projectless drive still uses the service token alone.
+ADMIN_TOKEN = os.environ.get("LANCE_E2E_ADMIN_TOKEN", "")
 #: The tenant to drive, and on a publish-driven estate it is REQUIRED rather than optional.
 #:
 #: With `medallion.cascadeViaPublish` on, the cascade is triggered by `publication_trigger`, and that
@@ -50,7 +56,20 @@ def _qualified(tier: str, table: str) -> str:
 # Governed lineage READS use the app-token SERVICE door as `service-web` (a warehouse reader — the same
 # read-only identity the web BFF uses). Auth-off → OIDC off → authenticate() pass-through (harmless);
 # auth-on → this is what lets the reads through instead of a 401.
-_LINEAGE_HEADERS = {"dapr-api-token": DAPR_TOKEN, "x-lance-service-identity": "service-web"} if DAPR_TOKEN else {}
+#: Governed lineage READS. On a projectless drive this is the app-token SERVICE door as `service-web`
+#: — a warehouse reader, the same read-only identity the web BFF uses.
+#:
+#: A PROJECT-scoped drive reads as the project ADMIN instead, and that is not a convenience. A tenant's
+#: stages hang off its OWN zone warehouse (`seed_medallion_fga.sh` links
+#: `warehouse:<zone-wh> -> namespace:<project>-<tier>`), while `service-web` is granted reader on the
+#: ESTATE root — so it has no path to tenant data and every read comes back 403, or worse, an empty
+#: dataset list that reads as "the cascade never ran". Observed 2026-08-25: silver was published
+#: (`publish 200 OK`) while the lineage dataset list showed no `lakehouse-*` rows at all.
+_LINEAGE_HEADERS = (
+    {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+    if PROJECT and ADMIN_TOKEN
+    else ({"dapr-api-token": DAPR_TOKEN, "x-lance-service-identity": "service-web"} if DAPR_TOKEN else {})
+)
 
 pytestmark = [pytest.mark.e2e, pytest.mark.medallion]
 
@@ -86,6 +105,13 @@ def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
     # ACT — one trigger at the head of the pipeline (carrying the app-token when the stack enforces it).
     headers = {"dapr-api-token": DAPR_TOKEN} if DAPR_TOKEN else {}
     params = {"project": PROJECT} if PROJECT else {}
+    # Producing INTO a named project is a human-authorized act, and the bearer must go INSTEAD of the
+    # service token, not alongside it: `produce_auth` takes the service-token branch as soon as a valid
+    # `dapr-api-token` is present and refuses the cross-project case there, before any bearer is read.
+    # Sending both therefore still 403s — the token that authenticates a SERVICE cannot also stand in
+    # for the human whose tenancy is being asserted.
+    if PROJECT and ADMIN_TOKEN:
+        headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
     produced = requests.post(f"{lance_ray}/produce", headers=headers, params=params, timeout=8)
     assert produced.status_code == 202 and produced.json()["status"] == "produced", produced.text
 

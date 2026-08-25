@@ -223,7 +223,9 @@ def test_the_lane_is_DECLARED_through_the_admin_gated_catalog_door(catalog: str)
         pytest.skip(f"LANCE_E2E_ADMIN_TOKEN is not a {PROJECT} admin ({response.status_code}); the door is working, the fixture is not")
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["lane"] == LANE
+    # `name`, not `lane` — the response carries the FIELD, and `lane` is only an input alias kept for
+    # backward compatibility with stored records. See the 422 assertion below for the same rename.
+    assert body["name"] == LANE
     assert body["project"] == PROJECT, "the project must come from the gated path"
     assert body["entrypoint"] == BAKED_ENTRYPOINT
 
@@ -244,7 +246,12 @@ def test_an_UNDECLARED_lane_is_422_naming_the_key(catalog: str) -> None:
         pytest.skip(f"LANCE_E2E_ADMIN_TOKEN is not a {PROJECT} admin ({response.status_code})")
     assert response.status_code == 422, response.text
     fields = [e["field"] for e in response.json()["errors"]]
-    assert "body.lane" in fields, f"the 422 must name the lane field; got {fields}"
+    # `body.name`, not `body.lane`. The field was renamed when a "lane" became a declared TRANSFORM —
+    # three different things had been called a lane (the declared record, the Ray job, the batch work).
+    # `lane` survives only as an input ALIAS (AliasChoices), and an alias is not what a validation error
+    # names: pydantic reports the FIELD. So the 422 still names the key, and this asserts the key it now
+    # names.
+    assert "body.name" in fields, f"the 422 must name the transform field; got {fields}"
 
 
 def test_a_runtime_env_style_entrypoint_CANNOT_be_declared(catalog: str) -> None:
