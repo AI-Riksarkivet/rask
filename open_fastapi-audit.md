@@ -516,7 +516,9 @@ voice.py:134-136 — "The body read stops one byte past the size cap, / so an ov
 
 </details>
 
-<details><summary><b>`GET /api/media` answers 200 with Content-Length 0 and then crashes mid-stream for a document whose media payload is NULL — two sibling helpers took opposite decisions on the same value</b> <i>(file-handling.md + streaming.md, CONFIRMED)</i></summary>
+<details><summary><b>~~`GET /api/media` answers 200 with Content-Length 0 and then crashes mid-stream for a document whose media payload is NULL — two sibling helpers took opposite decisions on the same value~~</b> <i>(file-handling.md + streaming.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-26.** The two helpers no longer disagree, because the question is asked once. `blob_size` became `payload_size`, which raises `NotFoundError("media not available")` for a null payload at the ROUTE — before any response object exists, which is the last point a status can still be chosen. Merged into the size probe rather than added beside it: `take_blobs` is object-store IO on a media route, and a separate guard would have doubled it while leaving the old zero branch unreachable from its only caller. `stream_blob_range`'s own null branch no longer RAISES — reaching it means the guard was bypassed, and by then the headers are on the wire, so it logs an error and yields nothing, the one outcome that cannot contradict what was already sent. `ty` rejected simply deleting the branch (`BlobFile | None` in a `with`), which is how that landed on the honest answer rather than a cast. The 416 branch was already correct and is pinned. Pinned by `services/viewer/tests/test_media_null_payload.py` (4 tests, 3 RED before) against a REAL pylance dataset with `blob_array([None])`. Also removed the `# type: ignore[attr-defined]` in the rewritten function — mypy syntax `ty` does not honour.
 
 **Rule.** streaming.md § Stream bytes / file-handling.md § Generated content — a `StreamingResponse` generator must not raise after the headers are on the wire; the exception handlers are already out of reach
 

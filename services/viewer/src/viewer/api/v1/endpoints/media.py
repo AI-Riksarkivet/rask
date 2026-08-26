@@ -61,14 +61,16 @@ def rowid_for_doc(ds: lance.LanceDataset, doc_key: str, doc_id: str) -> int | No
 
 def stream_blob_range(ds: lance.LanceDataset, column: str, rowid: int, *, start: int, end: int) -> Iterator[bytes]:
     """Yield bytes of the inclusive ``[start, end]`` range from a blob column."""
-    # `[0]` can be None from pylance 10.0.0: `take_blobs` returns a same-length list with `None`
-    # in a null payload's slot, where 9.0.0 omitted the row entirely. Unguarded, `with blob as f:`
-    # raises AttributeError on `__enter__` and this endpoint answers 500 for a document whose
-    # payload is legitimately absent — a 404 is the honest answer and the one every other
-    # absence on this path already gives.
     blob = ds.take_blobs(column, ids=[rowid])[0]
     if blob is None:
-        raise NotFoundError("no payload for this row")
+        # THIS NO LONGER RAISES, and that is the fix. `payload_size` has already refused a null
+        # payload with a 404, before any response object existed. Reaching here means that guard was
+        # bypassed — and by now the headers are on the wire, so an exception cannot become a status:
+        # raising is what produced a 200 with `Content-Length: 0` followed by an unhandled-ASGI
+        # traceback. An empty body is the only outcome that cannot contradict what was already sent,
+        # so the violation is reported where it can still be acted on: the log.
+        logger.error("null payload reached the stream for rowid %s in %r — the route guard was bypassed", rowid, column)
+        return
     with blob as f:
         f.seek(start)
         remaining = end - start + 1
@@ -115,17 +117,31 @@ def parse_range(header: str, total: int) -> tuple[int, int] | str | None:
     return start, min(end, total - 1)
 
 
-def blob_size(ds: lance.LanceDataset, column: str, rowid: int) -> int:
-    """Probe a blob's size without reading its contents. A null payload is size 0, not an error."""
+def payload_size(ds: lance.LanceDataset, column: str, rowid: int) -> int:
+    """Probe a blob's size without reading its contents; refuse a row that has no payload.
+
+    ONE PROBE, ONE DECISION, and that is the fix rather than an optimisation. This was `blob_size`,
+    which returned 0 for a null payload under a comment calling zero "the honest answer" — while its
+    sibling `stream_blob_range` raised `NotFoundError` for the same value under a comment calling 404
+    "the honest answer and the one every other absence on this path already gives". The non-range
+    branch of `media()` called both, in that order, so a null-payload document got `total = 0`, fell
+    through to a `StreamingResponse`, and then raised on the generator's FIRST step — after starlette
+    had already sent `http.response.start` with a 200 and `Content-Length: 0`. By then the exception
+    handlers are out of reach: the caller received a 200 with an empty body where every sibling
+    absence gives a 404 problem+json, and the server logged an unhandled-ASGI traceback each time.
+
+    So the question is answered once, here, where a status can still be chosen — and answered the way
+    the rest of the path answers it. Merged into the size probe rather than added beside it because
+    `take_blobs` is object-store IO on a media route, and a separate guard would have doubled it while
+    leaving this function's zero branch unreachable from its only caller.
+    """
     blob = ds.take_blobs(column, ids=[rowid])[0]
-    # pylance 10.0.0 puts `None` in a null payload's slot (9.0.0 omitted the row). Zero is the honest
-    # answer here — the callers use it for Content-Length and range satisfiability, and an absent
-    # payload is a zero-length body, which is exactly what the serving contract already promises.
+    # pylance 10.0.0 puts `None` in a null payload's slot; 9.0.0 omitted the row entirely.
     if blob is None:
-        return 0
+        raise NotFoundError("media not available")
     with blob as f:
         try:
-            return f.size()  # type: ignore[attr-defined]
+            return f.size()
         except AttributeError:
             f.seek(0, 2)
             return f.tell()
@@ -347,7 +363,7 @@ def media(doc_id: str, request: Request, state: StateDep, dataset: DatasetParam 
 
     mime = _cell_value(ds, doc_key, doc_id, binding.mime, "application/octet-stream")
     try:
-        total = blob_size(ds, binding.media_blob, rowid)
+        total = payload_size(ds, binding.media_blob, rowid)
     except OSError as exc:
         # External-URI media blob that doesn't resolve (dangling file://…): a
         # 404 through the problem+json contract, not a bare 500 (the sibling
