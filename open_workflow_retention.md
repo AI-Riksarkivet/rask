@@ -56,9 +56,9 @@ Six items. Three are small, one is a decision, one is real infrastructure.
 | ---: | --- | --- | --- |
 | ~~**0**~~ | ~~**Redeploy**~~ — **DONE 2026-08-26**, fleet on `main-553ec99b` (helm rev 57), all pods Running, 0 restarts | — | — |
 | ~~**1**~~ | ~~**R1** purge the 64 orphans~~ — **DONE 2026-08-26**, 1367 rows → 0 | — | — |
-| **2** | **U1** ruling: operator surface, or break-glass lever? | a decision | owner |
+| ~~**2**~~ | ~~**U1** ruling~~ — **RULED 2026-08-26: SURFACE**, scoped to `compute/ingest` only | — | — |
 | **3** | **R2** retention exporter + alert | ~half a day | nothing |
-| **4** | **U2** controls on `compute/ingest` | ~150 lines | 2, and only if the answer is "surface" |
+| ~~**4**~~ | ~~**U2** controls on `compute/ingest`~~ — **DONE 2026-08-26**, live and browser-verified | — | — |
 | **5** | **U3** surface history/retention | re-ask | 3 |
 
 **Step 0 traps, each of which has bitten this estate before.** Build from a CLEAN DETACHED WORKTREE
@@ -192,7 +192,7 @@ That makes R2 a small EXPORTER (run the count query, expose a gauge), not a rule
 infrastructure, and the reason this item is the highest-value one on the list rather than the
 quickest. Size it accordingly before promising it.
 
-### U1 — five operator routes with no caller
+### U1 — ~~five operator routes with no caller~~ · **RULED + PARTLY CLOSED 2026-08-26**
 
 Landed 2026-08-25 in the Dapr audit drain; every one is reachable only by `curl`:
 
@@ -209,7 +209,7 @@ Grepped every zone: **zero call sites.** The only `pause` matches in the fronten
 This is residue I created. It is defensible if the intent was a break-glass lever an operator reaches
 with `curl`, and indefensible if the intent was an operator surface. **That is the ruling below.**
 
-### U2 — `compute/ingest` shows status and offers no control
+### U2 — ~~`compute/ingest` shows status and offers no control~~ · **DONE 2026-08-26**
 
 The natural home already exists and is half-built. `compute` renders ingest run status over
 `getIngestRunStatus` / `listIngestRuns`, with both a list page and a `[run_id]` detail route.
@@ -237,6 +237,33 @@ The natural home already exists and is half-built. `compute` renders ingest run 
 
 `flows`, `train` and `stage` have no equivalent status page, so they are a larger question and should
 not be bundled with this one.
+
+**DONE 2026-08-26 — shipped, deployed and browser-verified.** `4e44584c`; `web-compute:main-4e44584c`
+live on the cluster.
+
+Pause / Resume / Terminate sit in the run detail header, over three `command()` functions that
+single-flight `getIngestRunStatus` and `listIngestRuns` — without that the button works, the door
+acts, and the page keeps showing the old state, because a re-called remote `query()` returns its
+CACHED value.
+
+**Verified signed-in against the live estate**, not just built: logged in through Dex as
+`alice@example.com` at `http://localhost:8080` (the origin the OIDC config expects — the ingress IP
+cannot complete the redirect, since `publicIssuer` is `localhost:8080/dex`), opened a real COMPLETE
+run, and read the rendered buttons back out of the DOM:
+
+```json
+[{"label":"Pause","disabled":true,"why":"This run is COMPLETE — there is nothing to pause."},
+ {"label":"Resume","disabled":true,"why":"This run is not paused."},
+ {"label":"Terminate","disabled":true,"why":"This run is COMPLETE — there is nothing to terminate."}]
+```
+
+Shown-disabled with the reason on each button, per the estate ruling. Zero console errors.
+
+**ONE VERIFICATION GAP, stated rather than glossed:** only the DISABLED path is proven. There was no
+live ingest run on the cluster to click Terminate on, so the enabled path — button → door → 202 →
+single-flight refresh → state changes on screen — has not been exercised against a real run. The
+client seam has six unit tests covering it (path, id encoding, bearer, 409-as-value, non-JSON body,
+`detail` preserved), but that is not the same claim. Closing it needs a live run to act on.
 
 ### U3 — workflow history and retention are surfaced nowhere
 
