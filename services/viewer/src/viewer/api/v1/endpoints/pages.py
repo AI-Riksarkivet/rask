@@ -18,6 +18,7 @@ See ``docs/architecture/lance-blob-v2-findings.md`` for the measurements behind 
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 import httpx
@@ -26,13 +27,16 @@ from fastapi import APIRouter, Query, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from service_kit.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
+from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
 from service_kit.governed.audit import FAILURE, audit
 from service_kit.governed.deps import RawBearerToken
 from service_kit.lakehouse.blobs import read_aligned_table
 from service_kit.media.authz import table_object
 from service_kit.media.deps import StateDep
 from viewer.api.security import READ_DATA, READ_METADATA, CheckerDep, CurrentSubject
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/api", tags=["pages"])
@@ -85,7 +89,19 @@ def _resolve(state: StateDep, table: str, token: str | None) -> str:
         with httpx.Client(base_url=base, timeout=30.0) as http:
             r = http.post(f"/v1/table/{table}/describe", json={}, headers=headers)
     except httpx.RequestError as exc:
-        raise NotFoundError(f"catalog unreachable while resolving {table!r}: {exc}") from exc
+        # AN OUTAGE, NOT AN ABSENCE — and the old message said so ("catalog unreachable") while the
+        # class it raised said the opposite. `httpx.RequestError` is the base of ConnectError,
+        # ConnectTimeout, ReadTimeout and DNS failure: all transient, all clearing on their own. A 404
+        # is TERMINAL, so the zone rendered "page not found", the reader stopped, and nothing retried.
+        # This is the same laundering the 401/403 branch below refuses to do, for the same reason.
+        #
+        # The exception goes to the LOG, never the detail: `_problem` puts `str(exc)` verbatim into the
+        # client body with no redaction at any status, so interpolating it here put the internal host
+        # and port on the wire. `ns_errors` redacts every 5xx detail for exactly this reason and never
+        # applied, because the class chosen was a 4xx — mislabelling the outage is what made the leak
+        # reachable.
+        logger.exception("catalog unreachable while resolving %r", table)
+        raise ServiceUnavailableError(f"the catalog is unreachable, so {table!r} cannot be resolved right now") from exc
     # 401/403 are NOT "unknown table". Reporting them as "catalog does not know table X" sends the
     # next reader hunting for a missing registration that is not the problem; the annotator lost real
     # debugging time to exactly this laundering. Say which failure it is — and now that the caller's
@@ -103,12 +119,21 @@ def _resolve(state: StateDep, table: str, token: str | None) -> str:
 
 
 def _open(state: StateDep, table: str, token: str | None) -> lance.LanceDataset:
-    """Open the dataset a catalog table points at, or 404 naming the table."""
+    """Open the dataset a catalog table points at.
+
+    404 only when the table is genuinely absent (that decision belongs to `_resolve`); a driver
+    failure opening it is a 503, because it is an outage and a 404 would stop the reader for good.
+    """
     location = _resolve(state, table, token)
     try:
         return lance.dataset(location, storage_options=state.settings.storage_options)
-    except Exception as exc:  # noqa: BLE001 — surface the cause, never a bare 500
-        raise NotFoundError(f"table {table!r} resolves to {location!r}, which is unreadable: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 — any driver failure here is an outage, not an absence
+        # A RustFS outage, expired vended credentials and a corrupt manifest all land here, and every
+        # one of them was reported as a missing page. The location is deliberately absent from the
+        # detail as well as the exception text: it is an `s3://` path the caller never supplied and
+        # has no business learning from a failure.
+        logger.exception("table %r resolves to %r, which is unreadable", table, location)
+        raise ServiceUnavailableError(f"the storage backing {table!r} is unreadable right now") from exc
 
 
 async def _authorized_dataset(

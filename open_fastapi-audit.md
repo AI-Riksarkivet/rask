@@ -450,7 +450,9 @@ packages/service-kit/src/service_kit/__init__.py:144-145 `register_handlers(app)
 
 </details>
 
-<details><summary><b>viewer's page resolver reports a catalog or object-store OUTAGE as 404 Not Found, with the raw httpx/lance exception text in the client-visible detail</b> <i>(exception-handlers.md, CONFIRMED)</i></summary>
+<details><summary><b>~~viewer's page resolver reports a catalog or object-store OUTAGE as 404 Not Found, with the raw httpx/lance exception text in the client-visible detail~~</b> <i>(exception-handlers.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-26.** Both branches raise `ServiceUnavailableError` (503) instead of `NotFoundError`: an `httpx.RequestError` resolving the table, and any driver failure opening the dataset. A 404 was terminal — the zone rendered "page not found" and nothing retried a condition that clears on its own — and the old message even said "catalog unreachable" while the class said the opposite. The details are now stable sentences naming the TABLE only; the httpx/lance text and the `s3://` location go to `logger.exception`. That second half was only reachable because of the first: `_problem` writes `str(exc)` into the body with no redaction at any status, and `ns_errors`' 5xx redaction never applied while the class chosen was a 4xx. The two cases that genuinely mean absent — a non-401/403 4xx from the catalog, and a describe with no `location` — stay 404, and are pinned so they cannot drift into a retryable status. Pinned by `services/viewer/tests/test_page_resolver_outages.py` (5 tests, 3 RED before).
 
 **Rule.** exception-handlers.md: the hierarchy exists so each class maps to its own status (`ExternalServiceError` → 502, not `NotFoundError` → 404); and "Never include exception internals in the response body — those leak via logs only"
 
