@@ -1372,19 +1372,43 @@ def terminate_chunks(ctx: WorkflowActivityContext, payload: TerminateChunksInput
 
     # Local imports, matching every other activity here: workflow scope must stay free of anything
     # that reaches a sidecar at import time.
+    import contextlib
     import logging
 
     import dapr.ext.workflow as wf_client
 
     log = logging.getLogger(__name__)
     terminated = 0
-    client = wf_client.DaprWorkflowClient()
-    for child_id in child_ids:
-        try:
-            client.terminate_workflow(child_id)
-            terminated += 1
-        except Exception:
-            log.debug("could not terminate chunk workflow %s — it has most likely already finished", child_id, exc_info=True)
+    # THE CONSTRUCTOR IS INSIDE THE GUARD, and it was not. It sat outside the per-child `try`, so if it
+    # ever raised, this activity raised — and BOTH dispatch sites sit on the only path to the terminal
+    # record: the deadline branch and the error boundary. ACTIVITY_RETRY would burn four attempts on a
+    # deterministic failure and then propagate out of the `except` block with no handler above it,
+    # skipping `emit_terminal`. A tidy-up that fails would turn a run that recorded its outcome into
+    # one that vanished — the exact opposite of what this activity's own docstring promises.
+    #
+    # So it is best-effort IN FACT now, not only in prose: an unusable client reports zero terminated
+    # and names why, and the run still reaches its terminal record.
+    try:
+        client = wf_client.DaprWorkflowClient()
+    except Exception as exc:
+        log.warning("could not reach the workflow engine to terminate %d chunk workflows: %s", len(child_ids), exc)
+        return {"terminated": 0, "requested": len(child_ids), "error": str(exc)}
+
+    # CLOSED deterministically. `DaprWorkflowClient` owns a TaskHubGrpcClient channel and exposes
+    # `close()`; without this it was left to refcounting, and this activity runs once per abandoned
+    # fan-out on a worker thread Dapr may not reuse.
+    try:
+        for child_id in child_ids:
+            try:
+                client.terminate_workflow(child_id)
+                terminated += 1
+            except Exception:
+                log.debug("could not terminate chunk workflow %s — it has most likely already finished", child_id, exc_info=True)
+    finally:
+        # Suppressed, not guarded by `hasattr`: an SDK that stops offering `close()` should not make
+        # this activity — which runs while a run is terminating — start failing.
+        with contextlib.suppress(Exception):
+            client.close()
     log.info("terminated %d of %d chunk workflows before releasing the run's queue", terminated, len(child_ids))
     return {"terminated": terminated, "requested": len(child_ids)}
 

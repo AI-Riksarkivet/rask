@@ -22,6 +22,7 @@ stops covering the third workflow somebody adds.
 from __future__ import annotations
 
 import ast
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -37,9 +38,15 @@ def _names() -> set[str]:
     return {fn.__name__ for fn in wf_module.WORKFLOWS}
 
 
+def _activities() -> set[str]:
+    """The registered ACTIVITIES, likewise. Passed so the scan excludes them: an activity reading the
+    environment is the sanctioned asymmetry this module's header depends on."""
+    return {fn.__name__ for fn in wf_module.ACTIVITIES}
+
+
 class TestTheRealModuleIsClean:
     def test_no_registered_workflow_body_reads_env(self) -> None:
-        offenders = env_reads_in_workflow_bodies(SRC.read_text(encoding="utf-8"), _names())
+        offenders = env_reads_in_workflow_bodies(SRC.read_text(encoding="utf-8"), _names(), _activities())
         assert offenders == [], (
             f"{offenders} read the environment inside a workflow body — a replay re-executes that "
             f"line against whatever the value is NOW, so a rolling deploy makes history disagree. "
@@ -112,3 +119,81 @@ def test_the_real_module_still_parses_and_declares_bodies() -> None:
     tree = ast.parse(SRC.read_text(encoding="utf-8"))
     found = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)}
     assert _names() <= found, "WORKFLOWS names a function this module does not define"
+
+
+class TestTheGateFollowsHELPERS:
+    """The checklist defines workflow scope as "the body of any function decorated with
+    `@wfr.workflow` ... OR ANY HELPER CALLED FROM SUCH A FUNCTION", and this gate covered only the
+    first half -- the same shape of hole its own docstring criticises in the suite it replaced.
+
+    Not a live divergence: today's workflow scope is clean either way. It is the GATE that was blind,
+    and `bound_errors` -- called from both generator bodies, capping a payload whose size is exactly
+    the kind of number an operator asks to tune -- is the helper most likely to grow an `os.getenv`.
+    """
+
+    def test_a_helper_called_from_a_body_is_IN_scope(self) -> None:
+        source = textwrap.dedent(
+            """
+            import os
+
+            def bound_errors(errors):
+                return errors[: int(os.getenv("MAX_REPORTED_ERRORS", "50"))]
+
+            def ingest_run(ctx, payload):
+                yield bound_errors(payload)
+            """
+        )
+
+        assert env_reads_in_workflow_bodies(source, {"ingest_run"}) == ["bound_errors"]
+
+    def test_it_is_TRANSITIVE_because_a_helpers_helper_is_still_workflow_scope(self) -> None:
+        source = textwrap.dedent(
+            """
+            import os
+
+            def deepest():
+                return os.environ["TUNABLE"]
+
+            def middle():
+                return deepest()
+
+            def ingest_run(ctx, payload):
+                yield middle()
+            """
+        )
+
+        assert env_reads_in_workflow_bodies(source, {"ingest_run"}) == ["deepest"]
+
+    def test_an_ACTIVITY_reading_env_is_NOT_an_offender(self) -> None:
+        """The sanctioned asymmetry. `resolve_limits` exists precisely to read env in activity scope,
+        and a gate that flagged it would be unusable."""
+        source = textwrap.dedent(
+            """
+            import os
+
+            def resolve_limits(ctx, payload):
+                return os.getenv("RASK_INGEST_MAX_UNITS")
+
+            def ingest_run(ctx, payload):
+                yield resolve_limits(ctx, payload)
+            """
+        )
+
+        assert env_reads_in_workflow_bodies(source, {"ingest_run"}, {"resolve_limits"}) == []
+
+    def test_an_UNREACHED_helper_is_not_scanned(self) -> None:
+        """Scope is what a body CALLS, not everything in the file. Flagging an unreached helper would
+        make the gate fire on activity-side code that merely lives nearby."""
+        source = textwrap.dedent(
+            """
+            import os
+
+            def nobody_calls_me():
+                return os.environ["X"]
+
+            def ingest_run(ctx, payload):
+                yield None
+            """
+        )
+
+        assert env_reads_in_workflow_bodies(source, {"ingest_run"}) == []

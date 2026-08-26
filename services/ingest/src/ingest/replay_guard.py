@@ -36,17 +36,55 @@ def _reads_env(node: ast.AST) -> bool:
     return False
 
 
-def env_reads_in_workflow_bodies(source: str, workflow_names: set[str]) -> list[str]:
-    """Names of workflow bodies in ``source`` that read the environment, in definition order.
+def _module_functions(tree: ast.Module) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    return {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)}
+
+
+def _called_names(node: ast.AST) -> set[str]:
+    """Bare-name call targets inside ``node``. Attribute calls (`ctx.call_activity`, `wf.when_all`)
+    are deliberately ignored: they are the runtime's surface, not this module's helpers."""
+    return {c.func.id for c in ast.walk(node) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+
+
+def workflow_scope(source: str, workflow_names: set[str], activity_names: set[str] | None = None) -> list[str]:
+    """Every function that runs in WORKFLOW SCOPE: the named bodies plus the helpers they call.
+
+    The Diagrid determinism checklist defines scope as "the body of any function decorated with
+    `@wfr.workflow` … **or any helper called from such a function**", and this gate covered only the
+    first half — which is the same shape of hole its own docstring criticises in the suite it replaced.
+
+    Transitive, because a helper's helper is still workflow scope. ACTIVITY names are excluded: an
+    activity reading the environment is the sanctioned asymmetry this whole module depends on, and a
+    body that dispatches one via `ctx.call_activity` is not calling it in workflow scope anyway.
+    """
+    tree = ast.parse(source)
+    functions = _module_functions(tree)
+    excluded = activity_names or set()
+    seen: set[str] = set()
+    queue = [n for n in workflow_names if n in functions]
+    while queue:
+        name = queue.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        queue.extend(c for c in _called_names(functions[name]) if c in functions and c not in seen and c not in excluded)
+    # Definition order, so a caller's report reads like the file rather than like a set.
+    return [name for name in functions if name in seen]
+
+
+def env_reads_in_workflow_bodies(source: str, workflow_names: set[str], activity_names: set[str] | None = None) -> list[str]:
+    """Names of functions in WORKFLOW SCOPE that read the environment, in definition order.
 
     ``workflow_names`` should be derived from the module's own registration tuple rather than
     hard-coded — a gate that names its targets silently stops covering the next workflow somebody adds.
+    ``activity_names`` likewise, and passing it is what keeps the sanctioned activity-side env reads
+    out of the answer.
 
     Raises ``SyntaxError`` on unparseable input rather than returning an empty list: a detector that
     answers "clean" for source it could not read reports every file as clean, which is the failure
     mode this module exists to prevent rather than reproduce.
     """
     tree = ast.parse(source)
-    return [
-        node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in workflow_names and _reads_env(node)
-    ]
+    functions = _module_functions(tree)
+    in_scope = workflow_scope(source, workflow_names, activity_names)
+    return [name for name in in_scope if _reads_env(functions[name])]

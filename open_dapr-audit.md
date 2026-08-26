@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **40 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **43 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -1474,6 +1474,24 @@ The code is as quoted — `workflow.py:1228  client = wf_client.DaprWorkflowClie
 
 The residual the finding keeps is real: `dapr_workflow_client.py:291-293  def close(self): """Closes the gRPC connection used by the client."""` exists and `terminate_chunks` never calls it, so each invocation leaves a TaskHubGrpcClient channel to refcounting. Bounded in practice — this activity runs at most once or twice per run (the deadline branch at workflow.py:657 and the error boundary at 715), under ACTIVITY_RETRY — so info is the right severity, not warning.
 
+
+**FIXED 2026-08-25 — the hygiene residual the finding named, plus the guard.**
+
+`client.close()` in a `finally`. `DaprWorkflowClient` owns a TaskHubGrpcClient channel and exposes
+`close()`; without this it was left to refcounting, and this activity runs once per abandoned fan-out
+on a worker thread Dapr may not reuse. The close is in a `finally` so the failing path — the one that
+runs during an incident — closes too.
+
+**Suppressed rather than `contextlib.closing`**, and that choice is load-bearing: an SDK that stops
+offering `close()` must not make an activity that runs while a run is terminating start failing. It is
+also what let the two existing doubles (`_Boom`, `_Half`, neither of which declares `close`) keep
+passing — so a separate test asserts the close DOES happen when the client offers it, because a fix
+nothing exercises is not a fix.
+
+The rule's own hazard (an activity ORCHESTRATING and deadlocking against its own history) does not
+arise here and the finding says so: this neither starts a child nor waits on one, and
+`DaprWorkflowContext` offers no terminate verb, so there is no orchestrator-side alternative.
+
 </details>
 
 <details><summary><b>Activity envelopes are untyped dicts, so a missing key becomes a plausible default instead of a validation error</b> <i>(act-ingest, rule DWF-ACT-009, ADJUSTED)</i></summary>
@@ -2033,6 +2051,20 @@ workflow.py:1228 `    client = wf_client.DaprWorkflowClient()`   (outside the pe
 
 The trigger fails verification. dapr/ext/workflow/dapr_workflow_client.py:56-62: `address = getAddress(host, port)` / `try: uri = GrpcEndpoint(address)` / `except ValueError as error: raise DaprInternalError(f'{error}') from error`. dapr/ext/workflow/workflow_runtime.py:128-133 is the same three lines — `address = getAddress(host, port)`, `GrpcEndpoint(address)`, `raise DaprInternalError` — and both resolve through the same `util.getAddress` (DAPR_GRPC_ENDPOINT, or DAPR_RUNTIME_HOST:DAPR_GRPC_PORT), read from process env at construction. A malformed address therefore kills `WorkflowRuntime` at worker startup and no workflow body ever executes, so `terminate_chunks` cannot be reached in the state the finding requires. Nothing else in that constructor is a plausible raiser: `TaskHubGrpcClient` builds a grpc channel, which does not connect eagerly, so an unreachable or down sidecar yields a working client object and the failure lands inside the per-child `try` that is already caught.
 
+
+**FIXED 2026-08-25.** The `DaprWorkflowClient()` constructor moved INSIDE the guard, and an
+unusable client now returns `{"terminated": 0, "requested": N, "error": …}` instead of raising.
+
+**Why the position of one line mattered.** Both dispatch sites sit on the only path to the terminal
+record — the deadline branch and the error boundary — and both are followed by `emit_terminal`. With
+the constructor outside the per-child `try`, a raise here meant ACTIVITY_RETRY burning four attempts
+on a deterministic failure and then propagating out of the `except` block with no handler above it,
+skipping the terminal emit. A tidy-up that failed would turn a run that recorded its outcome into one
+that vanished — the exact opposite of what this activity's docstring promises.
+
+It is best-effort IN FACT now, not only in prose. Four tests, including the unreachable-engine wedge
+and that the failure is NAMED, so something says why nothing was stopped.
+
 </details>
 
 <details><summary><b>The bespoke DWF-DET-009 gate does not follow helpers, contradicting the checklist's own Cross-reference rule and the header's "nothing in workflow scope reads env"</b> <i>(det-ingest, rule DWF-DET-009, CONFIRMED)</i></summary>
@@ -2055,6 +2087,26 @@ workflow.py:219  `def bound_errors(errors: Mapping[str, str], total: int | None 
 The checklist claim verifies. shared/review-determinism-python.md:3: "The 'scope' of every rule is the body of any function decorated with `@wfr.workflow(...)` (or any helper called from such a function)." Its Cross-reference section (:33) repeats it: "If a rule trips inside a helper function, confirm the helper is reachable from a `@wfr.workflow`-decorated function before reporting it." DWF-DET-009 is the `os.environ` / `os.getenv(` / `Settings()` row (:17).
 
 The named helper is genuinely in workflow scope: `def bound_errors(...)` at workflow.py:221, called at :674 (`errors, errors_total = bound_errors(merged, sum(r.errors_total for r in parsed))`, inside `ingest_run`) and :790 (`listed, total = bound_errors(errors, errors_total)`, inside `chunk_run`) — and :674's result is what builds `finalize`'s input. I confirmed the finding's own caveat: today's workflow scope is clean, the module's single `os.getenv` cluster is in `RunLimits.from_env`, which `resolve_limits` calls from activity scope. Info is correct — a gate-coverage hole, not a live divergence, and the same class the guard's own docstring criticises ("the estate had a gate that would have let the very defect it was written about come straight back").
+
+
+**FIXED 2026-08-25.** `workflow_scope()` resolves the call graph from each named body through
+module-level functions, transitively, and `env_reads_in_workflow_bodies` scans all of it.
+
+The checklist defines scope as "the body of any function decorated with `@wfr.workflow` … **or any
+helper called from such a function**", and the gate covered only the first half — the same shape of
+hole its own docstring criticises in the suite it replaced.
+
+**Three exclusions, each with a test, because a gate that over-fires is as useless as one that
+under-fires:** ACTIVITY names are excluded (an activity reading env is the sanctioned asymmetry the
+whole module depends on, and the tuple is read off `ACTIVITIES` rather than hard-coded); attribute
+calls like `ctx.call_activity` are ignored, being the runtime's surface rather than this module's
+helpers; and an UNREACHED helper is not scanned, since scope is what a body calls, not everything in
+the file.
+
+Not a live divergence — today's workflow scope is clean either way. It is the GATE that was blind,
+and `bound_errors`, called from both bodies and capping a payload whose size is exactly what an
+operator asks to tune, is the helper most likely to grow an `os.getenv`. RED-proven by reverting to
+the name-only scan.
 
 </details>
 

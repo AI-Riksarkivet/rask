@@ -245,3 +245,87 @@ def test_OPERATOR_CANCELLATION_stops_the_children_and_leaves_a_FAIL_record() -> 
     assert outcome is not None and outcome["status"] == "FAILED"
     assert "terminated by operator" in outcome["errors"]["run"]
     assert "wrong prefix" in outcome["errors"]["run"], "the operator's reason was dropped"
+
+
+class TestTheTidyUpCannotCostTheRunItsTerminalRecord:
+    """`terminate_chunks` calls itself "best-effort by construction" and was not, in two ways.
+
+    Both dispatch sites sit on the ONLY path to the terminal record -- the deadline branch and the
+    error boundary -- and both are followed by `emit_terminal`. The `DaprWorkflowClient()` constructor
+    sat OUTSIDE the per-child try, so if it raised, the activity raised: ACTIVITY_RETRY would burn
+    four attempts on a deterministic failure and then propagate out of the `except` block with no
+    handler above it, skipping `emit_terminal` entirely. A tidy-up that failed would turn a run that
+    recorded its outcome into one that vanished -- the exact opposite of the docstring's promise.
+
+    Separately the client was never closed. It owns a TaskHubGrpcClient channel and exposes `close()`,
+    and this runs once per abandoned fan-out on a worker thread Dapr may not reuse.
+    """
+
+    def test_an_UNREACHABLE_engine_reports_zero_rather_than_raising(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """THE WEDGE: raising here costs the run its terminal record."""
+
+        def _refuse() -> object:
+            raise RuntimeError("no sidecar")
+
+        import dapr.ext.workflow as wf_sdk
+
+        monkeypatch.setattr(wf_sdk, "DaprWorkflowClient", _refuse)
+
+        out = terminate_chunks(cast(Any, object()), TerminateChunksInput(child_ids=["a", "b"]))
+
+        assert out["terminated"] == 0
+        assert out["requested"] == 2
+        assert "no sidecar" in str(out.get("error", "")), f"the failure is not named, so nothing says why nothing was stopped: {out}"
+
+    def test_the_client_is_CLOSED_when_it_offers_close(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        closed: list[bool] = []
+
+        class _Closes:
+            def terminate_workflow(self, instance_id: str) -> None:
+                return None
+
+            def close(self) -> None:
+                closed.append(True)
+
+        import dapr.ext.workflow as wf_sdk
+
+        monkeypatch.setattr(wf_sdk, "DaprWorkflowClient", _Closes)
+
+        terminate_chunks(cast(Any, object()), TerminateChunksInput(child_ids=["a"]))
+
+        assert closed == [True], "the gRPC channel is left to refcounting"
+
+    def test_the_client_is_closed_EVEN_WHEN_every_child_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The `finally` is what makes this true, and the failing path is the one that runs during an
+        incident -- exactly when leaking a channel per abandoned run matters."""
+        closed: list[bool] = []
+
+        class _ClosesButFails:
+            def terminate_workflow(self, instance_id: str) -> None:
+                raise RuntimeError("already terminal")
+
+            def close(self) -> None:
+                closed.append(True)
+
+        import dapr.ext.workflow as wf_sdk
+
+        monkeypatch.setattr(wf_sdk, "DaprWorkflowClient", _ClosesButFails)
+
+        out = terminate_chunks(cast(Any, object()), TerminateChunksInput(child_ids=["a", "b"]))
+
+        assert out["terminated"] == 0
+        assert closed == [True]
+
+    def test_a_client_with_NO_close_is_not_a_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Suppressed rather than `contextlib.closing`: an SDK that stops offering `close()` must not
+        make an activity that runs while a run is terminating start failing."""
+
+        class _NoClose:
+            def terminate_workflow(self, instance_id: str) -> None:
+                return None
+
+        import dapr.ext.workflow as wf_sdk
+
+        monkeypatch.setattr(wf_sdk, "DaprWorkflowClient", _NoClose)
+
+        assert terminate_chunks(cast(Any, object()), TerminateChunksInput(child_ids=["a"]))["terminated"] == 1
