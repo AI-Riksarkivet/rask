@@ -355,6 +355,39 @@ imperative nats-stream-job; pairs with clustering). The **official nats-io helm 
 an admin-gated BFF proxy — the browser never connects to NATS (same posture as the audit viewer's
 GreptimeDB access).
 
+## Workflow history has no browser surface — the ALERT is the surface (2026-08-26, owner ruling)
+
+**Decision.** No zone shows how much Dapr workflow history exists, how old it is, or what the retention
+policy is, and **none will**. The operator concern is carried by
+`DaprWorkflowHistoryNotCollected` + `DaprWorkflowStateMetricsMissing` in `chart/alerting/rules.yml`.
+Extends the 2026-07-23 UI-operability boundaries above; same reasoning, later question.
+
+**Why.** The estate's answer to an operator concern is an alert, not a page — a dashboard rendering a
+gauge nobody acts on is a surface to maintain, not a feature. The question "is retention working?" is
+answered continuously by a rule; a page would answer it only when someone remembered to look, which is
+precisely the state this work replaced (both measurements the estate had of workflow-history volume —
+1367 rows on 2026-08-10, 7239 on 2026-08-26 — happened because a person went looking).
+
+**What was considered and also dropped.** A per-run line on `compute/ingest/[run_id]` stating how long
+THAT run's history survives given its terminal state. Defensible — it is a per-run fact on a page that
+already exists, not a new observability surface — and dropped as a nice-to-have nothing depends on. If
+it is ever wanted, the values are `dapr.workflowRetention` in `chart/values.yaml` (168h completed,
+720h failed/terminated) and the page already renders that run's terminal state.
+
+**Where the reasoning lives now.** `open_workflow_retention.md` was deleted with this ruling; nothing
+was lost, because each durable part had already been written to where it is enforced:
+`chart/templates/observability.yaml` (the policy, why there is no application-side purge, and what
+actually enforces it — a per-app `retentioner` actor on a scheduler reminder, NOT the scheduler);
+`chart/templates/otel-collector.yaml` (the measurement, and why the documented `wf-history-` key prefix
+matches **zero** rows in the Postgres state store); `chart/alerting/rules.yml` (why the rule is on AGE
+rather than volume, and why the `absent()` companion is not decoration);
+`docs/runbooks/RUNBOOK-oncall.md#workflow-history-not-collected` (diagnose + purge procedure); and four
+gates in `tests/unit/test_invariants.py` binding rule ↔ receiver ↔ threshold ↔ key shape.
+
+**Not covered, stated rather than glossed.** The `compute/ingest` lifecycle controls shipped in
+`4e44584c` are browser-verified on the DISABLED path only — no live ingest run existed to exercise
+button → door → 202 → refresh against. Six unit tests cover the client seam; that is not the same claim.
+
 ## Team/role administration — WONTFIX until the Keycloak sync (2026-07-23)
 
 **Decision.** No UI or API surface for administering the *identity-shaped* tuples — `team:<t>#member`,

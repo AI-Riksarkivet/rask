@@ -45,8 +45,29 @@ stringData:
 # `purge_workflow(instance_id)` but NO list-instances API, and the one index that could drive a sweep
 # — `InMemoryRunStore` — is documented as "deliberately NOT durable", so after a restart it cannot
 # name the instances that need collecting while their history persists. A sweep built on it would
-# collect only what happened since the last pod start. This policy is enforced by the scheduler and
-# needs no such index.
+# collect only what happened since the last pod start. The built-in policy needs no such index.
+#
+# WHAT ENFORCES IT, measured rather than assumed — an earlier version of this comment said "the
+# scheduler", and that was a guess. All four upstream sources are silent on the question, but the
+# sidecar answers it directly: every workflow-hosting app registers THREE actor types, not two.
+#
+#   $ curl -s 127.0.0.1:3500/v1.0/metadata      # from inside the ingest pod, 2026-08-26
+#   ['dapr.internal.default.ingest.retentioner',
+#    'dapr.internal.default.ingest.workflow',
+#    'dapr.internal.default.ingest.activity']
+#
+# `retentioner` is the janitor and it lives in THE APP'S OWN SIDECAR, not in a central controller.
+# Confirmed by elimination: `notifications` hosts two actor types and no retentioner, because it runs
+# no workflows. It holds no state rows of its own (the state table carries `.workflow` keys and nothing
+# else), so the window it waits out is a REMINDER — and since Dapr 1.15 reminders live in the
+# scheduler's etcd. Chain: instance goes terminal -> the app's retentioner registers a reminder -> the
+# reminder fires from the scheduler's etcd -> the retentioner DELETES that instance's rows.
+#
+# THAT SHAPE IS WHY chart/alerting/rules.yml CARRIES `DaprWorkflowHistoryNotCollected`. The timer and
+# the data it governs sit in DIFFERENT failure domains — a reminder in a 3-replica etcd StatefulSet,
+# rows in Postgres — and the symptom of a lost reminder is SILENCE: rows with nothing scheduled to
+# collect them, forever, reported by nothing. A central reconciling controller (Argo's model)
+# re-derives its work list every loop and cannot lose an item this way; a reminder-driven actor can.
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
 metadata:
