@@ -482,7 +482,9 @@ services/catalog/src/catalog/api/load_shed.py:83-91 `{"type": "https://lance.org
 
 </details>
 
-<details><summary><b>Multipart uploads are spooled to disk in FULL before the routes' byte caps can run — the cap protects memory and nothing else, and the docstring claims otherwise</b> <i>(file-handling.md + streaming.md, ADJUSTED)</i></summary>
+<details><summary><b>~~Multipart uploads are spooled to disk in FULL before the routes' byte caps can run — the cap protects memory and nothing else, and the docstring claims otherwise~~</b> <i>(file-handling.md + streaming.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-26.** The cap moved to the DOOR: `service_kit/media/middleware.py` now registers `BodySizeLimitMiddleware` at `MediaSettings.max_body_bytes` (32 MiB, tighter than the catalog's 256 and looser than voice's 25 MiB `_MAX_UPLOAD_BYTES`, so the handler's own message still wins), covering viewer/search/annotator — the three apps that take uploads and the three the fleet factory's cap never reached. `voice.py`'s docstring no longer claims the read-cap avoids buffering; the read-cap stays as defence in depth. The disk half is bounded too: `lance.tmpVolume` renders `sizeLimit` (`security.tmpSizeLimit`, 2Gi) so a spooled part cannot fill the NODE and evict every pod on it. Pinned by `packages/service-kit/tests/test_media_body_cap.py` (4 tests) and `test_invariants.py::test_the_scratch_emptyDir_is_BOUNDED`.
 
 **Rule.** file-handling.md § Uploads — UploadFile with chunked reads; § Anti-patterns ("await file.read() without a size cap on uploads — bounded only by client patience"; "Storing temp files ... container restarts wipe them mid-stream")
 

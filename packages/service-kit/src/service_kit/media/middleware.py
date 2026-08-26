@@ -16,11 +16,12 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.media.config import Settings
 
 
 def register_middleware(app: FastAPI, settings: Settings) -> None:
-    """Register CORS. Called once from ``create_app`` after ``register_handlers``."""
+    """Register CORS and the request-body ceiling. Called once from ``create_app``."""
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -28,3 +29,8 @@ def register_middleware(app: FastAPI, settings: Settings) -> None:
         allow_headers=["*"],
         expose_headers=["Content-Range", "Content-Length", "Accept-Ranges"],
     )
+    # THE BODY CEILING, and these are the apps that most needed one: viewer, search and annotator are
+    # where multipart uploads arrive. A file part is spooled whole to disk BEFORE the handler runs, so
+    # a handler-side `read(cap + 1)` bounds that handler's memory and nothing about the landing zone.
+    # Pure-ASGI, so this refuses as bytes arrive — before starlette spools anything.
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)

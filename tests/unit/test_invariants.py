@@ -5375,3 +5375,37 @@ def test_every_privileged_identity_has_a_dedicated_credential_seeded() -> None:
 
     orphan_token = sorted(seeded - subjects)
     assert not orphan_token, f"dedicated credentials seeded for identities that are not privileged, so they still take the shared-token path: {orphan_token}"
+
+
+def test_the_scratch_emptyDir_is_BOUNDED() -> None:
+    """An unbounded `/tmp` emptyDir makes one pod's upload every pod's problem.
+
+    open_fastapi-audit, the disk half of the multipart finding. `lance.tmpVolume` rendered
+    `emptyDir: {}`, and an emptyDir with no `sizeLimit` may grow until the NODE's filesystem is full.
+    That matters here specifically because starlette spools each multipart file part to a
+    `SpooledTemporaryFile` under `/tmp` — so this volume is exactly where an oversize or concurrent
+    upload lands, and it is the same volume pyarrow/Lance spill and the OTel queue use.
+
+    The blast radius is what makes it worth a gate rather than a comment: filling a node's disk gets
+    every pod on that node evicted under DiskPressure, not just the one that took the upload. With a
+    `sizeLimit`, the kubelet evicts the offending POD when it crosses the bound and the rest of the
+    node is untouched.
+    """
+    helpers = (CHART / "templates" / "_helpers.tpl").read_text()
+    volume = re.search(r'define "lance\.tmpVolume".*?\{\{- end', helpers, re.DOTALL)
+    assert volume is not None, "lance.tmpVolume helper vanished — this gate needs re-anchoring"
+    assert "sizeLimit" in volume.group(0), (
+        "the /tmp scratch emptyDir declares no sizeLimit, so a spooled multipart upload may grow until "
+        "the NODE's disk is full and every pod on it is evicted under DiskPressure"
+    )
+
+    # And it must actually reach the rendered pods, not just the helper.
+    docs = _rendered_docs()
+    unbounded = [
+        f"{doc['kind']}/{doc['metadata']['name']}"
+        for doc in docs
+        if doc.get("kind") in {"Deployment", "StatefulSet"}
+        for vol in (doc["spec"]["template"]["spec"].get("volumes") or [])
+        if vol.get("name") == "tmp" and not (vol.get("emptyDir") or {}).get("sizeLimit")
+    ]
+    assert not unbounded, f"workloads mount an unbounded /tmp emptyDir: {sorted(unbounded)}"

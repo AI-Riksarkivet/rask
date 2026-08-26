@@ -528,6 +528,19 @@ lifecycle:
 # emptyDir for pyarrow/Lance spill + OTel), flip off only if a workload genuinely needs a writable rootfs.
 security:
   readOnlyRootFilesystem: true
+  # THE BOUND ON THE SCRATCH VOLUME, and it is a blast-radius bound rather than a quota.
+  #
+  # `readOnlyRootFilesystem: true` forces every app to write through an emptyDir at /tmp, and an
+  # emptyDir with no sizeLimit may grow until the NODE's disk is full — at which point the kubelet
+  # evicts every pod on that node under DiskPressure, not just the one that filled it. Three things
+  # land here: starlette's SpooledTemporaryFile for each multipart file part (the media apps accept
+  # uploads), pyarrow/Lance spill, and the OTel queue.
+  #
+  # Generous on purpose. Lance spill is workload-shaped and this must not evict a pod doing legitimate
+  # work — the job is to stop one pod taking the node down with it. Raise it for a deployment whose
+  # compaction genuinely spills more; the media body cap (32 MiB/request, MEDIA_MAX_BODY_BYTES) is the
+  # bound that stops uploads reaching this one.
+  tmpSizeLimit: 2Gi
   # Batch 10 (2026-07-11) — both default OFF (behavior-identical); flip after the §7a live checks.
   # Dedicated unbound SA per first-party workload, automountServiceAccountToken:false ON THE SA
   # object (never the pod — the Dapr injector's projected token stays untouched). Pre-flip check:

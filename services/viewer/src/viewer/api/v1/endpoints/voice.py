@@ -131,10 +131,20 @@ async def voice_similar_upload(
 
     ``n`` rides as a query param like the GET's (the multipart body carries
     only ``file``); ``exclude_same_doc`` is deliberately not a param — an
-    upload belongs to no doc. The body read stops one byte past the size cap,
-    so an oversize upload 400s (in the service) without ever being buffered
-    whole. The encoder getter is passed as a thunk so the model only loads if
-    the snippet survives the size/decode/duration guards.
+    upload belongs to no doc.
+
+    The body read stops one byte past the size cap, so an oversize upload 400s
+    in the service with a message naming the limit. That bounds THIS HANDLER'S
+    MEMORY and nothing else. This docstring used to claim the read-cap also kept
+    the upload from being buffered in its entirety, and that was false: starlette
+    spools a multipart file part to a SpooledTemporaryFile in FULL before the
+    handler is ever entered, so by the time this cap runs the bytes have already
+    landed. The landing zone is bounded at the door instead, by
+    ``BodySizeLimitMiddleware`` (pure ASGI, refuses as bytes arrive); the read cap
+    stays as defence in depth.
+
+    The encoder getter is passed as a thunk so the model only loads if the
+    snippet survives the size/decode/duration guards.
     """
     # dataset_handle opens Lance on a cold miss — offload it so the async upload
     # handler never blocks the event loop (fastapi skill: no blocking I/O in async def).

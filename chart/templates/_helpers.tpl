@@ -973,12 +973,18 @@ securityContext:
 {{/* The writable-/tmp scratch pair that makes readOnlyRootFilesystem feasible: an emptyDir volume + its
 mount. Emitted as a container volumeMount via "lance.tmpMount" and a pod volume via "lance.tmpVolume" so a
 read-only rootfs still has a place for pyarrow/Lance spill + OTel. Only needed when readOnlyRootFilesystem
-is on; harmless (an unused tmpfs) when off, so unconditionally included keeps the templates uniform. */}}
+is on; harmless (an unused tmpfs) when off, so unconditionally included keeps the templates uniform.
+
+IT CARRIES A sizeLimit, because an emptyDir without one may grow until the NODE's disk is full — and
+DiskPressure evicts every pod on that node, not the one that filled it. This volume is also where
+starlette spools each multipart file part, so on the media apps it is directly reachable from an
+unauthenticated request. With the bound, the kubelet evicts the offending POD and the node survives.
+See security.tmpSizeLimit. */}}
 {{- define "lance.tmpMount" -}}
 - { name: tmp, mountPath: /tmp }
 {{- end -}}
 {{- define "lance.tmpVolume" -}}
-- { name: tmp, emptyDir: {} }
+- { name: tmp, emptyDir: { sizeLimit: {{ .Values.security.tmpSizeLimit | default "2Gi" | quote }} } }
 {{- end -}}
 
 {{/*

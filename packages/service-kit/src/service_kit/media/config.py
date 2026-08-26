@@ -76,6 +76,18 @@ class Settings(BaseSettings):
     #: ~100 MB per Arrow payload that is 1.2 GB resident in a one-replica pod. `0` disables the byte
     #: bound only, exactly as above — the two must not diverge on the meaning of their settings.
     points_cache_bytes: int = Field(default=256 * 1024 * 1024, ge=0, alias="MEDIA_POINTS_CACHE_BYTES")
+    #: The request-body ceiling for the media apps (viewer / search / annotator).
+    #:
+    #: These are the apps that accept MULTIPART UPLOADS, and they were the ones with no cap: they
+    #: build through `service_kit.media.middleware`, not the fleet factory that grew one. A file part
+    #: is spooled to a SpooledTemporaryFile in FULL before the handler is entered, so the handler's
+    #: own `read(cap + 1)` bounds its memory and cannot bound the landing zone.
+    #:
+    #: 32 MiB, not the catalog's 256: that ceiling exists for bulk Arrow-IPC table writes, and reusing
+    #: it here would make the bound meaningless for a voice snippet. It stays comfortably ABOVE
+    #: `_MAX_UPLOAD_BYTES` so the handler's own 400 — which names the limit in the caller's terms —
+    #: is still the message an oversize upload gets, rather than a bare 413 from the door.
+    max_body_bytes: int = Field(default=32 * 1024 * 1024, ge=0, alias="MEDIA_MAX_BODY_BYTES")
 
     # Optional S3 object-store backing (RASK_LANDING §4). Set MEDIA_S3_ENDPOINT to
     # serve datasets from RustFS / MinIO / AWS: the registry then lists + opens
