@@ -4,7 +4,7 @@
 	import { liveRead, lineageTick } from '$lib/live/tick.svelte';
 	import { Button } from '@rask/ui/button';
 	import { Card } from '@rask/ui/card';
-	import { CircleAlert, CircleCheck, CircleX, Import, Loader } from '@lucide/svelte';
+	import { CircleAlert, CircleCheck, CircleX, Import, Loader, Square } from '@lucide/svelte';
 
 	// The ingest RUN LIST — the page `/compute/ingest` did not have, which is why the sidebar's "Runs"
 	// row pointed at a 404 (`nav-truth.test.ts` caught it and the row was removed until this existed).
@@ -79,8 +79,14 @@
 				<ul class="divide-y" data-testid="ingest-runs">
 					{#each runs as run (run.run_id)}
 						{@const pct = percent(run.progress_done, run.progress_total)}
+						<!-- ABORT is terminal too. Omitting it leaves a stopped run showing the spinning
+						     "still working" loader below, forever — the page asserting a run is live when
+						     a person stopped it. -->
 						{@const terminal =
-							run.state === 'COMPLETE' || run.state === 'FAIL' || run.state === 'FAILED'}
+							run.state === 'COMPLETE' ||
+							run.state === 'FAIL' ||
+							run.state === 'FAILED' ||
+							run.state === 'ABORT'}
 						<li>
 							<!-- Linked ONLY with the producer's own id: `run.run_id` is the graph's derived
 							     UUID5 and every link built from it was dead (measured — "No such run" on
@@ -100,6 +106,11 @@
 									<CircleCheck class="h-4 w-4 shrink-0 text-emerald-600" />
 								{:else if run.state === 'FAIL' || run.state === 'FAILED'}
 									<CircleX class="text-destructive h-4 w-4 shrink-0" />
+								{:else if run.state === 'ABORT'}
+									<!-- MUTED, not destructive, and this row is the whole reason the state exists.
+									     A deliberate stop and a crash were both `FAIL` here, so scanning the list —
+									     the thing an operator opens it to do — could not tell them apart. -->
+									<Square class="text-muted-foreground h-4 w-4 shrink-0" />
 								{:else if run.error_message}
 									<CircleAlert class="h-4 w-4 shrink-0 text-amber-600" />
 								{:else}
@@ -149,7 +160,9 @@
 										? 'border-emerald-600/30 text-emerald-600'
 										: run.state === 'FAIL' || run.state === 'FAILED'
 											? 'border-destructive/30 text-destructive'
-											: 'text-muted-foreground'}"
+											: run.state === 'ABORT'
+												? 'border-muted-foreground/30 text-muted-foreground'
+												: 'text-muted-foreground'}"
 								>
 									{run.state ?? '—'}
 								</span>

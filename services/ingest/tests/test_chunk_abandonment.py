@@ -209,7 +209,7 @@ def test_no_children_is_a_cheap_no_op() -> None:
     assert terminate_chunks(cast(Any, object()), TerminateChunksInput(child_ids=[])) == {"terminated": 0, "requested": 0}
 
 
-def test_OPERATOR_CANCELLATION_stops_the_children_and_leaves_a_FAIL_record() -> None:
+def test_OPERATOR_CANCELLATION_stops_the_children_and_leaves_a_TERMINATED_record() -> None:
     """`terminate` is a terminal PATH now, not a kill — §2.4's sequence, reached deliberately.
 
     `terminate_workflow(run_id)` set the instance TERMINATED and never resumed the generator, so
@@ -242,7 +242,11 @@ def test_OPERATOR_CANCELLATION_stops_the_children_and_leaves_a_FAIL_record() -> 
         outcome = stop.value
     names = [n for n, _ in ctx.activities]
     assert names[-1] == "emit_terminal", f"cancellation left no terminal record — calls were {names}"
-    assert outcome is not None and outcome["status"] == "FAILED"
+    # TERMINATED, not FAILED. The property this test guards is that cancellation leaves a terminal
+    # RECORD at all rather than vanishing — that is unchanged. What changed is which terminal: an
+    # operator stop is an intended outcome, and reading it as a crash made a deliberate stop
+    # indistinguishable from a defect in any run list.
+    assert outcome is not None and outcome["status"] == "TERMINATED"
     assert "terminated by operator" in outcome["errors"]["run"]
     assert "wrong prefix" in outcome["errors"]["run"], "the operator's reason was dropped"
 

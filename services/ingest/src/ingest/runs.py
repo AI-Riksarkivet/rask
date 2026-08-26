@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from pydantic import BaseModel, Field
 
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 # uuid1/uuid4: the whole point is that the SAME key yields the SAME run id on a different pod.
 RUN_NAMESPACE = uuid.UUID("6f5c1f2e-9a3d-4a1e-8b77-2f0f1d9c4a10")
 
-RunStatus = Literal["ACCEPTED", "RUNNING", "COMPLETE", "COMPLETE_WITH_ERRORS", "FAILED"]
+RunStatus = Literal["ACCEPTED", "RUNNING", "COMPLETE", "COMPLETE_WITH_ERRORS", "FAILED", "TERMINATED"]
 
 # The scheduling call is a blocking gRPC round-trip to the sidecar. Bounded, because A1 is a
 # CONTRACT: 202 in under a second. Left unbounded it hangs the request — observed in-cluster at 15s
@@ -210,7 +210,11 @@ _RUNTIME_STATUS: dict[str, RunStatus] = {
     "SUSPENDED": "RUNNING",
     "COMPLETED": "COMPLETE",
     "FAILED": "FAILED",
-    "TERMINATED": "FAILED",
+    # NOT "FAILED". An operator stopping a run is not the run failing, and Dapr saying TERMINATED is
+    # the least ambiguous signal available — rewriting it as a crash discarded the one fact nothing
+    # else in the record carries. Measured 2026-08-26: a real run terminated from the run page read
+    # FAILED, in red, beside runs that had actually died.
+    "TERMINATED": "TERMINATED",
 }
 
 
@@ -328,9 +332,13 @@ def merge_workflow_state(record: RunRecord, state: Mapping[str, object] | None) 
     # Gated on `status == "COMPLETE"` still, so this can only ever REFINE a normal return. An engine
     # FAILED or TERMINATED — the workflow crashed, or an operator killed it — stays authoritative and
     # cannot be overwritten by whatever happens to be in a partial output payload.
+    # TERMINATED is in the set for the same reason FAILED is, and reaches it by the same route: the
+    # GRACEFUL terminate raises an event, the workflow wakes, stops scheduling and RETURNS — so the
+    # engine reports COMPLETED and only the outcome knows a person stopped it. Omit it here and the
+    # status is DROPPED rather than rejected, and the door answers COMPLETE for a run somebody killed.
     outcome_status = output.get("status")
-    if status == "COMPLETE" and outcome_status in ("COMPLETE", "COMPLETE_WITH_ERRORS", "FAILED"):
-        status = outcome_status  # type: ignore[assignment]
+    if status == "COMPLETE" and outcome_status in ("COMPLETE", "COMPLETE_WITH_ERRORS", "FAILED", "TERMINATED"):
+        status = cast(RunStatus, outcome_status)
 
     errors = output.get("errors")
 

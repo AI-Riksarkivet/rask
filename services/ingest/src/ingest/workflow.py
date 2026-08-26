@@ -676,8 +676,15 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
                 errors_total=1,
             ).model_dump()
         elif winner is cancel:
+            # TERMINATED, not FAILED. This branch is reached only because a PERSON asked, through
+            # `POST /ingests/{id}/terminate` — it is the one terminal state in this workflow that is
+            # an intended outcome rather than a defect, and collapsing it into FAILED made a
+            # deliberate stop indistinguishable from a crash in any list. The deadline branch above
+            # stays FAILED on purpose: nobody chose it.
+            #
+            # `errors` still carries the reason, because the reason is the whole value of the record.
             terminal = RunOutcome(
-                status="FAILED",
+                status="TERMINATED",
                 errors={"run": f"terminated by operator{_cancel_detail(cancel.get_result())} with {units_total} units enumerated"},
                 errors_total=1,
             ).model_dump()

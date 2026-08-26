@@ -154,8 +154,13 @@ def test_an_ENGINE_failure_still_wins_over_a_partial_output() -> None:
     crashed = merge_workflow_state(record, {"runtime_status": "FAILED", "serialized_output": {"status": "COMPLETE"}})
     killed = merge_workflow_state(record, {"runtime_status": "TERMINATED", "serialized_output": {"status": "COMPLETE"}})
 
+    # The property is that an engine terminal is AUTHORITATIVE — a partial output claiming COMPLETE
+    # cannot talk it back up. Which terminal each one is is a separate question, and the answer for a
+    # killed run is now TERMINATED: asserting "== FAILED" here only ever encoded the old mapping, and
+    # would have made a correct change look like a regression.
     assert crashed.status == "FAILED"
-    assert killed.status == "FAILED"
+    assert killed.status == "TERMINATED"
+    assert killed.status != "COMPLETE", "a partial output talked an engine terminal back up to COMPLETE"
 
 
 # ── the unit ceiling ─────────────────────────────────────────────────────────

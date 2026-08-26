@@ -229,7 +229,12 @@
 		{#if selected}
 			<div class="drill" {@attach enter({ y: 6 })}>
 				<div class="drill-top">
-					<span class="badge" style:background={stateColor(selected.state)}>{selected.state}</span>
+					<!-- `stateColor` takes the RUN, not its state string — it reads the phase through
+					     `runPhase(r)`, which consults more than `state` (a promotion that was refused is
+					     failed even on a run whose state reads complete). Passing `selected.state` here
+					     type-errored on main AND would have coloured the drill-in by a coarser rule than
+					     the row above it, which passes `row`. -->
+					<span class="badge" style:background={stateColor(selected)}>{selected.state}</span>
 					<span class="mono runid">{selected.run_id}</span>
 					<span class="mut">{selected.events} event{selected.events === 1 ? '' : 's'}</span>
 					<button class="close" aria-label="Close run drill-in" onclick={() => (selectedId = null)}

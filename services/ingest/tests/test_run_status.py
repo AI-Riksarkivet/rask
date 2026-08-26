@@ -51,7 +51,9 @@ def test_an_absent_instance_leaves_the_accepted_record_alone() -> None:
         ("SUSPENDED", "RUNNING"),
         ("COMPLETED", "COMPLETE"),
         ("FAILED", "FAILED"),
-        ("TERMINATED", "FAILED"),
+        # NOT "FAILED": the engine saying TERMINATED is the least ambiguous signal available that a
+        # person stopped this run, and mapping it onto FAILED threw that away.
+        ("TERMINATED", "TERMINATED"),
     ],
 )
 def test_engine_runtime_status_maps_onto_the_estate_vocabulary(runtime: str, expected: str) -> None:

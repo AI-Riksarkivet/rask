@@ -65,7 +65,12 @@
 	// Terminal states stop the poll, and so does a failure. Polling a finished run forever is how a
 	// status page becomes the busiest client of the service it reports on; polling a run that does
 	// not exist is that plus a permanent lie on screen.
-	const TERMINAL = ['COMPLETE', 'COMPLETE_WITH_ERRORS', 'FAILED'];
+	// TERMINATED belongs here and its absence would be the nastiest half of this change: `settled`
+	// gates BOTH the poll and the status chip's fallback, so a terminated run would have kept polling
+	// forever AND rendered the spinning "still working" loader — the page telling an operator their
+	// stopped run is live, which this file's own comment calls the single worst thing a status page
+	// can get wrong.
+	const TERMINAL = ['COMPLETE', 'COMPLETE_WITH_ERRORS', 'FAILED', 'TERMINATED'];
 	const settled = $derived(
 		failed !== undefined || (run !== undefined && TERMINAL.includes(run.status)),
 	);
@@ -304,7 +309,9 @@
 							: run.status ===
 								  'COMPLETE_WITH_ERRORS'
 								? 'border-amber-600/30'
-								: ''}"
+								: run.status === 'TERMINATED'
+									? 'border-muted-foreground/30'
+									: ''}"
 					data-testid="run-status"
 				>
 					{#if run.status === 'COMPLETE'}
@@ -313,6 +320,13 @@
 						<CircleX class="text-destructive h-4 w-4" />
 					{:else if run.status === 'COMPLETE_WITH_ERRORS'}
 						<CircleAlert class="h-4 w-4 text-amber-600" />
+					{:else if run.status === 'TERMINATED'}
+						<!-- MUTED, not destructive. An operator stopping a run is an intended outcome, and
+						     painting it the same red as a crash is the whole defect this state exists to
+						     fix — a run list where a deliberate stop and a failure look identical. The
+						     square is the Terminate button's own icon, so the state reads as the
+						     consequence of the action that caused it. -->
+						<Square class="text-muted-foreground h-4 w-4" />
 					{:else}
 						<Loader class="text-muted-foreground h-4 w-4 animate-spin" />
 					{/if}
@@ -415,7 +429,15 @@
 					<!-- Named, not counted. "3 units failed" tells an operator a number; the unit keys tell
 				     them which pages to look at, which is the only form of the answer that is actionable. -->
 					<section class="space-y-1" data-testid="run-errors">
-						<h2 class="text-sm font-medium">Units that refused to land ({errorEntries.length})</h2>
+						<!-- The heading has to follow the STATUS, not the map it renders. A terminated run
+						     puts its reason in the same `errors` map, and labelling that "Units that
+						     refused to land (1)" told an operator a unit had failed when what actually
+						     happened is that they pressed Terminate. Measured on the live estate. -->
+						<h2 class="text-sm font-medium">
+							{run.status === 'TERMINATED'
+								? 'Why it stopped'
+								: `Units that refused to land (${errorEntries.length})`}
+						</h2>
 						<ul class="space-y-1 text-xs">
 							{#each errorEntries as [unit, reason] (unit)}
 								<li class="rounded border p-2">

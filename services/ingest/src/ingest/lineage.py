@@ -303,7 +303,20 @@ class LineageRecorder:
         `medallion.bronze` directly — the head derives it from the write's own lineage, so a tier is
         announced by the record of what happened rather than by a second, separately-maintained event.
         """
-        event_type = "FAIL" if status == "FAILED" else "COMPLETE"
+        # THREE terminals, and the third is not decoration — it is a guard.
+        #
+        # This line was `"FAIL" if status == "FAILED" else "COMPLETE"`, so introducing TERMINATED
+        # without touching it would have sent a stopped run down the `else` and emitted COMPLETE. The
+        # medallion's `/bronze-arrival` head fires on exactly that — an eventType COMPLETE carrying
+        # the configured output pair — so terminating a run would have STARTED the
+        # bronze->silver->gold cascade over a half-finished harvest. Strictly worse than the FAIL it
+        # replaced, which at least stopped there.
+        #
+        # ABORT is OpenLineage's own state for a cancelled run and `lineage_kit` already implements
+        # it (`RunTracker.abort`: "the cancelled terminal — an operator stop, a per-chunk stop, a
+        # shutdown"). Using FAIL instead would leave the GRAPH saying a person's decision was a
+        # defect, which is the same conflation this change removes one layer up.
+        event_type = "ABORT" if status == "TERMINATED" else ("FAIL" if status == "FAILED" else "COMPLETE")
         self._record(LineageEvent(run_id=run_id, event_type=event_type, project=project, dataset=dataset, version=version, rows=rows, errors=errors))
 
         outputs = _output_datasets(project, dataset, version, rows)
@@ -316,6 +329,11 @@ class LineageRecorder:
             run = _run(run_id, project, originator, published, publish_reason, publish_error)
             if event_type == "FAIL":
                 run.fail(f"ingest run {run_id} failed: {errors or 'no detail'}", outputs=outputs)
+            elif event_type == "ABORT":
+                # No `outputs`. A terminated run's staged fragments are NOT committed — the workflow
+                # returns without calling `finalize` precisely so a partial harvest is not published —
+                # so naming an output here would record a WROTE edge for a write that never happened.
+                run.abort(f"ingest run {run_id} terminated: {errors or 'no detail'}")
             else:
                 run.complete(outputs=outputs)
 

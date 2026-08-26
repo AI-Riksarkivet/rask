@@ -223,7 +223,47 @@ it addresses `RASK_GATEWAY_URL`, that the seam is bound, that the callbacks REAC
 the half no prop-name check can reach — that the layout passes `inbox`/`inboxUnread` at all, since a
 zone can bind every callback and still hand the bell nothing but `runs`.
 
-Estate-wide: `command()` 73 across 22 remote modules (mutations single-flight their reads: `void query().refresh()` in the handler), `form()` 0, `query.batch()` 0, `{#await}` 0. `query.live` is the LIVENESS spine, not just the bell: every zone's `feeds.remote.ts` (the bell) and lakehouse's `controlEvents`/`controlCursor`/`jetstreamCursor`. (The explorer's service-health is NOT one — it is a single deduped poll in `lib/service-health.svelte.ts`, whose own comment rejects a cursor because liveness has no event.) Consume cursors through `$lib/live/tick.svelte.ts` (`liveRead` + `lineageTick`/`controlTick`) — it replaced thirteen hand-rolled `$effect`+`setInterval` pollers, and its rules (open on mount, cursor arrival is not a change) each exist because breaking them broke a test. Data mutations move the LINEAGE cursor; governance mutations (grants, warehouses, tenants — including raw `/v1/access/tuples` writes, which emit `grant_added`) move the CONTROL cursor.
+Estate-wide: `command()` 73 across 22 remote modules (mutations single-flight their reads: `void query().refresh()` in the handler), `form()` 0, `query.batch()` 0, `{#await}` 0. `query.live` is the LIVENESS spine, not just the bell: every zone's `feeds.remote.ts` (the bell) and lakehouse's `controlEvents`/`controlCursor`/`jetstreamCursor`. (The explorer's service-health is NOT one — it is a single deduped poll in `lib/service-health.svelte.ts`, whose own comment rejects a cursor because liveness has no event; see § *When a poll is the right answer* below, which is the general form of that exception.) Consume cursors through `$lib/live/tick.svelte.ts` (`liveRead` + `lineageTick`/`controlTick`) — it replaced thirteen hand-rolled `$effect`+`setInterval` pollers, and its rules (open on mount, cursor arrival is not a change) each exist because breaking them broke a test. Data mutations move the LINEAGE cursor; governance mutations (grants, warehouses, tenants — including raw `/v1/access/tuples` writes, which emit `grant_added`) move the CONTROL cursor.
+
+### When a poll is the right answer
+
+**`query.live` is a cursor over a change signal, not a polling primitive** — so the question is never
+"can this be a cursor" but "does anything PUBLISH this fact". Audited estate-wide 2026-08-26 across
+every `setInterval` in the zones; **13 call sites, 7 survive, and none of the survivors was the
+illegitimate case.** Three reasons are legitimate:
+
+| reason | example | why no cursor |
+|---|---|---|
+| **No publisher** | the Ray plane (dashboard REST is snapshot-only introspection, no subscribe verb, Event Export deferred to NATS and unwired); liveness probes | nothing emits the change. Riding `lineageFeed` is actively WORSE: on an idle estate it never moves, so a board renders a dead node alive under a pulsing "live" dot — a surface that LIES beats one that blanks |
+| **Time itself is the change** | `LeaseChip` (a lease countdown), `models` `Experiments` (`rate(...[5m])` over a MOVING window) | the value decays as the clock advances with nothing happening; no event could mean "the window moved" |
+| **Progress inside a unit of work** | ingest `units_done`, the annotator's publish saga | climbs between commits and commits once, so no cursor moves for it |
+
+**Every surviving timer carries a `POLL REASON:` marker**, enforced by
+`packages/zone-contract/src/poll-reason.test.ts` (which also refuses an empty one). The gate strips
+comments before looking for a call, so prose ABOUT the migration is not a false positive.
+
+**THE PARTIAL SHAPE IS THE COMMON CORRECT ANSWER**, not a compromise: a page usually wants BOTH — the
+cursor for the terminal transition (instant, and it is a published fact) and a bounded timer for
+progress (which is not). Reference: `compute/src/routes/ingest/[run_id]/+page.svelte`. The annotator's
+`tasks/[id]` had only the timer half until 2026-08-26, and the omission meant two reviewers on one
+project never saw each other's submissions.
+
+**A shared clock, not a timer per component.** `compute/src/lib/live/ray-clock.svelte.ts` is the
+pattern: a ref-counted module singleton (same shape as `explorer`'s `service-health.subscribe()`) that
+exposes itself as a `LiveCursor`, so consumers use the ordinary `liveRead` idiom and the zone owns ONE
+interval and ONE phase. Two properties fall out and both were real defects before it:
+
+- **A bound.** With no subscriber the clock does not tick, so a page with nothing to watch issues
+  nothing — a terminal job stopped re-reading the heaviest Ray call every 5 s forever.
+- **De-duplication**, via `rayClock.refresh(name, query)`. Key it on an explicit NAME: calling a no-arg
+  remote `query()` from two components returns two different WRAPPERS, so a `WeakMap` on the handle
+  can never collide. That version type-checked, passed 1281 gates and SHIPPED, and deduplicated
+  nothing — measured 14 vs 7 on `/compute/workbench`. Manual "refresh now" buttons and any timer on a
+  different cadence must NOT go through it.
+
+**Verify by counting requests in a browser.** The gates here check shape, not effect; both mistakes
+above survived every one of them and were caught only by `performance.getEntriesByType('resource')`
+against a deployed zone.
 
 ### The SSR hairpin
 
