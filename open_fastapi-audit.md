@@ -384,7 +384,9 @@ assist.py:34 `router = APIRouter(prefix="/api", tags=["assist"])` — no `depend
 
 </details>
 
-<details><summary><b>`POST /tasks/{task_id}/import` decodes a caller-supplied Arrow IPC payload and validates every row through Pydantic inline on the event loop</b> <i>(core-conventions.md + anti-patterns.md, CONFIRMED)</i></summary>
+<details><summary><b>~~`POST /tasks/{task_id}/import` decodes a caller-supplied Arrow IPC payload and validates every row through Pydantic inline on the event loop~~</b> <i>(core-conventions.md + anti-patterns.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-26.** `shapes, links = await run_in_threadpool(shapes_from_ipc, payload, ontology=ontology, taken_ids=taken)`. The route stays `async def` — it must, it awaits four actor round-trips — and the synchronous decode moves off the loop, the same shape `assist.py` and `project_events.py` already use. The Fix's pairing with a body cap is already satisfied: the annotator builds through `service_kit.media.middleware`, which now registers `BodySizeLimitMiddleware` at 32 MiB (verified on the built app), so the threadpool worker is bounded too. Pinned by `tests/unit/test_import_does_not_stall_the_loop.py`, which measures ELAPSED time against a concurrent ticker rather than counting ticks — pre-fix it recorded 0.50 s for a 0.30 s decode beside a 0.20 s ticker (serialized); post-fix, 0.30 s (concurrent).
 
 **Rule.** core-conventions.md § Async vs sync path operations: "Use `async def` only when the body is genuinely async-compatible… Never run blocking code inside an `async def` — it works but kills throughput."
 
