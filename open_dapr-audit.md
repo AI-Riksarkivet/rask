@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **16 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **19 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -473,7 +473,13 @@ outcome, so left alone it would have silently covered nothing.
 **Verifier (ADJUSTED).** services/catalog/src/catalog/core/lineage_emit.py:663-665 is exactly as quoted: `except Exception as exc: _emit_failed.add(1, {"lance.catalog.transport": "dapr"}); log.warning("lineage_publish_failed", ...)` — no re-raise, and make_emitter/chart wire this transport in production (chart/templates/services.yaml:114 `- { name: LANCE_LINEAGE_TRANSPORT, value: "dapr" }`). The module docstring lines 23-24 do say "the catalog has no DB for a transactional outbox", and services/catalog/src/catalog/services/warehouses.py:9-10 does cite the object-store shape ("Stateless-over-object-store, the same shape as ``service_kit/lakehouse/outbox.py``"), so the stated reason is indeed stale — but immaterial, per medallion-cascade.md §11. services/ingest/src/ingest/lineage.py:157-160 confirms the production chain: "It was not needed. The CATALOG announces the write — `lance-catalog/insert.bronze$events` ... which is exactly what the medallion's `/bronze-arrival` filters on". services/lineage/src/lineage/api/reconcile_cron.py:159-207 confirms the drain calls `await repository.ingest_event(event)` and `await record_event_best_effort(repository, event)` then `outbox.drop_event(...)` — no publish to lineage.events.v1. No medallion cron exists: `grep -rln bindings.cron chart/` returns only notifications-cron.yaml, compute-prune-cron.yaml, ingest-cron.yaml, maintenance.yaml and services.yaml (lineage).
 
 
-**FIXED 2026-08-25 (staging half).** `catalog/core/lineage_emit.py`'s `DaprEmitter` now stages
+**FIXED 2026-08-25 — the transactional outbox IS the remedy for this finding (owner ruling 2026-08-25).**
+The `(staging half)` label this row used to carry read as half-done and was withdrawn: RESILIENCE.md gap
+#1 says the outbox *"closes the window fully for producers that stage the event before publishing"*,
+which is exactly what both emitters now do. The Ray-job-as-durable-producer redesign RESILIENCE.md
+calls the *Full fix* is a separate architectural change with its own blast radius, not this row's
+remedy.
+ `catalog/core/lineage_emit.py`'s `DaprEmitter` now stages
 through `service_kit.lakehouse.outbox.publish_lineage_with_outbox` — stage, publish, drop on ack —
 behind a new `LANCE_LINEAGE_OUTBOX_URI`. The helper degrades to exactly the previous plain publish
 when the URI is unset, and unset is the default, so this is inert until a deployment opts in.
@@ -666,6 +672,18 @@ notifications/api/control_events.py:127-135: "`notification_id` is `&lt;event_id
 And that id is the ONLY dedupe: inbox_actor.py:322-332 — "Land one pointer. Idempotent on `notification_id`, which is the dedupe." / `if any(pointer.notification_id == delivery.notification_id for pointer in pointers)`. A random id per execution defeats it exactly as claimed, so an at-least-once re-execution writes a second pointer under a second id and the validator sees two identical review rows for one held promotion.
 
 The activity's docstring (:944-948) explains only why it publishes directly rather than through `process_control_emitter()` — it records nothing about duplicate suppression, so there is no countervailing decision here. Note the rule catalog rates DWF-ACT-002 critical; warning is the correct downgrade, since the duplicated side effect is a notification row, not a data or tag mutation.
+
+
+**FIXED 2026-08-25.** `event_id=f"promotion-review-{spec.token}"` — derived, not defaulted.
+
+`CatalogControlEvent.event_id` is documented as "the client-side dedupe key", and the model's
+`uuid4()` default made it a fresh key on every execution: the one value that cannot dedupe. Dapr
+re-executes an activity whose result was not recorded, so one promotion asked its approver twice.
+
+**Keyed on the token rather than a constant, and that half is pinned separately.** A constant would
+collapse every promotion onto the first one — a worse defect than the one being fixed — so the second
+test asserts two different promotions still get two different keys. It passed before the fix (uuid4
+differs per call) and must keep passing after it; that is what makes it a guard rather than padding.
 
 </details>
 
@@ -1408,6 +1426,15 @@ workflow.py:1120-1123
 
 What the finding overstates is the consequence. The swallow is sanctioned and the finding says so; DWF-ACT-003 ("except Exception: pass") does not actually fire, because the failure IS logged by name with a full traceback via `log.exception`. What is missing is only the identity fields, so this is a diagnosability defect with no behavioural component: nothing is delivered wrongly, no state changes, and an operator sees N named-and-stacked failures rather than N anonymous ones. Under the stated calibration ("anything cosmetic is info") a one-line, log-only consistency fix is info, not warning. The loss of the durable record itself is a property of the sanctioned best-effort design, not of the missing kwargs.
 
+
+**FIXED 2026-08-25.** `best_effort("promotion_outcome", token=…, dataset=…, status=…, decided_by=…)`,
+matching the three siblings in the same file that already pass identifying kwargs.
+
+This is the sole writer of the durable record, and its own docstring calls workflow history "a
+cache". When the publish fails, that log line is all that remains of a decision a person made — and
+an unnamed line cannot be tied back to a promotion, so the audit was lost twice: once in lineage,
+once in the log.
+
 </details>
 
 <details><summary><b>A retried `publish_stage_ready` double-counts the cascade's rows and bytes counters</b> <i>(act-medallion, rule DWF-ACT-002, ADJUSTED)</i></summary>
@@ -1770,6 +1797,17 @@ workflow.py:412-414 —
 ```
 
 **Verifier (CONFIRMED).** workflow.py:197 `failed = StageJobOutcome(submission_id="", status=None, polls=0, verdict="failed")`, handed straight to `report_stage_outcome` at :198. That activity's enrichment guard at :412-414 fires on the verdict: `if (outcome.verdict == "failed" and (cause := _read_stage_failure(outcome.submission_id)) is not None ...)`, so `_read_stage_failure("")` runs and `job_failure` issues `await client.get(f"/api/jobs/{sub_id}")` (ray_kit/submit.py) — i.e. `GET /api/jobs/`, the job LIST endpoint. I confirmed the validation half directly: `RayJobFailure.model_validate([{'status':'FAILED'}])` raises `ValidationError: Input should be a valid dictionary or instance of RayJobFailure`, which is neither an `httpx.HTTPError` nor a &gt;=400 status, so it escapes `job_failure` and is swallowed by `best_effort("read_stage_failure", ...)` (core/best_effort.py logs `medallion_best_effort_emit_failed_read_stage_failure` and control flow continues to `return None`). Net effect is exactly as claimed: one request at the wrong endpoint, a log.exception that reads like a Ray outage, and a FAIL event whose reason string is `the Ray stage job  ended UNKNOWN after 0 poll(s)` with an empty id. Diagnosability only — no replay hazard, no duplicated side effect. Info is the right severity.
+
+
+**FIXED 2026-08-25.** The enrichment guard now tests `outcome.submission_id` before calling
+`_read_stage_failure`.
+
+**The harm is a plausible wrong answer, not a missing one.** `_read_stage_failure("")` builds the
+dashboard URL without an id, which is Ray's job LIST endpoint — so the "cause" returned is whatever
+job happens to be first, attributed to a run that never started, and pinned into lineage as this
+stage's reason. An operator would then go debug someone else's job.
+
+RED-proven by reverting the guard and observing the empty id reach the reader.
 
 </details>
 

@@ -421,6 +421,10 @@ def report_stage_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) 
     # cause to report and asking for one would invite a misleading answer.
     if (
         outcome.verdict == "failed"
+        # A permanently failed SUBMIT reports with an EMPTY submission id, and `_read_stage_failure("")`
+        # builds the dashboard URL without one — i.e. asks Ray's job LIST endpoint for a cause. The
+        # answer is whatever job happens to be first, attributed to this run.
+        and outcome.submission_id
         and (cause := _read_stage_failure(outcome.submission_id)) is not None
         and (summary := cause.summary(_STAGE_FAIL_MESSAGE_CAP))
     ):
@@ -1012,6 +1016,12 @@ def request_approval(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> b
         object_id=f"table:{_qualified(spec.project, spec.to_dataset)}",
         actor=None,
         extra={"subject": f"user:{spec.approver}", "reasons": spec.reasons, "project": spec.project, "token": spec.token},
+        # DERIVED, not defaulted. `event_id` is documented as the client-side dedupe key, and the
+        # model's `uuid4()` default makes it a fresh key on every execution — the one value that
+        # cannot dedupe. Dapr re-executes an activity whose result was not recorded, so the approver
+        # was asked twice for one promotion. Keyed on the TOKEN rather than a constant: a constant
+        # would collapse every promotion onto the first one, which is worse than the bug.
+        event_id=f"promotion-review-{spec.token}",
     )
 
     async def _publish() -> None:
@@ -1182,7 +1192,17 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]
 
     # emit_promotion_outcome logged NOTHING at all on this path, while its docstring calls workflow
     # history "a cache; lineage is the durable record" — a dropped publish silently emptied the record.
-    with best_effort("promotion_outcome"):
+    # NAMED, like its three siblings in this file. When this publish fails, the log line is the only
+    # thing left of a decision a person made — `emit_promotion_outcome` is the sole writer of the
+    # durable record, and its own docstring calls workflow history "a cache". An unnamed line cannot
+    # be tied back to a promotion, so the audit was lost twice: once in lineage, once in the log.
+    with best_effort(
+        "promotion_outcome",
+        token=spec.token,
+        dataset=_qualified(spec.project, spec.to_dataset),
+        status=outcome["status"],
+        decided_by=outcome.get("decided_by"),
+    ):
         _run_async(_publish())
 
 
