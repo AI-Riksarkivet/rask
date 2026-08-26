@@ -21,7 +21,7 @@ import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import httpx
 from dotenv import load_dotenv
@@ -209,6 +209,30 @@ def _normalize_path(path: str) -> str:
     return normalized
 
 
+def _normalize_raw_path(raw: bytes) -> bytes:
+    """`_normalize_path`'s twin for the ENCODED path: classify by decoded value, keep original bytes.
+
+    The two must agree about what a segment IS while disagreeing about how it is spelled. A byte-wise
+    walker would read `%2e%2e` as an ordinary name and let a traversal through; a decoding walker
+    that also RETURNED the decoded bytes would turn `%2F` into a separator and address a different
+    object. So each segment is decoded only to be classified, and the original bytes are what survive.
+    """
+    kept: list[bytes] = []
+    for raw_seg in raw.split(b"/"):
+        seg = unquote(raw_seg.decode("ascii"))
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if kept:
+                kept.pop()
+            continue
+        kept.append(raw_seg)
+    normalized = b"/" + b"/".join(kept)
+    if raw.endswith(b"/") and not normalized.endswith(b"/"):
+        normalized += b"/"
+    return normalized
+
+
 def _lineage_sidecar_only_routes() -> tuple[str, ...]:
     """The Dapr-delivered lineage routes (pub/sub ingest + the cron reconcile
     binding) that must never be reachable through the public edge — proxying them
@@ -294,7 +318,7 @@ async def lineage_sidecar_guard(request: Request, call_next: Callable[[Request],
     `..`-normalization variants can't fall through to the /api/lineage proxy, the
     exact variants the nginx case-insensitive regex covered. Defense-in-depth: the
     services' own app-api-token check is the load-bearing guard either way."""
-    path = _normalize_path(request.url.path).lower()
+    path = _normalize_path(request.scope["path"]).lower()
     for route in _lineage_sidecar_only_routes():
         if path.startswith(f"/api/lineage/{route}"):
             return JSONResponse(status_code=403, content={"detail": f"sidecar-only lineage route: {route}"})
@@ -320,39 +344,72 @@ async def proxy(path: str, request: Request) -> Response:
     prefix: str = request.app.state.api_prefix
     client: httpx.AsyncClient = request.app.state.http
 
+    # TWO VIEWS OF THE PATH, and the whole correctness of this hop is in keeping them apart.
+    #
+    # `request.url.path` is neither of them and must not be used here. Starlette builds `URL` from a
+    # reassembled STRING and re-splits it with urlsplit, so a path segment that decodes to `?` or `#`
+    # silently truncates it: for `/api/catalog/v1/table/x%23y/describe`, `scope["path"]` is
+    # `…/table/x#y/describe` but `request.url.path` is `…/table/x`. Every decision below — the
+    # blocklist, the route pick, the upstream rewrite — was being taken against a path that is not
+    # the one the upstream would execute.
+    #
+    # DECIDE on the decoded path (`scope["path"]`): normalisation must see `%2E%2E` as a traversal,
+    # which is what stops the sidecar-only lineage routes being reached by spelling the dots in hex.
+    # FORWARD the raw path (`scope["raw_path"]`): `%2F` is a literal character inside one segment,
+    # never a separator, and re-encoding cannot restore a distinction already lost to decoding. That
+    # is also what carries the Lance Namespace multipart delimiter, the unit separator 0x1F — every
+    # nested namespace answered an unhandled 500 (`httpx.InvalidURL`) while flat ids answered 200.
+    scope_path: str = request.scope["path"]
+    # raw_path is optional in ASGI; uvicorn and the TestClient both set it, query-stripped and
+    # root_path-prefixed exactly like scope["path"], so the two stay in lockstep. The fallback keeps
+    # a server that omits it working rather than crashing.
+    raw_path: bytes = request.scope.get("raw_path") or quote(scope_path).encode("ascii")
+    # A URL path is ASCII by construction (RFC 3986); anything else had to arrive as raw bytes on the
+    # wire rather than percent-encoded. Refused HERE rather than at the URL build, because the
+    # normaliser below decodes each segment and would raise UnicodeDecodeError first — an unhandled
+    # 500 for client-controlled input, which is the class of answer this whole function is removing.
+    if not raw_path.isascii():
+        raise HTTPException(status_code=400, detail="request path contains non-ASCII bytes")
+
     # Serve a unified API page aggregating every backend's schema, instead of
     # proxying /docs + /openapi.json to core-api only.
-    if request.url.path == f"{prefix}/openapi.json":
+    if scope_path == f"{prefix}/openapi.json":
         return JSONResponse(await _merged_openapi(client, prefix, _distinct_targets(request.app.state.routes)))
-    if request.url.path == f"{prefix}/docs":
+    if scope_path == f"{prefix}/docs":
         return get_swagger_ui_html(openapi_url=f"{prefix}/openapi.json", title="rask API (gateway)")
 
-    norm_path = _normalize_path(request.url.path)
+    norm_path = _normalize_path(scope_path)
     picked = _pick_route(norm_path, request.app.state.routes)
     if picked is None:
-        raise HTTPException(status_code=404, detail=f"no upstream for {request.url.path}")
+        raise HTTPException(status_code=404, detail=f"no upstream for {scope_path}")
     route_prefix, upstream_prefix, app_id, fallback = picked
     base = _target_base(app_id, fallback)
 
+    raw_norm = _normalize_raw_path(raw_path)
+    # The one input where the two views genuinely disagree: a dot-segment hidden behind an encoded
+    # slash (`a%2F..%2Fb`) is ONE segment byte-wise and THREE after decoding. Forwarding the raw
+    # bytes would execute a path the blocklist never evaluated; collapsing them would address an
+    # object the client never named. Refusing is strictly safer than picking a side, and no
+    # legitimate client sends it. Every other case agrees and passes through.
+    if unquote(raw_norm.decode("ascii")) != norm_path or not raw_norm.decode("ascii").startswith(route_prefix):
+        raise HTTPException(status_code=400, detail="path encoding is ambiguous")
+
     # The upstream prefix replaces the public one: /api/catalog/v1/x → /v1/x,
     # /api/explorer/search?q → /api/search?q. rask rows rewrite to themselves.
-    #
-    # RE-ENCODE before handing the path to httpx. `request.url.path` arrives percent-DECODED, and
-    # `_normalize_path` must keep working on that decoded form — it exists so `%2E%2E` cannot dodge
-    # the 403 blocklist or slip past a longer prefix, and a normaliser reading the raw path would be
-    # blind to exactly the encodings it guards against. But httpx refuses non-printable ASCII in a
-    # URL, so a Lance Namespace multipart identifier — segments joined by the unit separator 0x1F,
-    # e.g. `acme%1Fbronze`, and the root namespace `%1F` alone — reached this line as a literal
-    # control character and raised `InvalidURL`, unhandled, as a 500. Measured live: every nested
-    # namespace 500'd while flat ids answered 200.
-    upstream_path = quote(upstream_prefix + norm_path[len(route_prefix) :], safe="/")
+    # Assembled as BYTES through copy_with(raw_path=...) rather than an f-string, because an f-string
+    # hands httpx a URL to re-parse and `:`/`?`/`#` in the path would be read as delimiters again —
+    # reintroducing the very truncation this function exists to avoid. The base may carry its own
+    # path (the Dapr invoke form, `/v1.0/invoke/<app>/method`), so it is prepended, not replaced.
+    base_url = httpx.URL(base)
+    upstream_raw = base_url.raw_path.rstrip(b"/") + upstream_prefix.encode("ascii") + raw_norm[len(route_prefix) :]
+    query: bytes = request.scope.get("query_string") or b""
     try:
-        url = httpx.URL(f"{base}{upstream_path}").copy_with(query=request.url.query.encode("utf-8") or None)
-    except httpx.InvalidURL as exc:
-        # The path is fully encoded above, so what remains unrepresentable is the upstream BASE —
-        # a misconfigured RASK_*_URL. That is upstream trouble, and this gateway's contract answers
-        # upstream trouble with a clean 502 rather than a traceback.
-        raise HTTPException(status_code=502, detail=f"upstream {app_id} address unusable: {exc}") from exc
+        url = base_url.copy_with(raw_path=upstream_raw + (b"?" + query if query else b""))
+    except (httpx.InvalidURL, UnicodeDecodeError) as exc:
+        # What remains unrepresentable is client-controlled: a non-ASCII byte or a literal control
+        # character sent raw on the wire rather than percent-encoded. That is a bad request, not a
+        # broken backend — answering 502 here would tell an operator a healthy service is down.
+        raise HTTPException(status_code=400, detail=f"unrepresentable request path: {exc}") from exc
     headers = [(k, v) for k, v in request.headers.raw if k.lower() not in _HOP_BY_HOP and k.lower() not in _CLIENT_SPOOFABLE]
     upstream_req = client.build_request(request.method, url, headers=headers, content=await request.body())
     try:

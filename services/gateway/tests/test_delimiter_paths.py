@@ -104,14 +104,115 @@ def test_the_default_dollar_delimiter_is_unchanged(proxied) -> None:
     assert arrived == "/v1/table/acme-bronze$agnostic/describe", f"the table delimiter was rewritten: {arrived!r}"
 
 
-def test_a_path_the_proxy_cannot_represent_is_never_an_unhandled_500(proxied) -> None:
-    """The gateway's contract has no 500 in it: upstream trouble is 502, a bad request is 4xx.
+def test_a_raw_path_the_proxy_cannot_represent_is_a_400_not_a_500(gw, proxied) -> None:
+    """The refusal branch, reached through a hand-built ASGI scope because no client can send this.
 
-    Asserted as "not 5xx-by-accident" rather than one exact code, because the point is the CLASS of
-    answer. A 500 here reports a healthy backend as broken — the backend was never called.
+    An earlier version of this test drove `/api/catalog/v1/namespace/%00%01%02/list` through the
+    TestClient and asserted "not 500". That was VACUOUS: once the raw path is forwarded, `%00%01%02`
+    is perfectly representable on the wire, the request proxies 200, and the branch it claimed to pin
+    was never entered. What genuinely cannot be represented is a NON-ASCII byte sent raw in the path,
+    which httpx and the ASCII decode both refuse — and an HTTP client will not produce one, so the
+    scope is constructed directly.
+
+    400 rather than 502 is the point. The input is client-controlled, and this gateway's 502 means
+    "backend down"; answering 502 for a malformed identifier tells an operator a healthy service is
+    broken.
     """
-    client, _ = proxied
+    import anyio
 
-    response = client.get("/api/catalog/v1/namespace/%00%01%02/list")
+    # `proxied` is taken purely to enter the TestClient context, which runs the lifespan that builds
+    # `app.state.api_prefix` and the route table. Driving a bare `app(scope, ...)` without it fails
+    # on missing state rather than on the thing under test.
+    received: list[dict] = []
 
-    assert response.status_code != 500, f"an unrepresentable path escaped as an unhandled 500: {response.text[:200]}"
+    async def drive() -> None:
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.1"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/api/catalog/v1/table/x/describe",
+            "raw_path": b"/api/catalog/v1/table/\xff\xfe/describe",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [(b"host", b"testserver")],
+            "client": ("127.0.0.1", 1234),
+            "server": ("testserver", 80),
+        }
+
+        async def receive() -> dict:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message: dict) -> None:
+            received.append(message)
+
+        await gw.app(scope, receive, send)
+
+    anyio.run(drive)
+
+    start = next(m for m in received if m["type"] == "http.response.start")
+    assert start["status"] == 400, f"a non-ASCII raw path did not come back as a refusal: {start['status']}"
+
+
+@pytest.mark.parametrize(
+    ("sent", "arrives_as"),
+    [
+        # An encoded slash is a literal character INSIDE one segment, never a separator. Promoting it
+        # silently addresses a different object: `object/a%2Fb` is one key named `a/b`, not `a` then `b`.
+        ("/api/explorer/object/a%2Fb", "/api/object/a%2Fb"),
+        # `?` and `#` are the worse pair, because Starlette's `URL.path` re-splits the DECODED string
+        # with urlsplit: a decoded `?` starts a query and a decoded `#` starts a fragment, so the tail
+        # of the path is moved or dropped BEFORE any routing or blocklist decision is taken. That is
+        # "guarded against one resource, executed against another".
+        ("/api/catalog/v1/table/x%3Fy/describe", "/v1/table/x%3Fy/describe"),
+        ("/api/catalog/v1/table/x%23y/describe", "/v1/table/x%23y/describe"),
+    ],
+)
+def test_a_percent_encoded_reserved_character_stays_inside_its_segment(proxied, sent: str, arrives_as: str) -> None:
+    """Re-encoding cannot repair these — the damage happens before the handler runs.
+
+    `quote()` on the decoded path fixes `%1F` (a character that merely offended httpx) and cannot fix
+    these three (characters that had already changed the path's STRUCTURE). Only the raw path carries
+    the distinction, which is why the fix reads `scope["raw_path"]` rather than re-encoding.
+    """
+    client, captured = proxied
+
+    response = client.get(sent)
+
+    assert response.status_code == 200, f"{sent} -> {response.status_code}"
+    assert captured, "the request never reached an upstream at all"
+    assert captured[0].url.raw_path.decode("ascii") == arrives_as
+
+
+def test_an_encoded_dot_segment_cannot_dodge_the_blocklist(proxied) -> None:
+    """The security property that forced normalisation onto the DECODED path in the first place.
+
+    `%2e%2e` is an ordinary segment to a byte-wise walker and a traversal to a decoding one. The
+    sidecar-only lineage routes are blocked by prefix on the normalised path, so if the fix moved
+    normalisation onto the raw bytes, `lineage-events` would become reachable by spelling the dots in
+    hex. Driven through the app rather than by calling `_normalize_path` directly, because the
+    decoding happens in the server before the handler and a unit call would test the wrong input.
+    """
+    client, captured = proxied
+
+    response = client.get("/api/lineage/foo/%2e%2e/lineage-events")
+
+    assert response.status_code == 403, f"an encoded dot-segment reached the lineage proxy: {response.status_code}"
+    assert not captured, "a sidecar-only route was forwarded to an upstream"
+
+
+def test_a_dot_segment_hidden_behind_an_encoded_slash_is_refused(proxied) -> None:
+    """The one input where the raw and decoded views genuinely disagree, so neither may be trusted.
+
+    `a%2F..%2Fb` is ONE segment byte-wise and THREE after decoding. Forwarding the raw bytes would
+    execute a path the decoded blocklist never evaluated; collapsing it would address an object the
+    client never named. Refusing is strictly safer than picking a side, and no legitimate client
+    sends it.
+    """
+    client, captured = proxied
+
+    response = client.get("/api/catalog/v1/table/a%2F..%2Fb/describe")
+
+    assert response.status_code == 400, f"expected a refusal, got {response.status_code}"
+    assert not captured, "an ambiguous path was forwarded to an upstream"
