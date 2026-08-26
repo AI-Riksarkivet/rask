@@ -157,7 +157,7 @@
 	{:else}<span class="mut">—</span>{/if}
 {/snippet}
 
-<svelte:head><title>Datasets · lineage · lance</title></svelte:head>
+<svelte:head><title>Datasets · lineage · rask</title></svelte:head>
 
 <div class="page">
 	<header>

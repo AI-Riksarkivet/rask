@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>Serve — RASK</title>
+	<title>Serve — rask</title>
 </svelte:head>
 
 <ServeBoard />

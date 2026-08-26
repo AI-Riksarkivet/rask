@@ -11,7 +11,7 @@
 </script>
 
 <svelte:head>
-	<title>API — RASK</title>
+	<title>API — rask</title>
 </svelte:head>
 
 <main class="bg-background flex flex-1 overflow-hidden">

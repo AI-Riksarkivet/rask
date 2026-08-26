@@ -79,7 +79,7 @@
 	}
 </script>
 
-<svelte:head><title>{project || 'Overview'} · lakehouse · lance</title></svelte:head>
+<svelte:head><title>{project || 'Overview'} · lakehouse · rask</title></svelte:head>
 
 <div class="mx-auto w-full max-w-5xl px-5 pt-14 pb-10">
 	{#if !project}

@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>Actors — RASK</title>
+	<title>Actors — rask</title>
 </svelte:head>
 
 <ActorsBoard />

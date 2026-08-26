@@ -8,4 +8,4 @@
 	reader auditing this zone's surface found pages that cannot be reached and text describing a
 	migration that finished.
 -->
-<svelte:head><title>lance — Admin</title></svelte:head>
+<svelte:head><title>rask — Admin</title></svelte:head>

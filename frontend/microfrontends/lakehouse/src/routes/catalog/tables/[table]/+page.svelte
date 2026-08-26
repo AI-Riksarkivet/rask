@@ -5,5 +5,5 @@
 	const table = $derived(page.params.table ?? '');
 </script>
 
-<svelte:head><title>{table} · lance</title></svelte:head>
+<svelte:head><title>{table} · rask</title></svelte:head>
 <TableDetail {table} />

@@ -81,7 +81,7 @@
 	}
 </script>
 
-<svelte:head><title>{id} · warehouses · lance</title></svelte:head>
+<svelte:head><title>{id} · warehouses · rask</title></svelte:head>
 
 <div class="page">
 	<header>

@@ -206,7 +206,7 @@
 </script>
 
 <svelte:head>
-	<title>Ingest — RASK</title>
+	<title>Ingest — rask</title>
 </svelte:head>
 
 <main class="bg-background flex-1 overflow-auto">

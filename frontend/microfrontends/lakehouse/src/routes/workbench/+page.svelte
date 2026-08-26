@@ -153,7 +153,7 @@
 	}
 </script>
 
-<svelte:head><title>Lakehouse workbench — RASK</title></svelte:head>
+<svelte:head><title>Lakehouse workbench — rask</title></svelte:head>
 
 <div class="wrap">
 	<ViewSidebar {views} onselect={applyView} />

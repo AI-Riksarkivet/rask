@@ -99,7 +99,7 @@
 	}
 </script>
 
-<svelte:head><title>{name} · lineage · lance</title></svelte:head>
+<svelte:head><title>{name} · lineage · rask</title></svelte:head>
 
 <div class="page">
 	<a class="back" href="{base}/lineage/datasets"><ArrowLeft size={12} /> datasets</a>

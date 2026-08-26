@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>Jobs — RASK</title>
+	<title>Jobs — rask</title>
 </svelte:head>
 
 <JobsBoard />

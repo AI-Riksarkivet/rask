@@ -2,5 +2,5 @@
 	import DlqPanel from '$lib/admin/DlqPanel.svelte';
 </script>
 
-<svelte:head><title>Dlq · lance</title></svelte:head>
+<svelte:head><title>Dlq · rask</title></svelte:head>
 <DlqPanel />

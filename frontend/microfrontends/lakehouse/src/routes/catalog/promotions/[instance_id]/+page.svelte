@@ -46,7 +46,7 @@
 	}
 </script>
 
-<svelte:head><title>Held promotion · lance</title></svelte:head>
+<svelte:head><title>Held promotion · rask</title></svelte:head>
 
 <div class="flex flex-col gap-4 p-4">
 	<div>

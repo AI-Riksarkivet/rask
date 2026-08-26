@@ -47,7 +47,7 @@
 	liveRead(lineageTick, () => load());
 </script>
 
-<svelte:head><title>Columns · lineage · lance</title></svelte:head>
+<svelte:head><title>Columns · lineage · rask</title></svelte:head>
 
 <div class="app">
 	<header>

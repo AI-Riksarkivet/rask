@@ -19,7 +19,7 @@
 	import Explorer from '$lib/access/Explorer.svelte';
 </script>
 
-<svelte:head><title>Access · lance</title></svelte:head>
+<svelte:head><title>Access · rask</title></svelte:head>
 
 <div class="mx-auto flex max-w-[1600px] flex-col gap-3 px-5 pb-6 pt-8">
 	<header class="flex items-baseline gap-2.5">

@@ -21,7 +21,7 @@
 		'hover:bg-accent/40 focus-visible:ring-ring flex items-center gap-3 rounded-lg border p-4 transition-colors focus-visible:ring-2 focus-visible:outline-none';
 </script>
 
-<svelte:head><title>Preferences · lance</title></svelte:head>
+<svelte:head><title>Preferences · rask</title></svelte:head>
 
 <div class="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
 	<header class="flex flex-col gap-1">

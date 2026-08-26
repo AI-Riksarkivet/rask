@@ -302,7 +302,7 @@
 	}
 </script>
 
-<svelte:head><title>{ns} · namespaces · lance</title></svelte:head>
+<svelte:head><title>{ns} · namespaces · rask</title></svelte:head>
 
 <div class="page">
 	<header>

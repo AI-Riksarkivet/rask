@@ -219,7 +219,7 @@
 	});
 </script>
 
-<svelte:head><title>{project} · projects · lance</title></svelte:head>
+<svelte:head><title>{project} · projects · rask</title></svelte:head>
 
 <div class="page">
 	<header>

@@ -2,5 +2,5 @@
 	import StreamsPanel from '$lib/admin/StreamsPanel.svelte';
 </script>
 
-<svelte:head><title>Streams · lance</title></svelte:head>
+<svelte:head><title>Streams · rask</title></svelte:head>
 <StreamsPanel />

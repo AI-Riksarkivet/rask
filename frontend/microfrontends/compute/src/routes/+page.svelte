@@ -193,7 +193,7 @@
 </script>
 
 <svelte:head>
-	<title>Compute — RASK</title>
+	<title>Compute — rask</title>
 </svelte:head>
 
 <main class="bg-background flex-1 overflow-auto">

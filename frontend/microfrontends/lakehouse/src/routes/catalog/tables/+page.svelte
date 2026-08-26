@@ -2,5 +2,5 @@
 	import TableRegistry from '$lib/data/TableRegistry.svelte';
 </script>
 
-<svelte:head><title>Tables · lance</title></svelte:head>
+<svelte:head><title>Tables · rask</title></svelte:head>
 <TableRegistry />

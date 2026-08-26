@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>Cluster — RASK</title>
+	<title>Cluster — rask</title>
 </svelte:head>
 
 <ClusterBoard />

@@ -16,7 +16,7 @@
 	const best = checkpoints[0];
 </script>
 
-<svelte:head><title>Training analysis — RASK</title></svelte:head>
+<svelte:head><title>Training analysis — rask</title></svelte:head>
 
 <div class="mx-auto flex w-full max-w-5xl flex-col gap-5 p-6">
 	<header class="flex items-center gap-3">

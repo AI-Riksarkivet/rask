@@ -200,7 +200,7 @@
 </script>
 
 <svelte:head>
-	<title>{id} — RASK</title>
+	<title>{id} — rask</title>
 </svelte:head>
 
 <main class="bg-background flex-1 overflow-auto">

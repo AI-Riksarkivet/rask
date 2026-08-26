@@ -33,7 +33,7 @@
 </script>
 
 <svelte:head>
-	<title>Ingest runs — RASK</title>
+	<title>Ingest runs — rask</title>
 </svelte:head>
 
 <main class="bg-background flex-1 overflow-auto">

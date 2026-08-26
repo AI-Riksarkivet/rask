@@ -129,7 +129,7 @@
 	}
 </script>
 
-<svelte:head><title>Compute workbench — RASK</title></svelte:head>
+<svelte:head><title>Compute workbench — rask</title></svelte:head>
 
 <div class="wrap">
 	<ViewSidebar {views} onselect={applyView} />

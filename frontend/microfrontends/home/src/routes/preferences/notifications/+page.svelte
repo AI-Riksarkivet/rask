@@ -112,7 +112,7 @@
 	}
 </script>
 
-<svelte:head><title>Notifications · Settings · lance</title></svelte:head>
+<svelte:head><title>Notifications · Settings · rask</title></svelte:head>
 
 <div class="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
 	<header class="flex flex-col gap-1">

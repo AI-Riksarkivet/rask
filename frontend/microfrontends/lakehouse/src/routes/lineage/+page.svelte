@@ -30,7 +30,7 @@
 	let buildMs = $state(0);
 </script>
 
-<svelte:head><title>Lineage graph · lance</title></svelte:head>
+<svelte:head><title>Lineage graph · rask</title></svelte:head>
 
 <div class="app">
 	<header {@attach stagger({ each: 0.08 })}>

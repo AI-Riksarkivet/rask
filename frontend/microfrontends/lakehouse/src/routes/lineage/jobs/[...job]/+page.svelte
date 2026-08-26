@@ -78,7 +78,7 @@
 		/FAIL|ABORT/i.test(s ?? '') ? 'var(--fail)' : s === 'COMPLETE' ? 'var(--ok)' : 'var(--amber)';
 </script>
 
-<svelte:head><title>{jobId} · lineage · lance</title></svelte:head>
+<svelte:head><title>{jobId} · lineage · rask</title></svelte:head>
 
 <div class="page">
 	<a class="back" href="{base}/lineage/jobs"><ArrowLeft size={12} /> jobs</a>

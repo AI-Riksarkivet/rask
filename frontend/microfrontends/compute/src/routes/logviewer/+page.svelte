@@ -197,7 +197,7 @@
 </script>
 
 <svelte:head>
-	<title>Logs — RASK</title>
+	<title>Logs — rask</title>
 </svelte:head>
 
 <main class="bg-background flex-1 overflow-auto">

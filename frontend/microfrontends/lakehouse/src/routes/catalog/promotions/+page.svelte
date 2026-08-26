@@ -23,7 +23,7 @@
 	}
 </script>
 
-<svelte:head><title>Promotions · lance</title></svelte:head>
+<svelte:head><title>Promotions · rask</title></svelte:head>
 
 <div class="flex flex-col gap-4 p-4">
 	<div>

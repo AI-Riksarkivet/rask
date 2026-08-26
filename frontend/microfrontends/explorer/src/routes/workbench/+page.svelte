@@ -118,7 +118,7 @@
 	}
 </script>
 
-<svelte:head><title>Search workbench — RASK</title></svelte:head>
+<svelte:head><title>Search workbench — rask</title></svelte:head>
 
 <div class="wrap">
 	<ViewSidebar {views} onselect={applyView} />

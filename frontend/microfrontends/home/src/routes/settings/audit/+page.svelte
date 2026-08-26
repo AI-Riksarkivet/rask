@@ -2,5 +2,5 @@
 	import AuditViewer from '$lib/settings/AuditViewer.svelte';
 </script>
 
-<svelte:head><title>Audit · lance</title></svelte:head>
+<svelte:head><title>Audit · rask</title></svelte:head>
 <AuditViewer />

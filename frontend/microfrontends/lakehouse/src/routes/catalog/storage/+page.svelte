@@ -2,5 +2,5 @@
 	import ObjectBrowser from '$lib/storage/ObjectBrowser.svelte';
 </script>
 
-<svelte:head><title>Storage · lance</title></svelte:head>
+<svelte:head><title>Storage · rask</title></svelte:head>
 <ObjectBrowser />

@@ -30,6 +30,6 @@
 	liveRead(lineageTick, () => load());
 </script>
 
-<svelte:head><title>Runs · lineage · lance</title></svelte:head>
+<svelte:head><title>Runs · lineage · rask</title></svelte:head>
 
 <RunsBoard {runs} {unauthorized} {offline} {loginHref} />

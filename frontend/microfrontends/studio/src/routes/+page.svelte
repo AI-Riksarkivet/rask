@@ -12,7 +12,7 @@
 	import FlowsInspector from '$lib/flows/FlowsInspector.svelte';
 </script>
 
-<svelte:head><title>Flows — Studio — RASK</title></svelte:head>
+<svelte:head><title>Flows — Studio — rask</title></svelte:head>
 
 <div class="h-full min-h-0 w-full">
 	<ResizableSplit storageKey="studio-flow-split" initial={0.72} minLeft={420} minRight={280}>

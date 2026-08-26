@@ -41,7 +41,7 @@
 	];
 </script>
 
-<svelte:head><title>lance</title></svelte:head>
+<svelte:head><title>rask</title></svelte:head>
 
 <div class="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
 	<!-- The hero. `isolate` gives the aurora a stacking context of its own so an absolutely-positioned
