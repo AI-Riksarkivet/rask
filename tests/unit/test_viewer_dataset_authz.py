@@ -18,13 +18,14 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from viewer.api.security import READ_METADATA, corpus_object
+from viewer.api.security import READ_METADATA
 from viewer.api.v1.endpoints import datasets as ds
 from viewer.api.v1.endpoints.datasets import router
 from viewer.core.config import ViewerSettings, get_viewer_settings
 
 from service_kit.exceptions import register_handlers
 from service_kit.lancekit.descriptor import DatasetDescriptor
+from service_kit.media.authz import corpus_object
 
 
 def _descriptor(dataset_id: str, row_table: str | None) -> DatasetDescriptor:

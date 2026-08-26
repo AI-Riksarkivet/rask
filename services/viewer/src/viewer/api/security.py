@@ -59,23 +59,6 @@ READ_DATA = "can_read_data"
 BROWSE_STORAGE = "can_browse_storage"
 
 
-def corpus_object(settings: ViewerSettings, dataset_id: str, table: str) -> str:
-    """The FGA object for one corpus table: `table:<namespace>/<table>`.
-
-    Built through `catalog_table_id` so the object this service checks is the SAME identifier the
-    annotator writes through and the catalog authorizes on. Deriving it any other way here would
-    create a second naming scheme that agrees until someone sets `MEDIA_CATALOG_NAMESPACE`.
-    """
-    segments = settings.catalog_table_id(dataset_id, table)
-    return f"table:{settings.catalog_delimiter.join(segments)}"
-
-
-def table_object(table_id: str) -> str:
-    """The FGA object for a caller-supplied CATALOG TABLE ID (``bronze$pages``) — ``table:<id>``.
-
-    The page routes are addressed by catalog table id directly, not by a media dataset id, so they
-    need no `catalog_table_id` mapping — the identifier the caller passes IS the one the catalog
-    authorizes on. Kept here beside `corpus_object` so both naming rules live in one file: the way
-    this goes wrong is a second module deriving an object string that agrees until it does not.
-    """
-    return f"table:{table_id}"
+# The two object-naming rules (`corpus_object`, `table_object`) moved to `service_kit.media.authz`
+# when the annotator's assist plane needed the same object. Import them from there — this module's
+# own docstring is why they must not be written twice.

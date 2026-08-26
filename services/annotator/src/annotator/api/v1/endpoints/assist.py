@@ -15,15 +15,18 @@ import logging
 from typing import Any
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.api.v1.endpoints.serve_discovery import discovered_backends
 from annotator.projects.generation_schema import generation_schema
 from annotator.projects.ontology import LabelOntology
-from service_kit.exceptions import ServiceUnavailableError
+from service_kit.exceptions import ForbiddenError, ServiceUnavailableError
+from service_kit.governed.audit import FAILURE, audit
 from service_kit.lancekit.keys import validate_doc_key
+from service_kit.media.authz import corpus_object
 from service_kit.media.config import AssistBackend
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import AppState, dataset_handle
@@ -31,7 +34,47 @@ from service_kit.media.state import AppState, dataset_handle
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["assist"])
+#: An assist prediction is a PROPOSED WRITE: it comes back as `status="prediction"`,
+#: `source="model:<name>"` rows the annotator renders and a reviewer accepts or rejects — the same
+#: provenance path a batch deriver's output takes. So the rung is the write one. Gating on the read
+#: rung would let anyone who may merely LOOK at a corpus spend model compute against it and queue
+#: work for its reviewers.
+WRITE_DATA = "can_write_data"
+
+
+async def require_assist(request: Request, state: StateDep, subject: CurrentSubject, checker: CheckerDep) -> None:
+    """The door for the whole assist plane.
+
+    AT THE ROUTER, not on each handler — the reference's own rule for a group where every route needs
+    the same check ("cheaper to read and harder to forget"). This module had no door at all: it did not
+    import `annotator.api.security`, so its three routes took no verified subject, no checker and no
+    forwarded bearer while every sibling router in this service had one. The POST reads a corpus unit
+    and drives a model backend; the two GETs disclose the estate's model-backend topology and a task's
+    ontology. None of that should answer a caller nobody identified.
+
+    The dataset is read off the QUERY STRING rather than a typed parameter because the two GETs do not
+    declare one — they are scoped by `task_id`, and resolving `None` here gives the default dataset,
+    which is the same corpus their answers describe. That keeps one door for the group instead of a
+    per-route rung, which is what made this router easy to add a fourth ungated route to.
+
+    Blocking Lance/S3 IO goes to the threadpool: `dataset_handle` opens under a `threading.Lock`, and
+    awaiting it inline would freeze the loop for every other request during a cold S3 open. The handler
+    resolves the same handle again from cache.
+    """
+    handle = await run_in_threadpool(dataset_handle, state, request.query_params.get("dataset"))
+    binding = handle.descriptor.declared.document
+    if binding is None:
+        # FAIL CLOSED. With no document binding there is no table to authorize against, and answering
+        # anyway would make a malformed descriptor an authorization bypass.
+        audit("annotator.assist", FAILURE, subject=subject, resource=handle.id, relation=WRITE_DATA)
+        raise ForbiddenError(f"{subject} cannot be authorized for assist on {handle.id}: no documents table")
+    obj = corpus_object(state.settings, handle.id, binding.table)
+    if not await checker(user=subject, relation=WRITE_DATA, obj=obj):
+        audit("annotator.assist", FAILURE, subject=subject, resource=handle.id, relation=WRITE_DATA)
+        raise ForbiddenError(f"{subject} lacks {WRITE_DATA} on {obj}")
+
+
+router = APIRouter(prefix="/api", tags=["assist"], dependencies=[Depends(require_assist)])
 
 
 class Region(BaseModel):

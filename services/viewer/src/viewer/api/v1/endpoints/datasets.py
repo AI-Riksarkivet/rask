@@ -18,9 +18,10 @@ from service_kit.exceptions import ForbiddenError
 from service_kit.governed.audit import FAILURE, audit
 from service_kit.lancekit.descriptor import DatasetDescriptor
 from service_kit.lancekit.registry import DatasetRegistry, UnknownDatasetError
+from service_kit.media.authz import corpus_object
 from service_kit.media.deps import StateDep
 from service_kit.media.state import AppState, dataset_handle
-from viewer.api.security import READ_METADATA, CheckerDep, CurrentSubject, SettingsDep, corpus_object
+from viewer.api.security import READ_METADATA, CheckerDep, CurrentSubject, SettingsDep
 
 
 logger = logging.getLogger(__name__)

@@ -30,8 +30,9 @@ from service_kit.exceptions import ForbiddenError, NotFoundError, UnauthorizedEr
 from service_kit.governed.audit import FAILURE, audit
 from service_kit.governed.deps import RawBearerToken
 from service_kit.lakehouse.blobs import read_aligned_table
+from service_kit.media.authz import table_object
 from service_kit.media.deps import StateDep
-from viewer.api.security import READ_DATA, READ_METADATA, CheckerDep, CurrentSubject, table_object
+from viewer.api.security import READ_DATA, READ_METADATA, CheckerDep, CurrentSubject
 
 
 router = APIRouter(prefix="/api", tags=["pages"])

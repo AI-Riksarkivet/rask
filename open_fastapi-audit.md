@@ -362,7 +362,9 @@ promotions.py:251-264 `@router.get("/promotions/{instance_id}")` / `async def sh
 
 </details>
 
-<details><summary><b>The annotator's interactive AI-assist plane is three routes with no subject, no checker and no catalog delegation — it spends model compute for any caller who can reach the pod</b> <i>(authn.md + authz.md, ADJUSTED)</i></summary>
+<details><summary><b>~~The annotator's interactive AI-assist plane is three routes with no subject, no checker and no catalog delegation — it spends model compute for any caller who can reach the pod~~</b> <i>(authn.md + authz.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-26.** The router has a door: `APIRouter(prefix="/api", tags=["assist"], dependencies=[Depends(require_assist)])`, which resolves a verified `CurrentSubject`, takes the existing `CheckerDep`, and checks `can_write_data` on the unit's corpus table — the write rung, because a prediction is a proposed write that queues reviewer work. All three routes, including the two GETs whose disclosure is model-backend topology and a task's ontology. Fails CLOSED on a descriptor with no documents binding, and writes the audit row the plane never had. The dataset comes off the query string so one door covers the group; `dataset_handle` runs in the threadpool as the handler's own call does. `corpus_object`/`table_object` moved from `viewer/api/security.py` to `service_kit/media/authz.py` rather than being written a second time — the viewer's own docstring warned against exactly that. Pinned by `tests/unit/test_assist_plane_is_gated.py` (5 tests, all RED before).
 
 **Rule.** authn.md § Protected routes: apply at the router level when every route in the group needs it — the stance `flows/security.py` already states for `POST /flows/runs`
 
