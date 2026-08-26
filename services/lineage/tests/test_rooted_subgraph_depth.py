@@ -61,7 +61,7 @@ def test_a_hostile_or_absurd_depth_cannot_reach_the_query(hostile: object) -> No
     asking for the unbounded walk under a different name.
     """
     with pytest.raises((ValueError, TypeError)):
-        bounded_walk("MATCH (d)-[:DERIVED_FROM*1..]->(u) RETURN u", hostile)  # ty: ignore[invalid-argument-type]
+        bounded_walk("MATCH (d)-[:DERIVED_FROM*1..]->(u) RETURN u", hostile)
 
 
 def test_the_bound_is_applied_to_every_variable_hop_in_the_query() -> None:

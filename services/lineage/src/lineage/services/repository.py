@@ -421,6 +421,11 @@ _ESTATE_EDGES: Final = "MATCH (a:Dataset)-[:DERIVED_FROM]->(b:Dataset) RETURN DI
 # (_fold_writes). Keeps the graph UI's node badges (versions, failed ring) at ONE request instead
 # of a per-dataset /producers fan-out.
 _ESTATE_WRITES: Final = "MATCH (r:Run)-[w:WROTE]->(d:Dataset) RETURN d.name, w.version, r.event_type"
+# The same rollup, scoped to a rooted neighbourhood. It exists because the badges must not depend on
+# WHICH read the UI happens to use: a card sourced from the rooted graph and the same card sourced
+# from the estate graph have to say the same thing, and an unscoped read here would fold the whole
+# estate's writes to answer a question about a handful of datasets.
+_GRAPH_WRITES: Final = "MATCH (r:Run)-[w:WROTE]->(d:Dataset) WHERE d.name IN $names RETURN d.name, w.version, r.event_type"
 
 # Column-level lineage (#24). A (:Column {dataset, field}) is MERGEd on the 2-tuple of SCALAR props
 # (no concatenated id — dataset names contain '$', so any delimiter could collide). ``dataset`` is the
@@ -1441,6 +1446,10 @@ class LineageRepository:
         whole connected component — the shape Marquez serves at `/lineage?nodeId=&depth=N`, and the
         thing a depth control needs in order to bound what is FETCHED instead of filtering what has
         already been fetched.
+
+        Nodes carry the SAME write rollup the estate read attaches (written versions, any-failed), so
+        a card renders identically whichever read fed it — see
+        ``tests/test_rooted_graph_carries_node_badges.py``.
         """
         up = await self.upstream(name, depth)
         down = await self.downstream(name, depth)
@@ -1448,6 +1457,7 @@ class LineageRepository:
         prop_rows = await fetch(self._pool, self._graph, _GRAPH_NODES, {"names": names}, columns=4)
         props = {r[0]: r for r in prop_rows}
         edge_rows = await fetch(self._pool, self._graph, _GRAPH_EDGES, {"names": names}, columns=2)
+        writes = _fold_writes(await fetch(self._pool, self._graph, _GRAPH_WRITES, {"names": names}, columns=3))
         return LineageGraph(
             root=name,
             nodes=[
@@ -1456,6 +1466,8 @@ class LineageRepository:
                     namespace=(props[n][1] if n in props else None),
                     source_uri=(props[n][2] if n in props else None),
                     tags=_tags_from(props[n][3] if n in props else None),
+                    versions=writes.get(n, _NO_WRITES)[0],
+                    failed=writes.get(n, _NO_WRITES)[1],
                 )
                 for n in names
             ],

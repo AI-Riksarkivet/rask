@@ -163,14 +163,50 @@
 	const FOCUS_DEPTHS: (number | null)[] = [1, 2, 3, null];
 
 	/**
+	 * FOCUS DRIVES THE FETCH, not just the filter. This is P2 #12 / P1 #7.
+	 *
+	 * Unfocused, the store reads the estate — every visible dataset, hard-capped. That cap is a
+	 * GLOBAL window, so a table five hops upstream of whatever you focus can sit outside it and stay
+	 * unreachable at every depth: the buttons below re-filtered something already fetched, and no
+	 * setting could pull in what the window had cut. Rooting the read on the focused dataset removes
+	 * the ceiling from the answer entirely — the server walks the neighbourhood and sends it.
+	 *
+	 * THE DEPTH SENT IS DATASET HOPS; the buttons count ALTERNATING hops (dataset → job → dataset).
+	 * Sending `focusDepth` unchanged therefore over-fetches slightly, and that direction is chosen
+	 * deliberately: the server's neighbourhood must CONTAIN the one drawn, or the filter below would
+	 * blank out neighbours the user asked for. Halving it would be tighter and occasionally wrong,
+	 * and a lineage graph that silently omits an upstream is worse than one that fetched too much.
+	 *
+	 * DATASETS ONLY — the rooted endpoint is rooted on a dataset. A focused JOB falls back to the
+	 * estate read and narrows client-side off the event feed, which is what it always did.
+	 *
+	 * `untrack` is load-bearing: `refocus` writes `store.focus` and then reads it inside `poll()`,
+	 * so tracking that read would make this effect depend on its own write and re-run forever.
+	 */
+	$effect(() => {
+		const name = focusNode?.kind === 'dataset' ? focusNode.name : null;
+		const depth = focusDepth;
+		untrack(() => void store.refocus(name !== null && depth !== null ? { name, depth } : null));
+	});
+
+	/**
 	 * Jump-to-node. With 81 nodes on the canvas there was no way to reach one you could name — you
 	 * panned until you saw it, or you did not find it. Marquez has the same affordance in its header.
 	 *
-	 * Matches against the nodes CURRENTLY BUILT rather than the store, so it can never offer a node
-	 * the canvas is not showing; picking one focuses it, which is also what re-roots the graph.
+	 * IT SEARCHES THE ESTATE, NOT THE CANVAS (P1 #8). Matching only drawn nodes was defended as
+	 * deliberate — never offer what the canvas cannot show — and it is a closed loop: the canvas is
+	 * capped when unfocused and bounded when focused, so the tables you most need to jump to are
+	 * exactly the ones off it. Picking an off-canvas dataset focuses it, and focusing is now what
+	 * FETCHES it, so the answer arrives instead of being withheld.
+	 *
+	 * On-canvas hits come first and are not re-fetched; the governed `/search` fills the rest and its
+	 * rows are marked, because "somewhere in the estate" and "over there on screen" are different
+	 * promises and a person about to lose their current view should be told which they are taking.
 	 */
 	let query = $state('');
-	const matches = $derived.by(() => {
+	let offCanvas = $state.raw<{ id: string; name: string }[]>([]);
+
+	const onCanvas = $derived.by(() => {
 		const q = query.trim().toLowerCase();
 		if (q.length < 2) return [];
 		return nodes
@@ -179,11 +215,52 @@
 			.slice(0, 8);
 	});
 
+	const matches = $derived.by(() => {
+		const drawn = new Set(onCanvas.map((m) => m.id));
+		const rest = offCanvas.filter((m) => !drawn.has(m.id)).map((m) => ({ ...m, off: true }));
+		return [...onCanvas.map((m) => ({ ...m, off: false })), ...rest].slice(0, 8);
+	});
+
+	/**
+	 * The estate half of the search, debounced.
+	 *
+	 * Debounced because this is a keystroke-driven request against a governed endpoint and a person
+	 * typing a table name would otherwise fire one per character. The cancel flag is not the same
+	 * thing as the timer: a request already in flight when the query changes must not be allowed to
+	 * land, or a slower earlier response overwrites a faster later one and the list shows hits for a
+	 * prefix the box no longer contains.
+	 */
+	$effect(() => {
+		const q = query.trim();
+		if (q.length < 2) {
+			offCanvas = [];
+			return;
+		}
+		let cancelled = false;
+		const timer = setTimeout(() => {
+			void store
+				.searchEstate(q)
+				.then((hits) => {
+					if (!cancelled) offCanvas = hits.map((h) => ({ id: dsId(h.name), name: h.name }));
+				})
+				.catch(() => {
+					// A failed search is an empty search, not a broken box: the on-canvas half still
+					// answers, and the alternative is an error state over a type-ahead.
+					if (!cancelled) offCanvas = [];
+				});
+		}, 180);
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+		};
+	});
+
 	function jump(id: string): void {
 		focusNode = id.startsWith(JOB_PREFIX)
 			? { kind: 'job', name: id.slice(JOB_PREFIX.length) }
 			: { kind: 'dataset', name: id.slice(DATASET_PREFIX.length) };
 		query = '';
+		offCanvas = [];
 	}
 
 	/** Where the focus bar's "Open" goes — the detail page for whatever is focused. */
@@ -357,7 +434,14 @@
 		// Filtering happens BEFORE layout on purpose: laying out the full graph and then hiding
 		// nodes would leave the survivors on their estate-wide coordinates, scattered across a
 		// canvas whose other occupants are gone.
-		if (focused && focusDepth !== null && ids.includes(focused)) {
+		//
+		// COLOURING AND NARROWING ARE SEPARATE (P1 #6). This guard used to require a finite depth for
+		// both, so switching to "All" — the moment the graph gets big enough for direction to be the
+		// only thing making it readable — dropped the upstream/downstream shading entirely and left an
+		// undifferentiated estate with one node marked. Direction is a property of the focus, not of
+		// the window: it is computed whenever something is focused, and only the `keep` filter below
+		// is skipped when depth is All.
+		if (focused && ids.includes(focused)) {
 			const adj = new Map<string, string[]>();
 			for (const e of derive) {
 				(adj.get(e.source) ?? adj.set(e.source, []).get(e.source)!).push(e.target);
@@ -372,9 +456,10 @@
 				(up.get(e.source) ?? up.set(e.source, []).get(e.source)!).push(e.target);
 				(down.get(e.target) ?? down.set(e.target, []).get(e.target)!).push(e.source);
 			}
-			// Captured: the outer guard narrows `focusDepth`, but a closure does not inherit that
-			// narrowing, and widening the guard instead would let `null` (= All) reach the loop.
-			const hops = focusDepth;
+			// `null` (= All) means "walk until the frontier is empty", which terminates on its own:
+			// `seen` is checked before a node is enqueued, so every node is expanded at most once.
+			// Captured in a local because a closure does not inherit the narrowing above.
+			const hops = focusDepth ?? Number.POSITIVE_INFINITY;
 			const reach = (side: Map<string, string[]>): Set<string> => {
 				const seen = new Set<string>();
 				let wave = [focused];
@@ -399,25 +484,30 @@
 			// "what depends on this" is the answer a person is usually acting on.
 			for (const id of downstreamSet) relation[id] = 'downstream';
 
-			const keep = new Set<string>([focused]);
-			let frontier = [focused];
-			for (let hop = 0; hop < focusDepth && frontier.length > 0; hop += 1) {
-				const next: string[] = [];
-				for (const id of frontier) {
-					for (const n of adj.get(id) ?? []) {
-						if (keep.has(n)) continue;
-						keep.add(n);
-						next.push(n);
+			// Only NARROWING is depth-gated — a BLOCK, not an early return: everything after this
+			// `if (focused …)` is the layout, and bailing out of the effect here would leave the
+			// canvas holding the previous build.
+			if (focusDepth !== null) {
+				const keep = new Set<string>([focused]);
+				let frontier = [focused];
+				for (let hop = 0; hop < focusDepth && frontier.length > 0; hop += 1) {
+					const next: string[] = [];
+					for (const id of frontier) {
+						for (const n of adj.get(id) ?? []) {
+							if (keep.has(n)) continue;
+							keep.add(n);
+							next.push(n);
+						}
 					}
+					frontier = next;
 				}
-				frontier = next;
+				ids = ids.filter((id) => keep.has(id));
+				derive = derive.filter((e) => keep.has(e.source) && keep.has(e.target));
+				// Deleting the CURRENT entry during `for…of` is defined behaviour for Set and Map, so
+				// these iterate the live collections rather than a copy.
+				for (const id of dsSet) if (!keep.has(dsId(id))) dsSet.delete(id);
+				for (const job of jobs.keys()) if (!keep.has(jobId(job))) jobs.delete(job);
 			}
-			ids = ids.filter((id) => keep.has(id));
-			derive = derive.filter((e) => keep.has(e.source) && keep.has(e.target));
-			// Deleting the CURRENT entry during `for…of` is defined behaviour for Set and Map, so
-			// these iterate the live collections rather than a copy.
-			for (const id of dsSet) if (!keep.has(dsId(id))) dsSet.delete(id);
-			for (const job of jobs.keys()) if (!keep.has(jobId(job))) jobs.delete(job);
 		}
 
 		const depth = depths(ids, derive);
@@ -625,9 +715,16 @@
 					<ul class="hits">
 						{#each matches as m (m.id)}
 							<li>
-								<button class="hit" onclick={() => jump(m.id)}>
+								<button
+									class="hit"
+									title={m.off
+										? 'not on the canvas — picking it fetches its neighbourhood'
+										: m.name}
+									onclick={() => jump(m.id)}
+								>
 									<span class="hkind">{m.id.startsWith(JOB_PREFIX) ? 'job' : 'data'}</span>
 									<span class="hname">{m.name}</span>
+									{#if m.off}<span class="hoff">fetch</span>{/if}
 								</button>
 							</li>
 						{/each}
@@ -644,7 +741,7 @@
 				{/if}
 				<span
 					class="flabel"
-					title="hops from the focused node — one hop reaches its jobs, two the tables those jobs touch"
+					title="hops from the focused node — one hop reaches its jobs, two the tables those jobs touch. On a focused dataset the neighbourhood is read from the server at this depth, so a larger number fetches more, it does not merely reveal more."
 					>hops</span
 				>
 				{#each FOCUS_DEPTHS as d (d ?? 'all')}
@@ -849,6 +946,19 @@
 	}
 	.hit:hover {
 		background: color-mix(in srgb, var(--primary) 12%, transparent);
+	}
+	/* An off-canvas hit costs a fetch and replaces the current view, so it is marked rather than
+	   hidden — the estate half of the search is the point, not a fallback to apologise for. */
+	.hoff {
+		margin-left: auto;
+		flex: none;
+		font-size: 9px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		padding: 1px 4px;
+		border-radius: 4px;
+		color: var(--primary);
+		background: color-mix(in srgb, var(--primary) 14%, transparent);
 	}
 	.hkind {
 		flex: none;

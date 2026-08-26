@@ -35,7 +35,11 @@ import type {
 const enc = encodeURIComponent;
 
 export interface LineageClient {
-	fetchGraph: (name: string) => Promise<LineageGraph | null>;
+	/** The ROOTED read: the neighbourhood around one dataset, bounded server-side by `depth` hops in
+	 *  each direction. Omitting `depth` returns the whole connected component, which is a real answer
+	 *  and stays the default. Nodes carry the same version/failed rollup `fetchEstateGraph` attaches,
+	 *  so a card renders identically whichever read fed it. */
+	fetchGraph: (name: string, depth?: number) => Promise<LineageGraph | null>;
 	/** The bulk estate read: every visible node + DERIVED_FROM edge (with per-node version/failed
 	 *  rollups) in ONE request — replaces the per-dataset /producers + /graph fan-out that cost
 	 *  hundreds of requests per refresh at estate scale. */
@@ -118,7 +122,8 @@ export function createLineageClient({
 	const write = <T>(path: string, init: RequestInit) => requestJSON<T>('/api', path, init);
 
 	return {
-		fetchGraph: (name) => getJSON<LineageGraph>(`datasets/${enc(name)}/graph`),
+		fetchGraph: (name, depth) =>
+			getJSON<LineageGraph>(`datasets/${enc(name)}/graph${depth ? `?depth=${depth}` : ''}`),
 		fetchEstateGraph: (limit) => getJSON<EstateGraph>(`graph?limit=${limit}`),
 		fetchProducers: (name) => getJSON<Producers>(`datasets/${enc(name)}/producers`),
 		fetchReaders: (name) => requestJSON<Readers>('/api', `datasets/${enc(name)}/readers`),
