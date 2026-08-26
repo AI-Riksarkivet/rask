@@ -151,12 +151,39 @@
 	const jobId = (job: string) => `${JOB_PREFIX}${job}`;
 	const dsId = (ds: string) => `${DATASET_PREFIX}${ds}`;
 
+	/** The focused node id (prefixed), and how many LOGICAL hops around it to draw — `null` is All.
+	 *  Pipeline-plane only: it is the one plane where the estate view is unreadable, and the two
+	 *  single-kind projections are small enough to click straight through. */
+	let focused = $state<string | null>(null);
+	let focusDepth = $state<number | null>(2);
+	const FOCUS_DEPTHS: (number | null)[] = [1, 2, 3, null];
+
+	/** The focused node's own name, unprefixed — the label the focus bar prints. */
+	const focusedName = $derived(
+		focused?.startsWith(JOB_PREFIX)
+			? focused.slice(JOB_PREFIX.length)
+			: focused?.startsWith(DATASET_PREFIX)
+				? focused.slice(DATASET_PREFIX.length)
+				: null,
+	);
+	/** Where the focus bar's "Open" goes — the same detail route a click used to navigate to. */
+	const focusedHref = $derived.by(() => {
+		if (!focused || !focusedName) return null;
+		const kind = focused.startsWith(JOB_PREFIX) ? 'jobs' : 'datasets';
+		return `${base}/lineage/${kind}/${encodeURIComponent(focusedName)}`;
+	});
+
 	let nodes = $state.raw<FlowNode[]>([]);
 	let edges = $state.raw<
 		{ id: string; source: string; target: string; animated: boolean; type: string }[]
 	>([]);
 	// Re-fit the viewport only when the node-set or the view changes (not on every data poll).
-	const fitKey = $derived(graphView + '|' + nodes.map((n) => n.id).join(','));
+	// `focused`/`focusDepth` ride the key as well as the node ids: focusing a node whose
+	// neighbourhood happens to be the whole graph leaves the id list identical, and the viewport
+	// would then keep whatever pan the previous selection left it on.
+	const fitKey = $derived(
+		graphView + '|' + focused + '|' + focusDepth + '|' + nodes.map((n) => n.id).join(','),
+	);
 
 	// Current run-state per dataset: the latest run (by updated_at) that lists it as an output.
 	const runStateByDataset = $derived.by(() => {
@@ -200,7 +227,8 @@
 				for (const o of j.outputs) dsSet.add(o);
 			}
 
-			const derive: { source: string; target: string }[] = [];
+			// `let`, not `const`: the focus pass below narrows it to the neighbourhood of one node.
+			let derive: { source: string; target: string }[] = [];
 			// Pairs a job already explains, as `<output>|<input>` — the derivation this run mediates.
 			const mediated = new Set<string>();
 			for (const [job, j] of jobs) {
@@ -235,7 +263,48 @@
 				derive.push({ source: dsId(e.source), target: dsId(e.target) });
 			}
 
-			const ids = [...[...dsSet].map(dsId), ...[...jobs.keys()].map(jobId)];
+			let ids = [...[...dsSet].map(dsId), ...[...jobs.keys()].map(jobId)];
+
+			// FOCUS — Marquez's `?nodeId=&depth=N`, which is the part that makes a lineage graph
+			// legible at estate scale: it never draws the whole estate, only the neighbourhood of one
+			// node. Without it this canvas is 79 nodes at 1,200×2,750px, a 1:2.3 aspect in a 16:9
+			// viewport, so `fitView` clamps to minZoom and every card renders ~20px wide.
+			//
+			// A hop here is a LOGICAL one — dataset → job → dataset, i.e. TWO graph edges — because
+			// this plane alternates the kinds. Depth 1 therefore reads as "the runs that touch this
+			// table and the tables they touch", which is what a person means by one hop; counting raw
+			// edges would make every odd depth end on a job and look truncated.
+			//
+			// Filtering happens BEFORE layout on purpose: laying out the full graph and then hiding
+			// nodes would leave the survivors on their estate-wide coordinates, scattered across a
+			// canvas whose other occupants are gone.
+			if (focused && focusDepth !== null && ids.includes(focused)) {
+				const adj = new Map<string, string[]>();
+				for (const e of derive) {
+					(adj.get(e.source) ?? adj.set(e.source, []).get(e.source)!).push(e.target);
+					(adj.get(e.target) ?? adj.set(e.target, []).get(e.target)!).push(e.source);
+				}
+				const keep = new Set<string>([focused]);
+				let frontier = [focused];
+				for (let hop = 0; hop < focusDepth * 2 && frontier.length > 0; hop += 1) {
+					const next: string[] = [];
+					for (const id of frontier) {
+						for (const n of adj.get(id) ?? []) {
+							if (keep.has(n)) continue;
+							keep.add(n);
+							next.push(n);
+						}
+					}
+					frontier = next;
+				}
+				ids = ids.filter((id) => keep.has(id));
+				derive = derive.filter((e) => keep.has(e.source) && keep.has(e.target));
+				// Deleting the CURRENT entry during `for…of` is defined behaviour for Set and Map, so
+				// these iterate the live collections rather than a copy.
+				for (const id of dsSet) if (!keep.has(dsId(id))) dsSet.delete(id);
+				for (const job of jobs.keys()) if (!keep.has(jobId(job))) jobs.delete(job);
+			}
+
 			const depth = depths(ids, derive);
 			const place = layout(ids, derive, (id) => depth.get(id) ?? 0);
 
@@ -255,7 +324,10 @@
 						tags: meta?.tags ?? [],
 						versions: meta?.versions ?? [],
 						failed: meta?.failed ?? false,
-						selected: false,
+						// The focused card, marked. `.selected` is already styled by MedallionNode and
+						// JobNode and was simply never set by anything — without it the node a click
+						// focused looked exactly like the twelve it dragged in with it.
+						selected: dsId(id) === focused,
 						runState: runStateByDataset[id] ?? null,
 					},
 				};
@@ -271,7 +343,7 @@
 					state: j.state,
 					outputs: [...j.outputs],
 					failed: j.failed,
-					selected: false,
+					selected: jobId(job) === focused,
 				},
 			}));
 
@@ -397,6 +469,15 @@
 		// The pipeline plane holds BOTH kinds on one canvas, so the kind comes off the node id, not
 		// off the active view — reading the view there would send every job click to a dataset page.
 		// The two single-kind planes keep raw ids and fall through to the view.
+		// In the PIPELINE plane a click FOCUSES rather than navigates — the plane draws the whole
+		// estate otherwise, and focus is what makes it readable (Marquez's `?nodeId=&depth=N`).
+		// Navigation is not lost, it moves to the focus bar's "Open", where it is labelled rather
+		// than implied. The two projections keep click-to-navigate: they were already legible, and
+		// silently changing what a click does there would be a regression for no gain.
+		if (graphView === 'pipeline') {
+			focused = focused === raw ? null : raw;
+			return;
+		}
 		const [kind, id] = raw.startsWith(JOB_PREFIX)
 			? (['jobs', raw.slice(JOB_PREFIX.length)] as const)
 			: raw.startsWith(DATASET_PREFIX)
@@ -463,6 +544,33 @@
 					<Cpu size={13} /> Jobs
 				</button>
 			</div>
+			{#if graphView === 'pipeline'}
+				<div class="focusbar">
+					{#if focused}
+						<span class="fname" title={focusedName}>{focusedName}</span>
+						<span class="fsep">·</span>
+					{:else}
+						<span class="fhint">click a node to focus</span>
+						<span class="fsep">·</span>
+					{/if}
+					<span class="flabel">depth</span>
+					{#each FOCUS_DEPTHS as d (d ?? 'all')}
+						<button
+							class="fd"
+							class:on={focusDepth === d}
+							disabled={!focused}
+							aria-pressed={focusDepth === d}
+							onclick={() => (focusDepth = d)}
+						>
+							{d ?? 'All'}
+						</button>
+					{/each}
+					{#if focused && focusedHref}
+						<a class="fopen" href={focusedHref}>Open</a>
+						<button class="fclear" onclick={() => (focused = null)}>Clear</button>
+					{/if}
+				</div>
+			{/if}
 		</Panel>
 	</SvelteFlow>
 	{#if store.settled && store.online && nodes.length === 0}
@@ -506,6 +614,81 @@
 		border: 1px solid var(--line);
 		border-radius: 999px;
 		box-shadow: var(--shadow);
+	}
+	/* The focus bar sits UNDER the plane toggle in the same top-left Panel, so `FIT_PADDING.top`
+	   (76px) already keeps nodes clear of both — it was sized for the toggle plus this row. */
+	.focusbar {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		margin-top: 6px;
+		padding: 3px 8px;
+		background: var(--panel);
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		box-shadow: var(--shadow);
+		font-size: 11px;
+		color: var(--mut);
+	}
+	.fname {
+		max-width: 190px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--ink);
+		font-weight: 600;
+	}
+	.fhint {
+		font-style: italic;
+	}
+	.fsep {
+		opacity: 0.5;
+	}
+	.flabel {
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		font-size: 10px;
+	}
+	.fd {
+		min-width: 20px;
+		padding: 2px 6px;
+		border: none;
+		background: transparent;
+		color: var(--mut);
+		font-size: 11px;
+		font-weight: 600;
+		border-radius: 999px;
+		cursor: pointer;
+	}
+	.fd:hover:not(:disabled) {
+		color: var(--ink);
+	}
+	.fd.on:not(:disabled) {
+		color: var(--primary);
+		background: color-mix(in srgb, var(--primary) 14%, transparent);
+	}
+	/* Depth is meaningless with nothing focused, so the buttons are DISABLED rather than hidden —
+	   the control stays where the eye already found it, and its state says why it is inert. */
+	.fd:disabled {
+		opacity: 0.4;
+		cursor: default;
+	}
+	.fopen,
+	.fclear {
+		padding: 2px 8px;
+		border: 1px solid var(--line);
+		background: transparent;
+		color: var(--ink);
+		font-size: 11px;
+		font-weight: 600;
+		border-radius: 999px;
+		cursor: pointer;
+		text-decoration: none;
+	}
+	.fopen:hover,
+	.fclear:hover {
+		border-color: var(--primary);
+		color: var(--primary);
 	}
 	.vt {
 		display: inline-flex;
