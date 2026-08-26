@@ -173,7 +173,7 @@ state-store metric — and `dapr_runtime_workflow_*` (which `rules.yml` already 
 for this codebase) is absent outright. A fourth scrape job would have had no target, so this could
 never have been a rules edit.
 
-**Shipped as `2fc1ad7b` + `<runbook-commit>`, live on helm rev 62.** The state store is measured by
+**Shipped as `2fc1ad7b` + `561efd99`, live on helm rev 62.** The state store is measured by
 QUERY rather than by scrape: a `sqlquery/daprstate` receiver on the Collector that already ships every
 other metric — no second image to vendor and scan, no second credential path, no new service. One
 query, 4.7 ms over a 7.5 MB table, every 5 minutes. The password arrives by `secretKeyRef` and the
