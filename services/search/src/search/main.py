@@ -16,6 +16,7 @@ from fastapi import FastAPI
 
 from search.api.v1.router import router as api_router
 from search.core.config import get_search_settings
+from search.core.rate_limit import limiter
 from service_kit import setup_logging
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.exceptions import register_handlers
@@ -24,6 +25,7 @@ from service_kit.media.middleware import register_middleware
 from service_kit.media.state import AppState, dataset_handle
 from service_kit.obs import configure_app_logging
 from service_kit.probes import router as probes_router
+from service_kit.rate_limit import register_rate_limiting
 
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,10 @@ register_handlers(app)
 # at networking for what is really "sign in again". Same installer the catalog has always used.
 install_problem_handlers(app, logger)
 register_middleware(app, get_search_settings())
+# PER-ROUTE rate limiting for the GPU surfaces (see search.core.rate_limit). Registered here because
+# slowapi reads `app.state.limiter` by that exact name for its header injection, and the problem+json
+# 429 replaces slowapi's default so a refusal is shaped like every other error in the estate.
+register_rate_limiting(app, limiter)
 app.include_router(probes_router)
 app.include_router(api_router)
 

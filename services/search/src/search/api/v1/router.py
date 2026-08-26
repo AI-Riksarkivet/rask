@@ -25,6 +25,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.concurrency import run_in_threadpool
 
 from search.api.dependencies import EmbedderFactoryDep, RerankerFactoryDep, StateDep
+from search.core.rate_limit import SEARCH_LIMIT, SEARCH_SCOPE, limiter
 from search.services.filters import TOPIC_FILTER, extract_filters
 from search.services.fuse import reciprocal_rank_fusion
 from search.services.result_cache import run_cached
@@ -112,6 +113,7 @@ def _spec_from_query(request: Request) -> SearchSpec:
 
 
 @router.get("/search")
+@limiter.shared_limit(SEARCH_LIMIT, scope=SEARCH_SCOPE)
 def search_get(
     request: Request,
     state: StateDep,
@@ -217,6 +219,7 @@ def _post_spec(
 
 
 @router.post("/search")
+@limiter.shared_limit(SEARCH_LIMIT, scope=SEARCH_SCOPE)
 async def search_post(
     request: Request,
     state: StateDep,

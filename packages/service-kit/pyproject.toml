@@ -25,6 +25,12 @@ dependencies = [
 # heavy deps as extras: a consumer that doesn't install the extra never imports the subpackage, so the
 # base library stays dependency-light and rask's existing consumers resolve unchanged.
 [project.optional-dependencies]
+# Rate limiting is its OWN extra, not part of `governed`: metering a route and authorizing it are
+# different concerns, and a service that wants a limiter should not have to pull the OIDC/FGA stack
+# to get one. `search` takes this without `governed` for exactly that reason.
+ratelimit = [
+    "slowapi>=0.1.10",
+]
 governed = [
     "openfga-sdk>=0.9",
     "pyjwt[crypto]>=2.8",

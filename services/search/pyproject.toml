@@ -5,7 +5,11 @@ description = "Media-plane search API — FTS, vector and hybrid lookups over La
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
-    "service-kit[lancekit]",
+    # [ratelimit] because `search.core.rate_limit` imports `service_kit.rate_limit` -> slowapi. The
+    # image's venv is `uv sync --package search` alone, so a transitive dep from another workspace
+    # member is present locally and ABSENT in the image — the dockerfile's import gate catches it, but
+    # only after a build. Same trap compute and controlplane paid for on 2026-08-26.
+    "service-kit[lancekit,ratelimit]",
     "fastapi>=0.115",
     "pydantic>=2.7",
     "python-multipart>=0.0.9",
