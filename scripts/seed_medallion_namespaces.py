@@ -78,11 +78,30 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 CONVERGED = (200, 201, 409)
 
 
-def declared_namespaces(values_path: pathlib.Path) -> list[str]:
+def qualified(project: str, namespace: str) -> str:
+    """Project-qualify a namespace exactly as the RUNTIME does, or return it unchanged.
+
+    Byte-identical to ``medallion.workflow._qualified``, and deliberately so: with
+    ``medallion.projectsEnabled`` the cascade writes ``<project>-<tier>`` at runtime while the chart
+    declares the bare tier names, so a seeder reading the chart provisions namespaces the cascade will
+    never ask for and misses every one it will. Measured live 2026-08-26 on tenant ``bind86``: bronze
+    existed as ``bind86-bronze``, silver as an unqualified leftover, gold not at all — and the cascade
+    ran bronze->silver, landed rows, emitted lineage, then died asking for ``bind86-gold``.
+
+    The two must not drift, so ``tests/unit/test_seed_qualification_matches_runtime.py`` pins them
+    against each other rather than trusting this comment.
+    """
+    if not project or namespace.startswith(f"{project}-"):
+        return namespace
+    return f"{project}-{namespace}"
+
+
+def declared_namespaces(values_path: pathlib.Path, project: str = "") -> list[str]:
     """Every top-level namespace the cascade will write into, read from the chart.
 
     The producer's bronze namespace is the head; each mover names the two it moves between. Ordered
-    and de-duplicated so the output reads the way the cascade runs.
+    and de-duplicated so the output reads the way the cascade runs. With ``project`` set, each is
+    qualified the way the runtime will ask for it — see :func:`qualified`.
     """
     values = yaml.safe_load(values_path.read_text(encoding="utf-8"))
     medallion = values.get("medallion") or {}
@@ -95,7 +114,7 @@ def declared_namespaces(values_path: pathlib.Path) -> list[str]:
             name = mover.get(key)
             if name:
                 seen[name] = None
-    return list(seen)
+    return [qualified(project, name) for name in seen]
 
 
 def create(client: httpx.Client, warehouse: str, namespace: str) -> tuple[int, str]:
@@ -120,11 +139,19 @@ def main() -> int:
     parser.add_argument("--warehouse", default=os.environ.get("SEED_WAREHOUSE", ""), help="registry warehouse id the namespaces belong to (REQUIRED)")
     parser.add_argument("--token", default=os.environ.get("SEED_CATALOG_TOKEN", ""), help="OIDC bearer; empty = an auth-off stack")
     parser.add_argument("--values", default=str(REPO / "chart/values.yaml"))
+    parser.add_argument(
+        "--project",
+        default=os.environ.get("SEED_PROJECT", ""),
+        help=(
+            "tenant id; qualifies every tier as <project>-<tier>, exactly as the runtime does when "
+            "medallion.projectsEnabled is on. Empty = the single-tenant, unqualified names."
+        ),
+    )
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--dry-run", action="store_true", help="print what would be created and exit 0")
     args = parser.parse_args()
 
-    namespaces = declared_namespaces(pathlib.Path(args.values))
+    namespaces = declared_namespaces(pathlib.Path(args.values), args.project)
     if not namespaces:
         print("!! the chart declares no medallion namespaces — nothing to seed, which is itself suspicious", file=sys.stderr)
         return 2
@@ -143,6 +170,7 @@ def main() -> int:
     print(f"catalog:   {base}")
     print(f"warehouse: {args.warehouse}")
     print(f"bearer:    {'yes' if args.token else 'NO — assuming an auth-off stack'}")
+    print(f"project:   {args.project or '(none — single-tenant, unqualified tier names)'}")
     print(f"namespaces ({len(namespaces)}): {', '.join(namespaces)}\n")
 
     if args.dry_run:
