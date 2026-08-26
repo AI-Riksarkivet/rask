@@ -80,15 +80,31 @@ def run_id_for(subject: str, idempotency_key: str) -> str:
 
 
 @router.get("/catalog", response_model=CatalogResponse)
-async def get_catalog() -> CatalogResponse:
+async def get_catalog(
+    subject: security.CurrentSubject,
+    checker: security.CheckerDep,
+    settings: FlowsSettingsDep,
+) -> CatalogResponse:
     """The server-declared node kinds. Shape is pinned — see `models.CatalogResponse`."""
+    await security.require_read(checker, settings, subject)
     return CatalogResponse(kinds=CATALOG)
 
 
 @router.post("/validate", response_model=ValidateResponse)
-async def validate(graph: FlowGraph) -> ValidateResponse:
+async def validate(
+    graph: FlowGraph,
+    subject: security.CurrentSubject,
+    checker: security.CheckerDep,
+    settings: FlowsSettingsDep,
+) -> ValidateResponse:
     """Graph hygiene, with no cluster involved: duplicate ids, unknown kinds, dangling edges,
-    self-loops, cycles. Same vocabulary the frontend executor refuses on."""
+    self-loops, cycles. Same vocabulary the frontend executor refuses on.
+
+    GATED since 2026-08-26 (owner ruling: the estate is authenticated). The graph is also bounded at
+    the MODEL now — `FlowGraph.nodes` carries `max_length` — because the ceiling in `validate_graph`
+    fires only after every node has been built, which bounded the answer and not the work.
+    """
+    await security.require_read(checker, settings, subject)
     problems = validate_graph(graph)
     return ValidateResponse(ok=not problems, problems=problems)
 

@@ -109,8 +109,19 @@ class FlowGraph(BaseModel):
     #: node carries editor-only fields (position, label) that the server has no business rejecting.
     model_config = ConfigDict(extra="forbid")
 
-    nodes: list[FlowNode] = Field(default_factory=list)
-    edges: list[FlowEdge] = Field(default_factory=list)
+    # BOUNDED HERE, not only in `validate_graph`. `graph.py:41` already refuses an over-ceiling graph
+    # — but it does so AFTER pydantic has constructed every node, so it bounded the ANSWER and not
+    # the WORK. Measured: 500,000 nodes = 23.26 MiB = 3.00 s of event-loop block before replying
+    # "over the 256-node ceiling". Flows runs one replica and one loop, so that also stalls every
+    # other flows request and `/livez` — a caller who never gets past validation could take the
+    # service out. `max_length` moves the refusal to the boundary, where the work stops.
+    #
+    # The ceiling in `graph.py` STAYS: it reports the problem in the caller's own vocabulary
+    # alongside the other hygiene problems, which a 422 cannot do. This is the cheap guard in front
+    # of it, not a replacement.
+    nodes: list[FlowNode] = Field(default_factory=list, max_length=MAX_GRAPH_NODES)
+    # Edges are bounded by the fan-in rule per node, so the graph-wide ceiling is nodes x fan-in.
+    edges: list[FlowEdge] = Field(default_factory=list, max_length=MAX_GRAPH_NODES * MAX_NODE_FAN_IN)
 
 
 class ParamSpec(BaseModel):

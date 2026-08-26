@@ -137,7 +137,18 @@ def test_a_graph_larger_than_the_node_cap_is_REFUSED() -> None:
     ok = _graph([(f"n{i}", "text") for i in range(MAX_GRAPH_NODES)], [])
     assert validate_graph(ok) == [], "a graph exactly AT the cap must run — an off-by-one here refuses legitimate work"
 
-    too_big = _graph([(f"n{i}", "text") for i in range(MAX_GRAPH_NODES + 1)], [])
+    # TWO BOUNDS NOW, and the order matters. Since 2026-08-26 `FlowGraph.nodes` carries `max_length`,
+    # so an over-ceiling graph is refused by pydantic BEFORE any node is built — the HTTP door never
+    # reaches this function with one. That is the fix for the unmetered parse (measured: 500,000 nodes
+    # = 23.26 MiB = 3.00 s of event-loop block, spent only to answer "over the ceiling").
+    with pytest.raises(ValidationError):
+        _graph([(f"n{i}", "text") for i in range(MAX_GRAPH_NODES + 1)], [])
+
+    # …and the check HERE stays, exercised through `model_construct`, which is the one way to build a
+    # FlowGraph without validation. It is defence in depth for a programmatic caller, and it is what
+    # states the problem in the caller's own vocabulary alongside the other hygiene problems — a 422
+    # cannot do that.
+    too_big = FlowGraph.model_construct(nodes=[FlowNode(id=f"n{i}", kind="text") for i in range(MAX_GRAPH_NODES + 1)], edges=[])
     problems = validate_graph(too_big)
     assert problems, f"a {MAX_GRAPH_NODES + 1}-node graph was accepted — the history it writes is bounded by nothing"
     assert any(str(MAX_GRAPH_NODES) in p for p in problems), f"the refusal must name the ceiling, so the caller knows what to cut to: {problems}"
