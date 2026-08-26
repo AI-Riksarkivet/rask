@@ -13,6 +13,7 @@ read(length)``. ``ids`` are stable logical row ids that survive deletes and
 compaction; positional ``indices`` are not, so they are never used here.
 """
 
+import asyncio
 import logging
 import math
 import re
@@ -24,13 +25,15 @@ import lance
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
-from service_kit.exceptions import NotFoundError, ValidationError
+from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, ValidationError
+from service_kit.governed.audit import FAILURE, audit
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from service_kit.lancekit.predicate import eq
 from service_kit.lancekit.registry import DatasetHandle, table_dataset
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
-from viewer.services.clips import MAX_CLIP_S, build_clip
+from viewer.api.security import READ_DATA, CheckerDep, CurrentSubject, SettingsDep, corpus_object
+from viewer.services.clips import MAX_CLIP_S, ClipBusyError, build_clip
 
 
 logger = logging.getLogger(__name__)
@@ -262,10 +265,13 @@ def chunk_frame(
 
 
 @router.get("/media-clip/{doc_id}")
-def media_clip(
+async def media_clip(
     doc_id: str,
     request: Request,
     state: StateDep,
+    subject: CurrentSubject,
+    checker: CheckerDep,
+    settings: SettingsDep,
     lo: Annotated[float, Query(ge=0)],
     hi: Annotated[float, Query(gt=0)],
     dataset: DatasetParam = None,
@@ -298,7 +304,29 @@ def media_clip(
     source = f"{str(request.base_url).rstrip('/')}/api/explorer/{doc_id}"
     if dataset:
         source += f"?dataset={quote(dataset, safe='')}"
-    path = build_clip(source, f"{handle.id}--{doc_id}", lo, hi)
+
+    # AUTHZ, after shape. `can_read_data`, not `can_get_metadata`: a clip IS the media, so this is
+    # the rung `pages.py` uses for image bytes rather than the one `datasets.py` uses for a listing.
+    # The whole module carried no auth constructs at all until 2026-08-26, while its two siblings
+    # gated the same corpus objects — and the viewer is published at the edge through the gateway's
+    # `/api/explorer` row.
+    obj = corpus_object(settings, handle.id, binding.table)
+    if not await checker(user=subject, relation=READ_DATA, obj=obj):
+        audit("viewer.clip.read", FAILURE, subject=subject, resource=handle.id, relation=READ_DATA)
+        raise ForbiddenError(f"{subject} lacks {READ_DATA} on {obj}")
+
+    # OFF THE LOOP, and refusing rather than queueing. This route was a plain `def`, so FastAPI
+    # threadpooled it — and every caller waiting on the old global build lock held a POOL THREAD for
+    # as long as the queue ahead of it took, 120 s ffmpeg timeout at the head. Measured: 41 concurrent
+    # requests exhausted the pool while `/livez` stayed green, because liveness does not know the pool
+    # is gone. It is `async def` now for the authz above, so the blocking build must go to a thread
+    # explicitly; `build_clip` takes a bounded slot and raises `ClipBusyError` instead of waiting.
+    try:
+        path = await asyncio.to_thread(build_clip, source, f"{handle.id}--{doc_id}", lo, hi)
+    except ClipBusyError as exc:
+        # 503 + Retry-After: a fact the caller can act on. Queueing would have told them nothing and
+        # cost a thread to say it.
+        raise ServiceUnavailableError(str(exc), headers={"Retry-After": "5"}) from exc
     return FileResponse(path, media_type=mime, headers={"Cache-Control": "no-store"})
 
 

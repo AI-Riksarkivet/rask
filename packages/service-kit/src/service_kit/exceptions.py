@@ -45,11 +45,19 @@ class DomainError(HTTPException):
     status_code: int = HTTPStatus.INTERNAL_SERVER_ERROR
     title: str = "Internal Server Error"
 
-    def __init__(self, detail: str | None = None) -> None:
+    def __init__(self, detail: str | None = None, *, headers: dict[str, str] | None = None) -> None:
         # Use the class-level status_code (subclasses override it) and the stable message;
         # default the detail to the title so an argument-less raise still yields a
         # meaningful, stable problem body.
-        super().__init__(status_code=self.status_code, detail=detail or self.title)
+        #
+        # `headers` exists because `Retry-After` is part of what a 503 or a 429 MEANS — a refusal
+        # that cannot say when to come back is a refusal the caller can only guess at. It was
+        # missing, and the failure mode was nasty: `HTTPException` accepts headers, this did not
+        # forward them, so writing the correct thing raised a TypeError AT RAISE TIME and the 503
+        # became a 500. Invisible until the refusal path runs, which for a saturation refusal is
+        # precisely when nobody is watching. Keyword-only and optional, so every existing raise site
+        # is unchanged.
+        super().__init__(status_code=self.status_code, detail=detail or self.title, headers=headers)
 
     def __str__(self) -> str:
         # Starlette's default __str__ is "<status>: <detail>"; we want the bare stable
@@ -112,10 +120,16 @@ def register_handlers(app: FastAPI) -> None:
     async def _domain(_: Request, exc: DomainError) -> JSONResponse:
         if exc.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
             log.exception("domain error", exc_info=exc)
+        # `headers=` is not optional politeness. This handler builds its own response, so a
+        # `Retry-After` set at the raise site was dropped here silently — the exception carried it
+        # and the client never saw it. Both halves of that are independently invisible: without the
+        # constructor change the raise TypeErrors, without this one the refusal simply says nothing.
+        # `exc.headers` is None for every existing raise site, which JSONResponse accepts.
         return JSONResponse(
             status_code=exc.status_code,
             content=_problem(exc),
             media_type=PROBLEM_JSON,
+            headers=exc.headers,
         )
 
     @app.exception_handler(RequestValidationError)
