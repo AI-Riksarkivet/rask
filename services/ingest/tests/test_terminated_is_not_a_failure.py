@@ -31,7 +31,6 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import pytest
-
 from ingest.lineage import LineageRecorder, recorded_events, reset_events
 from ingest.runs import _RUNTIME_STATUS, RunRecord, merge_workflow_state
 
