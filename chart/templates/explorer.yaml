@@ -13,20 +13,6 @@
 {{- if not (has $corpusMode (list "emptyDir" "pvc" "hostPath")) }}
 {{- fail (printf "rask chart: explorer.corpus.mode=%q is not one of emptyDir|pvc|hostPath" $corpusMode) }}
 {{- end }}
-{{- if .Values.explorer.catalogToken }}
-# The media services' catalog identity (auth-on catalogs): a bearer the annotator presents on every
-# catalog read/write — FGA decides what that identity may do (the merge's writer-rung rehearsal).
-# A Secret, never a plain env value; renders only when set (prod leaves it to the real secret flow).
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ include "lance.fullname" . }}-media-catalog-token
-  labels: {{- include "lance.labels" . | nindent 4 }}
-type: Opaque
-stringData:
-  token: {{ .Values.explorer.catalogToken | quote }}
----
-{{- end }}
 {{- if and (eq $corpusMode "pvc") (not $corpus.claimName) }}
 # The corpus PVC the chart owns (explorer.corpus.mode=pvc with no pre-existing claimName). All three
 # services mount it READ-ONLY, so accessModes must admit three concurrent readers: ReadWriteMany is the
@@ -139,11 +125,6 @@ spec:
             - { name: MEDIA_READ_BACKEND, value: {{ $root.Values.explorer.readBackend | quote }} }
             - { name: MEDIA_WRITE_BACKEND, value: {{ $root.Values.explorer.writeBackend | quote }} }
             - { name: MEDIA_CATALOG_URI, value: {{ $root.Values.explorer.catalogUri | default (printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port) | quote }} }
-            {{- if $root.Values.explorer.catalogToken }}
-            - name: MEDIA_CATALOG_TOKEN
-              valueFrom:
-                secretKeyRef: { name: {{ include "lance.fullname" $root }}-media-catalog-token, key: token }
-            {{- end }}
             {{- if $root.Values.auth.enabled }}
             # Authn/authz for EVERY explorer service, not just the annotator (#90).
             #
@@ -167,8 +148,12 @@ spec:
             # ANNOTATOR ONLY, and it stays that way: the publish saga's identity coordinates. This is
             # a service credential for writing back annotations, which no other explorer service does.
             # Deliberately NO password here — it is seeded into OpenBao and fetched via the Dapr
-            # secret store, fail-closed (the estate's secrets rule); a pinned media.catalogToken
-            # (above) still wins when set.
+            # secret store, fail-closed (the estate's secrets rule).
+            #
+            # This used to add "a pinned media.catalogToken (above) still wins when set". That knob is
+            # GONE (2026-08-26): `open_reader`/`open_writer` fell back to it whenever a request had no
+            # bearer, which re-issued an ANONYMOUS caller under the estate's own identity. The saga
+            # below was the cited justification and never used it — it mints its own token here.
             - { name: MEDIA_PUBLISH_TOKEN_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex/token" }
             - { name: MEDIA_PUBLISH_CLIENT_ID, value: {{ $root.Values.dex.clientId | quote }} }
             {{- if not (include "lance.secretsViaDapr" $root) }}

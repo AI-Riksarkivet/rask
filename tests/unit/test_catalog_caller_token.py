@@ -16,6 +16,12 @@ object and injects no row predicate, so a service credential answers 200 for a u
 — the two principals diverge, not the rows. That is a confused deputy, and it is why the estate's one
 service account is scoped to the publish saga, whose stated reason ("outlives any user request")
 does not apply to a request-scoped read.
+
+UPDATED 2026-08-26: the seam no longer falls back AT ALL. This file argued the principle from the
+start and still encoded the exception, and the exception was the whole hole — `caller_token or
+settings.catalog_token` fires exactly when a request arrives with no bearer. `MEDIA_CATALOG_TOKEN` is
+removed from the media settings and the chart with it; the movers' `MEDALLION_CATALOG_TOKEN` stays,
+because they genuinely have no caller to forward.
 """
 
 from __future__ import annotations
@@ -58,11 +64,18 @@ def _token_of(reader: Any) -> str | None:
         # The caller WINS over a configured service token — otherwise a deployment that sets
         # catalogToken silently reverts every read to the confused-deputy behaviour.
         ("service-jwt", "caller-jwt", "caller-jwt"),
-        # No request context (the publish saga) still falls back to the service identity.
-        ("service-jwt", None, "service-jwt"),
+        # NO CALLER TOKEN -> NO TOKEN, even with a service identity configured. This case asserted
+        # "service-jwt" until 2026-08-26, on the stated grounds that a caller with no request context
+        # (the publish saga) needed the fallback. This file's OWN docstring already refuted that —
+        # "whose stated reason does not apply to a request-scoped read" — and the tree agrees: every
+        # call site of open_reader/open_writer is a request-scoped annotator route, and the publish
+        # saga mints its own bearer from Dex (annotator/projects/lakehouse.py:388) rather than
+        # touching this seam. So the branch fired only for an ANONYMOUS request, re-issued under the
+        # estate's own identity against a catalog that injects no row predicate.
+        ("service-jwt", None, None),
     ],
 )
-def test_the_reader_sends_the_callers_bearer_and_falls_back_to_the_service_token(
+def test_the_reader_sends_the_callers_bearer_and_NEVER_substitutes_a_service_token(
     service_token: str | None, caller_token: str | None, expected: str | None
 ) -> None:
     reader = open_reader(

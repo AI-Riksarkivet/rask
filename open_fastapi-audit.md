@@ -50,7 +50,7 @@ verifier, and the corrected form is what appears here. 2 were refuted outright.
 
 ## Scorecard
 
-> ### RE-VERIFIED AT HEAD `fe789bfc`, 2026-08-26 — **55 of 60 still real; 3 drained since (52 open)**
+> ### RE-VERIFIED AT HEAD `fe789bfc`, 2026-08-26 — **55 of 60 still real; 4 drained since (51 open)**
 >
 > Ten read-only agents, one per lane, re-opened every finding against the current code. **Nothing was
 > refuted and nothing was undecidable**: 55 STILL_REAL (5 high / 22 medium / 28 low), 4 ALREADY_FIXED,
@@ -285,7 +285,23 @@ services/medallion/src/medallion/api/produce_auth.py:58 `async def authorize_pro
 
 </details>
 
-<details><summary><b>Nothing pages on any HTTP surface: `rules.yml` has no `http.server` rule and no group for 8 of the 14 apps, and ingest's and flows' first-party counters are read by no rule at all</b> <i>(observability.md, CONFIRMED)</i></summary>
+<details><summary><b>~~Nothing pages on any HTTP surface: `rules.yml` has no `http.server` rule and no group for 8 of the 14 apps, and ingest's and flows' first-party counters are read by no rule at all~~</b> <i>(observability.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-26 — `1da9489e`.** Three groups: `lance-http` (5xx RATIO per service — a count is
+> meaningless without traffic — plus p95 and a bare `absent()` so neither can go silently blind),
+> `lance-ingest` and `lance-flows`. Series names VERIFIED against the live store, not inferred: it is
+> `http_server_duration_milliseconds_*`, because the OTLP→Prometheus exporter appends the unit and a
+> rule naming `_seconds` can never fire. Every expression was replayed against GreptimeDB before being
+> written — `histogram_quantile` included. Thresholds measured, not guessed (p95: lineage 500 ms,
+> notifications 463 ms, maintenance 10 s by design → 15 s).
+>
+> The structural half is what stops recurrence:
+> `test_every_FIRST_PARTY_INSTRUMENT_is_read_by_some_alert_rule` asserts the REVERSE direction the
+> estate lacked — every first-party metrics module must be read by an alert group. `ingest/metrics.py`
+> stated this gap in its own docstring and that sentence was true for as long as the file existed.
+>
+> Stated rather than hidden: no `flows_*` series exists yet (flows has never executed a run, and a
+> counter that never incremented creates no table), so that rule is evaluable and unexercised.
 
 **Rule.** observability.md: § Quick checklist item 6 / the reference's premise that the FastAPI instrumentor's RED metrics are the operator-facing signal — emitting them and never alerting on them leaves the estate unpageable
 

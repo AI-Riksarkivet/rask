@@ -1308,10 +1308,16 @@ explorer:
   writeBackend: catalog
   # Default: the in-release catalog Service (rendered in media.yaml); set to override.
   catalogUri: ""
-  # The media services' catalog bearer (auth-on catalogs): rendered into a Secret + secretKeyRef env,
-  # only when set. FGA decides what the identity may do — grant it the writer rung on the annotations
-  # table. Unset = anonymous (fail-closed 401/403 on governed catalogs; fine for auth-off dev).
-  catalogToken: ""
+  # REMOVED 2026-08-26 — `catalogToken` was the media services' catalog bearer, and nothing read it
+  # except a fallback that should not have existed: `open_reader`/`open_writer` did
+  # `caller_token or settings.catalog_token`, so a request arriving with NO bearer was re-issued to
+  # the catalog under this identity — which the values comment itself told operators to grant the
+  # writer rung on the annotations table. The catalog checks one relation on one `table:` object and
+  # injects no row predicate, so that answers 200 for a caller with no grant at all.
+  #
+  # The cited justification ("callers with no request context, the publish saga") does not use it:
+  # the saga mints its own token from Dex via MEDIA_PUBLISH_TOKEN_URL. The movers' equivalent
+  # (MEDALLION_CATALOG_TOKEN) is untouched — they genuinely have no caller to forward.
   # The annotator PUBLISHES control events (`task_assigned` / `task_unassigned`) so the notifications
   # plane can put assigned work in the assignee's inbox instead of making them go looking for it.
   # Off by default like every other transport in this estate — a half-configured emitter must never

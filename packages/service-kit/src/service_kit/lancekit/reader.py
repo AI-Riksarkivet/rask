@@ -430,10 +430,19 @@ def open_reader(
     paths and is unused by the REST path.
 
     ``caller_token`` is the END USER's bearer, forwarded so the catalog's answer is about the
-    CALLER. It takes precedence over ``settings.catalog_token`` — a service credential would make
-    every reader a confused deputy, because the catalog checks a relation on the `table:` object and
-    injects no row predicate: an ungranted user gets 200 instead of 403. The settings token remains
-    the fallback for callers with no request context (the publish saga, which outlives any request).
+    CALLER — and it is the ONLY token this seam will send. A service credential would make every
+    reader a confused deputy, because the catalog checks a relation on the `table:` object and
+    injects no row predicate: an ungranted user gets 200 instead of 403.
+
+    THERE IS NO FALLBACK, and this docstring used to promise one — "the settings token remains the
+    fallback for callers with no request context (the publish saga, which outlives any request)".
+    That saga does not exist in the tree. Every call site of this function is a request-scoped
+    annotator route, so `caller_token or settings.catalog_token` fired only for the case it must not
+    serve: an ANONYMOUS request, re-issued to the catalog under MEDIA_CATALOG_TOKEN. Absent now means
+    absent; the catalog decides what an unauthenticated read is worth.
+
+    The pattern is not wrong everywhere — the medallion's cascade movers genuinely have no caller and
+    carry their own `MEDALLION_CATALOG_TOKEN`. It is wrong on a request path.
     """
     if settings.read_backend != "catalog":
         if dataset is None:
@@ -443,7 +452,7 @@ def open_reader(
         transport: CatalogTransport = RestCatalogTransport(
             settings.catalog_uri,
             delimiter=settings.catalog_delimiter,
-            token=caller_token or settings.catalog_token,
+            token=caller_token,
         )
     else:
         if dataset is None:
@@ -462,7 +471,7 @@ def open_catalog_reader(*, table_id: list[str], settings: Settings, caller_token
     uri = settings.catalog_uri
     if not settings.rest_catalog_mode or not uri:
         raise ValueError("catalog version surface requires full catalog mode (MEDIA_CATALOG_URI set + both MEDIA_*_BACKEND=catalog)")
-    transport = RestCatalogTransport(uri, delimiter=settings.catalog_delimiter, token=caller_token or settings.catalog_token)
+    transport = RestCatalogTransport(uri, delimiter=settings.catalog_delimiter, token=caller_token)
     return CatalogTableReader(transport, list(table_id))
 
 

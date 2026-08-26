@@ -242,8 +242,12 @@ def open_writer(
 
     ``caller_token`` is the END USER's bearer, forwarded so the catalog authorises the WRITE against
     the caller rather than against a service account — the same confused-deputy argument as
-    :func:`open_reader`, and it bites harder on a write. Falls back to ``settings.catalog_token``
-    for callers with no request context (the publish saga, which outlives any request).
+    :func:`open_reader`, and it bites harder on a write.
+
+    NO FALLBACK. This used to end "falls back to ``settings.catalog_token`` for callers with no
+    request context (the publish saga, which outlives any request)" — and no such caller exists, so
+    the branch only ever served an anonymous request by re-issuing it under the estate's own
+    credential, on a WRITE. Absent means absent.
     """
     if settings.write_backend != "catalog":
         if dataset is None:
@@ -254,7 +258,7 @@ def open_writer(
             settings.catalog_uri,
             list(table_id),
             delimiter=settings.catalog_delimiter,
-            token=caller_token or settings.catalog_token,
+            token=caller_token,
         )
     else:
         if dataset is None:
