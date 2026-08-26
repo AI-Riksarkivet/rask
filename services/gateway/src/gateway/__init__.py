@@ -21,6 +21,7 @@ import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 
 import httpx
 from dotenv import load_dotenv
@@ -335,8 +336,23 @@ async def proxy(path: str, request: Request) -> Response:
 
     # The upstream prefix replaces the public one: /api/catalog/v1/x → /v1/x,
     # /api/explorer/search?q → /api/search?q. rask rows rewrite to themselves.
-    upstream_path = upstream_prefix + norm_path[len(route_prefix) :]
-    url = httpx.URL(f"{base}{upstream_path}").copy_with(query=request.url.query.encode("utf-8") or None)
+    #
+    # RE-ENCODE before handing the path to httpx. `request.url.path` arrives percent-DECODED, and
+    # `_normalize_path` must keep working on that decoded form — it exists so `%2E%2E` cannot dodge
+    # the 403 blocklist or slip past a longer prefix, and a normaliser reading the raw path would be
+    # blind to exactly the encodings it guards against. But httpx refuses non-printable ASCII in a
+    # URL, so a Lance Namespace multipart identifier — segments joined by the unit separator 0x1F,
+    # e.g. `acme%1Fbronze`, and the root namespace `%1F` alone — reached this line as a literal
+    # control character and raised `InvalidURL`, unhandled, as a 500. Measured live: every nested
+    # namespace 500'd while flat ids answered 200.
+    upstream_path = quote(upstream_prefix + norm_path[len(route_prefix) :], safe="/")
+    try:
+        url = httpx.URL(f"{base}{upstream_path}").copy_with(query=request.url.query.encode("utf-8") or None)
+    except httpx.InvalidURL as exc:
+        # The path is fully encoded above, so what remains unrepresentable is the upstream BASE —
+        # a misconfigured RASK_*_URL. That is upstream trouble, and this gateway's contract answers
+        # upstream trouble with a clean 502 rather than a traceback.
+        raise HTTPException(status_code=502, detail=f"upstream {app_id} address unusable: {exc}") from exc
     headers = [(k, v) for k, v in request.headers.raw if k.lower() not in _HOP_BY_HOP and k.lower() not in _CLIENT_SPOOFABLE]
     upstream_req = client.build_request(request.method, url, headers=headers, content=await request.body())
     try:
