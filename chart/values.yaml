@@ -537,7 +537,13 @@ lifecycle:
   terminationGracePeriodSeconds: 30
   maintenanceTerminationGracePeriodSeconds: 120
 
-# --- Pod hardening (applied to every app container via the lance.securityContext helper) ----------
+# --- Pod hardening (applied to every FIRST-PARTY app container via the lance.securityContext helper) --
+# This line used to say "every app container", and for six Deployments it was false: fleet.yaml and
+# controlplane.yaml called the helper nowhere, so gateway/compute/controlplane/flows/ingest/notifications
+# rendered with no securityContext at all — including the pod the Ingress routes /api to. They call it
+# now, and `test_every_first_party_container_carries_the_HARDENING_the_chart_claims` derives its subject
+# list from the render, so a new first-party Deployment is covered by default rather than by memory.
+# INFRA pods are a separate, deliberately staged decision — see security.infraContexts below.
 # runAsNonRoot + drop-ALL-caps + RuntimeDefault seccomp are unconditional (the restricted PodSecurity
 # baseline). readOnlyRootFilesystem is the one tunable: on by default (each app has a writable /tmp
 # emptyDir for pyarrow/Lance spill + OTel), flip off only if a workload genuinely needs a writable rootfs.

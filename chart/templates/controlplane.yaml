@@ -73,6 +73,15 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.resources.fleet | nindent 12 }}
+          {{/* Same hardening + scratch pair as the fleet, and for the same reason: this file called
+               neither, so the container rendered with no securityContext while values.yaml claimed
+               every app container got one. See fleet.yaml for the full note. */}}
+          {{- include "lance.securityContext" . | nindent 10 }}
+          {{- include "lance.preStop" . | nindent 10 }}
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
+      volumes:
+        {{- include "lance.tmpVolume" . | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service
