@@ -23,6 +23,7 @@ from annotator.projects.project_actor import AnnotationProjectActor
 from annotator.projects.tenant_actor import TenantProjectsActor
 from service_kit import setup_logging
 from service_kit.control_emit import make_control_emitter, set_process_control_emitter
+from service_kit.draining import arm_drain_on_sigterm
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.actor_state_store import probe_actor_state_store
@@ -147,7 +148,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.startup_complete = True
     app.state.shutting_down = False
+    # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
+    # which uvicorn only reaches AFTER it has stopped accepting connections and drained —
+    # so the admission guards that read it refused nothing, ever. Kubernetes sends SIGTERM
+    # at the START of termination, and that window is exactly when the sidecar is still
+    # delivering. Owner ruling 2026-08-25.
+    _disarm_drain = arm_drain_on_sigterm(app)
     yield
+    _disarm_drain()
     app.state.shutting_down = True
     for resource in (state.http, state.embedder, state.reranker):
         close = getattr(resource, "close", None)

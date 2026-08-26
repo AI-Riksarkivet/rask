@@ -1429,6 +1429,9 @@ not a defect — but it should be a decision rather than an omission.
 ## Cross-references
 
 - `open_python-audit.md` — the estate-wide Python audit. Appendix B above lists what belongs to it.
-- `open_dapr-audit.md` — the Dapr sweep. The `authn-authz` lane here and the `mgt` lane there both reach
-  the workflow doors; each defers to the other rather than restating.
+- The Dapr sweep (`open_dapr-audit.md`) — **DRAINED AND DELETED 2026-08-25**, all 48 findings fixed
+  with RED-first tests. The `authn-authz` lane here and its `mgt` lane both reached the workflow
+  doors, and each deferred to the other rather than restating; where that leaves a claim here
+  pointing at reasoning you can no longer read, the git history of the deleted file has it, and the
+  fixes themselves are in the commits between `da59dac3` and the deletion.
 - `.claude/skills/rask-services-fleet` — the gateway routing table every exposure claim was checked against.

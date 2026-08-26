@@ -13,9 +13,15 @@ file when the backlog is drained**. `docs/` is for settled architecture only.
 > The 24 findings that are genuinely closed have been moved to **Appendix D** rather than deleted, so
 > the record of what those commits achieved survives.
 
-**Two sibling audits cover ground this one does not**, and cite findings here by id rather than
-restating them: `open_dapr-audit.md` (the Diagrid `DWF-DET`/`ACT`/`MGT` rule sets, actors, pub/sub) and
+**Two sibling audits covered ground this one does not**, and cite findings here by id rather than
+restating them: the Dapr sweep (the Diagrid `DWF-DET`/`ACT`/`MGT` rule sets, actors, pub/sub) and
 `open_fastapi-audit.md` (the `fastapi` skill's 21 references, applied one lane each).
+
+The Dapr sweep's own file, `open_dapr-audit.md`, was **DRAINED AND DELETED on 2026-08-25** — all 48 of
+its findings closed in code with RED-first tests, which is what its header said to do once the backlog
+reached zero. Two of its rows are also recorded here (`FLOWS-REDOS-ON-LOOP`, `FLOWS-NODE-ESCAPE`) and
+are marked FIXED above. Its reasoning lives on in the commits and in the git history of the deleted
+file; nothing in this document depends on being able to open it.
 
 ## How this was produced (so you can trust or re-run it)
 
@@ -149,8 +155,8 @@ in the shipped code comment — WRONG: the blow-up is exponential in the PATTERN
 Measured against `(a+)+$`: `re` took **76.5 s at a thirty-character subject**, nowhere near the
 256 KiB cap that was described as the load-bearing defence; `regex` answered in 0.0003 s at every n.
 The cap stays, redescribed as the memory bound it actually is. Pinned by
-`test_a_CATASTROPHIC_pattern_cannot_stall_the_process`. Full write-up was in `open_dapr-audit.md`
-(deleted on completion of that backlog).
+`test_a_CATASTROPHIC_pattern_cannot_stall_the_process`. The full write-up was in the Dapr sweep's
+file, deleted on completion of that backlog (2026-08-25); the commit that made this change carries it.
 
 </details>
 

@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from search.api.v1.router import router as api_router
 from search.core.config import get_search_settings
 from service_kit import setup_logging
+from service_kit.draining import arm_drain_on_sigterm
 from service_kit.exceptions import register_handlers
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.media.middleware import register_middleware
@@ -43,7 +44,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.exception("search: default dataset failed to open — serving degraded")
     app.state.startup_complete = True
     app.state.shutting_down = False
+    # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
+    # which uvicorn only reaches AFTER it has stopped accepting connections and drained —
+    # so the admission guards that read it refused nothing, ever. Kubernetes sends SIGTERM
+    # at the START of termination, and that window is exactly when the sidecar is still
+    # delivering. Owner ruling 2026-08-25.
+    _disarm_drain = arm_drain_on_sigterm(app)
     yield
+    _disarm_drain()
     app.state.shutting_down = True
     for resource in (state.http, state.embedder, state.reranker):
         close = getattr(resource, "close", None)

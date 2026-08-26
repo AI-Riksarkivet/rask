@@ -25,6 +25,7 @@ from notifications.config import get_notifications_settings
 from notifications.inbox_actor import InboxActor
 from notifications.watch_actor import WatchIndexActor
 from service_kit.config import Settings
+from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.actor_warmup import warm_actor_proxy_factory
 from service_kit.governed.dapr_auth import guard_actor_routes
@@ -161,8 +162,15 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         app.state.startup_complete = True
         app.state.shutting_down = False
         try:
+            # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
+            # which uvicorn only reaches AFTER it has stopped accepting connections and drained —
+            # so the admission guards that read it refused nothing, ever. Kubernetes sends SIGTERM
+            # at the START of termination, and that window is exactly when the sidecar is still
+            # delivering. Owner ruling 2026-08-25.
+            _disarm_drain = arm_drain_on_sigterm(app)
             yield
         finally:
+            _disarm_drain()
             app.state.shutting_down = True
             # Reverse construction order: the httpx pool was built AFTER the FGA client, so it closes
             # first. Suppressed for the same reason as the FGA close below — a shutdown path that

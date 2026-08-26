@@ -1115,6 +1115,10 @@ async def handle_stage(
         duration_seconds=stage_seconds,
         rows=result.row_count if result else None,
         size_bytes=result.size_bytes if result else None,
+        # The token IS the batch's identity and the transition names the hop, so this pair is stable
+        # across a retried or redelivered pass 2 — the same key the deterministic lineage run_id is
+        # derived from, which is why the graph already MERGEs where these counters used to double.
+        volume_key=f"{transition}:{token}",
     )
     log.info("medallion_stage_moved", extra={"transition": transition, "token": token, "to": settings.to_dataset, "duration_seconds": round(stage_seconds, 3)})
     return _SUCCESS

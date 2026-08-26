@@ -41,6 +41,7 @@ from service_kit.governed import fga
 
 if TYPE_CHECKING:  # no runtime cost, and it breaks no import cycle
     from openfga_sdk import OpenFgaClient
+from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import assert_app_token_configured, require_dapr_token
 
 
@@ -66,6 +67,7 @@ def register_subscriptions(app: FastAPI) -> None:
         event: dict[str, Any],
         visibility: VisibilityDep,
         _: Annotated[None, Depends(require_dapr_token)],
+        drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
     ) -> dict[str, str]:
         """Ingest one Dapr-delivered CloudEvent.
 
@@ -74,6 +76,8 @@ def register_subscriptions(app: FastAPI) -> None:
         single message. `body["data"]` is the OpenLineage event — Dapr parses it because the publisher
         sends `datacontenttype=application/json`.
         """
+        if drain is not None:
+            return drain
         return await ingest_run_event(event.get("data"), lane=Lane.BUS, visibility=visibility, open_inbox=inbox_for, watchers=watchers_of, push=channel_push())
 
     def _make_expander(client: "OpenFgaClient | None") -> UsersetExpander | None:
@@ -110,6 +114,7 @@ def register_subscriptions(app: FastAPI) -> None:
         event: dict[str, Any],
         request: Request,
         _: Annotated[None, Depends(require_dapr_token)],
+        drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
     ) -> dict[str, str]:
         """v3 targeting: a governance act that NAMED someone.
 
@@ -122,6 +127,8 @@ def register_subscriptions(app: FastAPI) -> None:
         told at all. Absent a client the expander is `None`, which resolves a userset to no audience —
         quiet, never a phantom inbox keyed on the group string.
         """
+        if drain is not None:
+            return drain
         return await ingest_control_event(
             event.get("data"),
             open_inbox=inbox_for,

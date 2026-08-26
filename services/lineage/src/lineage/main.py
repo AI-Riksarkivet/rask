@@ -23,6 +23,7 @@ from lineage.core.age import make_pool, run_cypher
 from lineage.core.config import apply_dapr_secrets, get_settings
 from lineage.services.repository import LineageRepository
 from service_kit import setup_logging
+from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed import fga
 from service_kit.governed.audit import configure_audit
 from service_kit.governed.dapr_auth import assert_app_token_configured
@@ -118,8 +119,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.dapr = DaprClient()
     app.state.startup_complete = True
     try:
+        # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
+        # which uvicorn only reaches AFTER it has stopped accepting connections and drained —
+        # so the admission guards that read it refused nothing, ever. Kubernetes sends SIGTERM
+        # at the START of termination, and that window is exactly when the sidecar is still
+        # delivering. Owner ruling 2026-08-25.
+        _disarm_drain = arm_drain_on_sigterm(app)
         yield
     finally:
+        _disarm_drain()
         app.state.shutting_down = True
         # Isolate each close so a failure in one still runs the others (parity with the other services) —
         # e.g. a raising fga_client.close() must not leak the AGE pool.

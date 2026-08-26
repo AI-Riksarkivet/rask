@@ -28,7 +28,7 @@ from medallion.services.train import (
     submit_train_request,
     train_head_enabled,
 )
-from service_kit.draining import refuse_when_draining
+from service_kit.draining import refuse_when_draining, retry_when_draining
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.dapr_auth import require_dapr_token
 
@@ -127,11 +127,14 @@ def register_train_trigger_route(app: FastAPI, dapr_app: DaprApp | None = None) 
         request: Request,
         config: SettingsDep,
         _: Annotated[None, Depends(require_dapr_token)],
+        drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
     ) -> dict[str, str]:
         """Thin wrapper over the testable :func:`handle_train_trigger` (submit-and-ack, D2).
         Authenticated by the Dapr app-api-token so a forged trigger can't spend training compute; the
         FGA client is the host app's (``app.state.fga`` — built by the producer lifespan when
         MEDALLION_FGA_ENABLED, ``None`` otherwise → gate off, symmetric with the movers)."""
+        if drain is not None:
+            return drain
         fga_client = getattr(request.app.state, "fga", None)
         return await handle_train_trigger(config, event, fga_client=fga_client)
 

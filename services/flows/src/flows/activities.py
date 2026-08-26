@@ -51,7 +51,15 @@ def run_node(ctx: WorkflowActivityContext, job: NodeJob) -> dict[str, object]:
     writes to the state store. Both ceilings live on the model (`models.NodeResult`), not here — a
     cap applied at one of its three construction sites is a cap that holds at one of three.
     """
-    result = asyncio.run(_run(job))
+    # THE KEY THE RUNTIME ALREADY HOLDS. `ctx` was accepted and never read, while the outbound Serve
+    # POST — the side effect NODE_RETRY re-runs — carried nothing to dedupe on.
+    #
+    # `task_execution_id` and NOT `f"{workflow_id}:{task_id}"`, which is what the audit proposed: a
+    # retry re-schedules with `id=None  # Get a new sequence number` and passes `task_execution_id`
+    # through unchanged (`_durabletask/worker.py`), so the task id CHANGES on exactly the event the
+    # key exists for. The fallback covers the SDK's `''` default, and is stable for a given attempt
+    # sequence even though it is not stable across one.
+    result = asyncio.run(_run(job, _idempotency_key(ctx)))
     record_node(result.state.status)
 
     # THE SPAN THAT ALREADY EXISTS, not a new one. daprd emits `activity||run_node` (SERVER) and the SDK
@@ -85,7 +93,21 @@ def run_node(ctx: WorkflowActivityContext, job: NodeJob) -> dict[str, object]:
     return result.model_dump()
 
 
-async def _run(job: NodeJob) -> NodeResult:
+def _idempotency_key(ctx: WorkflowActivityContext) -> str:
+    """A value stable across THIS activity's retries, for the outbound Serve POST.
+
+    `task_execution_id` and NOT `f"{workflow_id}:{task_id}"`: a retry re-schedules with
+    `id=None  # Get a new sequence number` and passes `task_execution_id` through unchanged
+    (`_durabletask/worker.py`), so the task id CHANGES on exactly the event the key exists for.
+
+    The fallback covers the SDK's `''` default. It is stable within an attempt and not across one,
+    which is worse than the real thing and better than sending nothing.
+    """
+    inner = ctx.get_inner_context()
+    return str(getattr(inner, "task_execution_id", "") or "") or f"{ctx.workflow_id}:{ctx.task_id}"
+
+
+async def _run(job: NodeJob, idempotency_key: str = "") -> NodeResult:
     # The per-call budget rides the job (`serve_timeout`), so the client only needs a connect bound.
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=job.serve_timeout)) as client:
-        return await executor.run_node(job, client=client)
+        return await executor.run_node(job, client=client, idempotency_key=idempotency_key)

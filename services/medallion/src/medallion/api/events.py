@@ -17,6 +17,7 @@ from medallion.api.dependencies import CatalogHttpDep, DaprClientDep, FgaClientD
 from medallion.api.dlq import register_dlq_route
 from medallion.core.config import get_settings
 from medallion.services.transform import handle_stage
+from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
 
 
@@ -55,10 +56,13 @@ def register_stage_route(app: FastAPI) -> DaprApp:
         fga_client: FgaClientDep,
         catalog_http: CatalogHttpDep,
         _: Annotated[None, Depends(require_dapr_token)],
+        drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
     ) -> dict[str, str]:
         """The Dapr subscription route — thin wrapper over the testable :func:`handle_stage`. ``event``
         is typed ``dict`` so FastAPI parses the CloudEvent JSON body (an ``Any`` param → query param →
         422). Authenticated by the Dapr app-api-token so a forged stage trigger can't drive the cascade."""
+        if drain is not None:
+            return drain
         return await handle_stage(dapr, config, event, fga_client=fga_client, catalog_http=catalog_http)
 
     return dapr_app

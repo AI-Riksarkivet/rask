@@ -142,6 +142,7 @@ async def dispatch(
     client: httpx.AsyncClient,
     serve_url: str,
     serve_timeout: float = 180.0,
+    idempotency_key: str = "",
 ) -> Payload:
     """Execute one node — a ROUTER, one line per kind.
 
@@ -162,7 +163,7 @@ async def dispatch(
         case "prompt":
             return _prompt(node, inputs)
         case "model":
-            return await _call_serve(node, inputs, client=client, serve_url=serve_url, serve_timeout=serve_timeout)
+            return await _call_serve(node, inputs, client=client, serve_url=serve_url, serve_timeout=serve_timeout, idempotency_key=idempotency_key)
         case "mcp":
             return _mcp(node)
         # The pure-CPU arms run OFF the loop: caller-supplied regex (and the DOTALL scans inside
@@ -297,7 +298,7 @@ def _regex(node: FlowNode, inputs: list[Payload]) -> Payload:
         raise NodeError(f"regex exceeded its {_REGEX_BUDGET_SECONDS}s budget — simplify the pattern") from exc
 
 
-async def run_node(job: NodeJob, *, client: httpx.AsyncClient) -> NodeResult:
+async def run_node(job: NodeJob, *, client: httpx.AsyncClient, idempotency_key: str = "") -> NodeResult:
     """One node, timed, with failure captured as state rather than raised.
 
     `time.perf_counter` is the monotonic clock — a wall clock can step backwards under NTP and
@@ -311,6 +312,7 @@ async def run_node(job: NodeJob, *, client: httpx.AsyncClient) -> NodeResult:
             inputs,
             job.seed,
             client=client,
+            idempotency_key=idempotency_key,
             serve_url=job.serve_url,
             serve_timeout=job.serve_timeout,
         )
@@ -398,6 +400,7 @@ async def _call_serve(
     client: httpx.AsyncClient,
     serve_url: str,
     serve_timeout: float,
+    idempotency_key: str = "",
 ) -> Payload:
     app = node.config.get("app")
     if not isinstance(app, str) or not APP_PATTERN.match(app):
@@ -412,12 +415,19 @@ async def _call_serve(
         params["name"] = name
 
     content_type = "text/plain; charset=utf-8" if payload.kind == "text" else "application/octet-stream"
+    headers = {"content-type": content_type}
+    if idempotency_key:
+        # DWF-ACT-002. `run_node` is retried by NODE_RETRY, and this POST is the side effect: a model
+        # that charges, writes, or enqueues sees the same work twice with no way to tell. The header is
+        # the conventional spelling, so a Serve app that honours it needs no rask-specific contract and
+        # one that ignores it is no worse off than before.
+        headers["Idempotency-Key"] = idempotency_key
     try:
         resp = await client.post(
             url,
             content=payload.as_bytes(),
             params=params,
-            headers={"content-type": content_type},
+            headers=headers,
             # Explicit per-call, not inherited from the client: the same client serves the whole
             # fleet-shaped app, and one node's model budget is not the app's default budget.
             timeout=serve_timeout,

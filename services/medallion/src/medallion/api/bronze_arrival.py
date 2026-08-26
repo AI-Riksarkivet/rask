@@ -104,8 +104,11 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
             dapr: DaprClientDep,
             config: SettingsDep,
             _: Annotated[None, Depends(require_dapr_token)],
+            drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
         ) -> dict[str, str]:
             """A publication became consumable — wake the cascade for exactly the rows it added."""
+            if drain is not None:
+                return drain
             return await handle_publication(dapr, config, event)
 
     return dapr_app

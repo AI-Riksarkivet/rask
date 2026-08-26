@@ -30,6 +30,7 @@ from medallion.api.dependencies import SettingsDep
 from medallion.api.produce_auth import authenticate_subject
 from medallion.core.config import get_settings
 from medallion.workflow import PromotionSpec, promotion_review
+from service_kit.draining import retry_when_draining
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -326,9 +327,12 @@ def register_promotion_route(app: FastAPI, dapr_app: DaprApp | None = None) -> D
         event: dict[str, Any],
         config: SettingsDep,
         _: Annotated[None, Depends(require_dapr_token)],
+        drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
     ) -> dict[str, str]:
         """Thin wrapper over the testable :func:`handle_promotion_held`. Token-guarded: a forged hold
         would park a promotion nobody asked for and name an approver who never agreed to be asked."""
+        if drain is not None:
+            return drain
         return await handle_promotion_held(event)
 
     return dapr_app

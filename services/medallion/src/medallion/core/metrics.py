@@ -11,6 +11,9 @@ become underscores →
 
 from __future__ import annotations
 
+from collections import OrderedDict
+from typing import Final
+
 from opentelemetry import metrics
 
 
@@ -128,7 +131,23 @@ def record_promotion_outcome(decision: str) -> None:
     _promotion_outcomes.add(1, {"lance.medallion.decision": decision})
 
 
-def record_stage_completion(transition: str, *, duration_seconds: float, rows: int | None = None, size_bytes: int | None = None) -> None:
+#: Volume keys already counted, so a re-run of pass 2 does not add a stage's output twice.
+#:
+#: Bounded and FIFO because this is a metrics guard, not a ledger: an unbounded set in a long-lived
+#: mover is a leak, and the duplicates worth catching arrive seconds apart (an activity retry, or an
+#: at-least-once redelivery of `sub_topic`).
+_counted_volume: Final[OrderedDict[str, None]] = OrderedDict()
+_COUNTED_VOLUME_MAX: Final[int] = 4096
+
+
+def record_stage_completion(
+    transition: str,
+    *,
+    duration_seconds: float,
+    rows: int | None = None,
+    size_bytes: int | None = None,
+    volume_key: str | None = None,
+) -> None:
     """Record what a completed transition COST — its latency, and what it moved.
 
     ``duration_seconds`` must be a MEASURED ``time.perf_counter`` delta, and the caller must hand the
@@ -146,6 +165,23 @@ def record_stage_completion(transition: str, *, duration_seconds: float, rows: i
     """
     attrs = {"lance.medallion.transition": transition}
     _stage_duration.record(duration_seconds, attrs)
+
+    # VOLUME IS DEDUPED, LATENCY IS NOT, and the asymmetry is deliberate. A duplicated pass 2 -- an
+    # activity retry, or ordinary at-least-once redelivery of `sub_topic` -- re-runs to completion,
+    # because a same-version re-publish is ACCEPTED by `publication.publish`. Rows and bytes are
+    # cumulative, so counting them twice over-reports by a whole stage's output; a duration is a
+    # histogram observation, and a second sample of real work done is not a lie.
+    #
+    # Process-local, and that limit is stated rather than hidden: a redelivery landing on a DIFFERENT
+    # replica still double-counts. Catching the same-process case is most of the value at none of the
+    # cost of a shared store for a metric.
+    if volume_key is not None:
+        if volume_key in _counted_volume:
+            return
+        _counted_volume[volume_key] = None
+        while len(_counted_volume) > _COUNTED_VOLUME_MAX:
+            _counted_volume.popitem(last=False)
+
     if rows is not None:
         _stage_rows.add(rows, attrs)
     if size_bytes is not None:

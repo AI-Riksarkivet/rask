@@ -31,6 +31,24 @@ from flows.models import FlowNode, NodeJob
 SERVE = "http://serve.test"
 
 
+class _Ctx:
+    """The slice of `WorkflowActivityContext` the activity reads.
+
+    It used to read NOTHING, so these tests passed `None` — which stopped being a faithful double the
+    moment the activity started deriving its idempotency key from `ctx`. A double that omits what the
+    code under test uses proves the code does not use it.
+    """
+
+    workflow_id = "wf-1"
+    task_id = 7
+
+    def get_inner_context(self) -> object:
+        class _Inner:
+            task_execution_id = "exec-abc"
+
+        return _Inner()
+
+
 def _traced() -> tuple[InMemorySpanExporter, Any]:
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -46,7 +64,7 @@ def test_a_FAILING_node_marks_the_activity_span_and_names_itself() -> None:
     job = NodeJob(node=FlowNode(id="ocr-1", kind="model", config={"app": "htrflow"}), inputs=["seed"], serve_url=SERVE)
 
     with tracer.start_as_current_span("activity: run_node"):
-        result = run_node.__wrapped__(cast("Any", None), job)
+        result = run_node.__wrapped__(cast("Any", _Ctx()), job)
 
     assert result["state"]["status"] == "failed", "the fixture did not produce a failed node"
     (span,) = exporter.get_finished_spans()
@@ -71,7 +89,7 @@ def test_a_SUCCEEDING_node_names_itself_but_is_not_marked_an_error() -> None:
     job = NodeJob(node=FlowNode(id="ocr-2", kind="model", config={"app": "htrflow"}), inputs=["seed"], serve_url=SERVE)
 
     with tracer.start_as_current_span("activity: run_node"):
-        result = run_node.__wrapped__(cast("Any", None), job)
+        result = run_node.__wrapped__(cast("Any", _Ctx()), job)
 
     assert result["state"]["status"] == "succeeded"
     (span,) = exporter.get_finished_spans()

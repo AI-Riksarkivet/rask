@@ -29,10 +29,21 @@ once `shutting_down` flips, that is the answer regardless of anything else.
 
 from __future__ import annotations
 
-from typing import Final
+import asyncio
+import logging
+import signal
+from collections.abc import Callable
+from contextlib import suppress
+from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
+
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+log = logging.getLogger(__name__)
 
 
 #: Seconds a refused caller is told to wait. A pod's terminationGracePeriod is the natural scale: long
@@ -95,3 +106,53 @@ def problem_response(detail: str) -> JSONResponse:
 
 
 __all__ = ["RETRY", "RETRY_AFTER_SECONDS", "draining", "problem_response", "refuse_when_draining", "retry_when_draining"]
+
+
+def arm_drain_on_sigterm(app: FastAPI) -> Callable[[], None]:
+    """Flip ``app.state.shutting_down`` the moment SIGTERM arrives, not when the lifespan unwinds.
+
+    WITHOUT THIS THE WHOLE MODULE IS INERT, which is the defect this closes. Every lifespan sets the
+    flag in its ``finally`` — i.e. AFTER uvicorn has stopped accepting connections and drained
+    in-flight requests. By then a delivery being served has already passed the dependency, and one
+    arriving later never reaches the app at all. So the admission guards below refused nothing, ever:
+    the module documented a protection it did not provide.
+
+    Kubernetes sends SIGTERM at the START of termination and only then waits out
+    ``terminationGracePeriodSeconds``. That window is the whole point — it is exactly when the sidecar
+    is still delivering and the pod can still answer. Flipping here turns the grace period into a
+    drain instead of a countdown.
+
+    RETURNS a restore callable, and the lifespan must call it. A handler installed per app and never
+    removed leaks across a test suite that builds many apps in one process, and — worse — would leave
+    a dead app's flag being flipped by a live process's signal.
+
+    Best-effort by construction: ``add_signal_handler`` raises on a loop that does not support it
+    (Windows) and ``signal`` raises off the main thread. Neither is a reason to fail a service start,
+    so the failure is logged and the process keeps the old behaviour rather than refusing to boot.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        previous = signal.getsignal(signal.SIGTERM)
+    except Exception:  # pragma: no cover — non-main thread
+        previous = None
+
+    def _flip() -> None:
+        # Idempotent, and it must be: a second SIGTERM (an impatient operator, or a runtime that
+        # re-sends) must not reset anything or raise out of a signal handler.
+        app.state.shutting_down = True
+        log.info("drain_armed_by_sigterm")
+
+    try:
+        loop.add_signal_handler(signal.SIGTERM, _flip)
+    except (NotImplementedError, RuntimeError, ValueError):
+        log.warning("could not arm the drain on SIGTERM; the flag flips at lifespan shutdown as before", exc_info=True)
+        return lambda: None
+
+    def _restore() -> None:
+        with suppress(Exception):
+            loop.remove_signal_handler(signal.SIGTERM)
+        if previous is not None and callable(previous):
+            with suppress(Exception):
+                signal.signal(signal.SIGTERM, previous)
+
+    return _restore

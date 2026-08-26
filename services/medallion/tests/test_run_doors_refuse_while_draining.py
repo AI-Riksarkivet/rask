@@ -34,7 +34,16 @@ HTTP_RUN_DOORS = {
 
 #: Sidecar-delivered. Dapr does not consult a readiness probe, so these are the ones the flag could
 #: never have protected before.
-SUBSCRIPTION_DOORS = {("bronze_arrival.py", "on_bronze_arrival")}
+#: Every sidecar-delivered door that STARTS work. It held one entry for a long time, and the
+#: anti-vacuity scan below could not have caught that — it matched only `@router.post`, so the whole
+#: class of route this guard exists FOR was invisible to the guard's own guard.
+SUBSCRIPTION_DOORS = {
+    ("bronze_arrival.py", "on_bronze_arrival"),
+    ("bronze_arrival.py", "on_publication"),
+    ("events.py", "on_stage"),
+    ("promotions.py", "on_promotion_held"),
+    ("train.py", "on_train_trigger"),
+}
 
 
 def _fn(module: str, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
@@ -99,7 +108,10 @@ class TestTheGateCannotGoVacuous:
             for node in ast.walk(tree):
                 if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) or node.name in listed:
                     continue
-                posts = any(isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr == "post" for d in node.decorator_list)
+                # `subscribe` TOO, not just `post`. The scan saw only HTTP doors, so every
+                # sidecar-delivered route was invisible to the guard that exists FOR sidecar-delivered
+                # routes — and B6's whole subject is a delivery that does not consult a readiness probe.
+                posts = any(isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr in {"post", "subscribe"} for d in node.decorator_list)
                 if posts and not any(_mentions(d, "refuse_when_draining") or _mentions(d, "retry_when_draining") for d in node.decorator_list):
                     ungated.append(f"{path.name}::{node.name}")
         # `train.py::terminate_train` is the THIRD category this gate did not have. B6 refuses a door
@@ -112,7 +124,11 @@ class TestTheGateCannotGoVacuous:
         # the third category: they STOP work. The mover-side one is additionally sidecar-unreachable —
         # it is called by the producer over ClusterIP, not delivered by Dapr — so B6's admission
         # question does not even apply to it.
+        # `dlq.py::on_dead_letter` PARKS a poison message; it starts no work. Refusing it while
+        # draining would leave the message unparked, which is the outcome the DLQ exists to prevent —
+        # so it is listed rather than gated, and this comment is why.
         assert ungated == [
+            "dlq.py::on_dead_letter",
             "mover_ops.py::terminate_stage",
             "promotions.py::decide",
             "stage_ops.py::terminate_stage",
