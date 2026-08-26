@@ -5025,3 +5025,39 @@ def test_no_coroutine_verifies_a_bearer_on_the_event_loop() -> None:
         "these coroutines call verifier.verify() inline, stalling the event loop; "
         "await service_kit.governed.oidc.verify_off_loop(verifier, raw) instead:\n  " + "\n  ".join(offenders)
     )
+
+
+def test_dapr_hot_reload_is_off_because_this_estate_cannot_converge_it() -> None:
+    """The sidecars' `lance-tracing` Configuration must disable HotReload, unconditionally.
+
+    Dapr 1.18 promoted HotReload to GA and default-ON, and every sidecar in this estate references
+    this one Configuration. Each then runs a 60-second reconcile ticker that diffs the operator's
+    components against its own in-memory store — and for `lance-statestore` that diff can never come
+    out equal, because its DSN arrives as a `secretKeyRef`: the operator holds the REFERENCE, daprd
+    holds the RESOLVED value. So the reconciler concludes it changed on every tick, tries to
+    hot-reload it, and refuses, because Dapr will not hot-reload a component used as an actor state
+    store.
+
+    MEASURED on the live estate before the fix: exactly 30 `Aborting to hot-reload a state store
+    component that is used as an actor state store: lance-statestore` lines per sidecar per 30
+    minutes — one a minute, across 16 sidecars, roughly 540 ERROR lines an hour. Nothing was pending
+    and nothing was broken; the loop is structurally unable to converge, and it buried every real
+    error in the estate's error stream. After the fix, and a restart: `Enabled features:
+    WorkflowsRemoteActivityReminder`, and zero aborts.
+
+    Pinned as a test because the failure is SILENT and reads as healthy: the flag defaults ON, so
+    deleting this block restores a permanent error flood that no gate would otherwise notice, and
+    whose only symptom is that genuine errors get harder to find. Asserted on the RENDERED chart
+    rather than the template text so a conditional accidentally wrapping the block also fails.
+    """
+    rendered = _helm_template()
+    configs = [
+        doc for doc in yaml.safe_load_all(rendered) if doc and doc.get("kind") == "Configuration" and doc.get("metadata", {}).get("name") == "lance-tracing"
+    ]
+    assert configs, "the sidecars' `lance-tracing` Dapr Configuration is not rendered at all"
+
+    features = {f["name"]: f.get("enabled") for f in (configs[0].get("spec", {}).get("features") or [])}
+    assert features.get("HotReload") is False, (
+        "HotReload is not disabled in `lance-tracing`, so every sidecar will retry an "
+        f"unconvergeable reload of the actor state store once a minute, forever. features={features}"
+    )

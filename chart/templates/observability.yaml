@@ -53,6 +53,29 @@ metadata:
   name: lance-tracing
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
+  # UNCONDITIONAL, and deliberately outside the otel guard below: this loop runs whether or not
+  # telemetry ships.
+  #
+  # Dapr 1.18 promoted HotReload to GA and default-ON, and every sidecar in this estate references
+  # this Configuration — so each one boots with `Enabled features: HotReload …` and runs a 60-second
+  # reconcile ticker that diffs the operator's components against its own in-memory store.
+  #
+  # For `lance-statestore` that diff can never come out equal. Its DSN arrives as a `secretKeyRef`,
+  # so the operator's copy holds the REFERENCE while daprd's holds the RESOLVED value; the reconciler
+  # therefore concludes it changed on every single tick, tries to hot-reload it, and refuses —
+  # because Dapr will not hot-reload a component used as an actor state store. Measured across the
+  # fleet: ~540 ERROR lines an hour, `Aborting to hot-reload a state store component that is used as
+  # an actor state store: lance-statestore`, one per sidecar per minute, forever. Nothing is pending
+  # and nothing is broken; the loop is structurally unable to converge, and it buries real errors.
+  #
+  # Turning it off costs nothing this estate was using. A component change here is a coordinated
+  # chart rollout, and for the actor state store a pod restart was ALREADY required — that is the
+  # very thing the reconciler was refusing to do for us. The trade is explicit: with HotReload off,
+  # a Component/Resiliency/Configuration edit reaches running sidecars only after
+  # `kubectl rollout restart`.
+  features:
+    - name: HotReload
+      enabled: false
 {{- if include "lance.otelEnabled" . }}
   # CORRECTED 2026-08-22. This block used to say "There is NO otel exporter here … Dapr's own sidecar
   # spans can't carry GreptimeDB's required db-name/pipeline headers", and concluded the estate still
