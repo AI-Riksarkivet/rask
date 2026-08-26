@@ -40,6 +40,15 @@ def _as_utc(value: datetime) -> datetime:
 UtcDatetime = Annotated[datetime, AfterValidator(_as_utc)]
 
 
+#: The FGA relation that gates watching a project.
+#:
+#: Lives HERE rather than in `api/watches.py`, which owns the feature, because the import graph
+#: forbids it: `watches` -> `security` -> `visibility`, and `visibility` is where the DELIVERY-side
+#: re-check runs. A second spelling in the second file is the drift this avoids — the create gate and
+#: the delivery gate must ask about the same relation or the re-check is theatre.
+WATCH_RELATION = "member"
+
+
 class NotificationReason(StrEnum):
     """Why this subject was told — one member per targeting source.
 

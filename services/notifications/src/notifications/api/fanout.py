@@ -63,13 +63,18 @@ class FanoutResult(BaseModel):
 #: stays testable without a sidecar — the same seam `InboxOpener` already is.
 type WatcherLookup = Callable[[str], Awaitable[Sequence[str]]]
 
+#: Re-checks one subject's `project#member` at DELIVERY. Raises on an authorization outage — the
+#: caller maps that to RETRY, because a silent False is indistinguishable from a revoked membership,
+#: which is the exact conflation this seam exists to end.
+type MemberCheck = Callable[[str, str], Awaitable[bool]]
+
 #: How a caller pushes one delivered pointer to a subject's opted-in channels. A CALLABLE for the same
 #: reason `InboxOpener` is one: the fan-out stays testable with no Dapr client and no bindings, and a
 #: deployment with channels off passes `None` rather than a table of senders that refuse.
 type ChannelPush = Callable[[str, dict[str, object]], Awaitable[None]]
 
 
-async def audience_for(notice: Notifiable, *, watchers: WatcherLookup | None = None) -> tuple[str, ...]:
+async def audience_for(notice: Notifiable, *, watchers: WatcherLookup | None = None, members: MemberCheck | None = None) -> tuple[str, ...]:
     """Who is told about this run: its verified author (v1) UNION the project's watchers (v2).
 
     The author needs no registry and no permission — you may always be told about your own run.
@@ -83,6 +88,10 @@ async def audience_for(notice: Notifiable, *, watchers: WatcherLookup | None = N
     project-less run) is v1's exact behaviour, which is what a lookup failure degrades to: a
     resolver that raises is a bus handler that RETRIES, so callers that cannot tolerate that pass a
     resolver which absorbs its own faults.
+
+    ``members`` re-checks `project#member` per watcher at DELIVERY. Optional so the v1 audience and
+    every test that does not model FGA keep working unchanged; wired in the bus handler, where the
+    visibility client already exists.
     """
     audience = [notice.author]
     # The human a service-authored run is FOR. Needs no opt-in for the same reason the author needs
@@ -92,8 +101,23 @@ async def audience_for(notice: Notifiable, *, watchers: WatcherLookup | None = N
         audience.append(notice.originator)
     if watchers is not None and notice.project:
         for subject in await watchers(notice.project):
-            if subject not in audience:
-                audience.append(subject)
+            if subject in audience:
+                continue
+            # RE-CHECKED AT DELIVERY, which three docstrings in this plane already claimed and none
+            # did. `project#member` gates watch CREATION; nothing re-asked afterwards.
+            #
+            # For most subjects the visibility gate below catches a revocation anyway, because the FGA
+            # model routes membership into readership (`warehouse#reader: … or member from project`,
+            # inherited down to `table#can_be_notified`). The residue is a subject holding an
+            # INDEPENDENT reader grant on the output: they kept receiving `reason: watch` rows for a
+            # project they were offboarded from, indefinitely — only they can delete their own watch.
+            #
+            # An FGA outage RAISES here rather than silently dropping the watcher, so the handler
+            # answers RETRY. Dropping would look identical to "they are no longer a member", which is
+            # the exact conflation this whole change is about.
+            if members is not None and not await members(subject, notice.project):
+                continue
+            audience.append(subject)
     return tuple(audience)
 
 

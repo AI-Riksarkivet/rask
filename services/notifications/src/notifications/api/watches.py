@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from notifications.api.security import CheckerDep, CurrentSubject
 from notifications.dependencies import ActorPlaneDep, NotificationsSettingsDep
+from notifications.models import WATCH_RELATION
 from notifications.proxies import inbox_for, watch_index_for
 from service_kit.exceptions import ForbiddenError
 
@@ -39,7 +40,7 @@ router = APIRouter(prefix="/notifications/watches", tags=["watches"])
 
 #: The relation a watch requires, on `project:<id>`. Membership, not readership: the project is the
 #: tenancy boundary, and being a member of it is what makes its runs your business.
-WATCH_RELATION = "member"
+
 
 _PROJECT_HELP = "The project id to watch. Estate-chosen and path-safe; not an encoded subject."
 

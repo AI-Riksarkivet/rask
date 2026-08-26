@@ -113,7 +113,10 @@ async def ingest_run_event(
     if event_seq is not None:
         notice = notice.model_copy(update={"delivery": notice.delivery.model_copy(update={"event_seq": event_seq})})
 
-    audience = await audience_for(notice, watchers=watchers)
+    # The delivery-side `project#member` re-check rides the visibility client that is already here.
+    # Wired at THIS seam rather than inside `audience_for` so the v1 audience — and every caller that
+    # models no authorization — keeps working unchanged.
+    audience = await audience_for(notice, watchers=watchers, members=visibility.still_a_member)
     result = await fan_out(notice, audience=audience, visibility=visibility, open_inbox=open_inbox, push=push)
     record_ingress(lane, _event_outcome(result))
     if result.needs_retry:

@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **43 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **45 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -1952,6 +1952,26 @@ api/ingest.py:116-121 `audience = await audience_for(notice, watchers=watchers);
 
 Refuting the permanence: api/reconciler.py:1-12 ("**The bus is provably incomplete** ... The one place both paths converge is this feed") and 327-331 ("**The cursor advances only when the whole pass succeeded.** ... the next tick re-offers everything above it — including the rows that already landed, which is free: delivery is idempotent on the notification's natural key"), plus reconciler.py:370-395 which re-runs `ingest_run_event` with `watchers` forwarded — the comment at 388-394 records that dropping `watchers`/`push` on THIS lane was itself the bug that was fixed. api/reconcile_cron.py:110-116 passes `watchers=watchers_of` on every tick. So the bus's degraded audience is re-attempted by the second lane, contradicting "there is no second chance".
 
+
+**FIXED 2026-08-25.** `watchers_of` now raises `WatchIndexUnavailable` on a transport or actor
+fault, so the bus handler answers RETRY instead of acking a partial fan-out.
+
+**The docstring's own reason for swallowing is what does not hold**, and the verifier's correction is
+what makes the fix safe rather than reckless. It said "a watcher-index outage does not heal on
+redelivery" — and for the faults it actually covers (a sidecar restart, an actor rebalance, a
+state-store failover) it heals in seconds. The retry is BOUNDED besides: the subscription registers a
+`deadLetterTopic`, so an event that keeps failing parks visibly rather than redelivering forever. And
+`audience_for` already documented a raising resolver as a supported shape.
+
+**A `ValueError` is still absorbed, and that asymmetry is the point.** An unusable project id is
+permanent, so answering RETRY would park the AUTHOR's own notification in the DLQ over a watcher
+lookup that can never succeed. Degrading to v1's audience is right there and wrong for a transient
+fault.
+
+The verifier also narrowed the harm — the reconciler is an independent lane that re-offers most of
+these — and the residual it leaves is real: an outage spanning both the bus delivery and every
+reconciler pass covering that seq. Four tests, two RED.
+
 </details>
 
 <details><summary><b>`project#member` is NOT re-checked at delivery, though `watch_actor.py` and `watches.py` both state it as the safeguard that makes a stale watch harmless</b> <i>(actors-notifications, rule N/A, ADJUSTED)</i></summary>
@@ -1984,6 +2004,33 @@ fanout.py:93-96 `if watchers is not None and notice.project: for subject in awai
 fanout.py:163-165 `if not await visibility.sees_all(subject, notice.outputs): return Outcome.HIDDEN` and visibility.py:145-150 "Asks `can_be_notified`, NOT the render's question" — the only re-derivation, and it is over the run's OUTPUT objects, not `project:&lt;id&gt;`.
 
 Why the practical effect is narrow: packages/service-kit/src/service_kit/governed/auth/model.fga:98 `define reader: [...] or writer or member from project` (warehouse), :259 `or reader from parent` (namespace), :331 same (table), :347 `define can_be_notified: reader`. Membership therefore feeds the gate that does run; only an independent grant survives an offboarding.
+
+
+**FIXED 2026-08-25 — implemented, so the three docstrings become TRUE rather than walked back.**
+The finding offered "implement the re-check or delete the claim"; implementing is the direction
+`watch_actor.py` and `watches.py` already committed to in prose.
+
+`Visibility.still_a_member` asks `project#member` per watcher at delivery, wired at the bus handler
+where the visibility client already exists. Optional on `audience_for`, so the v1 audience and every
+caller that models no authorization keep working unchanged.
+
+**The narrow residue is what it closes.** For most subjects the visibility gate caught a revocation
+anyway — the FGA model routes membership into readership (`warehouse#reader: … or member from
+project`, inherited to `table#can_be_notified`). The exception is a subject holding an INDEPENDENT
+reader grant on the output: they kept receiving `reason: watch` rows for a project they were
+offboarded from, indefinitely, since only they can delete their own watch.
+
+**FAIL-CLOSED, and a test says why:** an authorization outage RAISES rather than dropping the
+watcher, because a silent False is indistinguishable from a revoked membership — the exact conflation
+this change exists to end. The AUTHOR is never membership-checked; you may always be told about your
+own run.
+
+**`WATCH_RELATION` moved to `models.py`** because the import graph forbade the obvious home:
+`watches` → `security` → `visibility`, and the delivery-side check runs in `visibility`. A second
+spelling in the second file is the drift that would make the re-check theatre — the create gate and
+the delivery gate must ask about the same relation.
+
+Four tests, two RED.
 
 </details>
 

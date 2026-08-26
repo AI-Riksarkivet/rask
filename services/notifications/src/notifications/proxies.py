@@ -154,20 +154,39 @@ def watch_index_for(project_id: str) -> TypedActorProxy:
     return typed_proxy(WATCH_ACTOR_TYPE, project_id, WatchIndexActorInterface)
 
 
-async def watchers_of(project_id: str) -> list[str]:
-    """The subjects watching `project_id`, or an EMPTY list if the index cannot be read.
+class WatchIndexUnavailable(RuntimeError):
+    """The watch index could not be READ — distinct from a project that has no watchers.
 
-    Absorbing its own faults is the whole point of this wrapper. `audience_for` is called from a bus
-    handler, so a raising resolver is a handler that answers RETRY — and the sidecar would then
-    redeliver a run whose AUTHOR was already notified, forever, because a watcher-index outage does
-    not heal on redelivery. Degrading to v1's audience is the honest failure: the author is still
-    told, the watchers are not, and the fact is on an ERROR line rather than in a redelivery loop.
+    Its own type because the two used to be one answer (`[]`), which made the bus lane decide a
+    project had no watchers when what had actually happened was a sidecar restart.
+    """
+
+
+async def watchers_of(project_id: str) -> list[str]:
+    """The subjects watching `project_id`.
+
+    RAISES `WatchIndexUnavailable` when the index cannot be read, so the bus handler answers RETRY.
+    This wrapper used to absorb every fault and return `[]`, on the stated ground that "a watcher-index
+    outage does not heal on redelivery" — and for the faults it actually covers (a sidecar restart, an
+    actor rebalance, a state-store failover) it heals in seconds. The retry is BOUNDED besides: the
+    subscription registers a `deadLetterTopic`, so an event that keeps failing parks visibly instead
+    of redelivering forever, and `audience_for` already documents a raising resolver as a supported
+    shape. The cost of the retry is one counted duplicate for the author, because the fan-out is
+    idempotent on the notification's natural key.
+
+    A `ValueError` from `watch_index_for` is STILL absorbed, and the asymmetry is the point: an
+    unusable project id is permanent, so answering RETRY would park the AUTHOR's own notification in
+    the DLQ over a watcher lookup that can never succeed. Degrading to v1's audience is right there
+    and wrong for a transient fault.
     """
     try:
         result = await watch_index_for(project_id).list_watchers()
-    except Exception:
-        logger.exception("watch_index_unreadable", extra={"project_id": project_id})
+    except ValueError:
+        logger.exception("watch_index_unusable_project", extra={"project_id": project_id})
         return []
+    except Exception as exc:
+        logger.exception("watch_index_unreadable", extra={"project_id": project_id})
+        raise WatchIndexUnavailable(project_id) from exc
     return [str(s) for s in (result.get("subjects") or [])]
 
 

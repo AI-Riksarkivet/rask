@@ -33,6 +33,7 @@ import logging
 from collections.abc import Collection
 from typing import TYPE_CHECKING, Final
 
+from notifications.models import WATCH_RELATION
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed import fga
 
@@ -133,6 +134,27 @@ class Visibility:
         through this, and tightening it here would blank rows the delivery gate had already approved.
         """
         return await self._filter(subject, names, METADATA_RELATION)
+
+    async def still_a_member(self, subject: str, project_id: str) -> bool:
+        """Whether `subject` still holds `member` on `project:<id>` — re-checked at DELIVERY.
+
+        `project#member` gates watch CREATION, and three docstrings in this plane asserted it was
+        re-checked when a watch is delivered on. It was not. For most subjects the visibility gate
+        catches it anyway, because the FGA model routes membership into readership
+        (`warehouse#reader: … or member from project`, inherited down to `table#can_be_notified`) — so
+        revoking membership drops them. The residue is a subject holding an INDEPENDENT reader grant
+        on the output: they kept receiving `reason: watch` rows for a project they were offboarded
+        from, indefinitely, since only they can delete their own watch.
+
+        FAIL-CLOSED, matching every other gate here: authorization enabled with no client is a BROKEN
+        authorization layer, and answering it open turns that into an open one. The caller maps the
+        refusal to RETRY rather than to a silent drop.
+        """
+        if not self._enabled or not project_id:
+            return True
+        if self._client is None:
+            raise ServiceUnavailableError("authorization is enabled but unavailable")
+        return await fga.check(self._client, user=subject, relation=WATCH_RELATION, obj=f"project:{project_id}")
 
     async def sees_all(self, subject: str, names: Collection[str]) -> bool:
         """DELIVERY: whether `subject` may be notified about EVERY name — the subset test, and the
