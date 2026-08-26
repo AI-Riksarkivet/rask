@@ -182,6 +182,23 @@ spec:
               {{- $prefixed = append $prefixed (printf "user:%s" .) }}
             {{- end }}
             - { name: LANCE_FGA_CASCADE_WRITERS, value: {{ toJson $prefixed | quote }} }
+            {{- /* DEDICATED CREDENTIALS for the identities that hold a rung above read.
+                   `dapr_auth.py` binds a PRIVILEGED subject to its own `service-token-<identity>`;
+                   everyone else authenticates with the estate's SHARED APP_API_TOKEN. That control was
+                   written and tested, and rendered NOWHERE — `grep -rn PRIVILEGED chart/` matched one
+                   comment — so any holder of the shared token could claim any name on
+                   LANCE_SERVICE_SUBJECTS, and those names hold `owner` on every warehouse
+                   (LANCE_FGA_CASCADE_WRITERS, directly above): can_drop, can_deregister, can_restore
+                   and manage_grants across every tenant. Reading one web pod's environment was the
+                   whole attack.
+
+                   The same set as the cascade writers plus the trainer — deliberately NOT
+                   $catalogSubjects, which includes read-only identities like the web BFF that need no
+                   dedicated credential. openbao.yaml seeds one token per name from this same
+                   derivation; in prod an operator seeds them, and an unseeded one is a fail-closed
+                   refusal rather than a silent downgrade to the shared token. */}}
+            {{- $privileged := append (compact $cascadeWriters | uniq) .Values.medallion.train.trainerIdentity }}
+            - { name: LANCE_PRIVILEGED_SUBJECTS, value: {{ compact $privileged | uniq | sortAlpha | join "," | quote }} }
             {{- with include "lance.governedFgaPins" (list . "LANCE") }}{{- . | nindent 12 }}{{- end }}
             # #41 compliance audit trail (who/what/outcome for authn/authz/vending) — configurable.
             # hasKey+ternary, NOT `| default`: Sprig's default() treats boolean false as empty (making

@@ -5062,3 +5062,37 @@ def test_dapr_hot_reload_is_off_because_this_estate_cannot_converge_it() -> None
         "HotReload is not disabled in `lance-tracing`, so every sidecar will retry an "
         f"unconvergeable reload of the actor state store once a minute, forever. features={features}"
     )
+
+
+def test_every_privileged_identity_has_a_dedicated_credential_seeded() -> None:
+    """A privileged subject with no `service-token-<identity>` is a fail-closed outage, not a downgrade.
+
+    `service_kit.governed.dapr_auth` binds a PRIVILEGED service identity to its own dedicated
+    credential; every other identity authenticates with the estate's SHARED `APP_API_TOKEN`. Until
+    2026-08-26 nothing rendered `*_PRIVILEGED_SUBJECTS` — `grep -rn PRIVILEGED chart/` matched a single
+    comment — so the control was inert in every deployment the chart produced, and any holder of the
+    shared token could authenticate as any name on `LANCE_SERVICE_SUBJECTS`. Those names hold `owner`
+    on every warehouse (`LANCE_FGA_CASCADE_WRITERS`), which carries `can_drop`, `can_deregister`,
+    `can_restore` and `manage_grants` across every tenant.
+
+    The two halves must be rendered from ONE derivation, and this pins that they are. Rendering the
+    subject list without seeding a token turns each privileged service into a hard refusal
+    (`privileged but has no dedicated credential provisioned`) — the cascade stops, loudly. Seeding a
+    token without listing the subject silently restores the shared-token path. Both failure modes are
+    a one-line edit away, and neither is visible in review.
+    """
+    rendered = _helm_template()
+
+    subjects: set[str] = set()
+    for match in re.finditer(r'name:\s*\w*_?PRIVILEGED_SUBJECTS,\s*value:\s*"([^"]*)"', rendered):
+        subjects |= {s.strip() for s in match.group(1).split(",") if s.strip()}
+    assert subjects, "no *_PRIVILEGED_SUBJECTS is rendered at all — the credential binding is inert"
+
+    seeded = set(re.findall(r"service-token-([A-Za-z0-9_-]+)=", rendered))
+    assert seeded, "no service-token-<identity> is seeded — every privileged identity would be refused"
+
+    missing_token = sorted(subjects - seeded)
+    assert not missing_token, f"privileged identities with no dedicated credential seeded (each one is a fail-closed refusal): {missing_token}"
+
+    orphan_token = sorted(seeded - subjects)
+    assert not orphan_token, f"dedicated credentials seeded for identities that are not privileged, so they still take the shared-token path: {orphan_token}"

@@ -93,7 +93,20 @@ w user:service-medallion-producer writer "$WAREHOUSE"
 w user:service-ingest writer "$WAREHOUSE"
 w user:service-bronze-to-silver writer "$WAREHOUSE"
 w user:service-media-to-silver writer "$WAREHOUSE"
-w user:service-silver-to-gold validator namespace:gold
+# THE RUNG IS `owner`, AND IT IS A FINDING RATHER THAN A PREFERENCE — this file granted `validator`
+# and contradicted `scripts/seed_estate.py`, which had already measured the answer and written it down:
+# "The first attempt granted `validator` ... and it failed identically, three more 403s. `publish` is
+# guarded by `can_update_tag`, and the model says `define can_update_tag: owner`; `validator` buys
+# `can_promote`, which is the OTHER door on that route." Measured again 2026-08-26 on the live estate:
+# the silver->gold mover was refused `describe` AND `create` on its own tier, because `can_create_table`
+# is `writer` and `validator` is neither. Two seeders disagreeing about one identity's rung is how that
+# denial read as a permissions mystery for an hour.
+w user:service-silver-to-gold owner namespace:gold
+# The PRODUCER publishes the promotion a person approved — `publish_promotion` runs in ITS process,
+# because the workflow instance and the approve door must share an app-id for `raise_workflow_event`
+# to resolve. Without these the review path ends in `403 can_update_tag` AFTER someone said yes.
+w user:service-medallion-producer owner namespace:silver
+w user:service-medallion-producer owner namespace:gold
 
 # --- Ray TRAIN (#115c, docs/RAY-TRAIN.md D5): the trainer's OWN identity + rung. Feature READER on the
 # stages it consumes + WRITER on namespace:models ONLY — never the medallion writer rung (a trainer must
@@ -137,8 +150,17 @@ if [ -n "$PROJECT" ]; then
   done
   w user:service-medallion-producer writer "namespace:$PROJECT-bronze"
   w user:service-ingest writer "namespace:$PROJECT-bronze"
-  w user:service-bronze-to-silver writer "namespace:$PROJECT-silver"
-  w user:service-silver-to-gold validator "namespace:$PROJECT-gold"
+  w user:service-bronze-to-silver owner "namespace:$PROJECT-silver"
+  w user:service-silver-to-gold owner "namespace:$PROJECT-gold"
+  # The producer completes an approved hold in its own process — see the note above the
+  # single-tenant rungs. Omitted here until 2026-08-26, so a TENANT's approved promotion 403'd.
+  w user:service-medallion-producer owner "namespace:$PROJECT-silver"
+  w user:service-medallion-producer owner "namespace:$PROJECT-gold"
+  # The READ half: `service-web` backs the BFF and the live cascade proof. A tenant whose cascade
+  # runs but whose lineage nobody may read is governed correctly and observable by no one.
+  w user:service-web reader "namespace:$PROJECT-bronze"
+  w user:service-web reader "namespace:$PROJECT-silver"
+  w user:service-web reader "namespace:$PROJECT-gold"
   link "namespace:$PROJECT-bronze" "table:$PROJECT-bronze\$events"
   # The ingest lane's table. `INGEST_TABLE` because the ETL form lets a user name it, unlike the
   # producer's fixed `events` lane — pass it when seeding a tenant whose first ingest is not `pages`.

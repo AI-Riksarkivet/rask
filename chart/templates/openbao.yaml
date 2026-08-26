@@ -168,7 +168,22 @@ spec:
               bao kv put secret/lance rustfs-secret-key={{ .Values.rustfs.secretKey }} postgres-password={{ .Values.age.password }} \
                 publisher-oidc-password={{ .Values.dex.publisher.password }} \
                 publisher-oidc-client-secret={{ .Values.dex.clientSecret }} \
-                dapr-state-connection-string="postgres://{{ .Values.age.user }}:{{ .Values.age.password }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.stateDb }}?sslmode=disable"
+                dapr-state-connection-string="postgres://{{ .Values.age.user }}:{{ .Values.age.password }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.stateDb }}?sslmode=disable" \
+                {{- /* ONE DEDICATED CREDENTIAL PER PRIVILEGED IDENTITY. Without these the binding in
+                       `dapr_auth.py` is unreachable: a subject not on *_PRIVILEGED_SUBJECTS
+                       authenticates with the estate's SHARED APP_API_TOKEN, so any holder of that one
+                       token may claim ANY allowlisted service — including identities that hold `owner`
+                       on every warehouse. The control existed and was tested; nothing rendered it, and
+                       nothing seeded the secret it needs, so it was inert in every deployment.
+                       Derived from the same medallion declarations as LANCE_FGA_CASCADE_WRITERS, so a
+                       new mover cannot be added with an identity that has no credential of its own. */}}
+                {{- $privileged := list .Values.medallion.train.trainerIdentity .Values.medallion.producer.serviceIdentity }}
+                {{- range .Values.medallion.movers }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
+                {{- range (.Values.medallion.mediaMovers | default list) }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
+                {{- range (compact $privileged | uniq | sortAlpha) }}
+                service-token-{{ . }}={{ printf "%s-%s" . $.Values.dapr.appApiToken | sha256sum | trunc 40 }} \
+                {{- end }}
+
               echo "seeded secret/lance into OpenBao"
 {{- end }}{{/* devMode seed */}}
 {{- end }}{{/* openbao.enabled */}}
