@@ -360,6 +360,12 @@ class _FakeRepo:
         self.ingested: RunEvent | None = None
         self.events: list[EventRecord] = []
         self.list_events_calls: list[dict[str, object]] = []
+        # The depth each rooted read was asked for, so a test can assert the route THREADS it rather
+        # than merely tolerating it. A double that silently swallows a new argument is how "the
+        # endpoint takes a depth" and "the endpoint uses the depth" drift apart — which is exactly
+        # what happened here: these two fakes kept the old two-argument signature after the real
+        # methods grew a depth, and the mismatch was invisible until the endpoint called them.
+        self.seen_depths: dict[str, object] = {}
         self.runs: list[RunStatus] = []
         self.inputs: list[RunInput] = []
         self.write_version: int | None = None
@@ -408,10 +414,12 @@ class _FakeRepo:
     async def column_downstream(self, dataset: str, field: str) -> ColumnNeighbors:
         return ColumnNeighbors(dataset=dataset, field=field, related=self.col_related)
 
-    async def dataset_column_graph(self, name: str) -> ColumnGraph:
+    async def dataset_column_graph(self, name: str, depth: int = 1) -> ColumnGraph:
+        self.seen_depths["columns"] = depth
         return self.col_graph or ColumnGraph(root=name)
 
-    async def graph(self, name: str) -> LineageGraph:
+    async def graph(self, name: str, depth: int | None = None) -> LineageGraph:
+        self.seen_depths["graph"] = depth
         return self.lineage_graph or LineageGraph(root=name, nodes=[], edges=[])
 
     async def upstream(self, name: str) -> Neighbors:
@@ -594,8 +602,13 @@ def test_get_graph_drops_hidden_nodes_and_edges_both_directions(
         ],
     )
     flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(get_graph("a", cast(LineageRepository, repo), flt))
+    result = asyncio.run(get_graph("a", cast(LineageRepository, repo), flt, 2))
     assert {n.id for n in result.nodes} == {"a", "c"}  # b dropped; the root kept without an FGA check
+    # THE DEPTH MUST REACH THE REPOSITORY. Governance runs over whatever the walk returned, so a
+    # depth the route accepts and then drops would quietly serve a different neighbourhood than the
+    # caller asked for — and every assertion above would still pass, because the canned graph does
+    # not depend on it.
+    assert repo.seen_depths["graph"] == 2, f"get_graph was asked for depth 2 and passed {repo.seen_depths.get('graph')!r} to the repository"
     assert "table:a" not in checked  # the root was NOT re-checked (the route gate already authorized it)
     assert [(e.source, e.target) for e in result.edges] == [("a", "c")]  # both leak directions dropped
 
@@ -691,10 +704,13 @@ def test_get_dataset_columns_drops_edges_touching_hidden_datasets(
         ],
     )
     flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(get_dataset_columns("a", cast(LineageRepository, repo), flt))
+    result = asyncio.run(get_dataset_columns("a", cast(LineageRepository, repo), flt, 3))
     assert [n.dataset for n in result.columns] == ["a", "a"]  # b's column dropped, a's two kept
     # only the both-endpoints-visible edge survives; both leak directions are dropped.
     assert [(e.source_field, e.target_field) for e in result.edges] == [("x", "z")]
+    # And the depth reached the repository — a walk the route widened but never asked for would
+    # govern the right rows of the wrong neighbourhood.
+    assert repo.seen_depths["columns"] == 3, f"get_dataset_columns was asked for depth 3 and passed {repo.seen_depths.get('columns')!r}"
 
 
 def test_get_reconcile_flags_storage_drift(monkeypatch: pytest.MonkeyPatch) -> None:
