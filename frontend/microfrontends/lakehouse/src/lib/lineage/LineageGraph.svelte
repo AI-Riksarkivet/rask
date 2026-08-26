@@ -34,7 +34,7 @@
 	import type { LineageState } from '$lib/lineage/store.svelte';
 	import { useColorMode } from '@rask/ui/color-mode';
 	import { LAYER } from '@rask/api/lineage';
-	import { depths, elkLayout, layout } from '@rask/flow';
+	import { depths, elkLayout, layout, resolveCollisions } from '@rask/flow';
 
 	/**
 	 * `base` and `navigate` arrive as PROPS rather than from `$app/paths` and `$app/navigation`.
@@ -437,13 +437,47 @@
 		if (shape !== lastElkShape) {
 			lastElkShape = shape;
 			const generation = ++buildGeneration;
-			void elkLayout(ids, derive)
+			// REAL BOXES, not a constant. `elkLayout`'s `size` hook existed and nothing ever passed it,
+			// so every node was declared 200×64 to a layout engine whose whole job is reserving space.
+			// Measured on the deployed estate: cards render 51–129px tall, 82 of 85 exceed the declared
+			// 64, and 22 node pairs ACTUALLY OVERLAP — a dataset card sitting 31px into a job card.
+			//
+			// Svelte Flow writes `measured` after it renders a node, so the PREVIOUS render is the
+			// source: first pass falls back to the per-kind card width and ELK's own default height,
+			// and every pass after that reserves what is really drawn. Marquez feeds its real box the
+			// same way (`34 + fields.length * 10` for a dataset).
+			const measuredSize = (id: string) => {
+				const p = prev.get(id);
+				const w = p?.measured?.width;
+				const h = p?.measured?.height;
+				// JobNode is 210px, MedallionNode 200px — a 10px difference that only matters as a
+				// fallback, since a measured node reports its own width anyway.
+				return {
+					width: w && w > 0 ? w : id.startsWith(JOB_PREFIX) ? 210 : 200,
+					height: h && h > 0 ? h : 64,
+				};
+			};
+			void elkLayout(ids, derive, { size: measuredSize })
 				.then((elk) => {
 					if (generation !== buildGeneration || elk.size === 0) return;
 					untrack(() => {
 						nodes = nodes.map((n) => {
 							const p = elk.get(n.id);
 							return p ? { ...n, position: p } : n;
+						});
+					});
+					// ONE FRAME LATER the cards have rendered and Svelte Flow has measured them, which is
+					// the only moment the real geometry exists. ELK reserved an ESTIMATE (a card's height
+					// depends on how many chip rows wrap), so this separates whatever still collides —
+					// measured on the deployed estate: 22 overlapping pairs, one by 200×31px.
+					//
+					// Deliberately inside the ELK branch, so it runs only when the graph is re-laid out.
+					// A drag never triggers it, which is what keeps it from shoving a node the user
+					// placed on purpose.
+					requestAnimationFrame(() => {
+						if (generation !== buildGeneration) return;
+						untrack(() => {
+							nodes = resolveCollisions(nodes, { overlapThreshold: 0.5, margin: 8 });
 						});
 					});
 				})

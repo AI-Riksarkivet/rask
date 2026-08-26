@@ -7,14 +7,20 @@ transcript; this file keeps the decisions and the ordering.
 
 Marquez read at `MarquezProject/marquez@main` via `gh api`. rask read at `main` (`bc4539bc`).
 
-**Read the P0 section first: three of its four items are errors I shipped, and two are regressions
+**STATUS 2026-08-26: P0.1–P0.4 and P1.5 are DONE** — landed in `367516fb`, deployed as
+`web-lakehouse:main-367516fb` (helm rev 77) and verified through the ingress. Their sections below are
+kept with a ✅ and the proof, because the *reasons* are the durable part; delete them when the rest of
+this file goes. **Everything else here is still open** — that is 21 of the 26 items, and the goal that
+closed the five never covered them.
+
+**Read the P0 section first: three of its four items were errors I shipped, and two were regressions
 introduced by the ELK change itself (`08d82eea`).**
 
 ---
 
 ## P0 — wrong today, and mine
 
-### 1. ELK stomps dragged node positions on every poll  *(significant)*
+### 1. ✅ DONE — ELK stomped dragged node positions on every poll  *(significant)*
 
 `LineageGraph.svelte:403` calls `elkLayout` unconditionally inside the build effect, and the
 overwrite at `:407-410` is unconditional. The effect re-runs on every successful poll, because
@@ -31,7 +37,7 @@ poll instead.
 **Fix:** memoise the ELK input the way Marquez does — `useLayout.ts:153-156` compares the new ELK
 input against a ref and returns early when equal, so a data-only change never re-lays out.
 
-### 2. The depth comment and tooltip assert an equivalence that does not exist  *(significant)*
+### 2. ✅ DONE — the depth comment and tooltip asserted an equivalence that does not exist  *(significant)*
 
 I changed depth to "graph hops, exactly as Marquez counts it" and wrote that claim into both a code
 comment (`LineageGraph.svelte:321-324`) and a UI tooltip (`:573`). **Both are wrong.**
@@ -47,7 +53,7 @@ exactly the outcome the comment claims to have avoided.
 **Fix:** correct the comment and the tooltip. Decide separately whether to *match* the unit — that is
 entangled with item 7 (depth fetches vs filters), so do not change behaviour to chase the label.
 
-### 3. Three options documented as deliberate tuning are ELK defaults  *(cosmetic, but it is false documentation)*
+### 3. ✅ DONE — three options documented as deliberate tuning are ELK defaults  *(cosmetic, but it was false documentation)*
 
 `elk-layout.ts` carries `separateConnectedComponents: 'true'` (:94), `edgeRouting: 'ORTHOGONAL'`
 (:87) and `nodePlacement.strategy: 'BRANDES_KOEPF'` (:90), each with a comment explaining it as a
@@ -62,7 +68,7 @@ round.
 The option sets differ **effectively on two axes only**: component separation, and layering
 (`COFFMAN_GRAHAM`, effective only once separation is off) — plus rask's spacing and padding.
 
-### 4. The docstring misdescribes Marquez's edge routing  *(cosmetic)*
+### 4. ✅ DONE — the docstring misdescribed Marquez's edge routing  *(cosmetic)*
 
 `elk-layout.ts` calls Marquez's routing "a bundle of wires". Marquez routes orthogonally in ELK *and*
 renders the orthogonal path as an SVG polyline (`Edge/ElbowEdge.tsx:43-50`). The comment asserts a
@@ -74,7 +80,7 @@ deliberate divergence that does not exist, in the file whose whole purpose is co
 
 | # | Gap | Detail |
 |---|---|---|
-| 5 | **Column graph has no layout engine** | `ColumnLineage.svelte:102` places by arithmetic (`x = 20 + layer*230, y = 24 + row*76`). Marquez shares one ELK across *both* graphs. Fix: point it at `elkLayout()`. |
+| 5 | ✅ **DONE — column graph had no layout engine** | `ColumnLineage.svelte:102` places by arithmetic (`x = 20 + layer*230, y = 24 + row*76`). Marquez shares one ELK across *both* graphs. Fix: point it at `elkLayout()`. |
 | 6 | **"All" drops the upstream/downstream colouring** | Turning Full Graph on is the moment Marquez's highlight becomes meaningful, and the moment rask's disappears. |
 | 7 | **Depth filters, it does not fetch** | Marquez's depth controls what is *fetched*; rask's filters an already-fetched, hard-capped window (union of a 60-dataset and a 200-event window). |
 | 8 | **Search cannot leave the focused neighbourhood** | It matches only nodes currently drawn — deliberate, but it means you cannot jump *out* of a focus. |

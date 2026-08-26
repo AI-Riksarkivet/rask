@@ -10,6 +10,10 @@
  * - `layout` — the SYNCHRONOUS layered barycentre placer. Generic coordinates math that was misfiled
  *   under `panels/lineage` while the FGA access graph imported it cross-domain. It implements the
  *   first three phases of Sugiyama and stops before coordinate assignment.
+ * - `resolveCollisions` — the post-render repair pass. A layout engine reserves the box it is TOLD,
+ *   and a content-height card is not knowable before it renders; this separates whatever still
+ *   overlaps, using the boxes Svelte Flow actually measured. Adapted from Svelte Flow's own
+ *   `layout/node-collisions` example.
  * - `elkLayout` — the ASYNC upgrade over elkjs, which does the phase `layout` skips (plus dummy-node
  *   edge routing and real component packing). Same algorithm family Marquez uses for the same
  *   picture. Both ship: a caller that must place inside one tick still needs the sync one.
@@ -34,5 +38,7 @@ export { default as StaticFlow } from './StaticFlow.svelte';
 export { default as FlowAutoFit } from './FlowAutoFit.svelte';
 export { depths, layout } from './layout';
 export { elkLayout } from './elk-layout';
+export { resolveCollisions } from './resolve-collisions';
 export type { LayoutEdge, Placed } from './layout';
 export type { ElkLayoutOptions } from './elk-layout';
+export type { ResolveCollisionsOptions } from './resolve-collisions';
