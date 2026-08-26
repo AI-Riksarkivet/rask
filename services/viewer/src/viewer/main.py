@@ -20,6 +20,7 @@ from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.media.config import get_settings
 from service_kit.media.middleware import register_middleware
 from service_kit.media.state import AppState, dataset_handle
 from service_kit.obs import configure_app_logging
@@ -100,7 +101,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 # (see service_kit.setup_logging).
 setup_logging()
 
-app = FastAPI(title="lance-media viewer", lifespan=lifespan)
+# Docs are OPT-IN (`MEDIA_DOCS`). This constructor used to set none of the three, so FastAPI's
+# defaults stood and /docs, /redoc and /openapi.json were all served — see
+# `service_kit.media.config.Settings.docs_enabled`.
+_docs = get_settings().docs_enabled
+app = FastAPI(
+    title="lance-media viewer",
+    lifespan=lifespan,
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
+)
 register_handlers(app)
 # `register_handlers` maps `DomainError` only. The OIDC verifier raises `lance_namespace`'s
 # `UnauthenticatedError` (a `LanceNamespaceError`), so an expired or wrong-audience bearer escaped

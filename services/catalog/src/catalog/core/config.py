@@ -33,7 +33,11 @@ class Settings(BaseSettings):
     impl: str = Field(default="dir", alias="LANCE_REST_IMPL")
     root: str = Field(default="s3://lance-catalog", alias="LANCE_REST_ROOT")
     delimiter: str = Field(default="$", alias="LANCE_NS_DELIMITER")
-    docs_enabled: bool = Field(default=True, alias="LANCE_REST_DOCS")
+    #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
+    #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making
+    #: and the schemas shipped openly. A security default every deployment must remember to disable is
+    #: one nobody disables. Turn it on per-environment (the chart's dev values do).
+    docs_enabled: bool = Field(default=False, alias="LANCE_REST_DOCS")
     # Allow blob-v2 columns to reference EXTERNAL objects outside the dataset root (Blob.from_uri) on
     # create. Default off for two reasons: (1) an external pointer's bytes live outside the lakehouse, so
     # Lance's version-aware GC can't protect them and a source delete dangles the pointer; (2) SSRF — the

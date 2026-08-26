@@ -186,7 +186,11 @@ class LineageSettings(BaseSettings):
     audit_enabled: bool = Field(default=True, alias="LANCE_AUDIT_ENABLED")
 
     # Serve /docs + /openapi.json (default on for dev; prod sets false, like the catalog's LANCE_REST_DOCS).
-    docs_enabled: bool = Field(default=True, alias="LINEAGE_DOCS")
+    #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
+    #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making
+    #: and the schemas shipped openly. A security default every deployment must remember to disable is
+    #: one nobody disables. Turn it on per-environment (the chart's dev values do).
+    docs_enabled: bool = Field(default=False, alias="LINEAGE_DOCS")
 
     @model_validator(mode="after")
     def _validate_auth(self) -> Self:

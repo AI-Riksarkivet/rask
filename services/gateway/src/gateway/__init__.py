@@ -306,7 +306,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await app.state.http.aclose()
 
 
-app = FastAPI(title="gateway", version="0.1.0", lifespan=lifespan)
+# DOCS ARE OPT-IN AT THE FRONT DOOR (`RASK_DOCS`), and this is the one that mattered most: the chart
+# publishes `/api` at the Ingress, so everything the gateway serves under the prefix is reachable
+# unauthenticated from the internet.
+_docs_enabled = os.environ.get("RASK_DOCS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+app = FastAPI(
+    title="gateway",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+)
 
 # Opt-in OTLP tracing (no-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set). The
 # gateway is the front door, so its spans are the root of every request trace;
@@ -377,9 +389,21 @@ async def proxy(path: str, request: Request) -> Response:
 
     # Serve a unified API page aggregating every backend's schema, instead of
     # proxying /docs + /openapi.json to core-api only.
-    if scope_path == f"{prefix}/openapi.json":
-        return JSONResponse(await _merged_openapi(client, prefix, _distinct_targets(request.app.state.routes)))
-    if scope_path == f"{prefix}/docs":
+    #
+    # BEHIND `RASK_DOCS`, because these two branches are not like the others: they are the only routes
+    # the gateway ANSWERS itself under the prefix, they take no dependency and check no token, and
+    # `chart/templates/ingress.yaml` publishes `/api` — so an anonymous request from the internet got
+    # the merged route table, parameter names and request/response schemas of every backend the
+    # gateway fronts. It is also an amplification lever: one unauthenticated GET costs the gateway a
+    # sequential fan-out to every distinct upstream at a 10 s timeout each.
+    #
+    # 404 rather than 403 when off, so the answer is indistinguishable from a gateway that never had
+    # a docs route — the same authz-before-existence rule the promotion read follows.
+    if scope_path in {f"{prefix}/openapi.json", f"{prefix}/docs"}:
+        if not _docs_enabled:
+            raise HTTPException(status_code=404, detail="Not Found")
+        if scope_path == f"{prefix}/openapi.json":
+            return JSONResponse(await _merged_openapi(client, prefix, _distinct_targets(request.app.state.routes)))
         return get_swagger_ui_html(openapi_url=f"{prefix}/openapi.json", title="rask API (gateway)")
 
     norm_path = _normalize_path(scope_path)

@@ -143,7 +143,8 @@ setup_logging()
 app = FastAPI(
     title=f"medallion mover ({_settings.from_namespace}->{_settings.to_namespace})",
     lifespan=lifespan,
-    docs_url="/docs" if _settings.docs_enabled else None,  # gate /docs (off in prod), like the catalog
+    docs_url="/docs" if _settings.docs_enabled else None,
+    redoc_url="/redoc" if _settings.docs_enabled else None,  # gate /docs (off in prod), like the catalog
     openapi_url="/openapi.json" if _settings.docs_enabled else None,
 )
 # Problem+json handlers — parity with catalog/lineage/compaction: medallion runs the same lance stack,

@@ -137,9 +137,11 @@ def make_service_app(
         title=title,
         version="0.1.0",
         lifespan=lifespan_factory(settings),
-        docs_url=f"{settings.api_prefix}/docs",
-        redoc_url=f"{settings.api_prefix}/redoc",
-        openapi_url=f"{settings.api_prefix}/openapi.json",
+        # Opt-IN, and it used to be hard-coded on with no way for a service to say no. See
+        # `Settings.docs_enabled` for why the default is closed rather than open.
+        docs_url=f"{settings.api_prefix}/docs" if settings.docs_enabled else None,
+        redoc_url=f"{settings.api_prefix}/redoc" if settings.docs_enabled else None,
+        openapi_url=f"{settings.api_prefix}/openapi.json" if settings.docs_enabled else None,
     )
     register_handlers(app)
     register_middleware(app, settings)

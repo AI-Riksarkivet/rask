@@ -54,3 +54,12 @@ explorer:
 # two upgrades later the movers were back on `rask-ray-head-svc` and the cascade was dead again.
 medallion:
   rayAddress: http://ray-lance-head:8265
+
+# Interactive API docs (/docs, /redoc, /openapi.json) across the release.
+#
+# ON here and OFF in the chart default, which is the split the audit asked for: a local k3s cluster is
+# where these are actually useful, and it is not reachable from anywhere. Everything published at an
+# Ingress keeps the closed default — most of all the gateway, whose aggregated `{prefix}/openapi.json`
+# answers anonymously and fans out to every backend it fronts.
+docs:
+  enabled: true

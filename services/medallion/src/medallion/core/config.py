@@ -57,7 +57,11 @@ class MedallionSettings(BaseSettings):
     # service. Off in dev (no sidecar); the producer's plain-HTTP /produce carries no such route.
     dapr_enabled: bool = Field(default=False, alias="MEDALLION_DAPR_ENABLED")
     # Serve /docs + /openapi.json (default on for dev; prod sets false, like the catalog's LANCE_REST_DOCS).
-    docs_enabled: bool = Field(default=True, alias="MEDALLION_DOCS")
+    #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
+    #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making
+    #: and the schemas shipped openly. A security default every deployment must remember to disable is
+    #: one nobody disables. Turn it on per-environment (the chart's dev values do).
+    docs_enabled: bool = Field(default=False, alias="MEDALLION_DOCS")
     # Compliance audit trail (#41): gate the dedicated `lance.audit` stream (the /produce + /train admin-door
     # decisions) exactly like the catalog — the SHARED LANCE_AUDIT_ENABLED env (not a MEDALLION_* twin), so
     # one flag governs the estate's compliance posture. Default on; without the producer lifespan's

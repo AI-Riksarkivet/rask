@@ -53,6 +53,7 @@ spec:
             {{- if include "lance.otelEnabled" $root }}
             {{- include "lance.otelEnv" (list $root .Values.medallion.producer.daprAppId) | nindent 12 }}
             {{- end }}
+            - { name: MEDALLION_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
             # Fail-closed at boot if behind a sidecar but the app-token is unset — /bronze-arrival would
@@ -318,6 +319,7 @@ spec:
             {{- if include "lance.otelEnabled" $root }}
             {{- include "lance.otelEnv" (list $root .daprAppId) | nindent 12 }}
             {{- end }}
+            - { name: MEDALLION_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ $root.Values.dapr.apiTimeoutSeconds | quote }} }
             # Fail-closed at boot if behind a sidecar but the app-token is unset (open forged-trigger path).

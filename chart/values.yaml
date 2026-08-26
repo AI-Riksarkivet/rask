@@ -62,6 +62,21 @@ existingSecret: ""
 secrets:
   hfToken: ""            # HuggingFace token for the gated TrOCR model; from .env HF_TOKEN
 
+# INTERACTIVE API DOCS — /docs, /redoc and /openapi.json — across every app in the release.
+#
+# OFF, and the reason it is one knob rather than a per-service choice is the defect it closes. Four
+# services already had a `docs_enabled` setting; all four defaulted it to True and NO manifest
+# anywhere set it, so the flag documented a decision nobody was making and the schemas shipped openly.
+# Three more (viewer, search, annotator) and the gateway had no flag at all.
+#
+# The gateway is the one that matters: `templates/ingress.yaml` publishes `/api` at the edge, and its
+# `{prefix}/openapi.json` answers anonymously by fanning out to every backend it fronts — a merged
+# route table plus an amplification lever, in one unauthenticated GET.
+#
+# Turn it on for a dev cluster (chart/values-local.yaml does). Leave it off anywhere reachable.
+docs:
+  enabled: false
+
 # Non-secret env shared by the fleet ConfigMap.
 config:
   RASK_API_PREFIX: "/api"

@@ -17,6 +17,9 @@ data:
   # Each Serve replica's GPU fraction, derived from the ONE GPU signal (ray.gpuCount) by
   # rask.serveGpuFrac — the same include the RayService uses, so the two cannot drift.
   RASK_SERVE_GPU_FRAC: {{ include "rask.serveGpuFrac" . | quote }}
+  # Interactive API docs, off unless a deployment asks (see values.yaml `docs`). The gateway reads
+  # this one: its aggregated Swagger is served under the Ingress-published /api prefix.
+  RASK_DOCS: {{ .Values.docs.enabled | quote }}
   RASK_DAPR_ENABLED: {{ .Values.dapr.sidecars | quote }}
   # Gateway upstreams (in-cluster DNS). The core/search/volumes rows died in the
   # R6/R20 media wave — their capabilities serve from the media plane below.

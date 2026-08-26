@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     #: is still the message an oversize upload gets, rather than a bare 413 from the door.
     max_body_bytes: int = Field(default=32 * 1024 * 1024, ge=0, alias="MEDIA_MAX_BODY_BYTES")
 
+    #: Whether this app serves `/docs`, `/redoc` and `/openapi.json`. OFF by default.
+    #:
+    #: viewer, search and annotator constructed `FastAPI(...)` with none of the three set, so FastAPI's
+    #: defaults stood and all three were served — while four sibling services at least carried a flag.
+    #: See `service_kit.config.Settings.docs_enabled` for why the default is closed.
+    docs_enabled: bool = Field(default=False, alias="MEDIA_DOCS")
+
     # Optional S3 object-store backing (RASK_LANDING §4). Set MEDIA_S3_ENDPOINT to
     # serve datasets from RustFS / MinIO / AWS: the registry then lists + opens
     # under MEDIA_S3_DB_ROOT (an s3:// URI) with these storage_options. All unset

@@ -402,7 +402,9 @@ services/annotator/src/annotator/api/v1/endpoints/tasks.py:401-402 `@router.post
 
 </details>
 
-<details><summary><b>/docs and /openapi.json are on in production for every served app, and the public front door serves an unauthenticated aggregated Swagger of the whole estate at /api/docs</b> <i>(dependencies.md + production-patterns.md + observability.md + kubernetes.md + microservices.md + rate-limiting.md + websockets.md + cache.md, ADJUSTED)</i></summary>
+<details><summary><b>~~/docs and /openapi.json are on in production for every served app, and the public front door serves an unauthenticated aggregated Swagger of the whole estate at /api/docs~~</b> <i>(dependencies.md + production-patterns.md + observability.md + kubernetes.md + microservices.md + rate-limiting.md + websockets.md + cache.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-26.** Docs are opt-IN estate-wide. All 14 entrypoints now answer `openapi_url=docs_url=redoc_url=None` with no flag set — `make_service_app` (which had hard-coded all three on), the four bare constructors (gateway, viewer, search, annotator, the last three via a new `MEDIA_DOCS`), and the four that carried a `docs_enabled` flag defaulting to True, now False. The gateway's two catch-all branches — the sharp end, since `ingress.yaml` publishes `/api` — 404 behind `RASK_DOCS` rather than serving the merged schema and its sequential fan-out to an anonymous caller. One chart knob (`docs.enabled`, off) renders all six env names; `values-local.yaml` turns it on for local k3s. Pinned by `tests/unit/test_docs_are_closed_by_default.py` (14 apps, one clean subprocess each), `services/gateway/tests/test_docs_are_gated.py` (6, incl. the flag actually opening them), and `test_invariants.py::test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked`.
 
 **Rule.** production-patterns.md § Hiding docs in production: "if settings.ENVIRONMENT not in SHOW_DOCS_IN: app_kwargs['openapi_url'] = None  # disables /docs, /redoc, /openapi.json" — and "Auth-protect /docs instead of hiding it only if internal consumers need it in prod"
 

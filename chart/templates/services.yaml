@@ -59,6 +59,7 @@ spec:
             {{- include "lance.otelEnv" (list $root "catalog") | nindent 12 }}
             {{- end }}
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
+            - { name: LANCE_REST_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             - { name: LANCE_REST_IMPL, value: "dir" }
             - { name: LANCE_REST_ROOT, value: "s3://{{ .Values.rustfs.bucket }}" }
             - { name: LANCE_NS_DELIMITER, value: "$" }
@@ -336,6 +337,7 @@ spec:
             - { name: LINEAGE_SECRETS_FROM_DAPR, value: "true" }
             {{- end }}
             - { name: LINEAGE_GRAPH, value: {{ .Values.age.lineageDb | quote }} }
+            - { name: LINEAGE_DOCS, value: {{ .Values.docs.enabled | quote }} }
             # §4 reliability knobs: Run-node retention (pruned by the reconcile cron; 0 = keep all) and
             # the AGE pool's per-statement timeout (bounds runaway traversals).
             - { name: LINEAGE_RUN_RETENTION_DAYS, value: {{ .Values.services.lineage.runRetentionDays | quote }} }

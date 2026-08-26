@@ -35,7 +35,11 @@ class MaintenanceSettings(BaseSettings):
     # binding would force the cheap read to inherit the expensive write's schedule.
     reconcile_binding_name: str = Field(default="maintenance-reconcile-cron", alias="MAINTENANCE_RECONCILE_BINDING_NAME")
     # Serve /docs + /openapi.json (default on for dev; prod sets false, like the catalog's LANCE_REST_DOCS).
-    docs_enabled: bool = Field(default=True, alias="MAINTENANCE_DOCS")
+    #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
+    #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making
+    #: and the schemas shipped openly. A security default every deployment must remember to disable is
+    #: one nobody disables. Turn it on per-environment (the chart's dev values do).
+    docs_enabled: bool = Field(default=False, alias="MAINTENANCE_DOCS")
     # Datasets whose newest version is older than this are eligible for version GC (keep recent history).
     # ge=1 (not 0): timedelta(0) is falsy, so pylance collapses `older_than` to None and silently drops the
     # threshold — to GC aggressively, use a small positive value, not 0.

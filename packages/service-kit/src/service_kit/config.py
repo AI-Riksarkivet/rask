@@ -32,6 +32,21 @@ class Settings(BaseSettings):
     api_prefix: str = Field(default="/api/v1", alias="RASK_API_PREFIX")
     cors_origins: list[str] = Field(default_factory=list, alias="RASK_CORS_ORIGINS")
 
+    #: Whether this app serves `/docs`, `/redoc` and `/openapi.json`. OFF by default, and the default
+    #: is the whole point.
+    #:
+    #: Four services already carried a `docs_enabled` flag before this one existed — and it defaulted
+    #: to True, with no deployment path setting it either way (`grep -rn DOCS chart/ .docker/ scripts/`
+    #: matched nothing). A flag nobody sets IS the default, so all four shipped their schemas openly
+    #: while looking configurable. A security default that every deployment must remember to turn off
+    #: is one nobody turns off.
+    #:
+    #: What this closes is a route table, parameter names and request/response schemas — not data, and
+    #: every documented route stays individually auth-gated. It matters most on the gateway, whose
+    #: aggregated `{prefix}/openapi.json` is published at the Ingress and answers an anonymous caller
+    #: by fanning out to every backend it fronts.
+    docs_enabled: bool = Field(default=False, alias="RASK_DOCS")
+
     ray_dashboard_url: str = Field(default="http://localhost:8265", alias="RAY_DASHBOARD_URL")
 
     http_timeout: float = Field(default=15.0, alias="RASK_HTTP_TIMEOUT")

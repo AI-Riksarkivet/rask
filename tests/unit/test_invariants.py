@@ -5409,3 +5409,70 @@ def test_the_scratch_emptyDir_is_BOUNDED() -> None:
         if vol.get("name") == "tmp" and not (vol.get("emptyDir") or {}).get("sizeLimit")
     ]
     assert not unbounded, f"workloads mount an unbounded /tmp emptyDir: {sorted(unbounded)}"
+
+
+#: Every deployed app and the env var its own config reads for the docs opt-in. The names differ
+#: because the services predate any shared setting; what must NOT differ is that each one is set.
+_DOCS_ENV_BY_WORKLOAD: dict[str, str] = {
+    "catalog": "LANCE_REST_DOCS",
+    "lineage": "LINEAGE_DOCS",
+    "medallion-producer": "MEDALLION_DOCS",
+    "maintenance": "MAINTENANCE_DOCS",
+    "viewer": "MEDIA_DOCS",
+    "search": "MEDIA_DOCS",
+    "annotator": "MEDIA_DOCS",
+}
+
+
+def _env_of(container: dict) -> dict[str, str]:
+    return {e["name"]: str(e.get("value", "")) for e in (container.get("env") or []) if "name" in e}
+
+
+def _app_containers(docs: list[dict]) -> dict[str, dict]:
+    """Each workload's app container, keyed by the workload name it renders under."""
+    found: dict[str, dict] = {}
+    for doc in docs:
+        if doc.get("kind") not in {"Deployment", "StatefulSet"}:
+            continue
+        name = doc["metadata"]["name"]
+        for container in doc["spec"]["template"]["spec"].get("containers") or []:
+            env = _env_of(container)
+            for workload, var in _DOCS_ENV_BY_WORKLOAD.items():
+                if name.endswith(workload) and var in env:
+                    found[workload] = container
+    return found
+
+
+def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
+    """Interactive docs must be a deployment decision, and the deployment must actually make it.
+
+    open_fastapi-audit — "/docs and /openapi.json are on in production for every served app".
+
+    The code defaults are closed now, which is the load-bearing half. This is the other half, and it
+    is the one the finding is really about: four services ALREADY carried a `docs_enabled` flag and
+    every one of them shipped docs anyway, because no deployment path ever set it —
+    `grep -rn DOCS chart/ .docker/ scripts/` matched nothing but an unrelated `_DOCS = _ROOT / "docs"`.
+    A flag no manifest sets is not a control, it is a comment.
+
+    So the gate asserts the env var is RENDERED, in both positions. Asserting only the "off" case
+    would pass just as well against a chart that never mentions docs at all — which is exactly the
+    state this finding describes.
+    """
+    # `explorer.enabled` is false by default (a fresh cluster must come up with no node
+    # preparation), so viewer/search/annotator render only when asked for. Enable it here or the
+    # gate silently covers four of the seven apps.
+    _ON = "explorer.enabled=true"
+    off = _app_containers(_rendered_docs(_ON))
+    missing = sorted(set(_DOCS_ENV_BY_WORKLOAD) - set(off))
+    assert not missing, (
+        f"these workloads render no docs env var at all: {missing} — a service whose docs flag no manifest sets is one whose default nobody chose"
+    )
+    for workload, container in off.items():
+        var = _DOCS_ENV_BY_WORKLOAD[workload]
+        assert _env_of(container)[var].lower() in {"false", "0"}, f"{workload} renders {var}={_env_of(container)[var]} by default — docs are opt-in"
+
+    on = _app_containers(_rendered_docs(_ON, "docs.enabled=true"))
+    for workload in _DOCS_ENV_BY_WORKLOAD:
+        var = _DOCS_ENV_BY_WORKLOAD[workload]
+        value = _env_of(on[workload])[var]
+        assert value.lower() in {"true", "1"}, f"docs.enabled=true left {workload} at {var}={value} — a knob that cannot open is a deletion"
