@@ -129,3 +129,30 @@ def test_the_chart_FEEDS_the_door_it_now_has() -> None:
         "False and every route answers anonymously while the code reports authorization as "
         "configured:\n  " + "\n  ".join(missing)
     )
+
+
+def test_the_door_has_its_DEPENDENCIES_built_at_startup() -> None:
+    """Settings + a router dependency are not enough: the verifier has to EXIST.
+
+    `make_auth_deps` reads `app.state.oidc` and `app.state.fga`, which a lifespan must put there —
+    building an `OIDCVerifier` fetches discovery, so it cannot happen at import. Miss it and the
+    failure is quiet and total: the settings bind, the route declares its dependency, and every
+    request answers 503 "Authentication is enabled but unavailable".
+
+    That is fail-CLOSED and correct, and it is also a service that does nothing — which is why it has
+    to be its own assertion rather than something the 403 tests would have caught. Measured on the
+    live estate 2026-08-26: exactly that shipped when the settings and the gate landed without the
+    lifespan. Both services answered 503 to every request while their siblings answered 401.
+    """
+    ungrounded: list[str] = []
+    for service in PUBLICLY_PROXIED:
+        root = REPO / "services" / service / "src" / service
+        text = "\n".join(p.read_text() for p in root.rglob("*.py"))
+        if "attach_auth" not in text:
+            ungrounded.append(service)
+
+    assert not ungrounded, (
+        f"{ungrounded} declare an auth door and never build its dependencies — `app.state.oidc` and "
+        f"`app.state.fga` stay unset, so every governed route answers 503 rather than authorizing. "
+        f"Call `service_kit.governed.auth_lifespan.attach_auth` from the service's lifespan."
+    )
