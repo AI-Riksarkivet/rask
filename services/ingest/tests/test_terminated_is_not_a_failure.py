@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import pytest
+
 from ingest.lineage import LineageRecorder, recorded_events, reset_events
 from ingest.runs import _RUNTIME_STATUS, RunRecord, merge_workflow_state
 
@@ -155,3 +157,40 @@ def test_the_other_two_terminals_are_unchanged() -> None:
     """The discrimination has to stay three-way, so pin the other two against this change."""
     assert _terminal_event_type("FAILED") == "FAIL"
     assert _terminal_event_type("COMPLETE") == "COMPLETE"
+
+
+def test_the_ABORT_event_NAMES_the_dataset_the_run_touched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The invisibility bug, pinned.
+
+    The first version of the ABORT branch withheld `outputs`, reasoning that a terminated run's
+    fragments are never committed so a WROTE edge would assert a write that did not happen. Measured
+    on the live estate: the run landed in the graph correctly — right job, right `source_run_id`,
+    right reason, newest by `event_time` — and appeared on the compute zone's run board NOWHERE,
+    because a board that finds runs through the dataset they touched cannot see one that names none.
+
+    Withholding the edge bought no safety either. The guard is the READER's `event_type = 'COMPLETE'`
+    filter (`lineage/services/repository.py` calls it load-bearing for exactly this: "FAILed runs keep
+    WROTE edges (producers() shows the attempt)"), and the cascade head fires only on COMPLETE, so an
+    ABORT edge cannot wake bronze->silver->gold.
+    """
+    seen: dict[str, object] = {}
+
+    class _Spy:
+        def abort(self, reason: str, **kwargs: object) -> None:
+            seen["reason"] = reason
+            seen["outputs"] = list(kwargs.get("outputs") or [])
+
+        def fail(self, *_a: object, **_k: object) -> None:
+            raise AssertionError("a terminated run emitted FAIL")
+
+        def complete(self, **_k: object) -> None:
+            raise AssertionError("a terminated run emitted COMPLETE — the cascade's own trigger")
+
+    monkeypatch.setattr("ingest.lineage._run", lambda *_a, **_k: _Spy())
+
+    reset_events()
+    _Capture().terminal(run_id="r", project="acme", dataset="abortproof", status="TERMINATED", version=None, rows=0, errors={"run": "terminated by operator"})
+
+    assert "outputs" in seen, "the ABORT branch never ran"
+    assert seen["outputs"], "ABORT named no dataset — the run is invisible to every by-dataset surface"
+    assert "terminated by operator" in str(seen["reason"])

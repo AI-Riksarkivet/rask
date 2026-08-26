@@ -47,6 +47,31 @@ def test_abort_with_reason(recording: RecordingEmitter) -> None:
     assert facet is not None and facet.message == "operator stop"
 
 
+def test_abort_can_NAME_what_the_run_touched(recording: RecordingEmitter) -> None:
+    """ABORT was the only terminal that could not carry inputs/outputs, and the asymmetry cost real
+    visibility rather than tidiness.
+
+    `complete()` and `fail()` both take them; `abort()` did not. So a cancelled run emitted a terminal
+    with no dataset edge at all — and a FAILED run keeps its WROTE edge deliberately
+    (`lineage/services/repository.py`: "FAILed runs keep WROTE edges (producers() shows the attempt),
+    so the event_type=COMPLETE filter is load-bearing"). The estate's guard against a half-written
+    dataset being read as a real one is that COMPLETE filter, NOT the absence of the edge — so
+    withholding the edge on ABORT bought no safety and lost the run from every surface that finds a
+    run through the dataset it touched.
+
+    Measured 2026-08-26: a terminated ingest run landed in the graph correctly (right job, right
+    source_run_id, right error) and did not appear on the compute zone's run board at all.
+    """
+    run = LineageRun(job_name="ingest", namespace="rask", emitter=recording)
+    run.start()
+    run.abort("operator stop", outputs=[("rask", "acme-bronze$abortproof")])
+
+    assert _states(recording) == [RunState.START, RunState.ABORT]
+    outputs = recording.events[1].outputs
+    assert outputs, "ABORT emitted no output — the run is invisible to anything that looks up by dataset"
+    assert outputs[0].name == "acme-bronze$abortproof"
+
+
 def test_terminal_is_emitted_at_most_once(recording: RecordingEmitter, caplog: pytest.LogCaptureFixture) -> None:
     run = LineageRun(job_name="ingest", namespace="rask", emitter=recording)
     run.start()

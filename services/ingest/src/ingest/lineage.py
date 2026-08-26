@@ -330,10 +330,19 @@ class LineageRecorder:
             if event_type == "FAIL":
                 run.fail(f"ingest run {run_id} failed: {errors or 'no detail'}", outputs=outputs)
             elif event_type == "ABORT":
-                # No `outputs`. A terminated run's staged fragments are NOT committed — the workflow
-                # returns without calling `finalize` precisely so a partial harvest is not published —
-                # so naming an output here would record a WROTE edge for a write that never happened.
-                run.abort(f"ingest run {run_id} terminated: {errors or 'no detail'}")
+                # WITH `outputs`, and the first version of this withheld them on the reasoning that a
+                # terminated run's fragments are never committed so a WROTE edge would assert a write
+                # that did not happen. That reasoning is wrong for this estate and was measured wrong:
+                # the run landed in the graph correctly and appeared on the compute run board NOWHERE,
+                # because a board that finds runs through the dataset they touched cannot see one that
+                # names no dataset.
+                #
+                # The guard against reading a half-written dataset as a real one is the READER's
+                # `event_type = 'COMPLETE'` filter — `lineage/services/repository.py` calls it
+                # load-bearing for precisely this case: "FAILed runs keep WROTE edges (producers()
+                # shows the attempt)". FAIL passes `outputs` one branch up for the same reason. And
+                # the cascade head fires only on COMPLETE, so an ABORT edge cannot wake it.
+                run.abort(f"ingest run {run_id} terminated: {errors or 'no detail'}", outputs=outputs)
             else:
                 run.complete(outputs=outputs)
 

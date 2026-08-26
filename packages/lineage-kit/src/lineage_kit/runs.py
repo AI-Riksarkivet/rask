@@ -199,10 +199,30 @@ class LineageRun:
             facet = ErrorMessageRunFacet(message=error)
         return self._emit_terminal(RunState.FAIL, inputs=inputs, outputs=outputs, error=facet)
 
-    def abort(self, reason: str | None = None) -> RunEvent | None:
-        """Emit ABORT — the cancelled terminal (an operator stop, a per-chunk stop, a shutdown)."""
+    def abort(
+        self,
+        reason: str | None = None,
+        *,
+        inputs: Iterable[DatasetLike] = (),
+        outputs: Iterable[OutputDatasetLike] = (),
+    ) -> RunEvent | None:
+        """Emit ABORT — the cancelled terminal (an operator stop, a per-chunk stop, a shutdown).
+
+        TAKES INPUTS AND OUTPUTS, like its two siblings. It did not, and the asymmetry cost real
+        visibility rather than tidiness: a cancelled run emitted a terminal with no dataset edge at
+        all, so every surface that finds a run THROUGH the dataset it touched lost it. Measured
+        2026-08-26 — a terminated ingest run landed in the graph correctly (right job, right
+        source_run_id, right reason) and appeared on the compute zone's run board nowhere.
+
+        Naming the dataset does not assert the write succeeded, and that worry is what the omission
+        was for. The estate's guard is the READER's `event_type = 'COMPLETE'` filter, which
+        `lineage/services/repository.py` calls load-bearing for exactly this reason: "FAILed runs keep
+        WROTE edges (producers() shows the attempt)". An ABORT edge is the same claim — this run
+        touched this dataset and did not finish — and the cascade head, which fires only on COMPLETE,
+        cannot be woken by it.
+        """
         facet = ErrorMessageRunFacet(message=reason) if reason else None
-        return self._emit_terminal(RunState.ABORT, error=facet)
+        return self._emit_terminal(RunState.ABORT, inputs=inputs, outputs=outputs, error=facet)
 
 
 @contextmanager
