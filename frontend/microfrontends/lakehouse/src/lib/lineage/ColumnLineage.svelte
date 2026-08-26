@@ -101,10 +101,18 @@
 	// Switching datasets drops any open field panel — a field from the previous root has no place in the
 	// new subgraph. This is a DATASET-change reset and nothing else: folding it into the live read below
 	// would slam the user's open panel shut every time the estate changed.
+	//
+	// AND IT MUST NOT FIRE ON MOUNT. An effect's first run is not a change, and treating it as one
+	// wiped the selection restored from `?col=` before anything could render it — the panel opened,
+	// the URL kept the field, and a reload silently dropped both. Measured in the browser: the
+	// parameter was written correctly and then deleted on the next load, which reads as the URL state
+	// never having worked rather than as this effect erasing it.
+	let lastDataset: string | undefined;
 	$effect(() => {
-		void dataset;
+		const current = dataset;
 		untrack(() => {
-			store.selectedColumn = null;
+			if (lastDataset !== undefined && lastDataset !== current) store.selectedColumn = null;
+			lastDataset = current;
 		});
 	});
 
