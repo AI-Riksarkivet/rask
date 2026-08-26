@@ -988,6 +988,18 @@ class PromotionSpec(BaseModel):
     #: landed while the approver was deciding, and publishing that would ship a version nobody
     #: reviewed. 0 means the hold predates a tag-driven cascade and can only resume by trigger.
     version: int = 0
+    #: The HELD STAGE's own lineage identity, resolved at hold time in the mover. `emit_promotion_outcome`
+    #: runs in the PRODUCER — which hosts the review workflow and sets neither `MEDALLION_OPERATION` nor
+    #: `MEDALLION_AUTHOR` — so without these it recorded every approved promotion under the code defaults
+    #: (`embed_features`/`data_eng`). Those are the bronze→silver mover's real values, so a silver hold was
+    #: right by accident and a gold hold said the silver stage produced `gold$catalog`.
+    #:
+    #: Same carrier and same reasoning as `pub_topic` directly above: the producer has no idea which
+    #: mover held this, so anything the emit needs about the stage has to ride the spec. Empty means a
+    #: hold serialized before this field existed — the emit falls back to settings, which is the old
+    #: behaviour and better than an empty job name.
+    operation: str = ""
+    author: str = ""
 
 
 def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[Any, Any, dict[str, Any]]:
@@ -1318,12 +1330,20 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: PromotionRepor
     record_promotion_outcome(outcome.status)
     approved = outcome.status == "PROMOTED"
     event = build_run_event(
-        operation=settings.operation,
-        author=settings.author,
+        # THE STAGE'S identity, not this process's. `settings` here is the PRODUCER's — it hosts the
+        # review workflow and sets neither var, so reading it recorded every approved promotion as
+        # `embed_features`/`data_eng` and made `gold$catalog` claim the silver stage produced it. The
+        # fallback keeps a hold taken before `operation`/`author` existed emitting exactly as it did.
+        operation=spec.operation or settings.operation,
+        author=spec.author or settings.author,
         job_namespace=settings.job_namespace,
         inputs=[(spec.from_namespace, _qualified(spec.project, spec.from_dataset))],
         output_namespace=spec.to_namespace,
         output_name=_qualified(spec.project, spec.to_dataset),
+        # The version the approver actually ruled on. Omitting it took `build_run_event`'s `version: int
+        # = 1`, so a promotion into a table at v48 recorded v1 — a version that table never held at that
+        # point, in the record that is supposed to be the durable one.
+        version=spec.version or 1,
         token=f"{spec.token}:promotion-{outcome.status.lower()}",
         project=spec.project or None,
         originator=spec.originator or None,

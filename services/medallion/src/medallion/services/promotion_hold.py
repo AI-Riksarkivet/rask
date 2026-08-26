@@ -72,6 +72,13 @@ def hold_spec(
         # commit may land while the approver decides, and publishing that would ship a version nobody
         # reviewed.
         version=version,
+        # Resolved HERE because here is the only place that knows: this runs in the mover, so
+        # `settings` is the held stage's. The producer that emits the outcome reads its own settings
+        # and sets neither var, so before these rode the spec every approved promotion was recorded
+        # as `embed_features`/`data_eng` — right by accident for a silver hold, wrong for every
+        # other lane. Same reason `pub_topic` is resolved at dispatch rather than in the workflow.
+        operation=settings.operation,
+        author=settings.author,
     )
 
 
