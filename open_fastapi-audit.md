@@ -50,6 +50,31 @@ verifier, and the corrected form is what appears here. 2 were refuted outright.
 
 ## Scorecard
 
+> ### RE-VERIFIED AT HEAD `fe789bfc`, 2026-08-26 — **55 of 60 still real**
+>
+> Ten read-only agents, one per lane, re-opened every finding against the current code. **Nothing was
+> refuted and nothing was undecidable**: 55 STILL_REAL (5 high / 22 medium / 28 low), 4 ALREADY_FIXED,
+> 1 within-file DUPLICATE, 0 stale files. The struck rows below carry their closing evidence inline.
+>
+> **Read this file as 55 findings, not 70.** Four findings carry multi-lane tags and appear once per
+> lane that touched them — the `/docs` + `/api/openapi.json` exposure (4 lanes), the missing `code` key
+> in 7 problem+json bodies (2), the 4 unclosed FGA clients (2), and `draining.py`'s mislabeled 503 (2).
+> Counting rows inflates the backlog by 17%.
+>
+> **The hope that intervening work had drained a chunk of this was false.** The 48-finding Dapr drain
+> and the ingest/medallion wave touched exactly 4 of 60. Three findings got WORSE in the meantime:
+> `response_model=` sites 21 → 24, `dapr_auth` consumers 18 → 21, and the false alert-group
+> classification gained a second instance (`ray`, now querying first-party `ray_control_*`). An
+> undrained audit decays — which is the argument for draining or deleting it, not for leaving it.
+>
+> Two stale PATHS inside otherwise-real findings: `services/compute/src/compute/main.py` does not exist
+> (the app is built at `compute/__init__.py:26`), and ANN-12's `annotator/tasks.py` is now
+> `annotator/api/v1/endpoints/tasks.py`.
+>
+> **One concentration is dead, three hold.** The blocking-IO door is fixed on both copies. The
+> unmetered compute surface, the observability of the HTTP plane, and the chart's probe/drain wiring
+> all stand (the drain gate itself landed; `retry_when_draining` went 5 → 10 call sites).
+
 **60 NEW findings survived verification** (7 high / 25 medium / 28 low), plus 14 already filed in `open_python-audit.md`.
 
 | Lane | New | High | Med | Low | Rules checked clean |
@@ -65,6 +90,25 @@ verifier, and the corrected form is what appears here. 2 were refuted outright.
 | `k8s-microservices` | 11 | 0 | 8 | 3 | 15 |
 | `limits-realtime` | 6 | 2 | 3 | 1 | 13 |
 | **total** | **60** | **7** | **25** | **28** | |
+
+## Owner rulings (2026-08-26) — settled before the drain, not during it
+
+Three of the five surviving highs were blocked on decisions rather than engineering. Asked and answered:
+
+1. **The estate is AUTHENTICATED.** `CLAUDE.md:252` claimed *"No auth, no app middleware — the services
+   assume localhost / trusted network"* while the chart defaults auth ON and `ingress.yaml:66` publishes
+   `/api`. Both could not be true; the doc was the stale half and is corrected in the same change. So
+   `compute` and `controlplane` get the door their nine siblings share, and `assist` / `search` /
+   `media-clip` are gated. This settles 3 highs and 2 mediums.
+2. **Rate limiting and body caps land as ONE SEAM** in `service_kit.middleware.register_middleware`
+   (plus the media variant), not per route — so every service inherits them and a new route cannot be
+   added uncapped. Closes 7 rows including two owned by `open_python-audit.md`.
+3. **Drain order: this bookkeeping pass, then the two cheap highs** (`flows/validate`, `media-clip`),
+   then fix-by-seam. The seam clusters are in the triage report: ~7 changes close ~29 rows.
+
+Five findings are NOT drained here — their mechanism is ledgered in `open_python-audit.md`
+(`MED-008`/`DUP-21`, `SKG-07`, `SKG-05`/`X11`, `X6`/`VS-13`). Fix them there and close both rows, or the
+work is paid for twice.
 
 ## What this audit did NOT find (read this before the backlog)
 
@@ -95,7 +139,9 @@ probe/drain wiring**.
 
 ### High — 7
 
-<details><summary><b>The medallion producer verifies bearers with blocking OIDC discovery + JWKS fetches inside `async def` — the ING-02 fix landed on ingest's twin and not on this one</b> <i>(authn.md + authz.md, CONFIRMED)</i></summary>
+<details><summary><b>~~The medallion producer verifies bearers with blocking OIDC discovery + JWKS fetches inside `async def` — the ING-02 fix landed on ingest's twin and not on this one~~</b> <i>(authn.md + authz.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-26 — ALREADY FIXED.** `produce_auth.py:130` and `:178` are `await verify_off_loop(verifier, raw)`; the hop is centralised in `packages/service-kit/src/service_kit/governed/oidc.py` and pinned by `tests/unit/test_invariants.py`. **Filed TWICE** — the `conventions`-lane copy below is the same defect; both are closed.
 
 **Rule.** authn.md: JWKS/discovery I/O must not stall the request path; estate calibration: "A plain 'def' route doing blocking work is CORRECT … The SAME work inside 'async def' is a defect"
 
@@ -155,7 +201,9 @@ reader.py:441-447 `transport = RestCatalogTransport(settings.catalog_uri, delimi
 
 </details>
 
-<details><summary><b>The medallion producer's OIDC door runs blocking discovery + JWKS fetches on the event loop — the ING-02 fix landed on the ingest copy of this duplicated function and never reached the medallion copy</b> <i>(core-conventions.md + anti-patterns.md, CONFIRMED)</i></summary>
+<details><summary><b>~~The medallion producer's OIDC door runs blocking discovery + JWKS fetches on the event loop — the ING-02 fix landed on the ingest copy of this duplicated function and never reached the medallion copy~~</b> <i>(core-conventions.md + anti-patterns.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-26 — ALREADY FIXED, and a DUPLICATE.** The same defect as the `authn-authz` high above, filed once per lane. Closed by the same change.
 
 **Rule.** anti-patterns.md: "`time.sleep`, `open()`, sync DB driver inside `async def` — blocks the loop, kills throughput" / core-conventions.md § Async vs sync path operations: "Never run blocking code inside an `async def`… Same rule applies to dependencies."
 
@@ -240,7 +288,9 @@ services/ingest/src/ingest/metrics.py:3-5 states the gap in its own docstring: "
 
 ### Medium — 25
 
-<details><summary><b>`GET /promotions/{instance_id}` returns a held promotion's contents to an unauthenticated caller — the sibling decision write refuses exactly that caller</b> <i>(authn.md + authz.md, ADJUSTED)</i></summary>
+<details><summary><b>~~`GET /promotions/{instance_id}` returns a held promotion's contents to an unauthenticated caller — the sibling decision write refuses exactly that caller~~</b> <i>(authn.md + authz.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-26 — ALREADY FIXED.** `promotions.py:284-304` now reads `gate = _fga_gate(request)` / `if gate is not None:` and raises on an empty subject; pinned by `services/medallion/tests/test_promotion_read_is_gated.py`.
 
 **Rule.** authz.md § Service-layer integration (a single-object GET takes a route dep `require_permission(...)`); the read/write asymmetry pattern — a write gated, the equivalent read open
 
@@ -460,7 +510,9 @@ chart/templates/dapr-resiliency.yaml:125-136 — `retries:\n  invokeRetry:\n    
 
 </details>
 
-<details><summary><b>The drain gate is wired to the cascade's trigger door but not to the door that does the work — `on_stage` accepts stage triggers while the mover is shutting down</b> <i>(kubernetes.md + microservices.md, ADJUSTED)</i></summary>
+<details><summary><b>~~The drain gate is wired to the cascade's trigger door but not to the door that does the work — `on_stage` accepts stage triggers while the mover is shutting down~~</b> <i>(kubernetes.md + microservices.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-26 — ALREADY FIXED.** `services/medallion/src/medallion/api/events.py:59` carries `Depends(retry_when_draining)` in `on_stage`'s signature; landed in `264adf29`.
 
 **Rule.** microservices.md: § Anti-patterns — a message handler must be retryable, and delivery must not race the pod's lifecycle; kubernetes.md: § Shutdown sequence — Dapr delivery does not consult the readiness probe
 
@@ -480,7 +532,9 @@ services/medallion/src/medallion/api/events.py:51-58 — `async def on_stage(\n 
 
 </details>
 
-<details><summary><b>No startupProbe on any fleet Deployment: a fixed 75-second boot budget for services whose lifespans do OIDC discovery, FGA provisioning and a Dapr actor handshake</b> <i>(kubernetes.md + microservices.md, CONFIRMED)</i></summary>
+<details><summary><b>~~No startupProbe on any fleet Deployment: a fixed 75-second boot budget for services whose lifespans do OIDC discovery, FGA provisioning and a Dapr actor handshake~~</b> <i>(kubernetes.md + microservices.md, CONFIRMED)</i></summary>
+
+> **MERGED 2026-08-26 — DUPLICATE.** Same mechanism and overlapping sites as the `health`-lane finding *"The six fleet pods have no startupProbe, and controlplane also missed the measured probe-timeout"*. Drain there, once.
 
 **Rule.** kubernetes.md: § What NOT to do — "Long synchronous warm-up in lifespan startup without a startupProbe: k8s declares the pod dead before it's done loading"
 
