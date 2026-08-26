@@ -97,12 +97,16 @@
 	liveRead(
 		() => rayClock.cursor,
 		() => {
-			rayClock.refresh(jobsQuery);
-			if (tasksQuery) rayClock.refresh(tasksQuery);
-			rayClock.refresh(clusterQuery);
+			// `jobs` and `cluster` are the SAME reads the boards do, so they share those names and
+			// coalesce with them. `tasks` and `logs` carry the job id: they are per-job queries, and a
+			// bare name would make two open job tabs collapse into one, the second rendering the
+			// first's tasks.
+			rayClock.refresh('jobs', jobsQuery);
+			rayClock.refresh('cluster', clusterQuery);
+			if (tasksQuery) rayClock.refresh(`tasks:${id}`, tasksQuery);
 			// A live job's log file grows with no event that says it grew — and a terminal job's does
 			// not grow at all, so this guard is a second, independent bound on the heaviest read here.
-			if (running) logsQuery.refresh().catch(() => {});
+			if (running) rayClock.refresh(`logs:${id}`, logsQuery);
 		},
 	);
 

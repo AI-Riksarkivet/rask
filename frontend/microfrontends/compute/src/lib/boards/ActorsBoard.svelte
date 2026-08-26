@@ -63,8 +63,8 @@
 	liveRead(
 		() => rayClock.cursor,
 		() => {
-			rayClock.refresh(actorsQuery);
-			rayClock.refresh(clusterQuery);
+			rayClock.refresh('actors', actorsQuery);
+			rayClock.refresh('cluster', clusterQuery);
 		},
 	);
 

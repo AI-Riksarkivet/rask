@@ -72,12 +72,12 @@
 	liveRead(
 		() => rayClock.cursor,
 		() => {
-			rayClock.refresh(overviewQuery);
-			rayClock.refresh(clusterQuery);
-			rayClock.refresh(jobsQuery);
-			rayClock.refresh(actorsQuery);
-			rayClock.refresh(tasksQuery);
-			rayClock.refresh(serveQuery);
+			rayClock.refresh('overview', overviewQuery);
+			rayClock.refresh('cluster', clusterQuery);
+			rayClock.refresh('jobs', jobsQuery);
+			rayClock.refresh('actors', actorsQuery);
+			rayClock.refresh('tasks', tasksQuery);
+			rayClock.refresh('serve', serveQuery);
 		},
 	);
 

@@ -37,7 +37,7 @@ import type { LiveCursor } from '@rask/api/live';
  *
  *     $effect(() => rayClock.subscribe());
  *     liveRead(() => rayClock.cursor, () => {
- *         rayClock.refresh(jobsQuery);
+ *         rayClock.refresh('jobs', jobsQuery);
  *     });
  *
  * Go through `rayClock.refresh(q)` rather than `q.refresh()`: it carries the mandatory
@@ -53,7 +53,7 @@ class RayClock {
 	tick = $state(0);
 	#refs = 0;
 	#timer: ReturnType<typeof setInterval> | null = null;
-	#refreshedAt = new WeakMap<object, number>();
+	#refreshedAt = new Map<string, number>();
 
 	/** Start the clock while at least one surface wants it; stop when the last one goes away.
 	 *
@@ -83,18 +83,25 @@ class RayClock {
 	 *  `getRayCluster` 8, every sibling 4. Putting them on one clock made the duplicate punctual
 	 *  rather than absent, which is not the same fix.
 	 *
-	 *  De-duplicated on the QUERY OBJECT, not on a name: a no-arg remote `query()` is cached on the
-	 *  function's identity, so both boards hold the very same instance and a `WeakMap` keyed on it
-	 *  coalesces them without either board knowing the other exists. A keyed query (`getRayJobs(id)`)
-	 *  is a different instance per key and is correctly NOT coalesced.
+	 *  DE-DUPLICATED ON AN EXPLICIT NAME, and the first attempt got this wrong in a way only
+	 *  measurement caught. Keying a `WeakMap` on the query OBJECT looks natural — `getRayCluster()`
+	 *  takes no arguments, so the two boards ought to hold one cached instance — and it does not work:
+	 *  each call site gets its own wrapper. Deployed and measured on /compute/workbench over 21 s, the
+	 *  object-keyed version still gave `getRayCluster` 14 against 7 for every sibling, i.e. exactly no
+	 *  change. The name is therefore the caller's declaration that two reads are THE SAME READ, which
+	 *  is a claim only the caller can make.
 	 *
-	 *  The loser of the race is not starved: it shares the winner's result, because it is the same
-	 *  cached query. And `.catch(() => {})` lives HERE now, so it cannot be forgotten at a call site —
-	 *  one uncaught rejection evicts the query from cache and silently kills its updates.
+	 *  A per-key query (`getJobTasks({ jobId })`) must carry the key in its name — `tasks:<id>` — or
+	 *  two different jobs would coalesce into one and the second would render the first's tasks.
+	 *
+	 *  The loser of the race is not starved: it shares the winner's result, because the underlying
+	 *  remote query IS cached by SvelteKit even though the wrapper is not. And `.catch(() => {})`
+	 *  lives HERE now, so it cannot be forgotten at a call site — one uncaught rejection evicts the
+	 *  query from cache and silently kills its updates.
 	 */
-	refresh(query: { refresh(): Promise<unknown> }): void {
-		if (this.#refreshedAt.get(query) === this.tick) return;
-		this.#refreshedAt.set(query, this.tick);
+	refresh(name: string, query: { refresh(): Promise<unknown> }): void {
+		if (this.#refreshedAt.get(name) === this.tick) return;
+		this.#refreshedAt.set(name, this.tick);
 		query.refresh().catch(() => {});
 	}
 

@@ -47,7 +47,7 @@
 	liveRead(
 		() => rayClock.cursor,
 		() => {
-			rayClock.refresh(serveQuery);
+			rayClock.refresh('serve', serveQuery);
 		},
 	);
 
