@@ -387,6 +387,39 @@ nothing reporting it. A central reconciling controller (Argo's model) re-derives
 loop and cannot lose an item this way; a reminder-driven actor can. `DaprWorkflowHistoryNotCollected`
 is the only thing in the estate that would notice.
 
+## What the four source docs did and did NOT settle
+
+Asked directly ("wasn't this solved by the docs?"), and worth recording, because the answer is not
+obvious and one of the four is actively misleading for this estate.
+
+| doc | what it settled | what it could not |
+| --- | --- | --- |
+| **Dapr: workflow history retention policy** | The POLICY — the config keys, and the load-bearing rule that it applies only to instances that NEWLY reach terminal. That rule is why R1 existed | Names no enforcing component. Prescribes no monitoring |
+| **Dapr: workflow protocol — state and history** | What a purge deletes (metadata + all associated history keys) | **Its key format is wrong for this store.** See below |
+| **oneuptime: workflow history retention** | Context. Nothing actionable here | Written against **1.14**, where it calls automatic retention-based purge "planned". Prescribes a DIY Python purge loop — **un-buildable in this estate** (no list-instances API, non-durable run store) and unnecessary since the built-in policy. Its monitoring advice is `redis-cli KEYS '<appid>||dapr.internal.*' \| wc -l` in a `watch` loop: this estate has **no Redis**, and it stops at MONITORING, explicitly not alerting |
+| **oneuptime: failures and retries** | Retry policy, compensation, timeouts | Nothing about retention, purging, state-store growth or alerting at all |
+
+So the docs answered **"how do you configure retention"** — and that was already configured in this repo
+before any of this started. What none of them answers is **"how do you know it stopped"**, which is the
+whole of R2. The nearest thing on offer is a human running a Redis one-liner against a store this estate
+does not use, on a Dapr version where the feature did not yet exist.
+
+**And the protocol reference would have shipped a dead alert.** It documents history keys as
+`wf-history-<instance_id>-<index>`. Measured against the live store:
+
+```
+key like '%wf-history-%'  ->     0 rows
+key like '%||history-%'   ->  5551 rows
+```
+
+The documented form is the LOGICAL key; the Postgres state store holds
+`<app>||dapr.internal.default.<app>.workflow||<id>||history-000006`. A filter written from the doc
+matches nothing, the gauge is a permanent 0, and `DaprWorkflowHistoryNotCollected` can never fire —
+which looks exactly like a healthy estate. Identical in class to the `outbox_oldest_age` defect this
+repo already carries a scar from. The most likely way this metric dies is now someone reading the
+official doc and "correcting" the filter to agree with it, so that edit is pinned by
+`test_the_workflow_history_query_matches_the_REAL_key_shape` and called out where the SQL lives.
+
 ## Sources
 
 * Retention policy, config keys and the "newly terminal only" rule —

@@ -5039,6 +5039,36 @@ def test_every_collector_sourced_ALERT_names_a_metric_the_RECEIVER_declares(grou
     )
 
 
+def test_the_workflow_history_query_matches_the_REAL_key_shape() -> None:
+    """Dapr's own protocol reference documents a key format the Postgres state store does not use.
+
+    The doc says history keys are `wf-history-<instance_id>-<index>`. Measured against the live store:
+    `key like '%wf-history-%'` matched 0 rows and `key like '%||history-%'` matched 5551. The documented
+    form is the LOGICAL key; the state store holds `<app>||<actor-type>||<id>||history-000006`.
+
+    So the most likely way this metric dies is someone reading the official doc and "fixing" the filter
+    to agree with it. The gauge would go to a permanent 0, DaprWorkflowHistoryNotCollected could never
+    fire, and a dead alert is indistinguishable from a healthy estate — the `outbox_oldest_age` defect
+    exactly. This gate makes that edit fail instead of shipping silently.
+    """
+    config = _collector_config(_rendered_docs())
+    queries = (config.get("receivers", {}).get("sqlquery/daprstate") or {}).get("queries", [])
+    assert queries, "the sqlquery/daprstate receiver declares no queries — nothing feeds the retention alert"
+
+    sql = " ".join(str(query.get("sql", "")) for query in queries)
+    assert "||history-" in sql, (
+        "the workflow-history query no longer filters on the REAL key shape `%||history-%`. Dapr's "
+        "protocol reference documents `wf-history-<id>-<index>`, which matches ZERO rows in the "
+        "Postgres state store — a filter taken from the doc makes the gauge a permanent 0 and "
+        "DaprWorkflowHistoryNotCollected unable to fire."
+    )
+    assert "wf-history-" not in sql, (
+        "the workflow-history query uses the DOCUMENTED key prefix `wf-history-`, which matches nothing "
+        "in the Postgres state store (measured: 0 rows vs 5551 for `%||history-%`). The alert built on "
+        "it can never fire."
+    )
+
+
 def _duration_seconds(value: str) -> int:
     """`720h` / `90m` -> seconds. The only two units the chart's own render guard admits."""
     match = re.fullmatch(r"([1-9][0-9]*)(h|m)", str(value))

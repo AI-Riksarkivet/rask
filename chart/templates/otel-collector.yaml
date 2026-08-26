@@ -315,7 +315,18 @@ data:
       # long-running recurring workflow — which this estate has, in the movers' watch loops — would
       # look arbitrarily old forever and the alert would fire on a perfectly healthy store. History
       # rows are rewritten per turn, so their age is the property the retention policy actually
-      # governs. Key shape verified live: `<app>||dapr.internal.default.<app>.workflow||<id>||history-000006`.
+      # governs.
+      #
+      # DO NOT "CORRECT" `%||history-%` TO `wf-history-%`, however authoritative the source. Dapr's own
+      # protocol reference (contributing/protocol-reference/workflow-protocol/…-state-and-history) states
+      # the history key format is `wf-history-<instance_id>-<index>`. That is the LOGICAL key; it is not
+      # what the Postgres state store holds. Measured on the live store 2026-08-26:
+      #     key like '%wf-history-%'  ->     0 rows
+      #     key like '%||history-%'   ->  5551 rows
+      # The real shape is `<app>||dapr.internal.default.<app>.workflow||<id>||history-000006`. A filter
+      # taken from the doc matches nothing, the gauge is a permanent 0, and DaprWorkflowHistoryNotCollected
+      # can never fire — which is indistinguishable from a healthy estate. Same class of defect as
+      # `outbox_oldest_age`. Pinned by test_the_workflow_history_query_matches_the_REAL_key_shape.
       #
       # The password is an ENV REFERENCE, not a literal: the Collector expands ${env:...} at load, and
       # the value arrives by secretKeyRef on the Deployment below, so no credential is in this ConfigMap.
