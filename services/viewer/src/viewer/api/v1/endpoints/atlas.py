@@ -32,6 +32,7 @@ from service_kit.lancekit.descriptor import AtlasSpace, Declared
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from service_kit.lancekit.predicate import and_, eq, isin, or_
 from service_kit.lancekit.registry import DatasetHandle, table_dataset
+from service_kit.media.cache_bounds import evict_to_bounds
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
 from viewer.api.v1.endpoints.chunks import alignments_binding
@@ -47,7 +48,8 @@ router = APIRouter(prefix="/api/atlas", tags=["atlas"])
 
 #: Media type for the /points Arrow IPC stream response.
 _ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
-#: Max memoized /points payloads before oldest-first eviction (each is multi-MB).
+#: Max memoized /points payloads (the LOOKUP bound). The MEMORY bound is
+#: `settings.points_cache_bytes` — see `evict_to_bounds`.
 _POINTS_CACHE_MAX = 12
 
 #: Rows per caption-attach scan when decorating a selection with frame captions.
@@ -118,14 +120,22 @@ def atlas_points(state: StateDep, space: SpaceParam = None, dataset: DatasetPara
     # cache lives on AppState (per app instance), never module-global.
     cache = state.points_cache
     key = (handle.id, requested.name, ds.version)
-    body = cache.get(key)
+    entry = cache.get(key)
+    body = entry[0] if entry is not None else None
     if body is None:
         body = build_points(declared, requested, ds)
-        # Bound the cache: each entry is multi-MB and a superseded table version
-        # would otherwise strand its payload forever. Evict oldest-first.
-        while len(cache) >= _POINTS_CACHE_MAX:
-            cache.pop(next(iter(cache)))
-        cache[key] = body
+        # TWO BOUNDS. The count is the lookup bound; the BYTE total is what decides whether the pod
+        # survives, and this cache had only the first — `while len(cache) >= 12` under a comment
+        # acknowledging "each is multi-MB". Twelve keys is one space per declared embedding across
+        # four corpora, i.e. reachable today, and at ~100 MB per Arrow payload that is 1.2 GB in a
+        # one-replica pod. Shared with `search_cache`'s eviction so the twins cannot diverge again.
+        evict_to_bounds(
+            cache,
+            max_entries=_POINTS_CACHE_MAX,
+            max_bytes=state.settings.points_cache_bytes,
+            incoming_bytes=len(body),
+        )
+        cache[key] = (body, len(body))
 
     return Response(
         content=body,

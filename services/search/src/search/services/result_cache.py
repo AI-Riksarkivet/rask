@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Any
 
 import lance
 
+from service_kit.media.cache_bounds import evict_to_bounds
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -136,9 +138,10 @@ def run_cached(
     nbytes = entry_bytes(result)
     if 0 < max_bytes < nbytes:
         return result
-    total = sum(size for _, size in cache.values()) + nbytes
-    while cache and (len(cache) >= max_size or (max_bytes > 0 and total > max_bytes)):
-        _, freed = cache.pop(next(iter(cache)))  # evict oldest
-        total -= freed
+    # THE SHARED EVICTION. This loop was written here and NOT carried to the twin cache on the same
+    # AppState (`points_cache`), which kept a count-only bound and could hold 1.2 GB of Arrow payloads
+    # in a one-replica pod. Copying it there would have left the same shape for a third cache, so it
+    # is one function now and both callers inherit both bounds.
+    evict_to_bounds(cache, max_entries=max_size, max_bytes=max_bytes, incoming_bytes=nbytes)
     cache[key] = (result, nbytes)
     return result

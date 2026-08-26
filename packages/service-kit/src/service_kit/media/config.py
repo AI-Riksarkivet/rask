@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     # Total bytes of cached results to retain (approximated as serialized JSON
     # length). 0 removes the byte bound (count-only, the pre-#141 behaviour).
     search_cache_bytes: int = Field(default=64 * 1024 * 1024, ge=0, alias="MEDIA_SEARCH_CACHE_BYTES")
+    #: The MEMORY ceiling on the atlas `/points` cache. Its twin above has had one since someone
+    #: measured the problem; this one evicted on entry count alone (12) while its own comment said
+    #: "each is multi-MB". Three declared spaces across four corpora is already twelve keys, and at
+    #: ~100 MB per Arrow payload that is 1.2 GB resident in a one-replica pod. `0` disables the byte
+    #: bound only, exactly as above — the two must not diverge on the meaning of their settings.
+    points_cache_bytes: int = Field(default=256 * 1024 * 1024, ge=0, alias="MEDIA_POINTS_CACHE_BYTES")
 
     # Optional S3 object-store backing (RASK_LANDING §4). Set MEDIA_S3_ENDPOINT to
     # serve datasets from RustFS / MinIO / AWS: the registry then lists + opens

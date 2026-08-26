@@ -53,7 +53,10 @@ class AppState(BaseModel):
     # Memoized /points payloads keyed on (space, dataset version) — per-app, not
     # module-global, so two app instances (e.g. tests) can't cross-contaminate.
     # Writes are idempotent (same input → same bytes), so a plain dict suffices.
-    points_cache: dict[tuple[str, str, int], bytes] = Field(default_factory=dict)
+    # Carries the payload's SIZE alongside it, like `search_cache` below, so eviction can honour a
+    # byte ceiling without re-measuring every entry. The atlas payload is `bytes`, so the size is
+    # EXACT rather than the estimate the search cache has to make.
+    points_cache: dict[tuple[str, str, int], tuple[bytes, int]] = Field(default_factory=dict)
     # Version-keyed search result cache (search.services.result_cache): keyed
     # (dataset, table-version signature, query hash) → (the query's hits, their
     # approximate byte size — carried so eviction can honour the byte ceiling
