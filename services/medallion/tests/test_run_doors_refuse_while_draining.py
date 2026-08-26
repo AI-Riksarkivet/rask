@@ -86,7 +86,12 @@ class TestTheGateCannotGoVacuous:
 
     def test_no_unlisted_router_post_creates_work_ungated(self) -> None:
         """Catches the door added next month. Every `@router.post` in the api package is either in a
-        list above, or must justify itself by carrying one of the two dependencies anyway."""
+        list above, or must justify itself by carrying one of the two dependencies anyway.
+
+        Three categories are legitimate here, and the expected list must say WHICH for each entry:
+        a door that starts work is gated; a door that completes work already held is listed; a door
+        that STOPS work is listed, because refusing it while draining removes the lever precisely
+        when it is needed."""
         listed = {name for _, name in HTTP_RUN_DOORS | SUBSCRIPTION_DOORS}
         ungated: list[str] = []
         for path in sorted(API.glob("*.py")):
@@ -97,7 +102,13 @@ class TestTheGateCannotGoVacuous:
                 posts = any(isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr == "post" for d in node.decorator_list)
                 if posts and not any(_mentions(d, "refuse_when_draining") or _mentions(d, "retry_when_draining") for d in node.decorator_list):
                     ungated.append(f"{path.name}::{node.name}")
-        assert ungated == ["promotions.py::decide"], (
+        # `train.py::terminate_train` is the THIRD category this gate did not have. B6 refuses a door
+        # that STARTS work a draining pod cannot finish, and `promotions.py::decide` is listed because
+        # it COMPLETES work already held. A terminate does neither — it stops work — and gating it
+        # would take the runaway-stopping lever away at exactly the moment an operator reaches for it,
+        # since a rollout is when runaways are noticed. It is also idempotent against a pod that
+        # leaves mid-call: the workflow is durable and the terminate is recorded by the sidecar.
+        assert ungated == ["promotions.py::decide", "train.py::terminate_train"], (
             "a new POST door appeared that neither this gate lists nor refuses while draining: "
             f"{ungated}. If it starts work, gate it; if it completes work already held (like the "
             "promotion decision), add it to this expected list with that reasoning."

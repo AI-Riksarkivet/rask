@@ -6,10 +6,14 @@ stage hop — see the design doc for why a workload-type field on the medallion 
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
+from contextlib import suppress
 from typing import Annotated, Any
 
 from dapr.ext.fastapi import DaprApp
-from fastapi import APIRouter, Depends, FastAPI, Header, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -25,9 +29,11 @@ from medallion.services.train import (
     train_head_enabled,
 )
 from service_kit.draining import refuse_when_draining
+from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.dapr_auth import require_dapr_token
 
 
+log = logging.getLogger(__name__)
 router = APIRouter(tags=["train"])
 
 
@@ -130,3 +136,87 @@ def register_train_trigger_route(app: FastAPI, dapr_app: DaprApp | None = None) 
         return await handle_train_trigger(config, event, fga_client=fga_client)
 
     return dapr_app
+
+
+class TrainRunState(BaseModel):
+    """What an operator needs to answer "is my training run still being watched".
+
+    A declared field list, not the SDK's state object: `WorkflowState` carries the serialized input
+    and the serialized output, and this route is reachable by anyone who may train — so it would
+    disclose the whole spec to answer a status question.
+    """
+
+    instance_id: str
+    status: str
+    #: The Ray submission the watcher is polling, echoed so an operator can cross-check the dashboard.
+    submission_id: str | None = None
+
+
+class TrainTerminateAccepted(BaseModel):
+    instance_id: str
+    detail: str
+
+
+def _train_client(request: Request) -> Any:
+    """The lifespan's client, never a per-request one.
+
+    `decide()` on the promotion router builds its own and its sibling `show()` reads this one; that
+    asymmetry is its own audit row. New code takes the documented side: constructing a client per
+    request re-opens a gRPC channel to the sidecar on every call.
+    """
+    client = getattr(request.app.state, "workflow_client", None)
+    if client is None:
+        raise ServiceUnavailableError("the workflow engine is not available")
+    return client
+
+
+@router.get("/trains/{instance_id}", response_model=TrainRunState)
+async def show_train(
+    instance_id: str,
+    request: Request,
+    _subject: Annotated[str | None, Depends(authorize_train)],
+) -> TrainRunState:
+    """DWF-MGT-002. `train_run` was startable and unobservable: a caller got a 202 and then had no
+    HTTP means to learn whether the watcher was alive, had abandoned the run, or was never scheduled
+    at all — which, before the hosting fix in this same change, was the DEFAULT chart's behaviour.
+
+    Gated by the same door as `POST /train`, deliberately: reading the status of compute you were
+    refused permission to spend is not public, and the estate already argues this exact point on
+    `flows.get_run` and `ingest.get_ingest`.
+    """
+    client = _train_client(request)
+    # The SDK client is SYNCHRONOUS. Awaiting it inline blocks the event loop for every other request
+    # on this worker — the same reason ingest and flows read their state through a thread.
+    state = await asyncio.to_thread(lambda: client.get_workflow_state(instance_id, fetch_payloads=True))
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"no training watch {instance_id!r}")
+    submission_id: str | None = None
+    with suppress(Exception):
+        # Best-effort: a state whose input this build cannot parse must still answer the STATUS
+        # question, which is the one the caller asked.
+        submission_id = str(json.loads(state.serialized_input or "{}").get("submission_id") or "") or None
+    return TrainRunState(instance_id=instance_id, status=str(getattr(state.runtime_status, "name", state.runtime_status)), submission_id=submission_id)
+
+
+@router.post("/trains/{instance_id}/terminate", status_code=202, response_model=TrainTerminateAccepted)
+async def terminate_train(
+    instance_id: str,
+    request: Request,
+    _subject: Annotated[str | None, Depends(authorize_train)],
+) -> TrainTerminateAccepted:
+    """DWF-MGT-003, for the training lane.
+
+    A HARD terminate is honest here and the response says exactly what it does and does not do.
+    `train_run` only POLLS a Ray job it did not submit — `submit_train_job` did, before the watcher
+    was ever scheduled — so stopping the watch does NOT stop the training job or free its GPUs. An
+    operator told "terminated" would reasonably believe otherwise, so the body refuses to imply it.
+    """
+    client = _train_client(request)
+    if await asyncio.to_thread(lambda: client.get_workflow_state(instance_id, fetch_payloads=False)) is None:
+        raise HTTPException(status_code=404, detail=f"no training watch {instance_id!r}")
+    await asyncio.to_thread(lambda: client.terminate_workflow(instance_id))
+    log.info("medallion_train_watch_termination_requested", extra={"instance_id": instance_id})
+    return TrainTerminateAccepted(
+        instance_id=instance_id,
+        detail="the watch stops; the Ray training job it was polling keeps running and must be stopped through Ray",
+    )

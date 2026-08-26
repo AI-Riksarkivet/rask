@@ -105,7 +105,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Without this the door 404s honestly — which is the correct failure, not a working one.
     app.state.workflow_runtime = None
     app.state.workflow_client = None
-    if get_settings().quality_review_enabled:
+    # `qualityReview OR ray`, because this app hosts TWO workflows and they answer to different
+    # features: `promotion_review` (quality review) and `train_run` (the Ray training watcher, started
+    # by `schedule_train_watch`). Gating on quality review alone meant the DEFAULT chart -- ray on,
+    # review off -- started no runtime here, so every training job was submitted and never watched.
+    # That lane fails silently ON PURPOSE (a lost watcher must not fail a trigger whose job is already
+    # running), so nobody was ever told: no terminal event, no outcome report, no notification to the
+    # originator. Owner ruling 2026-08-25. NOT "always": with neither feature on, this app hosts no
+    # workflow and should run no engine.
+    settings = get_settings()
+    if settings.quality_review_enabled or settings.ray_enabled:
         try:
             import dapr.ext.workflow as wf
 
@@ -117,11 +126,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.workflow_runtime = runtime
             # ONE client for the app, not one per request — the decision door reads it from here.
             app.state.workflow_client = wf.DaprWorkflowClient()
-            log.info("dapr workflow runtime started (promotion review)")
+            log.info("dapr workflow runtime started", extra={"promotion_review": settings.quality_review_enabled, "train_watch": settings.ray_enabled})
             # The line above is TRUE and INSUFFICIENT: the runtime starts whether or not this
             # app-id can reach an actor state store, and without one the first call fails (and,
             # on dapr 1.18.1, panics the sidecar). Ask the sidecar what it can actually see.
-            await probe_actor_state_store(capability="held promotions cannot be reviewed")
+            await probe_actor_state_store(capability="held promotions cannot be reviewed and training jobs cannot be watched")
         except Exception:
             # Non-fatal, the mover's reasoning: refusing to start because the sidecar is not up yet
             # turns an ordering blip into a CrashLoopBackOff. A hold that cannot be scheduled RETRYs

@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **15 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **16 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -1029,6 +1029,31 @@ producer.py:108 `if get_settings().quality_review_enabled:` … producer.py:172 
 
 **Verifier (ADJUSTED).** producer.py:108 `if get_settings().quality_review_enabled:` … producer.py:119 `app.state.workflow_client = wf.DaprWorkflowClient()`; producer.py:172 `register_train_trigger_route(app, _dapr_app)` (unconditional). train.py:301 `schedule_train_watch(settings, token=token, model=model, …)`; train.py:329-334 `client = wf.DaprWorkflowClient()\n        client.schedule_new_workflow(workflow=train_run, input=spec.model_dump(), instance_id=instance_id)\n    except Exception:\n        log.warning("medallion_train_watch_not_scheduled", …)\n        return None`. chart/values.yaml:967 `ray: true`, :1000 `qualityReview: false`; chart/templates/dapr-statestore.yaml:108-109 `{{- if .Values.medallion.qualityReview }}\n{{-   $scopes = append $scopes .Values.medallion.producer.daprAppId }}` with the comment "It starts a runtime exactly when `medallion.qualityReview` is on (producer.py's lifespan), so that is the gate here — NOT `medallion.ray`"; values.yaml:1328-1395 base `stateStore.scopes` contains annotator/catalog/ingest/flows/notifications and no producer id. REFUTED sub-claim: workflow.py:1140 `WORKFLOWS = (stage_run, train_run, promotion_review)` — `train_run` IS registered whenever the producer's runtime starts.
 
+
+**FIXED 2026-08-25 — owner ruling: gate on `qualityReview OR ray`.** The producer's lifespan and the
+Dapr statestore scope now both start/scope when EITHER feature is on.
+
+**The old gate was correct about the lifespan and wrong about what the app HOSTS.** The statestore
+template even reasoned it out in a comment — "It starts a runtime exactly when `medallion.qualityReview`
+is on … NOT `medallion.ray`, which the producer's runtime does not consult" — true of the condition as
+written, and beside the point: `schedule_train_watch` starts `train_run` in this same app, and that
+answers to ray. Since ray defaults ON and qualityReview defaults OFF, the DEFAULT chart could not
+watch a single training job. That comment is corrected in place rather than appended to.
+
+**Why nobody noticed:** this lane fails silently on purpose, and correctly — a lost watcher must not
+fail a trigger whose job is already running, because retrying re-enters the FGA gate and a submit that
+refuses to resubmit. So the cost was invisible: no terminal event, no outcome report, and no
+notification to the originator whose four-hour run finished.
+
+**Not "always".** With neither feature on the producer hosts no workflow, so it runs no engine and is
+not scoped — the ruling's second half, pinned by its own test.
+
+Five tests in `tests/unit/test_train_watch_is_hosted.py`. **The chart half is proven OFFLINE**, not
+deferred to a live check: `helm template` renders the component and the test reads the actor state
+store's `scopes` off the parsed manifest. Two were RED (the default chart, and ray-alone), two passed
+as guards, and a fifth asserts the lifespan condition and the chart gate still say the same thing —
+they are written in two languages in two files, and when they drift the sidecar says nothing.
+
 </details>
 
 <details><summary><b>No terminate route for the cascade: an in-flight stage_run cannot be stopped by any HTTP means</b> <i>(mgt, rule DWF-MGT-003, ADJUSTED)</i></summary>
@@ -1047,6 +1072,30 @@ mover.py:140-143 `app.include_router(health_router)\n# The DaprApp wrapper serve
 
 **Verifier (ADJUSTED).** mover.py:140 `app.include_router(health_router)`; mover.py:143 `register_stage_route(app)` — the complete non-health surface. workflow.py:86-90 `#: Hard ceiling on poll iterations, so history cannot grow without bound (DWF-DET-013). At the default\n#: interval this is 24h of waiting. A job still running at the ceiling is NOT killed …\nMAX_POLLS: Final = 2880`. services/compute/src/compute/routes.py:24-59 — `@router.get("/health")`, `/jobs`, `/jobs/{submission_id}/logs`, `/cluster`, `/actors`, `/tasks`, `/overview`, `/logs`; no POST/DELETE.
 
+
+**PARTIALLY FIXED 2026-08-25 — the `train_run` half is closed; the `stage_run` half is in progress.**
+
+`POST /trains/{instance_id}/terminate` now exists on the producer, same door as the read.
+
+**The 202 body refuses to imply the GPUs are free, and that is the point of writing a custom one.**
+`train_run` only POLLS a Ray job that `submit_train_job` had already submitted before the watcher
+existed — so terminating stops the watch and nothing else. The body says so in those words. This is
+the opposite of ingest, where terminate had to become a `cancel` EVENT because the skipped tail held
+the only caller of `release_run_units`; here there is no such tail, so a hard terminate is honest.
+
+**An estate gate caught this and was extended rather than satisfied.**
+`test_no_unlisted_router_post_creates_work_ungated` (B6) refused the new POST. The right answer was
+not to gate it: B6 refuses a door that STARTS work a draining pod cannot finish, and the gate's
+expected list held one door that COMPLETES work already held. A terminate does neither — it STOPS
+work — and refusing it while draining removes the runaway-stopping lever at exactly the moment an
+operator reaches for it, since a rollout is when runaways get noticed. The gate now names all three
+categories and the list says which each entry is.
+
+Eight tests in `test_train_operator_routes.py`, RED by construction — `git show HEAD:…/train.py`
+contains no `/trains/` at all, so every assertion was a 404 before this change. They cover the read,
+the wire shape, 404 on an unknown instance for both verbs, that a 404 terminates nothing, and that a
+missing engine is 503 rather than a silent 202.
+
 </details>
 
 <details><summary><b>No status route for stage_run or train_run — the cascade's workflow instances are unobservable over HTTP</b> <i>(mgt, rule DWF-MGT-002, ADJUSTED)</i></summary>
@@ -1064,6 +1113,23 @@ mover.py:143 `register_stage_route(app)` — the mover's only non-health mount; 
 ```
 
 **Verifier (ADJUSTED).** transform.py:111 `instance_id = f"stage-{stage_submission_id(stage, token, from_uri, to_uri)}"`; train.py:327 `instance_id = f"train-{submission_id}"`; mover.py:143 `register_stage_route(app)` is the mover's only non-health mount. promotions.py:108 `state = client.get_workflow_state(instance_id, fetch_payloads=True)` (in `_live_spec`, called by `show` at promotions.py:261), promotions.py:167 `return client.get_workflow_state(instance_id) is not None` (`_exists`), transform.py:158 `return client.get_workflow_state(instance_id) is not None` (`_stage_workflow_exists`).
+
+
+**PARTIALLY FIXED 2026-08-25 — the `train_run` half is closed; the `stage_run` half is in progress.**
+
+`GET /trains/{instance_id}` now exists on the producer, behind the same `authorize_train` door as
+`POST /train` — reading the status of compute you were refused permission to spend is not public, and
+`flows.get_run` and `ingest.get_ingest` already argue exactly that.
+
+It needed no new public surface: `train_run` executes in the producer's own runtime, and the producer
+already has a gateway row. The wire shape is a DECLARED field list (`instance_id`, `status`,
+`submission_id`) rather than the SDK's `WorkflowState`, which carries the serialized input and output
+— answering a status question must not disclose the whole spec. `submission_id` is echoed so an
+operator can cross-check the Ray dashboard, and is read best-effort so a state this build cannot parse
+still answers the question actually asked.
+
+The `stage_run` half is separate because `stage_run` executes in the MOVER, which has no Service and
+no gateway row — see the terminate row below for that work.
 
 </details>
 
