@@ -27,7 +27,7 @@ answer an opaque 400.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 
 import httpx
@@ -59,7 +59,13 @@ def relative_location(to_uri: str, catalog_root: str) -> str:
     return to_uri[len(root) + 1 :]
 
 
-def _credential(*, token: str | None, app_token: str | None, service_identity: str | None) -> dict[str, str]:
+def _credential(
+    *,
+    token: str | None,
+    app_token: str | None,
+    service_identity: str | None,
+    dedicated_token: Callable[[str], str | None] | None = None,
+) -> dict[str, str]:
     """The credential a mover presents to the catalog, service door first.
 
     A service authenticates AS ITSELF — the app token daprd already injects plus the subject it
@@ -74,7 +80,18 @@ def _credential(*, token: str | None, app_token: str | None, service_identity: s
     simply does not have.
     """
     if app_token and service_identity:
-        return {"dapr-api-token": app_token, "x-lance-service-identity": service_identity}
+        # A PRIVILEGED identity presents its OWN credential, never the estate's shared one. The door
+        # (`service_kit.governed.dapr_auth`) binds such a subject to `service-token-<identity>`, and
+        # rendering that server-side alone is not enabling the control — it is refusing every
+        # privileged caller. Measured 2026-08-26: the catalog began demanding the dedicated token
+        # while movers still sent APP_API_TOKEN, and every call 401'd until it was reverted.
+        #
+        # `None` from the resolver means the bundle was READ and this identity is not privileged, so
+        # the shared token is correct. Falling back rather than refusing keeps ONE authority over the
+        # decision: the door already hard-refuses a privileged subject presenting the wrong
+        # credential, and a refusal here would only reach the same outcome with less information.
+        presented = (dedicated_token(service_identity) if dedicated_token else None) or app_token
+        return {"dapr-api-token": presented, "x-lance-service-identity": service_identity}
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
@@ -88,6 +105,7 @@ def register_stage_output(
     token: str | None = None,
     app_token: str | None = None,
     service_identity: str | None = None,
+    dedicated_token: Callable[[str], str | None] | None = None,
     timeout_seconds: float = 30.0,
     client: httpx.Client | None = None,
 ) -> None:
@@ -100,7 +118,7 @@ def register_stage_output(
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot register its output table")
     location = relative_location(to_uri, catalog_root)
     segments = table_id.split(delimiter)
-    headers = _credential(token=token, app_token=app_token, service_identity=service_identity)
+    headers = _credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         # Creates are top-down (the catalog's require_parent guard, live-verified: registering into
         # an absent namespace answers NamespaceNotFound 404) — and the cascade OWNS its tier
@@ -201,6 +219,7 @@ def publish_stage_output(
     token: str | None = None,
     app_token: str | None = None,
     service_identity: str | None = None,
+    dedicated_token: Callable[[str], str | None] | None = None,
     timeout_seconds: float = 30.0,
     gate_only: bool = False,
     cascade_id: str = "",
@@ -228,7 +247,7 @@ def publish_stage_output(
     """
     if not catalog_url:
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot publish its output table")
-    headers = _credential(token=token, app_token=app_token, service_identity=service_identity)
+    headers = _credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
     body = {
         "version": version,
         "key_column": key_column,
@@ -282,6 +301,7 @@ def ensure_stage_output(
     token: str | None = None,
     app_token: str | None = None,
     service_identity: str | None = None,
+    dedicated_token: Callable[[str], str | None] | None = None,
     timeout_seconds: float = 30.0,
     client: httpx.Client | None = None,
 ) -> str:
@@ -307,7 +327,7 @@ def ensure_stage_output(
     """
     if not catalog_url:
         raise RegisterError("MEDALLION_CATALOG_URL is not set — this stage cannot resolve where to write")
-    headers = _credential(token=token, app_token=app_token, service_identity=service_identity)
+    headers = _credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
     segments = table_id.split(delimiter)
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:

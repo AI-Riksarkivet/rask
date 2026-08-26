@@ -61,7 +61,7 @@ from medallion.core.metrics import record_promotion_outcome, record_stage_outcom
 
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
 
     from dapr.ext.workflow import DaprWorkflowContext, WorkflowActivityContext
 
@@ -1185,6 +1185,13 @@ def request_approval(ctx: WorkflowActivityContext, spec: PromotionSpec) -> bool:
     return True
 
 
+def _dedicated(settings: Any) -> Callable[[str], str | None] | None:
+    """The mover's own credential resolver — imported locally, like every other config use here."""
+    from medallion.core.config import dedicated_token_for
+
+    return dedicated_token_for(settings)
+
+
 def _resume_publish(
     *,
     catalog_url: str,
@@ -1196,6 +1203,7 @@ def _resume_publish(
     service_identity: str,
     token: str | None,
     timeout_seconds: float,
+    dedicated_token: Callable[[str], str | None] | None = None,
 ) -> None:
     """The tag move an approval resumes with. A seam so the activity is testable without a catalog."""
     from medallion.services.catalog_register import publish_stage_output
@@ -1208,6 +1216,7 @@ def _resume_publish(
         accept_assertions=accept_assertions,
         app_token=app_token,
         service_identity=service_identity,
+        dedicated_token=dedicated_token,
         token=token,
         timeout_seconds=timeout_seconds,
     )
@@ -1245,6 +1254,7 @@ def publish_promotion(ctx: WorkflowActivityContext, spec: PromotionSpec) -> None
             accept_assertions=list(spec.reasons),
             app_token=settings.app_api_token,
             service_identity=settings.catalog_service_identity,
+            dedicated_token=_dedicated(settings),
             token=settings.catalog_token,
             timeout_seconds=settings.publish_timeout_seconds,
         )

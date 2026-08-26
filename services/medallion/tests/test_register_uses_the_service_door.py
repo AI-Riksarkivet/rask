@@ -218,3 +218,71 @@ class TestA409MustAgreeAboutWHERE:
 
         with pytest.raises(RegisterError):
             _register()
+
+
+class TestAPrivilegedIdentityPresentsItsOwnCredential:
+    """The CLIENT half of the dedicated-credential binding.
+
+    `service_kit.governed.dapr_auth` already binds a privileged subject to its own
+    `service-token-<identity>` on the SERVER side. Rendering that alone is not enabling the control,
+    it is refusing every privileged caller — measured on the live estate 2026-08-26, where the catalog
+    began demanding the dedicated token while the movers went on presenting the shared
+    `APP_API_TOKEN`, and every call answered `401 Unauthorized` until it was reverted.
+
+    So the mover must PRESENT what the door will ask for. Until it does, the estate is stuck with the
+    shared token, and any holder of it can authenticate as any allowlisted identity — including ones
+    that hold `owner` on every warehouse.
+
+    The resolver is injected rather than read from the store here, for the same reason the server side
+    takes a `dedicated_token=` callback: the secret store is a Dapr sidecar call, and a unit test that
+    needed one would be testing the sidecar.
+    """
+
+    @respx.mock
+    def test_a_dedicated_token_is_sent_instead_of_the_shared_one(self) -> None:
+        route = _routes()
+
+        register_stage_output(
+            catalog_url=CATALOG,
+            catalog_root=ROOT,
+            table_id="silver$features",
+            to_uri=f"{ROOT}/medallion/silver",
+            app_token="shared-app-token",
+            service_identity="service-bronze-to-silver",
+            dedicated_token=lambda identity: f"dedicated-for-{identity}",
+        )
+
+        headers = route.calls.last.request.headers
+        assert headers["dapr-api-token"] == "dedicated-for-service-bronze-to-silver", "the mover still presented the SHARED token"
+        assert headers["x-lance-service-identity"] == "service-bronze-to-silver"
+
+    @respx.mock
+    def test_an_identity_with_no_dedicated_token_falls_back_to_the_shared_one(self) -> None:
+        """`None` means the bundle was READ and this identity simply is not privileged.
+
+        Falling back rather than refusing keeps ONE authority over the decision: the door already
+        hard-refuses a privileged subject that presents the wrong credential, so a client-side refusal
+        would only produce the same outcome from a place with less information.
+        """
+        route = _routes()
+
+        register_stage_output(
+            catalog_url=CATALOG,
+            catalog_root=ROOT,
+            table_id="silver$features",
+            to_uri=f"{ROOT}/medallion/silver",
+            app_token="shared-app-token",
+            service_identity="service-web",
+            dedicated_token=lambda _identity: None,
+        )
+
+        assert route.calls.last.request.headers["dapr-api-token"] == "shared-app-token"
+
+    @respx.mock
+    def test_no_resolver_at_all_is_the_shared_token(self) -> None:
+        """The default, and what every existing caller gets — this change adds a path, it moves none."""
+        route = _routes()
+
+        _register(app_token="shared-app-token", service_identity="service-bronze-to-silver")
+
+        assert route.calls.last.request.headers["dapr-api-token"] == "shared-app-token"

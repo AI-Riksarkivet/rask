@@ -34,7 +34,7 @@ from openfga_sdk import OpenFgaClient
 from opentelemetry import trace
 
 from medallion.core.best_effort import best_effort
-from medallion.core.config import MedallionSettings, project_namespace
+from medallion.core.config import MedallionSettings, dedicated_token_for, project_namespace
 from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_refused, record_stage_completion, record_transition
 from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register, promotion_band, promotion_hold
@@ -505,6 +505,7 @@ async def handle_stage(
                         token=settings.catalog_token,
                         app_token=settings.app_api_token,
                         service_identity=settings.catalog_service_identity,
+                        dedicated_token=dedicated_token_for(settings),
                     )
                 lineage_doc = promotion_lineage(
                     settings,
@@ -820,6 +821,7 @@ async def handle_stage(
                     token=settings.catalog_token,
                     app_token=settings.app_api_token,
                     service_identity=settings.catalog_service_identity,
+                    dedicated_token=dedicated_token_for(settings),
                     timeout_seconds=settings.publish_timeout_seconds,
                     gate_only=True,
                     cascade_id=trigger.cascade_id or "",
@@ -869,6 +871,7 @@ async def handle_stage(
                 token=settings.catalog_token,
                 app_token=settings.app_api_token,
                 service_identity=settings.catalog_service_identity,
+                dedicated_token=dedicated_token_for(settings),
                 timeout_seconds=settings.publish_timeout_seconds,
                 # Carried so the NEXT tier inherits it: the catalog echoes this onto
                 # `table_published`, which is what wakes the next mover.

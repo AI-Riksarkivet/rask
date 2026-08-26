@@ -13,6 +13,7 @@ raw-to-bronze mover anywhere in this config.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import lru_cache
 from typing import Self
 
@@ -502,3 +503,33 @@ def apply_dapr_secrets(settings: MedallionSettings) -> None:
 
     bundle = fetch_required_secrets(settings.dapr_secret_store, settings.dapr_secret_key, require=settings.dapr_secret_s3_field)
     settings.s3_secret_access_key = SecretStr(bundle[settings.dapr_secret_s3_field])
+
+
+@lru_cache(maxsize=1)
+def _dedicated_token_resolver(store: str, key: str) -> Callable[[str], str | None]:
+    """Cached so a resolver is built once per process, not once per catalog call."""
+    from service_kit.governed.dapr_auth import dedicated_token_from_store
+
+    return dedicated_token_from_store(store, key)
+
+
+def dedicated_token_for(settings: MedallionSettings) -> Callable[[str], str | None] | None:
+    """The resolver a mover uses to present its OWN credential, or ``None`` when it cannot.
+
+    THE CLIENT HALF of the dedicated-credential binding. `service_kit.governed.dapr_auth` binds a
+    privileged subject to `service-token-<identity>` at the DOOR; a caller that goes on presenting the
+    shared `APP_API_TOKEN` is simply refused. Measured on the live estate 2026-08-26: rendering the
+    server-side expectation alone 401'd every mover call to the catalog until it was reverted.
+
+    Returns ``None`` when secrets do not come from Dapr — a dev stack with no secret store keeps the
+    shared-token path exactly as before. A store that is READABLE but has no entry for this identity
+    resolves to ``None`` per-identity inside the resolver, and the caller falls back; the door remains
+    the single authority on whether that is acceptable.
+
+    An unreadable store raises out of the resolver rather than silently downgrading to the shared
+    token: "we could not read it" and "this identity is not privileged" are different answers, and
+    quietly treating the first as the second is how a credential control becomes decorative.
+    """
+    if not settings.secrets_from_dapr:
+        return None
+    return _dedicated_token_resolver(settings.dapr_secret_store, settings.dapr_secret_key)
