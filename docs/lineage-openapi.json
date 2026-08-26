@@ -1632,6 +1632,17 @@
             ],
             "title": "Progress Total"
           },
+          "promotion_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promotion Status"
+          },
           "run_id": {
             "title": "Run Id",
             "type": "string"

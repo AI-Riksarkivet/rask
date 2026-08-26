@@ -41,15 +41,29 @@ export type RunStatusLike = {
 	 *  rename "would compile fine here and render blanks in every zone", and a missing field is the
 	 *  same defect arriving from the other side. */
 	source_run_id?: string | null;
+	/** WHY a promotion did not advance — `HELD` (a validator may approve it), `BLOCKED` (a failed
+	 *  assertion, which no approval waives) or `REFUSED` (the catalog's own gate declined), plus the
+	 *  review's own outcomes (`PROMOTED` / `REJECTED` / `EXPIRED`).
+	 *
+	 *  `state` is `FAIL` for all of the refusals, correctly — the promotion did not advance — so this
+	 *  is the only thing separating a question for a person from an outage. `null` for the
+	 *  overwhelming majority of runs, which refused no promotion. */
+	promotion_status?: string | null;
 };
 
 /** What a viewer needs to know at a glance. `unknown` keeps an unrecognised state honest — it is
  *  rendered verbatim rather than guessed into one of the others. */
-export type RunPhase = 'started' | 'running' | 'complete' | 'failed' | 'unknown';
+export type RunPhase = 'started' | 'running' | 'complete' | 'failed' | 'held' | 'unknown';
 
 export function runPhase(run: RunStatusLike): RunPhase {
 	const state = (run.state ?? '').toUpperCase();
-	if (state === 'FAIL' || state === 'ABORT') return 'failed';
+	// A HELD promotion arrives as FAIL and is not a failure: it is waiting on a validator. Checked
+	// INSIDE the terminal branch rather than before it, because the verdict is sticky on the run node
+	// — a hold that later resumed still carries `HELD` while RUNNING, and its phase must follow the
+	// run's current state. BLOCKED and REFUSED deliberately stay `failed`: no approval waives them.
+	if (state === 'FAIL' || state === 'ABORT') {
+		return (run.promotion_status ?? '').toUpperCase() === 'HELD' ? 'held' : 'failed';
+	}
 	if (state === 'COMPLETE') return 'complete';
 	if (state === 'RUNNING') return 'running';
 	if (state === 'START') return 'started';
@@ -61,6 +75,8 @@ export function runPhaseLabel(run: RunStatusLike): string {
 	switch (runPhase(run)) {
 		case 'failed':
 			return (run.state ?? '').toUpperCase() === 'ABORT' ? 'Aborted' : 'Failed';
+		case 'held':
+			return 'Held for review';
 		case 'complete':
 			return 'Completed';
 		case 'running':

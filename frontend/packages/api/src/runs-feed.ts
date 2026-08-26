@@ -35,6 +35,9 @@ export interface RunNotice {
 	error_message: string | null;
 	updated_at: string | null;
 	operation: string | null;
+	/** WHY a promotion did not advance — `HELD` / `BLOCKED` / `REFUSED`. `state` is `FAIL` for all
+	 *  three, so without this a hold is indistinguishable from an outage. */
+	promotion_status: string | null;
 }
 
 /** One beat of the lineage plane: where the estate's event log stands, and the runs behind the bell. */
@@ -60,6 +63,7 @@ const RunsSchema = v.object({
 			error_message: v.nullish(v.string()),
 			updated_at: v.nullish(v.string()),
 			operation: v.nullish(v.string()),
+			promotion_status: v.nullish(v.string()),
 		}),
 	),
 });
@@ -75,9 +79,16 @@ export const PROBE_TIMEOUT_MS = 4000;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const isFailed = (r: { state?: string | null | undefined }): boolean => {
+const isFailed = (r: {
+	state?: string | null | undefined;
+	promotion_status?: string | null | undefined;
+}): boolean => {
 	const s = (r.state ?? '').toUpperCase();
-	return s === 'FAIL' || s === 'ABORT';
+	if (s !== 'FAIL' && s !== 'ABORT') return false;
+	// A HELD promotion arrives as FAIL and is a question for a validator, not a failure. It must not
+	// sort into the failures-first block: measured on the live board, every hold sat at the top of
+	// the list looking like an outage. BLOCKED and REFUSED stay failures — no approval waives them.
+	return (r.promotion_status ?? '').toUpperCase() !== 'HELD';
 };
 
 /**
@@ -166,6 +177,7 @@ export async function* lineagePulse(opts: LineageFeedOptions): AsyncGenerator<Li
 					error_message: r.error_message ?? null,
 					updated_at: r.updated_at ?? null,
 					operation: r.operation ?? null,
+					promotion_status: r.promotion_status ?? null,
 				}),
 			);
 		} catch {

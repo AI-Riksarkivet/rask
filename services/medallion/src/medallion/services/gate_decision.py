@@ -97,3 +97,53 @@ def gate_decision(
     if not has_catalog:
         return GateOutcome.UNGOVERNED
     return GateOutcome.MISCONFIGURED
+
+
+#: The promotion verdict each outcome represents, for the `lance.promotion_status` run facet.
+#:
+#: Only outcomes that actually REFUSED a promotion appear. `MISCONFIGURED` is deliberately absent: a
+#: stage with a downstream and no publish target is a DEPLOYMENT fault, and giving it a promotion
+#: status would file an operator's mistake in the same column as a data-quality decision, where no
+#: validator can act on it. `UNGOVERNED` and `NOTHING` refuse nothing, so they have no verdict.
+#:
+#: `PUBLISH` maps to REFUSED rather than BLOCKED because the refuser is different and so is the
+#: remedy: the gate allowed the promotion and the CATALOG's own gate declined it.
+_PROMOTION_STATUS: dict[GateOutcome, str] = {
+    GateOutcome.HOLD: "HELD",
+    GateOutcome.BLOCK: "BLOCKED",
+    GateOutcome.PUBLISH: "REFUSED",
+}
+
+
+def promotion_status_for(outcome: GateOutcome | None) -> str | None:
+    """The verdict to stamp on the run facet, or ``None`` when the outcome is not a verdict.
+
+    The run board renders a HOLD identically to a hard failure today, because the only thing crossing
+    the wire is ``eventType=FAIL``. This is the one bit that tells them apart — and it distinguishes
+    "a person may approve this" from "no approval can fix this", which are opposite instructions.
+    """
+    if outcome is None:
+        return None
+    return _PROMOTION_STATUS.get(outcome)
+
+
+def refusal_message(outcome: GateOutcome | None, to_dataset: str) -> str:
+    """What a person is told when a promotion did not happen — named by its ACTUAL cause.
+
+    Every refusal used to emit one hardcoded sentence, "quality gate HELD the promotion into <x>",
+    whatever the outcome. Three of the four were wrong and one was harmful: `BLOCK` is defined as
+    "corrupt, and no approval makes it right", and reporting it as HELD sends an operator looking for
+    a validator who cannot help. Measured on the live compute board 2026-08-26, where every refusal —
+    including a catalog 404 — read as a hold.
+    """
+    match outcome:
+        case GateOutcome.HOLD:
+            return f"quality gate HELD the promotion into {to_dataset} — a validator must approve it; downstream was not triggered"
+        case GateOutcome.BLOCK:
+            return f"quality gate BLOCKED the promotion into {to_dataset} — a failed assertion, which no approval can waive; downstream was not triggered"
+        case GateOutcome.PUBLISH:
+            return f"the catalog REFUSED the promotion into {to_dataset} — downstream was not triggered"
+        case GateOutcome.MISCONFIGURED:
+            return f"the stage has a downstream but no publish target, so the promotion into {to_dataset} could not be attempted"
+        case _:
+            return f"the promotion into {to_dataset} did not happen — downstream was not triggered"

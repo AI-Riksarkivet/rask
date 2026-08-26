@@ -217,3 +217,34 @@ describe('a failure cannot be buried by recency', () => {
 		expect(ids).toEqual(['ok']);
 	});
 });
+
+// A HELD promotion is not a failure, and rendering it as one is an instruction to do the wrong thing.
+//
+// The medallion emits eventType=FAIL for a held promotion, correctly — the promotion genuinely did
+// not advance, and every existing FAIL consumer must keep meaning that. But a HOLD is a question for
+// a validator, while a BLOCK is "corrupt, and no approval makes it right". Measured on the live
+// compute board 2026-08-26: both rendered as FAIL, and the board sorts failures first, so every hold
+// sat at the top of the list looking like an outage.
+describe('a promotion verdict outranks the raw FAIL state', () => {
+	it('renders a held promotion as held, not failed', () => {
+		const held = { run_id: 'r1', state: 'FAIL', promotion_status: 'HELD' };
+		expect(runPhase(held)).toBe('held');
+		expect(runPhaseLabel(held)).toBe('Held for review');
+	});
+
+	it('leaves a blocked promotion as a failure, because no approval can waive it', () => {
+		const blocked = { run_id: 'r2', state: 'FAIL', promotion_status: 'BLOCKED' };
+		expect(runPhase(blocked)).toBe('failed');
+	});
+
+	it('leaves an ordinary failure untouched', () => {
+		expect(runPhase({ run_id: 'r3', state: 'FAIL' })).toBe('failed');
+		expect(runPhase({ run_id: 'r4', state: 'COMPLETE' })).toBe('complete');
+	});
+
+	it('does not let a verdict on a non-terminal run change its phase', () => {
+		// A verdict is sticky on the run node, so a later RUNNING event still carries it. The phase
+		// must follow the run's CURRENT state — a hold that resumed is running, not held.
+		expect(runPhase({ run_id: 'r5', state: 'RUNNING', promotion_status: 'HELD' })).toBe('running');
+	});
+});

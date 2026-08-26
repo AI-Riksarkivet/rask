@@ -41,7 +41,7 @@ from medallion.services import catalog_register, promotion_band, promotion_hold
 from medallion.services import gate as gate_svc
 from medallion.services.compute import existing_row_count, measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
-from medallion.services.gate_decision import GateOutcome, gate_decision
+from medallion.services.gate_decision import GateOutcome, gate_decision, promotion_status_for, refusal_message
 from medallion.services.promotion import promotion_lineage
 from medallion.services.transform_spec import UndeclaredTransformError, resolve_transform_async
 from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, uri_within
@@ -401,6 +401,9 @@ async def handle_stage(
             return _DROP
 
     quality_blocked = False
+    # WHICH outcome refused, not merely THAT one did. The boolean above is what collapsed a
+    # corrupt batch and a band breach into one hardcoded 'quality gate HELD' sentence.
+    blocked_by: GateOutcome | None = None
     quality_reasons: list[str] = []
     completed = False  # set once the COMPLETE lineage emit lands — gates the FAIL-on-failure below
     # ONE instant for the whole run: the `lineage` JSONB written into the dataset (R26) and the event
@@ -839,11 +842,13 @@ async def handle_stage(
         # cannot cascade. Composes with the FGA gate above.
         if decision is GateOutcome.BLOCK:
             quality_blocked = True
+            blocked_by = GateOutcome.BLOCK
             quality_reasons = failed_assertions
         # 3b. A band breach is a QUESTION (§9.1): unusual rather than broken, so it becomes a hold a
         # person is asked about rather than a verdict this code invents.
         elif decision is GateOutcome.HOLD:
             quality_blocked = True
+            blocked_by = GateOutcome.HOLD
             quality_reasons = band_reasons
         # 3c. PUBLISH what was written and let the CATALOG gate it — its tag move is the trigger, so
         # there is nothing else to fire. A refusal is a normal outcome that names its assertions, and
@@ -872,6 +877,9 @@ async def handle_stage(
             )
             if not outcome.published:
                 quality_blocked = True
+                # The GATE allowed this and the CATALOG declined it — a different refuser and a
+                # different remedy, so it reports as REFUSED rather than BLOCKED.
+                blocked_by = GateOutcome.PUBLISH
                 quality_reasons = outcome.failed_assertions
         # 4. NO CATALOG AT ALL: a supported mode, so it ACKS rather than retrying.
         #
@@ -911,6 +919,7 @@ async def handle_stage(
                 },
             )
             quality_blocked = True
+            blocked_by = GateOutcome.MISCONFIGURED
             quality_reasons = [
                 f"stage {transition} has a downstream topic ({settings.pub_topic}) but no publish target, "
                 "so it cannot promote through the catalog -- the only door that may advance a tag"
@@ -1061,7 +1070,8 @@ async def handle_stage(
                 project=project or None,
                 originator=trigger.originator or None,
                 event_type="FAIL",
-                error_message=f"quality gate HELD the promotion into {settings.to_dataset} — downstream was not triggered",
+                error_message=refusal_message(blocked_by, settings.to_dataset),
+                promotion_status=promotion_status_for(blocked_by),
             )
             await outbox.publish_lineage_with_outbox(
                 dapr,

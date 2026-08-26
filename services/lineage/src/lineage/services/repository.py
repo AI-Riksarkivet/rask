@@ -105,6 +105,10 @@ _MERGE_RUN: Final = (
     # on every event it emits, but a reconcile/backfill event for the same graph run carries none
     # and must not erase it. Empty string means the event did not say; only a non-empty value writes.
     "r.source_run_id=(CASE WHEN $srid = '' THEN r.source_run_id ELSE $srid END), "
+    # promotion_status is STICKY for the same reason as the two above: a reconcile or backfill event
+    # for the same graph run carries no lance facet, and clobbering the verdict to null would turn a
+    # recorded hold back into an ordinary failure on the next tick.
+    "r.promotion_status=(CASE WHEN $ps = '' THEN r.promotion_status ELSE $ps END), "
     "r.started_at=coalesce(r.started_at, $tm), r.events_count=coalesce(r.events_count, 0)+1 "
     "RETURN 1"
 )
@@ -118,7 +122,8 @@ _SET_RUN_OUTPUTS: Final = "MATCH (r:Run {run_id:$rid}) SET r.outputs=$outs RETUR
 _RUN_OUTPUT_NAMES: Final = "MATCH (r:Run {run_id:$rid}) RETURN r.outputs"
 _LIST_RUNS: Final = (
     "MATCH (r:Run) RETURN r.run_id, r.job, r.author, r.event_type, r.progress_done, r.progress_total, "
-    "r.error_message, r.started_at, r.event_time, r.events_count, r.outputs, r.operation, r.source_run_id"
+    "r.error_message, r.started_at, r.event_time, r.events_count, r.outputs, r.operation, r.source_run_id, "
+    "r.promotion_status"
 )
 # Discovery / browse — the "what exists?" lists. Like _LIST_RUNS these fetch every node and are governed in
 # Python, so a caller can browse the estate without already knowing an exact name.
@@ -504,6 +509,9 @@ class LineageRepository:
                     # WROTE); "" for events that carry no lance-facet operation (external producers).
                     "op": event.operation or "",
                     "srid": event.source_run_id or "",
+                    # The promotion verdict (HELD/BLOCKED/REFUSED); "" for every run that refused no
+                    # promotion, which is almost all of them.
+                    "ps": event.promotion_status or "",
                 },
             )
             progress = event.progress
@@ -925,7 +933,7 @@ class LineageRepository:
         Durable replacement for the in-memory fold: survives a restart and is shared across replicas.
         ``event_type``/``event_time`` are the last-event-wins state/updated_at; ``""`` maps back to None.
         """
-        rows = await fetch(self._pool, self._graph, _LIST_RUNS, columns=13)
+        rows = await fetch(self._pool, self._graph, _LIST_RUNS, columns=14)
         runs = [
             RunStatus(
                 run_id=r[0],
@@ -941,6 +949,7 @@ class LineageRepository:
                 outputs=_tags_from(r[10]),
                 operation=(r[11] or None),
                 source_run_id=(r[12] or None),
+                promotion_status=(r[13] or None),
             )
             for r in rows
         ]

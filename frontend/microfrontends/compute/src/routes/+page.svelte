@@ -14,6 +14,7 @@
 	import RayStatus from '$lib/components/ray-status.svelte';
 	import { Card } from '@rask/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
+	import { runPhase, runPhaseLabel } from '@rask/ui/runs';
 	import { Button } from '@rask/ui/button';
 	import {
 		Boxes,
@@ -142,15 +143,20 @@
 		}
 	}
 
-	function runBadgeVariant(state: string | null): BadgeVariant {
-		switch ((state ?? '').toUpperCase()) {
-			case 'COMPLETE':
+	// Derived from the SHARED phase, not from the raw state. This was a local switch on `state`, which
+	// is a second copy of `runPhase` — and the copy could not see a promotion verdict, so a promotion
+	// the quality gate HELD rendered `destructive` / "FAIL", identical to an outage. A hold is a
+	// question for a validator; BLOCKED and REFUSED stay destructive because no approval waives them.
+	function runBadgeVariant(r: RunNotice): BadgeVariant {
+		switch (runPhase(r)) {
+			case 'complete':
 				return 'success';
-			case 'RUNNING':
-			case 'START':
+			case 'running':
+			case 'started':
 				return 'warning';
-			case 'FAIL':
-			case 'ABORT':
+			case 'held':
+				return 'warning';
+			case 'failed':
 				return 'destructive';
 			default:
 				return 'secondary';
@@ -249,10 +255,10 @@
 						{@const pctVal = runProgress(r)}
 						<div class="flex items-center gap-3 px-4 py-1.5 text-xs">
 							<Badge
-								variant={runBadgeVariant(r.state)}
+								variant={runBadgeVariant(r)}
 								class={`min-w-[72px] justify-center ${(r.state ?? '').toUpperCase() === 'RUNNING' ? 'animate-pulse' : ''}`}
 							>
-								{r.state ?? '—'}
+								{runPhaseLabel(r)}
 							</Badge>
 							<span class="text-foreground truncate font-mono" title={r.run_id}>
 								{r.operation ?? r.job ?? r.run_id.slice(0, 12)}
@@ -272,7 +278,10 @@
 								</span>
 							{/if}
 							{#if r.error_message}
-								<span class="text-destructive truncate" title={r.error_message}>
+								<span
+									class={`truncate ${runPhase(r) === 'held' ? 'text-muted-foreground' : 'text-destructive'}`}
+									title={r.error_message}
+								>
 									{r.error_message}
 								</span>
 							{/if}

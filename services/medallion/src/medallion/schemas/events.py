@@ -178,6 +178,7 @@ def build_run_event(
     originator: str | None = None,
     event_type: str = "COMPLETE",
     error_message: str | None = None,
+    promotion_status: str | None = None,
     event_time: str | None = None,
     synthetic: bool = False,
     models: list[str] | None = None,
@@ -238,6 +239,14 @@ def build_run_event(
     # whose cascade it is. Carried, never substituted for `author` — see `NotificationReason.ORIGINATOR`.
     if originator:
         lance_fields["originator"] = originator
+    # WHY a promotion did not advance — HELD (a validator may approve), BLOCKED (a failed assertion,
+    # which no approval waives) or REFUSED (the catalog's own gate declined). The event type stays
+    # FAIL for all three, because the promotion genuinely did not advance and every existing FAIL
+    # consumer must keep meaning that; this is the one bit that tells an operator whether there is
+    # anything a person can do. `workflow.py` already stamps the same field for the review's own
+    # outcomes (PROMOTED / REJECTED / BLOCKED / EXPIRED), so the field is one vocabulary, not two.
+    if promotion_status:
+        lance_fields["promotion_status"] = promotion_status
     # HOW LONG the run took, measured — the same `time.perf_counter` delta the caller hands to
     # `record_stage_completion`. B10 (`docs/architecture/batch-processing-invariants.md`) requires both places to carry ONE
     # number so the graph and the metric cannot disagree; it cannot be derived from timestamps here

@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import pytest
-from medallion.services.gate_decision import GateOutcome, gate_decision
+from medallion.services.gate_decision import GateOutcome, gate_decision, promotion_status_for, refusal_message
 
 
 def _decide(
@@ -145,3 +145,59 @@ def test_every_outcome_is_reachable(outcome: GateOutcome) -> None:
         _decide(has_catalog=False, has_pub_topic=True),
     }
     assert outcome in reachable
+
+
+# --- what a refused promotion TELLS a person -------------------------------------------------
+#
+# `transform.py` collapsed four distinct outcomes onto one boolean (`quality_blocked`) and then
+# emitted ONE hardcoded sentence for all of them: "quality gate HELD the promotion into <x>".
+#
+# That is wrong for three of the four, and the BLOCK case is actively harmful: `GateOutcome.BLOCK`
+# is defined as "a failed assertion: corrupt, and no approval makes it right", yet it reported as
+# HELD — which tells an operator to go find a validator to approve something no approval can fix.
+# MEASURED on the live compute board 2026-08-26, where every refusal read "quality gate HELD".
+#
+# The verdict is also the thing the UI needs: the run board renders a hold identically to a
+# failure, because the only signal crossing the wire is eventType=FAIL.
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        # The two genuine GATE VERDICTS get a promotion status, and they are opposites: one asks a
+        # person, the other says no answer exists.
+        (GateOutcome.HOLD, "HELD"),
+        (GateOutcome.BLOCK, "BLOCKED"),
+        # The catalog refused a publish the gate itself allowed — a verdict, but the catalog's.
+        (GateOutcome.PUBLISH, "REFUSED"),
+        # Not a verdict at all: a stage with a downstream and no publish target is a DEPLOYMENT
+        # fault. Giving it a promotion status would put an operator's misconfiguration in the same
+        # column as a data-quality decision, and no validator can act on it.
+        (GateOutcome.MISCONFIGURED, None),
+        # Neither of these refuses anything, so neither has a verdict to report.
+        (GateOutcome.UNGOVERNED, None),
+        (GateOutcome.NOTHING, None),
+    ],
+)
+def test_each_outcome_reports_its_own_promotion_verdict(outcome: GateOutcome, expected: str | None) -> None:
+    assert promotion_status_for(outcome) == expected
+
+
+def test_a_block_never_claims_a_person_can_approve_it() -> None:
+    """The sharp end: BLOCK and HOLD must not read alike, because the actions they invite differ."""
+    blocked = refusal_message(GateOutcome.BLOCK, "silver$features")
+    held = refusal_message(GateOutcome.HOLD, "silver$features")
+
+    assert "HELD" not in blocked, f"a corrupt batch was reported as held for approval: {blocked!r}"
+    assert "BLOCKED" in blocked
+    assert "HELD" in held
+    assert "silver$features" in blocked and "silver$features" in held
+    assert blocked != held
+
+
+def test_every_refusing_outcome_has_a_message_that_names_its_dataset() -> None:
+    """No outcome may fall through to a generic sentence — that is the bug, one layer down."""
+    for outcome in (GateOutcome.BLOCK, GateOutcome.HOLD, GateOutcome.PUBLISH, GateOutcome.MISCONFIGURED):
+        message = refusal_message(outcome, "silver$features")
+        assert "silver$features" in message, f"{outcome} produced a message that does not name the target: {message!r}"
+        assert message.strip(), f"{outcome} produced an empty message"

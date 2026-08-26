@@ -394,6 +394,12 @@ class RunStatus(BaseModel):
     #: nothing (measured: every ingest-board row 404'd). None for runs recorded before producers
     #: stated it — a consumer must render those unlinked, never guess.
     source_run_id: str | None = None
+    #: WHY a promotion did not advance — ``HELD`` (a validator may approve it), ``BLOCKED`` (a failed
+    #: assertion, which no approval waives) or ``REFUSED`` (the catalog's own gate declined). ``state``
+    #: is ``FAIL`` for all three, correctly — the promotion did not advance — so this is the only thing
+    #: that separates a question for a person from an outage. ``None`` for the overwhelming majority of
+    #: runs, which refused no promotion.
+    promotion_status: str | None = None
 
 
 class Runs(BaseModel):

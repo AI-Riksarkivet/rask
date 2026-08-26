@@ -1442,6 +1442,8 @@ export interface components {
             progress_done?: number | null;
             /** Progress Total */
             progress_total?: number | null;
+            /** Promotion Status */
+            promotion_status?: string | null;
             /** Run Id */
             run_id: string;
             /** Source Run Id */

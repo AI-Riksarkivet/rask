@@ -56,6 +56,9 @@
 		switch (runPhase(run)) {
 			case 'failed':
 				return CircleX;
+			// A held promotion is waiting on a person, not broken — it must not wear the failure icon.
+			case 'held':
+				return CircleDashed;
 			case 'complete':
 				return CircleCheck;
 			case 'running':
@@ -72,6 +75,8 @@
 		switch (runPhase(run)) {
 			case 'failed':
 				return 'destructive';
+			case 'held':
+				return 'warning';
 			case 'complete':
 				return 'success';
 			case 'running':

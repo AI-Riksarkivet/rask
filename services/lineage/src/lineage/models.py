@@ -436,6 +436,21 @@ class RunEvent(BaseModel):
         return lance.get("operation") if isinstance(lance, dict) else None
 
     @property
+    def promotion_status(self) -> str | None:
+        """WHY a promotion did not advance, from the ``lance`` run facet — HELD / BLOCKED / REFUSED.
+
+        The medallion emits ``eventType=FAIL`` for all three, correctly: the promotion genuinely did
+        not advance, and every existing FAIL consumer must keep meaning exactly that. This is the one
+        bit that separates "a validator may approve this" from "corrupt, and no approval can waive
+        it" — opposite instructions that the run board rendered identically until it crossed the wire.
+        The review's own outcomes (PROMOTED / REJECTED / BLOCKED / EXPIRED) use the same field, so it
+        is one vocabulary rather than two.
+        """
+        lance = (self.run.facets or {}).get("lance")
+        value = lance.get("promotion_status") if isinstance(lance, dict) else None
+        return value if isinstance(value, str) and value else None
+
+    @property
     def source_run_id(self) -> str | None:
         """The PRODUCER'S OWN run id, from the ``lance`` run facet (``run_id``).
 

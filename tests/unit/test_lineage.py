@@ -780,12 +780,18 @@ def test_ingest_sets_run_progress_only_when_the_facet_rides(monkeypatch: pytest.
 
 
 def test_list_runs_folds_progress_onto_the_status_board(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The 13-column _LIST_RUNS row folds into RunStatus with progress as ints (positions 4/5)."""
+    """The 14-column _LIST_RUNS row folds into RunStatus with progress as ints (positions 4/5).
+
+    The column count is asserted, not incidental: `fetch(..., columns=N)` is POSITIONAL, so an
+    off-by-one silently shifts every field on the run board rather than failing — a wrong author
+    against the wrong job, with nothing red. It went 13 -> 14 when `promotion_status` joined, so the
+    run board could tell a HELD promotion from a hard failure.
+    """
     import lineage.services.repository as repo_mod
 
     async def _fake_fetch(_pool: object, _graph: str, query: str, params: dict[str, object] | None = None, *, columns: int) -> list[list[object]]:
-        # 13 columns since source_run_id joined the projection (the run-board identity fix).
-        assert "r.progress_done" in query and columns == 13
+        # 14 columns since promotion_status joined the projection (the held-vs-failed fix).
+        assert "r.progress_done" in query and columns == 14
         return [
             [
                 "r-prog",
@@ -801,6 +807,7 @@ def test_list_runs_folds_progress_onto_the_status_board(monkeypatch: pytest.Monk
                 "silver$features",
                 "",
                 "ingest-run-77",
+                "",
             ]
         ]
 
@@ -811,6 +818,7 @@ def test_list_runs_folds_progress_onto_the_status_board(monkeypatch: pytest.Monk
     assert (runs[0].progress_done, runs[0].progress_total) == (3, 10)
     assert runs[0].state == "RUNNING"
     assert runs[0].operation is None  # "" maps back to None (no lance-facet operation)
+    assert runs[0].promotion_status is None  # likewise: an ordinary run refused no promotion
 
 
 # --------------------------------------------------------------------------- #
@@ -1054,3 +1062,69 @@ def test_ensure_events_table_timeout_raises_fail_closed() -> None:
     repo = repo_mod.LineageRepository(cast(Any, _DDLPool(conn)), "g")
     with pytest.raises(psycopg.errors.QueryCanceled):
         asyncio.run(repo.ensure_events_table())
+
+
+def test_a_held_promotion_is_distinguishable_from_a_failed_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole point of the column: eventType is FAIL for both, and only this tells them apart.
+
+    A promotion the quality gate HELD is a question for a validator; a BLOCKED one is corrupt and no
+    approval can waive it. Both emit `eventType=FAIL`, correctly — the promotion genuinely did not
+    advance, and every existing FAIL consumer must keep meaning that. Before this column crossed the
+    wire the run board had no way to distinguish them and rendered both as failures, so a hold looked
+    like an outage and a corrupt batch looked approvable.
+    """
+    import lineage.services.repository as repo_mod
+
+    async def _fake_fetch(_pool: object, _graph: str, query: str, params: dict[str, object] | None = None, *, columns: int) -> list[list[object]]:
+        assert "r.promotion_status" in query, "the projection does not return the verdict at all"
+        return [
+            ["r-held", "lance-medallion/promote", "data_eng", "FAIL", None, None, "quality gate HELD …", "t0", "t1", 1, "silver$features", "", "", "HELD"],
+            ["r-dead", "lance-medallion/promote", "data_eng", "FAIL", None, None, "boom", "t0", "t1", 1, "silver$features", "", "", ""],
+        ]
+
+    monkeypatch.setattr(repo_mod, "fetch", _fake_fetch)
+    repo = repo_mod.LineageRepository(cast(Any, _FakePool()), "g")
+    runs = asyncio.run(repo.list_runs()).runs
+
+    held, dead = runs[0], runs[1]
+    assert held.state == "FAIL" and dead.state == "FAIL", "both are terminal failures on the wire"
+    assert held.promotion_status == "HELD"
+    assert dead.promotion_status is None, '"" must fold back to None, not to a falsy verdict string'
+
+
+def test_the_promotion_verdict_is_sticky_across_a_runs_events() -> None:
+    """A later event carrying no verdict must not erase the one an earlier event declared.
+
+    Same rule as `operation` and `source_run_id`, and for the same reason: a reconcile or backfill
+    event for the same graph run carries no lance facet, and clobbering the verdict to null would
+    turn a recorded hold back into an ordinary failure on the next tick.
+    """
+    import lineage.services.repository as repo_mod
+
+    assert "r.promotion_status=(CASE WHEN $ps = '' THEN r.promotion_status ELSE $ps END)" in repo_mod._MERGE_RUN
+
+
+def test_the_run_event_reads_its_verdict_off_the_lance_facet() -> None:
+    """Producer side: the verdict rides `lance.promotion_status`, beside operation and originator."""
+    from lineage.models import RunEvent
+
+    event = RunEvent.model_validate(
+        {
+            "eventType": "FAIL",
+            "eventTime": "2026-08-26T00:00:00Z",
+            "run": {"runId": "11111111-1111-5111-8111-111111111111", "facets": {"lance": {"operation": "promote", "promotion_status": "HELD"}}},
+            "job": {"namespace": "lance-medallion", "name": "promote"},
+        }
+    )
+
+    assert event.promotion_status == "HELD"
+
+    without = RunEvent.model_validate(
+        {
+            "eventType": "COMPLETE",
+            "eventTime": "2026-08-26T00:00:00Z",
+            "run": {"runId": "11111111-1111-5111-8111-111111111111", "facets": {}},
+            "job": {"namespace": "lance-medallion", "name": "promote"},
+        }
+    )
+    assert without.promotion_status is None

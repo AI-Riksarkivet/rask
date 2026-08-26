@@ -225,6 +225,9 @@ def test_discovery_lists_against_age(dsn: str) -> None:
     assert ingest.outputs == ["bronze$events"]
     assert ingest.events >= 1
     assert ingest.started_at and ingest.updated_at  # timestamps landed in their own slots
+    # promotion_status joined the projection LAST, so an ordinary run must read None rather than
+    # picking up a neighbouring column's value — the transposition this block exists to catch.
+    assert ingest.promotion_status is None
     failed = by_id["22222222-2222-2222-2222-222222222220"]
     assert failed.state == "FAIL"
     assert failed.error_message and "OOM" in failed.error_message  # error slot, not swapped with a timestamp
