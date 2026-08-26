@@ -1404,7 +1404,17 @@ ACTIVITIES = (
 
 
 def register(runtime: wf.WorkflowRuntime) -> None:
-    """Register everything with the runtime — one place, so nothing is silently unregistered."""
+    """Register everything with the runtime — one place, so nothing is silently unregistered.
+
+    THE `<verb>_activity` SUFFIX IS DELIBERATELY NOT USED (DWF-ACT-008, owner ruling 2026-08-25).
+    `register_activity` takes no explicit name, so the runtime registers by `__name__` and these
+    function names ARE the wire names. Renaming them would therefore break replay for every in-flight
+    instance — the estate has no versioning seam — and the convention buys nothing here: the registry
+    is single-sourced through this function, and nothing cross-language calls these activities.
+
+    Recorded rather than left silent, because a sweep that finds no reasoning re-raises the finding.
+    Pinned by `tests/unit/test_activity_naming_is_a_recorded_deviation.py`.
+    """
     for w in WORKFLOWS:
         runtime.register_workflow(w)
     for a in ACTIVITIES:

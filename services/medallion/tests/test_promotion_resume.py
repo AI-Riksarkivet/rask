@@ -57,7 +57,7 @@ class TestTheResumeMovesTheTag:
         monkeypatch.setattr(workflow, "_resume_publish", lambda **k: asks.append(k))
         _publishing_estate(monkeypatch)
 
-        workflow.publish_promotion(cast("Any", None), _spec().model_dump())
+        workflow.publish_promotion(cast("Any", None), _spec())
 
         assert asks and asks[0]["version"] == 7
         assert asks[0]["table_id"] == "gold$catalog"
@@ -71,7 +71,7 @@ class TestTheResumeMovesTheTag:
         monkeypatch.setattr(workflow, "_resume_publish", lambda **k: asks.append(k))
         _publishing_estate(monkeypatch)
 
-        workflow.publish_promotion(cast("Any", None), _spec(reasons=["row_count_positive", "column_declared"]).model_dump())
+        workflow.publish_promotion(cast("Any", None), _spec(reasons=["row_count_positive", "column_declared"]))
 
         assert sorted(asks[0]["accept_assertions"]) == ["column_declared", "row_count_positive"]
 
@@ -102,6 +102,6 @@ class TestAHoldWithNeitherVersionNorTopicPublishesNothing:
         monkeypatch.setattr(workflow, "_run_async", lambda coro: published.append({"trigger": True}))
         _publishing_estate(monkeypatch)
 
-        workflow.publish_promotion(cast("Any", None), _spec(version=0, pub_topic="").model_dump())
+        workflow.publish_promotion(cast("Any", None), _spec(version=0, pub_topic=""))
 
         assert published == [], f"a hold with neither a version nor a topic published something: {published}"

@@ -22,7 +22,7 @@ from contextlib import suppress
 from typing import Any, cast
 
 import pytest
-from medallion.workflow import PromotionSpec, request_approval
+from medallion.workflow import PromotionOutcome, PromotionReport, PromotionSpec, StageJobOutcome, StageJobSpec, StageReport, request_approval
 
 
 def _spec(**over: Any) -> dict[str, Any]:
@@ -72,8 +72,8 @@ def test_a_RE_EXECUTED_request_approval_carries_the_SAME_dedupe_key(monkeypatch:
     execution is precisely the key that cannot dedupe, so the approver is asked twice."""
     seen = _published(monkeypatch)
 
-    request_approval(cast("Any", None), _spec())
-    request_approval(cast("Any", None), _spec())
+    request_approval(cast("Any", None), PromotionSpec.model_validate(_spec()))
+    request_approval(cast("Any", None), PromotionSpec.model_validate(_spec()))
 
     assert len(seen) == 2, f"the fixture did not capture both publishes: {seen}"
     assert seen[0]["event_id"] == seen[1]["event_id"], f"a re-executed activity minted a fresh dedupe key: {seen[0]['event_id']} vs {seen[1]['event_id']}"
@@ -83,8 +83,8 @@ def test_the_dedupe_key_is_DERIVED_from_the_promotion_not_shared_across_them(mon
     """A constant would dedupe every promotion into the first one -- worse than the bug."""
     seen = _published(monkeypatch)
 
-    request_approval(cast("Any", None), _spec(token="tok-1"))
-    request_approval(cast("Any", None), _spec(token="tok-2"))
+    request_approval(cast("Any", None), PromotionSpec.model_validate(_spec(token="tok-1")))
+    request_approval(cast("Any", None), PromotionSpec.model_validate(_spec(token="tok-2")))
 
     assert seen[0]["event_id"] != seen[1]["event_id"], "two different promotions collapsed onto one dedupe key"
 
@@ -101,7 +101,7 @@ def test_a_lost_promotion_audit_NAMES_the_promotion(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(workflow_mod, "_run_async", lambda _coro: _boom())
     monkeypatch.setattr(workflow_mod, "record_promotion_outcome", lambda _s: None)
 
-    payload = {"spec": _spec(), "outcome": {"status": "PROMOTED", "decided_by": "CiQwOGE4Njg0Yi1kYjg4"}}
+    payload = PromotionReport(spec=PromotionSpec.model_validate(_spec()), outcome=PromotionOutcome(status="PROMOTED", decided_by="CiQwOGE4Njg0Yi1kYjg4"))
     with caplog.at_level(logging.ERROR):
         workflow_mod.emit_promotion_outcome(cast("Any", None), payload)
 
@@ -131,16 +131,18 @@ def test_an_EMPTY_submission_id_never_reaches_rays_job_list_endpoint(monkeypatch
     monkeypatch.setattr(workflow_mod, "record_stage_outcome", lambda *a, **k: None)
     monkeypatch.setattr(workflow_mod, "_publish_stage_fail_event", lambda *a, **k: None, raising=False)
 
-    payload = {
-        "spec": {
-            "from_uri": "s3://wh/p-bronze/pages.lance",
-            "to_uri": "s3://wh/p-silver/pages.lance",
-            "stage": "silver",
-            "token": "tok-1",
-            "trigger": {"token": "tok-1"},
-        },
-        "outcome": {"submission_id": "", "status": None, "polls": 0, "verdict": "failed"},
-    }
+    payload = StageReport(
+        spec=StageJobSpec.model_validate(
+            {
+                "from_uri": "s3://wh/p-bronze/pages.lance",
+                "to_uri": "s3://wh/p-silver/pages.lance",
+                "stage": "silver",
+                "token": "tok-1",
+                "trigger": {"token": "tok-1"},
+            }
+        ),
+        outcome=StageJobOutcome.model_validate({"submission_id": "", "status": None, "polls": 0, "verdict": "failed"}),
+    )
     with suppress(Exception):
         # The SUBJECT is whether Ray is asked at all. What the reporter does afterwards reaches a bus
         # and is covered by test_stage_workflow; suppressed rather than stubbed so this test cannot

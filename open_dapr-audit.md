@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **24 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **27 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -1403,6 +1403,11 @@ workflow.py:1239-1250  `ACTIVITIES = (\n    emit_start,\n    resolve_limits,\n  
 
 I checked for a recorded decision that would refute this and found none — no comment near `ACTIVITIES` or `register()` addresses naming. The finding's own hedge is correct: the registry is single-sourced through `register()` (its docstring: "one place, so nothing is silently unregistered") and no cross-language caller exists, so nothing is broken. Convention note, info, no action forced.
 
+
+**FIXED 2026-08-25 — same ruling, same commit as the medallion twin.** ingest's ten activities keep
+their verb-only names; `register`'s docstring records why, and the shared test pins it for both
+services. Recorded on both rows rather than merged, so the count stays honest about what was found.
+
 </details>
 
 <details><summary><b>`StageJobSpec.lineage_json` is an uncapped `str` re-persisted into workflow state on every one of up to 2880 turns</b> <i>(act-medallion, rule DWF-ACT-004, ADJUSTED)</i></summary>
@@ -1464,6 +1469,23 @@ But both concrete failures are unreachable as written:
 - `emit_promotion_outcome` reads exactly one key unconditionally — `record_promotion_outcome(str(outcome["status"]))` at :1085 — and every one of the five call sites (:874, :886, :893, :899, :908) supplies `"status"`. `reasons` and `decided_by` are read with `.get()` (:1101, :1103), which is the correct handling of genuinely optional fields, not an accident.
 
 Also, the input side is not merely "defended by hand": each body does `Spec.model_validate(payload)` — the same validation a typed signature would give, with the SDK's deserialized dict typed honestly. This is a convention/clarity gap on the output and envelope shapes, with no demonstrated failure.
+
+
+**FIXED 2026-08-25 — owner ruling, applied estate-wide in one pass.** All ten medallion activities
+are typed, alongside ingest's ten and flows' one, because the ruling was explicitly that this cannot
+be "typed in ingest, untyped in flows".
+
+Six already validated a `StageJobSpec`/`PromotionSpec` by hand and now name it. The rest get declared
+envelopes: `PollInput` (one submission id — deliberately not the whole spec, since a workflow input
+is re-persisted on every checkpoint and `stage_run` checkpoints up to `MAX_POLLS` times),
+`StageReport`, `TrainReport`, and `PromotionReport` carrying a `PromotionOutcome` whose `status` is
+REQUIRED, because that field decides COMPLETE vs FAIL and a default would silently pick one. Its
+`decided_by`/`reasons` keep honest defaults: a BLOCKED or EXPIRED promotion has no decider, and an
+approved one has no reasons.
+
+Workflow bodies still validate by hand and now say why — the SDK coerces activity input, not workflow
+input. Proven by the 369 existing medallion tests; the fake contexts record the SERIALIZED input, so
+assertions keep testing what history actually holds.
 
 </details>
 
@@ -1558,6 +1580,23 @@ ACTIVITIES = (
 ```
 
 **Verifier (CONFIRMED).** Factually exact. `ACTIVITIES` at workflow.py:1144-1153 lists `submit_stage, poll_stage, publish_stage_ready, report_stage_outcome, poll_train, report_train_outcome, resolve_review_policy, request_approval, publish_promotion, emit_promotion_outcome` — zero carry the suffix — and registration is by function name, so those are the wire names. The rule catalog rates DWF-ACT-008 info ("Activity decorator name does not match the convention `&lt;thing&gt;_activity`"), matching the reported severity, and the finding correctly discounts the cross-language cost since nothing outside this module calls them. The stated cost (a trace or `ACTIVITIES` reader cannot separate activities from same-module helpers like `_publish_fail_event`, `_resume_publish`, `_read_stage_failure`) holds — though those three are `_`-prefixed and the registered ten are not, which is a weaker but real distinguishing convention already in place. Purely cosmetic; nothing to change unless the estate adopts the suffix.
+
+
+**FIXED 2026-08-25 — owner ruling: record the deviation, do not rename.**
+
+`register_activity` is called with no explicit name, so the runtime registers by `__name__` and these
+function names ARE the wire names. Renaming breaks replay for every in-flight instance and this
+estate has no versioning seam. Medallion carries a second cost the ingest twin does not: these names
+appear in daprd's `activity||<name>` spans, which `report_stage_outcome` reads.
+
+The reasoning now sits in `register`'s docstring — where a sweep looks — and is pinned by
+`tests/unit/test_activity_naming_is_a_recorded_deviation.py`. **The test guards the RULING's premise,
+not just the current state:** if `register` ever passes an explicit name, renaming becomes free and
+the deviation needs revisiting, so that is asserted rather than assumed. A third test refuses a
+half-applied suffix, because three of twenty suffixed reads as an accident rather than a rule.
+
+Recorded rather than left silent because that silence is what caused this: two independent sweeps
+raised the same finding, found no reasoning, and filed it again.
 
 </details>
 
@@ -1802,6 +1841,14 @@ What narrows it — the activity almost never raises. activities.py deliberately
 What removes the harm — no arm is write-shaped. `dataset` refuses at executor.py:211 (`raise NodeError(f"dataset source is a scaffold — reading rows{named} needs the Arrow lane")`), `mcp` refuses at :219, and `model` (:381) is stateless inference; the `?name=` param is stamped into the ALTO the call RETURNS, not into any store. Re-issuing it is safe. Under the estate's own test — a duplicate-side-effect claim needs a side effect that is actually not idempotent — that condition is not met, so DWF-ACT-002's `critical` grading does not apply here and `info` is correct.
 
 The forward-looking argument is fair (catalog.py:3-6 does call the catalog "the SEAM" for server-side kinds), but it should be stated as such rather than as a live at-least-once-without-dedupe exposure.
+
+
+**PARTIALLY ADDRESSED 2026-08-25 — the typing half only; the idempotency-key half remains open.**
+`run_node` now declares a typed `NodeJob` input, and its docstring's contrary argument for dict-in
+was WITHDRAWN rather than left standing: the owner waived back-compat, and the SDK coerces the
+annotated model, so both premises of that paragraph had moved. Leaving it would have left the estate
+carrying two contradictory rules for one seam. The outbound Serve POST still carries no idempotency
+key — that is this row's actual subject and it is still open.
 
 </details>
 

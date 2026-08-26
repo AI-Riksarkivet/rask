@@ -46,7 +46,7 @@ def test_a_FAILING_node_marks_the_activity_span_and_names_itself() -> None:
     job = NodeJob(node=FlowNode(id="ocr-1", kind="model", config={"app": "htrflow"}), inputs=["seed"], serve_url=SERVE)
 
     with tracer.start_as_current_span("activity: run_node"):
-        result = run_node.__wrapped__(cast("Any", None), job.model_dump())
+        result = run_node.__wrapped__(cast("Any", None), job)
 
     assert result["state"]["status"] == "failed", "the fixture did not produce a failed node"
     (span,) = exporter.get_finished_spans()
@@ -71,7 +71,7 @@ def test_a_SUCCEEDING_node_names_itself_but_is_not_marked_an_error() -> None:
     job = NodeJob(node=FlowNode(id="ocr-2", kind="model", config={"app": "htrflow"}), inputs=["seed"], serve_url=SERVE)
 
     with tracer.start_as_current_span("activity: run_node"):
-        result = run_node.__wrapped__(cast("Any", None), job.model_dump())
+        result = run_node.__wrapped__(cast("Any", None), job)
 
     assert result["state"]["status"] == "succeeded"
     (span,) = exporter.get_finished_spans()

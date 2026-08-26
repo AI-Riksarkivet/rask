@@ -176,12 +176,15 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     the poll loop runs until Ray says the job is done, which is the guarantee `transform.py`'s Ray
     branch assumed it had and did not.
     """
-    spec = StageJobSpec.model_validate(payload)
 
     # BOUNDED, like the publish below. An exhausted submit used to raise into the workflow and take
     # the instance terminal FAILED with no report: nothing watching a job that may or may not have
     # been submitted, the trigger already acked in pass 1, and the only record a Dapr instance in a
     # FAILED state nobody queries.
+    # The WORKFLOW body validates by hand. The SDK coerces an ACTIVITY's input into its annotated
+    # model; a workflow body's input is NOT coerced, so this line is what makes `spec` a model.
+    spec = StageJobSpec.model_validate(payload)
+
     # FIRST TURN ONLY. After a `continue_as_new` the spec carries the id, and re-submitting would start
     # a second Ray job writing the same output dataset.
     # Stamped on the first turn only, from Dapr's deterministic clock, and carried by the
@@ -190,12 +193,12 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     submission_id: str | None = spec.submission_id
     if submission_id is None:
         try:
-            submission_id = yield ctx.call_activity(submit_stage, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+            submission_id = yield ctx.call_activity(submit_stage, input=spec, retry_policy=ACTIVITY_RETRY)
         except Exception:
             if not ctx.is_replaying:
                 log.error("medallion_stage_submit_failed", extra={"stage": spec.stage, "to_uri": spec.to_uri})
             failed = StageJobOutcome(submission_id="", status=None, polls=0, verdict="failed")
-            yield ctx.call_activity(report_stage_outcome, input={"spec": spec.model_dump(), "outcome": failed.model_dump()}, retry_policy=ACTIVITY_RETRY)
+            yield ctx.call_activity(report_stage_outcome, input=StageReport(spec=spec, outcome=failed), retry_policy=ACTIVITY_RETRY)
             return failed.model_dump()
 
     # ONE poll per turn — the Monitor pattern. The loop this replaces was bounded, so it was never the
@@ -223,7 +226,7 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     # Replay-safe: it is recomputed from the same history on every replay, never carried across turns.
     watch_lost = False
     try:
-        status = yield ctx.call_activity(poll_stage, input={"submission_id": submission_id}, retry_policy=ACTIVITY_RETRY)
+        status = yield ctx.call_activity(poll_stage, input=PollInput(submission_id=submission_id), retry_policy=ACTIVITY_RETRY)
         polls = spec.polls_done + 1
     except Exception:
         if not ctx.is_replaying:
@@ -246,7 +249,7 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         )
         if not ctx.is_replaying:
             log.warning("medallion_stage_watch_abandoned", extra={"submission_id": submission_id, "status": status, "polls": polls})
-        yield ctx.call_activity(report_stage_outcome, input={"spec": spec.model_dump(), "outcome": outcome.model_dump()}, retry_policy=ACTIVITY_RETRY)
+        yield ctx.call_activity(report_stage_outcome, input=StageReport(spec=spec, outcome=outcome), retry_policy=ACTIVITY_RETRY)
         return outcome.model_dump()
 
     verdict = "succeeded" if status == _TERMINAL_OK else "failed"
@@ -266,7 +269,7 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         # mismatch, which is raised outside it), so this is the boundary Dapr's own guidance describes
         # for compensating a failed activity — not a workaround.
         try:
-            yield ctx.call_activity(publish_stage_ready, input={"spec": spec.model_dump(), "outcome": outcome.model_dump()}, retry_policy=ACTIVITY_RETRY)
+            yield ctx.call_activity(publish_stage_ready, input=StageReport(spec=spec, outcome=outcome), retry_policy=ACTIVITY_RETRY)
         except Exception:
             # `unnotified`, not `failed`: the JOB succeeded and the data is on disk. Reporting this as
             # a job failure would send an operator to the Ray dashboard for a healthy job. What broke
@@ -274,9 +277,9 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
             outcome = outcome.model_copy(update={"verdict": "unnotified"})
             if not ctx.is_replaying:
                 log.error("medallion_stage_wakeup_lost", extra={"submission_id": outcome.submission_id, "to_uri": spec.to_uri})
-            yield ctx.call_activity(report_stage_outcome, input={"spec": spec.model_dump(), "outcome": outcome.model_dump()}, retry_policy=ACTIVITY_RETRY)
+            yield ctx.call_activity(report_stage_outcome, input=StageReport(spec=spec, outcome=outcome), retry_policy=ACTIVITY_RETRY)
     else:
-        yield ctx.call_activity(report_stage_outcome, input={"spec": spec.model_dump(), "outcome": outcome.model_dump()}, retry_policy=ACTIVITY_RETRY)
+        yield ctx.call_activity(report_stage_outcome, input=StageReport(spec=spec, outcome=outcome), retry_policy=ACTIVITY_RETRY)
     return outcome.model_dump()
 
 
@@ -285,7 +288,65 @@ def stage_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-def submit_stage(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str:
+# --------------------------------------------------------------------------------------------------
+# ACTIVITY ENVELOPES (DWF-ACT-009)
+#
+# dapr-ext-workflow 1.18 coerces an activity's input into whatever model its second parameter names —
+# `workflow_runtime._coerce_activity_input` -> `_model_protocol.coerce_to_model` — so these are
+# enforced by the runtime rather than documentation. Every activity below took `dict[str, Any]`, and
+# each one re-validated by hand or read raw keys; the envelopes make the shape the signature.
+#
+# Owner ruling 2026-08-25 ("do what best practices"), which overrides the estate's earlier written
+# position in `flows/activities.py` — that a plain dict survives a model gaining a field. The
+# back-compat argument behind it is waived, and the SDK has moved on besides.
+# --------------------------------------------------------------------------------------------------
+
+
+class PollInput(BaseModel):
+    """`poll_stage` / `poll_train`: the Ray submission being watched, and nothing else.
+
+    Deliberately not the whole spec. A poll needs one id, and a workflow input is re-persisted to the
+    state store on every checkpoint — `stage_run` alone checkpoints up to `MAX_POLLS` times.
+    """
+
+    submission_id: str
+
+
+class StageReport(BaseModel):
+    """`publish_stage_ready` / `report_stage_outcome`: the stage and how it ended."""
+
+    spec: StageJobSpec
+    outcome: StageJobOutcome
+
+
+class TrainReport(BaseModel):
+    """`report_train_outcome`: the training run and how it ended."""
+
+    spec: TrainJobSpec
+    outcome: TrainJobOutcome
+
+
+class PromotionOutcome(BaseModel):
+    """What `emit_promotion_outcome` records. `status` is REQUIRED — it decides whether the lineage
+    event is a COMPLETE or a FAIL, so a default would silently pick one.
+
+    The other two carry honest defaults rather than lazy ones: a BLOCKED or EXPIRED promotion has no
+    decider, and an approved one has no reasons.
+    """
+
+    status: str
+    decided_by: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class PromotionReport(BaseModel):
+    """`emit_promotion_outcome`: the promotion and the decision reached on it."""
+
+    spec: PromotionSpec
+    outcome: PromotionOutcome
+
+
+def submit_stage(ctx: WorkflowActivityContext, spec: StageJobSpec) -> str:
     """Submit (or re-attach to) the Ray job, and return the submission id the poll will watch.
 
     Re-attach rather than re-submit is what makes a replayed activity safe: the id is deterministic in
@@ -294,7 +355,6 @@ def submit_stage(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str:
     from medallion.core.config import get_settings
     from medallion.services.ray_submit import submit_stage_job
 
-    spec = StageJobSpec.model_validate(payload)
     settings = get_settings()
     # RETURN WHAT THE SUBMITTER POSTED — never re-derive it. The id is deterministic, so a second
     # `stage_submission_id(...)` call here reads as equivalent and is not: it has to be handed every
@@ -317,7 +377,7 @@ def submit_stage(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str:
     )
 
 
-def poll_stage(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str | None:
+def poll_stage(ctx: WorkflowActivityContext, payload: PollInput) -> str | None:
     """ONE status read. The workflow owns the waiting; this owns only the question."""
     import httpx
 
@@ -325,7 +385,7 @@ def poll_stage(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str | N
     from ray_kit.submit import job_status
 
     settings = get_settings()
-    submission_id = str(payload["submission_id"])
+    submission_id = payload.submission_id
 
     async def _read() -> str | None:
         async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
@@ -334,7 +394,7 @@ def poll_stage(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str | N
     return _run_async(_read())
 
 
-def publish_stage_ready(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
+def publish_stage_ready(ctx: WorkflowActivityContext, payload: StageReport) -> None:
     """Re-publish the original trigger with `ray_job_done` set, waking the mover's measure path.
 
     The mover re-parses it through the same `parse_stage_trigger` guard as any bus arrival — this is
@@ -346,8 +406,8 @@ def publish_stage_ready(ctx: WorkflowActivityContext, payload: dict[str, Any]) -
     from medallion.core.config import get_settings
     from service_kit.dapr_publish import publish_event
 
-    spec = StageJobSpec.model_validate(payload["spec"])
-    outcome = StageJobOutcome.model_validate(payload["outcome"])
+    spec = payload.spec
+    outcome = payload.outcome
     settings = get_settings()
 
     trigger = dict(spec.trigger)
@@ -385,7 +445,7 @@ def publish_stage_ready(ctx: WorkflowActivityContext, payload: dict[str, Any]) -
     log.info("medallion_stage_ready_published", extra={"submission_id": outcome.submission_id, "topic": settings.sub_topic})
 
 
-def report_stage_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
+def report_stage_outcome(ctx: WorkflowActivityContext, payload: StageReport) -> None:
     """Record a job that FAILED, was STOPPED, or outlived the watch.
 
     A terminal-bad job publishes NOTHING: waking the mover would run the measure against a dataset the
@@ -393,8 +453,8 @@ def report_stage_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) 
     line and the counter; the lineage reconciler is what reconciles storage truth (A13), and S5's
     compensation slice is where a failed promotion grows a saga.
     """
-    outcome = StageJobOutcome.model_validate(payload["outcome"])
-    spec = StageJobSpec.model_validate(payload["spec"])
+    outcome = payload.outcome
+    spec = payload.spec
 
     # THE FAILURE REACHES THE GRAPH, not just this log line. S1 regressed that: before it, a failed job
     # made `measure_stage` raise and the handler's except emitted a FAIL RunEvent with an errorMessage
@@ -609,7 +669,20 @@ def _run_async(coro: Any) -> Any:  # noqa: ANN401 — mirrors ingest.workflow._r
 
 
 def register(runtime: wf.WorkflowRuntime) -> None:
-    """Register everything with the runtime — one place, so nothing is silently unregistered."""
+    """Register everything with the runtime — one place, so nothing is silently unregistered.
+
+    THE `<verb>_activity` SUFFIX IS DELIBERATELY NOT USED (DWF-ACT-008, owner ruling 2026-08-25).
+    `register_activity` takes no explicit name, so the runtime registers by `__name__` and these
+    function names ARE the wire names. Renaming them would therefore break replay for every in-flight
+    instance — the estate has no versioning seam — and the convention buys nothing here: the registry
+    is single-sourced through this function, and nothing cross-language calls these activities.
+
+    There is a second cost to renaming here specifically: these names already appear in daprd's
+    `activity||<name>` spans, which `report_stage_outcome` reads to attach the cascade identity.
+
+    Recorded rather than left silent, because a sweep that finds no reasoning re-raises the finding.
+    Pinned by `tests/unit/test_activity_naming_is_a_recorded_deviation.py`.
+    """
     for w in WORKFLOWS:
         runtime.register_workflow(w)
     for a in ACTIVITIES:
@@ -684,7 +757,7 @@ def train_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     # training run is exactly the case where ending the watch early is least affordable.
     watch_lost = False
     try:
-        status = yield ctx.call_activity(poll_train, input={"submission_id": spec.submission_id}, retry_policy=ACTIVITY_RETRY)
+        status = yield ctx.call_activity(poll_train, input=PollInput(submission_id=spec.submission_id), retry_policy=ACTIVITY_RETRY)
         polls = spec.polls_done + 1
     except Exception:
         if not ctx.is_replaying:
@@ -710,11 +783,11 @@ def train_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         log.info("medallion_train_job_terminal", extra={"submission_id": spec.submission_id, "status": status, "polls": polls})
 
     if verdict == "failed":
-        yield ctx.call_activity(report_train_outcome, input={"spec": spec.model_dump(), "outcome": outcome.model_dump()}, retry_policy=ACTIVITY_RETRY)
+        yield ctx.call_activity(report_train_outcome, input=TrainReport(spec=spec, outcome=outcome), retry_policy=ACTIVITY_RETRY)
     return outcome.model_dump()
 
 
-def poll_train(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str | None:
+def poll_train(ctx: WorkflowActivityContext, payload: PollInput) -> str | None:
     """ONE status read of the training job. The workflow owns the waiting."""
     import httpx
 
@@ -722,7 +795,7 @@ def poll_train(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str | N
     from ray_kit.submit import job_status
 
     settings = get_settings()
-    submission_id = str(payload["submission_id"])
+    submission_id = payload.submission_id
 
     async def _read() -> str | None:
         async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
@@ -731,7 +804,7 @@ def poll_train(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str | N
     return _run_async(_read())
 
 
-def report_train_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
+def report_train_outcome(ctx: WorkflowActivityContext, payload: TrainReport) -> None:
     """Put a dead training job in the graph, named for the person who asked for it.
 
     THE RUN ID IS THE JOB'S OWN — `run_id_for(f"train-{token}")`, byte-identical to what
@@ -748,8 +821,8 @@ def report_train_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) 
     end FAILED, so a lineage outage would leave the workflow unable to finish reporting a failure —
     strictly worse than the silence it replaces.
     """
-    spec = TrainJobSpec.model_validate(payload["spec"])
-    outcome = TrainJobOutcome.model_validate(payload["outcome"])
+    spec = payload.spec
+    outcome = payload.outcome
 
     reason = f"the Ray training job {outcome.submission_id} ended {outcome.status or 'UNKNOWN'} after {outcome.polls} poll(s)"
     record_train_outcome(outcome.verdict)
@@ -869,17 +942,19 @@ def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Gener
     reached promotion by falling off the end of a branch would be the gate failing open, which is
     worse than the permanent DROP this replaces.
     """
+    # The WORKFLOW body validates by hand. The SDK coerces an ACTIVITY's input into its annotated
+    # model; a workflow body's input is NOT coerced, so this line is what makes `spec` a model.
     spec = PromotionSpec.model_validate(payload)
 
     # Resolved by an ACTIVITY, and first: a threshold read in the body changes under a running
     # instance and makes replay disagree with the original turn.
-    policy = yield ctx.call_activity(resolve_review_policy, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+    policy = yield ctx.call_activity(resolve_review_policy, input=spec, retry_policy=ACTIVITY_RETRY)
     verdict = policy.get("verdict", "block")
 
     if verdict == "block":
         yield ctx.call_activity(
             emit_promotion_outcome,
-            input={"spec": spec.model_dump(), "outcome": {"status": "BLOCKED", "reasons": spec.reasons}},
+            input=PromotionReport(spec=spec, outcome=PromotionOutcome(status="BLOCKED", reasons=spec.reasons)),
             retry_policy=ACTIVITY_RETRY,
         )
         return {"status": "BLOCKED", "decided_by": None, "reasons": spec.reasons}
@@ -888,11 +963,11 @@ def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Gener
     if verdict == "review":
         # ASK BEFORE WAITING, and treat an unsendable ask as a refusal: parking on an event nobody was
         # told about is an outage wearing a pause.
-        asked = yield ctx.call_activity(request_approval, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+        asked = yield ctx.call_activity(request_approval, input=spec, retry_policy=ACTIVITY_RETRY)
         if not asked:
             yield ctx.call_activity(
                 emit_promotion_outcome,
-                input={"spec": spec.model_dump(), "outcome": {"status": "BLOCKED", "reasons": [*spec.reasons, "no reachable approver"]}},
+                input=PromotionReport(spec=spec, outcome=PromotionOutcome(status="BLOCKED", reasons=[*spec.reasons, "no reachable approver"])),
                 retry_policy=ACTIVITY_RETRY,
             )
             return {"status": "BLOCKED", "decided_by": None, "reasons": [*spec.reasons, "no reachable approver"]}
@@ -904,7 +979,7 @@ def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Gener
         if winner is deadline:
             yield ctx.call_activity(
                 emit_promotion_outcome,
-                input={"spec": spec.model_dump(), "outcome": {"status": "EXPIRED", "reasons": spec.reasons}},
+                input=PromotionReport(spec=spec, outcome=PromotionOutcome(status="EXPIRED", reasons=spec.reasons)),
                 retry_policy=ACTIVITY_RETRY,
             )
             return {"status": "EXPIRED", "decided_by": None, "reasons": spec.reasons}
@@ -917,7 +992,7 @@ def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Gener
             status = "REJECTED" if decided_by and decision.get("approved") is False else "BLOCKED"
             yield ctx.call_activity(
                 emit_promotion_outcome,
-                input={"spec": spec.model_dump(), "outcome": {"status": status, "decided_by": decided_by, "reasons": spec.reasons}},
+                input=PromotionReport(spec=spec, outcome=PromotionOutcome(status=status, decided_by=decided_by, reasons=spec.reasons)),
                 retry_policy=ACTIVITY_RETRY,
             )
             return {"status": status, "decided_by": decided_by, "reasons": spec.reasons}
@@ -942,7 +1017,7 @@ def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Gener
     # replay derives the same reason string rather than re-running the catalog call.
     promotion_failure: str | None = None
     try:
-        yield ctx.call_activity(publish_promotion, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+        yield ctx.call_activity(publish_promotion, input=spec, retry_policy=ACTIVITY_RETRY)
     except Exception as exc:  # noqa: BLE001 — the boundary is the point; any activity failure must still reach lineage
         promotion_failure = str(exc) or exc.__class__.__name__
 
@@ -950,14 +1025,14 @@ def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Gener
         reasons = [*spec.reasons, promotion_failure]
         yield ctx.call_activity(
             emit_promotion_outcome,
-            input={"spec": spec.model_dump(), "outcome": {"status": "PROMOTION_FAILED", "decided_by": decided_by, "reasons": reasons}},
+            input=PromotionReport(spec=spec, outcome=PromotionOutcome(status="PROMOTION_FAILED", decided_by=decided_by, reasons=reasons)),
             retry_policy=ACTIVITY_RETRY,
         )
         return {"status": "PROMOTION_FAILED", "decided_by": decided_by, "reasons": reasons}
 
     yield ctx.call_activity(
         emit_promotion_outcome,
-        input={"spec": spec.model_dump(), "outcome": {"status": "PROMOTED", "decided_by": decided_by}},
+        input=PromotionReport(spec=spec, outcome=PromotionOutcome(status="PROMOTED", decided_by=decided_by)),
         retry_policy=ACTIVITY_RETRY,
     )
     return {"status": "PROMOTED", "decided_by": decided_by, "reasons": spec.reasons}
@@ -972,7 +1047,7 @@ def settings_author_marker(spec: PromotionSpec) -> str:
     return f"service:{spec.from_namespace}-to-{spec.to_namespace}"
 
 
-def resolve_review_policy(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
+def resolve_review_policy(ctx: WorkflowActivityContext, spec: PromotionSpec) -> dict[str, Any]:
     """Split a hold into corrupt / unusual / clean, and FAIL CLOSED on anything else.
 
     `blob_resolves` and a null key column are structural: the data is wrong and no approval makes it
@@ -982,7 +1057,6 @@ def resolve_review_policy(ctx: WorkflowActivityContext, payload: dict[str, Any])
     """
     from medallion.core.config import get_settings
 
-    spec = PromotionSpec.model_validate(payload)
     settings = get_settings()
     if not spec.reasons:
         return {"verdict": "promote", "reasons": []}
@@ -991,7 +1065,7 @@ def resolve_review_policy(ctx: WorkflowActivityContext, payload: dict[str, Any])
     return {"verdict": "review" if settings.quality_review_enabled else "block", "reasons": spec.reasons}
 
 
-def request_approval(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> bool:
+def request_approval(ctx: WorkflowActivityContext, spec: PromotionSpec) -> bool:
     """Tell the approver there is something to decide. Returns whether the ask went out.
 
     Published DIRECTLY rather than through `process_control_emitter()`: the mover never sets a
@@ -1004,7 +1078,6 @@ def request_approval(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> b
     from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
     from service_kit.dapr_publish import publish_event
 
-    spec = PromotionSpec.model_validate(payload)
     if not spec.approver:
         log.warning("medallion_promotion_unapprovable", extra={"dataset": spec.to_dataset, "token": spec.token})
         return False
@@ -1072,7 +1145,7 @@ def _resume_publish(
     )
 
 
-def publish_promotion(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
+def publish_promotion(ctx: WorkflowActivityContext, spec: PromotionSpec) -> None:
     """Resume the promotion a person approved.
 
     Under a tag-driven cascade the resume MOVES THE TAG — the next-stage trigger no longer exists, so
@@ -1089,7 +1162,6 @@ def publish_promotion(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> 
     from medallion.core.config import get_settings
     from service_kit.dapr_publish import publish_event
 
-    spec = PromotionSpec.model_validate(payload)
     settings = get_settings()
     if spec.version:
         _resume_publish(
@@ -1137,7 +1209,7 @@ def publish_promotion(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> 
     log.info("medallion_promotion_published", extra={"dataset": spec.to_dataset, "topic": spec.pub_topic})
 
 
-def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
+def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: PromotionReport) -> None:
     """Record the decision where the AUDIT lives.
 
     Workflow history is retention-bounded (7d COMPLETED / 30d FAILED), so it is a cache; lineage is
@@ -1149,14 +1221,14 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]
     from medallion.schemas.events import build_run_event
     from service_kit.lakehouse import outbox
 
-    spec = PromotionSpec.model_validate(payload["spec"])
-    outcome = payload["outcome"]
+    spec = payload.spec
+    outcome = payload.outcome
     settings = get_settings()
     # PROMOTED | REJECTED | BLOCKED | EXPIRED | PROMOTION_FAILED — a closed set decided by the review
     # body, never caller input. PROMOTION_FAILED means the person APPROVED and the publish was
     # refused: the decision is real, the tag did not move, and only a distinct status can say both.
-    record_promotion_outcome(str(outcome["status"]))
-    approved = outcome["status"] == "PROMOTED"
+    record_promotion_outcome(outcome.status)
+    approved = outcome.status == "PROMOTED"
     event = build_run_event(
         operation=settings.operation,
         author=settings.author,
@@ -1164,18 +1236,16 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]
         inputs=[(spec.from_namespace, _qualified(spec.project, spec.from_dataset))],
         output_namespace=spec.to_namespace,
         output_name=_qualified(spec.project, spec.to_dataset),
-        token=f"{spec.token}:promotion-{outcome['status'].lower()}",
+        token=f"{spec.token}:promotion-{outcome.status.lower()}",
         project=spec.project or None,
         originator=spec.originator or None,
         event_type="COMPLETE" if approved else "FAIL",
-        error_message=None
-        if approved
-        else f"promotion {outcome['status'].lower().replace('promotion_', '')}: {', '.join(outcome.get('reasons') or []) or 'quality review'}",
+        error_message=None if approved else f"promotion {outcome.status.lower().replace('promotion_', '')}: {', '.join(outcome.reasons) or 'quality review'}",
     )
     lance = event["run"]["facets"].setdefault("lance", {})
-    lance["promotion_status"] = outcome["status"]
-    if outcome.get("decided_by"):
-        lance["promotion_decided_by"] = outcome["decided_by"]
+    lance["promotion_status"] = outcome.status
+    if outcome.decided_by:
+        lance["promotion_decided_by"] = outcome.decided_by
 
     async def _publish() -> None:
         async with DaprClient() as client:
@@ -1200,8 +1270,8 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: dict[str, Any]
         "promotion_outcome",
         token=spec.token,
         dataset=_qualified(spec.project, spec.to_dataset),
-        status=outcome["status"],
-        decided_by=outcome.get("decided_by"),
+        status=outcome.status,
+        decided_by=outcome.decided_by,
     ):
         _run_async(_publish())
 

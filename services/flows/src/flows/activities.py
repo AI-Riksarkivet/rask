@@ -25,13 +25,20 @@ log = logging.getLogger(__name__)
 
 
 @wfr.activity(name="run_node")
-def run_node(ctx: WorkflowActivityContext, activity_input: dict[str, object]) -> dict[str, object]:
+def run_node(ctx: WorkflowActivityContext, job: NodeJob) -> dict[str, object]:
     """Execute one node and return its :class:`~flows.models.NodeResult` as a dict.
 
-    Dict in, dict out — not the pydantic models directly. 1.18 can serialize a model, but the
-    activity's input and output are what land in the workflow's durable HISTORY: a replay after a
-    deploy must be able to read a payload written by the previous version, and a plain dict is the
-    shape that survives a model gaining a field.
+    THE INPUT IS TYPED (DWF-ACT-009). This docstring used to argue the opposite — "dict in, dict out
+    … a plain dict is the shape that survives a model gaining a field" — on replay-compatibility
+    grounds. That position is withdrawn, not merely overruled, because both halves of it have moved:
+    the owner waived back-compat for this estate (ruling 2026-08-25, "do what best practices"), and
+    the SDK now COERCES an activity's input into whatever model its second parameter names
+    (`workflow_runtime._coerce_activity_input` → `_model_protocol.coerce_to_model`), so the annotation
+    is enforced rather than decorative. `ingest` and `medallion` are typed the same way; leaving this
+    paragraph standing would have left the estate carrying two contradictory rules for one seam.
+
+    The OUTPUT stays a dict: it is written to history and then again as the input of every dependent
+    node, and `NodeResult` owns the two ceilings that keep it bounded (see below).
 
     `asyncio.run` is correct HERE and would be wrong almost anywhere else in the service: a Dapr
     activity is invoked SYNCHRONOUSLY on a worker thread the runtime owns, so there is no event loop
@@ -44,7 +51,6 @@ def run_node(ctx: WorkflowActivityContext, activity_input: dict[str, object]) ->
     writes to the state store. Both ceilings live on the model (`models.NodeResult`), not here — a
     cap applied at one of its three construction sites is a cap that holds at one of three.
     """
-    job = NodeJob.model_validate(activity_input)
     result = asyncio.run(_run(job))
     record_node(result.state.status)
 

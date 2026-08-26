@@ -29,6 +29,20 @@ import pytest
 from medallion.workflow import PromotionSpec, promotion_review
 
 
+def _recorded(payload: object) -> dict[str, Any]:
+    """An activity input as the RUNTIME records it: JSON, never the model instance.
+
+    Activities declare Pydantic inputs now (DWF-ACT-009) and the SDK coerces on the worker side, so a
+    workflow body hands `call_activity` a MODEL while history keeps the serialized form. A fake that
+    stored the instance would let assertions read attributes the real recorded payload does not have.
+    """
+    dump = getattr(payload, "model_dump", None)
+    if callable(dump):
+        dumped = dump(mode="json")
+        return dumped if isinstance(dumped, dict) else {}
+    return payload if isinstance(payload, dict) else {}
+
+
 class _Action:
     def __init__(self, kind: str, name: str = "", value: Any = None) -> None:
         self.kind, self.name, self.value = kind, name, value
@@ -53,7 +67,7 @@ class _Ctx:
     def call_activity(self, activity: Any, *, input: Any = None, retry_policy: Any = None) -> _Action:  # noqa: A002
         name = getattr(activity, "__name__", str(activity))
         self.actions.append(f"call_activity({name})")
-        self.inputs[name] = input
+        self.inputs[name] = _recorded(input)
         return _Action("activity", name, self._results.get(name))
 
     def create_timer(self, delay: timedelta) -> _Action:

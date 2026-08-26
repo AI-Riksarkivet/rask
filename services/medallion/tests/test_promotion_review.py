@@ -225,7 +225,7 @@ class TestTheActivitiesActuallyRUN:
     def test_a_clean_run_promotes_without_asking(self) -> None:
         from medallion.workflow import resolve_review_policy
 
-        verdict = resolve_review_policy(cast(Any, None), _spec(reasons=[]).model_dump())
+        verdict = resolve_review_policy(cast(Any, None), _spec(reasons=[]))
 
         assert verdict["verdict"] == "promote"
 
@@ -237,7 +237,7 @@ class TestTheActivitiesActuallyRUN:
         from medallion.workflow import resolve_review_policy
 
         get_settings.cache_clear()
-        verdict = resolve_review_policy(cast(Any, None), _spec(reasons=["blob_resolves"]).model_dump())
+        verdict = resolve_review_policy(cast(Any, None), _spec(reasons=["blob_resolves"]))
         get_settings.cache_clear()
 
         assert verdict["verdict"] == "block"
@@ -254,7 +254,7 @@ class TestTheActivitiesActuallyRUN:
         from medallion.workflow import resolve_review_policy
 
         get_settings.cache_clear()
-        verdict = resolve_review_policy(cast(Any, None), _spec(reasons=["row_delta_band"]).model_dump())
+        verdict = resolve_review_policy(cast(Any, None), _spec(reasons=["row_delta_band"]))
 
         assert verdict["verdict"] == "block", "review off must BLOCK — the gate must never fail open"
 
@@ -263,7 +263,7 @@ class TestTheActivitiesActuallyRUN:
         nobody can raise. It reports the failure so the body can block instead."""
         from medallion.workflow import request_approval
 
-        assert request_approval(cast(Any, None), _spec(approver="").model_dump()) is False
+        assert request_approval(cast(Any, None), _spec(approver="")) is False
 
     def test_the_dataset_id_is_PROJECT_QUALIFIED_or_the_approver_is_hidden(self) -> None:
         """A18, again: an unqualified name against tenant-qualified grants counts every recipient

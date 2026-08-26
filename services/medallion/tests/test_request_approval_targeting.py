@@ -88,7 +88,7 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 def test_the_ask_names_the_approver_as_the_subject(published: list[dict[str, Any]]) -> None:
     """Q6's rule: `extra.subject` is the WORKER — here, the person being asked to decide."""
-    assert wf.request_approval(_ctx(), _spec()) is True
+    assert wf.request_approval(_ctx(), wf.PromotionSpec.model_validate(_spec())) is True
 
     assert len(published) == 1, f"expected exactly one control event, got {len(published)}"
     event = json.loads(published[0]["data"])
@@ -109,13 +109,13 @@ def test_the_control_topic_is_the_one_the_inbox_subscribes_to(published: list[di
     """Publishing a correct event to the wrong topic reaches nobody, and looks identical from here."""
     from service_kit.control_events import CONTROL_TOPIC
 
-    assert wf.request_approval(_ctx(), _spec()) is True
+    assert wf.request_approval(_ctx(), wf.PromotionSpec.model_validate(_spec())) is True
     assert published[0]["topic_name"] == CONTROL_TOPIC
 
 
 def test_no_approver_refuses_the_ask_instead_of_publishing_one_nobody_can_answer(published: list[dict[str, Any]]) -> None:
     """`approver` empty means nobody can be asked. The spec's own comment: that BLOCKS, never promotes."""
-    assert wf.request_approval(_ctx(), _spec(approver="")) is False
+    assert wf.request_approval(_ctx(), wf.PromotionSpec.model_validate(_spec(approver=""))) is False
     assert published == [], "an unapprovable promotion must publish nothing at all"
 
 
@@ -144,4 +144,4 @@ def test_a_failed_publish_is_a_refusal_not_a_silent_park(monkeypatch: pytest.Mon
     monkeypatch.setattr(dapr_clients, "DaprClient", _Client)
     monkeypatch.setattr(dapr_publish, "publish_event", _boom)
 
-    assert wf.request_approval(_ctx(), _spec()) is False
+    assert wf.request_approval(_ctx(), wf.PromotionSpec.model_validate(_spec())) is False

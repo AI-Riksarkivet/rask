@@ -16,7 +16,19 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
-from medallion.workflow import MAX_POLLS, StageJobOutcome, StageJobSpec, _is_terminal, publish_stage_ready, report_stage_outcome, stage_run, submit_stage
+from medallion.workflow import (
+    MAX_POLLS,
+    PollInput,
+    StageJobOutcome,
+    StageJobSpec,
+    StageReport,
+    _is_terminal,
+    poll_stage,
+    publish_stage_ready,
+    report_stage_outcome,
+    stage_run,
+    submit_stage,
+)
 
 
 class _Action:
@@ -279,10 +291,10 @@ def test_a_TERMINAL_BAD_job_emits_a_lineage_FAIL(monkeypatch: pytest.MonkeyPatch
 
     report_stage_outcome(
         cast("Any", None),
-        {
-            "spec": _spec(),
-            "outcome": {"submission_id": "ray-silver-tok-1-abc", "status": "FAILED", "polls": 3, "verdict": "failed"},
-        },
+        StageReport(
+            spec=StageJobSpec.model_validate(_spec()),
+            outcome=StageJobOutcome.model_validate({"submission_id": "ray-silver-tok-1-abc", "status": "FAILED", "polls": 3, "verdict": "failed"}),
+        ),
     )
 
     assert published, "a FAILED Ray job emitted no lineage event — the failure exists only in a log line"
@@ -315,10 +327,10 @@ def test_a_FAILED_job_carries_RAYS_OWN_REASON_into_the_graph(monkeypatch: pytest
 
     report_stage_outcome(
         cast("Any", None),
-        {
-            "spec": _spec(),
-            "outcome": {"submission_id": "ray-silver-tok-1-abc", "status": "FAILED", "polls": 3, "verdict": "failed"},
-        },
+        StageReport(
+            spec=StageJobSpec.model_validate(_spec()),
+            outcome=StageJobOutcome.model_validate({"submission_id": "ray-silver-tok-1-abc", "status": "FAILED", "polls": 3, "verdict": "failed"}),
+        ),
     )
 
     assert published, "a FAILED Ray job emitted no lineage event"
@@ -345,7 +357,10 @@ def test_the_failure_reason_is_BOUNDED_so_a_traceback_cannot_size_a_lineage_even
 
     report_stage_outcome(
         cast("Any", None),
-        {"spec": _spec(), "outcome": {"submission_id": "sub", "status": "FAILED", "polls": 1, "verdict": "failed"}},
+        StageReport(
+            spec=StageJobSpec.model_validate(_spec()),
+            outcome=StageJobOutcome.model_validate({"submission_id": "sub", "status": "FAILED", "polls": 1, "verdict": "failed"}),
+        ),
     )
 
     reason = published[0]["run"]["facets"]["errorMessage"]["message"]
@@ -369,10 +384,12 @@ def test_an_ABANDONED_watch_also_reaches_the_graph(monkeypatch: pytest.MonkeyPat
 
     report_stage_outcome(
         cast("Any", None),
-        {
-            "spec": _spec(),
-            "outcome": {"submission_id": "sub", "status": "RUNNING", "polls": 2880, "verdict": "abandoned", "duration_seconds": 172800.0},
-        },
+        StageReport(
+            spec=StageJobSpec.model_validate(_spec()),
+            outcome=StageJobOutcome.model_validate(
+                {"submission_id": "sub", "status": "RUNNING", "polls": 2880, "verdict": "abandoned", "duration_seconds": 172800.0}
+            ),
+        ),
     )
 
     assert published, "an abandoned watch reported nothing to the graph"
@@ -426,7 +443,10 @@ def test_a_lineage_OUTAGE_does_not_fail_the_reporting_activity_BUT_IS_REPORTED(m
     with caplog.at_level(logging.ERROR):
         report_stage_outcome(
             cast("Any", None),
-            {"spec": _spec(), "outcome": {"submission_id": "sub", "status": "FAILED", "polls": 1, "verdict": "failed"}},
+            StageReport(
+                spec=StageJobSpec.model_validate(_spec()),
+                outcome=StageJobOutcome.model_validate({"submission_id": "sub", "status": "FAILED", "polls": 1, "verdict": "failed"}),
+            ),
         )
 
     suppressed = [r for r in caplog.records if "best_effort" in r.message or "lineage is down" in str(r.exc_info)]
@@ -496,7 +516,7 @@ def test_submit_returns_THE_SAME_id_it_submitted_under(monkeypatch: pytest.Monke
 
     monkeypatch.setattr("medallion.services.ray_submit.submit_stage_job", _fake_submit)
 
-    returned = submit_stage(cast("Any", None), _spec())
+    returned = submit_stage(cast("Any", None), StageJobSpec.model_validate(_spec()))
 
     assert returned == posted, "the poll would watch an id the submitter never used"
 
@@ -538,7 +558,7 @@ def test_submit_returns_the_posted_id_when_a_CODE_VERSION_is_set(monkeypatch: py
     settings = MedallionSettings.model_validate({"ray_enabled": True, "compute_enabled": True, "ray_code_version": "catalog:main-abc1234"})
     monkeypatch.setattr("medallion.core.config.get_settings", lambda: settings)
 
-    returned = submit_stage(cast("Any", None), _spec())
+    returned = submit_stage(cast("Any", None), StageJobSpec.model_validate(_spec()))
 
     assert captured, "the submitter never reached the Ray Jobs API"
     assert returned == captured[0]["submission_id"], "the watcher polls an id the submitter never posted — every stage job reports `abandoned`"
@@ -551,14 +571,13 @@ def test_poll_answers_NONE_for_an_id_the_dashboard_has_not_registered(monkeypatc
     would abort a healthy job on a timing artefact, so `job_status` answers None and the loop simply
     asks again.
     """
-    from medallion.workflow import poll_stage
 
     async def _unknown(_client: Any, _sub: str) -> str | None:
         return None
 
     monkeypatch.setattr("ray_kit.submit.job_status", _unknown)
 
-    assert poll_stage(cast("Any", None), {"submission_id": "not-registered-yet"}) is None
+    assert poll_stage(cast("Any", None), PollInput(submission_id="not-registered-yet")) is None
 
 
 def test_poll_RAISES_on_transport_failure_rather_than_reporting_no_status(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -568,7 +587,6 @@ def test_poll_RAISES_on_transport_failure_rather_than_reporting_no_status(monkey
     watch would poll to its ceiling and report `abandoned` for a job that may well have succeeded.
     The activity's retry policy is the right owner of a transport blip.
     """
-    from medallion.workflow import poll_stage
 
     from ray_kit.submit import RayJobError
 
@@ -578,7 +596,7 @@ def test_poll_RAISES_on_transport_failure_rather_than_reporting_no_status(monkey
     monkeypatch.setattr("ray_kit.submit.job_status", _down)
 
     with pytest.raises(RayJobError):
-        poll_stage(cast("Any", None), {"submission_id": "sub"})
+        poll_stage(cast("Any", None), PollInput(submission_id="sub"))
 
 
 def test_the_wakeup_carries_the_FLAG_and_goes_to_the_movers_OWN_topic(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -611,7 +629,10 @@ def test_the_wakeup_carries_the_FLAG_and_goes_to_the_movers_OWN_topic(monkeypatc
 
     publish_stage_ready(
         cast("Any", None),
-        {"spec": _spec(), "outcome": {"submission_id": "ray-silver-tok-1-abc", "status": "SUCCEEDED", "polls": 1, "verdict": "succeeded"}},
+        StageReport(
+            spec=StageJobSpec.model_validate(_spec()),
+            outcome=StageJobOutcome.model_validate({"submission_id": "ray-silver-tok-1-abc", "status": "SUCCEEDED", "polls": 1, "verdict": "succeeded"}),
+        ),
     )
 
     settings = get_settings()
@@ -827,7 +848,10 @@ def test_the_stage_outcome_span_carries_the_CASCADE_identity_and_the_verdict(mon
     with provider.get_tracer("test").start_as_current_span("activity: report_stage_outcome"):
         report_stage_outcome(
             cast("Any", None),
-            {"spec": _spec(), "outcome": {"submission_id": "sub-9", "status": "FAILED", "polls": 3, "verdict": "failed"}},
+            StageReport(
+                spec=StageJobSpec.model_validate(_spec()),
+                outcome=StageJobOutcome.model_validate({"submission_id": "sub-9", "status": "FAILED", "polls": 3, "verdict": "failed"}),
+            ),
         )
 
     (span,) = exporter.get_finished_spans()

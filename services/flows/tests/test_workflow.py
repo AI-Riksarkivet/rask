@@ -67,9 +67,13 @@ class _FakeContext:
     def __init__(self) -> None:
         self.dispatched: list[dict[str, Any]] = []
 
-    def call_activity(self, activity: object, *, input: dict[str, Any], retry_policy: object = None) -> tuple[str, dict[str, Any]]:  # noqa: A002
-        self.dispatched.append(input)
-        return ("task", input)
+    def call_activity(self, activity: object, *, input: Any, retry_policy: object = None) -> tuple[str, dict[str, Any]]:  # noqa: A002
+        # RECORDED AS THE RUNTIME RECORDS IT: `run_node` declares a typed input (DWF-ACT-009), so the
+        # body hands a MODEL while history keeps the serialized form. Storing the instance would let
+        # assertions read attributes the real recorded payload does not have.
+        dumped = input.model_dump(mode="json") if hasattr(input, "model_dump") else input
+        self.dispatched.append(dumped)
+        return ("task", dumped)
 
 
 def test_importing_the_lane_registers_the_workflow_and_its_activity() -> None:
