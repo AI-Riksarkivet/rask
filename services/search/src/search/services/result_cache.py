@@ -70,14 +70,29 @@ def version_signature(handle: DatasetHandle) -> str:
     return "|".join(parts)
 
 
+def _normalized_query(text: str) -> str:
+    """Fold the variations that change the KEY without changing the question.
+
+    `cache.md` says to cache only "keys with bounded cardinality and high hit-rate", and a raw
+    free-text `q` has neither: `"cat"`, `"cat "` and `"Cat"` were three keys for one question, so a
+    caller varying whitespace or case never hit and every request paid a fresh GPU pass. That is what
+    made this cache a free miss generator rather than a cache.
+
+    ONLY THE KEY IS NORMALIZED — never what is searched. `spec.q` still carries the caller's own text
+    to the FTS engine, where case and punctuation can matter to the analyzer. Folding here decides
+    which requests SHARE an entry; folding there would answer a different question than the one asked.
+    """
+    return " ".join(text.split()).casefold()
+
+
 def query_hash(spec: SearchSpec, filters: Mapping[str, str] | None, image_bytes: bytes | None) -> str:
     """A stable hash of EVERY result-affecting input. Miss one and a stale result
     is served, so the payload is exhaustive: the spec knobs, the sorted filters,
     and the uploaded image's own digest."""
     payload = {
         "mode": spec.mode,
-        "q": spec.q,
-        "q_vec": spec.q_vec,
+        "q": _normalized_query(spec.q),
+        "q_vec": _normalized_query(spec.q_vec),
         "n": spec.n,
         "where": spec.where,
         "rerank": spec.rerank,

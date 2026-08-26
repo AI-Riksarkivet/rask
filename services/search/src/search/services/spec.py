@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from service_kit.lancekit.descriptor import Search
 
@@ -44,6 +44,20 @@ def available_modes(search: Search) -> list[str]:
     return modes
 
 
+#: The ceiling on a free-text query field.
+#:
+#: REJECTED, not clamped, and that is a deliberate departure from `n` / `rerank_n` / `fuzziness`
+#: beside it. Those clamp because the frontend's "load more" legitimately raises `n` past 100 and
+#: should not error. There is no equivalent story for an oversized query: silently truncating it
+#: would return results for a question the caller did not ask, which is worse than a 422 naming the
+#: limit.
+#:
+#: Both `q` and `q_vec` reach a GPU embedding forward pass and `q` also reaches the FTS engine, so an
+#: unbounded string is one request costing orders of magnitude more than a normal one — under
+#: whatever the rate limiter permits. 4096 is far above any real query and far below a payload.
+MAX_QUERY_CHARS = 4096
+
+
 class SearchSpec(BaseModel):
     """Normalized search request shared by the GET and POST handlers.
 
@@ -56,7 +70,7 @@ class SearchSpec(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    q: str = ""
+    q: str = Field(default="", max_length=MAX_QUERY_CHARS)
     n: int = 20
     # A vector-space key (any declared embedding), a `<key>_fts`, or a composite
     # (fts/hybrid/all). `str`, not the enum, so a dataset's own embedding keys
@@ -73,7 +87,7 @@ class SearchSpec(BaseModel):
     weight: float | None = None
     # Optional separate text for the vector leg of hybrid/semantic/all; falls
     # back to ``q`` when empty. The FTS leg always uses ``q``.
-    q_vec: str = ""
+    q_vec: str = Field(default="", max_length=MAX_QUERY_CHARS)
     # Raw user-typed SQL WHERE expression, ANDed with the structured metadata
     # filters (e.g. "duration > 60").
     where: str | None = None
