@@ -50,7 +50,7 @@ verifier, and the corrected form is what appears here. 2 were refuted outright.
 
 ## Scorecard
 
-> ### RE-VERIFIED AT HEAD `fe789bfc`, 2026-08-26 — **55 of 60 still real**
+> ### RE-VERIFIED AT HEAD `fe789bfc`, 2026-08-26 — **55 of 60 still real; 2 drained since (53 open)**
 >
 > Ten read-only agents, one per lane, re-opened every finding against the current code. **Nothing was
 > refuted and nothing was undecidable**: 55 STILL_REAL (5 high / 22 medium / 28 low), 4 ALREADY_FIXED,
@@ -161,7 +161,9 @@ produce_auth.py:58 `async def authorize_produce(` … :123-124 `try:` / `token =
 
 </details>
 
-<details><summary><b>`compute` and `controlplane` have no authn/authz code path at all — the hole X6 filed for `search`, in two more publicly-proxied services</b> <i>(authn.md + authz.md, CONFIRMED)</i></summary>
+<details><summary><b>~~`compute` and `controlplane` have no authn/authz code path at all — the hole X6 filed for `search`, in two more publicly-proxied services~~</b> <i>(authn.md + authz.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-26 — `1e9acf06`.** Both now declare a settings class mixing in `GovernedAuthSettings`, ship a `security.py` over `service_kit.governed.deps`, and mount the dependency ON THE ROUTER (per route would miss `proxy.py`'s `{path:path}` catch-all). The chart feeds it: `governedAuth: true` for compute, the same env block in `controlplane.yaml`. Rung is READER — `warehouse#reader` is `... or writer or member from project`, so no authorized caller loses access. Pinned by `tests/unit/test_every_public_service_has_a_door.py`, whose chart assertion was proven non-vacuous by deleting the flag. **STILL OPEN, split out:** the project list is not yet FGA-FILTERED per tenant — an authorized caller still sees every project. That changes what an authorized caller sees, so it was deliberately not bundled with closing the exposure.
 
 **Rule.** authn.md § Protected routes / authz.md § Coarse-grained authorization: apply the door at the router level; a service with no `GovernedAuthSettings` cannot bind the estate's OIDC/FGA env
 
@@ -226,7 +228,9 @@ services/medallion/src/medallion/api/produce_auth.py:58 `async def authorize_pro
 
 </details>
 
-<details><summary><b>POST /api/flows/validate parses an arbitrary-size graph on the event loop with no auth and no cap — measured 3.06 s of loop block per 28.5 MiB request</b> <i>(rate-limiting.md + websockets.md + cache.md, CONFIRMED)</i></summary>
+<details><summary><b>~~POST /api/flows/validate parses an arbitrary-size graph on the event loop with no auth and no cap — measured 3.06 s of loop block per 28.5 MiB request~~</b> <i>(rate-limiting.md + websockets.md + cache.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-26 — `bc4539bc`.** `FlowGraph.nodes` carries `max_length`, so pydantic refuses at the boundary instead of building every node and consulting the ceiling afterwards. The `graph.py` check stays as defence in depth (exercised via `model_construct`) because a 422 cannot state the problem in the caller's vocabulary. Both `/validate` and `/catalog` gated at the READ rung; the module docstring that argued they should stay open is corrected.
 
 **Rule.** rate-limiting.md: "apply to auth routes and expensive operations only" — an expensive route with no limit; compounded by the cap (MAX_GRAPH_NODES) being enforced AFTER the work it is supposed to bound
 
