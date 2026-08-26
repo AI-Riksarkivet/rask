@@ -2103,7 +2103,7 @@ age:
   # Effectively immutable after first install: StatefulSet volumeClaimTemplates can't be updated in
   # place, so the chart fails the upgrade if this differs from the deployed StatefulSet instead of
   # silently not resizing. To resize: patch the PVC, recreate the StatefulSet with --cascade=orphan,
-  # then upgrade — see docs/RUNBOOK-restore.md.
+  # then upgrade — see docs/runbooks/RUNBOOK-restore.md.
   storage: 1Gi
   # --- AGE-on-CNPG cutover gate (audit 2026-07-27 defect 3; lance-ns-merge.md decision 1 / P4) ---
   # templates/age-cluster.yaml (CNPG Cluster + ImageVolume AGE extension, docs/CNPG-AGE.md) used to

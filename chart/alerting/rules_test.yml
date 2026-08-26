@@ -23,7 +23,7 @@ tests:
               service: lineage
             exp_annotations:
               summary: "Lineage outbox not draining (depth > 0 for 10m)"
-              description: "Durable lineage events are staged but not published — provenance is not reaching the AGE graph. The relay, lineage, or the NATS bus is unhealthy. Runbook: docs/RUNBOOK-oncall.md#outbox-not-draining"
+              description: "Durable lineage events are staged but not published — provenance is not reaching the AGE graph. The relay, lineage, or the NATS bus is unhealthy. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
 
   # 2. Outbox healthy (depth 0) → NO alert. A gauge that falls back must not page forever.
   - interval: 1m
@@ -49,7 +49,7 @@ tests:
               service: medallion
             exp_annotations:
               summary: "Medallion cascade dead-lettering — a stage delivery gave up"
-              description: "A cascade delivery exhausted its retries and was parked; a dataset has silently stopped updating. Runbook: docs/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+              description: "A cascade delivery exhausted its retries and was parked; a dataset has silently stopped updating. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
   # 4. No dead-letters (flat counter) → the cascade alert stays silent.
   - interval: 1m
@@ -75,7 +75,7 @@ tests:
               service: catalog
             exp_annotations:
               summary: "Catalog shedding writes for 15m — persistently over write-concurrency capacity"
-              description: "The catalog has been returning 429 on bulk Arrow-IPC writes (the concurrent-write cap, P5 load-shedding) for 15m — it is persistently over capacity, not just riding out a burst. Scale catalog replicas or raise LANCE_MAX_CONCURRENT_WRITES (watch the pod memory: each write buffers up to 256MiB). Runbook: docs/RUNBOOK-oncall.md"
+              description: "The catalog has been returning 429 on bulk Arrow-IPC writes (the concurrent-write cap, P5 load-shedding) for 15m — it is persistently over capacity, not just riding out a burst. Scale catalog replicas or raise LANCE_MAX_CONCURRENT_WRITES (watch the pod memory: each write buffers up to 256MiB). Runbook: docs/runbooks/RUNBOOK-oncall.md"
 
   # 6. A brief shed burst that stops well under 15m → NO alert (backpressure riding out a spike is normal).
   - interval: 1m
@@ -103,7 +103,7 @@ tests:
               app_id: bronze-to-silver
             exp_annotations:
               summary: "Dapr consumer wedged — a subscriber is retrying inbound messages for 15m"
-              description: "A subscriber's handler has failed continuously: Dapr has booked process_status=retry on inbound deliveries for 15m without clearing, so this consumer is not draining its subscription and the cascade / lineage ingest has silently stopped. A healthy transient error clears in seconds. Check the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+              description: "A subscriber's handler has failed continuously: Dapr has booked process_status=retry on inbound deliveries for 15m without clearing, so this consumer is not draining its subscription and the cascade / lineage ingest has silently stopped. A healthy transient error clears in seconds. Check the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # 8. A busy-but-HEALTHY consumer books only process_status=success (no retry series at all) → NO alert.
   #    This is the case the old dapr_resiliency_count rule got wrong: that counter rises on healthy traffic
@@ -147,7 +147,7 @@ tests:
               service: notifications
             exp_annotations:
               summary: "Notifications are dead-lettering — deliveries are being parked, not retried"
-              description: "The notifications service has parked messages on dlq.notifications for 10m: the sidecar's full retry schedule was exhausted, so these notifications will not arrive without a replay. Check the inbox actor plane (lance-statestore reachable? actors registered?) and OpenFGA. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+              description: "The notifications service has parked messages on dlq.notifications for 10m: the sidecar's full retry schedule was exhausted, so these notifications will not arrive without a replay. Check the inbox actor plane (lance-statestore reachable? actors registered?) and OpenFGA. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # 11. A plane that has NEVER parked anything → NO alert. The counter sits flat at zero, which is the
   #     ordinary state and must never page.
@@ -175,7 +175,7 @@ tests:
               service: notifications
             exp_annotations:
               summary: "InboxActor turn queue is backing up — one subject's notifications are serializing"
-              description: "More than 10 calls are queued against a single InboxActor for 2m. Turn-based concurrency means they run one at a time, so something inside a turn is slow — most likely a channel send (SMTP or the Slack webhook) or an unhealthy state store. Notifications for that subject are delayed, not lost. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+              description: "More than 10 calls are queued against a single InboxActor for 2m. Turn-based concurrency means they run one at a time, so something inside a turn is slow — most likely a channel send (SMTP or the Slack webhook) or an unhealthy state store. Notifications for that subject are delayed, not lost. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # 13. A BURST that drains → NO alert. A busy inbox briefly queues; the `for: 2m` is what separates a
   #     burst from a backlog, and this is the case that would false-page without it.
@@ -203,7 +203,7 @@ tests:
               service: notifications
             exp_annotations:
               summary: "The notifications /events reconciler has processed nothing for 30m"
-              description: "The feed lane has ingested no events for 30m. On an idle estate that is correct; on a busy one it means the reconciler is running and seeing nothing — check that RASK_LINEAGE_SERVICE_IDENTITY is in lineage's LINEAGE_SERVICE_SUBJECTS allowlist AND that the subject holds grants on the datasets it should see. A reconciler that is admitted but ungranted runs perfectly and reconciles zero. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+              description: "The feed lane has ingested no events for 30m. On an idle estate that is correct; on a busy one it means the reconciler is running and seeing nothing — check that RASK_LINEAGE_SERVICE_IDENTITY is in lineage's LINEAGE_SERVICE_SUBJECTS allowlist AND that the subject holds grants on the datasets it should see. A reconciler that is admitted but ungranted runs perfectly and reconciles zero. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # 15. A reconciler that IS reconciling → NO alert, even at a slow trickle. One event every ten
   #     minutes is enough to prove the lane is alive, and the rule must not page on a quiet estate that
@@ -239,7 +239,7 @@ tests:
                 publish watchdog never re-drives, the InboxActor never compacts. Nothing errors — work just
                 stops. Check `kubectl get pods -l app=dapr-scheduler-server` and the etcd PVCs; a rollback or
                 PVC loss here is not recoverable from the state store, which holds no copy of the reminders.
-                Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+                Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # 12. A HEALTHY scheduler must NOT fire it. The live cluster reads 48; anything above zero is serving.
   - interval: 1m
@@ -272,7 +272,7 @@ tests:
                 collector's `dapr-control-plane` scrape job is not matching it (it keeps pods annotated
                 `dapr.io/control-plane` on the container port named `metrics`). Until this clears,
                 DaprSchedulerServingNoSidecars is blind.
-                Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+                Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # ---------------------------------------------------------------------------------------------
   # RAY. Three of these fire on rask's OWN series (ray_control_*, from ray_kit.metrics) and work the
@@ -303,7 +303,7 @@ tests:
                 service and 0% errors while the cluster is gone. Check the Ray head and
                 `ray.dashboardUrl`. If the outcome is `unauthorized` instead, this is a Secret, not an
                 outage — see RayControlUnauthorized.
-                Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+                Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # 17. A CREDENTIAL fault must not look like an outage. RAY_TRANSIENT_ERRORS catches
   #     AuthenticationError alongside ConnectionError, so before ray_kit.metrics classified them a
@@ -326,7 +326,7 @@ tests:
                 401/403. Check `RASK_RAY_AUTH_TOKEN` / the `<release>-ray-auth-token` Secret and whether
                 the token was rotated. Do NOT go debugging the node pool — the cluster is up and saying
                 no.
-                Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+                Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # 18. A HEALTHY control path must not fire either of the above.
   - interval: 1m
@@ -362,7 +362,7 @@ tests:
                 81,155 jobs that response measured 164.7 MB and OOM-killed the compute pod. Check the
                 `compute-prune-jobs-cron` Dapr binding is ticking and that `prune_jobs` is not failing
                 every delete (`PruneResult.failed`).
-                Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+                Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # 20. NO Ray metrics at all → RayMetricsMissing fires, and every Ray rule below it is blind. This is
   #     the DaprSchedulerMetricsMissing lesson applied: without it, the absence of the ray-pods scrape
@@ -385,7 +385,7 @@ tests:
                 endpoint. Ray metrics are PULL-only and this does not self-heal. Apply the `ray-pods`
                 scrape job in open_ray_handover.md section 1 on the cluster KubeRay runs on. Until it
                 clears, RayWorkerOOMKills and RayServeNoHealthyReplicas cannot fire.
-                Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+                Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # 21. Worker OOM kills — a real COUNTER, so increase() is correct here (unlike ray_tasks, which is a
   #     gauge). exit 137 is SIGKILL, the dominant silent cause of a dead stage.
@@ -410,7 +410,7 @@ tests:
                 the pod that nothing ships, so there is no traceback to find — the FAIL lineage event's
                 errorMessage facet now carries the exit code instead. Reduce the stage's batch size or
                 raise the head/worker memory limit.
-                Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+                Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # ── M24: the six rules that had no fire-proof ────────────────────────────────────────────────────
   # `promtool test rules` only evaluates the cases declared here, so a rule with no case is never
@@ -433,7 +433,7 @@ tests:
               service: "lineage"
             exp_annotations:
               summary: "Lineage outbox oldest staged event > 5 min old"
-              description: "The outbox relay is lagging; the oldest undrained event exceeds 300s. Runbook: docs/RUNBOOK-oncall.md#outbox-not-draining"
+              description: "The outbox relay is lagging; the oldest undrained event exceeds 300s. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
 
   # M24 b. A backlog well under the threshold must NOT page — the gauge falls back on its own.
   - interval: 1m
@@ -459,7 +459,7 @@ tests:
               service: "lineage"
             exp_annotations:
               summary: "Lineage ingest dead-lettering \u2014 provenance is being LOST"
-              description: "A lineage event exhausted its Dapr resiliency schedule and was parked (a terminal loss signal). Runbook: docs/RUNBOOK-oncall.md#dlq-parking"
+              description: "A lineage event exhausted its Dapr resiliency schedule and was parked (a terminal loss signal). Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
   # M24 d. A flat dead-letter counter is the healthy estate; it must stay silent.
   - interval: 1m
@@ -485,7 +485,7 @@ tests:
               service: "medallion"
             exp_annotations:
               summary: "Medallion stage FGA-denied \u2014 the cascade may stall at this stage"
-              description: "A mover lacked the grant to write its target stage; re-seed with scripts/seed_medallion_fga.sh. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+              description: "A mover lacked the grant to write its target stage; re-seed with scripts/seed_medallion_fga.sh. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # M24 f. Sweep failures accumulating over 30m → MaintenanceDatasetsFailing fires.
   - interval: 1m
@@ -575,7 +575,7 @@ tests:
               service: dapr
             exp_annotations:
               summary: "Dapr workflow activities are failing — a lane is burning its retries"
-              description: "One or more activities exhausted their retry policy. Group by `activity_name` and `app_id` to find which lane. Note the activity SPAN cannot corroborate this: the SDK wraps the call in a span but swallows the exception inside it, so every activity span is STATUS_CODE_UNSET even when this counter says failed. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+              description: "One or more activities exhausted their retry policy. Group by `activity_name` and `app_id` to find which lane. Note the activity SPAN cannot corroborate this: the SDK wraps the call in a span but swallows the exception inside it, so every activity span is STATUS_CODE_UNSET even when this counter says failed. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # A lane where only SUCCEEDED activities run must not page.
   - interval: 1m
@@ -602,7 +602,7 @@ tests:
               service: medallion
             exp_annotations:
               summary: "Medallion stage runs are ending badly — failed, abandoned or unnotified"
-              description: "A stage watch reached a terminal verdict other than `succeeded`. `abandoned` means the job was still RUNNING at the watch ceiling — not a failure, but the estate stopped looking; `unnotified` means the outcome reached the graph and no person. Split by `lance_medallion_verdict` to tell them apart. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+              description: "A stage watch reached a terminal verdict other than `succeeded`. `abandoned` means the job was still RUNNING at the watch ceiling — not a failure, but the estate stopped looking; `unnotified` means the outcome reached the graph and no person. Split by `lance_medallion_verdict` to tell them apart. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # Succeeded runs must not page — the label filter is the whole rule.
   - interval: 1m
@@ -630,7 +630,7 @@ tests:
               service: dapr
             exp_annotations:
               summary: "Workflow orchestration turns are firing but nothing completes — a wedged continue_as_new"
-              description: "The engine's internal reminders keep firing while no workflow execution completes, which is a watch loop taking turns forever. `stage_run` and `train_run` both continue_as_new on every poll, so a job that never reaches a terminal status turns indefinitely and looks healthy from every angle except this one. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+              description: "The engine's internal reminders keep firing while no workflow execution completes, which is a watch loop taking turns forever. `stage_run` and `train_run` both continue_as_new on every poll, so a job that never reaches a terminal status turns indefinitely and looks healthy from every angle except this one. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # Turns firing AND executions completing is a healthy busy estate — must not page.
   - interval: 1m
@@ -663,7 +663,7 @@ tests:
               lance_notifications_lane: feed
             exp_annotations:
               summary: "The notifications feed lane has stopped reporting entirely"
-              description: "No `notifications_ingress_events_total` series for the feed lane exists at all. That is not an idle estate \u2014 an idle reconciler still emits a zero-valued counter. Either the pod is gone, its OTLP export is broken, or the lane label changed. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+              description: "No `notifications_ingress_events_total` series for the feed lane exists at all. That is not an idle estate \u2014 an idle reconciler still emits a zero-valued counter. Either the pod is gone, its OTLP export is broken, or the lane label changed. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
       # ...and the `== 0` rule must NOT fire here: it cannot evaluate over an empty vector. That is
       # the whole reason the absence rule has to exist separately.
       - eval_time: 35m
@@ -709,7 +709,7 @@ tests:
               pod: rask-greptimedb-standalone-0
             exp_annotations:
               summary: "GreptimeDB restarted in the last 15 minutes"
-              description: "The estate's only metrics/logs/traces store restarted. Check for OOMKill first — `kubectl get pod rask-greptimedb-standalone-0 -o jsonpath='{.status.containerStatuses[0].lastState}'` — exit 137 means the 8Gi limit was hit. Every dashboard and every other rule in this file went blind for the duration. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+              description: "The estate's only metrics/logs/traces store restarted. Check for OOMKill first — `kubectl get pod rask-greptimedb-standalone-0 -o jsonpath='{.status.containerStatuses[0].lastState}'` — exit 137 means the 8Gi limit was hit. Every dashboard and every other rule in this file went blind for the duration. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # A store that has NOT restarted must stay quiet, or the rule is noise on every scrape.
   - interval: 1m
@@ -761,7 +761,7 @@ tests:
               service: observability
             exp_annotations:
               summary: "GreptimeDB is not answering its scrape"
-              description: "The store is down. Ingest is being dropped, not buffered — the fleet exports OTLP/HTTP straight to it. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+              description: "The store is down. Ingest is being dropped, not buffered — the fleet exports OTLP/HTTP straight to it. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # ABSENT IS NOT ZERO, applied to the watcher itself: if the scrape JOB is removed, GreptimeDBDown
   # goes quiet and looks exactly like health. This is the rule that refuses to let that pass.

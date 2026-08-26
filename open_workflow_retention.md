@@ -57,9 +57,9 @@ Six items. Three are small, one is a decision, one is real infrastructure.
 | ~~**0**~~ | ~~**Redeploy**~~ — **DONE 2026-08-26**, fleet on `main-553ec99b` (helm rev 57), all pods Running, 0 restarts | — | — |
 | ~~**1**~~ | ~~**R1** purge the 64 orphans~~ — **DONE 2026-08-26**, 1367 rows → 0 | — | — |
 | ~~**2**~~ | ~~**U1** ruling~~ — **RULED 2026-08-26: SURFACE**, scoped to `compute/ingest` only | — | — |
-| **3** | **R2** retention exporter + alert | ~half a day | nothing |
+| ~~**3**~~ | ~~**R2** retention exporter + alert~~ — **DONE 2026-08-26**, live on helm rev 62; every rule replayed against the real GreptimeDB | — | — |
 | ~~**4**~~ | ~~**U2** controls on `compute/ingest`~~ — **DONE 2026-08-26**, live and browser-verified | — | — |
-| **5** | **U3** surface history/retention | re-ask | 3 |
+| **5** | **U3** surface history/retention | re-ask — **now askable**, see below | — |
 
 **Step 0 traps, each of which has bitten this estate before.** Build from a CLEAN DETACHED WORKTREE
 (`git worktree add /tmp/rask-deploy --detach origin/main`): Dagger snapshots the HOST, not git, so a
@@ -159,38 +159,72 @@ those keys. Re-measure afterwards with the queries below.
 **Cost of leaving it:** disk only. These rows are inert — no correctness consequence, no replay
 consequence. Rank it accordingly.
 
-### R2 — nothing alerts on retention stalling
+### R2 — ~~nothing alerts on retention stalling~~ · **DONE 2026-08-26**
 
-`chart/alerting/rules.yml` carries `WorkflowActivitiesFailing` and `DaprConsumerWedge`, and **no rule
-on state-store growth or on retention failing to collect**. Both measurements this estate has of
-workflow-history volume — 1367 on 2026-08-10 and 7239 on 2026-08-26 — happened because a person went
-looking. If the policy is dropped by a values edit, or the annotation is re-gated, or the scheduler
-stops collecting, the first symptom is a full disk.
+`chart/alerting/rules.yml` carried `WorkflowActivitiesFailing` and `DaprConsumerWedge` and **no rule on
+state-store growth or on retention failing to collect**. Both measurements this estate had of
+workflow-history volume — 1367 rows on 2026-08-10, 7239 on 2026-08-26 — happened because a person went
+looking. The first automatic symptom would have been a full disk.
 
-**This is the item worth doing first, and it is NOT the quick one** — see the measured obstacle below.
-It is the difference between "retention is fixed" and "we can tell when retention breaks".
+**The obstacle was real and was the whole cost of the item.** Enumerated live against the `ingest`
+sidecar, daprd's ENTIRE metric surface is `dapr_error_code_total`, `dapr_grpc_io_*`, `dapr_http_*`,
+`dapr_runtime_component_{init_total,loaded}` and `go_*`. No workflow metric, no actor metric, no
+state-store metric — and `dapr_runtime_workflow_*` (which `rules.yml` already documents as unreliable
+for this codebase) is absent outright. A fourth scrape job would have had no target, so this could
+never have been a rules edit.
 
-**Done means:** a vmalert rule that fires when workflow-history rows grow monotonically past a
-threshold, or when the oldest row's age exceeds the longest configured retention (720h) plus a margin.
-The second framing is better — it tests the *property* rather than a volume that legitimately varies
-with load.
+**Shipped as `2fc1ad7b` + `<runbook-commit>`, live on helm rev 62.** The state store is measured by
+QUERY rather than by scrape: a `sqlquery/daprstate` receiver on the Collector that already ships every
+other metric — no second image to vendor and scan, no second credential path, no new service. One
+query, 4.7 ms over a 7.5 MB table, every 5 minutes. The password arrives by `secretKeyRef` and the
+config references `${env:DAPRSTATE_PASSWORD}`, so no credential is in the ConfigMap.
 
-**The obstacle is real and now measured, so do not start by looking for a metric.** Enumerated every
-family the `ingest` sidecar exports on 2026-08-26:
+Two gauges, two rules:
 
-```
-dapr_error_code_total · dapr_grpc_io_* · dapr_http_* ·
-dapr_runtime_component_init_total · dapr_runtime_component_loaded · go_*
-```
+| series | rule | why |
+| --- | --- | --- |
+| `dapr_workflow_history_oldest_age_seconds` | `DaprWorkflowHistoryNotCollected` > 792h, `for: 30m` | the PROPERTY. Row count varies legitimately with load; age does not |
+| `dapr_workflow_state_rows` | `DaprWorkflowStateMetricsMissing` — bare `absent()`, `for: 15m` | `max()` over an empty vector returns nothing, so a dead receiver makes the age rule permanently quiet — identical to a well-collected store |
 
-**No workflow, actor or state-store metric is emitted at all.** `dapr_runtime_workflow_*` — the family
-`rules.yml:83` already documents as unreliable for this codebase — is not merely unreliable here, it
-is absent. The alerting chain is vmalert → GreptimeDB over PromQL, so with no series there is nothing
-to write a rule against.
+**Two design points worth keeping**, because both were nearly got wrong:
 
-That makes R2 a small EXPORTER (run the count query, expose a gauge), not a rules edit — new
-infrastructure, and the reason this item is the highest-value one on the list rather than the
-quickest. Size it accordingly before promising it.
+* **The age metric reads HISTORY rows only** (`key like '%||history-%'`), and that filter is
+  load-bearing rather than tidy. A workflow's `metadata` row keeps its original `insertdate` across
+  `continue_as_new`, so the movers' watch loops would look arbitrarily old forever and the alert would
+  fire on a perfectly healthy store.
+* **No `unit:` field on the metric; the name carries `_seconds` itself.** Declaring a unit makes the
+  OTLP→Prometheus convention APPEND the suffix — exactly how `outbox_oldest_age` shipped as a rule
+  that could never fire.
+
+**Verified end to end, not assumed:**
+
+* the SHIPPED collector config loads — rendered out of the chart and run through `otelcol-contrib
+  validate` in the real `0.157.0` image via Dagger, with a negative control (`value_type: bogus`)
+  proving `validate` actually rejects a bad config rather than passing everything;
+* both series are live in GreptimeDB, and their values match the database: `dapr_workflow_state_rows`
+  6157, `dapr_workflow_history_oldest_age_seconds` 267571 (3.1 days) against psql's 6157 / 267571;
+* every alert expression is evaluable **on the production engine** — `make alert-rules-drill` replayed
+  all 31 rules against the live GreptimeDB, "all evaluable". `max(...) > 2851200` and
+  `absent(dapr_workflow_state_rows)` both return empty right now, which is what a correctly-collecting
+  store looks like.
+
+**Three gates hold it together**, since `rules.yml` is mounted with `.Files.Get` and cannot be
+templated: the rules cannot ship without the receiver and the receiver cannot be renamed or deleted
+while they exist (both directions, plus a declared metric no rule reads is refused); and the threshold
+literal must track `dapr.workflowRetention` in `values.yaml` the way `GreptimeDBMemoryHigh` tracks the
+memory limit.
+
+**vmalert itself is OFF in dev** (`observability.alerting.enabled: false` — dev has no on-call;
+`values-prod` flips it). That is pre-existing and correct: the series and the expressions are both
+proven against the real store, and the only unexercised leg is Alertmanager's routing, which is a prod
+drill.
+
+**A defect found while verifying, fixed in the same pass.** `e1b8f3dd` moved the runbooks into
+`docs/runbooks/` and left **24 of 29 alert annotations** pointing at the old flat path — dead links in
+the one text an on-caller reads at 3am — plus a `#dlq-parking` anchor that had never matched its
+heading, and four more stale `docs/RUNBOOK-restore.md` pointers (one of them inside a helm render
+FAILURE message, shown to someone whose upgrade just died). All fixed, and a gate now resolves both
+the file and the anchor of every runbook link an annotation cites.
 
 ### U1 — ~~five operator routes with no caller~~ · **RULED + PARTLY CLOSED 2026-08-26**
 
@@ -265,15 +299,25 @@ single-flight refresh → state changes on screen — has not been exercised aga
 client seam has six unit tests covering it (path, id encoding, bearer, 409-as-value, non-JSON body,
 `detail` preserved), but that is not the same claim. Closing it needs a live run to act on.
 
-### U3 — workflow history and retention are surfaced nowhere
+### U3 — workflow history and retention are surfaced nowhere · **RE-ASK IS NOW DUE**
 
 No zone shows how much history exists, how old it is, or what the retention policy is. The one
 promising grep hit — `home/src/lib/remote/policies.remote.ts` — is the **Lance table** compaction and
 retention plane (the maintenance surface), which is a different thing entirely.
 
-Whether this deserves a surface at all is a genuine question, not an obvious yes: it is an operator
-concern, and the estate's answer to operator concerns elsewhere is an alert (R2), not a page. **Do R2
-first and re-ask this afterwards** — an alert may make the page unnecessary.
+This was deliberately deferred behind R2 on the reasoning that *an alert may make the page
+unnecessary*. R2 has landed, so the question is answerable now, and the honest answer is **mostly
+yes**: the operator concern is covered. Retention stalling now pages, the numbers are queryable in
+GreptimeDB, and a page rendering a gauge nobody acts on is a surface to maintain rather than a feature.
+The estate's own precedent for operator concerns is an alert, not a page.
+
+**What R2 does NOT cover, and is the only part still worth building:** a person looking at a specific
+run has no way to know how long its history will survive. That is a per-run fact on a page that already
+exists (`compute/ingest/[run_id]`), not a new observability surface — a line in the run header, sourced
+from the same policy values, saying how long this run's history is kept given its terminal state.
+Small, and it answers the question a user actually has.
+
+**Recommendation: build that line, drop the dashboard.** Owner's call.
 
 ---
 

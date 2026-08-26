@@ -94,7 +94,7 @@ normally the one this chart installed). */}}
 {{- if eq .metadata.name "data" }}
 {{- $current := .spec.resources.requests.storage }}
 {{- if ne (toString $current) (toString $.Values.age.storage) }}
-{{- fail (printf "age.storage=%s but the deployed AGE StatefulSet's volumeClaimTemplate requests %s — volumeClaimTemplates are immutable, so this upgrade cannot resize the volume. To resize: patch the PVC (kubectl patch pvc data-%s-0 -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"%s\"}}}}'), delete the StatefulSet with --cascade=orphan (pods and PVC stay), then re-run the upgrade. See docs/RUNBOOK-restore.md. To keep the current size, revert age.storage to %s." (toString $.Values.age.storage) (toString $current) (include "lance.ageHost" $) (toString $.Values.age.storage) (toString $current)) }}
+{{- fail (printf "age.storage=%s but the deployed AGE StatefulSet's volumeClaimTemplate requests %s — volumeClaimTemplates are immutable, so this upgrade cannot resize the volume. To resize: patch the PVC (kubectl patch pvc data-%s-0 -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"%s\"}}}}'), delete the StatefulSet with --cascade=orphan (pods and PVC stay), then re-run the upgrade. See docs/runbooks/RUNBOOK-restore.md. To keep the current size, revert age.storage to %s." (toString $.Values.age.storage) (toString $current) (include "lance.ageHost" $) (toString $.Values.age.storage) (toString $current)) }}
 {{- end }}
 {{- end }}
 {{- end }}

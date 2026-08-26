@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AGE restore drill (prod-readiness P4) — RUN INSIDE the age-postgres pod (it has psql/pg_dump; the Dagger
-# lineage-e2e AGE is not reachable from the runner). Proves the exact hazard docs/RUNBOOK-restore.md warns
+# lineage-e2e AGE is not reachable from the runner). Proves the exact hazard docs/runbooks/RUNBOOK-restore.md warns
 # about: does a plain `pg_dump` of an Apache AGE database, restored into a fresh DB, KEEP the graph's labels
 # and vertices — or does it come back with the ag_catalog metadata but no data (the known plain-pg_dump-of-AGE
 # trap)? Self-contained on a throwaway `restore_drill` DB, so it never touches the real lineage graph.

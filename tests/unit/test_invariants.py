@@ -5080,6 +5080,54 @@ def test_the_workflow_history_alert_threshold_TRACKS_the_retention_policy() -> N
     )
 
 
+def _slugify_heading(text: str) -> str:
+    """A markdown heading -> its anchor, the way GitHub and the docs site both derive it.
+
+    Characters that are neither alphanumeric nor space nor hyphen are DROPPED rather than replaced,
+    which is why `DLQ parking -> a delivery gave up` anchors as `dlq-parking--a-delivery-gave-up`
+    with a double hyphen. Getting that wrong would make this gate reject links that work.
+    """
+    kept = "".join(char for char in text.lower() if char.isalnum() or char in " -")
+    return kept.strip().replace(" ", "-")
+
+
+def test_every_RUNBOOK_LINK_in_an_alert_annotation_resolves() -> None:
+    """A dead runbook link in an alert is worse than no link: it costs the on-caller time at 3am.
+
+    This is not hypothetical. `e1b8f3dd` moved the runbooks into docs/runbooks/ and left every
+    annotation in rules.yml pointing at the old flat path -- 24 of 29 rules, for weeks, and nothing
+    reported it. Every other gate in this file passed the whole time, because a link is prose and
+    prose is not evaluated.
+
+    Both halves are checked, because both fail the same way. The FILE must exist, and the ANCHOR must
+    be a heading in it -- a heading rename leaves a link that loads the right page and lands nowhere,
+    which reads as "the runbook does not cover this".
+    """
+    rules = yaml.safe_load((REPO / "chart/alerting/rules.yml").read_text())
+    annotations = [str(value) for group in rules["groups"] for rule in group.get("rules", []) for value in (rule.get("annotations") or {}).values()]
+    assert annotations, "parsed no annotations out of rules.yml -- this check would pass vacuously"
+
+    links = {link for text in annotations for link in re.findall(r"docs/[A-Za-z0-9_./-]+\.md(?:#[A-Za-z0-9-]+)?", text)}
+    assert links, "no runbook links found in any annotation -- this check would pass vacuously"
+
+    broken: list[str] = []
+    for link in sorted(links):
+        path, _, fragment = link.partition("#")
+        target = REPO / path
+        if not target.exists():
+            broken.append(f"{link} -> no such file")
+            continue
+        if not fragment:
+            continue
+        headings = {_slugify_heading(m) for m in re.findall(r"^#{1,6}\s+(.*?)\s*$", target.read_text(), re.MULTILINE)}
+        if fragment not in headings:
+            broken.append(f"{link} -> no heading anchors to #{fragment}")
+
+    assert not broken, f"{len(broken)} runbook link(s) in alert annotations do not resolve, so the alert points an on-caller at nothing:\n" + "\n".join(
+        f"  - {b}" for b in broken
+    )
+
+
 def test_every_alert_rule_has_a_promtool_case() -> None:
     """rules.yml and rules_test.yml are related by nothing, so both directions rot silently.
 

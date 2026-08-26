@@ -362,7 +362,7 @@ if [ "${E2E_CHAOS:-1}" = "1" ]; then
   echo "   ✓ chaos drill: both dependency outages fail closed + recover"
 fi
 
-# --- P4 restore drill: PROVE the AGE backup is restorable. docs/RUNBOOK-restore.md warns that a plain
+# --- P4 restore drill: PROVE the AGE backup is restorable. docs/runbooks/RUNBOOK-restore.md warns that a plain
 # pg_dump of an Apache AGE database can restore the ag_catalog metadata but LOSE the graph's labels/data.
 # Run the drill INSIDE the age-postgres pod (it has psql/pg_dump) on a throwaway DB, so it never touches the
 # real lineage graph. A red here is a genuine finding (switch backup-pg.yaml to an AGE-aware dump), not a

@@ -3,7 +3,7 @@
 # observability.alerting.enabled. Seeded from the Perses panels already labelled "alertable" — every metric
 # below is one this estate actually emits. Proven to FIRE on synthetic series by rules_test.yml
 # (`make alert-rules-check` → promtool). The live datasource round-trip is a drill (see docs/DECISIONS.md "P3b").
-# The point: these turn SILENT failures (data quietly stops flowing) into a page. See docs/RUNBOOK-oncall.md.
+# The point: these turn SILENT failures (data quietly stops flowing) into a page. See docs/runbooks/RUNBOOK-oncall.md.
 groups:
   - name: lance-lineage
     rules:
@@ -17,7 +17,7 @@ groups:
           summary: "Lineage outbox not draining (depth > 0 for 10m)"
           description: >-
             Durable lineage events are staged but not published — provenance is not reaching the AGE graph.
-            The relay, lineage, or the NATS bus is unhealthy. Runbook: docs/RUNBOOK-oncall.md#outbox-not-draining
+            The relay, lineage, or the NATS bus is unhealthy. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
       # `_seconds`, and the suffix is the whole rule. The instrument declares `unit="s"`, and the
       # OTLP->Prometheus exporter APPENDS the unit — so the series is `outbox_oldest_age_seconds` and a
@@ -35,7 +35,7 @@ groups:
           summary: "Lineage outbox oldest staged event > 5 min old"
           description: >-
             The outbox relay is lagging; the oldest undrained event exceeds 300s.
-            Runbook: docs/RUNBOOK-oncall.md#outbox-not-draining
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
       - alert: LineageIngestDeadLettering
         expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="dead_lettered"}[5m])) > 0
@@ -47,7 +47,7 @@ groups:
           summary: "Lineage ingest dead-lettering — provenance is being LOST"
           description: >-
             A lineage event exhausted its Dapr resiliency schedule and was parked (a terminal loss signal).
-            Runbook: docs/RUNBOOK-oncall.md#dlq-parking
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
   - name: lance-catalog
     rules:
@@ -63,7 +63,7 @@ groups:
             The catalog has been returning 429 on bulk Arrow-IPC writes (the concurrent-write cap, P5
             load-shedding) for 15m — it is persistently over capacity, not just riding out a burst. Scale
             catalog replicas or raise LANCE_MAX_CONCURRENT_WRITES (watch the pod memory: each write buffers
-            up to 256MiB). Runbook: docs/RUNBOOK-oncall.md
+            up to 256MiB). Runbook: docs/runbooks/RUNBOOK-oncall.md
 
   - name: lance-medallion
     rules:
@@ -77,7 +77,7 @@ groups:
           summary: "Medallion cascade dead-lettering — a stage delivery gave up"
           description: >-
             A cascade delivery exhausted its retries and was parked; a dataset has silently stopped updating.
-            Runbook: docs/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
       # THE RUN-LEVEL VERDICT, and the reason it cannot come from Dapr's own family.
       # `dapr_runtime_workflow_execution_count_total` carries a `status` label, and for this codebase it
@@ -97,7 +97,7 @@ groups:
             A stage watch reached a terminal verdict other than `succeeded`. `abandoned` means the job was
             still RUNNING at the watch ceiling — not a failure, but the estate stopped looking; `unnotified`
             means the outcome reached the graph and no person. Split by `lance_medallion_verdict` to tell
-            them apart. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            them apart. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       - alert: MedallionStageDenied
         expr: sum(rate(medallion_stage_denied_total[5m])) > 0
@@ -109,7 +109,7 @@ groups:
           summary: "Medallion stage FGA-denied — the cascade may stall at this stage"
           description: >-
             A mover lacked the grant to write its target stage; re-seed with scripts/seed_medallion_fga.sh.
-            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   - name: lance-infra
     rules:
@@ -135,7 +135,7 @@ groups:
             A subscriber's handler has failed continuously: Dapr has booked process_status=retry on inbound
             deliveries for 15m without clearing, so this consumer is not draining its subscription and the
             cascade / lineage ingest has silently stopped. A healthy transient error clears in seconds. Check
-            the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   - name: lance-notifications
     rules:
@@ -159,7 +159,7 @@ groups:
             The notifications service has parked messages on dlq.notifications for 10m: the sidecar's full
             retry schedule was exhausted, so these notifications will not arrive without a replay. Check the
             inbox actor plane (lance-statestore reachable? actors registered?) and OpenFGA.
-            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # 2. The INBOX ACTOR TURN QUEUE. Single-activation is the plane's lock, which means every call for
       #    one subject serializes — so anything slow INSIDE a turn (a channel send, an FGA round-trip)
@@ -178,7 +178,7 @@ groups:
             More than 10 calls are queued against a single InboxActor for 2m. Turn-based concurrency means
             they run one at a time, so something inside a turn is slow — most likely a channel send (SMTP or
             the Slack webhook) or an unhealthy state store. Notifications for that subject are delayed, not
-            lost. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            lost. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # 3. The RECONCILER GONE QUIET — the one that catches a plane which looks healthy and is not.
       #    The feed lane covers every producer that emits lineage over HTTP only (ingest, Ray TRAIN,
@@ -217,7 +217,7 @@ groups:
             means the reconciler is running and seeing nothing — check that RASK_LINEAGE_SERVICE_IDENTITY is
             in lineage's LINEAGE_SERVICE_SUBJECTS allowlist AND that the subject holds grants on the datasets
             it should see. A reconciler that is admitted but ungranted runs perfectly and reconciles zero.
-            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # The absence half of the rule above. Separate rule, not an `or` branch — see the note there.
       # This is the one that survives the reconciler pod dying: `== 0` cannot fire over a vector that
@@ -233,7 +233,7 @@ groups:
           description: >-
             No `notifications_ingress_events_total` series for the feed lane exists at all. That is not an
             idle estate — an idle reconciler still emits a zero-valued counter. Either the pod is gone, its
-            OTLP export is broken, or the lane label changed. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            OTLP export is broken, or the lane label changed. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # T5 — the maintenance sweep's FAILURE surface. Until 2026-08-16 this service had seven metric
   # instruments and not one counted a failure, so a dataset failing on every tick forever was
@@ -343,7 +343,7 @@ groups:
             publish watchdog never re-drives, the InboxActor never compacts. Nothing errors — work just
             stops. Check `kubectl get pods -l app=dapr-scheduler-server` and the etcd PVCs; a rollback or
             PVC loss here is not recoverable from the state store, which holds no copy of the reminders.
-            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
       # WORKFLOW ACTIVITY FAILURES — writable with no first-party instrumentation at all, and unwritten
       # until now. This is the one workflow family whose `status` label is TRUE: an activity that
       # exhausts its retries raises into the orchestrator, so the sidecar sees a real failure. Measured
@@ -366,7 +366,7 @@ groups:
             One or more activities exhausted their retry policy. Group by `activity_name` and `app_id` to
             find which lane. Note the activity SPAN cannot corroborate this: the SDK wraps the call in a
             span but swallows the exception inside it, so every activity span is STATUS_CODE_UNSET even
-            when this counter says failed. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            when this counter says failed. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # THE WEDGED `continue_as_new` DETECTOR. The workflow engine drives each orchestration turn through
       # its own internal actor type, so reminder fires climbing while executions stay flat IS a watch loop
@@ -394,7 +394,7 @@ groups:
             The engine's internal reminders keep firing while no workflow execution completes, which is a
             watch loop taking turns forever. `stage_run` and `train_run` both continue_as_new on every
             poll, so a job that never reaches a terminal status turns indefinitely and looks healthy from
-            every angle except this one. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            every angle except this one. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # The scrape itself, asserted. If the control-plane job stops producing series the rule above
       # cannot fire, and its silence would be indistinguishable from health — the failure mode this
@@ -412,7 +412,7 @@ groups:
             collector's `dapr-control-plane` scrape job is not matching it (it keeps pods annotated
             `dapr.io/control-plane` on the container port named `metrics`). Until this clears,
             DaprSchedulerServingNoSidecars is blind.
-            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # ===============================================================================================
   # RAY. Fifteen rules existed and not one concerned Ray — the plane the entire bronze->silver->gold
@@ -447,7 +447,7 @@ groups:
             service and 0% errors while the cluster is gone. Check the Ray head and
             `ray.dashboardUrl`. If the outcome is `unauthorized` instead, this is a Secret, not an
             outage — see RayControlUnauthorized.
-            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       - alert: RayControlUnauthorized
         expr: sum(increase(ray_control_probes_total{lance_ray_outcome="unauthorized"}[10m])) > 0
@@ -462,7 +462,7 @@ groups:
             401/403. Check `RASK_RAY_AUTH_TOKEN` / the `<release>-ray-auth-token` Secret and whether
             the token was rotated. Do NOT go debugging the node pool — the cluster is up and saying
             no.
-            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       - alert: RayJobHistoryGrowing
         expr: max(ray_control_jobs_known) > 10000
@@ -477,7 +477,7 @@ groups:
             81,155 jobs that response measured 164.7 MB and OOM-killed the compute pod. Check the
             `compute-prune-jobs-cron` Dapr binding is ticking and that `prune_jobs` is not failing
             every delete (`PruneResult.failed`).
-            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       - alert: RayMetricsMissing
         expr: absent(ray_node_cpu_utilization)
@@ -492,7 +492,7 @@ groups:
             endpoint. Ray metrics are PULL-only and this does not self-heal. Apply the `ray-pods`
             scrape job in open_ray_handover.md section 1 on the cluster KubeRay runs on. Until it
             clears, RayWorkerOOMKills and RayServeNoHealthyReplicas cannot fire.
-            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       - alert: RayWorkerOOMKills
         expr: sum(increase(ray_memory_manager_worker_eviction_total[15m])) > 0
@@ -508,7 +508,7 @@ groups:
             the pod that nothing ships, so there is no traceback to find — the FAIL lineage event's
             errorMessage facet now carries the exit code instead. Reduce the stage's batch size or
             raise the head/worker memory limit.
-            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # T-OBS — the telemetry backend itself. Every other group in this file describes something the
   # store can tell you about; this group is the one that tells you the store is gone. It has to be
@@ -542,7 +542,7 @@ groups:
             The estate's only metrics/logs/traces store restarted. Check for OOMKill first —
             `kubectl get pod rask-greptimedb-standalone-0 -o jsonpath='{.status.containerStatuses[0].lastState}'`
             — exit 137 means the 8Gi limit was hit. Every dashboard and every other rule in this file
-            went blind for the duration. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            went blind for the duration. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # Fires while the store is still UP, which is the entire point — GreptimeDBRestarting only
       # tells you afterwards. RSS, not greptime_cgroups_memory_usage_bytes: the cgroup figure
@@ -579,7 +579,7 @@ groups:
           summary: "GreptimeDB is not answering its scrape"
           description: >-
             The store is down. Ingest is being dropped, not buffered — the fleet exports OTLP/HTTP
-            straight to it. Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+            straight to it. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # The scrape job itself vanishing looks identical to a healthy quiet store unless something
       # asserts the series EXISTS. Returns 1 today and goes quiet once the job lands.
