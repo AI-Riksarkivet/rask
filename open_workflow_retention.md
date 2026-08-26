@@ -54,8 +54,8 @@ Six items. Three are small, one is a decision, one is real infrastructure.
 
 | # | item | size | blocked by |
 | ---: | --- | --- | --- |
-| **0** | **Redeploy** — the fleet runs `main-da59dac3`, none of the 48 Dapr fixes are live, and the deployed revision's `uv.lock` lacks `regex` so the flows image cannot build from it | 30–60 min | nothing |
-| **1** | **R1** purge the 64 orphans | minutes | 0 (not strictly — but re-measuring against a stale fleet is confusing) |
+| ~~**0**~~ | ~~**Redeploy**~~ — **DONE 2026-08-26**, fleet on `main-553ec99b` (helm rev 57), all pods Running, 0 restarts | — | — |
+| ~~**1**~~ | ~~**R1** purge the 64 orphans~~ — **DONE 2026-08-26**, 1367 rows → 0 | — | — |
 | **2** | **U1** ruling: operator surface, or break-glass lever? | a decision | owner |
 | **3** | **R2** retention exporter + alert | ~half a day | nothing |
 | **4** | **U2** controls on `compute/ingest` | ~150 lines | 2, and only if the answer is "surface" |
@@ -71,13 +71,27 @@ a bare `helm upgrade` with different values replaces every deployed image with t
 response to HTTPS client". And never pipe the build to `tail` — the pipe's exit code is reported, not
 the build's, so a failed build prints success.
 
+
+**Two traps hit during the 2026-08-26 redeploy, recorded so the next one does not.**
+
+* **`make k3s-up` was the WRONG command for this release.** The plan said to use it; the live release
+  runs `image.localImages: false` (registry-based, per-image `image.tags`), and `k3s-up` renders with
+  `localImages=true` — it would have flipped every image to side-loaded mode. The right command was
+  `helm upgrade rask chart --reuse-values --set image.tags.<svc>=<tag>`, which also preserves a
+  concurrent session's values.
+* **`flows` is NOT in `COMPOSE_IMAGES`** and so is missed by any loop built from that variable, even
+  though it has its own `.docker/flows.dockerfile` and its own deployment. It was caught only by
+  reading `helm get values`' tag map. It is also the one service whose `regex` lock fix mattered —
+  and its build succeeding is the proof that fix works, since `uv sync --frozen --package flows`
+  refuses a stale lock.
+
 **Why 3 outranks 1 in value but not in order.** R1 is inert disk; R2 is the difference between
 "retention is fixed" and "we can tell when retention breaks". R1 goes first only because it is minutes
 and closes a measured, sized item cleanly.
 
 ## The backlog
 
-### R1 — 64 orphaned `ingest` instances that will never be collected
+### R1 — ~~64 orphaned `ingest` instances~~ · **DONE 2026-08-26**
 
 **Measured 2026-08-26**, `daprstate.state`:
 
@@ -104,8 +118,17 @@ terminal instances require a manual purge. The 08-08 → 08-22 gap is the proof 
 post-policy instances in that window were collected — and the untouched pre-policy block is the proof
 it cannot reach backwards.
 
-**Done means:** those 64 instances are gone from the state store, and a re-measure shows the earliest
-`insertdate` inside the retention window.
+**DONE 2026-08-26.** Purged via the sidecar loop below; **1367 rows → 0**, and the whole workflow table
+now starts at 2026-08-23 — inside the retention window.
+
+Two things learned in the doing, both worth keeping:
+
+* **The 64 distinct ids were 43 instances + 21 ACTIVITY keys.** The activity records are keyed
+  `<instance-uuid>:0004`, not bare UUIDs, so a loop that assumes one id per instance purges the wrong
+  set. Purging the 43 real instances collected their activity keys too — purge deletes an instance's
+  metadata *and* its associated keys, as the protocol doc says.
+* All 43 returned 2xx and **zero failed**, which is what "COMPLETED is purgeable, no `--force`"
+  looks like in practice.
 
 **How — measured 2026-08-26, and simpler than the docs' CLI path suggests.** There is no `dapr` CLI
 on this host and none is needed: the sidecar's HTTP API is reachable from the app container
