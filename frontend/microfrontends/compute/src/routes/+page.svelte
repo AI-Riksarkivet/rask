@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { liveRead } from '@rask/api/live';
+	import { rayClock } from '$lib/live/ray-clock.svelte';
 	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import {
@@ -57,22 +58,28 @@
 	const serve = $derived(serveQuery.current ?? null);
 	const runs = $derived(runsQuery.current?.runs ?? []);
 
-	// POLL REASON: the Ray dashboard REST API is snapshot-only introspection — Ray publishes no
-	// change events a cursor could ride, so re-reading cluster/job/actor/task/serve/event state on
-	// a clock is the only transport. The runs feed is NOT polled — it's a live query driven by the
-	// lineage cursor. `.catch(() => {})` is mandatory: an uncaught refresh rejection (one 500)
-	// evicts the query from cache and kills the loop. Each query refreshes independently.
-	onMount(() => {
-		const timer = setInterval(() => {
+	// SIX READS, ONE CLOCK — and the split on this page is the estate's clearest example of the rule.
+	// The runs feed is NOT here: it is a live query driven by the lineage cursor, because a run
+	// reaching a terminal state IS published. Everything below is the Ray plane, which publishes
+	// nothing, so it rides `$lib/live/ray-clock` — one interval for the whole zone, holding the single
+	// POLL REASON. This page alone used to issue 72 requests a minute per open tab on its own timer,
+	// beside a seventh owned by `RayStatus`.
+	//
+	// `.catch(() => {})` per refresh stays mandatory: one uncaught rejection evicts that query from
+	// cache and silently kills its updates. The catch is what isolates a failing read — never a
+	// separate timer.
+	$effect(() => rayClock.subscribe());
+	liveRead(
+		() => rayClock.cursor,
+		() => {
 			overviewQuery.refresh().catch(() => {});
 			clusterQuery.refresh().catch(() => {});
 			jobsQuery.refresh().catch(() => {});
 			actorsQuery.refresh().catch(() => {});
 			tasksQuery.refresh().catch(() => {});
 			serveQuery.refresh().catch(() => {});
-		}, 5000);
-		return () => clearInterval(timer);
-	});
+		},
+	);
 
 	const jobList = $derived(jobsPayload?.jobs ?? []);
 	const serveApps = $derived(Object.values(serve?.applications ?? {}));

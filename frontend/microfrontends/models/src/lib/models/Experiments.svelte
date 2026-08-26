@@ -9,13 +9,21 @@
 	import { page } from '$app/state';
 	import { fetchExperimentsDashboard } from './remote/experiments.remote';
 
-	// POLL REASON: a decaying rate has no event. This is the one surviving timer in this zone, and it
-	// survives on purpose. Every other panel re-reads on a
-	// cursor because its value changes when the estate changes. This panel does not: it renders
-	// `rate(lance_training_runs_total[5m])` and friends, a Prometheus rate over a MOVING five-minute
-	// window, whose value falls as the clock advances even when nothing whatsoever happens. Driving it
-	// from the lineage cursor would freeze a decaying rate at its last non-zero value and call it live —
-	// a worse lie than a poll. There is no event that means "the window moved", so the clock stays.
+	// POLL REASON: a decaying rate has no event — and that is true of ONE of the three panels here,
+	// which is the whole argument, so state it precisely rather than generalising it.
+	//
+	// Panel 1 renders `rate(lance_training_runs_total[5m])`: a Prometheus rate over a MOVING
+	// five-minute window, whose value falls as the clock advances even when nothing whatsoever
+	// happens. No event can mean "the window moved", so no cursor could drive it; the lineage cursor
+	// would freeze a decaying rate at its last non-zero value and call it live, which is a worse lie
+	// than a poll. Panels 2 and 3 are `max by (lance_model) (lance_training_rows_seen)` and
+	// `(lance_training_features)` — gauges that move only when a training job writes, which the
+	// lineage cursor DOES carry, so on their own they would not justify a timer.
+	//
+	// The clock stays because all three arrive in ONE request: panel 1 needs it, and the other two
+	// ride along at no additional cost. Splitting the dashboard to put two panels on a cursor would
+	// add a second read and a second failure mode to save nothing. What the clock does NOT do is run
+	// in the resting states — see the bounded effect below.
 	const POLL_MS = 5000;
 
 	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
@@ -48,8 +56,18 @@
 		}
 	}
 
+	// BOUNDED. The clock is the right transport here and stays — but only while something CAN change.
+	// `unauthorized` (401, no session) and `unavailable` (501, no observability wired) are RESTING
+	// states: nothing moves until the user signs in or the estate is reconfigured, and neither is an
+	// event this panel could miss. Polling through them re-asks a question whose answer cannot have
+	// changed, every POLL_MS, for as long as the tab is open. The Refresh button covers recovery.
+	//
+	// `offline` is deliberately NOT in the guard: an unreachable backend IS expected to come back, and
+	// the recovery is exactly the transition nothing publishes — the same argument that keeps
+	// `explorer/src/lib/service-health.svelte.ts` on a timer.
 	$effect(() => {
 		load();
+		if (unauthorized || unavailable) return;
 		const timer = setInterval(load, POLL_MS);
 		return () => clearInterval(timer);
 	});

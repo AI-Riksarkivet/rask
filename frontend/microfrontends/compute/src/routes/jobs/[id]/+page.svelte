@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { liveRead } from '@rask/api/live';
+	import { rayClock } from '$lib/live/ray-clock.svelte';
 	import { page } from '$app/state';
 	import { base } from '$app/paths';
 	import { type TaskInfo } from '@rask/api';
@@ -73,20 +74,33 @@
 		logsQuery.refresh().catch(() => {});
 	}
 
-	// POLL REASON: the Ray dashboard REST API is snapshot-only introspection — Ray publishes no
-	// change events a cursor could ride, and a live job's log file grows without any event that
-	// says it grew, so re-reading on a clock is the only transport. `.catch(() => {})` is
-	// mandatory: an uncaught refresh rejection (one 500) evicts the query from cache and kills
-	// the loop. Logs only poll while the job is live; the rest always refresh independently.
-	onMount(() => {
-		const timer = setInterval(() => {
+	// BOUNDED, and the bound is the point. This page used to say "the rest always refresh
+	// independently" as though it were a feature; it was the defect. A tab left open on a SUCCEEDED
+	// job kept re-reading `getRayJobs()` — the heaviest call in `ray-kit`, the one with the
+	// 81,155-job / 164.7 MB history behind it — every five seconds, forever, one directory away from
+	// `ingest/[run_id]` whose own comment forbids exactly that ("polling a finished run forever is how
+	// a status page becomes the busiest client of the service it reports on"). Two pages in one zone
+	// taught contradictory rules; they now teach the same one.
+	//
+	// Ray still has no publisher — that reason is intact and lives with the clock in
+	// `$lib/live/ray-clock`. What is added here is the STOP: with no subscriber the shared clock does
+	// not tick at all, so a terminal job issues zero requests rather than merely fewer.
+	const terminal = $derived(job !== null && !running);
+	$effect(() => {
+		if (terminal) return;
+		return rayClock.subscribe();
+	});
+	liveRead(
+		() => rayClock.cursor,
+		() => {
 			jobsQuery.refresh().catch(() => {});
 			tasksQuery?.refresh().catch(() => {});
 			clusterQuery.refresh().catch(() => {});
+			// A live job's log file grows with no event that says it grew — and a terminal job's does
+			// not grow at all, so this guard is a second, independent bound on the heaviest read here.
 			if (running) logsQuery.refresh().catch(() => {});
-		}, 5000);
-		return () => clearInterval(timer);
-	});
+		},
+	);
 
 	// Tail behaviour for the log pane.
 	function onLogScroll() {

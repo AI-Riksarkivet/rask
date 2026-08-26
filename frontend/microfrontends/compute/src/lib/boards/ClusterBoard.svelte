@@ -9,7 +9,8 @@
 	One component now. The panel is a sizing wrapper around it, so a column added here appears in both.
 -->
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { liveRead } from '@rask/api/live';
+	import { rayClock } from '$lib/live/ray-clock.svelte';
 	import { type RayNode } from '@rask/api';
 	import { getRayCluster } from '$lib/remote/compute.remote';
 	import { SortHeader } from '@rask/ui/sort-header';
@@ -26,16 +27,19 @@
 	const payload = $derived(clusterQuery.current ?? null);
 	const error = $derived(clusterQuery.error ? String(clusterQuery.error) : null);
 
-	// POLL REASON: the Ray dashboard REST API is snapshot-only introspection — Ray publishes no
-	// change events a cursor could ride, so re-reading node/resource state on a clock is the only
-	// transport. `.catch(() => {})` is mandatory: an uncaught refresh rejection (one 500) evicts
-	// the query from cache and kills the loop.
-	onMount(() => {
-		const timer = setInterval(() => {
+	// THE ZONE'S ONE CLOCK. This used to be a private `setInterval` here, and in three sibling boards,
+	// each re-reading the same shared no-arg cached queries on its own phase. `$lib/live/ray-clock`
+	// holds the single interval and the POLL REASON for all of them; `liveRead` gives the
+	// unconditional first read. `.catch(() => {})` stays mandatory per refresh — one uncaught
+	// rejection evicts that query from cache and silently kills its updates, and it is the catch, not
+	// a separate timer, that stops one failing query taking the others with it.
+	$effect(() => rayClock.subscribe());
+	liveRead(
+		() => rayClock.cursor,
+		() => {
 			clusterQuery.refresh().catch(() => {});
-		}, 5000);
-		return () => clearInterval(timer);
-	});
+		},
+	);
 
 	function bytesGb(b: number): number {
 		return b / 1024 ** 3;

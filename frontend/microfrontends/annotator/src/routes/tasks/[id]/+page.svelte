@@ -15,6 +15,7 @@
 	import { ArrowLeft, Inbox, Pencil, RefreshCw } from '@lucide/svelte';
 
 	import { fetchMeViaBff } from '$lib/http';
+	import { liveRead, lineageTick } from '$lib/live/tick.svelte';
 	import AdjudicationPanel from '$lib/projects/AdjudicationPanel.svelte';
 	import BulkGrid from '$lib/bulk/BulkGrid.svelte';
 	import AnnotatorMetrics from '$lib/projects/AnnotatorMetrics.svelte';
@@ -101,16 +102,35 @@
 		})();
 	});
 
-	$effect(() => {
-		void projectId; // the tracked dependency: re-load when the route param changes
-		void load();
-	});
+	// TWO SIGNALS, because this page has two kinds of news and only one of them is on a cursor. The
+	// shape is `compute/src/routes/ingest/[run_id]/+page.svelte`'s, which is the estate's reference
+	// for it; this page had only the second half, and the omission was not cosmetic.
+	//
+	// 1. THE CURSOR. An annotation save emits lineage (`annotations/commit.py::emit_save`) and the
+	//    publish saga's own `create_table` goes through the catalog — a governed write. Both move
+	//    `lineageFeed`. So the cursor is how this page learns that SOMEONE ELSE submitted, and that a
+	//    publish actually landed. Without it two reviewers on one project never saw each other's work
+	//    and the `publishing -> published` flip waited for the next 2 s tick.
+	//
+	//    Keyed on `projectId`, which replaces the bare re-load effect that used to sit here: the key
+	//    stays a tracked dependency and the first read is unconditional, so a route change still
+	//    re-reads immediately.
+	liveRead(
+		lineageTick,
+		() => {
+			void load();
+		},
+		() => projectId,
+	);
 
+	// 2. POLL REASON: SAGA STEP NARRATION, and nothing else. The publish saga runs server-side and
+	//    narrates `publish_progress` onto the project document (`saga.py::_note`) — a counter that
+	//    climbs between commits, so no cursor moves for it, exactly like `units_done` on the ingest
+	//    run page. The cursor above already owns the terminal transition and other people's work; this
+	//    timer owns only the steps in between. 2 s tracks a run whose steps take seconds, and it stops
+	//    the moment the project leaves `publishing`, so a settled project polls not at all.
 	$effect(() => {
 		if (detail?.project.state !== 'publishing') return;
-		// POLL REASON: the publish saga runs server-side and narrates progress onto the project
-		// document; there is no client event for "the saga advanced a step". 2 s tracks a run whose
-		// steps take seconds, and the poll stops the moment the project leaves `publishing`.
 		const timer = setInterval(() => void load(), 2000);
 		return () => clearInterval(timer);
 	});

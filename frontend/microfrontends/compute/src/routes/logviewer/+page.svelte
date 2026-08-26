@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { liveRead } from '@rask/api/live';
+	import { rayClock } from '$lib/live/ray-clock.svelte';
 	import { page } from '$app/state';
 	import { type RayNode } from '@rask/api';
 	import { getRayCluster, getLogFiles, getLogContent } from '$lib/remote/compute.remote';
@@ -76,14 +77,20 @@
 		return null;
 	});
 
-	// POLL REASON: the Ray dashboard REST API is snapshot-only introspection — Ray publishes no
-	// change events a cursor could ride, so the node list re-reads on a clock (the file/content
-	// reads re-key themselves; the manual refresh button re-fetches the active content query),
-	// and the live tail below polls because a growing log file emits no "it grew" event.
-	onMount(() => {
-		const timer = setInterval(() => clusterQuery.refresh().catch(() => {}), 5000);
-		return () => clearInterval(timer);
-	});
+	// The NODE ROSTER is an ordinary Ray read, so it rides the zone's one clock (`$lib/live/ray-clock`,
+	// which holds the single POLL REASON for the Ray plane). The file/content reads re-key themselves
+	// and the toolbar button re-fetches the active content query, so neither needs a clock.
+	//
+	// The live TAIL below is deliberately NOT folded in here: it runs at 2.5 s, not 5 s, and it is
+	// gated on `follow && selected` rather than on the page being open. Different cadence and
+	// different lifetime — one clock for both would make the tail lag or the roster churn.
+	$effect(() => rayClock.subscribe());
+	liveRead(
+		() => rayClock.cursor,
+		() => {
+			clusterQuery.refresh().catch(() => {});
+		},
+	);
 
 	function selectNode(id: string) {
 		selectedNode = id;
@@ -129,8 +136,12 @@
 		deepLinkOpened = true;
 	});
 
-	// Live tail — poll the content query while following. `.refresh().catch()` is
-	// mandatory: an uncaught refresh rejection evicts the query and kills the loop.
+	// POLL REASON: a growing log file emits no "it grew" event. The Ray dashboard serves a log's bytes
+	// on request (`/api/v0/logs/file`) and publishes nothing when more arrive, so following a live tail
+	// can only be done by asking again. 2.5 s rather than the zone's 5 s because a tail that lags is a
+	// tail nobody uses, and BOUNDED to `follow && selected` — stop following, or select nothing, and
+	// this issues no requests at all. `.refresh().catch()` is mandatory: an uncaught refresh rejection
+	// evicts the query from cache and kills the loop.
 	$effect(() => {
 		if (!follow || !selected) return;
 		const cq = contentQuery;

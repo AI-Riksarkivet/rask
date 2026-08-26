@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { liveRead } from '@rask/api/live';
+	import { rayClock } from '$lib/live/ray-clock.svelte';
 	import { getRayHealth } from '$lib/remote/compute.remote';
 
 	// Ray cluster health — a live signal at the top of the compute overview. Lives in
@@ -8,14 +9,18 @@
 	const healthQuery = getRayHealth();
 	const health = $derived(healthQuery.current ?? null);
 
-	// POLL REASON: service liveness — the transition worth catching is a recovery, and nothing
-	// publishes "the Ray head you could not reach is up again", so a timer is the only transport.
-	// `.catch(() => {})` is mandatory: an uncaught refresh rejection (one 500) evicts the query
-	// from cache and kills the loop.
-	onMount(() => {
-		const timer = setInterval(() => healthQuery.refresh().catch(() => {}), 5000);
-		return () => clearInterval(timer);
-	});
+	// Liveness, on the zone's ONE clock. The reason a clock is right here is unchanged and still the
+	// strongest case in the zone: the transition worth catching is a RECOVERY, and by construction
+	// nothing publishes "the Ray head you could not reach is up again" — so the only signal is to try
+	// again. What changed is that it no longer owns a private interval to do it; `$lib/live/ray-clock`
+	// holds the single one and its POLL REASON.
+	$effect(() => rayClock.subscribe());
+	liveRead(
+		() => rayClock.cursor,
+		() => {
+			healthQuery.refresh().catch(() => {});
+		},
+	);
 </script>
 
 <div class="flex items-center gap-2 text-xs" title={health?.error ?? ''}>

@@ -4,6 +4,7 @@
 	// an annotator loses work to a reclaim they were never warned about.
 	import { Badge } from '@rask/ui/badge';
 
+	import { wallClock } from './clock.svelte';
 	import { leaseView, formatLease } from './lease.js';
 	import type { TaskDetail } from './types.js';
 
@@ -13,16 +14,22 @@
 	}: { task: Pick<TaskDetail, 'state' | 'assignee' | 'lease_expires_at'>; me: string | null } =
 		$props();
 
-	let now = $state(new Date());
+	// ONE CLOCK FOR THE WHOLE QUEUE, not one per row. This component used to own a 1 s interval
+	// itself, so a queue of forty tasks ran forty of them to compute the same instant — including for
+	// the `pinned` and `unheld` rows, whose markup contains no countdown at all. `./clock.svelte`
+	// holds the single interval and the POLL REASON (the wall clock is genuinely the only signal: no
+	// event means "one more second passed").
+	//
+	// GUARDED OFF THE PROPS, deliberately not off `view`. `view` is derived FROM the clock, so
+	// guarding on it would re-run this effect every tick and tear the subscription down and back up
+	// once a second — the churn this change removes, reintroduced one layer up. A row that cannot
+	// show a countdown subscribes to nothing, and a queue with no live leases runs no timer at all.
 	$effect(() => {
-		// POLL REASON: a lease deadline is a wall-clock fact with no event — the countdown (and the
-		// held→expired flip) can only be observed by sampling time. 1 s matches the chip's own
-		// resolution; the SERVER remains the authority (its reminder fires lease_expired regardless).
-		const timer = setInterval(() => (now = new Date()), 1000);
-		return () => clearInterval(timer);
+		if (task.state !== 'claimed' || !task.lease_expires_at) return;
+		return wallClock.subscribe();
 	});
 
-	const view = $derived(leaseView(task, me, now));
+	const view = $derived(leaseView(task, me, wallClock.now));
 </script>
 
 {#if view.kind === 'held'}
