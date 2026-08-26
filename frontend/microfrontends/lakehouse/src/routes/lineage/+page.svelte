@@ -51,6 +51,14 @@
 	let focusDepth = $state<number | null>(
 		initialDepth === 'all' ? null : initialDepth ? Number(initialDepth) : 2,
 	);
+	/**
+	 * The folded-away nodes, as prefixed ids. Same key Marquez uses (`collapsedNodes`), and in the
+	 * URL for the same reason focus is: a graph someone has spent a minute pruning down to the part
+	 * that matters is exactly the thing they want to send to a colleague.
+	 */
+	let collapsed = $state<string[]>(
+		(page.url.searchParams.get('collapsedNodes') ?? '').split(',').filter(Boolean),
+	);
 
 	// Mirror focus back into the URL. `replaceState` rather than `goto`: re-rooting the graph is not
 	// a navigation, and pushing history would make Back walk every node the user clicked through
@@ -66,6 +74,10 @@
 			url.searchParams.delete('kind');
 			url.searchParams.delete('depth');
 		}
+		// Independent of focus: a collapse survives clearing the focus, and clearing the focus should
+		// not silently expand a graph the reader folded on purpose.
+		if (collapsed.length > 0) url.searchParams.set('collapsedNodes', collapsed.join(','));
+		else url.searchParams.delete('collapsedNodes');
 		if (url.href !== page.url.href) replaceState(url, page.state);
 	});
 </script>
@@ -103,6 +115,7 @@
 		bind:buildMs
 		bind:focusNode
 		bind:focusDepth
+		bind:collapsed
 	/>
 </div>
 

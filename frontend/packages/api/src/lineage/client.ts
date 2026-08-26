@@ -80,7 +80,9 @@ export interface LineageClient {
 	fetchSearch: (q: string, limit?: number) => Promise<SearchResults | null>;
 	fetchJobs: () => Promise<Jobs | null>;
 	fetchNamespaces: () => Promise<Namespaces | null>;
-	fetchColumnGraph: (name: string) => Promise<ColumnGraph | null>;
+	/** The field-to-field subgraph around a dataset. `depth` counts DATASET hops outward and
+	 *  defaults to the single-hop answer, so an omitted depth is the behaviour that predates it. */
+	fetchColumnGraph: (name: string, depth?: number) => Promise<ColumnGraph | null>;
 	/** Who ORIGINATED a dataset — the verified catalog principal recorded at create time (provenance,
 	 *  not "who wrote the latest version"). Reader-gated like the rest of the dataset reads. */
 	fetchCreator: (name: string) => Promise<Creator | null>;
@@ -154,7 +156,10 @@ export function createLineageClient({
 		fetchSearch: (q, limit = 10) => getJSON<SearchResults>(`search?q=${enc(q)}&limit=${limit}`),
 		fetchJobs: () => getJSON<Jobs>('jobs'),
 		fetchNamespaces: () => getJSON<Namespaces>('namespaces'),
-		fetchColumnGraph: (name) => getJSON<ColumnGraph>(`datasets/${enc(name)}/columns`),
+		fetchColumnGraph: (name, depth) =>
+			getJSON<ColumnGraph>(
+				`datasets/${enc(name)}/columns${depth && depth > 1 ? `?depth=${depth}` : ''}`,
+			),
 		fetchCreator: (name) => getJSON<Creator>(`datasets/${enc(name)}/creator`),
 		fetchSchema: (name, version) =>
 			getJSON<DatasetSchema>(

@@ -80,6 +80,21 @@
 	 */
 	let hovered = $state<string | null>(null);
 
+	/**
+	 * How far out the field graph is read. The table graph has had a depth control since it shipped;
+	 * this one was pinned at one hop with no way to ask for more, so "where did this column actually
+	 * come from" was unanswerable here whenever the answer was a table away — which, in a medallion
+	 * cascade, is most of the time.
+	 *
+	 * Changing it RE-READS rather than re-filtering: the extra hop is not in the payload to filter.
+	 */
+	const COLUMN_DEPTHS = [1, 2, 3];
+	function setDepth(d: number): void {
+		if (store.depth === d) return;
+		store.depth = d;
+		void store.loadGraph(dataset);
+	}
+
 	// Follow the estate theme live rather than pinning the canvas dark (see the graph page).
 	const theme = useColorMode();
 
@@ -321,7 +336,10 @@
 				label: e.transformation_subtype || e.transformation_type || '',
 				// Both cues on one attribute: masking is a property of the edge, dimming is a property
 				// of what is hovered, and an edge can be either, both or neither.
-				class: [e.masking ? 'masked-edge' : '', chain && !(chain.has(s) && chain.has(t)) ? 'dim-edge' : '']
+				class: [
+					e.masking ? 'masked-edge' : '',
+					chain && !(chain.has(s) && chain.has(t)) ? 'dim-edge' : '',
+				]
 					.filter(Boolean)
 					.join(' '),
 			};
@@ -448,6 +466,23 @@
 		/>
 		<FlowAutoFit trigger={fitKey} />
 	</SvelteFlow>
+	<div class="depthbar">
+		<span
+			class="dlabel"
+			title="how many tables out to read. One hop is this dataset and whatever directly feeds or reads its columns; each further hop follows the lineage one table further."
+			>hops</span
+		>
+		{#each COLUMN_DEPTHS as d (d)}
+			<button
+				class="db"
+				class:on={store.depth === d}
+				aria-pressed={store.depth === d}
+				onclick={() => setDepth(d)}
+			>
+				{d}
+			</button>
+		{/each}
+	</div>
 	<span class="perf mono" title="last layout build">{buildMs}ms</span>
 
 	{#if !store.settled}
@@ -555,6 +590,47 @@
 	:global(.dim-edge .svelte-flow__edge-text),
 	:global(.dim-edge .svelte-flow__edge-textbg) {
 		opacity: 0.12;
+	}
+	/* Top-left, above the canvas chrome — the same corner the table graph puts its controls in, so a
+	   reader moving between the two views looks in one place. */
+	.depthbar {
+		position: absolute;
+		top: 10px;
+		left: 10px;
+		z-index: 5;
+		display: flex;
+		align-items: center;
+		gap: 3px;
+		padding: 3px 6px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--panel) 92%, transparent);
+		backdrop-filter: blur(6px);
+	}
+	.dlabel {
+		font-size: 10px;
+		color: var(--mut);
+		margin-right: 2px;
+		cursor: help;
+	}
+	.db {
+		min-width: 20px;
+		padding: 2px 5px;
+		border: none;
+		border-radius: 5px;
+		background: transparent;
+		color: var(--mut);
+		font: inherit;
+		font-size: 11px;
+		cursor: pointer;
+	}
+	.db:hover {
+		background: color-mix(in srgb, var(--ink) 8%, transparent);
+		color: var(--ink);
+	}
+	.db.on {
+		color: var(--primary);
+		background: color-mix(in srgb, var(--primary) 14%, transparent);
 	}
 	.perf {
 		position: absolute;

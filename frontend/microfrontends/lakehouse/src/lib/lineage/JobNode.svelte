@@ -13,6 +13,12 @@
 		rel?: 'focus' | 'upstream' | 'downstream' | null;
 		/** Compact mode: name and status only. See the switch in `LineageGraph.svelte`. */
 		compact?: boolean;
+		/** True when this node's downstream is folded away. */
+		collapsed?: boolean;
+		/** Fold/unfold this node's downstream. Handed DOWN through data because the collapsed set is
+		 *  the graph's (and the URL's), not the card's — a node that owned its own collapsed flag could
+		 *  not survive the rebuild that collapsing causes. */
+		onCollapse?: (id: string) => void;
 	};
 	export type JobNodeType = Node<JobData, 'job'>;
 </script>
@@ -22,7 +28,7 @@
 	import { Cpu } from '@lucide/svelte';
 	import { pop } from '@rask/ui/motion';
 
-	let { data }: NodeProps<JobNodeType> = $props();
+	let { id, data }: NodeProps<JobNodeType> = $props();
 
 	const failed = $derived(data.failed || /FAIL|ABORT/i.test(data.state ?? ''));
 	const done = $derived(data.state === 'COMPLETE');
@@ -41,7 +47,26 @@
 	<Handle type="target" position={Position.Left} />
 	<div class="bar"></div>
 	<div class="body">
-		<div class="name"><Cpu size={13} /> {data.id}</div>
+		<div class="name">
+			<Cpu size={13} />
+			<span class="jname">{data.id}</span>
+			<!-- COLLAPSE. `nodrag` so grabbing the chevron does not start a drag, and `stopPropagation`
+			     so it does not also re-root the graph — one gesture, one effect. -->
+			{#if data.onCollapse}
+				<button
+					class="fold nodrag"
+					aria-pressed={data.collapsed ?? false}
+					title={data.collapsed ? 'expand what this feeds' : 'fold away what this feeds'}
+					aria-label={data.collapsed ? 'Expand downstream' : 'Collapse downstream'}
+					onclick={(e) => {
+						e.stopPropagation();
+						data.onCollapse?.(id);
+					}}
+				>
+					{data.collapsed ? '\u203A' : '\u2039'}
+				</button>
+			{/if}
+		</div>
 		<div class="meta">
 			{data.author ?? '—'}{#if data.state}
 				· {data.state}{/if}
@@ -57,6 +82,39 @@
 	/* Compact: the job's name and whether it failed. `.meta` carries the state word and `.out` the
 	   tables it wrote — both are readable one click away in the drawer, and both are what make this
 	   card three rows tall. The RING still carries state, so a failed job is red either way. */
+	/* The chevron. Faint until the card is hovered — it is an affordance on every node, and at
+	   estate scale eighty visible chevrons are noise. A COLLAPSED node keeps it lit, because that is
+	   the only thing on the canvas saying something is folded behind this card. */
+	.fold {
+		flex: none;
+		width: 15px;
+		height: 15px;
+		padding: 0;
+		border: none;
+		border-radius: 4px;
+		background: transparent;
+		color: var(--mut, var(--muted));
+		font-size: 13px;
+		line-height: 1;
+		cursor: pointer;
+		opacity: 0;
+		transition: opacity 0.15s var(--ease);
+	}
+	.fold[aria-pressed='true'] {
+		opacity: 1;
+		color: var(--amber);
+		background: color-mix(in srgb, var(--amber) 18%, transparent);
+	}
+	.job-node:hover .fold {
+		opacity: 1;
+	}
+	.jname {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
 	.job-node.compact {
 		width: 152px;
 	}

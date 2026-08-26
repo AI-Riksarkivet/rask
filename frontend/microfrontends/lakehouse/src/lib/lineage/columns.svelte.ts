@@ -24,10 +24,19 @@ export class ColumnLineageState {
 	#graphReq = 0;
 	#fieldReq = 0;
 
+	/**
+	 * How many DATASET hops out from the root to read.
+	 *
+	 * Lives on the store rather than being passed per call because the poll re-reads on the lineage
+	 * cursor and must not silently drop back to one hop on the next tick — which is exactly what a
+	 * per-call parameter would do, and it would look like the control resetting itself.
+	 */
+	depth = $state(1);
+
 	/** Load the column-level lineage subgraph for one dataset. */
 	async loadGraph(name: string): Promise<void> {
 		const req = ++this.#graphReq;
-		const graph = await fetchColumnGraph(name);
+		const graph = await fetchColumnGraph(name, this.depth);
 		// Latest-wins: an older in-flight request must not publish over a newer selection's result.
 		if (req !== this.#graphReq) return;
 		// A failed read PRESERVES the last good graph rather than blanking the canvas — the sibling

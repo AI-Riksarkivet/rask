@@ -8,11 +8,14 @@ caller can't see are dropped via :func:`~lineage.api.fga_deps.governed` / the pe
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query
 
 from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, audit_read, governed, require_metadata_access
 from lineage.schemas import ColumnGraph, ColumnNeighbors
+from lineage.services.repository import MAX_COLUMN_DEPTH
 
 
 # Gate first (require_metadata_access), then log the authorized column-level read (#6); router-level
@@ -50,14 +53,24 @@ async def get_column_downstream(name: str, field: str, repository: RepositoryDep
 
 
 @router.get("/{name}/columns")
-async def get_dataset_columns(name: str, repository: RepositoryDep, datasets: FilterDep) -> ColumnGraph:
+async def get_dataset_columns(
+    name: str,
+    repository: RepositoryDep,
+    datasets: FilterDep,
+    depth: Annotated[int, Query(ge=1, le=MAX_COLUMN_DEPTH)] = 1,
+) -> ColumnGraph:
     """The column-level lineage subgraph around ``name`` (#24) — the field-to-field analogue of
     ``/graph``, for a DAG view of how each column was produced.
+
+    ``depth`` counts DATASET hops outward; 1 is the single-hop answer this returned before the
+    parameter existed, so every existing caller is unaffected. The bound is FastAPI's here AND the
+    repository's — governance below runs over whatever the walk returned, so a depth the service did
+    not agree to would enlarge the set being filtered, not the set being disclosed.
 
     Nodes/edges touching a dataset the caller can't see are dropped (an edge needs BOTH endpoints'
     datasets visible); ``name``'s own columns are always shown (the route gate authorized it).
     """
-    result = await repository.dataset_column_graph(name)
+    result = await repository.dataset_column_graph(name, depth)
     visible = await datasets.visible([n.dataset for n in result.columns if n.dataset != name])
     visible.add(name)
     result.columns = [n for n in result.columns if n.dataset in visible]

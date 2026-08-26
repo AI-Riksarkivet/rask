@@ -468,11 +468,19 @@ _COL_DOWNSTREAM: Final = (
 # and CREATE, leaving a duplicate :Column + duplicate HAS_COLUMN; DISTINCT collapses them so the inventory
 # lists each field once regardless. The upstream/downstream column walks already RETURN DISTINCT.
 _DATASET_COLUMN_NODES: Final = "MATCH (d:Dataset {name:$ds})-[:HAS_COLUMN]->(c:Column) RETURN DISTINCT c.field, c.type ORDER BY c.field"
+# The FRONTIER form, taking a list of datasets rather than one, so the column graph can be walked
+# outward a table at a time. The frontier is a BIND PARAMETER — unlike the table-level walk, whose
+# hop range is Cypher syntax and has to be interpolated, there is no string to sanitise here.
 _DATASET_COLUMN_EDGES: Final = (
-    "MATCH (o:Column)-[e:DERIVED_FROM_COLUMN]->(i:Column) WHERE o.dataset=$ds OR i.dataset=$ds "
+    "MATCH (o:Column)-[e:DERIVED_FROM_COLUMN]->(i:Column) WHERE o.dataset IN $dss OR i.dataset IN $dss "
     "RETURN DISTINCT o.dataset, o.field, i.dataset, i.field, "
     "e.transformation_type, e.transformation_subtype, e.masking, e.description"
 )
+
+#: How many DATASET hops out from the root the column graph may be walked. Small on purpose: the
+#: expansion is breadth-first over a connected estate, so each hop can multiply the payload, and the
+#: view draws one container per table — past a handful of tables it stops being a graph you can read.
+MAX_COLUMN_DEPTH: Final = 5
 
 
 def _tags_from(value: object) -> list[str]:
@@ -866,35 +874,71 @@ class LineageRepository:
             related=[ColumnRef(dataset=r[0], field=r[1], namespace=r[2], type=r[3]) for r in rows],
         )
 
-    async def dataset_column_graph(self, name: str) -> ColumnGraph:
+    async def dataset_column_graph(self, name: str, depth: int = 1) -> ColumnGraph:
         """The column-level subgraph around ``name``: its own columns + every edge touching them. (#24)
 
         Nodes = ``name``'s complete typed column inventory (via HAS_COLUMN) plus the neighbour columns on
         the far end of each edge (untyped — they belong to other datasets). Edges flow source→target where
         ``target`` is the derived column. Owning ``dataset`` rides every node/edge for the visibility drop.
+
+        ``depth`` counts DATASET hops, and 1 is exactly what this returned before the parameter existed.
+        A column two derivations upstream — the real answer to "where did this field come from" whenever a
+        table is built from a table that was built from something — was unreachable at any setting, because
+        there was no setting. The unit is tables rather than columns because the query is dataset-scoped and
+        the view draws one container per table: expanding by single columns would produce a container
+        holding one field, which reads as a broken table rather than a bounded walk.
         """
+        if isinstance(depth, bool) or not isinstance(depth, int):
+            raise TypeError(f"column depth must be an int, got {type(depth).__name__}")
+        if depth < 1 or depth > MAX_COLUMN_DEPTH:
+            raise ValueError(f"column depth must be between 1 and {MAX_COLUMN_DEPTH}, got {depth}")
+
         node_rows = await fetch(self._pool, self._graph, _DATASET_COLUMN_NODES, {"ds": name}, columns=2)
-        edge_rows = await fetch(self._pool, self._graph, _DATASET_COLUMN_EDGES, {"ds": name}, columns=8)
         nodes = [ColumnNode(dataset=name, field=r[0], type=r[1]) for r in node_rows]
         seen = {(name, r[0]) for r in node_rows}
         edges: list[ColumnEdge] = []
-        for o_ds, o_fld, i_ds, i_fld, tt, st, mask, desc in edge_rows:
-            edges.append(
-                ColumnEdge(
-                    source_dataset=i_ds,
-                    source_field=i_fld,
-                    target_dataset=o_ds,
-                    target_field=o_fld,
-                    transformation_type=tt or "",
-                    transformation_subtype=st or "",
-                    masking=bool(mask),
-                    description=desc or "",
+        # Deduplicated across hops: the frontier query returns every edge touching a dataset, so an
+        # edge between two datasets that are both walked comes back twice.
+        edge_keys: set[tuple[str, str, str, str]] = set()
+        # VISITED, not just the current frontier. A job that reads and writes the same table across
+        # runs makes the dataset graph cyclic, and a frontier without a visited-set walks it forever
+        # (bounded by `depth` here, but each hop would still re-fetch what it already had).
+        visited = {name}
+        frontier = {name}
+        for _ in range(depth):
+            if not frontier:
+                break
+            edge_rows = await fetch(self._pool, self._graph, _DATASET_COLUMN_EDGES, {"dss": sorted(frontier)}, columns=8)
+            next_frontier: set[str] = set()
+            for o_ds, o_fld, i_ds, i_fld, tt, st, mask, desc in edge_rows:
+                key = (o_ds, o_fld, i_ds, i_fld)
+                if key in edge_keys:
+                    continue
+                edge_keys.add(key)
+                edges.append(
+                    ColumnEdge(
+                        source_dataset=i_ds,
+                        source_field=i_fld,
+                        target_dataset=o_ds,
+                        target_field=o_fld,
+                        transformation_type=tt or "",
+                        transformation_subtype=st or "",
+                        masking=bool(mask),
+                        description=desc or "",
+                    )
                 )
-            )
-            for ds, fld in ((o_ds, o_fld), (i_ds, i_fld)):
-                if (ds, fld) not in seen:
-                    seen.add((ds, fld))
-                    nodes.append(ColumnNode(dataset=ds, field=fld))
+                for ds, fld in ((o_ds, o_fld), (i_ds, i_fld)):
+                    if (ds, fld) not in seen:
+                        seen.add((ds, fld))
+                        # Untyped: only the ROOT dataset contributes its complete typed inventory. A
+                        # neighbour contributes just the fields that take part in a derivation —
+                        # otherwise one hop outward drags in every column of every adjacent table,
+                        # and the graph grows by tables rather than along lineage.
+                        nodes.append(ColumnNode(dataset=ds, field=fld))
+                    if ds not in visited:
+                        visited.add(ds)
+                        next_frontier.add(ds)
+            frontier = next_frontier
         return ColumnGraph(root=name, columns=nodes, edges=edges)
 
     async def producers(self, name: str) -> Producers:

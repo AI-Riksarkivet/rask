@@ -57,6 +57,7 @@
 		buildMs = $bindable(0),
 		focusNode = $bindable(null),
 		focusDepth = $bindable(2),
+		collapsed = $bindable([]),
 	}: {
 		store: LineageState;
 		base?: string;
@@ -73,6 +74,15 @@
 		 */
 		focusNode?: { kind: 'dataset' | 'job'; name: string } | null;
 		focusDepth?: number | null;
+		/**
+		 * Nodes whose downstream is folded away, as PREFIXED ids (`dataset:…` / `job:…`).
+		 *
+		 * BINDABLE and URL-shaped for the same reason focus is: Marquez carries its collapsed set in
+		 * `?collapsedNodes=`, and a graph you have spent a minute pruning is worth linking to. The
+		 * prefixed form is used here rather than the public `{kind,name}` because this is a SET —
+		 * a list of objects in a query string is unreadable, and the prefix already encodes the kind.
+		 */
+		collapsed?: string[];
 	} = $props();
 
 	// The canvas follows the estate theme LIVE (the shell's theme button toggles `.dark` on
@@ -282,7 +292,7 @@
 	 * governance edits), which is why "Open" is still one click away. A drawer that fetched would
 	 * fire a request per click on a canvas whose whole idiom is clicking around.
 	 */
-	const jobAggs = $derived.by(() => collectJobs());
+	const jobAggs = $derived(collectJobs());
 
 	type Detail =
 		| {
@@ -307,8 +317,12 @@
 				outputs: string[];
 		  };
 
-	const detail = $derived.by((): Detail | null => {
-		const f = focusNode;
+	/**
+	 * Everything the canvas knows about one node. Extracted from the drawer's derived value because
+	 * the HOVER CARD asks the identical question about a different node — and a hover card computed
+	 * from a second, slightly-different expression is how the two end up disagreeing.
+	 */
+	function describe(f: { kind: 'dataset' | 'job'; name: string } | null): Detail | null {
 		if (!f) return null;
 		if (f.kind === 'dataset') {
 			const meta = store.nodes.find((n) => n.id === f.name);
@@ -335,6 +349,64 @@
 			inputs: [...(j?.inputs ?? [])],
 			outputs: [...(j?.outputs ?? [])],
 		};
+	}
+
+	const detail = $derived(describe(focusNode));
+
+	/**
+	 * THE HOVER CARD (P3). Every node on this canvas carried a native `title`, which is a browser
+	 * tooltip: it appears after a fixed delay the page cannot influence, renders in the OS's styling,
+	 * truncates, and can only ever be one string — so a dataset's location, versions, tags and run
+	 * state had to be flattened into a sentence or left out. Marquez shows a real card.
+	 *
+	 * It is the drawer's own summary, smaller, without the navigation. A click still opens the drawer;
+	 * this is for the pass over the canvas where you are identifying nodes, not reading one.
+	 */
+	let hoverId = $state<string | null>(null);
+	let hoverAt = $state<{ x: number; y: number } | null>(null);
+	/** The hovered node, as the public `{kind, name}` shape — `null` for the focused node, whose
+	 *  facts are already open in the drawer beside it. */
+	const hoverTarget = $derived(
+		!hoverId || hoverId === focused
+			? null
+			: hoverId.startsWith(JOB_PREFIX)
+				? ({ kind: 'job', name: hoverId.slice(JOB_PREFIX.length) } as const)
+				: ({ kind: 'dataset', name: hoverId.slice(DATASET_PREFIX.length) } as const),
+	);
+	const hoverDetail = $derived(describe(hoverTarget));
+
+	/**
+	 * Opening is DELAYED, closing is immediate.
+	 *
+	 * Without the delay a card fires under the pointer for every node crossed while panning or
+	 * reaching for another one, which is the failure mode that makes hover cards feel hostile. The
+	 * asymmetry is the point: appearing is a decision, disappearing is not.
+	 */
+	let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+	const HOVER_DELAY = 380;
+
+	function onNodeEnter(e: unknown) {
+		const ev = e as { node?: { id: string }; event?: { clientX?: number; clientY?: number } };
+		const id = ev.node?.id;
+		if (!id) return;
+		const x = ev.event?.clientX;
+		const y = ev.event?.clientY;
+		if (hoverTimer) clearTimeout(hoverTimer);
+		hoverTimer = setTimeout(() => {
+			hoverAt = x !== undefined && y !== undefined ? { x, y } : null;
+			hoverId = id;
+		}, HOVER_DELAY);
+	}
+
+	function onNodeLeave() {
+		if (hoverTimer) clearTimeout(hoverTimer);
+		hoverTimer = null;
+		hoverId = null;
+	}
+
+	/** A pending card must not open after the component is gone. */
+	$effect(() => () => {
+		if (hoverTimer) clearTimeout(hoverTimer);
 	});
 
 	/**
@@ -369,6 +441,18 @@
 	/** Nonce for the centring gesture — bumped per press, because pressing again with the same node
 	 *  selected must move the viewport again. */
 	let centerNonce = $state(0);
+
+	/** How many nodes the current collapse set folded away — reported, because a graph that quietly
+	 *  got smaller is a graph you cannot trust. Assigned by the build; read by the header strip. */
+	let foldedAway = $state(0);
+
+	/**
+	 * Fold or unfold one node's downstream. Immutable reassign — `collapsed` is a bindable prop that
+	 * the page mirrors into the URL, and mutating the array in place would not notify it.
+	 */
+	function toggleCollapse(id: string): void {
+		collapsed = collapsed.includes(id) ? collapsed.filter((c) => c !== id) : [...collapsed, id];
+	}
 
 	/** Open state is EXPLICIT, set by the gestures that select a node, rather than derived from
 	 *  `focusNode`. Dismissing the drawer must not also drop the focus — the neighbourhood on screen
@@ -638,6 +722,61 @@
 			}
 		}
 
+		/**
+		 * COLLAPSE: fold away what a node feeds, and nothing else.
+		 *
+		 * The rule is "hidden iff EVERY thing that feeds it is collapsed or hidden", reached as a
+		 * fixpoint from the downstream closure of the collapsed set. The naive version — hide the
+		 * whole downstream reachable set — is wrong on any real lineage graph: a gold table fed by
+		 * two silver tables would vanish when you collapsed one of them, which silently deletes a
+		 * dataset that is still very much being produced. Depth already answers "show me less";
+		 * collapse has to answer "show me less OF THIS ONE" or it is just a second depth control.
+		 */
+		const collapsedSet = new Set(collapsed);
+		if (collapsedSet.size > 0) {
+			// `derive` is derivation-oriented: source is derived FROM target, so target FEEDS source.
+			const fedBy = new Map<string, string[]>();
+			const feeds = new Map<string, string[]>();
+			for (const e of derive) {
+				(fedBy.get(e.source) ?? fedBy.set(e.source, []).get(e.source)!).push(e.target);
+				(feeds.get(e.target) ?? feeds.set(e.target, []).get(e.target)!).push(e.source);
+			}
+			const hidden = new Set<string>();
+			const queue = [...collapsedSet];
+			while (queue.length > 0) {
+				const id = queue.shift();
+				if (id === undefined) break;
+				for (const next of feeds.get(id) ?? []) {
+					// A collapsed node is never hidden by another collapse — you must still be able to
+					// see, and un-collapse, the thing you collapsed.
+					if (hidden.has(next) || collapsedSet.has(next)) continue;
+					hidden.add(next);
+					queue.push(next);
+				}
+			}
+			// Relax to a fixpoint. Deletions are COLLECTED and applied per round rather than made
+			// during iteration: `every()` below reads `hidden`, so removing entries mid-pass would
+			// make a node's verdict depend on the order its siblings happened to be visited in.
+			for (;;) {
+				const freed: string[] = [];
+				for (const id of hidden) {
+					const sources = fedBy.get(id) ?? [];
+					if (!sources.every((f) => collapsedSet.has(f) || hidden.has(f))) freed.push(id);
+				}
+				if (freed.length === 0) break;
+				for (const id of freed) hidden.delete(id);
+			}
+			if (hidden.size > 0) {
+				ids = ids.filter((id) => !hidden.has(id));
+				derive = derive.filter((e) => !hidden.has(e.source) && !hidden.has(e.target));
+				for (const id of dsSet) if (hidden.has(dsId(id))) dsSet.delete(id);
+				for (const job of jobs.keys()) if (hidden.has(jobId(job))) jobs.delete(job);
+			}
+			foldedAway = hidden.size;
+		} else {
+			foldedAway = 0;
+		}
+
 		const depth = depths(ids, derive);
 		const place = layout(ids, derive, (id) => depth.get(id) ?? 0);
 
@@ -745,6 +884,8 @@
 					rel: relation[dsId(id)] ?? null,
 					runState: runStateByDataset[id] ?? null,
 					compact,
+					collapsed: collapsedSet.has(dsId(id)),
+					onCollapse: toggleCollapse,
 				},
 			};
 		});
@@ -762,6 +903,8 @@
 				selected: jobId(job) === focused,
 				rel: relation[jobId(job)] ?? null,
 				compact,
+				collapsed: collapsedSet.has(jobId(job)),
+				onCollapse: toggleCollapse,
 			},
 		}));
 
@@ -846,6 +989,9 @@
 		{fitViewOptions}
 		minZoom={MIN_ZOOM}
 		onnodeclick={openNode}
+		onnodepointerenter={onNodeEnter}
+		onnodepointerleave={onNodeLeave}
+		onmovestart={onNodeLeave}
 	>
 		<Background variant={BackgroundVariant.Dots} gap={16} />
 		<Controls position="bottom-left" />
@@ -877,6 +1023,20 @@
 					<Minimize2 size={12} />
 					<span>Compact</span>
 				</button>
+				{#if collapsed.length > 0}
+					<button
+						class="vbtn on"
+						title="{foldedAway} node{foldedAway === 1
+							? ''
+							: 's'} folded behind {collapsed.length} collapsed node{collapsed.length ===
+						1
+							? ''
+							: 's'} — click to expand them all"
+						onclick={() => (collapsed = [])}
+					>
+						<span>{foldedAway} folded</span>
+					</button>
+				{/if}
 				<button
 					class="vbtn"
 					disabled={refreshing}
@@ -1104,6 +1264,65 @@
 			</Panel>
 		{/if}
 	</SvelteFlow>
+	{#if hoverDetail && hoverAt}
+		<!-- FIXED positioning against the pointer's viewport coordinates: the canvas pans and zooms
+		     under its own transform, and a card placed in canvas space would scale with it and drift
+		     while the graph moves. `pointer-events: none` so the card can never intercept the click
+		     that would open the real drawer. -->
+		<aside
+			class="hovercard"
+			style:left="{hoverAt.x + 16}px"
+			style:top="{hoverAt.y + 12}px"
+			aria-hidden="true"
+		>
+			<div class="hchead">
+				<span class="hckind" class:job={hoverDetail.kind === 'job'}>
+					{hoverDetail.kind === 'job' ? 'job' : 'dataset'}
+				</span>
+				<span class="hcname">{hoverDetail.name}</span>
+			</div>
+			{#if hoverDetail.kind === 'dataset'}
+				{#if hoverDetail.sourceUri}
+					<div class="hcuri mono">{hoverDetail.sourceUri}</div>
+				{/if}
+				<div class="hcrow">
+					{#if hoverDetail.runState}
+						<span class="hcstate" class:bad={hoverDetail.failed}>{hoverDetail.runState}</span>
+					{/if}
+					{#if hoverDetail.versions.length}
+						<span class="hcdim"
+							>{hoverDetail.versions.length} version{hoverDetail.versions.length === 1
+								? ''
+								: 's'}</span
+						>
+					{/if}
+					<span class="hcdim">
+						{hoverDetail.producedBy.length} producer{hoverDetail.producedBy.length === 1 ? '' : 's'}
+						· {hoverDetail.readBy.length} consumer{hoverDetail.readBy.length === 1 ? '' : 's'}
+					</span>
+				</div>
+				{#if hoverDetail.tags.length}
+					<div class="hcrow">
+						{#each hoverDetail.tags.slice(0, 4) as t (t)}<span class="hctag">{t}</span>{/each}
+					</div>
+				{/if}
+			{:else}
+				<div class="hcrow">
+					{#if hoverDetail.state}
+						<span class="hcstate" class:bad={hoverDetail.failed}>{hoverDetail.state}</span>
+					{/if}
+					{#if hoverDetail.author}<span class="hcdim">{hoverDetail.author}</span>{/if}
+				</div>
+				<div class="hcrow">
+					<span class="hcdim">
+						reads {hoverDetail.inputs.length} · writes {hoverDetail.outputs.length}
+					</span>
+				</div>
+			{/if}
+			<div class="hchint">click to open detail</div>
+		</aside>
+	{/if}
+
 	{#if store.settled && store.online && nodes.length === 0}
 		<div class="empty">
 			<b>No lineage yet.</b><br />
@@ -1329,6 +1548,87 @@
 		display: inline-flex;
 		align-items: center;
 		padding: 2px 5px;
+	}
+
+	/* THE HOVER CARD. Fixed to the viewport, never interactive — the click underneath belongs to the
+	   node, and a card that swallows it would make hovering a node stop you opening it. */
+	.hovercard {
+		position: fixed;
+		z-index: 60;
+		pointer-events: none;
+		max-width: 280px;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		padding: 7px 9px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--panel) 96%, transparent);
+		backdrop-filter: blur(6px);
+		box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 16%, transparent);
+		font-size: 11px;
+	}
+	.hchead {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		min-width: 0;
+	}
+	.hckind {
+		flex: none;
+		font-size: 9px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		padding: 0 4px;
+		border-radius: 4px;
+		color: var(--primary);
+		background: color-mix(in srgb, var(--primary) 14%, transparent);
+	}
+	.hckind.job {
+		color: var(--amber);
+		background: color-mix(in srgb, var(--amber) 16%, transparent);
+	}
+	.hcname {
+		font-weight: 600;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.hcuri {
+		font-size: 10px;
+		color: var(--muted);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.hcrow {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px;
+	}
+	.hcstate {
+		font-size: 10px;
+		font-weight: 600;
+		color: var(--ok);
+	}
+	.hcstate.bad {
+		color: var(--fail);
+	}
+	.hcdim {
+		font-size: 10px;
+		color: var(--muted);
+	}
+	.hctag {
+		font-size: 9px;
+		padding: 0 4px;
+		border-radius: 4px;
+		color: var(--muted);
+		background: color-mix(in srgb, var(--ink) 7%, transparent);
+	}
+	.hchint {
+		font-size: 9px;
+		color: var(--faint);
 	}
 
 	/* THE DETAIL DRAWER. Height-capped and scrollable rather than growing: a job with forty inputs

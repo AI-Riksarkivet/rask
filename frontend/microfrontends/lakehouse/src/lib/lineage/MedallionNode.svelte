@@ -15,6 +15,12 @@
 		runState?: string | null;
 		/** Compact mode: name and status only. See the switch in `LineageGraph.svelte`. */
 		compact?: boolean;
+		/** True when this node's downstream is folded away. */
+		collapsed?: boolean;
+		/** Fold/unfold this node's downstream. Handed DOWN through data because the collapsed set is
+		 *  the graph's (and the URL's), not the card's — a node that owned its own collapsed flag could
+		 *  not survive the rebuild that collapsing causes. */
+		onCollapse?: (id: string) => void;
 	};
 	export type MedallionNodeType = Node<MedallionData, 'medallion'>;
 
@@ -31,7 +37,7 @@
 	import { Boxes, Database, Layers, Gem } from '@lucide/svelte';
 	import { pulse, pop } from '@rask/ui/motion';
 
-	let { data }: NodeProps<MedallionNodeType> = $props();
+	let { id, data }: NodeProps<MedallionNodeType> = $props();
 
 	// Icon per medallion layer (raw → bronze → silver → gold).
 	const LAYER_ICONS = [Boxes, Database, Layers, Gem, Database];
@@ -77,8 +83,23 @@
 			     dropped is description (the URI, the version history, the tags) and what is kept is
 			     anything a reader would act on. A density mode that hides a failed write makes a
 			     broken table look healthy, which is worse than not having the mode. -->
-			{#if data.compact && data.failed}<span class="dot fail" title="a producing run failed"
-				></span>{/if}
+			{#if data.compact && data.failed}<span class="dot fail" title="a producing run failed"></span>{/if}
+			<!-- COLLAPSE. `nodrag` so grabbing the chevron does not start a drag, and `stopPropagation`
+			     so it does not also re-root the graph — one gesture, one effect. -->
+			{#if data.onCollapse}
+				<button
+					class="fold nodrag"
+					aria-pressed={data.collapsed ?? false}
+					title={data.collapsed ? 'expand what this feeds' : 'fold away what this feeds'}
+					aria-label={data.collapsed ? 'Expand downstream' : 'Collapse downstream'}
+					onclick={(e) => {
+						e.stopPropagation();
+						data.onCollapse?.(id);
+					}}
+				>
+					{data.collapsed ? '\u203A' : '\u2039'}
+				</button>
+			{/if}
 		</div>
 		<div class="uri" title={data.source_uri ?? undefined}>{data.source_uri ?? '(pending)'}</div>
 		<div class="chips">
@@ -134,6 +155,32 @@
 	}
 	.node.compact .body {
 		padding: 4px 8px;
+	}
+	/* The chevron. Faint until the card is hovered — it is an affordance on every node, and at
+	   estate scale eighty visible chevrons are noise. A COLLAPSED node keeps it lit, because that is
+	   the only thing on the canvas saying something is folded behind this card. */
+	.fold {
+		flex: none;
+		width: 15px;
+		height: 15px;
+		padding: 0;
+		border: none;
+		border-radius: 4px;
+		background: transparent;
+		color: var(--mut, var(--muted));
+		font-size: 13px;
+		line-height: 1;
+		cursor: pointer;
+		opacity: 0;
+		transition: opacity 0.15s var(--ease);
+	}
+	.fold[aria-pressed='true'] {
+		opacity: 1;
+		color: var(--amber);
+		background: color-mix(in srgb, var(--amber) 18%, transparent);
+	}
+	.node:hover .fold {
+		opacity: 1;
 	}
 	.dot {
 		flex: none;
