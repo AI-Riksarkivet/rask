@@ -8,6 +8,9 @@
 		outputs: string[];
 		failed: boolean;
 		selected: boolean;
+		/** Which side of the focused node this sits on — `null` when nothing is focused. Marquez
+		 *  answers the same question with findUpstreamNodes/findDownstreamNodes. */
+		rel?: 'focus' | 'upstream' | 'downstream' | null;
 	};
 	export type JobNodeType = Node<JobData, 'job'>;
 </script>
@@ -25,7 +28,13 @@
 	const stateKey = $derived(data.state ?? '');
 </script>
 
-<div class="job-node" class:selected={data.selected} style:--ring={ring} {@attach pop(stateKey)}>
+<div
+	class="job-node"
+	class:selected={data.selected}
+	data-rel={data.rel ?? undefined}
+	style:--ring={ring}
+	{@attach pop(stateKey)}
+>
 	<Handle type="target" position={Position.Left} />
 	<div class="bar"></div>
 	<div class="body">
@@ -82,5 +91,21 @@
 		color: var(--accent);
 		margin-top: 3px;
 		word-break: break-all;
+	}
+
+	/* FOCUS CONTEXT. With a node focused, everything else on the canvas is context rather than
+	   subject: upstream ("where this came from") and downstream ("what depends on it") are the two
+	   questions a lineage graph exists to answer, and an undifferentiated blob answers neither.
+	   Marquez separates the same two sets explicitly (findUpstreamNodes / findDownstreamNodes).
+	   A tinted left border rather than a full re-colour: the medallion tier is already carried by
+	   the card's own accent, and overriding it would trade one fact for another. */
+	.job-node[data-rel='upstream'] {
+		border-left: 3px solid var(--primary);
+	}
+	.job-node[data-rel='downstream'] {
+		border-left: 3px solid var(--amber);
+	}
+	.job-node[data-rel='focus'] {
+		border-left: 3px solid var(--ink);
 	}
 </style>

@@ -26,8 +26,10 @@
 		Controls,
 		MiniMap,
 		Panel,
+		MarkerType,
 		type FitViewOptions,
 	} from '@xyflow/svelte';
+	import { Search } from '@lucide/svelte';
 	import { FlowAutoFit } from '@rask/flow';
 	import type { LineageState } from '$lib/lineage/store.svelte';
 	import { useColorMode } from '@rask/ui/color-mode';
@@ -160,6 +162,30 @@
 	const focusedName = $derived(focusNode?.name ?? null);
 	const FOCUS_DEPTHS: (number | null)[] = [1, 2, 3, null];
 
+	/**
+	 * Jump-to-node. With 81 nodes on the canvas there was no way to reach one you could name — you
+	 * panned until you saw it, or you did not find it. Marquez has the same affordance in its header.
+	 *
+	 * Matches against the nodes CURRENTLY BUILT rather than the store, so it can never offer a node
+	 * the canvas is not showing; picking one focuses it, which is also what re-roots the graph.
+	 */
+	let query = $state('');
+	const matches = $derived.by(() => {
+		const q = query.trim().toLowerCase();
+		if (q.length < 2) return [];
+		return nodes
+			.map((n) => ({ id: n.id, name: String(n.data.id ?? '') }))
+			.filter((n) => n.name.toLowerCase().includes(q))
+			.slice(0, 8);
+	});
+
+	function jump(id: string): void {
+		focusNode = id.startsWith(JOB_PREFIX)
+			? { kind: 'job', name: id.slice(JOB_PREFIX.length) }
+			: { kind: 'dataset', name: id.slice(DATASET_PREFIX.length) };
+		query = '';
+	}
+
 	/** Where the focus bar's "Open" goes — the detail page for whatever is focused. */
 	const focusedHref = $derived(
 		focusNode
@@ -178,8 +204,17 @@
 
 	let nodes = $state.raw<FlowNode[]>([]);
 	let edges = $state.raw<
-		{ id: string; source: string; target: string; animated: boolean; type: string }[]
+		{
+			id: string;
+			source: string;
+			target: string;
+			animated: boolean;
+			type: string;
+			markerEnd: { type: MarkerType; width: number; height: number; color: string };
+			style?: string;
+		}[]
 	>([]);
+
 	// Re-fit the viewport only when the node-set or the view changes (not on every data poll).
 	// `focused`/`focusDepth` ride the key as well as the node ids: focusing a node whose
 	// neighbourhood happens to be the whole graph leaves the id list identical, and the viewport
@@ -206,6 +241,19 @@
 		// `nodes` (the var we reassign below) would make this effect retrigger itself.
 		const prev = new Map(untrack(() => nodes).map((node) => [node.id, node]));
 		const t0 = performance.now();
+
+		/**
+		 * Which side of the focused node each node sits on — the question a lineage graph exists to
+		 * answer, and the one Marquez models explicitly (`findUpstreamNodes` / `findDownstreamNodes`
+		 * in its own `table-level/layout.ts`). "Where did this come from" and "what breaks if I
+		 * change it" are different questions, and an undifferentiated blob answers neither.
+		 *
+		 * A PLAIN LOCAL, deliberately. It was `$state.raw` first, which this effect both assigned and
+		 * read back three lines later — so the effect depended on its own output and re-ran forever.
+		 * The page did not error, it PEGGED: every later measurement read a frozen DOM, and even the
+		 * browser automation stopped answering. Nothing outside this effect needs the value.
+		 */
+		const relation: Record<string, 'focus' | 'upstream' | 'downstream'> = {};
 
 		// THE graph — the interleaved DAG: input dataset → job → output dataset.
 		//
@@ -288,6 +336,42 @@
 				(adj.get(e.source) ?? adj.set(e.source, []).get(e.source)!).push(e.target);
 				(adj.get(e.target) ?? adj.set(e.target, []).get(e.target)!).push(e.source);
 			}
+			// DIRECTED walks first, so a node can be told apart from its neighbours by WHICH WAY it
+			// lies. `derive` is derivation-oriented (source derived FROM target), so following
+			// source→target walks upstream and target→source walks downstream.
+			const up = new Map<string, string[]>();
+			const down = new Map<string, string[]>();
+			for (const e of derive) {
+				(up.get(e.source) ?? up.set(e.source, []).get(e.source)!).push(e.target);
+				(down.get(e.target) ?? down.set(e.target, []).get(e.target)!).push(e.source);
+			}
+			// Captured: the outer guard narrows `focusDepth`, but a closure does not inherit that
+			// narrowing, and widening the guard instead would let `null` (= All) reach the loop.
+			const hops = focusDepth;
+			const reach = (side: Map<string, string[]>): Set<string> => {
+				const seen = new Set<string>();
+				let wave = [focused];
+				for (let hop = 0; hop < hops && wave.length > 0; hop += 1) {
+					const next: string[] = [];
+					for (const id of wave) {
+						for (const n of side.get(id) ?? []) {
+							if (n === focused || seen.has(n)) continue;
+							seen.add(n);
+							next.push(n);
+						}
+					}
+					wave = next;
+				}
+				return seen;
+			};
+			const upstreamSet = reach(up);
+			const downstreamSet = reach(down);
+			relation[focused] = 'focus';
+			for (const id of upstreamSet) relation[id] = 'upstream';
+			// Downstream wins a tie: a node reachable BOTH ways is on a cycle or a diamond, and
+			// "what depends on this" is the answer a person is usually acting on.
+			for (const id of downstreamSet) relation[id] = 'downstream';
+
 			const keep = new Set<string>([focused]);
 			let frontier = [focused];
 			for (let hop = 0; hop < focusDepth && frontier.length > 0; hop += 1) {
@@ -351,6 +435,7 @@
 					// JobNode and was simply never set by anything — without it the node a click
 					// focused looked exactly like the twelve it dragged in with it.
 					selected: dsId(id) === focused,
+					rel: relation[dsId(id)] ?? null,
 					runState: runStateByDataset[id] ?? null,
 				},
 			};
@@ -367,17 +452,36 @@
 				outputs: [...j.outputs],
 				failed: j.failed,
 				selected: jobId(job) === focused,
+				rel: relation[jobId(job)] ?? null,
 			},
 		}));
 
 		nodes = [...dsNodes, ...jobNodes];
-		edges = derive.map((e) => ({
-			id: `${e.target}->${e.source}`,
-			source: e.target,
-			target: e.source,
-			animated: true,
-			type: 'smoothstep',
-		}));
+		// An edge takes the class of the node it POINTS AT, so a chain reads as one colour the whole
+		// way out from the focus rather than changing hue at every hop.
+		const EDGE_TINT = {
+			upstream: 'var(--primary)',
+			downstream: 'var(--amber)',
+			focus: 'var(--ink)',
+			none: 'var(--line)',
+		} as const;
+		edges = derive.map((e) => {
+			const tint = EDGE_TINT[relation[e.source] ?? relation[e.target] ?? 'none'];
+			return {
+				id: `${e.target}->${e.source}`,
+				source: e.target,
+				target: e.source,
+				// Only the focused neighbourhood animates. Eighty crawling dashes is not information,
+				// it is a screensaver — and it made the one chain a reader cared about impossible to
+				// pick out of the rest.
+				animated: focused !== null,
+				type: 'smoothstep',
+				// A DAG without arrowheads is an undirected blob: "A relates to B somehow" instead of
+				// "A produced B". This is the single cheapest legibility win on the canvas.
+				markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: tint },
+				style: `stroke:${tint}`,
+			};
+		});
 		buildMs = Math.round((performance.now() - t0) * 10) / 10;
 	});
 
@@ -430,6 +534,32 @@
 		/>
 		<FlowAutoFit trigger={fitKey} padding={FIT_PADDING} />
 		<Panel position="top-left">
+			<div class="searchbar">
+				<Search size={12} />
+				<input
+					class="sinput"
+					type="search"
+					placeholder="find a dataset or job…"
+					aria-label="Find a node"
+					bind:value={query}
+					onkeydown={(e) => {
+						if (e.key === 'Enter' && matches[0]) jump(matches[0].id);
+						if (e.key === 'Escape') query = '';
+					}}
+				/>
+				{#if matches.length > 0}
+					<ul class="hits">
+						{#each matches as m (m.id)}
+							<li>
+								<button class="hit" onclick={() => jump(m.id)}>
+									<span class="hkind">{m.id.startsWith(JOB_PREFIX) ? 'job' : 'data'}</span>
+									<span class="hname">{m.name}</span>
+								</button>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
 			<div class="focusbar">
 				{#if focused}
 					<span class="fname" title={focusedName}>{focusedName}</span>
@@ -588,5 +718,76 @@
 		border-radius: var(--radius);
 		box-shadow: 0 6px 20px -10px rgb(0 0 0 / 45%);
 		overflow: hidden;
+	}
+
+	.searchbar {
+		position: relative;
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 4px 10px;
+		background: var(--panel);
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		box-shadow: var(--shadow);
+		color: var(--mut);
+	}
+	.sinput {
+		width: 190px;
+		border: none;
+		background: transparent;
+		color: var(--ink);
+		font-size: 11px;
+		outline: none;
+	}
+	.sinput::placeholder {
+		color: var(--faint);
+	}
+	/* The hit list hangs BELOW the bar and out of flow, so opening it never reflows the focus bar
+	   underneath — which would move the depth buttons out from under the pointer mid-click. */
+	.hits {
+		position: absolute;
+		top: calc(100% + 4px);
+		left: 0;
+		right: 0;
+		margin: 0;
+		padding: 4px;
+		list-style: none;
+		background: var(--panel);
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		box-shadow: var(--shadow);
+		max-height: 220px;
+		overflow-y: auto;
+		z-index: 5;
+	}
+	.hit {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		width: 100%;
+		padding: 4px 6px;
+		border: none;
+		background: transparent;
+		border-radius: 6px;
+		cursor: pointer;
+		text-align: left;
+	}
+	.hit:hover {
+		background: color-mix(in srgb, var(--primary) 12%, transparent);
+	}
+	.hkind {
+		flex: none;
+		font-size: 9px;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--mut);
+	}
+	.hname {
+		font-size: 11px;
+		color: var(--ink);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 </style>
