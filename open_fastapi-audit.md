@@ -50,7 +50,7 @@ verifier, and the corrected form is what appears here. 2 were refuted outright.
 
 ## Scorecard
 
-> ### RE-VERIFIED AT HEAD `fe789bfc`, 2026-08-26 — **55 of 60 still real; 5 drained since (50 open)**
+> ### RE-VERIFIED AT HEAD `fe789bfc`, 2026-08-26 — **55 of 60 still real; 9 drained since (46 open)**
 >
 > Ten read-only agents, one per lane, re-opened every finding against the current code. **Nothing was
 > refuted and nothing was undecidable**: 55 STILL_REAL (5 high / 22 medium / 28 low), 4 ALREADY_FIXED,
@@ -666,7 +666,18 @@ chart/templates/_helpers.tpl:198-221 is the complete annotation set: `dapr.io/en
 
 </details>
 
-<details><summary><b>GET /api/explorer/search drives unauthenticated GPU embedding + cross-encoder rerank, with an unbounded query string and a cache a random q always misses</b> <i>(rate-limiting.md + websockets.md + cache.md, ADJUSTED)</i></summary>
+<details><summary><b>~~GET /api/explorer/search drives unauthenticated GPU embedding + cross-encoder rerank, with an unbounded query string and a cache a random q always misses~~</b> <i>(rate-limiting.md + websockets.md + cache.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-26 — `dd1b648a` + `63a8d581`.** Rate-limited (slowapi, per route, one shared
+> `scope` across the three entry points so they cannot be used in rotation for three times the
+> budget), inputs bounded at the model (`q`/`q_vec` `max_length`, REJECTED not clamped — silently
+> truncating returns results for a question the caller did not ask), and the cache key normalized so
+> case and internal spacing stop generating free misses. Pinned in both directions: "harbour" vs
+> "harbor" must still be distinct, since serving one query's results for another beats a miss only in
+> the wrong direction.
+>
+> **The unauthenticated half is NOT closed here and is not this file's to close** — the audit files it
+> as `X6`/`VS-13` against `open_python-audit.md`, and its own guidance says fixing it here pays twice.
 
 **Rule.** rate-limiting.md: "apply to auth routes and expensive operations only"; and "Always include an ip: fallback so unauthenticated requests can't bypass the limit" — there is no limit to bypass
 
@@ -686,7 +697,13 @@ chart/templates/_helpers.tpl:198-221 is the complete annotation set: `dapr.io/en
 
 </details>
 
-<details><summary><b>The atlas points_cache bounds by entry COUNT while holding multi-MB Arrow payloads — the exact defect the search cache was fixed for, never carried across</b> <i>(rate-limiting.md + websockets.md + cache.md, CONFIRMED)</i></summary>
+<details><summary><b>~~The atlas points_cache bounds by entry COUNT while holding multi-MB Arrow payloads — the exact defect the search cache was fixed for, never carried across~~</b> <i>(rate-limiting.md + websockets.md + cache.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-26 — `4ce3a08d`.** The eviction is now one shared function
+> (`service_kit.media.cache_bounds.evict_to_bounds`) used by BOTH twins, rather than the fix reaching
+> one of them a second time — which is the actual defect the finding describes. Count is the lookup
+> bound, bytes the memory bound. Also covers a case neither original loop handled: an entry larger
+> than the whole ceiling no longer empties the cache on its way to not fitting.
 
 **Rule.** cache.md: a cache must be bounded in the dimension that actually costs — the estate's own search cache states the rule ("a hit row carries transcript text, so 256 entries was a count, not a cap; #141") and the atlas cache still violates it
 
