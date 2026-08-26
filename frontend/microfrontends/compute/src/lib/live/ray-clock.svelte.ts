@@ -37,12 +37,13 @@ import type { LiveCursor } from '@rask/api/live';
  *
  *     $effect(() => rayClock.subscribe());
  *     liveRead(() => rayClock.cursor, () => {
- *         jobsQuery.refresh().catch(() => {});
+ *         rayClock.refresh(jobsQuery);
  *     });
  *
- * `.catch(() => {})` on every refresh stays MANDATORY and is not made redundant by the shared clock:
- * one uncaught rejection evicts that query from cache and silently kills its updates. It is the catch
- * — never a separate timer — that keeps one failing query from taking the others down with it.
+ * Go through `rayClock.refresh(q)` rather than `q.refresh()`: it carries the mandatory
+ * `.catch(() => {})` so a call site cannot forget it (one uncaught rejection evicts the query from
+ * cache and silently kills its updates), and it coalesces two boards asking for the same shared query
+ * in the same tick — see its own note.
  */
 const POLL_MS = 5000;
 
@@ -52,6 +53,7 @@ class RayClock {
 	tick = $state(0);
 	#refs = 0;
 	#timer: ReturnType<typeof setInterval> | null = null;
+	#refreshedAt = new WeakMap<object, number>();
 
 	/** Start the clock while at least one surface wants it; stop when the last one goes away.
 	 *
@@ -70,6 +72,30 @@ class RayClock {
 				this.#timer = null;
 			}
 		};
+	}
+
+	/** Refresh a SHARED query at most once per tick, whoever asks.
+	 *
+	 *  Sharing the clock puts every board in one phase; it does NOT stop two of them asking for the
+	 *  same thing. `ActorsBoard` needs `getRayCluster()` (it resolves node names) and so does
+	 *  `ClusterBoard`, and `/compute/workbench` docks both — so the same no-arg cached query was
+	 *  refetched twice per tick. MEASURED against the deployed zone, 11 s on the workbench:
+	 *  `getRayCluster` 8, every sibling 4. Putting them on one clock made the duplicate punctual
+	 *  rather than absent, which is not the same fix.
+	 *
+	 *  De-duplicated on the QUERY OBJECT, not on a name: a no-arg remote `query()` is cached on the
+	 *  function's identity, so both boards hold the very same instance and a `WeakMap` keyed on it
+	 *  coalesces them without either board knowing the other exists. A keyed query (`getRayJobs(id)`)
+	 *  is a different instance per key and is correctly NOT coalesced.
+	 *
+	 *  The loser of the race is not starved: it shares the winner's result, because it is the same
+	 *  cached query. And `.catch(() => {})` lives HERE now, so it cannot be forgotten at a call site —
+	 *  one uncaught rejection evicts the query from cache and silently kills its updates.
+	 */
+	refresh(query: { refresh(): Promise<unknown> }): void {
+		if (this.#refreshedAt.get(query) === this.tick) return;
+		this.#refreshedAt.set(query, this.tick);
+		query.refresh().catch(() => {});
 	}
 
 	/** The clock IS the cursor — `LiveCursor` is two getters and this class has them.

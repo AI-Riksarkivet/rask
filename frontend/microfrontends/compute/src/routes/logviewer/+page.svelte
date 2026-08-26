@@ -88,7 +88,7 @@
 	liveRead(
 		() => rayClock.cursor,
 		() => {
-			clusterQuery.refresh().catch(() => {});
+			rayClock.refresh(clusterQuery);
 		},
 	);
 
@@ -102,6 +102,11 @@
 		stick = true;
 	}
 
+	// The toolbar button. NOT `rayClock.refresh()`: the clock coalesces per tick, so a press inside
+	// five seconds of the roster read would do nothing — and "ask NOW" is the one call that must never
+	// be de-duplicated. (The 2.5 s tail below calls `cq.refresh()` directly for the same reason plus
+	// one more: it runs at a different cadence from the clock, so coalescing on the clock's tick would
+	// silently drop every second read and halve the follow rate.)
 	function refreshContent() {
 		contentQuery?.refresh().catch(() => {});
 	}

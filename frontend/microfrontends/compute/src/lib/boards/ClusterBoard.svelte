@@ -37,7 +37,7 @@
 	liveRead(
 		() => rayClock.cursor,
 		() => {
-			clusterQuery.refresh().catch(() => {});
+			rayClock.refresh(clusterQuery);
 		},
 	);
 

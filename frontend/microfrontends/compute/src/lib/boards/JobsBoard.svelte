@@ -54,7 +54,7 @@
 	liveRead(
 		() => rayClock.cursor,
 		() => {
-			jobsQuery.refresh().catch(() => {});
+			rayClock.refresh(jobsQuery);
 		},
 	);
 

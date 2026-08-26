@@ -70,6 +70,10 @@
 
 	// Manual log refresh (toolbar button) — event handler, so `.refresh()` (one
 	// of the always-callable methods) not `.current`.
+	//
+	// NOT `rayClock.refresh()`, deliberately: that coalesces per tick, and a person pressing the
+	// button within five seconds of the automatic read would get nothing. A manual refresh means
+	// "ask NOW" — it is the one call that must never be de-duplicated.
 	function refreshLogs() {
 		logsQuery.refresh().catch(() => {});
 	}
@@ -93,9 +97,9 @@
 	liveRead(
 		() => rayClock.cursor,
 		() => {
-			jobsQuery.refresh().catch(() => {});
-			tasksQuery?.refresh().catch(() => {});
-			clusterQuery.refresh().catch(() => {});
+			rayClock.refresh(jobsQuery);
+			if (tasksQuery) rayClock.refresh(tasksQuery);
+			rayClock.refresh(clusterQuery);
 			// A live job's log file grows with no event that says it grew — and a terminal job's does
 			// not grow at all, so this guard is a second, independent bound on the heaviest read here.
 			if (running) logsQuery.refresh().catch(() => {});

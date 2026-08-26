@@ -18,7 +18,7 @@
 	liveRead(
 		() => rayClock.cursor,
 		() => {
-			healthQuery.refresh().catch(() => {});
+			rayClock.refresh(healthQuery);
 		},
 	);
 </script>
