@@ -4325,6 +4325,11 @@ _ALERT_GROUP_SOURCES: dict[str, tuple[str, ...]] = {
     "lance-medallion": ("services/medallion/src/medallion/core/metrics.py",),
     "lance-notifications": ("services/notifications/src/notifications/api/metrics.py",),
     "lance-maintenance": ("services/maintenance/src/maintenance/core/metrics.py",),
+    # Both added 2026-08-26. Their instruments existed and NO rule read them — `ingest/metrics.py`
+    # said so in its own docstring — which the forward gate cannot catch and
+    # `test_every_FIRST_PARTY_INSTRUMENT_is_read_by_some_alert_rule` now does.
+    "lance-ingest": ("services/ingest/src/ingest/metrics.py",),
+    "lance-flows": ("services/flows/src/flows/metrics.py",),
 }
 
 #: UCUM unit -> the suffix the OTLP->Prometheus exporter APPENDS to the series name. A unit in curly
@@ -4338,6 +4343,13 @@ _UCUM_SUFFIX = {"s": "seconds", "ms": "milliseconds", "By": "bytes"}
 _THIRD_PARTY_ALERT_GROUPS = {
     "lance-catalog": "the catalog ships no metrics.py — its rules ride the shared HTTP server metrics that service_kit.setup_otel's FastAPI instrumentation emits automatically, not a first-party instrument",
     "lance-infra": "infrastructure series (NATS, CloudNativePG, RustFS) exported by their own operators",
+    "lance-http": (
+        "the FastAPI instrumentor's own RED series (`http_server_duration_milliseconds_*`), emitted "
+        "automatically by `service_kit.setup_otel` for all fourteen apps — no rask instrument creates "
+        "them, which is the same reason `lance-catalog` is here. The `_milliseconds` suffix is the "
+        "OTLP->Prometheus unit convention and is load-bearing: verified against the live store, since "
+        "a rule naming the bare form matches nothing and can never fire"
+    ),
     "dapr-control-plane": "Dapr's own control-plane metrics, emitted by the sidecar injector and placement service",
     "ray": "Ray's own metrics, exported by the Ray dashboard's Prometheus endpoint",
     "lance-observability": (
@@ -4852,6 +4864,66 @@ def test_the_daprd_sidecar_logs_are_json_and_parsed() -> None:
 #: GreptimeDB's PromQL endpoint, and the two do not accept the same language. Everything below is a
 #: shape gate for the differences that have already cost the estate a rule, measured against the live
 #: store (GreptimeDB v1.1.1) at 10.43.90.225:4000/v1/prometheus/api/v1/query.
+
+
+#: Every first-party metrics module in the estate, and the alert group that must read it.
+#:
+#: THE REVERSE DIRECTION, and the estate had only the forward one. `test_every_first_party_ALERT_names
+#: _a_metric_the_service_actually_EMITS` asks "does this rule name a real instrument?" — which catches
+#: a typo and cannot catch an instrument NOBODY ALERTS ON. Measured 2026-08-26: `grep 'ingest_\|flows_'
+#: chart/alerting/rules.yml` returned zero, and both modules exist precisely because Dapr's own
+#: workflow families report `status="success"` for a run that returned FAILED. The fact they were
+#: added to carry reached nobody.
+#:
+#: An entry is a CLAIM that the named group reads that module's instruments. Adding a metrics module
+#: without a group fails here, which is the point: an instrument with no rule is telemetry, not
+#: monitoring.
+_METRICS_MODULE_GROUPS: dict[str, str] = {
+    "services/lineage/src/lineage/core/metrics.py": "lance-lineage",
+    "services/medallion/src/medallion/core/metrics.py": "lance-medallion",
+    "services/notifications/src/notifications/api/metrics.py": "lance-notifications",
+    "services/maintenance/src/maintenance/core/metrics.py": "lance-maintenance",
+    "services/ingest/src/ingest/metrics.py": "lance-ingest",
+    "services/flows/src/flows/metrics.py": "lance-flows",
+    "packages/service-kit/src/service_kit/lakehouse/outbox_metrics.py": "lance-lineage",
+}
+
+
+def test_every_FIRST_PARTY_INSTRUMENT_is_read_by_some_alert_rule() -> None:
+    """An instrument nothing alerts on is telemetry, not monitoring.
+
+    The forward gate (a rule must name a real instrument) cannot catch this, and the consequence was
+    concrete: `ingest/metrics.py` states the gap in its OWN DOCSTRING — "chart/alerting/rules.yml duly
+    contains zero ingest rules: no page fires for a run that failed, a fan-out that stalled, or units
+    that never landed" — and that sentence sat there true for as long as the file existed.
+
+    Checks the MODULE's declared instruments against the named group's expressions, applying the
+    OTLP->Prometheus convention: dots become underscores and a counter gains `_total`. A module whose
+    group reads none of its instruments fails, naming them.
+    """
+    rules = yaml.safe_load((REPO / "chart/alerting/rules.yml").read_text())
+    by_name = {g["name"]: g for g in rules["groups"]}
+
+    unread: list[str] = []
+    for module, group_name in sorted(_METRICS_MODULE_GROUPS.items()):
+        source = (REPO / module).read_text()
+        instruments = re.findall(r'create_(?:counter|up_down_counter|histogram|observable_gauge)\(\s*"([^"]+)"', source)
+        assert instruments, f"parsed no instruments out of {module} — this check would pass vacuously"
+
+        group = by_name.get(group_name)
+        assert group is not None, f"{module} names alert group {group_name!r}, which rules.yml does not define"
+        exprs = " ".join(str(r.get("expr", "")) for r in group.get("rules", []))
+
+        # `ingest.runs` -> `ingest_runs`; a counter also answers to `_total`.
+        read = [i for i in instruments if i.replace(".", "_") in exprs]
+        if not read:
+            flat = sorted({i.replace(".", "_") for i in instruments})
+            unread.append(f"{module} -> group {group_name!r} reads none of {flat}")
+
+    assert not unread, (
+        f"{len(unread)} first-party metrics module(s) are emitted and alerted on by nothing, so the "
+        f"failures they exist to carry reach no one:\n" + "\n".join(f"  - {u}" for u in unread)
+    )
 
 
 def _alert_exprs() -> list[tuple[str, str]]:

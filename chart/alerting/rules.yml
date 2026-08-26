@@ -676,3 +676,136 @@ groups:
             chart/templates/otel-collector.yaml, or it is running and cannot reach the state store's
             database. Runbook:
             docs/runbooks/RUNBOOK-oncall.md#workflow-history-not-collected
+
+  # ==================================================================================================
+  # THE HTTP PLANE — fourteen apps emitted RED metrics and not one rule read them.
+  #
+  # `grep 'http_server\|ingest_\|flows_\|gateway\|compute_\|controlplane' rules.yml` returned ZERO at
+  # HEAD on 2026-08-26. Every app emits `http.server.*` automatically (service_kit.setup_otel wires the
+  # FastAPI instrumentor), the chart provisions a Perses "Fleet — RED" dashboard from those very
+  # series, and nothing turned any of it into a page. Eight of fourteen apps had no group at all —
+  # including the gateway and every app a browser talks to.
+  #
+  # The concrete scenario, and it is not hypothetical: the catalog starts answering 500 on every
+  # `POST /v1/table/{id}/describe`. The only rule in `lance-catalog` counts 429s on Arrow-IPC WRITES,
+  # which stays at zero throughout. A catalog failing 100% of reads pages nobody.
+  #
+  # SERIES NAMES VERIFIED AGAINST THE LIVE STORE, not inferred. It is
+  # `http_server_duration_milliseconds_*` — the OTLP->Prometheus exporter APPENDS the unit, so a rule
+  # naming `_seconds` matches nothing and can never fire. That is the `outbox_oldest_age` defect, and
+  # it is the reason every expression below was replayed against GreptimeDB before being written down.
+  - name: lance-http
+    rules:
+
+      # THE LOAD-BEARING ONE. A ratio, not a count: absolute 5xx tells you nothing without traffic,
+      # and a service that serves ten requests an hour would never cross a count threshold however
+      # broken it is. `service_name` is the instrumentor's own label (verified live: catalog, gateway,
+      # ingest, lineage, notifications, maintenance, medallion-producer and the movers all report it).
+      - alert: HttpServerErrorRatioHigh
+        expr: sum by (service_name) (rate(http_server_duration_milliseconds_count{http_status_code=~"5.."}[5m])) / sum by (service_name) (rate(http_server_duration_milliseconds_count[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          service: fleet
+        annotations:
+          summary: "More than 5% of one service's HTTP responses are 5xx"
+          description: >-
+            A service is failing its own requests. This is the estate's only fleet-wide failure
+            signal — before it existed, a service could 500 on every read and no rule anywhere
+            noticed. Split by `service_name` to find which. Runbook:
+            docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph
+
+      # LATENCY, and the threshold is deliberately far above the observed estate rather than tuned to
+      # it. Measured over a 10m window on 2026-08-26: lineage 500ms, notifications 463ms, maintenance
+      # 10s — maintenance runs long BY DESIGN (its sweeps are the request), which is exactly why this
+      # fires at 15s rather than at a value that would page on a healthy sweep. A latency rule that
+      # cries wolf is one people mute, and a muted rule is worse than none.
+      #
+      # `histogram_quantile` over the bucket series is supported by GreptimeDB — verified by running
+      # this exact expression against the live store, because promtool accepting it proves nothing
+      # about the engine that evaluates it.
+      - alert: HttpServerLatencyHigh
+        expr: histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket[10m]))) > 15000
+        for: 15m
+        labels:
+          severity: warning
+          service: fleet
+        annotations:
+          summary: "One service's p95 HTTP latency is above 15s"
+          description: >-
+            Sustained p95 over 15 seconds means requests are queueing behind something — a blocking
+            call on the event loop, an exhausted threadpool, or an upstream that stopped answering.
+            `maintenance` legitimately runs long during a sweep; any other service here is a defect.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph
+
+      # The watcher's watcher. Both rules above evaluate over an empty vector and go quiet if the
+      # instrumentor stops exporting — indistinguishable from an estate serving no errors. Bare
+      # `absent()` in its own rule, never as an operand of a set operator: GreptimeDB refuses the
+      # composite form outright (HTTP 500). See the note at NotificationsReconcilerStalled.
+      - alert: HttpServerMetricsMissing
+        expr: absent(http_server_duration_milliseconds_count)
+        for: 15m
+        labels:
+          severity: critical
+          service: fleet
+        annotations:
+          summary: "No app is reporting HTTP metrics at all"
+          description: >-
+            `http_server_duration_milliseconds_count` does not exist, so HttpServerErrorRatioHigh and
+            HttpServerLatencyHigh are both dead and their silence means nothing. Either
+            `service_kit.setup_otel` stopped wiring the FastAPI instrumentor, or the OTLP path to
+            GreptimeDB is broken. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+
+  # The ingest plane's own failure signal, which existed and was read by nothing. `ingest/metrics.py`
+  # states the gap in its OWN docstring — "chart/alerting/rules.yml duly contains zero ingest rules: no
+  # page fires for a run that failed, a fan-out that stalled, or units that never landed" — and that
+  # sentence was true for as long as the file existed.
+  #
+  # WHY A FIRST-PARTY COUNTER RATHER THAN DAPR'S. `dapr_runtime_workflow_execution_count_total` carries
+  # a `status` label and for this codebase it is FALSE: the workflow converts failure into a RETURNED
+  # value, so the orchestrator completes normally and the sidecar records success. Measured across the
+  # live estate — every app_id holds `success` and nothing else. This counter exists precisely because
+  # that one lies.
+  - name: lance-ingest
+    rules:
+
+      # Status values verified against the live store: COMPLETE, COMPLETE_WITH_ERRORS, FAILED and
+      # TERMINATED. TERMINATED is EXCLUDED deliberately — it means a person pressed Terminate, which is
+      # an intended outcome and not a defect. Paging on it would page on the operator's own action.
+      - alert: IngestRunsFailing
+        expr: sum(rate(ingest_runs_total{lance_ingest_status="FAILED"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: ingest
+        annotations:
+          summary: "Ingest runs are failing"
+          description: >-
+            A run reached FAILED — the harvest did not land its data. Distinct from TERMINATED, which
+            is an operator stopping a run deliberately and is not alerted on. Check the run's own
+            errors on the ingest detail page. Runbook:
+            docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+
+  # The flows plane, same argument. `flows/metrics.py:33` calls the node counter "the service's only
+  # failure signal" and no rule read it.
+  #
+  # NO SERIES EXISTS IN THE STORE YET, stated rather than hidden: flows has never executed a run on
+  # this estate, and a counter that has never been incremented creates no table. The rule is therefore
+  # evaluable (confirmed by the drill) and unexercised against real data — which is the honest status
+  # of any alert for a plane that has not yet run.
+  - name: lance-flows
+    rules:
+
+      - alert: FlowNodesFailing
+        expr: sum(rate(flows_nodes_total{lance_flows_status="failed"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: flows
+        annotations:
+          summary: "Flow nodes are failing"
+          description: >-
+            A node in a flow graph ended failed. Dapr's own workflow family reports success for these
+            runs — the orchestrator returns a failed VALUE rather than raising — so this counter is
+            the only signal that distinguishes them. Runbook:
+            docs/runbooks/RUNBOOK-oncall.md#cascade-stalled

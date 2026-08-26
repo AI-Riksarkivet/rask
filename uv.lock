@@ -563,7 +563,7 @@ source = { editable = "services/compute" }
 dependencies = [
     { name = "httpx" },
     { name = "ray-kit" },
-    { name = "service-kit" },
+    { name = "service-kit", extra = ["governed"] },
     { name = "uvicorn" },
 ]
 
@@ -571,7 +571,7 @@ dependencies = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "ray-kit", editable = "packages/ray-kit" },
-    { name = "service-kit", editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed"], editable = "packages/service-kit" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 
@@ -581,14 +581,14 @@ version = "0.1.0"
 source = { editable = "services/controlplane" }
 dependencies = [
     { name = "kubernetes" },
-    { name = "service-kit" },
+    { name = "service-kit", extra = ["governed"] },
     { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "kubernetes", specifier = ">=31" },
-    { name = "service-kit", editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed"], editable = "packages/service-kit" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 

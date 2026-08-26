@@ -852,3 +852,149 @@ tests:
       - eval_time: 20m
         alertname: DaprWorkflowStateMetricsMissing
         exp_alerts: []
+
+  # ------------------------------------------------------------------------------------------------
+  # The HTTP plane. Series names are the live store's, verified — `http_server_duration_milliseconds_*`,
+  # with the unit suffix the OTLP->Prometheus exporter appends. Labels `service_name` and
+  # `http_status_code` are the FastAPI instrumentor's own.
+  # ------------------------------------------------------------------------------------------------
+
+  # One service failing 20% of its requests → over the 5% ratio → fires past the 10m `for`.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_duration_milliseconds_count{service_name="catalog",http_status_code="500"}'
+        values: "0+2x20" # 2 errors/min
+      - series: 'http_server_duration_milliseconds_count{service_name="catalog",http_status_code="200"}'
+        values: "0+8x20" # 8 successes/min → 20% error ratio
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: HttpServerErrorRatioHigh
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: fleet
+              service_name: catalog
+            exp_annotations:
+              summary: "More than 5% of one service's HTTP responses are 5xx"
+              description: "A service is failing its own requests. This is the estate's only fleet-wide failure signal — before it existed, a service could 500 on every read and no rule anywhere noticed. Split by `service_name` to find which. Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph"
+
+  # A HEALTHY service must not page. 1 error in 100 is 1%, under the 5% bar — this is the case that
+  # stops the threshold being tightened into noise.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_duration_milliseconds_count{service_name="catalog",http_status_code="500"}'
+        values: "0+1x20"
+      - series: 'http_server_duration_milliseconds_count{service_name="catalog",http_status_code="200"}'
+        values: "0+99x20"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: HttpServerErrorRatioHigh
+        exp_alerts: []
+
+  # ABSENT IS NOT ZERO, applied to the fleet's only failure signal: with no series at all, the ratio
+  # rule evaluates over an empty vector and goes quiet — identical to an estate serving no errors.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="something-else"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: HttpServerMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: fleet
+            exp_annotations:
+              summary: "No app is reporting HTTP metrics at all"
+              description: "`http_server_duration_milliseconds_count` does not exist, so HttpServerErrorRatioHigh and HttpServerLatencyHigh are both dead and their silence means nothing. Either `service_kit.setup_otel` stopped wiring the FastAPI instrumentor, or the OTLP path to GreptimeDB is broken. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
+      # ...and the ratio rule is indeed silent here, which is the whole argument for the pair.
+      - eval_time: 17m
+        alertname: HttpServerErrorRatioHigh
+        exp_alerts: []
+
+  # p95 over 15s. Buckets are cumulative and `le` must include `+Inf`: every observation lands above
+  # 15000, so the 95th percentile is in the top bucket.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="1000"}'
+        values: "0+0x25"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="15000"}'
+        values: "0+0x25"
+      # A FINITE bucket above the threshold. With observations only in `+Inf`, histogram_quantile has
+      # no upper bound to interpolate against and yields +Inf, which produced no sample at all — the
+      # rule looked broken when the FIXTURE was.
+      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="30000"}'
+        values: "0+10x25"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="+Inf"}'
+        values: "0+10x25"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HttpServerLatencyHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: fleet
+              service_name: viewer
+            exp_annotations:
+              summary: "One service's p95 HTTP latency is above 15s"
+              description: "Sustained p95 over 15 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. `maintenance` legitimately runs long during a sweep; any other service here is a defect. Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph"
+
+  # A fast service must not page — every observation under 1s.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="1000"}'
+        values: "0+10x25"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="15000"}'
+        values: "0+10x25"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="30000"}'
+        values: "0+10x25"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="+Inf"}'
+        values: "0+10x25"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HttpServerLatencyHigh
+        exp_alerts: []
+
+  # Ingest runs reaching FAILED.
+  - interval: 1m
+    input_series:
+      - series: 'ingest_runs_total{lance_ingest_status="FAILED"}'
+        values: "0+1x25"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: IngestRunsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: ingest
+            exp_annotations:
+              summary: "Ingest runs are failing"
+              description: "A run reached FAILED — the harvest did not land its data. Distinct from TERMINATED, which is an operator stopping a run deliberately and is not alerted on. Check the run's own errors on the ingest detail page. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
+
+  # TERMINATED is an operator pressing Terminate — an intended outcome. Paging on it would page on the
+  # operator's own action, which is why the rule filters on FAILED alone.
+  - interval: 1m
+    input_series:
+      - series: 'ingest_runs_total{lance_ingest_status="TERMINATED"}'
+        values: "0+1x25"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: IngestRunsFailing
+        exp_alerts: []
+
+  # Flow nodes ending failed — the plane's only failure signal, since Dapr reports these runs as
+  # successful (the orchestrator returns a failed VALUE rather than raising).
+  - interval: 1m
+    input_series:
+      - series: 'flows_nodes_total{lance_flows_status="failed"}'
+        values: "0+1x25"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: FlowNodesFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: flows
+            exp_annotations:
+              summary: "Flow nodes are failing"
+              description: "A node in a flow graph ended failed. Dapr's own workflow family reports success for these runs — the orchestrator returns a failed VALUE rather than raising — so this counter is the only signal that distinguishes them. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
