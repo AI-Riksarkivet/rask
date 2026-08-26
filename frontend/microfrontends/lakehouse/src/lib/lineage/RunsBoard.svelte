@@ -48,6 +48,7 @@
 	import { RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
+	import { runPhase, runPhaseLabel } from '@rask/ui/runs';
 	import { enter } from '@rask/ui/motion';
 	import { listRuns } from '$lib/api';
 	import RunInputs from '$lib/lineage/RunInputs.svelte';
@@ -152,13 +153,25 @@
 		getPaginationRowModel: getPaginationRowModel(),
 	});
 
-	const stateColor = (s?: string | null) =>
-		/FAIL|ABORT/i.test(s ?? '') ? 'var(--fail)' : s === 'COMPLETE' ? 'var(--ok)' : 'var(--amber)';
+	// Derived from the SHARED phase, not from the raw state. A promotion the quality gate HELD arrives
+	// as FAIL and is a question for a validator, not an outage — colouring it `--fail` and labelling it
+	// FAIL is the same second-copy defect the compute board had. BLOCKED and REFUSED stay `--fail`,
+	// because no approval waives them.
+	const stateColor = (r: RunStatus) => {
+		switch (runPhase(r)) {
+			case 'failed':
+				return 'var(--fail)';
+			case 'complete':
+				return 'var(--ok)';
+			default:
+				return 'var(--amber)';
+		}
+	};
 </script>
 
 {#snippet stateCell(row: RunStatus)}
-	<span class="badge" style:background={stateColor(row.state)}>
-		{row.state}{#if row.progress_total}&nbsp;{row.progress_done ?? 0}/{row.progress_total}{/if}
+	<span class="badge" style:background={stateColor(row)} title={row.promotion_status ?? undefined}>
+		{runPhaseLabel(row)}{#if row.progress_total}&nbsp;{row.progress_done ?? 0}/{row.progress_total}{/if}
 	</span>
 {/snippet}
 {#snippet runCell(row: RunStatus)}
