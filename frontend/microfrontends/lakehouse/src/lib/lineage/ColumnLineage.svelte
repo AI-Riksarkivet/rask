@@ -11,7 +11,7 @@
 	import { untrack } from 'svelte';
 	import { SvelteFlow, Background, BackgroundVariant, Controls } from '@xyflow/svelte';
 	import { Columns3, ShieldAlert } from '@lucide/svelte';
-	import { FlowAutoFit } from '@rask/flow';
+	import { elkLayout, FlowAutoFit } from '@rask/flow';
 	import { enter } from '@rask/ui/motion';
 	import { useColorMode } from '@rask/ui/color-mode';
 	import { ColumnLineageState } from '$lib/lineage/columns.svelte';
@@ -67,6 +67,24 @@
 	>([]);
 	/** Last layout-build cost (ms) — the perf readout the header chip shows. */
 	let buildMs = $state(0);
+
+	/**
+	 * ELK bookkeeping, mirroring the table-level graph (`LineageGraph.svelte`) exactly.
+	 *
+	 * This canvas placed nodes by ARITHMETIC — `x = 20 + layer * 230, y = 24 + row * 76` — which is
+	 * not a layout: a column was never pulled level with the column it feeds, and rows were assigned
+	 * in iteration order, so edges crossed for no reason. Marquez lays its column graph out with the
+	 * SAME ELK its table graph uses (`web/libs/graph/src/layout/useLayout.ts` is shared by both
+	 * routes); this zone had ELK on one graph and arithmetic on the other.
+	 *
+	 * `lastElkShape` is the same memoisation guard and exists for the same reason: without it a poll
+	 * re-runs ELK and overwrites a node the user had DRAGGED.
+	 */
+	let buildGeneration = 0;
+	let lastElkShape = '';
+	/** The real card box (`ColumnNode.svelte` is `width: 170px`), so ELK reserves what is drawn
+	 *  rather than a guess — the one place the table graph still hands ELK less than it knows. */
+	const CARD = { width: 170, height: 52 };
 	const fitKey = $derived(dataset + '|' + nodes.map((n) => n.id).join(','));
 
 	// Rebuild the plane when the polled subgraph changes. Reconcile, don't rebuild: keep each
@@ -110,6 +128,46 @@
 				},
 			};
 		});
+		// DERIVATION-oriented for ELK: a target field is derived FROM a source field, and `elkLayout`
+		// reverses its input so the drawn graph reads upstream-on-the-left. Passing the wire
+		// orientation straight through would mirror the whole picture.
+		const derive = colEdges.map((e) => ({
+			source: `${e.target_dataset}::${e.target_field}`,
+			target: `${e.source_dataset}::${e.source_field}`,
+		}));
+		// Built from `cols`, NOT from `nodes`. Reading `nodes` here is a TRACKED read of the very
+		// state this effect assigns, which self-triggers it — `effect_update_depth_exceeded`, and
+		// the canvas rendered its nodes but never its edges. Same id expression as the node build
+		// above, so the two cannot drift.
+		const ids = cols.map((c) => `${c.dataset}::${c.field}`);
+		// SORTED on BOTH halves. Sorting only the edges left this order-SENSITIVE, and the feed does
+		// not promise a stable order: a poll that returned the identical graph in a different
+		// order read as a shape change, re-ran ELK and snapped a dragged node back. Measured —
+		// the drag reverted across a poll whose node and edge counts were byte-identical.
+		const shape = `${[...ids].sort().join(',')}|${derive
+			.map((e) => `${e.source}>${e.target}`)
+			.sort()
+			.join(',')}`;
+		if (shape !== lastElkShape) {
+			lastElkShape = shape;
+			const generation = ++buildGeneration;
+			void elkLayout(ids, derive, { size: () => CARD })
+				.then((elk) => {
+					if (generation !== buildGeneration || elk.size === 0) return;
+					untrack(() => {
+						nodes = nodes.map((n) => {
+							const pos = elk.get(n.id);
+							return pos ? { ...n, position: pos } : n;
+						});
+					});
+				})
+				.catch(() => {
+					// The arithmetic placement above is already on screen and readable, so a failed
+					// layout degrades rather than blanking the canvas. Reset so the next tick retries.
+					lastElkShape = '';
+				});
+		}
+
 		edges = colEdges.map((e) => {
 			const s = `${e.source_dataset}::${e.source_field}`;
 			const t = `${e.target_dataset}::${e.target_field}`;

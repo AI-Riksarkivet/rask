@@ -202,6 +202,25 @@
 	 */
 	let buildGeneration = 0;
 
+	/**
+	 * The graph SHAPE the last ELK run was asked about — ids plus edges, order-independent.
+	 *
+	 * ELK is re-run only when this changes, which is the same guard Marquez uses
+	 * (`useLayout.ts` compares the new ELK input against a ref and returns the old one when equal,
+	 * so a data-only change never re-lays out).
+	 *
+	 * WITHOUT IT THIS DESTROYS USER STATE. The store reassigns fresh arrays on every poll, so the
+	 * build effect re-runs whenever the estate ticks; an unconditional ELK call then overwrote every
+	 * node's position on each successful poll, and a node the user had DRAGGED snapped back within
+	 * seconds. `store.svelte.ts`'s own comment says its failure guard exists so a blip "never …
+	 * destroys dragged node positions" — this path was destroying them on success instead. Positions
+	 * otherwise carry forward through `prev`, so skipping the run is exactly what preserves a drag.
+	 *
+	 * A real shape change still re-lays out everything, dragged nodes included. That is Marquez's
+	 * behaviour too, and it is the honest trade: the alternative is a graph that never re-flows.
+	 */
+	let lastElkShape = '';
+
 	let nodes = $state.raw<FlowNode[]>([]);
 	let edges = $state.raw<
 		{
@@ -318,14 +337,22 @@
 		// node. Without it this canvas is 79 nodes at 1,200×2,750px, a 1:2.3 aspect in a 16:9
 		// viewport, so `fitView` clamps to minZoom and every card renders ~20px wide.
 		//
-		// DEPTH IS GRAPH HOPS, exactly as Marquez counts it (`?depth=N` handed straight to its
-		// lineage API, defaulting to 2 in `TableLevel.tsx`). Because the graph alternates kinds, one
-		// hop off a dataset reaches its JOBS and two reaches the tables those jobs touch — so an odd
-		// depth legitimately ends on a job, and 2 is the default for the same reason it is theirs.
+		// DEPTH IS ALTERNATING-NODE HOPS ON THE CLIENT, and it is NOT the same unit as Marquez's.
+		// Because this graph alternates kinds, one hop off a dataset reaches its JOBS and two reaches
+		// the tables those jobs touch, so an odd depth legitimately ends on a job.
 		//
-		// This counted LOGICAL hops (doubled) at first, which made depth 1 mean "runs plus their
-		// tables". Nicer in isolation, and wrong: the number then meant something different here than
-		// in the tool it is modelled on, to anyone comparing the two.
+		// DO NOT re-assert equivalence with Marquez here — two earlier revisions did, in this comment
+		// and in the control's own tooltip, and both were wrong. Marquez's `?depth=N` is JOB hops
+		// evaluated SERVER-side: `LineageDao.java`'s recursive CTE seeds `0 AS depth` from the rooted
+		// JOB and recurses while `depth < :depth`, stepping job→job on "shares any dataset", and then
+		// attaches every one of those jobs' datasets REGARDLESS of depth. Its root is a job even when
+		// you ask about a dataset. Their depth=2 lands nearer this graph's hop 6 than its hop 2.
+		//
+		// The default of 2 is shared, and that is a coincidence of taste, not of unit.
+		//
+		// Matching the unit is not simply a counting change: theirs bounds what the SERVER FETCHES,
+		// while this bounds a filter over an already-fetched, capped window. See P1 item 7 in
+		// `open_lineage_graph.md` — the two belong in one change or neither.
 		//
 		// Filtering happens BEFORE layout on purpose: laying out the full graph and then hiding
 		// nodes would leave the survivors on their estate-wide coordinates, scattered across a
@@ -399,21 +426,34 @@
 		// Hand the SAME id/edge set to ELK for the phases `layout()` skips — coordinate assignment,
 		// dummy-node edge routing and component packing. Untracked: this reads `nodes` to re-place
 		// them, and tracking that would make the effect retrigger itself forever.
-		const generation = ++buildGeneration;
-		void elkLayout(ids, derive)
-			.then((elk) => {
-				if (generation !== buildGeneration || elk.size === 0) return;
-				untrack(() => {
-					nodes = nodes.map((n) => {
-						const p = elk.get(n.id);
-						return p ? { ...n, position: p } : n;
+		// SORTED on BOTH halves. Sorting only the edges left this order-SENSITIVE, and the feed does
+		// not promise a stable order: a poll that returned the identical graph in a different
+		// order read as a shape change, re-ran ELK and snapped a dragged node back. Measured —
+		// the drag reverted across a poll whose node and edge counts were byte-identical.
+		const shape = `${[...ids].sort().join(',')}|${derive
+			.map((e) => `${e.source}>${e.target}`)
+			.sort()
+			.join(',')}`;
+		if (shape !== lastElkShape) {
+			lastElkShape = shape;
+			const generation = ++buildGeneration;
+			void elkLayout(ids, derive)
+				.then((elk) => {
+					if (generation !== buildGeneration || elk.size === 0) return;
+					untrack(() => {
+						nodes = nodes.map((n) => {
+							const p = elk.get(n.id);
+							return p ? { ...n, position: p } : n;
+						});
 					});
+				})
+				.catch(() => {
+					// A failed layout is not a failed graph: the sync placement is already on screen
+					// and correct enough to read, so this degrades rather than blanking the canvas.
+					// Reset the shape so the next tick retries rather than caching the failure.
+					lastElkShape = '';
 				});
-			})
-			.catch(() => {
-				// A failed layout is not a failed graph: the sync placement is already on screen and
-				// correct enough to read, so this degrades rather than blanking the canvas.
-			});
+		}
 
 		const dsNodes: FlowNode[] = [...dsSet].map((id) => {
 			const meta = dsMeta.get(id);
@@ -570,7 +610,7 @@
 				{/if}
 				<span
 					class="flabel"
-					title="graph hops from the focused node — a hop alternates dataset and job, as in Marquez"
+					title="hops from the focused node — one hop reaches its jobs, two the tables those jobs touch"
 					>hops</span
 				>
 				{#each FOCUS_DEPTHS as d (d ?? 'all')}

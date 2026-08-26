@@ -18,6 +18,12 @@
  * useLayout.ts` runs `elk.algorithm: layered` with `elk.direction: RIGHT` — so this is convergence on
  * the reference implementation rather than a new idea.
  *
+ * On edges, for accuracy: Marquez routes ORTHOGONALLY too and then RENDERS that route, drawing ELK's
+ * bend points as an SVG polyline (`Edge/ElbowEdge.tsx`). An earlier revision of this file described
+ * its routing as splines — that was simply wrong. rask asks ELK for the same orthogonal route and
+ * then discards the geometry (only `x`/`y` are read below), letting `smoothstep` redraw its own right
+ * angles; the two usually coincide, but the bend points ELK computed are thrown away.
+ *
  * **Why this is not the dependency `layout.ts` rejected.** That file turned elk down on bundle size
  * "against ~7 KB of deferred-bundle headroom in this zone (`budget.json`)". `budget.json` no longer
  * exists — the per-zone ceiling and its `budget.test.ts` gate were removed 2026-08-04 — and `elkjs` is
@@ -82,15 +88,21 @@ export async function elkLayout(
 			'elk.direction': direction,
 			'elk.layered.spacing.nodeNodeBetweenLayers': String(layerGap),
 			'elk.spacing.nodeNode': String(nodeGap),
-			// ORTHOGONAL over Marquez's SLOPPY splines: rask's edges are already `smoothstep`, and
-			// right angles read as a pipeline rather than as a bundle of wires.
+			// THE THREE BELOW RESTATE ELK's OWN DEFAULTS. They are kept because this file's job is to
+			// be read against Marquez's `useLayout.ts`, and a reader comparing the two needs to see
+			// what rask relies on — but none of them is a tuning decision, and an earlier revision of
+			// this comment claimed all three were. Leave-one-out on a lineage-shaped probe: deleting
+			// any one changes the output by nothing (1400×416 either way).
+			//
+			// Measured against elkjs 0.12.0 — re-measure before trusting this after an upgrade, since
+			// a default that moves upstream would silently change the picture with no diff here.
 			'elk.edgeRouting': 'ORTHOGONAL',
-			// Brandes-Köpf placement is what actually pulls a node level with the one it feeds — the
-			// single phase the hand-rolled placer skipped.
 			'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF',
-			// A real estate is mostly UNCONNECTED nodes (measured: 20 of 51 datasets), and packing
-			// them is a first-class ELK job. The placer this replaces bolted them into a grid as wide
-			// as the graph was deep, so an unrelated block grew with the graph.
+			// Marquez turns this OFF (`separateConnectedComponents: 'false'` +
+			// `hierarchyHandling: 'INCLUDE_CHILDREN'`, which are redundant with each other), and that
+			// is the single largest difference between the two pictures: a real estate is mostly
+			// UNCONNECTED nodes (measured: 20 of 51 datasets), and separating them is what keeps them
+			// packed instead of strung down one column. rask gets that by NOT deviating.
 			'elk.separateConnectedComponents': 'true',
 			'elk.padding': '[top=20,left=20,bottom=20,right=20]',
 		},
