@@ -37,7 +37,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Any, Final, LiteralString, cast
 
 import psycopg
 from psycopg import sql
@@ -335,6 +335,39 @@ _SET_WROTE_QUALITY: Final = (
     "MATCH (r:Run {run_id:$rid})-[w:WROTE]->(d:Dataset {name:$name}) SET w.quality_passed=$passed, w.quality_assertions=$assertions RETURN 1"
 )
 _DERIVED_FROM: Final = "MATCH (o:Dataset {name:$on}), (i:Dataset {name:$inp}) MERGE (o)-[:DERIVED_FROM]->(i) RETURN 1"
+
+#: Widest hop count a caller may ask for. A bound this side of "the whole component" is the point of
+#: the parameter, so an absurd number is refused rather than honoured — it is the unbounded walk
+#: wearing a number, and the unbounded walk already has its own spelling (`depth=None`).
+MAX_WALK_DEPTH: Final = 20
+
+
+def bounded_walk(query: LiteralString, depth: object) -> LiteralString:
+    """Bound every variable-length `DERIVED_FROM` hop in `query` to at most `depth` hops.
+
+    `None` returns the query untouched — the unbounded walk, which is what the estate-wide read wants
+    and is a deliberate answer rather than a missing bound.
+
+    **Why the number is interpolated.** openCypher takes the hop range as SYNTAX (`*1..3`), not as a
+    bind parameter: `*1..$depth` does not parse. So this formats it into the string, which is exactly
+    the shape an injection takes — hence the coercion below happens BEFORE any formatting, and a value
+    that is not a small positive integer is refused outright rather than clamped to something
+    plausible. Clamping would run a query the caller never asked for and hide that they tried.
+
+    `bool` is excluded explicitly: it is an `int` subclass in Python, and `True` would otherwise pass
+    as depth 1.
+    """
+    if depth is None:
+        return query
+    if isinstance(depth, bool) or not isinstance(depth, int):
+        raise TypeError(f"walk depth must be an int or None, got {type(depth).__name__}")
+    if depth < 1 or depth > MAX_WALK_DEPTH:
+        raise ValueError(f"walk depth must be between 1 and {MAX_WALK_DEPTH}, got {depth}")
+    # EVERY hop, not the first: the rooted read runs an upstream and a downstream walk, and bounding
+    # one would return a neighbourhood that is shallow in one direction and the whole component in the
+    # other — which reads as a graph bug rather than as a missing bound.
+    return cast("LiteralString", query.replace("*1..]", f"*1..{depth}]"))
+
 
 _UPSTREAM: Final = "MATCH (d:Dataset {name:$name})-[:DERIVED_FROM*1..]->(u:Dataset) RETURN DISTINCT u.name, u.namespace"
 # One run's direct inputs + the version it PINNED on each (the READ-edge version — #115's reproducibility
@@ -776,14 +809,21 @@ class LineageRepository:
                     },
                 )
 
-    async def upstream(self, name: str) -> Neighbors:
-        """Datasets ``name`` is (transitively) derived from — its provenance."""
-        rows = await fetch(self._pool, self._graph, _UPSTREAM, {"name": name}, columns=2)
+    async def upstream(self, name: str, depth: int | None = None) -> Neighbors:
+        """Datasets ``name`` is (transitively) derived from — its provenance.
+
+        ``depth`` bounds the walk to that many hops; ``None`` keeps the full ancestry, which is what
+        the un-rooted reads want.
+        """
+        rows = await fetch(self._pool, self._graph, bounded_walk(_UPSTREAM, depth), {"name": name}, columns=2)
         return Neighbors(dataset=name, related=[DatasetRef(name=r[0], namespace=r[1]) for r in rows])
 
-    async def downstream(self, name: str) -> Neighbors:
-        """Datasets that are (transitively) derived from ``name`` — its impact."""
-        rows = await fetch(self._pool, self._graph, _DOWNSTREAM, {"name": name}, columns=2)
+    async def downstream(self, name: str, depth: int | None = None) -> Neighbors:
+        """Datasets that are (transitively) derived from ``name`` — its impact.
+
+        ``depth`` bounds the walk to that many hops; ``None`` keeps the full impact set.
+        """
+        rows = await fetch(self._pool, self._graph, bounded_walk(_DOWNSTREAM, depth), {"name": name}, columns=2)
         return Neighbors(dataset=name, related=[DatasetRef(name=r[0], namespace=r[1]) for r in rows])
 
     async def run_inputs(self, run_id: str) -> RunInputs:
@@ -1391,14 +1431,19 @@ class LineageRepository:
         rows = await fetch(self._pool, self._graph, _CREATOR, {"name": name}, columns=1)
         return Creator(dataset=name, creator=rows[0][0] if rows else None)
 
-    async def graph(self, name: str) -> LineageGraph:
+    async def graph(self, name: str, depth: int | None = None) -> LineageGraph:
         """The connected dataset-lineage subgraph around ``name`` (nodes + edges).
 
         Each node carries its storage location (``source_uri``) and governance ``tags`` so a
         DAG view can show *where* each table lives and *how* it is classified, not just its name.
+
+        ``depth`` bounds BOTH walks, which is what makes this a rooted neighbourhood rather than a
+        whole connected component — the shape Marquez serves at `/lineage?nodeId=&depth=N`, and the
+        thing a depth control needs in order to bound what is FETCHED instead of filtering what has
+        already been fetched.
         """
-        up = await self.upstream(name)
-        down = await self.downstream(name)
+        up = await self.upstream(name, depth)
+        down = await self.downstream(name, depth)
         names = list(dict.fromkeys([name, *(r.name for r in up.related), *(r.name for r in down.related)]))
         prop_rows = await fetch(self._pool, self._graph, _GRAPH_NODES, {"names": names}, columns=4)
         props = {r[0]: r for r in prop_rows}

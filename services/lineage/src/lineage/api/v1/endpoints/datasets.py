@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Query
 from lineage.api.dependencies import RepositoryDep
 from lineage.api.fga_deps import FilterDep, audit_read, require_metadata_access, require_write_access
 from lineage.schemas import Creator, DatasetSchema, LineageGraph, Neighbors, Producers, Readers
+from lineage.services.repository import MAX_WALK_DEPTH
 
 
 # require_metadata_access gates the read (must run first); audit_read then logs the now-authorized
@@ -87,13 +88,31 @@ async def get_schema(name: str, repository: RepositoryDep, version: int | None =
 
 
 @router.get("/{name}/graph")
-async def get_graph(name: str, repository: RepositoryDep, datasets: FilterDep) -> LineageGraph:
+async def get_graph(
+    name: str,
+    repository: RepositoryDep,
+    datasets: FilterDep,
+    depth: Annotated[int | None, Query(ge=1, le=MAX_WALK_DEPTH)] = None,
+) -> LineageGraph:
     """The connected lineage subgraph around ``name`` (nodes + edges) for a DAG view.
+
+    ``depth`` bounds the walk to that many hops in each direction, making this a ROOTED
+    NEIGHBOURHOOD rather than a whole connected component — the shape Marquez serves at
+    ``/lineage?nodeId=&depth=N``. Omitted, the walk is unbounded, which is the previous behaviour and
+    still what an un-rooted caller wants.
+
+    Bounding here rather than in the client is the point: a UI depth control that filters an
+    already-fetched window cannot reach anything the window excluded, however small the depth.
+
+    `ge=1, le=MAX_WALK_DEPTH` is the FIRST of two guards and the one that answers the caller: a bad
+    depth is a 422 here rather than a 500 from the repository. The repository re-checks anyway,
+    because the hop range is interpolated into Cypher and that check must not depend on every caller
+    having gone through this route.
 
     Nodes the caller may not see (and edges touching them) are dropped; the requested ``name``
     is already authorized by the route gate.
     """
-    result = await repository.graph(name)
+    result = await repository.graph(name, depth)
     visible = await datasets.visible([node.id for node in result.nodes if node.id != name])
     visible.add(name)
     result.nodes = [node for node in result.nodes if node.id in visible]

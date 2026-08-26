@@ -7,11 +7,18 @@ transcript; this file keeps the decisions and the ordering.
 
 Marquez read at `MarquezProject/marquez@main` via `gh api`. rask read at `main` (`bc4539bc`).
 
-**STATUS 2026-08-26: P0.1–P0.4 and P1.5 are DONE** — landed in `367516fb`, deployed as
+**STATUS 2026-08-26: P0.1–P0.4, P1.5 and P1.10 are DONE** — landed in `367516fb`, deployed as
 `web-lakehouse:main-367516fb` (helm rev 77) and verified through the ingress. Their sections below are
 kept with a ✅ and the proof, because the *reasons* are the durable part; delete them when the rest of
-this file goes. **Everything else here is still open** — that is 21 of the 26 items, and the goal that
-closed the five never covered them.
+this file goes. **Everything else is still open** — 20 of 26. But read the tiers before reading that number as
+debt: only **P1 (5 left) is remaining WORK**. P2 is five architectural DECISIONS with nothing to
+implement until they are ruled on, and P3 is ten feature-parity items with a different product, each
+of which may correctly be answered "we do not want that". This file catalogues DIVERGENCE, not
+breakage.
+
+Two P1 items are not independent: **#7 (depth filters rather than fetches) and #8 (search cannot
+leave the neighbourhood) are both symptoms of P2 #12** (the client-side capped feed). Patching them
+separately papers over the cap; they close for free once #12 is ruled on.
 
 **Read the P0 section first: three of its four items were errors I shipped, and two were regressions
 introduced by the ELK change itself (`08d82eea`).**
@@ -61,9 +68,13 @@ choice. **All three restate ELK's defaults.** Leave-one-out: deleting :94 change
 (1400×416 either way on a lineage-shaped probe).
 
 The component-packing win over Marquez is real — but it comes from rask *not deviating*, while
-Marquez forces separation off (`useLayout.ts:104` + `:117 hierarchyHandling: INCLUDE_CHILDREN`, which
-are redundant with each other). My commit message for `08d82eea` claims the credit the wrong way
-round.
+Marquez forces separation off (`useLayout.ts:104` + `:117 hierarchyHandling: INCLUDE_CHILDREN`). My
+commit message for `08d82eea` claims the credit the wrong way round.
+
+**Correction to an earlier revision of this file:** those two were described as "redundant with each
+other". That is true only of their effect on component separation. `INCLUDE_CHILDREN`'s real job is
+COMPOUND-NODE layout — it is what lets ELK lay out a container and its children in one pass — and
+that is the mechanism behind item 17 below, which this file originally dropped.
 
 The option sets differ **effectively on two axes only**: component separation, and layering
 (`COFFMAN_GRAHAM`, effective only once separation is off) — plus rask's spacing and padding.
@@ -85,7 +96,8 @@ deliberate divergence that does not exist, in the file whose whole purpose is co
 | 7 | **Depth filters, it does not fetch** | Marquez's depth controls what is *fetched*; rask's filters an already-fetched, hard-capped window (union of a 60-dataset and a 200-event window). |
 | 8 | **Search cannot leave the focused neighbourhood** | It matches only nodes currently drawn — deliberate, but it means you cannot jump *out* of a focus. |
 | 9 | **No detail drawer** | Marquez's node click navigates *and* opens a drawer in one gesture; rask only re-roots, and detail is a separate page. |
-| 10 | **ELK gets one constant box per node** | The `size` hook (`elk-layout.ts:56`) is dead — the sole call site passes no third argument, so every node is declared 200×64 while cards are content-height. Overlap needs a rendered height >98px (ELK reserves 64, sibling gap 34); chip-heavy cards approach it. Marquez feeds the real box, incl. `34 + fields.length * 10`. |
+| 10 | ✅ **DONE — ELK got one constant box per node** | The `size` hook (`elk-layout.ts:56`) is dead — the sole call site passes no third argument, so every node is declared 200×64 while cards are content-height. Overlap needs a rendered height >98px (ELK reserves 64, sibling gap 34); chip-heavy cards approach it. Marquez feeds the real box, incl. `34 + fields.length * 10`. |
+| 17 | **Column graph has no dataset containers** — RESTORED, this file dropped it | The audit rated it **significant** and the distillation lost it. Marquez nests columns inside a compound dataset node (`column-level/layout.ts:83-119` builds a parent `kind: 'dataset', width: 800` whose `children` are the columns) and lays it out with `hierarchyHandling: INCLUDE_CHILDREN`. rask's column nodes are flat siblings carrying the table name as a subtitle, so nothing renders a table boundary. **Measured live on `acme-silver$features`: 23 nodes, 3 distinct datasets, and 1 column stack at x=20 holding `acme-silver$features` AND `acme-bronze$events` interleaved.** Mechanism: Svelte Flow sub-flows (`parentId`, `type: 'group'`, `extent: 'parent'`) plus `INCLUDE_CHILDREN` on the ELK run. |
 | 11 | **ELK's edge geometry is discarded** | We read only `child.x/y`; a lineage probe returns bendPoints `[2,2,0,0,2,2,2,0,2,0,0,0]`. Marquez draws them. Low visible impact (smoothstep also draws right angles) but it is information thrown away. |
 
 ---
