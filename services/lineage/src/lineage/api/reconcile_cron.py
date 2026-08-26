@@ -32,6 +32,7 @@ from lineage.core.reconcile import (
     reconcile_all,
 )
 from lineage.models import RunEvent, author_sub_from_payload
+from lineage.schemas import ReconcileState
 from lineage.services.consumer import record_event_best_effort
 from service_kit import dapr_publish
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -117,6 +118,15 @@ async def _on_cron(
     lost = [s.dataset for s in statuses if s.status in STORAGE_LOSS_STATES]
     if lost:
         log.warning("lineage_reconcile_storage_loss", extra={"datasets": lost, "count": len(lost)})
+    # Datasets this reader could not OPEN. Reported on their own line, and NOT counted as storage
+    # loss: "we could not read it" and "it is gone" demand opposite responses — one is a reader or
+    # credential mismatch, the other an incident. Before they were separated, six live datasets
+    # carrying an unsupported manifest feature flag were reported as destroyed, in the same hour
+    # `services/maintenance` was reading their manifests. WARN rather than ERROR because the data is
+    # very likely fine; what is broken is our ability to see it, and the reason says which.
+    unreadable = {s.dataset: s.unreadable_reason for s in statuses if s.status is ReconcileState.UNREADABLE}
+    if unreadable:
+        log.warning("lineage_reconcile_unreadable", extra={"datasets": unreadable, "count": len(unreadable)})
     # Dangling blob pointers — payloads gone from under a version-wise-healthy table. NOT auto-fixable
     # (the bytes are lost); WARN so a bucket wipe / deleted external base surfaces on the next tick
     # instead of at some consumer's first read.
@@ -139,6 +149,7 @@ async def _on_cron(
             "checked": len(statuses),
             "backfilled": len(backfilled),
             "storage_loss": len(lost),
+            "unreadable": len(unreadable),
             "dangling_blobs": len(dangling),
             "stale": len(stale),
             "contract_violations": len(violations),
@@ -150,6 +161,7 @@ async def _on_cron(
         "checked": len(statuses),
         "backfilled": backfilled,
         "storage_loss": lost,
+        "unreadable": unreadable,
         "dangling_blobs": dangling,
         "stale": stale,
         "contract_violations": violations,

@@ -1315,7 +1315,7 @@ export interface components {
          * @description Result of reconciling the lineage graph's recorded version against the on-disk Lance version.
          * @enum {string}
          */
-        ReconcileState: "in_sync" | "storage_ahead" | "graph_ahead" | "untracked" | "missing_on_storage" | "absent";
+        ReconcileState: "in_sync" | "storage_ahead" | "graph_ahead" | "untracked" | "missing_on_storage" | "absent" | "unreadable";
         /**
          * ReconcileStatus
          * @description Whether a dataset's lineage-graph version matches its actual on-disk Lance version (#23).
@@ -1350,6 +1350,8 @@ export interface components {
             status: components["schemas"]["ReconcileState"];
             /** Storage Version */
             storage_version?: number | null;
+            /** Unreadable Reason */
+            unreadable_reason?: string | null;
         };
         /**
          * Run

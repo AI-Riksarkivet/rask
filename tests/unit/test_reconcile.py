@@ -14,6 +14,9 @@ import pytest
 from lineage.api.reconcile_cron import _on_cron
 from lineage.core.config import LineageSettings
 from lineage.core.reconcile import (
+    BACKFILLABLE_STATES,
+    STORAGE_LOSS_STATES,
+    StorageUnreadable,
     read_dangling_blob_columns,
     read_latest_write_age_hours,
     read_storage_version,
@@ -443,11 +446,17 @@ def test_cron_route_post_with_token_returns_sweep_report(monkeypatch: pytest.Mon
     # the fixture's dataset has no dataSource URI, so the sweep checks 0 datasets (swept above proves the
     # body ran); retention off (the default) → the report still carries pruned_runs, so dashboards can
     # rely on every key being present on every tick.
+    # `unreadable` joined the report 2026-08-26, and its presence is the contract, not an extra:
+    # datasets this reader cannot OPEN used to be counted as `storage_loss`, which reported six live
+    # datasets as destroyed. Splitting them means an unreadable dataset must land SOMEWHERE — a key
+    # that appears only when non-empty would let them vanish instead, which is the quieter half of
+    # the same bug.
     assert body == {
         "checked": 0,
         "outbox_drained": 0,
         "backfilled": [],
         "storage_loss": [],
+        "unreadable": {},
         "dangling_blobs": {},
         "stale": [],
         "contract_violations": {},
@@ -482,3 +491,51 @@ def test_storage_loss_states_flag_graph_ahead_and_missing_not_insync() -> None:
     assert ReconcileState.MISSING_ON_STORAGE in STORAGE_LOSS_STATES
     assert ReconcileState.IN_SYNC not in STORAGE_LOSS_STATES
     assert not set(STORAGE_LOSS_STATES) & set(BACKFILLABLE_STATES)  # loss ≠ back-fillable (disjoint)
+
+
+def test_unreadable_storage_is_not_reported_as_storage_loss(tmp_path: Path) -> None:
+    """ "We could not open it" and "it is gone" are different answers, and only one of them is loss.
+
+    MEASURED on the live estate 2026-08-26: the reconcile sweep reported 6 datasets as
+    `missing_on_storage` — `silver$pin-live-b`, `silver$consensus-live-41965`,
+    `silver$loop-1785786423`, two `silver$vasa-publish-*` and `uiproof-gold$catalog` — while
+    `services/maintenance` was reading those same datasets' manifests in the same hour, far enough to
+    parse their feature flags before declining to compact them. They exist. What they carry is
+    manifest feature flag 16 (`base_paths`, shallow-clone / multi-base), which this pylance build
+    refuses to open.
+
+    `read_storage_version` swallowed EVERY failure into `None` — its own docstring said "isn't there
+    / unreadable", conflating the two in one breath — and `reconcile()` maps `None` to
+    MISSING_ON_STORAGE. So a permission error, a bad endpoint, a wrong scheme, a pyo3 panic and an
+    unsupported manifest all read as DATA LOSS. That is the estate's own stated rule broken
+    (`maintenance/services/base_refs.py`: "'we could not read it' and 'it referenced nothing' must
+    stay distinguishable"), and it is not theoretical — it is what made a human report six phantom
+    losses.
+
+    The discriminator has to be NARROW. Matching a loose "not found" would swallow S3's
+    "Bucket 'x' not found" — a misconfigured endpoint — back into "deleted dataset". pylance's absent
+    wording is "was not found", which that message does not contain.
+
+    Both halves are asserted together, because a fix that raises on everything would be just as wrong
+    as one that raises on nothing: a genuinely absent dataset must still be absent.
+    """
+    # ABSENT stays absent — the pin against pylance rewording its message. If that day comes this
+    # goes red HERE, at the discriminator, rather than silently across every dataset in the estate.
+    assert read_storage_version(str(tmp_path / "missing.lance"), {}) is None
+    assert reconcile(dataset="d", graph_version=7, storage_version=None).status is ReconcileState.MISSING_ON_STORAGE
+
+    # UNREADABLE is a third answer, not a quieter kind of loss.
+    with pytest.raises(StorageUnreadable) as raised:
+        read_storage_version("notascheme://bucket/table.lance", {})
+    assert str(raised.value), "the refusal must carry a reason — an unexplained UNREADABLE is no better than a wrong MISSING"
+
+    status = reconcile(dataset="d", graph_version=7, storage_version=None, storage_unreadable="unsupported manifest feature flags: 16")
+    assert status.status is ReconcileState.UNREADABLE, "an unopenable dataset was still reported as storage loss"
+    assert status.in_sync is False, "unknown is not healthy either"
+    assert status.unreadable_reason == "unsupported manifest feature flags: 16"
+
+
+def test_an_unreadable_dataset_is_excluded_from_storage_loss() -> None:
+    """The signal an operator acts on must not count what it could not look at."""
+    assert ReconcileState.UNREADABLE not in STORAGE_LOSS_STATES
+    assert ReconcileState.UNREADABLE not in BACKFILLABLE_STATES

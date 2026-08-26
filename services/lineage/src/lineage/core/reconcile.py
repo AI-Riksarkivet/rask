@@ -17,6 +17,7 @@ import lance
 
 from lineage.schemas import DatasetSummary, ReconcileState, ReconcileStatus
 from service_kit.lakehouse import blobs
+from service_kit.lakehouse.features import unsupported_features_from_open_error
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 
 
@@ -33,16 +34,33 @@ def _swallow_dataset_error(exc: BaseException) -> None:
         raise exc
 
 
+class StorageUnreadable(Exception):
+    """The dataset could not be OPENED — its state is unknown, which is not the same as gone."""
+
+
 def read_storage_version(uri: str, storage_options: dict[str, str]) -> int | None:
-    """The current on-disk Lance version at ``uri`` — ``None`` when the dataset isn't there / unreadable.
+    """The current on-disk Lance version at ``uri`` — ``None`` ONLY when the dataset is genuinely absent.
 
     A missing dataset is a normal "no storage version" (it may not have been written yet), not an error.
+    Anything else — an unsupported manifest feature flag, missing credentials, a bad endpoint or scheme,
+    a pyo3 panic — raises :class:`StorageUnreadable`, because the caller classifies a `None` as
+    MISSING_ON_STORAGE and reporting "we could not open it" as "it was destroyed" is a false alarm an
+    operator acts on. Measured 2026-08-26: six live datasets reported as storage loss while
+    ``services/maintenance`` was reading their manifests in the same hour.
+
+    The absent marker is deliberately NARROW. pylance's wording for a genuinely missing dataset is
+    "was not found"; a loose "not found" would also match S3's "Bucket 'x' not found", so a
+    misconfigured endpoint would go on reading as a deleted dataset — the very bug this closes, one
+    layer out.
     """
     try:
         return int(lance.dataset(uri, storage_options=storage_options).version)
     except BaseException as exc:
         _swallow_dataset_error(exc)
-        return None
+        if "was not found" in str(exc):
+            return None
+        reason = unsupported_features_from_open_error(exc) or f"{type(exc).__name__}: {exc}"
+        raise StorageUnreadable(reason) from exc
 
 
 def read_storage_schema(uri: str, storage_options: dict[str, str], version: int) -> SchemaFields | None:
@@ -96,8 +114,23 @@ def read_latest_write_age_hours(uri: str, storage_options: dict[str, str]) -> fl
         return None
 
 
-def reconcile(*, dataset: str, graph_version: int | None, storage_version: int | None) -> ReconcileStatus:
-    """Compare the graph's recorded version against the on-disk version and classify any drift."""
+def reconcile(*, dataset: str, graph_version: int | None, storage_version: int | None, storage_unreadable: str | None = None) -> ReconcileStatus:
+    """Compare the graph's recorded version against the on-disk version and classify any drift.
+
+    ``storage_unreadable`` is checked FIRST and short-circuits every version comparison: if the
+    dataset could not be opened there is no on-disk version to compare, and every other branch would
+    be reasoning from an absence it mistook for a fact. Defaulting to ``None`` keeps every existing
+    caller and case byte-identical.
+    """
+    if storage_unreadable is not None:
+        return ReconcileStatus(
+            dataset=dataset,
+            graph_version=graph_version,
+            storage_version=None,
+            in_sync=False,
+            status=ReconcileState.UNREADABLE,
+            unreadable_reason=storage_unreadable,
+        )
     if graph_version is None and storage_version is None:
         state = ReconcileState.ABSENT
     elif storage_version is None:
@@ -176,8 +209,22 @@ async def reconcile_all(
             # tick. A recreate clears the stamp on ingest and re-enters the sweep automatically.
             continue
         graph_version = await repository.latest_write_version(summary.name)
-        storage_version = await read_version(uri)
-        status = reconcile(dataset=summary.name, graph_version=graph_version, storage_version=storage_version)
+        # A dataset this reader cannot OPEN is classified UNREADABLE and skips every downstream axis
+        # below: with no storage version there is nothing to compare, no blob pointer to probe, no
+        # schema to read, and nothing to back-fill. Reporting it as loss is what sent an operator
+        # looking for six datasets that were never gone.
+        storage_unreadable: str | None = None
+        storage_version: int | None = None
+        try:
+            storage_version = await read_version(uri)
+        except StorageUnreadable as exc:
+            storage_unreadable = str(exc)
+        status = reconcile(
+            dataset=summary.name,
+            graph_version=graph_version,
+            storage_version=storage_version,
+            storage_unreadable=storage_unreadable,
+        )
         if storage_version is not None and read_dangling is not None:
             status.dangling_blob_columns = await read_dangling(uri)
         # Freshness (data-contract gap #2): only when a budget is configured AND storage is readable —

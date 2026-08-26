@@ -17,6 +17,11 @@ class ReconcileState(StrEnum):
     UNTRACKED = "untracked"  # data exists on disk but the graph has no versioned write (no lineage)
     MISSING_ON_STORAGE = "missing_on_storage"  # graph records a version but the dataset isn't on disk
     ABSENT = "absent"  # neither side has it
+    # The dataset could not be OPENED, so its state is unknown — neither loss nor health. Distinct
+    # from MISSING_ON_STORAGE because the two demand opposite responses: loss is an incident, an
+    # unreadable dataset is usually a reader/format mismatch (an unsupported manifest feature flag,
+    # a bad endpoint, missing credentials). Collapsing them reported six live datasets as destroyed.
+    UNREADABLE = "unreadable"
 
 
 class ReconcileStatus(BaseModel):
@@ -34,6 +39,10 @@ class ReconcileStatus(BaseModel):
     in_sync: bool
     status: ReconcileState
     dangling_blob_columns: list[str] = []
+    # Why the dataset could not be opened, when ``status`` is UNREADABLE. Carried rather than logged
+    # because an unexplained UNREADABLE is no more actionable than a wrong MISSING_ON_STORAGE — the
+    # reason is what tells an operator whether to upgrade a reader or fix a credential.
+    unreadable_reason: str | None = None
     # Freshness (data-contract gap #2, 2026-07-12): True when a freshness budget is configured and
     # the newest on-disk version commit is older than it. False when in budget OR the axis is off.
     stale: bool = False
