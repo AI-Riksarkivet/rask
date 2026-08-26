@@ -138,6 +138,55 @@ export async function startIngest(
 	return parse(IngestAcceptedSchema, await res.json());
 }
 
+/** What a lifecycle call answers with. `state` is where the run IS now, `detail` is what the door
+ *  says the call did and did NOT do — the ingest routes deliberately spell out that terminate stops
+ *  further scheduling while an in-flight activity runs to completion, and a UI must not soften it. */
+export const IngestLifecycleSchema = v.object({
+	run_id: v.string(),
+	state: v.optional(v.string()),
+	detail: v.optional(v.string()),
+});
+export type IngestLifecycle = v.InferOutput<typeof IngestLifecycleSchema>;
+
+/** The lifecycle verbs, as the ingest door names them. */
+export type IngestLifecycleAction = 'terminate' | 'pause' | 'resume';
+
+/**
+ * Stop, hold, or release a live ingest run.
+ *
+ * ONE function for three verbs because the doors are identical in shape — same bearer seam, same
+ * 409-when-not-applicable, same 202 — and three near-copies would drift. The verb is a closed union
+ * so a typo cannot reach the gateway as a path segment.
+ *
+ * REFUSALS ARE VALUES HERE, not exceptions, and that is the point. 409 means "the run is not in a
+ * state this verb applies to" and 503 means "the engine did not answer" — both are things an operator
+ * needs to SEE, and `refuse()` would turn them into a thrown string the caller can only render as a
+ * generic failure. The caller gets `{ ok: false, status, detail }` and can say which happened.
+ */
+export async function ingestLifecycle(
+	runId: string,
+	action: IngestLifecycleAction,
+	fetchFn: typeof fetch = fetch,
+	extraHeaders: Record<string, string> = {},
+): Promise<{ ok: true; value: IngestLifecycle } | { ok: false; status: number; detail: string }> {
+	// Same bearer seam as `startIngest` — these are governed doors, gated on the RUN's own project.
+	const res = await fetchFn(`/api/ingest/ingests/${encodeURIComponent(runId)}/${action}`, {
+		method: 'POST',
+		headers: extraHeaders,
+	});
+	if (!res.ok) {
+		let detail = `${res.status} ${res.statusText}`;
+		try {
+			const body = await res.json();
+			if (body && typeof body.detail === 'string') detail = body.detail;
+		} catch {
+			// non-JSON error body — keep the status line
+		}
+		return { ok: false, status: res.status, detail };
+	}
+	return { ok: true, value: parse(IngestLifecycleSchema, await res.json()) };
+}
+
 /** Read a run's status. */
 export async function getIngestRun(
 	runId: string,

@@ -5,9 +5,11 @@ import { lineageAuthHeaders } from '@rask/api/runs-feed';
 import { isIngestJob } from './ingest-job';
 import {
 	getIngestRun,
+	ingestLifecycle,
 	listIngestSources,
 	startIngest as postIngest,
 	type IngestAccepted,
+	type IngestLifecycle,
 	type IngestRun,
 	type SourceDescriptor,
 } from '@rask/api';
@@ -125,6 +127,66 @@ const IngestInput = v.object({
 export const startIngest = command(IngestInput, async (input): Promise<IngestAccepted> => {
 	return postIngest(input, getRequestEvent().fetch, bearerHeaders());
 });
+
+/** What a lifecycle button gets back. A RESULT UNION, never a throw.
+ *
+ *  The three refusals this door issues are all things an operator must be able to READ: 409 for a run
+ *  that already finished ("nothing to terminate"), 409 for a resume on a run that was never paused,
+ *  503 for an engine that did not answer. Thrown, they collapse into one red toast; returned, the
+ *  page can say which. This is the `ApiResult` shape the dock-layout store established — status-driven
+ *  UI states rather than exception flow. */
+export type LifecycleResult =
+	| { ok: true; state: string; detail: string }
+	| { ok: false; status: number; detail: string };
+
+const LifecycleInput = v.object({
+	runId: RunId,
+	action: v.picklist(['terminate', 'pause', 'resume']),
+});
+
+/**
+ * Stop, hold, or release a live ingest run.
+ *
+ * A `command()` and not a `query()` because it MUTATES — and a single-flight refresh is attached for
+ * exactly the reason `startIngest`'s comment says one was not: there IS something on screen this
+ * staleness-invalidates now. The run's own status and the runs list both change the moment the door
+ * accepts, and a remote `query()` re-CALLED returns its cached value — so without the explicit
+ * `.refresh()` the button would work, the door would act, and the page would keep showing the old
+ * state until a reload. That is the estate's most-repeated remote-function trap.
+ *
+ * `void` on the refreshes deliberately: a refresh that fails must not fail the mutation the user
+ * already succeeded at. The catch keeps an unhandled rejection from evicting the query from cache,
+ * which is what silently kills a poll loop.
+ */
+export const runLifecycle = command(
+	LifecycleInput,
+	async ({ runId, action }): Promise<LifecycleResult> => {
+		const res: Awaited<ReturnType<typeof ingestLifecycle>> = await ingestLifecycle(
+			runId,
+			action,
+			getRequestEvent().fetch,
+			bearerHeaders(),
+		);
+		if (!res.ok) return { ok: false, status: res.status, detail: res.detail };
+
+		void getIngestRunStatus(runId)
+			.refresh()
+			.catch(() => {});
+		void listIngestRuns()
+			.refresh()
+			.catch(() => {});
+
+		const value: IngestLifecycle = res.value;
+		return {
+			ok: true,
+			state: value.state ?? '',
+			// The door's OWN words. `terminate` says further scheduling stops while an in-flight activity
+			// runs to completion; `pause` says the run still holds its queue and its consumer. Rewriting
+			// either into something friendlier is how an operator comes to believe the work has stopped.
+			detail: value.detail ?? '',
+		};
+	},
+);
 
 /** One ingest run as the LIST renders it — deliberately fewer fields than the detail page. */
 export interface IngestRunRow {

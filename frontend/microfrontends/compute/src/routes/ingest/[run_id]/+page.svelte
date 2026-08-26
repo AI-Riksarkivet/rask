@@ -1,11 +1,25 @@
 <script lang="ts">
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { getIngestRunStatus } from '$lib/remote/ingest.remote';
+	import {
+		getIngestRunStatus,
+		runLifecycle,
+		type LifecycleResult,
+	} from '$lib/remote/ingest.remote';
 	import { bronzeDatasetId } from '$lib/remote/ingest-job';
 	import { liveRead, lineageTick } from '$lib/live/tick.svelte';
+	import { Button } from '@rask/ui/button';
 	import { Card } from '@rask/ui/card';
-	import { ArrowLeft, CircleAlert, CircleCheck, CircleX, Loader } from '@lucide/svelte';
+	import {
+		ArrowLeft,
+		CircleAlert,
+		CircleCheck,
+		CircleX,
+		Loader,
+		Pause,
+		Play,
+		Square,
+	} from '@lucide/svelte';
 
 	// One ingest run's status (open_ingest.md A20). The run is genuinely asynchronous, so this page
 	// is the only honest place to learn what happened to it — the POST returns a handle, not a result.
@@ -54,6 +68,53 @@
 	const percent = $derived(
 		totalKnown ? Math.min(100, Math.round(((run?.units_done ?? 0) / total) * 100)) : 0,
 	);
+
+	// ── LIFECYCLE CONTROLS ─────────────────────────────────────────────────────────────────────────
+	//
+	// The doors existed before this page called them: `POST /ingests/{id}/{terminate,pause,resume}`
+	// shipped with the Dapr audit drain and had ZERO callers in any zone, reachable only by curl. An
+	// operator stopping a runaway harvest had to find a shell, a bearer and the run id — during an
+	// incident, which is exactly when nobody wants to look those up.
+	//
+	// SHOWN DISABLED, NEVER HIDDEN (estate ruling). A finished run still renders all three buttons,
+	// greyed, with the reason on the button itself. Hiding them would make "this run is COMPLETE" and
+	// "this build has no terminate feature" look identical, and only one of those is worth knowing.
+	let pending = $state<'' | 'terminate' | 'pause' | 'resume'>('');
+	let outcome = $state<LifecycleResult | undefined>(undefined);
+
+	// PAUSE and RESUME are mutually exclusive on state, TERMINATE applies to both. The server is the
+	// authority — it answers 409 for a verb that does not apply — so these only decide what to grey
+	// out. Guessing MORE than the server knows is how a UI starts refusing things the API allows.
+	const live = $derived(run !== undefined && !TERMINAL.includes(run.status));
+	const suspended = $derived(run?.status === 'SUSPENDED');
+	const canTerminate = $derived(live);
+	const canPause = $derived(live && !suspended);
+	const canResume = $derived(suspended);
+
+	function whyDisabled(verb: 'terminate' | 'pause' | 'resume'): string {
+		if (run === undefined) return 'Run status is still loading.';
+		if (!live && verb !== 'resume')
+			return `This run is ${run.status} — there is nothing to ${verb}.`;
+		if (verb === 'pause' && suspended) return 'This run is already paused.';
+		if (verb === 'resume' && !suspended) return 'This run is not paused.';
+		return '';
+	}
+
+	async function act(action: 'terminate' | 'pause' | 'resume') {
+		pending = action;
+		outcome = undefined;
+		try {
+			// The command single-flights the status refresh itself, so the page updates without a
+			// second round trip here.
+			outcome = await runLifecycle({ runId, action });
+		} catch (err) {
+			// A THROW IS NOT A REFUSAL. The command returns 409/503 as VALUES; reaching this branch
+			// means the transport itself failed, and saying so is different from saying the door said no.
+			outcome = { ok: false, status: 0, detail: err instanceof Error ? err.message : String(err) };
+		} finally {
+			pending = '';
+		}
+	}
 
 	// TWO SIGNALS, because a run has two kinds of news and only one of them is on a cursor.
 	//
@@ -106,10 +167,74 @@
 			>
 				<ArrowLeft class="h-3 w-3" /> Ingest runs
 			</a>
-			<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-				<h1 class="text-xl font-semibold tracking-tight">Ingest run</h1>
-				<span class="text-muted-foreground font-mono text-xs" data-testid="run-id">{runId}</span>
+			<div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+				<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+					<h1 class="text-xl font-semibold tracking-tight">Ingest run</h1>
+					<span class="text-muted-foreground font-mono text-xs" data-testid="run-id">{runId}</span>
+				</div>
+
+				{#if !failed}
+					<!-- All three ALWAYS rendered, disabled when they do not apply, with the reason in the
+					     tooltip. See `whyDisabled` for why hiding them would be worse than greying them. -->
+					<div class="flex items-center gap-2" data-testid="run-lifecycle">
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={!canPause || pending !== ''}
+							title={whyDisabled('pause') || 'Hold this run — it keeps its queue and consumer'}
+							data-testid="run-pause"
+							onclick={() => act('pause')}
+						>
+							<Pause class="h-3.5 w-3.5" />
+							{pending === 'pause' ? 'Pausing…' : 'Pause'}
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={!canResume || pending !== ''}
+							title={whyDisabled('resume') || 'Resume from where this run was suspended'}
+							data-testid="run-resume"
+							onclick={() => act('resume')}
+						>
+							<Play class="h-3.5 w-3.5" />
+							{pending === 'resume' ? 'Resuming…' : 'Resume'}
+						</Button>
+						<Button
+							variant="destructive"
+							size="sm"
+							disabled={!canTerminate || pending !== ''}
+							title={whyDisabled('terminate') || 'Stop scheduling further work on this run'}
+							data-testid="run-terminate"
+							onclick={() => act('terminate')}
+						>
+							<Square class="h-3.5 w-3.5" />
+							{pending === 'terminate' ? 'Terminating…' : 'Terminate'}
+						</Button>
+					</div>
+				{/if}
 			</div>
+
+			{#if outcome}
+				<!-- THE DOOR'S OWN WORDS, carried through unchanged. Terminate's 202 says further
+				     scheduling stops while an in-flight activity runs to completion; pause's says the run
+				     still holds its queue and its consumer. Both were written to stop the misreading a
+				     button invites, so softening either here would undo the reason they exist. -->
+				<p
+					class={outcome.ok
+						? 'border-border text-muted-foreground rounded border p-3 text-xs'
+						: 'border-destructive text-destructive rounded border p-3 text-xs'}
+					data-testid="run-lifecycle-outcome"
+				>
+					{#if outcome.ok}
+						<strong class="text-foreground"
+							>Accepted{outcome.state ? ` — now ${outcome.state}` : ''}.</strong
+						>
+						{outcome.detail}
+					{:else}
+						<strong>Refused{outcome.status ? ` (${outcome.status})` : ''}.</strong> {outcome.detail}
+					{/if}
+				</p>
+			{/if}
 		</div>
 
 		<Card class="space-y-5 p-6">
