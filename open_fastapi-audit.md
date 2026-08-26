@@ -50,7 +50,7 @@ verifier, and the corrected form is what appears here. 2 were refuted outright.
 
 ## Scorecard
 
-> ### RE-VERIFIED AT HEAD `fe789bfc`, 2026-08-26 — **55 of 60 still real; 2 drained since (53 open)**
+> ### RE-VERIFIED AT HEAD `fe789bfc`, 2026-08-26 — **55 of 60 still real; 3 drained since (52 open)**
 >
 > Ten read-only agents, one per lane, re-opened every finding against the current code. **Nothing was
 > refuted and nothing was undecidable**: 55 STILL_REAL (5 high / 22 medium / 28 low), 4 ALREADY_FIXED,
@@ -250,7 +250,22 @@ services/medallion/src/medallion/api/produce_auth.py:58 `async def authorize_pro
 
 </details>
 
-<details><summary><b>GET /api/explorer/media-clip runs an unauthenticated ffmpeg libx264 transcode behind a process-global lock — 41 concurrent requests exhaust the viewer's threadpool while /livez stays green</b> <i>(rate-limiting.md + websockets.md + cache.md, CONFIRMED)</i></summary>
+<details><summary><b>~~GET /api/explorer/media-clip runs an unauthenticated ffmpeg libx264 transcode behind a process-global lock — 41 concurrent requests exhaust the viewer's threadpool while /livez stays green~~</b> <i>(rate-limiting.md + websockets.md + cache.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-26 — `6f69a097`.** All three halves. Gated on `can_read_data` (a clip IS the
+> media — the rung `pages.py` uses for image bytes, not `datasets.py`'s metadata rung). The global
+> `threading.Lock` is a bounded semaphore with a NON-BLOCKING acquire: `MAX_CONCURRENT_BUILDS = 2`
+> and a third caller gets `ClipBusyError` → 503 + `Retry-After` instead of a parked threadpool
+> thread; the route is `async def` and sends the build to `asyncio.to_thread` explicitly. Cache key
+> quantized to 250 ms, pinned in BOTH directions (windows within the quantum share a file; genuinely
+> different ones must not collide, since serving the wrong media beats a cache miss).
+>
+> **Found on the way, and fixed at the shared layer:** `DomainError` could not carry response
+> headers — `__init__` took `detail` alone — so `ServiceUnavailableError(..., headers=...)` would
+> have TypeError'd AT RAISE TIME and turned the 503 into a 500, on the saturation path. The handler
+> then dropped them a second time, building its own `JSONResponse` from status and body only. Both
+> halves fixed with their own RED tests. This is on the rate-limit seam's path: `Retry-After` on a
+> 429 is the whole meaning of that status.
 
 **Rule.** rate-limiting.md: "apply to auth routes and expensive operations only" — a per-request subprocess transcode is the most expensive route family in the estate and carries no limit
 
