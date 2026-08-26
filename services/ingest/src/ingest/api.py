@@ -52,6 +52,15 @@ from service_kit.exceptions import ValidationError
 logger = logging.getLogger(__name__)
 
 
+#: Runtime statuses a terminate can act on. Mirrors `promotions.py`'s `_LIVE` rather than inventing a
+#: second spelling of "still going" — a SUSPENDED run is paused, not finished, and stopping it is a
+#: legitimate ask.
+_TERMINABLE: frozenset[str] = frozenset({"RUNNING", "PENDING", "SUSPENDED"})
+
+#: Ceiling on the synchronous terminate call. Same reasoning as `SCHEDULE_TIMEOUT_SECONDS` above it:
+#: unbounded, a sidecar that accepts and never answers parks a shared worker thread forever.
+TERMINATE_TIMEOUT_SECONDS = 5.0
+
 router = APIRouter(tags=["ingest"])
 
 
@@ -581,21 +590,48 @@ async def terminate_ingest(
     # The run is resolved BEFORE the gate, because the gate needs the run's own project: authorization
     # scope must equal write scope, exactly as `create_ingest` states it. Checking a configured project
     # instead would let an admin of project A stop project B's harvest.
+    # READ ONCE, before either use. The rebuild below needs it, and so does the terminal-run check
+    # further down — which previously read a name bound only inside that branch, so the common path
+    # (a record the store still has) raised NameError.
+    engine_state = await asyncio.to_thread(reader.state, run_id) if reader is not None else None
     record = await store.get(run_id)
     if record is None:
         # The store is process-local, so a pod restart loses every accepted record while the workflows
         # keep executing durably. Rebuild from the engine's own copy of the POST body rather than
         # answering 404 for a run that is demonstrably still working — the same recovery `get_ingest`
         # performs, and it matters more here: this is the door someone reaches for to stop a runaway.
-        engine_state = await asyncio.to_thread(reader.state, run_id) if reader is not None else None
         record = record_from_workflow_state(run_id, engine_state)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no ingest run {run_id!r}")
 
     await authorize_ingest(request, settings, record.project, dapr_api_token, authorization, dapr_caller_app_id)
 
+    # ALREADY TERMINAL IS A 409, not a cheerful 202. Nothing on this path filtered a finished run:
+    # `record_from_workflow_state` rebuilds a record from `serialized_input` with no runtime-status
+    # check, so a COMPLETED or already-TERMINATED run got the same "TERMINATING" answer as a live one.
+    # No state was changed wrongly — but a control door that reports success for a no-op teaches an
+    # operator to trust it, and this is the door someone reaches for to stop a runaway.
+    if engine_state is not None and str(engine_state.get("runtime_status") or "") not in _TERMINABLE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"ingest run {run_id!r} is {engine_state.get('runtime_status')}, not running — nothing to terminate",
+        )
+
     # `DaprWorkflowClient` is synchronous. Awaiting it inline would block the event loop for every
-    # other request on this worker — the same reason `get_ingest` reads state through a thread.
-    await asyncio.to_thread(terminator.terminate, run_id)
+    # other request on this worker — the same reason `get_ingest` reads state through a thread. BOUNDED
+    # for the reason `promotions.py` bounds its own: unbounded, a sidecar that accepts and never
+    # answers parks a worker thread forever, and the pool is finite and shared.
+    try:
+        stopped = await asyncio.wait_for(asyncio.to_thread(terminator.terminate, run_id), timeout=TERMINATE_TIMEOUT_SECONDS)
+    except TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"the workflow engine did not answer within {TERMINATE_TIMEOUT_SECONDS}s",
+        ) from None
+    if stopped is False:
+        # HONOURING THE DECLARED CONTRACT. The Protocol and the implementation both say `-> bool`,
+        # documented as "False when it had nothing to stop", and the route discarded it — so the type
+        # described an answer nobody read.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"ingest run {run_id!r} had nothing to stop")
     logger.info("ingest_run_termination_requested", extra={"run_id": run_id, "project": record.project})
     return TerminateAccepted(run_id=run_id)

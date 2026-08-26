@@ -14,6 +14,7 @@ other stage — by publishing an event.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Annotated, Any, Protocol
@@ -32,6 +33,28 @@ from medallion.workflow import PromotionSpec, promotion_review
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.dapr_auth import require_dapr_token
+
+
+#: Ceiling on any single synchronous workflow-client call from these routes.
+#:
+#: `run_in_threadpool` around a blocking SDK call is the estate's sanctioned pattern, but unbounded it
+#: parks a worker thread forever against a sidecar that ACCEPTS and never answers — and the threadpool
+#: is finite and shared. Bounding it is symmetry with the one place the estate already bounds
+#: (`SCHEDULE_TIMEOUT_SECONDS` on the ingest schedule path).
+#:
+#: A timeout answers 503 + Retry-After rather than 500, and that is honest HERE specifically because
+#: `instance_for(token)` is deterministic: a retried decision converges on the same instance instead
+#: of forking a second one.
+WORKFLOW_CALL_TIMEOUT_SECONDS = 5.0
+
+
+async def _bounded(call: Any, *args: Any) -> Any:
+    """Run a blocking workflow-client call off the loop, with a ceiling.
+
+    A `TimeoutError` is left to propagate to the route, which maps it to 503 — the caller's request is
+    fine, the engine is simply not answering.
+    """
+    return await asyncio.wait_for(run_in_threadpool(call, *args), timeout=WORKFLOW_CALL_TIMEOUT_SECONDS)
 
 
 log = logging.getLogger(__name__)
@@ -142,7 +165,7 @@ async def handle_promotion_held(event: dict[str, Any], *, client: _Client | None
     wf_client = _client(client)
     instance_id = instance_for(spec.token)
     try:
-        await run_in_threadpool(lambda: wf_client.schedule_new_workflow(workflow=promotion_review, input=spec.model_dump(), instance_id=instance_id))
+        await _bounded(lambda: wf_client.schedule_new_workflow(workflow=promotion_review, input=spec.model_dump(), instance_id=instance_id))
     except Exception:
         # Two events wear one exception, and they need opposite answers. An instance that already
         # exists means the review is open and this delivery is fully handled. Anything else — no
@@ -191,7 +214,7 @@ async def decide_promotion(
 
     wf_client = _client(client)
     try:
-        spec = await run_in_threadpool(_live_spec, wf_client, instance_id)
+        spec = await _bounded(_live_spec, wf_client, instance_id)
     except (TableNotFoundError, PermissionDeniedError):
         raise
     except Exception as exc:
@@ -200,7 +223,7 @@ async def decide_promotion(
     if authorize is not None:
         await authorize(subject=subject, obj=promotion_object(spec))
 
-    await run_in_threadpool(lambda: wf_client.raise_workflow_event(instance_id, "promotion_decision", data={"approved": approved, "subject": subject}))
+    await _bounded(lambda: wf_client.raise_workflow_event(instance_id, "promotion_decision", data={"approved": approved, "subject": subject}))
     log.info(
         "medallion_promotion_decided",
         extra={"instance_id": instance_id, "approved": approved, "subject": subject, "dataset": spec.to_dataset},
@@ -244,7 +267,16 @@ async def decide(
 ) -> DecisionAccepted:
     """Approve or reject a held promotion. 403 without a signed-in `can_promote` holder on the
     destination stage; 404 when this app hosts no live review under that id."""
-    outcome = await decide_promotion(instance_id, approved=body.approved, subject=subject or "", authorize=_fga_gate(request))
+    outcome = await decide_promotion(
+        instance_id,
+        approved=body.approved,
+        subject=subject or "",
+        # THE LIFESPAN'S CLIENT, like `show` 13 lines below — whose comment states the rule this route
+        # was breaking beside it. Omitting it made `_client(None)` construct a fresh
+        # `DaprWorkflowClient`, and so a fresh gRPC channel to the sidecar, on every approval.
+        client=getattr(request.app.state, "workflow_client", None),
+        authorize=_fga_gate(request),
+    )
     return DecisionAccepted(**outcome)
 
 
@@ -258,7 +290,7 @@ async def show(
     # From `app.state`, built once in the lifespan. Constructing a client per request re-opens its
     # connection to the sidecar on every call — the "build it in lifespan, inject it" rule.
     wf_client = _client(getattr(request.app.state, "workflow_client", None))
-    spec = await run_in_threadpool(_live_spec, wf_client, instance_id)
+    spec = await _bounded(_live_spec, wf_client, instance_id)
     gate = _fga_gate(request)
     if gate is not None:
         # `and subject` used to sit here, which read as a guard and acted as a bypass: a caller with

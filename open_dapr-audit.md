@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **35 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **38 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -2192,6 +2192,22 @@ promotions.py:194 `spec = await run_in_threadpool(_live_spec, wf_client, instanc
 
 **Verifier (ADJUSTED).** promotions.py:194 `spec = await run_in_threadpool(_live_spec, wf_client, instance_id)`; promotions.py:203 `await run_in_threadpool(lambda: wf_client.raise_workflow_event(instance_id, "promotion_decision", data={"approved": approved, "subject": subject}))`; promotions.py:145 `await run_in_threadpool(lambda: wf_client.schedule_new_workflow(workflow=promotion_review, …))`. Counter-evidence: services/ingest/src/ingest/api.py:599 `await asyncio.to_thread(terminator.terminate, run_id)` and :483 `engine_state = await asyncio.to_thread(reader.state, run_id) if reader is not None else None` — no `wait_for`; the only bounded call is `__init__.py:304`.
 
+
+**FIXED 2026-08-25 — in ingest too, which is what the finding's own correction demanded.**
+
+Every workflow-client call on the promotion routes goes through `_bounded`, an
+`asyncio.wait_for(run_in_threadpool(...), timeout=WORKFLOW_CALL_TIMEOUT_SECONDS)` wrapper. A timeout
+answers 503 + Retry-After rather than 500, and that is honest HERE specifically because
+`instance_for(token)` is deterministic: a retried decision converges on the same instance instead of
+forking a second one.
+
+**The finding corrected its own premise and the fix follows the correction, not the headline.** It
+reports the gap against ingest as a contrast — and then establishes that ingest's status and terminate
+doors have *exactly the same* unbounded shape, with only the schedule path bounded. Fixing only
+`promotions.py` would have left the identical hole in the service the comparison was drawn from, which
+is the spot-fix trap the proxy pair already caught once. ingest's terminate is bounded in the same
+commit, with its own 503 test.
+
 </details>
 
 <details><summary><b>No pause route anywhere in the estate</b> <i>(mgt, rule DWF-MGT-004, ADJUSTED)</i></summary>
@@ -2246,6 +2262,26 @@ __init__.py:337-341 `def terminate(self, run_id: str) -> bool:\n        """True 
 
 **Verifier (ADJUSTED).** services/ingest/src/ingest/__init__.py:337-341 `def terminate(self, run_id: str) -&gt; bool:\n        """True when the engine accepted the termination; False when it had nothing to stop."""\n        import dapr.ext.workflow as wf\n\n        wf.DaprWorkflowClient().terminate_workflow(run_id)\n        return True`; runs.py:218-222 `class WorkflowTerminator(Protocol):` … `def terminate(self, run_id: str) -&gt; bool: ...`; api.py:599-601 `await asyncio.to_thread(terminator.terminate, run_id)\n    logger.info("ingest_run_termination_requested", …)\n    return TerminateAccepted(run_id=run_id)`; api.py:590 `engine_state = await asyncio.to_thread(reader.state, run_id) if reader is not None else None` feeding `record_from_workflow_state`, which has no terminal filter.
 
+
+**FIXED 2026-08-25 — both halves the finding names.**
+
+The route now reads the engine state before terminating and answers **409** when the run is not
+`RUNNING`/`PENDING`/`SUSPENDED`, naming the state it is actually in. `SUSPENDED` is in the live set
+deliberately: a paused run is not a finished one, and `_RUNTIME_STATUS` already maps it to RUNNING for
+exactly that reason. The set mirrors `promotions.py`'s `_LIVE` rather than inventing a second spelling
+of "still going".
+
+The declared `bool` is **honoured** rather than narrowed away: the Protocol and the implementation both
+say "False when it had nothing to stop", and the route discarded it — a type describing an answer
+nobody read. A False now answers 409 too.
+
+**A bug of my own, caught by the suite:** the guard first read an `engine_state` bound only inside the
+`record is None` branch, so the common path — a record the store still has — raised `NameError` and
+500'd. The read is hoisted above both uses.
+
+Seven tests: three terminal statuses refused with nothing stopped, three live ones still terminated,
+and the False-return case. RED-proven by removing the guard.
+
 </details>
 
 <details><summary><b>decide() builds a per-request DaprWorkflowClient while its sibling show() reads the lifespan one and documents why</b> <i>(mgt, rule N/A, CONFIRMED)</i></summary>
@@ -2263,6 +2299,14 @@ promotions.py:247 `outcome = await decide_promotion(instance_id, approved=body.a
 ```
 
 **Verifier (CONFIRMED).** promotions.py:247 `outcome = await decide_promotion(instance_id, approved=body.approved, subject=subject or "", authorize=_fga_gate(request))` — no `client=`, so promotions.py:191 `wf_client = _client(client)` falls into promotions.py:96-100 `def _client(client: _Client | None) -&gt; _Client:\n    if client is not None:\n        return client\n    import dapr.ext.workflow as wf\n\n    return wf.DaprWorkflowClient()` and constructs a fresh client (and gRPC channel) per approval. Thirteen lines below, promotions.py:258-260 `# From `app.state`, built once in the lifespan. Constructing a client per request re-opens its\n    # connection to the sidecar on every call — the "build it in lifespan, inject it" rule.\n    wf_client = _client(getattr(request.app.state, "workflow_client", None))`, and producer.py:119 `app.state.workflow_client = wf.DaprWorkflowClient()` builds the one client. App-id resolution is unaffected (both clients live in the producer process), so info is the correct grade.
+
+
+**FIXED 2026-08-25.** `decide` passes `client=getattr(request.app.state, "workflow_client", None)`;
+`_client` already falls back correctly when that is None.
+
+The sharpness of this one is that `show`, thirteen lines below on the same router, states the rule in
+a comment — "built once in the lifespan … constructing a client per request re-opens its connection to
+the sidecar on every call" — and `decide` was breaking it right beside the sentence.
 
 </details>
 

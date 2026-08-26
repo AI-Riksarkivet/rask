@@ -142,3 +142,89 @@ class TestBlockingWorkStaysOffTheLoop:
         loop — the same rule `get_ingest` already follows with `asyncio.to_thread(reader.state, ...)`."""
         source = inspect.getsource(api.terminate_ingest)
         assert "to_thread" in source, "a sync SDK call inside async def blocks every other request"
+
+
+class _Reader:
+    """A workflow reader that answers a fixed runtime status, as the engine does."""
+
+    def __init__(self, runtime_status: str) -> None:
+        self._status = runtime_status
+
+    def state(self, _run_id: str) -> dict[str, object]:
+        return {"runtime_status": self._status, "serialized_input": "{}", "serialized_output": ""}
+
+
+def _client_with(reader: object, term: object, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    app = FastAPI()
+    app.include_router(api.router, prefix="/v1")
+    app.state.run_store = _Store({"run-1"})
+    app.state.workflow_terminator = term
+    app.state.workflow_reader = reader
+
+    async def _allow(*a: object, **k: object) -> str | None:
+        return "user-1"
+
+    monkeypatch.setattr(api, "authorize_ingest", _allow)
+    return TestClient(app, raise_server_exceptions=False)
+
+
+class TestItRefusesWhatItCannotStop:
+    """A control door that reports success for a no-op teaches an operator to trust it, and this is
+    the door someone reaches for to stop a runaway.
+
+    Nothing on this path filtered a finished run: `record_from_workflow_state` rebuilds a record from
+    `serialized_input` with no runtime-status check, so a COMPLETED or already-TERMINATED instance got
+    the same "TERMINATING" answer as a live one. No state was changed wrongly -- it is an honesty
+    defect, on the one door where being believed matters most.
+    """
+
+    @pytest.mark.parametrize("terminal", ["COMPLETED", "TERMINATED", "FAILED"])
+    def test_an_already_terminal_run_is_409_and_stops_NOTHING(self, terminal: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        term = _Terminator()
+        client = _client_with(_Reader(terminal), term, monkeypatch)
+
+        resp = client.post("/v1/ingests/run-1/terminate")
+
+        assert resp.status_code == 409, f"a {terminal} run was answered as though it were being stopped: {resp.text}"
+        assert term.calls == [], "the engine was asked to terminate a run that had already finished"
+        assert terminal in resp.text, "the refusal does not say what state the run is actually in"
+
+    @pytest.mark.parametrize("live", ["RUNNING", "PENDING", "SUSPENDED"])
+    def test_a_LIVE_run_is_still_terminated(self, live: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SUSPENDED belongs here: a paused run is not a finished one, and stopping it is a legitimate
+        ask -- the same reading `_RUNTIME_STATUS` already applies when it maps SUSPENDED to RUNNING."""
+        term = _Terminator()
+        client = _client_with(_Reader(live), term, monkeypatch)
+
+        resp = client.post("/v1/ingests/run-1/terminate")
+
+        assert resp.status_code == 202, resp.text
+        assert term.calls == ["run-1"]
+
+    def test_a_terminator_that_stopped_NOTHING_is_409_not_202(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The Protocol and the implementation both declare `-> bool`, documented as "False when it had
+        nothing to stop", and the route discarded it -- so the type described an answer nobody read."""
+
+        class _StoppedNothing(_Terminator):
+            def terminate(self, run_id: str) -> bool:
+                super().terminate(run_id)
+                return False
+
+        client = _client_with(_Reader("RUNNING"), _StoppedNothing(), monkeypatch)
+
+        assert client.post("/v1/ingests/run-1/terminate").status_code == 409
+
+    def test_an_engine_that_never_answers_is_503_not_a_parked_thread(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unbounded, this parks a worker thread forever against a sidecar that accepts and never
+        answers -- and the threadpool is finite and shared across every route on this worker."""
+        import time
+
+        class _Hangs(_Terminator):
+            def terminate(self, run_id: str) -> bool:
+                time.sleep(1.0)
+                return True
+
+        monkeypatch.setattr(api, "TERMINATE_TIMEOUT_SECONDS", 0.2)
+        client = _client_with(_Reader("RUNNING"), _Hangs(), monkeypatch)
+
+        assert client.post("/v1/ingests/run-1/terminate").status_code == 503
