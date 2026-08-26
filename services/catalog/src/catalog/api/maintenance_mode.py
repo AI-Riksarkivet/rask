@@ -16,6 +16,9 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
+from lance_namespace import ErrorCode
+
+from service_kit.lakehouse.ns_errors import problem_body
 
 
 PROBLEM_JSON = "application/problem+json"
@@ -32,12 +35,17 @@ def maintenance_response() -> JSONResponse:
     """Build the standardized 503 + ``Retry-After`` problem+json response."""
     return JSONResponse(
         status_code=503,
-        content={
-            "type": "https://lance.org/problems/maintenance",
-            "title": "MaintenanceMode",
-            "status": 503,
-            "detail": "Catalog is in read-only maintenance mode; retry after the window.",
-        },
+        # SHARED builder: the spec's `code` is required on the generated client's ErrorResponse, and
+        # this body is emitted on `/v1` routes those clients call. The response is still built here
+        # rather than raised, because `Retry-After` carries the maintenance WINDOW (60s, not the
+        # draining 5s) and the installed handler emits no headers at all.
+        content=problem_body(
+            ErrorCode.SERVICE_UNAVAILABLE,
+            status=503,
+            title="MaintenanceMode",
+            slug="maintenance",
+            detail="Catalog is in read-only maintenance mode; retry after the window.",
+        ),
         media_type=PROBLEM_JSON,
         headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
     )

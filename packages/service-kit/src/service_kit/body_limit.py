@@ -24,7 +24,10 @@ from __future__ import annotations
 
 import json
 
+from lance_namespace import ErrorCode
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from service_kit.lakehouse.ns_errors import problem_body
 
 
 _PROBLEM_JSON = b"application/problem+json"
@@ -79,16 +82,22 @@ class BodySizeLimitMiddleware:
             await self._reject(send)
 
     async def _reject(self, send: Send) -> None:
+        # Through the SHARED builder, so this envelope carries the spec's required `code` and `error`.
+        # A generated Lance-Namespace client validates `ErrorResponse` with `code` as a REQUIRED,
+        # no-default field, so the four-key body this used to emit made the client raise rather than
+        # read the refusal. This middleware cannot raise its way to the handler — it is pure ASGI and
+        # must answer before the body is buffered — so the shape comes from `ns_errors` instead.
         body = json.dumps(
-            {
-                "type": "https://lance.org/problems/payload-too-large",
-                "title": "Payload Too Large",
-                "status": 413,
-                "detail": (
+            problem_body(
+                ErrorCode.INVALID_INPUT,
+                status=413,
+                title="Payload Too Large",
+                slug="payload-too-large",
+                detail=(
                     f"request body exceeds the {self._max_bytes}-byte limit; write large payloads "
                     "directly to object storage with vended credentials instead of through the catalog"
                 ),
-            }
+            )
         ).encode()
         await send(
             {

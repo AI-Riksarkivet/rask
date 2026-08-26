@@ -6,11 +6,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import JSONResponse
+from lance_namespace import ErrorCode
 
 from medallion.api.dependencies import DaprClientDep, SettingsDep
 from medallion.api.produce_auth import ProjectParam, authorize_produce
 from medallion.services.produce import produce as run_produce
 from service_kit.draining import refuse_when_draining
+from service_kit.lakehouse.ns_errors import problem_body
 from service_kit.lakehouse.warehouse_registry import UnresolvableProjectError
 
 
@@ -87,12 +89,7 @@ async def produce(
         return JSONResponse(
             status_code=409,
             media_type="application/problem+json",
-            content={
-                "type": "https://lance.org/problems/conflict",
-                "title": "Conflict",
-                "status": 409,
-                "detail": str(exc),
-            },
+            content=problem_body(ErrorCode.INVALID_TABLE_STATE, status=409, title="Conflict", detail=str(exc)),
         )
     if result.get("status") == "publish_failed":
         # RFC 9457 problem+json + Retry-After (parity with catalog/lineage errors), not a bare FastAPI 503.
@@ -100,11 +97,13 @@ async def produce(
             status_code=503,
             media_type="application/problem+json",
             headers={"Retry-After": "5"},
-            content={
-                "type": "https://lance.org/problems/serviceunavailable",
-                "title": "ServiceUnavailable",
-                "status": 503,
-                "detail": "medallion trigger publish failed; retry",
-            },
+            # The `code`/`error` pair is what makes the parity this comment claims actually true — the
+            # body carried four keys where every catalog/lineage error carries six.
+            content=problem_body(
+                ErrorCode.SERVICE_UNAVAILABLE,
+                status=503,
+                title="ServiceUnavailable",
+                detail="medallion trigger publish failed; retry",
+            ),
         )
     return result

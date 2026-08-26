@@ -15,6 +15,7 @@ from typing import Annotated, Any
 from dapr.ext.fastapi import DaprApp
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from lance_namespace import ErrorCode
 from pydantic import BaseModel, Field
 
 from medallion.api.dependencies import DaprClientDep, SettingsDep
@@ -31,6 +32,7 @@ from medallion.services.train import (
 from service_kit.draining import refuse_when_draining, retry_when_draining
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.lakehouse.ns_errors import problem_body
 
 
 log = logging.getLogger(__name__)
@@ -56,17 +58,24 @@ class TrainRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+#: This door's statuses mapped to the spec's numeric error codes. A literal per site would drift; the
+#: map is small because the door answers exactly three ways.
+_CODES: dict[int, ErrorCode] = {
+    409: ErrorCode.INVALID_TABLE_STATE,
+    422: ErrorCode.INVALID_INPUT,
+    503: ErrorCode.SERVICE_UNAVAILABLE,
+}
+
+
 def _problem(status: int, title: str, detail: str) -> JSONResponse:
     return JSONResponse(
         status_code=status,
         media_type="application/problem+json",
         headers={"Retry-After": "5"} if status == 503 else None,
-        content={
-            "type": f"https://lance.org/problems/{title.lower()}",
-            "title": title,
-            "status": status,
-            "detail": detail,
-        },
+        # SHARED builder — see `ns_errors.problem_body`. This door is non-spec, so the missing `code`
+        # broke no generated client; it made the estate answer the same class of failure in two
+        # different shapes, which is the thing the comment below already claimed it did not.
+        content=problem_body(_CODES[status], status=status, title=title, detail=detail),
     )
 
 

@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import json
 
+from lance_namespace import ErrorCode
 from opentelemetry import metrics
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from service_kit.lakehouse.ns_errors import problem_body
 
 
 _PROBLEM_JSON = b"application/problem+json"
@@ -79,16 +82,20 @@ class WriteConcurrencyLimitMiddleware:
             self._inflight -= 1
 
     async def _reject(self, send: Send) -> None:
+        # SHARED builder. Pure ASGI, outside ExceptionMiddleware, and it must shed BEFORE a body byte
+        # is read — so it cannot raise its way to the installed handler, and the envelope shape has to
+        # come from `ns_errors` instead. THROTTLING is the spec code this refusal has always meant.
         body = json.dumps(
-            {
-                "type": "https://lance.org/problems/throttling",
-                "title": "Too Many Requests",
-                "status": 429,
-                "detail": (
+            problem_body(
+                ErrorCode.THROTTLING,
+                status=429,
+                title="Too Many Requests",
+                slug="throttling",
+                detail=(
                     "the catalog is at its concurrent-write capacity; retry with backoff, or write large "
                     "payloads directly to object storage with vended credentials"
                 ),
-            }
+            )
         ).encode()
         await send(
             {

@@ -472,7 +472,9 @@ services/viewer/src/viewer/api/v1/endpoints/pages.py:86-87 `except httpx.Request
 
 </details>
 
-<details><summary><b>Seven hand-built problem+json bodies omit the numeric `code` the lance plane's own error model calls required</b> <i>(exception-handlers.md + health-checks.md, ADJUSTED)</i></summary>
+<details><summary><b>~~Seven hand-built problem+json bodies omit the numeric `code` the lance plane's own error model calls required~~</b> <i>(exception-handlers.md + health-checks.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-26.** One builder, `ns_errors.problem_body(code, *, status, title, detail, slug)`, emits the full six-key envelope, and all seven sites go through it — body_limit, load_shed, maintenance_mode, produce (×2), ingest_media (×3), train. **Plus the two the finding did not list:** `install_problem_handlers`' own 422 and 500 handlers had the same hole, and they are the bodies a generated client is most likely to meet, on the same `/v1` routes — fixing the seven and leaving those would have left the contract test passing over a surface that still breaks clients. **DEVIATION from the suggested fix, deliberately:** the audit says to raise `lance_namespace` errors and delete the hand-built responses. Every one of these sites sets `Retry-After` (5s draining, 60s maintenance) and `install_problem_handlers`' handler builds a bare `JSONResponse` with no headers — raising would have traded a missing `code` for a missing `Retry-After`, which the reference names explicitly, and a generic handler cannot know which window applies. So the SHAPE moved to one place and each site kept its status and headers, which is what the cited rule actually asks. Pinned by `tests/unit/test_problem_bodies_carry_a_code.py` (8 tests), including one that the fix did not RENAME any existing body — deriving `type` from `title.lower()` silently rewrote `/validation`, `/payload-too-large`, `/throttling` and `/maintenance`, hence `slug`.
 
 **Rule.** exception-handlers.md: "One handler per exception class, registered in main.py. Don't scatter try/except in routes." — the shape must come from one place, and here seven places rebuild it by hand
 
