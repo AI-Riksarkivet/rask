@@ -28,7 +28,7 @@ from the same list.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import pytest
 from ingest.lineage import LineageRecorder, recorded_events, reset_events
@@ -175,9 +175,9 @@ def test_the_ABORT_event_NAMES_the_dataset_the_run_touched(monkeypatch: pytest.M
     seen: dict[str, object] = {}
 
     class _Spy:
-        def abort(self, reason: str, **kwargs: object) -> None:
+        def abort(self, reason: str, *, outputs: Sequence[object] = ()) -> None:
             seen["reason"] = reason
-            seen["outputs"] = list(kwargs.get("outputs") or [])
+            seen["outputs"] = list(outputs)
 
         def fail(self, *_a: object, **_k: object) -> None:
             raise AssertionError("a terminated run emitted FAIL")
