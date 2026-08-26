@@ -221,6 +221,15 @@ class WorkflowTerminator(Protocol):
 
     def terminate(self, run_id: str) -> bool: ...
 
+    def pause(self, run_id: str) -> None:
+        """Suspend a live run (DWF-MGT-004). Paired with `resume` by contract, never shipped alone —
+        a suspended instance with no way back is strictly worse than a terminated one."""
+        ...
+
+    def resume(self, run_id: str) -> None:
+        """Resume a suspended run (DWF-MGT-005)."""
+        ...
+
 
 class WorkflowRunReader(Protocol):
     """Reads a run's live state from the workflow engine. A Protocol so the API needs no sidecar in

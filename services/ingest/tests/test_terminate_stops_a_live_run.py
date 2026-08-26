@@ -36,7 +36,15 @@ class _Terminator:
 
     def __init__(self, *, raises: Exception | None = None) -> None:
         self.calls: list[str] = []
+        self.paused: list[str] = []
+        self.resumed: list[str] = []
         self._raises = raises
+
+    def pause(self, run_id: str) -> None:
+        self.paused.append(run_id)
+
+    def resume(self, run_id: str) -> None:
+        self.resumed.append(run_id)
 
     def terminate(self, run_id: str) -> bool:
         self.calls.append(run_id)
@@ -228,3 +236,74 @@ class TestItRefusesWhatItCannotStop:
         client = _client_with(_Reader("RUNNING"), _Hangs(), monkeypatch)
 
         assert client.post("/v1/ingests/run-1/terminate").status_code == 503
+
+
+class TestPauseAndResumeShipTogether:
+    """DWF-MGT-004/005. The estate had no pause route anywhere, and its whole lifecycle-control
+    surface was this file's terminate.
+
+    The finding names exactly one route with a real use, and this is it: holding a fan-out while a
+    credential is rotated -- a run that is FINE but must not proceed for a few minutes. Terminating
+    that run throws away everything it has done.
+
+    THE PAIRING IS A CONTRACT, not a courtesy. A suspended instance with no way back is strictly worse
+    than a terminated one: it still holds its JetStream subject and its per-run durable consumer while
+    making no progress at all. So resume ships in the same change, and a test says so.
+    """
+
+    def test_BOTH_routes_exist(self) -> None:
+        paths = {getattr(r, "path", "") for r in api.router.routes}
+
+        assert "/ingests/{run_id}/pause" in paths
+        assert "/ingests/{run_id}/resume" in paths, "pause without resume leaves a run suspended with no way back"
+
+    def test_a_running_run_can_be_PAUSED(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        term = _Terminator()
+        client = _client_with(_Reader("RUNNING"), term, monkeypatch)
+
+        resp = client.post("/v1/ingests/run-1/pause")
+
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["state"] == "SUSPENDED"
+        assert term.paused == ["run-1"]
+
+    def test_the_pause_body_says_the_run_STILL_HOLDS_its_queue(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pausing and walking away is worse than stopping, and an operator reaching for this during
+        an incident should not have to infer that."""
+        client = _client_with(_Reader("RUNNING"), _Terminator(), monkeypatch)
+
+        detail = client.post("/v1/ingests/run-1/pause").json()["detail"]
+
+        assert "consumer" in detail, f"the body does not say the paused run still holds its queue: {detail!r}"
+
+    def test_a_SUSPENDED_run_can_be_RESUMED(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        term = _Terminator()
+        client = _client_with(_Reader("SUSPENDED"), term, monkeypatch)
+
+        resp = client.post("/v1/ingests/run-1/resume")
+
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["state"] == "RUNNING"
+        assert term.resumed == ["run-1"]
+
+    def test_pausing_an_ALREADY_SUSPENDED_run_is_409(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        term = _Terminator()
+        client = _client_with(_Reader("SUSPENDED"), term, monkeypatch)
+
+        assert client.post("/v1/ingests/run-1/pause").status_code == 409
+        assert term.paused == []
+
+    @pytest.mark.parametrize("terminal", ["COMPLETED", "TERMINATED", "FAILED"])
+    def test_neither_verb_touches_a_TERMINAL_run(self, terminal: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        term = _Terminator()
+        client = _client_with(_Reader(terminal), term, monkeypatch)
+
+        assert client.post("/v1/ingests/run-1/pause").status_code == 409
+        assert client.post("/v1/ingests/run-1/resume").status_code == 409
+        assert term.paused == [] and term.resumed == []
+
+    def test_resuming_a_RUNNING_run_is_409_not_a_no_op_202(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A 202 here would tell an operator they had un-paused something that was never paused."""
+        client = _client_with(_Reader("RUNNING"), _Terminator(), monkeypatch)
+
+        assert client.post("/v1/ingests/run-1/resume").status_code == 409

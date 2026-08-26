@@ -361,6 +361,32 @@ class _DaprWorkflowTerminator:
         wf.DaprWorkflowClient().raise_workflow_event(run_id, CANCEL_EVENT, data={"reason": reason})
         return True
 
+    def pause(self, run_id: str) -> None:
+        """Suspend a live run (DWF-MGT-004).
+
+        UNLIKE TERMINATE, this is the SDK call and not an event. Terminate had to become a `cancel`
+        event because `terminate_workflow` skips the rest of the generator, and the skipped tail held
+        `emit_terminal` — the only caller of `release_run_units`. Pause skips nothing: the instance
+        stops being scheduled and resumes exactly where it was, so the tail still runs when it does.
+
+        The use it exists for is holding a fan-out while a credential is rotated — a run that is fine
+        but must not proceed for a few minutes. Terminating that run throws away the work it has done.
+        """
+        import dapr.ext.workflow as wf
+
+        wf.DaprWorkflowClient().pause_workflow(run_id)
+
+    def resume(self, run_id: str) -> None:
+        """Resume a suspended run (DWF-MGT-005).
+
+        Shipped in the same change as `pause`, and that pairing is a contract rather than a courtesy:
+        a paused instance with no way back is strictly worse than a terminated one, because it holds
+        its JetStream subject and its durable consumer while making no progress at all.
+        """
+        import dapr.ext.workflow as wf
+
+        wf.DaprWorkflowClient().resume_workflow(run_id)
+
 
 class _DaprWorkflowReader:
     """Reads a run's live state from the engine, for `GET /v1/ingests/{id}`.

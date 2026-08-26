@@ -29,7 +29,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, Field
 
-from ingest.auth import AuthSettingsDep, authorize_ingest
+from ingest.auth import AuthSettingsDep, IngestAuthSettings, authorize_ingest
 from ingest.provenance import ProvenanceRefused
 from ingest.runs import (
     SCHEDULE_TIMEOUT_SECONDS,
@@ -635,3 +635,132 @@ async def terminate_ingest(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"ingest run {run_id!r} had nothing to stop")
     logger.info("ingest_run_termination_requested", extra={"run_id": run_id, "project": record.project})
     return TerminateAccepted(run_id=run_id)
+
+
+class LifecycleAccepted(BaseModel):
+    """The answer to a pause or a resume. Its own model rather than reusing `TerminateAccepted`,
+    whose `detail` promises something specific about termination that is false for these."""
+
+    run_id: str
+    state: str
+    detail: str
+
+
+async def _lifecycle(
+    run_id: str,
+    request: Request,
+    settings: IngestAuthSettings,
+    store: RunStore,
+    reader: WorkflowRunReader | None,
+    terminator: WorkflowTerminator | None,
+    dapr_api_token: str | None,
+    authorization: str | None,
+    dapr_caller_app_id: str | None,
+    *,
+    action: str,
+    allowed: frozenset[str],
+) -> LifecycleAccepted:
+    """The shared body of pause and resume — resolve, authorize, check the state, act, bounded.
+
+    Factored rather than duplicated because the ORDER matters and is easy to get subtly wrong: the run
+    is resolved BEFORE the gate, since the gate needs the run's own project (authorization scope must
+    equal write scope, or an admin of project A could pause project B's harvest).
+    """
+    if terminator is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="the workflow engine is not available")
+    engine_state = await asyncio.to_thread(reader.state, run_id) if reader is not None else None
+    record = await store.get(run_id)
+    if record is None:
+        record = record_from_workflow_state(run_id, engine_state)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no ingest run {run_id!r}")
+
+    await authorize_ingest(request, settings, record.project, dapr_api_token, authorization, dapr_caller_app_id)
+
+    current = str((engine_state or {}).get("runtime_status") or "")
+    if engine_state is not None and current not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"ingest run {run_id!r} is {current}, so it cannot be {action}d",
+        )
+    call = terminator.pause if action == "pause" else terminator.resume
+    try:
+        await asyncio.wait_for(asyncio.to_thread(call, run_id), timeout=TERMINATE_TIMEOUT_SECONDS)
+    except TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"the workflow engine did not answer within {TERMINATE_TIMEOUT_SECONDS}s",
+        ) from None
+    logger.info(f"ingest_run_{action}_requested", extra={"run_id": run_id, "project": record.project})
+    return LifecycleAccepted(
+        run_id=run_id,
+        state="SUSPENDED" if action == "pause" else "RUNNING",
+        detail=(
+            "further scheduling stops; an activity already in flight runs to completion, and the run holds its queue and consumer until resumed"
+            if action == "pause"
+            else "scheduling resumes from where the run was suspended"
+        ),
+    )
+
+
+@router.post("/ingests/{run_id}/pause", status_code=status.HTTP_202_ACCEPTED, response_model=LifecycleAccepted)
+async def pause_ingest(
+    run_id: str,
+    request: Request,
+    store: Annotated[RunStore, Depends(get_store)],
+    terminator: Annotated[WorkflowTerminator, Depends(get_terminator)],
+    reader: Annotated[WorkflowRunReader | None, Depends(get_reader)],
+    settings: AuthSettingsDep,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+) -> LifecycleAccepted:
+    """DWF-MGT-004. The use this exists for is holding a fan-out while a credential is rotated — a run
+    that is FINE but must not proceed for a few minutes. Terminating it throws the work away.
+
+    NOT a substitute for terminate, and it must not be reached for as one: a paused run still holds its
+    JetStream subject and its per-run durable consumer, so pausing and walking away is worse than
+    stopping. The 202 body says so.
+    """
+    return await _lifecycle(
+        run_id,
+        request,
+        settings,
+        store,
+        reader,
+        terminator,
+        dapr_api_token,
+        authorization,
+        dapr_caller_app_id,
+        action="pause",
+        allowed=frozenset({"RUNNING", "PENDING"}),
+    )
+
+
+@router.post("/ingests/{run_id}/resume", status_code=status.HTTP_202_ACCEPTED, response_model=LifecycleAccepted)
+async def resume_ingest(
+    run_id: str,
+    request: Request,
+    store: Annotated[RunStore, Depends(get_store)],
+    terminator: Annotated[WorkflowTerminator, Depends(get_terminator)],
+    reader: Annotated[WorkflowRunReader | None, Depends(get_reader)],
+    settings: AuthSettingsDep,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+) -> LifecycleAccepted:
+    """DWF-MGT-005, shipped in the SAME change as pause because the pairing is a contract: a suspended
+    instance with no way back is strictly worse than a terminated one."""
+    return await _lifecycle(
+        run_id,
+        request,
+        settings,
+        store,
+        reader,
+        terminator,
+        dapr_api_token,
+        authorization,
+        dapr_caller_app_id,
+        action="resume",
+        allowed=frozenset({"SUSPENDED"}),
+    )

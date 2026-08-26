@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **38 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **40 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -2226,6 +2226,34 @@ commit, with its own 503 test.
 
 **Verifier (ADJUSTED).** `grep -rn "pause_workflow" services/` → no matches. services/ingest/src/ingest/api.py:554 `@router.post("/ingests/{run_id}/terminate", status_code=status.HTTP_202_ACCEPTED, response_model=TerminateAccepted)` — the sole lifecycle-control door, whose docstring names DWF-MGT-003 and states "BOUNDED, NOT INSTANT … it stops further SCHEDULING and does not stop an in-flight activity". promotions.py:230 `@router.post("/promotions/{instance_id}/decision", status_code=202)` is the working cancel for a held promotion.
 
+
+**FIXED 2026-08-25.** `POST /v1/ingests/{run_id}/pause`, with the seam method beside `terminate`.
+
+**Unlike terminate, this is the SDK call and not an event**, and the difference is exactly why. Ingest's
+terminate had to become a `cancel` event because `terminate_workflow` skips the rest of the generator
+and the skipped tail held `emit_terminal`, the only caller of `release_run_units`. Pause skips
+nothing: the instance stops being scheduled and resumes where it was, so the tail still runs.
+
+The 202 body says the paused run STILL HOLDS its queue and consumer, because pausing and walking away
+is worse than stopping, and an operator reaching for this during an incident should not have to infer
+that.
+
+**Both routes ship in ONE change, because the pairing is a contract and not a courtesy.** A suspended
+instance with no way back is strictly worse than a terminated one: it still holds its JetStream
+subject and its per-run durable consumer while making no progress at all. A test asserts both paths
+exist, so neither can be removed alone.
+
+**Scoped to ingest, following the finding's own reasoning rather than the checklist's letter.** The
+rule fires estate-wide, and the finding then establishes that for `promotion_review` pause is moot
+(the review is already parked on `wait_for_external_event`, and a decision with `approved: false` IS
+the cancel) and that for the cascade the real gap was the missing terminate — now closed as its own
+row. Adding pause to those would be reporting one gap twice in code.
+
+Guards match the terminate door beside them: a 409 naming the actual state for any transition that
+does not apply, the same bound and 503 on an engine that will not answer, and authorization resolved
+from the RUN's own project rather than a configured one. Ten tests, RED by construction — neither
+route nor the seam methods exist at HEAD.
+
 </details>
 
 <details><summary><b>No resume route anywhere in the estate</b> <i>(mgt, rule DWF-MGT-005, CONFIRMED)</i></summary>
@@ -2243,6 +2271,28 @@ promotions.py:46 `_LIVE = (WorkflowStatus.RUNNING, WorkflowStatus.PENDING, Workf
 ```
 
 **Verifier (CONFIRMED).** `grep -rn "resume_workflow" services/` returns nothing. promotions.py:44-46 `#: A workflow instance is never terminal-and-answerable: the engine accepts an event for a completed\n#: instance and discards it, which is the silent-success this door exists to refuse.\n_LIVE = (WorkflowStatus.RUNNING, WorkflowStatus.PENDING, WorkflowStatus.SUSPENDED)` is indeed the only mention of SUSPENDED under `services/medallion`, and since nothing can pause an instance, nothing can strand one. Info grade is correct and the reasoning (resume without pause is dead code) holds.
+
+
+**FIXED 2026-08-25 — same commit as pause, which is the point.** `POST /v1/ingests/{run_id}/resume`.
+
+Refuses a run that is not SUSPENDED with a 409 rather than a no-op 202: answering 202 would tell an
+operator they had un-paused something that was never paused.
+
+**Both routes ship in ONE change, because the pairing is a contract and not a courtesy.** A suspended
+instance with no way back is strictly worse than a terminated one: it still holds its JetStream
+subject and its per-run durable consumer while making no progress at all. A test asserts both paths
+exist, so neither can be removed alone.
+
+**Scoped to ingest, following the finding's own reasoning rather than the checklist's letter.** The
+rule fires estate-wide, and the finding then establishes that for `promotion_review` pause is moot
+(the review is already parked on `wait_for_external_event`, and a decision with `approved: false` IS
+the cancel) and that for the cascade the real gap was the missing terminate — now closed as its own
+row. Adding pause to those would be reporting one gap twice in code.
+
+Guards match the terminate door beside them: a 409 naming the actual state for any transition that
+does not apply, the same bound and 503 on an engine that will not answer, and authorization resolved
+from the RUN's own project rather than a configured one. Ten tests, RED by construction — neither
+route nor the seam methods exist at HEAD.
 
 </details>
 
