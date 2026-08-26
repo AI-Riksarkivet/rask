@@ -48,6 +48,33 @@ natural experiment — see R1.
 
 ---
 
+## Order of work
+
+Six items. Three are small, one is a decision, one is real infrastructure.
+
+| # | item | size | blocked by |
+| ---: | --- | --- | --- |
+| **0** | **Redeploy** — the fleet runs `main-da59dac3`, none of the 48 Dapr fixes are live, and the deployed revision's `uv.lock` lacks `regex` so the flows image cannot build from it | 30–60 min | nothing |
+| **1** | **R1** purge the 64 orphans | minutes | 0 (not strictly — but re-measuring against a stale fleet is confusing) |
+| **2** | **U1** ruling: operator surface, or break-glass lever? | a decision | owner |
+| **3** | **R2** retention exporter + alert | ~half a day | nothing |
+| **4** | **U2** controls on `compute/ingest` | ~150 lines | 2, and only if the answer is "surface" |
+| **5** | **U3** surface history/retention | re-ask | 3 |
+
+**Step 0 traps, each of which has bitten this estate before.** Build from a CLEAN DETACHED WORKTREE
+(`git worktree add /tmp/rask-deploy --detach origin/main`): Dagger snapshots the HOST, not git, so a
+concurrent session's dirty files land inside an image tagged with a commit that never contained them.
+The registry is addressed twice — `172.17.0.1:5000` to push (Dagger's engine is itself a container, so
+`localhost` there is the engine) and `localhost:5000` for k3s to pull. `make k3s-up` OWNS the release;
+a bare `helm upgrade` with different values replaces every deployed image with the chart default. Run
+`make dagger-engine` first, or `publish` dies on the plain-HTTP registry with "server gave HTTP
+response to HTTPS client". And never pipe the build to `tail` — the pipe's exit code is reported, not
+the build's, so a failed build prints success.
+
+**Why 3 outranks 1 in value but not in order.** R1 is inert disk; R2 is the difference between
+"retention is fixed" and "we can tell when retention breaks". R1 goes first only because it is minutes
+and closes a measured, sized item cleanly.
+
 ## The backlog
 
 ### R1 — 64 orphaned `ingest` instances that will never be collected
