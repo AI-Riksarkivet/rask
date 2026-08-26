@@ -198,7 +198,18 @@ spec:
                    derivation; in prod an operator seeds them, and an unseeded one is a fail-closed
                    refusal rather than a silent downgrade to the shared token. */}}
             {{- $privileged := append (compact $cascadeWriters | uniq) .Values.medallion.train.trainerIdentity }}
+            {{- /* NOT RENDERED YET — deliberately. Measured 2026-08-26: switching this on refuses every
+                   mover, because the server-side expectation is only HALF the control. The catalog then
+                   demands `service-token-<identity>` for a privileged subject, but the movers still
+                   PRESENT the shared APP_API_TOKEN, so every catalog call 401s and the cascade stops
+                   (`POST /v1/table/acme-silver$features/describe -> 401`, repeating). Turning it on
+                   needs the CLIENT half too: each privileged service must read its own dedicated token
+                   out of the secret store and send THAT instead of APP_API_TOKEN.
+                   The tokens are already seeded (openbao.yaml) and the derivation below is correct; what
+                   is missing is the outbound wiring, which is a service change, not a chart one. */}}
+            {{- if .Values.auth.dedicatedServiceCredentials }}
             - { name: LANCE_PRIVILEGED_SUBJECTS, value: {{ compact $privileged | uniq | sortAlpha | join "," | quote }} }
+            {{- end }}
             {{- with include "lance.governedFgaPins" (list . "LANCE") }}{{- . | nindent 12 }}{{- end }}
             # #41 compliance audit trail (who/what/outcome for authn/authz/vending) — configurable.
             # hasKey+ternary, NOT `| default`: Sprig's default() treats boolean false as empty (making

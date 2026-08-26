@@ -693,6 +693,11 @@ frontend:
 
 # --- Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ------------
 auth:
+  # Bind each privileged service identity to its OWN credential instead of the shared APP_API_TOKEN.
+  # OFF until the CLIENT half exists: the catalog would demand `service-token-<identity>` while the
+  # movers still present APP_API_TOKEN, which 401s every catalog call and stops the cascade (measured
+  # 2026-08-26). The tokens are seeded already; what is missing is each service sending its own.
+  dedicatedServiceCredentials: false
   # ON BY DEFAULT (2026-08-06). It was `false`, and values-prod.yaml flipped it — which meant every
   # install that forgot to pass a values file came up UNGOVERNED, silently and green. That is exactly
   # how it kept happening: a `helm upgrade` without `-f values-prod.yaml` reverts a governed estate to

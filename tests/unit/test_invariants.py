@@ -5080,8 +5080,16 @@ def test_every_privileged_identity_has_a_dedicated_credential_seeded() -> None:
     (`privileged but has no dedicated credential provisioned`) — the cascade stops, loudly. Seeding a
     token without listing the subject silently restores the shared-token path. Both failure modes are
     a one-line edit away, and neither is visible in review.
+
+    RENDERED WITH THE FLAG ON, because the flag is OFF by default and for a measured reason: turning
+    it on refuses every mover, since the server-side expectation is only half the control. The catalog
+    demands `service-token-<identity>` while the movers still PRESENT the shared APP_API_TOKEN, so
+    every catalog call 401s and the cascade stops — driven live 2026-08-26 and rolled back. The
+    remaining work is the CLIENT half: each privileged service reading its own token from the secret
+    store and sending that. This invariant guards the halves that DO exist, so they cannot drift
+    apart while that work is pending.
     """
-    rendered = _helm_template()
+    rendered = _helm_template("auth.dedicatedServiceCredentials=true")
 
     subjects: set[str] = set()
     for match in re.finditer(r'name:\s*\w*_?PRIVILEGED_SUBJECTS,\s*value:\s*"([^"]*)"', rendered):
