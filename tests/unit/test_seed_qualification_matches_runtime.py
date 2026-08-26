@@ -110,7 +110,6 @@ def test_the_names_the_seeder_would_actually_create_are_qualified() -> None:
     assert for_tenant, "a project-scoped seed produced no namespaces"
     offenders = [n for n in for_tenant if not n.startswith("bind86-")]
     assert not offenders, (
-        f"the seeder would create {offenders} while the cascade asks for bind86-prefixed names, so "
-        "those tiers will not exist when a mover reaches them"
+        f"the seeder would create {offenders} while the cascade asks for bind86-prefixed names, so those tiers will not exist when a mover reaches them"
     )
     assert len(for_tenant) == len(unqualified), "qualification changed how MANY namespaces are seeded, which it must not"
