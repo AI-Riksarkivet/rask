@@ -1,10 +1,15 @@
 <script lang="ts" module>
 	import MedallionNode, { type MedallionNodeType } from '$lib/lineage/MedallionNode.svelte';
 	import JobNode, { type JobNodeType } from '$lib/lineage/JobNode.svelte';
-	import type { NodeTypes } from '@xyflow/svelte';
+	import { ElbowEdge } from '@rask/flow';
+	import type { EdgeTypes, NodeTypes } from '@xyflow/svelte';
 
 	// svelte-flow rule 5: register node components ONCE at module scope, not inline.
 	const nodeTypes: NodeTypes = { medallion: MedallionNode, job: JobNode };
+	// The routed edge. ELK computes a route around the nodes in the way; `smoothstep` re-derives one
+	// from the two endpoints and draws straight through them. `ElbowEdge` uses the first while it is
+	// still accurate and falls back to the second once a node has been dragged.
+	const edgeTypes: EdgeTypes = { elbow: ElbowEdge };
 	type FlowNode = MedallionNodeType | JobNodeType;
 </script>
 
@@ -29,12 +34,13 @@
 		MarkerType,
 		type FitViewOptions,
 	} from '@xyflow/svelte';
-	import { Search } from '@lucide/svelte';
-	import { FlowAutoFit } from '@rask/flow';
+	import { ArrowUpRight, Crosshair, Minimize2, RefreshCw, Search, X } from '@lucide/svelte';
+	import { FlowAutoFit, FlowCenterOn } from '@rask/flow';
 	import type { LineageState } from '$lib/lineage/store.svelte';
 	import { useColorMode } from '@rask/ui/color-mode';
 	import { LAYER } from '@rask/api/lineage';
-	import { depths, elkLayout, layout, resolveCollisions } from '@rask/flow';
+	import { depths, elkLayout, layout, resolveCollisions, routeKey } from '@rask/flow';
+	import type { ElkRoute } from '@rask/flow';
 
 	/**
 	 * `base` and `navigate` arrive as PROPS rather than from `$app/paths` and `$app/navigation`.
@@ -261,7 +267,113 @@
 			: { kind: 'dataset', name: id.slice(DATASET_PREFIX.length) };
 		query = '';
 		offCanvas = [];
+		drawerOpen = true;
 	}
+
+	/**
+	 * THE DETAIL DRAWER (P1 #9). Marquez's node click navigates AND opens a drawer in one gesture,
+	 * because "which node is this" and "what is in it" are the same question when you are reading a
+	 * graph. rask's click only re-rooted, and every fact about the node lived a page-load away — so
+	 * answering it meant leaving the graph, and coming back meant rebuilding the focus you left.
+	 *
+	 * It reads what the canvas ALREADY HAS rather than fetching: the store's node metadata, the
+	 * folded event feed, the run board. That is a deliberate ceiling — this is the summary that makes
+	 * the graph legible, and the detail page stays the place for the full record (readers, columns,
+	 * governance edits), which is why "Open" is still one click away. A drawer that fetched would
+	 * fire a request per click on a canvas whose whole idiom is clicking around.
+	 */
+	const jobAggs = $derived.by(() => collectJobs());
+
+	type Detail =
+		| {
+				kind: 'dataset';
+				name: string;
+				namespace: string | null;
+				sourceUri: string | null;
+				tags: string[];
+				versions: string[];
+				failed: boolean;
+				runState: string | null;
+				producedBy: string[];
+				readBy: string[];
+		  }
+		| {
+				kind: 'job';
+				name: string;
+				author: string | null;
+				state: string | null;
+				failed: boolean;
+				inputs: string[];
+				outputs: string[];
+		  };
+
+	const detail = $derived.by((): Detail | null => {
+		const f = focusNode;
+		if (!f) return null;
+		if (f.kind === 'dataset') {
+			const meta = store.nodes.find((n) => n.id === f.name);
+			return {
+				kind: 'dataset',
+				name: f.name,
+				namespace: meta?.namespace ?? null,
+				sourceUri: meta?.source_uri ?? null,
+				tags: meta?.tags ?? [],
+				versions: meta?.versions ?? [],
+				failed: meta?.failed ?? false,
+				runState: runStateByDataset[f.name] ?? null,
+				producedBy: [...jobAggs].filter(([, j]) => j.outputs.has(f.name)).map(([n]) => n),
+				readBy: [...jobAggs].filter(([, j]) => j.inputs.has(f.name)).map(([n]) => n),
+			};
+		}
+		const j = jobAggs.get(f.name);
+		return {
+			kind: 'job',
+			name: f.name,
+			author: j?.author ?? null,
+			state: j?.state ?? null,
+			failed: j?.failed ?? false,
+			inputs: [...(j?.inputs ?? [])],
+			outputs: [...(j?.outputs ?? [])],
+		};
+	});
+
+	/**
+	 * COMPACT CARDS. Marquez ships the same switch, and the reason is measurable here: a full card
+	 * renders 51–129px tall against the 64 ELK is told, which is what makes cards collide and what
+	 * forces `fitView` to zoom out past legibility on a real estate. Compact drops description — the
+	 * URI, the version chips, the tags, a job's outputs — and keeps everything a reader would act on,
+	 * including the failure state. It also feeds ELK a smaller box, so the layout tightens rather
+	 * than just the cards.
+	 *
+	 * Not persisted: it is a way of looking at the graph you are looking at now, not a preference.
+	 */
+	let compact = $state(false);
+
+	/**
+	 * MANUAL REFRESH. The poll is cursor-gated — it re-reads when the lineage cursor moves — which is
+	 * right almost always and unhelpful in the one case someone reaches for a refresh button: when
+	 * they have just done something elsewhere and want to see whether it landed. The button is also
+	 * the honest place to say the canvas is not frozen.
+	 */
+	let refreshing = $state(false);
+	async function refresh(): Promise<void> {
+		if (refreshing) return;
+		refreshing = true;
+		try {
+			await store.poll();
+		} finally {
+			refreshing = false;
+		}
+	}
+
+	/** Nonce for the centring gesture — bumped per press, because pressing again with the same node
+	 *  selected must move the viewport again. */
+	let centerNonce = $state(0);
+
+	/** Open state is EXPLICIT, set by the gestures that select a node, rather than derived from
+	 *  `focusNode`. Dismissing the drawer must not also drop the focus — the neighbourhood on screen
+	 *  is what you were reading — and deriving it would make the close button un-closeable. */
+	let drawerOpen = $state(false);
 
 	/** Where the focus bar's "Open" goes — the detail page for whatever is focused. */
 	const focusedHref = $derived(
@@ -306,10 +418,21 @@
 			target: string;
 			animated: boolean;
 			type: string;
+			data?: { route?: ElkRoute };
 			markerEnd: { type: MarkerType; width: number; height: number; color: string };
 			style?: string;
 		}[]
 	>([]);
+
+	/**
+	 * The routes ELK computed for the CURRENT layout, keyed by the derivation pair.
+	 *
+	 * Held separately from `edges` because the two change on different clocks: the edge list is
+	 * rebuilt on every data tick, while a layout runs only when the graph's shape changes. Folding
+	 * routes into the edge build would drop them on the first tick after a layout and put every edge
+	 * back on `smoothstep` until the shape changed again.
+	 */
+	let elkRoutes = $state.raw<Map<string, ElkRoute>>(new Map());
 
 	// Re-fit the viewport only when the node-set or the view changes (not on every data poll).
 	// `focused`/`focusDepth` ride the key as well as the node ids: focusing a node whose
@@ -336,6 +459,11 @@
 		// Read the current nodes UNTRACKED — only their last positions carry forward; tracking
 		// `nodes` (the var we reassign below) would make this effect retrigger itself.
 		const prev = new Map(untrack(() => nodes).map((node) => [node.id, node]));
+		// UNTRACKED, and for the same reason `prev` is: this effect ASSIGNS `elkRoutes` when a layout
+		// resolves, so a tracked read here would make the effect depend on its own output and re-run
+		// the entire build on every layout. The `.then` below patches the live edges directly, so the
+		// only thing this read owes is the routes as of now.
+		const knownRoutes = untrack(() => elkRoutes);
 		const t0 = performance.now();
 
 		/**
@@ -520,7 +648,10 @@
 		// not promise a stable order: a poll that returned the identical graph in a different
 		// order read as a shape change, re-ran ELK and snapped a dragged node back. Measured —
 		// the drag reverted across a poll whose node and edge counts were byte-identical.
-		const shape = `${[...ids].sort().join(',')}|${derive
+		// `compact` rides the key: the switch changes every node's BOX, and a layout computed for the
+		// old boxes is the wrong layout for the new ones. Without it the cards shrink and the spacing
+		// stays where it was, which looks like the switch half-worked.
+		const shape = `${compact}|${[...ids].sort().join(',')}|${derive
 			.map((e) => `${e.source}>${e.target}`)
 			.sort()
 			.join(',')}`;
@@ -542,18 +673,30 @@
 				const h = p?.measured?.height;
 				// JobNode is 210px, MedallionNode 200px — a 10px difference that only matters as a
 				// fallback, since a measured node reports its own width anyway.
+				// The COMPACT fallbacks are the compact cards' real widths — measured falls back to
+				// declared only on the first pass, but that first pass is the one that decides whether
+				// the switch visibly tightens the layout.
+				const fallbackW = compact ? 152 : id.startsWith(JOB_PREFIX) ? 210 : 200;
 				return {
-					width: w && w > 0 ? w : id.startsWith(JOB_PREFIX) ? 210 : 200,
-					height: h && h > 0 ? h : 64,
+					width: w && w > 0 ? w : fallbackW,
+					height: h && h > 0 ? h : compact ? 34 : 64,
 				};
 			};
 			void elkLayout(ids, derive, { size: measuredSize })
 				.then((elk) => {
-					if (generation !== buildGeneration || elk.size === 0) return;
+					if (generation !== buildGeneration || elk.nodes.size === 0) return;
 					untrack(() => {
 						nodes = nodes.map((n) => {
-							const p = elk.get(n.id);
+							const p = elk.nodes.get(n.id);
 							return p ? { ...n, position: p } : n;
+						});
+						// The routing phase's output, finally read. Attached to the live edges here as
+						// well as stored, so the edges already on screen pick up the route without
+						// waiting for the next data tick to rebuild them.
+						elkRoutes = elk.routes;
+						edges = edges.map((e) => {
+							const route = elk.routes.get(routeKey(e.target, e.source));
+							return route ? { ...e, data: { route } } : e;
 						});
 					});
 					// ONE FRAME LATER the cards have rendered and Svelte Flow has measured them, which is
@@ -601,6 +744,7 @@
 					selected: dsId(id) === focused,
 					rel: relation[dsId(id)] ?? null,
 					runState: runStateByDataset[id] ?? null,
+					compact,
 				},
 			};
 		});
@@ -617,6 +761,7 @@
 				failed: j.failed,
 				selected: jobId(job) === focused,
 				rel: relation[jobId(job)] ?? null,
+				compact,
 			},
 		}));
 
@@ -639,7 +784,8 @@
 				// it is a screensaver — and it made the one chain a reader cared about impossible to
 				// pick out of the rest.
 				animated: focused !== null,
-				type: 'smoothstep',
+				type: 'elbow',
+				data: { route: knownRoutes.get(routeKey(e.source, e.target)) },
 				// A DAG without arrowheads is an undirected blob: "A relates to B somehow" instead of
 				// "A produced B". This is the single cheapest legibility win on the canvas.
 				markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: tint },
@@ -662,11 +808,30 @@
 		// labelled rather than implied. Clicking the focused node again clears it.
 		if (focused === raw) {
 			focusNode = null;
+			drawerOpen = false;
 			return;
 		}
 		focusNode = raw.startsWith(JOB_PREFIX)
 			? { kind: 'job', name: raw.slice(JOB_PREFIX.length) }
 			: { kind: 'dataset', name: raw.slice(DATASET_PREFIX.length) };
+		// One gesture, both answers — the Marquez behaviour this was missing.
+		drawerOpen = true;
+	}
+
+	/** The drawer's link to this dataset's column-level graph — the zone's existing route, which
+	 *  already takes the dataset as a query parameter. */
+	const columnsHref = $derived(
+		detail?.kind === 'dataset'
+			? `${base}/lineage/columns?dataset=${encodeURIComponent(detail.name)}`
+			: null,
+	);
+
+	/** Both drawer links go through the injected navigator when there is one, and fall through to a
+	 *  real href otherwise — same reason the focus bar's Open does. */
+	function go(e: MouseEvent, href: string): void {
+		if (!navigate) return;
+		e.preventDefault();
+		navigate(href);
 	}
 </script>
 
@@ -675,6 +840,7 @@
 		bind:nodes
 		bind:edges
 		{nodeTypes}
+		{edgeTypes}
 		colorMode={theme.current}
 		fitView
 		{fitViewOptions}
@@ -697,7 +863,30 @@
 			maskColor="color-mix(in srgb, var(--panel-2) 72%, transparent)"
 		/>
 		<FlowAutoFit trigger={fitKey} padding={FIT_PADDING} />
+		<FlowCenterOn nodeId={focused} nonce={centerNonce} />
 		<Panel position="top-left">
+			<div class="viewbar">
+				<!-- DENSITY + FRESHNESS, the two view-level controls Marquez keeps beside its graph. -->
+				<button
+					class="vbtn"
+					class:on={compact}
+					aria-pressed={compact}
+					title="compact cards — name and status only, and a tighter layout"
+					onclick={() => (compact = !compact)}
+				>
+					<Minimize2 size={12} />
+					<span>Compact</span>
+				</button>
+				<button
+					class="vbtn"
+					disabled={refreshing}
+					title="re-read the lineage feed now"
+					aria-label="Refresh the lineage feed"
+					onclick={() => void refresh()}
+				>
+					<RefreshCw size={12} class={refreshing ? 'spin' : undefined} />
+				</button>
+			</div>
 			<div class="searchbar">
 				<Search size={12} />
 				<input
@@ -755,6 +944,19 @@
 						{d ?? 'All'}
 					</button>
 				{/each}
+				{#if focused}
+					<!-- CENTRE. Search, the drawer's relation links and a click all re-root the graph, and
+					     each of them can leave the selected node somewhere off-screen. Disabled rather
+					     than hidden when nothing is focused, per the estate's show-disabled rule. -->
+					<button
+						class="fd ficon"
+						title="centre the view on the focused node"
+						aria-label="Centre on the focused node"
+						onclick={() => (centerNonce += 1)}
+					>
+						<Crosshair size={12} />
+					</button>
+				{/if}
 				{#if focused && focusedHref}
 					<!-- A real anchor (middle-click, copy-link, keyboard) that hands the actual navigation
 					     to the injected `navigate`: this component cannot import `$app/navigation`,
@@ -773,6 +975,134 @@
 				{/if}
 			</div>
 		</Panel>
+		{#if detail && drawerOpen}
+			<!-- A canvas PANEL, not a modal sheet. A lineage drawer is read WHILE looking at the
+			     graph — which node lights up as upstream, where the chain goes — so anything that
+			     dims or blocks the canvas defeats the reason for opening it. `nowheel` keeps a
+			     scroll inside the drawer from zooming the viewport underneath. -->
+			<Panel position="top-right">
+				<aside class="drawer nowheel" aria-label="Node detail">
+					<header class="dhead">
+						<span class="dkind" class:job={detail.kind === 'job'}>
+							{detail.kind === 'job' ? 'job' : 'dataset'}
+						</span>
+						<h2 class="dtitle" title={detail.name}>{detail.name}</h2>
+						<button class="dclose" aria-label="Close detail" onclick={() => (drawerOpen = false)}>
+							<X size={13} />
+						</button>
+					</header>
+
+					{#if detail.kind === 'dataset'}
+						<dl class="dgrid">
+							{#if detail.namespace}
+								<dt>namespace</dt>
+								<dd>{detail.namespace}</dd>
+							{/if}
+							{#if detail.sourceUri}
+								<dt>location</dt>
+								<dd class="dmono" title={detail.sourceUri}>{detail.sourceUri}</dd>
+							{/if}
+							{#if detail.runState}
+								<dt>last run</dt>
+								<dd class:dbad={detail.failed}>{detail.runState}</dd>
+							{/if}
+							{#if detail.versions.length > 0}
+								<dt>versions</dt>
+								<dd class="dchips">
+									{#each detail.versions.slice(-6) as v (v)}<span class="dchip">v{v}</span>{/each}
+								</dd>
+							{/if}
+							{#if detail.tags.length > 0}
+								<dt>tags</dt>
+								<dd class="dchips">
+									{#each detail.tags as t (t)}<span class="dchip">{t}</span>{/each}
+								</dd>
+							{/if}
+						</dl>
+						<!-- Producers and consumers are the two questions a lineage drawer exists for, and
+						     they are ALWAYS shown, empty or not: "nothing reads this table" is an answer
+						     someone acts on, and hiding the row makes it indistinguishable from a drawer
+						     that simply does not report it. -->
+						<section class="drel">
+							<h3>produced by</h3>
+							{#if detail.producedBy.length > 0}
+								<ul>
+									{#each detail.producedBy as j (j)}
+										<li>
+											<button class="dlink" onclick={() => jump(jobId(j))}
+												>{j.replace(/^ray-jobs\//, '')}</button
+											>
+										</li>
+									{/each}
+								</ul>
+							{:else}
+								<p class="dnone">no run in the event window wrote this table</p>
+							{/if}
+							<h3>read by</h3>
+							{#if detail.readBy.length > 0}
+								<ul>
+									{#each detail.readBy as j (j)}
+										<li>
+											<button class="dlink" onclick={() => jump(jobId(j))}
+												>{j.replace(/^ray-jobs\//, '')}</button
+											>
+										</li>
+									{/each}
+								</ul>
+							{:else}
+								<p class="dnone">nothing in the event window reads this table</p>
+							{/if}
+						</section>
+					{:else}
+						<dl class="dgrid">
+							{#if detail.state}
+								<dt>state</dt>
+								<dd class:dbad={detail.failed}>{detail.state}</dd>
+							{/if}
+							{#if detail.author}
+								<dt>author</dt>
+								<dd>{detail.author}</dd>
+							{/if}
+						</dl>
+						<section class="drel">
+							<h3>reads</h3>
+							{#if detail.inputs.length > 0}
+								<ul>
+									{#each detail.inputs as d (d)}
+										<li><button class="dlink" onclick={() => jump(dsId(d))}>{d}</button></li>
+									{/each}
+								</ul>
+							{:else}
+								<p class="dnone">no inputs recorded</p>
+							{/if}
+							<h3>writes</h3>
+							{#if detail.outputs.length > 0}
+								<ul>
+									{#each detail.outputs as d (d)}
+										<li><button class="dlink" onclick={() => jump(dsId(d))}>{d}</button></li>
+									{/each}
+								</ul>
+							{:else}
+								<p class="dnone">no outputs recorded</p>
+							{/if}
+						</section>
+					{/if}
+
+					<footer class="dfoot">
+						{#if focusedHref}
+							<a class="dgo" href={focusedHref} onclick={(e) => go(e, focusedHref)}>
+								Full detail <ArrowUpRight size={12} />
+							</a>
+						{/if}
+						{#if columnsHref}
+							<a class="dgo" href={columnsHref} onclick={(e) => go(e, columnsHref)}>
+								Columns <ArrowUpRight size={12} />
+							</a>
+						{/if}
+					</footer>
+				</aside>
+			</Panel>
+		{/if}
 	</SvelteFlow>
 	{#if store.settled && store.online && nodes.length === 0}
 		<div class="empty">
@@ -947,6 +1277,218 @@
 	.hit:hover {
 		background: color-mix(in srgb, var(--primary) 12%, transparent);
 	}
+	/* The view-level controls, above the search box. Same floating-panel language as the bars below
+	   it — this is one stack of controls, not three unrelated widgets. */
+	.viewbar {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		margin-bottom: 6px;
+		padding: 3px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--panel) 92%, transparent);
+		backdrop-filter: blur(6px);
+		width: fit-content;
+	}
+	.vbtn {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 3px 7px;
+		border: none;
+		border-radius: 6px;
+		background: transparent;
+		color: var(--muted);
+		font: inherit;
+		font-size: 11px;
+		cursor: pointer;
+	}
+	.vbtn:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--ink) 8%, transparent);
+		color: var(--ink);
+	}
+	.vbtn.on {
+		color: var(--primary);
+		background: color-mix(in srgb, var(--primary) 14%, transparent);
+	}
+	.vbtn:disabled {
+		opacity: 0.55;
+		cursor: default;
+	}
+	/* One turn per refresh, so the button says "I am doing it" without a second spinner element. */
+	:global(.viewbar .spin) {
+		animation: vspin 0.9s linear infinite;
+	}
+	@keyframes vspin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+	.ficon {
+		display: inline-flex;
+		align-items: center;
+		padding: 2px 5px;
+	}
+
+	/* THE DETAIL DRAWER. Height-capped and scrollable rather than growing: a job with forty inputs
+	   would otherwise run the panel off the bottom of the canvas, taking its footer links with it. */
+	.drawer {
+		width: 268px;
+		max-height: min(62vh, 520px);
+		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		padding: 10px 12px 12px;
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		background: color-mix(in srgb, var(--panel) 94%, transparent);
+		backdrop-filter: blur(6px);
+		box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 12%, transparent);
+		font-size: 11px;
+	}
+	.dhead {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.dkind {
+		flex: none;
+		font-size: 9px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		padding: 1px 5px;
+		border-radius: 4px;
+		color: var(--primary);
+		background: color-mix(in srgb, var(--primary) 14%, transparent);
+	}
+	.dkind.job {
+		color: var(--amber);
+		background: color-mix(in srgb, var(--amber) 16%, transparent);
+	}
+	.dtitle {
+		flex: 1;
+		min-width: 0;
+		margin: 0;
+		font-size: 12px;
+		font-weight: 600;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.dclose {
+		flex: none;
+		display: grid;
+		place-items: center;
+		width: 20px;
+		height: 20px;
+		padding: 0;
+		border: none;
+		border-radius: 5px;
+		background: transparent;
+		color: var(--muted);
+		cursor: pointer;
+	}
+	.dclose:hover {
+		background: color-mix(in srgb, var(--ink) 8%, transparent);
+		color: var(--ink);
+	}
+	.dgrid {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		gap: 3px 10px;
+		margin: 0;
+	}
+	.dgrid dt {
+		color: var(--muted);
+		font-size: 10px;
+	}
+	.dgrid dd {
+		margin: 0;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.dmono {
+		font-family: var(--font-mono, ui-monospace, monospace);
+		font-size: 10px;
+		white-space: nowrap;
+	}
+	.dbad {
+		color: var(--danger, #d9534f);
+		font-weight: 600;
+	}
+	.dchips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 3px;
+	}
+	.dchip {
+		padding: 0 4px;
+		border-radius: 4px;
+		font-size: 9px;
+		color: var(--muted);
+		background: color-mix(in srgb, var(--ink) 7%, transparent);
+	}
+	.drel h3 {
+		margin: 8px 0 3px;
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+	.drel ul {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	/* Each relation is a BUTTON that re-roots the graph, not a link that leaves it: following a
+	   producer is the move a reader makes next, and doing it in place is the whole advantage of
+	   having the drawer over the canvas. */
+	.dlink {
+		display: block;
+		width: 100%;
+		padding: 2px 4px;
+		border: none;
+		border-radius: 4px;
+		background: transparent;
+		color: var(--primary);
+		font: inherit;
+		text-align: left;
+		cursor: pointer;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.dlink:hover {
+		background: color-mix(in srgb, var(--primary) 12%, transparent);
+	}
+	.dnone {
+		margin: 0;
+		padding: 2px 4px;
+		color: var(--muted);
+		font-style: italic;
+	}
+	.dfoot {
+		display: flex;
+		gap: 10px;
+		padding-top: 8px;
+		border-top: 1px solid var(--line);
+	}
+	.dgo {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		color: var(--primary);
+		text-decoration: none;
+		font-weight: 600;
+	}
+	.dgo:hover {
+		text-decoration: underline;
+	}
+
 	/* An off-canvas hit costs a fetch and replaces the current view, so it is marked rather than
 	   hidden — the estate half of the search is the point, not a fallback to apologise for. */
 	.hoff {

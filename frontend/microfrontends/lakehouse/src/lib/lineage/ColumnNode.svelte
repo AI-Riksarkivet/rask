@@ -8,6 +8,10 @@
 		layer: number;
 		masked: boolean;
 		isRoot: boolean;
+		/** True while ANOTHER column is hovered and this one is not on its derivation chain. Dimming
+		 *  rather than hiding: the graph's shape has to stay legible, and a node that vanishes on
+		 *  hover moves everything around it. */
+		dimmed?: boolean;
 	};
 	export type ColumnNodeType = Node<ColumnData, 'column'>;
 
@@ -26,7 +30,13 @@
 	const color = $derived(COLORS[data.layer] ?? COLORS[4]);
 </script>
 
-<div class="col" class:root={data.isRoot} class:masked={data.masked} style:--accent={color}>
+<div
+	class="col"
+	class:root={data.isRoot}
+	class:masked={data.masked}
+	class:dimmed={data.dimmed}
+	style:--accent={color}
+>
 	<Handle type="target" position={Position.Left} />
 	<div class="bar"></div>
 	<div class="body">
@@ -53,6 +63,11 @@
 		overflow: hidden;
 		font-family: ui-sans-serif, system-ui, sans-serif;
 		box-shadow: var(--shadow);
+	}
+	/* Faded, not hidden — and still readable enough to answer "what was that one?" without
+	   un-hovering. */
+	.col.dimmed {
+		opacity: 0.22;
 	}
 	.col.root {
 		border-color: var(--accent);

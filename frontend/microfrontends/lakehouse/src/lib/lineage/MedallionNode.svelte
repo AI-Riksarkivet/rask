@@ -13,6 +13,8 @@
 		 *  answers the same question with findUpstreamNodes/findDownstreamNodes. */
 		rel?: 'focus' | 'upstream' | 'downstream' | null;
 		runState?: string | null;
+		/** Compact mode: name and status only. See the switch in `LineageGraph.svelte`. */
+		compact?: boolean;
 	};
 	export type MedallionNodeType = Node<MedallionData, 'medallion'>;
 
@@ -57,6 +59,7 @@
 
 <div
 	class="node"
+	class:compact={data.compact}
 	class:selected={data.selected}
 	data-rel={data.rel ?? undefined}
 	style:--accent={color}
@@ -67,7 +70,16 @@
 	<Handle type="target" position={Position.Left} />
 	<div class="bar"></div>
 	<div class="body">
-		<div class="name" title={data.id}><LayerIcon size={12} {color} /> <span>{data.id}</span></div>
+		<div class="name" title={data.id}>
+			<LayerIcon size={12} {color} />
+			<span>{data.id}</span>
+			<!-- COMPACT KEEPS THE FAILURE, and that is the whole design of the compact card: what is
+			     dropped is description (the URI, the version history, the tags) and what is kept is
+			     anything a reader would act on. A density mode that hides a failed write makes a
+			     broken table look healthy, which is worse than not having the mode. -->
+			{#if data.compact && data.failed}<span class="dot fail" title="a producing run failed"
+				></span>{/if}
+		</div>
 		<div class="uri" title={data.source_uri ?? undefined}>{data.source_uri ?? '(pending)'}</div>
 		<div class="chips">
 			{#if data.versions.length}
@@ -107,6 +119,30 @@
 	.node.selected {
 		outline: 2px solid #46f9b8;
 		outline-offset: 2px;
+	}
+	/* COMPACT: name and status only. At estate scale the canvas frames dozens of cards, and the
+	   URI and chip rows are what push a card past 100px tall — the height ELK reserves, the height
+	   that makes cards collide, and the height that forces `fitView` to zoom out until nothing is
+	   readable. Narrower as well as shorter, because the wasted width is what strings a layered
+	   graph across a canvas nobody can see at once. */
+	.node.compact {
+		width: 152px;
+	}
+	.node.compact .uri,
+	.node.compact .chips {
+		display: none;
+	}
+	.node.compact .body {
+		padding: 4px 8px;
+	}
+	.dot {
+		flex: none;
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+	}
+	.dot.fail {
+		background: var(--fail);
 	}
 	.bar {
 		width: 4px;

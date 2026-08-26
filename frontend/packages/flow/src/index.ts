@@ -17,7 +17,14 @@
  * - `elkLayout` — the ASYNC upgrade over elkjs, which does the phase `layout` skips (plus dummy-node
  *   edge routing and real component packing). Same algorithm family Marquez uses for the same
  *   picture. Both ship: a caller that must place inside one tick still needs the sync one.
+ * - `ElbowEdge` — draws the route `elkLayout` returned. Without it the routing phase is computed and
+ *   discarded: `smoothstep` re-derives a shape from two endpoints, so an edge ELK steered AROUND a
+ *   node is drawn straight through it. Falls back to `smoothstep` once an endpoint has moved, which
+ *   is what keeps a dragged node's edges honest.
  * - `FlowAutoFit` — the one surviving copy (`maxZoom: 1`).
+ * - `FlowCenterOn` — bring ONE node into view. `fitView` frames the whole graph, which is the wrong
+ *   answer to "where is the node you just selected" on a canvas big enough for the question to
+ *   arise. Nonce-driven, because centring is a gesture and may be repeated on the same node.
  *
  * `./styles.css` is the vendor sheet's `--xy-*` theme mapped onto the OKLCH tokens — imported per zone
  * in `app.css` under `layer(base)`, immediately after `@xyflow/svelte/dist/style.css`, exactly as
@@ -36,8 +43,11 @@
 export { default as GraphCanvas } from './GraphCanvas.svelte';
 export { default as StaticFlow } from './StaticFlow.svelte';
 export { default as FlowAutoFit } from './FlowAutoFit.svelte';
+export { default as FlowCenterOn } from './FlowCenterOn.svelte';
+export { default as ElbowEdge } from './ElbowEdge.svelte';
 export { depths, layout } from './layout';
-export { elkLayout } from './elk-layout';
+export { elkLayout, routeKey } from './elk-layout';
+export type { ElkLayoutResult, ElkRoute, PlacedGroup, RoutePoint } from './elk-layout';
 export { resolveCollisions } from './resolve-collisions';
 export type { LayoutEdge, Placed } from './layout';
 export type { ElkLayoutOptions } from './elk-layout';

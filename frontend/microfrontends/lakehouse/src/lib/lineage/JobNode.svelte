@@ -11,6 +11,8 @@
 		/** Which side of the focused node this sits on — `null` when nothing is focused. Marquez
 		 *  answers the same question with findUpstreamNodes/findDownstreamNodes. */
 		rel?: 'focus' | 'upstream' | 'downstream' | null;
+		/** Compact mode: name and status only. See the switch in `LineageGraph.svelte`. */
+		compact?: boolean;
 	};
 	export type JobNodeType = Node<JobData, 'job'>;
 </script>
@@ -30,6 +32,7 @@
 
 <div
 	class="job-node"
+	class:compact={data.compact}
 	class:selected={data.selected}
 	data-rel={data.rel ?? undefined}
 	style:--ring={ring}
@@ -51,6 +54,19 @@
 </div>
 
 <style>
+	/* Compact: the job's name and whether it failed. `.meta` carries the state word and `.out` the
+	   tables it wrote — both are readable one click away in the drawer, and both are what make this
+	   card three rows tall. The RING still carries state, so a failed job is red either way. */
+	.job-node.compact {
+		width: 152px;
+	}
+	.job-node.compact .meta,
+	.job-node.compact .out {
+		display: none;
+	}
+	.job-node.compact .body {
+		padding: 4px 8px;
+	}
 	.job-node {
 		display: flex;
 		width: 210px;

@@ -2,6 +2,7 @@
 	// `/lineage/columns` — column-level lineage as a first-class view (#24): pick a dataset from
 	// the governed catalog (or arrive with `?dataset=` from a detail page) and explore its
 	// field-to-field subgraph, with the per-field provenance/impact panel on click.
+	import { untrack } from 'svelte';
 	import { RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
@@ -25,9 +26,30 @@
 	// URL as the picker changes, so the view survives reload/share. One-way state → URL: the page
 	// itself carries no link that rewrites the param externally.
 	let selected = $state(page.url.searchParams.get('dataset') ?? '');
+	/** The chosen FIELD, as `dataset::field`. It rides the URL for the same reason the dataset does:
+	 *  the provenance panel is the answer people link to, and it was the one thing on this page a
+	 *  reload discarded. A field of another table is a legal selection, hence the composite. */
+	let selectedColumn = $state(page.url.searchParams.get('col'));
 	$effect(() => {
-		const q = selected ? `?dataset=${encodeURIComponent(selected)}` : '';
-		goto(`${base}/lineage/columns${q}`, { replaceState: true, keepFocus: true, noScroll: true });
+		const params = new URLSearchParams();
+		if (selected) params.set('dataset', selected);
+		if (selectedColumn) params.set('col', selectedColumn);
+		const q = params.toString();
+		goto(`${base}/lineage/columns${q ? `?${q}` : ''}`, {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true,
+		});
+	});
+
+	/** Changing the TABLE drops the field: a field of the old subgraph has no place in the new one,
+	 *  and carrying it over would put a selection in the URL that the canvas cannot show. */
+	$effect(() => {
+		void selected;
+		untrack(() => {
+			const owner = selectedColumn?.split('::')[0];
+			if (selectedColumn && owner !== selected) selectedColumn = null;
+		});
 	});
 
 	async function load(): Promise<void> {
@@ -86,7 +108,7 @@
 		</div>
 	{:else}
 		{#key selected}
-			<ColumnLineage dataset={selected} />
+			<ColumnLineage dataset={selected} bind:selectedColumn />
 		{/key}
 	{/if}
 </div>

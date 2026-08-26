@@ -20,9 +20,14 @@
  *
  * On edges, for accuracy: Marquez routes ORTHOGONALLY too and then RENDERS that route, drawing ELK's
  * bend points as an SVG polyline (`Edge/ElbowEdge.tsx`). An earlier revision of this file described
- * its routing as splines — that was simply wrong. rask asks ELK for the same orthogonal route and
- * then discards the geometry (only `x`/`y` are read below), letting `smoothstep` redraw its own right
- * angles; the two usually coincide, but the bend points ELK computed are thrown away.
+ * its routing as splines — that was simply wrong.
+ *
+ * rask now returns that geometry too. It used to ask ELK for the orthogonal route and read only
+ * `x`/`y`, letting `smoothstep` redraw its own right angles — which mostly coincided, and quietly did
+ * not wherever ELK had routed an edge AROUND something. `smoothstep` knows two endpoints and nothing
+ * about the nodes between them, so a long edge crossing three layers was drawn straight through
+ * whatever ELK had carefully steered it past. The bend points are the only record of that decision,
+ * and throwing them away is throwing away the routing phase this file exists to gain.
  *
  * **Why this is not the dependency `layout.ts` rejected.** That file turned elk down on bundle size
  * "against ~7 KB of deferred-bundle headroom in this zone (`budget.json`)". `budget.json` no longer
@@ -35,6 +40,7 @@
  * a first paint before ELK resolves) still needs it. This is the async upgrade, not a replacement.
  */
 import ELK from 'elkjs/lib/elk.bundled.js';
+import type { ElkNode } from 'elkjs/lib/elk-api';
 
 import type { LayoutEdge, Placed } from './layout';
 
@@ -60,10 +66,75 @@ export interface ElkLayoutOptions {
 	nodeGap?: number;
 	/** Per-node box, when the caller knows better than the default card size. */
 	size?: (id: string) => { width: number; height: number } | undefined;
+	/**
+	 * Group nodes into COMPOUND containers: return the container id a node belongs in, or
+	 * `undefined` to leave it at the top level.
+	 *
+	 * ELK lays a container and its children out in ONE pass, so the containers are placed by the same
+	 * layered algorithm as everything else rather than being drawn around a finished layout. That is
+	 * what Marquez's column graph does — it builds a parent `kind: 'dataset'` node whose children are
+	 * the columns (`column-level/layout.ts`) — and it is why `hierarchyHandling` is switched on below
+	 * only when this hook is supplied: `INCLUDE_CHILDREN` exists for exactly this, and turning it on
+	 * unconditionally would also disable component separation for flat graphs, which is the single
+	 * biggest thing keeping an estate of mostly-unconnected nodes packed.
+	 *
+	 * CHILD COORDINATES COME BACK PARENT-RELATIVE, which is also what Svelte Flow's `parentId`
+	 * expects — the two conventions agree, so nothing is converted.
+	 */
+	parentOf?: (id: string) => string | undefined;
+	/** Inset between a container's border and its children. The top gets extra room for a label. */
+	groupPadding?: number;
+	/** Height reserved at the top of a container for its title. */
+	groupLabelHeight?: number;
+}
+
+/** One point on an edge's route, in the same coordinate space as the node positions. */
+export interface RoutePoint {
+	x: number;
+	y: number;
 }
 
 /**
- * Place `ids` under `edges`, returning top-left coordinates keyed by id.
+ * ELK's computed route for one edge: where it decided the edge leaves, the corners it turns, and
+ * where it arrives. `bendPoints` is empty for a straight edge, which is the common case and the
+ * reason a renderer must have a no-bend path as well.
+ */
+export interface ElkRoute {
+	start: RoutePoint;
+	bendPoints: RoutePoint[];
+	end: RoutePoint;
+}
+
+/** A compound container's placed box. */
+export interface PlacedGroup extends Placed {
+	width: number;
+	height: number;
+}
+
+export interface ElkLayoutResult {
+	/**
+	 * Top-left coordinates keyed by node id — ABSOLUTE for a top-level node, PARENT-RELATIVE for one
+	 * `parentOf` put inside a container, matching Svelte Flow's own `parentId` convention.
+	 */
+	nodes: Map<string, Placed>;
+	/** Container boxes keyed by the id `parentOf` returned. Empty unless `parentOf` was supplied. */
+	groups: Map<string, PlacedGroup>;
+	/**
+	 * Routes keyed `` `${source}>${target}` `` in the CALLER's derivation orientation — the same
+	 * orientation the edges went in, not the reversed one handed to ELK. A caller should not have to
+	 * know that this function flips edges in order to find its own edge's route.
+	 */
+	routes: Map<string, ElkRoute>;
+}
+
+/** The route key both sides agree on. Exported so a caller cannot get the spelling wrong. */
+export function routeKey(source: string, target: string): string {
+	return `${source}>${target}`;
+}
+
+/**
+ * Place `ids` under `edges`, returning top-left coordinates keyed by id plus the route ELK computed
+ * for each edge.
  *
  * Edges are DERIVATION-oriented on the way in — `source` derived from `target`, the same convention
  * `depths()` reads — and are reversed here so ELK lays the graph out in reading order, upstream on
@@ -74,14 +145,67 @@ export async function elkLayout(
 	ids: string[],
 	edges: readonly LayoutEdge[],
 	opts: ElkLayoutOptions = {},
-): Promise<Map<string, Placed>> {
+): Promise<ElkLayoutResult> {
 	const placed = new Map<string, Placed>();
-	if (ids.length === 0) return placed;
+	const groups = new Map<string, PlacedGroup>();
+	const routes = new Map<string, ElkRoute>();
+	if (ids.length === 0) return { nodes: placed, groups, routes };
 
-	const { direction = 'RIGHT', layerGap = 90, nodeGap = 34, size } = opts;
+	const {
+		direction = 'RIGHT',
+		layerGap = 90,
+		nodeGap = 34,
+		size,
+		parentOf,
+		groupPadding = 12,
+		groupLabelHeight = 26,
+	} = opts;
 	const known = new Set(ids);
 
-	const graph = {
+	/**
+	 * Build the child list, nesting under containers when `parentOf` asks for it.
+	 *
+	 * Containers are created in first-seen order and a node with no parent stays at the top level, so
+	 * a caller can group SOME nodes without having to invent a container for the rest.
+	 */
+	const containers = new Map<string, ElkNode>();
+	const children: ElkNode[] = [];
+	for (const id of ids) {
+		const box = size?.(id) ?? { width: DEFAULT_W, height: DEFAULT_H };
+		const parent = parentOf?.(id);
+		if (parent === undefined) {
+			children.push({ id, ...box });
+			continue;
+		}
+		let container = containers.get(parent);
+		if (!container) {
+			container = {
+				id: parent,
+				children: [],
+				layoutOptions: {
+					// The container's OWN inner layout. Without this the children are laid out by the
+					// root's algorithm and the container is sized around whatever that produced.
+					'elk.algorithm': 'layered',
+					'elk.direction': direction,
+					'elk.padding': `[top=${groupPadding + groupLabelHeight},left=${groupPadding},bottom=${groupPadding},right=${groupPadding}]`,
+				},
+			};
+			containers.set(parent, container);
+			children.push(container);
+		}
+		container.children?.push({ id, ...box });
+	}
+
+	// The edges actually handed to ELK, in ELK order, so each `e<i>` can be mapped back to the
+	// caller's own pair after layout.
+	const routed = edges.filter(
+		(e) => e.source !== e.target && known.has(e.source) && known.has(e.target),
+	);
+
+	// TYPED AS `ElkNode`, not inferred from the literal. Inference narrows `edges` to the object
+	// shape written here, which has no `sections` — so the routes ELK writes BACK onto the graph are
+	// invisible to the type system and unreadable without a cast.
+	const graph: ElkNode = {
 		id: 'root',
 		layoutOptions: {
 			'elk.algorithm': 'layered',
@@ -105,19 +229,54 @@ export async function elkLayout(
 			// packed instead of strung down one column. rask gets that by NOT deviating.
 			'elk.separateConnectedComponents': 'true',
 			'elk.padding': '[top=20,left=20,bottom=20,right=20]',
+			// ONLY when there are containers. `INCLUDE_CHILDREN` is what lets one pass lay out a
+			// container and its children together AND lets an edge cross a container boundary — but
+			// it also forces component separation off, which for a FLAT graph is a regression, not a
+			// no-op: a real estate is mostly unconnected nodes and separating them is what keeps them
+			// packed rather than strung down one column.
+			...(containers.size > 0 ? { 'elk.hierarchyHandling': 'INCLUDE_CHILDREN' } : {}),
 		},
-		children: ids.map((id) => ({ id, ...(size?.(id) ?? { width: DEFAULT_W, height: DEFAULT_H }) })),
-		edges: edges
-			.filter((e) => e.source !== e.target && known.has(e.source) && known.has(e.target))
-			// REVERSED: derivation-oriented in, reading-oriented out.
-			.map((e, i) => ({ id: `e${i}`, sources: [e.target], targets: [e.source] })),
+		children,
+		// REVERSED: derivation-oriented in, reading-oriented out.
+		edges: routed.map((e, i) => ({ id: `e${i}`, sources: [e.target], targets: [e.source] })),
 	};
 
 	elk ??= new ELK();
 	const laid = await elk.layout(graph);
 	// ELK reports TOP-LEFT, which is Svelte Flow's own convention — no centre offset to undo.
+	// A container is recorded as a GROUP and recursed into; its children's coordinates are left
+	// parent-relative, exactly as they arrive and exactly as Svelte Flow wants them.
 	for (const child of laid.children ?? []) {
-		if (child.x != null && child.y != null) placed.set(child.id, { x: child.x, y: child.y });
+		if (child.x == null || child.y == null) continue;
+		if (containers.has(child.id)) {
+			groups.set(child.id, {
+				x: child.x,
+				y: child.y,
+				width: child.width ?? DEFAULT_W,
+				height: child.height ?? DEFAULT_H,
+			});
+			for (const inner of child.children ?? []) {
+				if (inner.x != null && inner.y != null) placed.set(inner.id, { x: inner.x, y: inner.y });
+			}
+			continue;
+		}
+		placed.set(child.id, { x: child.x, y: child.y });
 	}
-	return placed;
+	// ELK returns edges in the order they were given, but it is not contractually required to, so
+	// the index is recovered from the id this function assigned rather than from array position.
+	for (const edge of laid.edges ?? []) {
+		const index = Number(String(edge.id).slice(1));
+		const original = routed[index];
+		// ONE section only. `sections` is a list because ELK models hyperedges (several sources or
+		// targets); every edge here has exactly one of each, so a multi-section result would mean the
+		// graph handed in was not the graph this describes — skip rather than draw a guess.
+		const section = edge.sections?.length === 1 ? edge.sections[0] : undefined;
+		if (!original || !section?.startPoint || !section.endPoint) continue;
+		routes.set(routeKey(original.source, original.target), {
+			start: { x: section.startPoint.x, y: section.startPoint.y },
+			bendPoints: (section.bendPoints ?? []).map((point) => ({ x: point.x, y: point.y })),
+			end: { x: section.endPoint.x, y: section.endPoint.y },
+		});
+	}
+	return { nodes: placed, groups, routes };
 }
