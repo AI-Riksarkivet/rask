@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **32 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **35 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -1590,6 +1590,15 @@ True as quoted: workflow.py:110 `lineage_json: str = ""` on the workflow INPUT m
 
 What does not hold is "the bound on a workflow-state write is whatever an arbitrary upstream producer put in a JSONB column". consume.py:158-171 builds `derived_from = [*hops, *parent_chain]` — ONE `LineageEdge` per input per hop — and the governed cascade is bronze→silver→gold (chart/values.yaml:1081-1089, three movers, one terminal). That is a handful of small edges, i.e. low single-digit KB, not an attacker-shaped payload; `inherited_chain` (consume.py:174-186) returns `[]` on anything unparseable. The finding names no measured size, no state-store limit, and no reachable writer that inflates the chain. The field is also load-bearing on the first turn — ray_submit.py:109 `"LINEAGE_JSON": lineage_json` — so it cannot simply be replaced by a pointer; the honest fix is to drop it from the spec after `submission_id` is set, or cap it.
 
+
+**FIXED 2026-08-25.** `max_length=MAX_LINEAGE_JSON_BYTES` (64 KiB), declared beside the other
+ceilings. Refused at VALIDATION, which both bodies run at their first line, so an oversized spec never
+reaches a single turn — rather than being caught after the first of up to `MAX_POLLS` writes.
+
+The multiplier is what makes this worth a bound: a workflow input is re-persisted to the state store
+on every checkpoint, and `stage_run` takes one poll per turn — 2880 of them at the default interval —
+so the cost is the blob's size times the number of turns, not the blob.
+
 </details>
 
 <details><summary><b>No activity types its input or output with a Pydantic model — all ten take `dict[str, Any]`</b> <i>(act-medallion, rule DWF-ACT-009, ADJUSTED)</i></summary>
@@ -2079,6 +2088,25 @@ workflow.py:681-696 —
 
 **Verifier (ADJUSTED).** workflow.py:681-687 — `outcome = TrainJobOutcome(..., verdict="abandoned")` / `log.warning("medallion_train_watch_abandoned", ...)` / `return outcome.model_dump()` (no call_activity). Recorded decision at :682-683: `# The ceiling, or a lost watch. NOT a failure: a training job still running at the ceiling is alive and may yet land, and reporting it as dead sends somebody hunting a healthy run.` Pinned by services/medallion/tests/test_train_workflow.py:222 `test_a_LOST_watch_is_not_reported_as_a_dead_job` (ctx.raise_on = 'poll_train'; asserts out['verdict'] == 'abandoned'). Residual gap: grep shows `record_train_outcome` called only at workflow.py:737 inside `report_train_outcome`, versus `record_stage_outcome` at :423 which the stage abandoned branch does reach.
 
+
+**FIXED 2026-08-25 — and it could not ship alone, which is the part worth recording.**
+
+The abandoned exit now yields `report_train_outcome`. But that activity was a SINGLE-ARMED failure
+reporter: its `reason` read "ended `<status>`" and `_publish_train_fail` was unconditional. Adding the
+yield by itself would have emitted a lineage FAIL for a job that is still RUNNING — precisely what the
+abandoned branch's own comment refuses ("a training job still running at the ceiling is alive and may
+yet land, and reporting it as dead sends somebody hunting a healthy run").
+
+So the reporter is two-armed first, matching `report_stage_outcome`, which already was: an abandoned
+verdict counts the metric and logs that the WATCH ended, and publishes no lineage FAIL. The graph
+hears only about a job that actually died.
+
+**Deploy note (the action-order gate fired, and the answer is "no drain").** `train_run` gained a
+trailing `call_activity(report_train_outcome)`. It sits on the ABANDONED branch, which an instance
+reaches only as the last thing a turn does before returning — and `continue_as_new` gives every turn
+EMPTY history, so there is no recorded action after it for a replay to disagree with. An instance that
+already completed under the old code is terminal, not in-flight.
+
 </details>
 
 <details><summary><b>A permanently failed submit reports with an empty submission id, sending the failure reporter at Ray's job LIST endpoint</b> <i>(det-medallion, rule N/A, CONFIRMED)</i></summary>
@@ -2136,6 +2164,15 @@ workflow.py:163-167 —
 ```
 
 **Verifier (ADJUSTED).** workflow.py:51 `from datetime import UTC, datetime, timedelta`; workflow.py:164 `    from datetime import datetime` inside `_watch_seconds`, whose only use is :167 `return max(0.0, (ctx.current_utc_datetime - datetime.fromisoformat(started_at)).total_seconds())` — identical binding, no behaviour change. The 'rule' cited is workflow.py:578-582, which is scoped to module-level imports of ray_kit: 'The workflow module is imported by the replay path; keeping this a pure comparison over two literals means the body has no import-time behaviour to be non-deterministic about.' Contrast the sanctioned in-body imports at :309-312 (`poll_stage`: `import httpx` / `from ray_kit.submit import job_status`) and :285-286 (`submit_stage`).
+
+
+**FIXED 2026-08-25.** The local `from datetime import datetime` is gone; the module already imports
+it at line 51.
+
+Cosmetic in effect and not in what it teaches: this is the one helper called synchronously from
+workflow scope, sitting under docstrings that spend paragraphs on what a body may not do. A local
+import there reads as though the body were reaching for something, which is the opposite of what the
+surrounding prose is trying to establish.
 
 </details>
 

@@ -95,6 +95,11 @@ MAX_POLLS: Final = 2880
 _STRUCTURAL_FAILURES: Final = frozenset({"blob_resolves", "not_null"})
 
 
+#: Ceiling for a spec's carried lineage blob. Bytes, not rows: this is a JSON string, and what costs
+#: is its size multiplied by the number of checkpoints the run makes.
+MAX_LINEAGE_JSON_BYTES: Final[int] = 64 * 1024
+
+
 class StageJobSpec(BaseModel):
     """What the workflow needs to submit, watch and hand back — nothing more.
 
@@ -107,7 +112,11 @@ class StageJobSpec(BaseModel):
     to_uri: str
     stage: str
     token: str | None = None
-    lineage_json: str = ""
+    #: BOUNDED, because a workflow input is re-persisted to the state store on EVERY checkpoint and
+    #: `stage_run` takes one poll per turn — up to `MAX_POLLS` (2880 at the default interval). An
+    #: uncapped blob is therefore written thousands of times, not once. Refused at validation, which
+    #: both bodies run at their first line, so an oversized spec never reaches a single turn.
+    lineage_json: str = Field(default="", max_length=MAX_LINEAGE_JSON_BYTES)
     #: The trigger to re-publish once the job is terminal, verbatim as the mover will re-parse it.
     #: Held as a dict rather than a `StageTrigger` so a field added to the trigger contract does not
     #: silently drop off the round trip.
@@ -161,8 +170,6 @@ def _watch_seconds(ctx: DaprWorkflowContext, started_at: str) -> float | None:
     instance that started before this field existed genuinely does not know how long it has run, and a
     zero would land in the histogram's lowest bucket and read as an instant stage.
     """
-    from datetime import datetime
-
     try:
         return max(0.0, (ctx.current_utc_datetime - datetime.fromisoformat(started_at)).total_seconds())
     except (TypeError, ValueError):
@@ -778,6 +785,11 @@ def train_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
         outcome = TrainJobOutcome(submission_id=spec.submission_id, status=status, polls=polls, verdict="abandoned")
         if not ctx.is_replaying:
             log.warning("medallion_train_watch_abandoned", extra={"submission_id": spec.submission_id, "status": status, "polls": polls})
+        # REPORTED, where it used to return in silence. A lost or ceiling-hit watch told nobody: no
+        # metric, no log an operator polls, nothing. Somebody's four-hour GPU run simply stopped being
+        # watched. The reporter is two-armed for this — it counts the verdict and says the WATCH ended,
+        # and deliberately publishes no lineage FAIL, because the job is still running.
+        yield ctx.call_activity(report_train_outcome, input=TrainReport(spec=spec, outcome=outcome), retry_policy=ACTIVITY_RETRY)
         return outcome.model_dump()
 
     verdict = "succeeded" if status == _TERMINAL_OK else "failed"
@@ -827,9 +839,22 @@ def report_train_outcome(ctx: WorkflowActivityContext, payload: TrainReport) -> 
     spec = payload.spec
     outcome = payload.outcome
 
-    reason = f"the Ray training job {outcome.submission_id} ended {outcome.status or 'UNKNOWN'} after {outcome.polls} poll(s)"
     record_train_outcome(outcome.verdict)
 
+    # TWO ARMS, like `report_stage_outcome` already has, and the distinction is the whole reason this
+    # activity can be called on the abandoned path at all. `abandoned` means the ceiling was reached or
+    # the watch was lost WITH THE JOB STILL RUNNING — it is alive and may yet land. Emitting a lineage
+    # FAIL for it would send somebody hunting a healthy four-hour run, which is exactly what the
+    # abandoned branch's own comment refuses. So the graph hears only about a job that actually died;
+    # the metric and the log carry the lost watch.
+    if outcome.verdict == "abandoned":
+        log.warning(
+            "medallion_train_watch_abandoned_reported",
+            extra={"submission_id": outcome.submission_id, "status": outcome.status, "polls": outcome.polls, "model": spec.model},
+        )
+        return
+
+    reason = f"the Ray training job {outcome.submission_id} ended {outcome.status or 'UNKNOWN'} after {outcome.polls} poll(s)"
     with best_effort("train_fail_event", token=spec.token, submission_id=outcome.submission_id):
         _publish_train_fail(spec, reason)
 

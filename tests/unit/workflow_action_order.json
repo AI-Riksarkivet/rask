@@ -57,6 +57,7 @@
     "create_timer(timedelta(seconds=spec.poll_interval_seconds))",
     "call_activity(poll_train)",
     "continue_as_new(spec.model_copy(update={'polls_done': polls}).model_dump())",
+    "call_activity(report_train_outcome)",
     "call_activity(report_train_outcome)"
   ]
 }
