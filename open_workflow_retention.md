@@ -41,7 +41,7 @@ workflow-hosting sidecars carry it (`ingest`, `flows`, `medallion-producer`, the
 `DaprWorkflowClient` exposes `purge_workflow(instance_id)` but **no list-instances API**, and the only
 index that could drive a sweep — `InMemoryRunStore` — is documented as deliberately non-durable, so
 after a restart it cannot name the instances whose history persists. A sweep built on it would collect
-only what happened since the last pod start. The scheduler-enforced policy needs no such index.
+only what happened since the last pod start. The built-in policy needs no such index — see the mechanism below.
 
 **Retention is demonstrably working for post-policy instances.** The day distribution is a clean
 natural experiment — see R1.
@@ -353,9 +353,39 @@ kubectl exec rask-age-0 -- bash -lc "psql -U lance -d daprstate -tAc \
     from state where key like '%workflow%' and insertdate < '2026-08-08' group by 1\""
 ```
 
-`count(expiredate) = 0` across the whole table is **expected and not a symptom**: the Dapr scheduler
-enforces retention by deleting rows, not by writing a TTL column. Judge collection by the age
-distribution, never by that count — reading it as a failure signal is the mistake this note prevents.
+`count(expiredate) = 0` across the whole table is **expected and not a symptom**: retention is enforced
+by DELETING rows, not by writing a TTL column. Judge collection by the age distribution, never by that
+count — reading it as a failure signal is the mistake this note prevents.
+
+## The mechanism, measured rather than assumed
+
+The Dapr docs describe the policy and say nothing about what enforces it, and an earlier version of
+this file guessed "the scheduler". That was wrong, and the sidecar answers it directly. Every
+workflow-hosting app registers **three** actor types, not two:
+
+```
+$ curl -s 127.0.0.1:3500/v1.0/metadata   # from inside the ingest pod, 2026-08-26
+actors hosted: ['dapr.internal.default.ingest.retentioner',
+                'dapr.internal.default.ingest.workflow',
+                'dapr.internal.default.ingest.activity']
+scheduler:     {'connected_addresses': ['10.42.0.130:50006', '10.42.0.129:50006', '10.42.0.128:50006']}
+```
+
+`retentioner` is the janitor, and it lives in **the app's own sidecar** — not in a central controller.
+It holds no state of its own (the state table contains `.workflow` keys and nothing else), so the
+window it is waiting out is a **reminder**, and since Dapr 1.15 reminders live in the scheduler's etcd.
+Confirmed by elimination too: `notifications` hosts two actor types and no `retentioner`, because it
+runs no workflows.
+
+So the chain is: instance goes terminal → the app's `retentioner` registers a reminder for the window
+→ the reminder fires from the scheduler's etcd → the retentioner deletes that instance's rows.
+
+**That shape is exactly why R2 exists.** The timer and the data it governs are in DIFFERENT failure
+domains — a reminder in a 3-replica etcd StatefulSet, rows in Postgres — and the symptom of a lost
+reminder is SILENCE: rows that no longer have anything scheduled to collect them, forever, with
+nothing reporting it. A central reconciling controller (Argo's model) re-derives its work list every
+loop and cannot lose an item this way; a reminder-driven actor can. `DaprWorkflowHistoryNotCollected`
+is the only thing in the estate that would notice.
 
 ## Sources
 
