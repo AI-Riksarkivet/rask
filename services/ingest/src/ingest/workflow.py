@@ -912,6 +912,11 @@ def emit_start(ctx: WorkflowActivityContext, spec: RunSpec) -> None:
     NO record at all — not a failed one, none. A START here means a crashed run is a visibly
     incomplete run rather than an absence someone has to notice.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real run calls it (measured live on a
+    # 600-object backfill: `'dict' object has no attribute 'run_id'`, run FAILED, nothing ingested).
+    spec = RunSpec.model_validate(spec)
     _lineage().start(spec.run_id, spec.project, spec.dataset, spec.kind, spec.options, spec.originator)
 
 
@@ -926,6 +931,11 @@ def resolve_limits(ctx: WorkflowActivityContext, spec: RunSpec) -> dict[str, Any
     a run can be pinned to what it was ACCEPTED with rather than to what the pod that first executed
     it happened to hold.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real run calls it (measured live on a
+    # 600-object backfill: `'dict' object has no attribute 'run_id'`, run FAILED, nothing ingested).
+    spec = RunSpec.model_validate(spec)
     return (spec.limits or RunLimits.from_env()).model_dump()
 
 
@@ -940,6 +950,11 @@ def ensure_dataset(ctx: WorkflowActivityContext, spec: RunSpec) -> dict[str, Any
     write where the catalog was not looking, and two derivations of one base VERSION is what made the
     catalog's replay dedupe unreachable (F12a — `DatasetHandle` has the mechanism).
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real run calls it (measured live on a
+    # 600-object backfill: `'dict' object has no attribute 'run_id'`, run FAILED, nothing ingested).
+    spec = RunSpec.model_validate(spec)
     from ingest.runtime import ensure_dataset_at
 
     location, read_version = ensure_dataset_at(spec)
@@ -1077,6 +1092,11 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: EnumerateChunksInput
     it through the same returned-FAILED path `max_units` already uses. A refusal is one small dict, so
     it always fits.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real run calls it (measured live on a
+    # 600-object backfill: `'dict' object has no attribute 'run_id'`, run FAILED, nothing ingested).
+    payload = EnumerateChunksInput.model_validate(payload)
     from ingest.identity import unit_id
     from ingest.sources import SourceSpec, build_source, iter_versioned_unit_keys
 
@@ -1189,6 +1209,11 @@ def drain_chunk(ctx: WorkflowActivityContext, chunk: ChunkSpec) -> dict[str, Any
     loss: acked units are gone from a WORK_QUEUE stream, and their fragments' names died with the
     pod.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real run calls it (measured live on a
+    # 600-object backfill: `'dict' object has no attribute 'run_id'`, run FAILED, nothing ingested).
+    chunk = ChunkSpec.model_validate(chunk)
     from ingest.runtime import drain_chunk_units
 
     return _run_async(drain_chunk_units(chunk))
@@ -1202,6 +1227,11 @@ def publish_units(ctx: WorkflowActivityContext, chunk: ChunkSpec) -> int:
     therefore re-publishes without re-queuing work, which matters because Dapr replays an activity
     whose result was not durably recorded before the pod died.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real run calls it (measured live on a
+    # 600-object backfill: `'dict' object has no attribute 'run_id'`, run FAILED, nothing ingested).
+    chunk = ChunkSpec.model_validate(chunk)
     from ingest.runtime import publish_chunk_units
 
     return _run_async(publish_chunk_units(chunk))
@@ -1214,6 +1244,11 @@ def reconcile_chunk(ctx: WorkflowActivityContext, chunk: ChunkSpec) -> dict[str,
     is gone, so `num_pending == 0` means the chunk really did drain and the signal was simply lost.
     Degrades to slow, never to stuck.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real run calls it (measured live on a
+    # 600-object backfill: `'dict' object has no attribute 'run_id'`, run FAILED, nothing ingested).
+    chunk = ChunkSpec.model_validate(chunk)
     from ingest.runtime import reconcile_from_queue
 
     return _run_async(reconcile_from_queue(chunk))
@@ -1228,6 +1263,11 @@ def finalize(ctx: WorkflowActivityContext, payload: FinalizeInput) -> dict[str, 
     version that run already committed instead of appending its rows twice. Re-reading the version per
     attempt is what made that dedupe unreachable; see `DatasetHandle`.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real run calls it (measured live on a
+    # 600-object backfill: `'dict' object has no attribute 'run_id'`, run FAILED, nothing ingested).
+    payload = FinalizeInput.model_validate(payload)
     from ingest.runtime import finalize_run
 
     spec = payload.spec
@@ -1252,6 +1292,11 @@ def emit_terminal(ctx: WorkflowActivityContext, payload: TerminalInput) -> None:
     A run that fails must leave a FAIL record, not silence. The medallion turned a ValueError into a
     400 and emitted nothing, so a failed harvest was indistinguishable from one that never started.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real run calls it (measured live on a
+    # 600-object backfill: `'dict' object has no attribute 'run_id'`, run FAILED, nothing ingested).
+    payload = TerminalInput.model_validate(payload)
     spec = payload.spec
     outcome = payload.outcome
 
@@ -1366,6 +1411,11 @@ def terminate_chunks(ctx: WorkflowActivityContext, payload: TerminateChunksInput
     is already terminating, and a tidy-up that fails must not turn a run that recorded its outcome
     into one that died. Terminating an already-terminal child is the NORMAL race, not an error.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real run calls it (measured live on a
+    # 600-object backfill: `'dict' object has no attribute 'run_id'`, run FAILED, nothing ingested).
+    payload = TerminateChunksInput.model_validate(payload)
     child_ids = payload.child_ids
     if not child_ids:
         return {"terminated": 0, "requested": 0}

@@ -339,6 +339,24 @@ def _s3_prefix_partition(spec: SourceSpec, key: str) -> str | None:
     return head or None
 
 
+def local_dir_unusable() -> str | None:
+    """Why `local-dir` cannot run here, or None when it can.
+
+    The SAME shape as `lance_append_unusable` below, and it was missing — so on a stock deployment
+    (`RASK_INGEST_LOCAL_ROOT` defaults to empty) the registry advertised this kind as AVAILABLE and
+    the door refused every run with a 400 naming an environment variable. Measured live 2026-08-26:
+    `GET /sources` said `local-dir available=true`, and `POST /ingests` answered
+    "local-dir is not enabled here".
+
+    That is the estate's "show disabled, never hide" ruling failing in its other direction — a control
+    shown ENABLED that cannot work. The reason travels with the kind so the form renders it disabled
+    and says which knob fixes it.
+    """
+    if local_root() is None:
+        return f"{LOCAL_ROOT_ENV} is not set — this deployment has no local directory to read from"
+    return None
+
+
 def lance_append_unusable() -> str | None:
     """Why `lance-append` cannot run here, or None when it can.
 
@@ -375,6 +393,7 @@ def register_builtin_sources() -> None:
             # The containing directory — the local twin of the S3 folder rule.
             partition_of=_local_dir_partition,
             external_base_of=_local_dir_external_base,
+            unusable=local_dir_unusable,
             label="Local directory",
             description="A directory tree on the worker. Deterministic and offline — the lane's fixture source.",
             options=[
