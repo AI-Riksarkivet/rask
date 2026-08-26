@@ -108,7 +108,16 @@ class TestTheGateCannotGoVacuous:
         # would take the runaway-stopping lever away at exactly the moment an operator reaches for it,
         # since a rollout is when runaways are noticed. It is also idempotent against a pod that
         # leaves mid-call: the workflow is durable and the terminate is recorded by the sidecar.
-        assert ungated == ["promotions.py::decide", "train.py::terminate_train"], (
+        # `mover_ops.py::terminate_stage` and `stage_ops.py::terminate_stage` join `terminate_train` in
+        # the third category: they STOP work. The mover-side one is additionally sidecar-unreachable —
+        # it is called by the producer over ClusterIP, not delivered by Dapr — so B6's admission
+        # question does not even apply to it.
+        assert ungated == [
+            "mover_ops.py::terminate_stage",
+            "promotions.py::decide",
+            "stage_ops.py::terminate_stage",
+            "train.py::terminate_train",
+        ], (
             "a new POST door appeared that neither this gate lists nor refuses while draining: "
             f"{ungated}. If it starts work, gate it; if it completes work already held (like the "
             "promotion decision), add it to this expected list with that reasoning."

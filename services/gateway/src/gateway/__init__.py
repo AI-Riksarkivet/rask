@@ -161,6 +161,10 @@ def _routes() -> list[Route]:
         # row here, no Ingress path. Root-mounted like /produce and /train (the producer does not use
         # `make_service_app`'s prefix), so the rewrite is a literal, not `prefix`-interpolated.
         ("/api/promotions", "/promotions", *medallion),
+        # The cascade's operator surface. Routed to the PRODUCER, which authorizes and forwards to the
+        # mover that hosts the instance — a mover has no row of its own because it is bus-only, and
+        # `terminate_workflow` must run under the mover's app-id, so neither end can do both halves.
+        ("/api/movers", "/movers", *medallion),
         (f"{prefix}/ray", f"{prefix}/ray", *compute),
         (f"{prefix}/projects", f"{prefix}/projects", *controlplane),
         # PREFIX-INTERPOLATED, not the literal "/api/flows", and that is the ingest row's lesson

@@ -156,19 +156,13 @@ class MedallionSettings(BaseSettings):
     transform_routes: dict[str, str] = Field(
         default_factory=dict, validation_alias=AliasChoices("transform_routes", "MEDALLION_TRANSFORM_ROUTES", "MEDALLION_LANE_ROUTES")
     )
-    #: Move data by PUBLISHING it, instead of by firing the next-stage trigger.
-    #:
-    #: The two gates ran identical assertions with different consequences: the catalog's withholds the
-    #: `published` TAG, while the mover's withheld only the next TRIGGER — so a refused batch was
-    #: already committed into the tier and visible to anyone reading `latest`. Only the tag is a
-    #: boundary, which is why this replaces the local gate rather than joining it.
-    #:
-    #: With this on, the mover registers, publishes, and stops. The tag move emits `table_published`,
-    #: the publication head routes it to the next lane, and the cascade has ONE trigger and ONE gate.
-    #:
-    #: OPT-IN, because it needs a reachable catalog the mover can authenticate to and `transform_routes`
-    #: declared. An estate missing either would simply stop cascading, and a migration seam is honest
-    #: where a silent fallback would not be. It should die once every estate runs on it.
+    #: Where each MOVER answers, by mover name — the producer proxies the cascade's operator routes
+    #: (`/movers/{name}/stages/...`) to these. Movers are deliberately bus-only, with no gateway row
+    #: and no Ingress, so the producer is the only door a person can reach; it authenticates and
+    #: authorizes, then forwards, and the MOVER runs the terminate under its own app-id — which is the
+    #: whole reason the routes cannot simply live on the producer.
+    mover_urls: dict[str, str] = Field(default_factory=dict, validation_alias=AliasChoices("mover_urls", "MEDALLION_MOVER_URLS"))
+
     # Ingest ceilings (audit 2026-07-12): the media ingest refuses (400) rather than OOM when a
     # source prefix exceeds these. Defaults generous for the demo; tune per deployment.
     ingest_max_objects: int = Field(default=10_000, alias="MEDALLION_INGEST_MAX_OBJECTS")

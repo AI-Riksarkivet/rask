@@ -28,6 +28,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from medallion.api.bronze_arrival import register_bronze_arrival_route
 from medallion.api.ingest_media import router as ingest_media_router
+from medallion.api.mover_ops import router as mover_ops_router
 from medallion.api.produce import router as produce_router
 from medallion.api.promotions import register_promotion_route
 from medallion.api.promotions import router as promotions_router
@@ -182,4 +183,8 @@ register_train_trigger_route(app, _dapr_app)
 # The quality gate's third answer (S3/S4): a mover that HOLDS a promotion publishes it here, the
 # review workflow runs in this process, and a `can_promote` holder answers it on /promotions/*.
 app.include_router(promotions_router)
+# The cascade's operator door (DWF-MGT-002/003). The ROUTES that touch the workflow live on the mover
+# — `terminate_workflow` resolves the instance through the calling app's app-id — so this end does the
+# human auth and forwards. See `api/mover_ops.py` for why the split is forced rather than chosen.
+app.include_router(mover_ops_router)
 register_promotion_route(app, _dapr_app)

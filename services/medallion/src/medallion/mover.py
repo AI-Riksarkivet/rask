@@ -25,6 +25,7 @@ from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
 from medallion.api.events import register_stage_route
+from medallion.api.stage_ops import router as stage_ops_router
 from medallion.core.config import apply_dapr_secrets, get_settings
 from service_kit import setup_logging
 from service_kit.governed import fga
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # every angle except an actual run. Only started when the Ray lane is on, because that is the only
     # lane with a job to wait for.
     app.state.workflow_runtime = None
+    app.state.workflow_client = None
     if settings.ray_enabled:
         try:
             import dapr.ext.workflow as wf
@@ -86,6 +88,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             register(runtime)
             runtime.start()  # spawns the worker's own threads; does not block the event loop
             app.state.workflow_runtime = runtime
+            # ONE client for the app, read by the operator routes — never one per request, which
+            # re-opens a gRPC channel to the sidecar on every call.
+            app.state.workflow_client = wf.DaprWorkflowClient()
             log.info("dapr workflow runtime started")
             # The line above is TRUE and INSUFFICIENT: the runtime starts whether or not this
             # app-id can reach an actor state store, and without one the first call fails (and,
@@ -141,3 +146,7 @@ app.include_router(health_router)
 # The DaprApp wrapper serves GET /dapr/subscribe (read by the sidecar at startup) and routes deliveries
 # of `sub_topic` to /medallion-event. Each mover has its own app-id + sub_topic, so no consumer clash.
 register_stage_route(app)
+# The cascade's operator surface (DWF-MGT-002/003). Mounted HERE and not on the producer because both
+# `get_workflow_state` and `terminate_workflow` resolve the instance through the calling app's app-id:
+# the producer would not find it and would accept the call anyway. The producer proxies to this.
+app.include_router(stage_ops_router)

@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **30 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **32 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -1172,6 +1172,42 @@ contains no `/trains/` at all, so every assertion was a 404 before this change. 
 the wire shape, 404 on an unknown instance for both verbs, that a 404 terminates nothing, and that a
 missing engine is 503 rather than a silent 202.
 
+
+**FIXED 2026-08-25 — the `stage_run` half now lands too, so this row is fully closed.**
+`POST /api/movers/{mover}/stages/{instance_id}/terminate`.
+
+**The 202 body says which of two things it did.** `stage_run` submits a Ray job and then polls it, so
+terminating stops the WATCH and the next tier's trigger — never the job, and never the GPUs. That
+distinction is the finding's own narrower reading of the harm, and the body states it in those words.
+
+A HARD terminate is right here, and it is worth recording why ingest's twin got a `cancel` EVENT
+instead: ingest's skipped tail held `emit_terminal`, the only caller of `release_run_units`, so
+terminating stranded the run's JetStream consumer. `stage_run` holds no queue and no consumer.
+
+**THE SPLIT ACROSS TWO APPS IS FORCED, NOT CHOSEN, and both halves are pinned because either alone is
+useless.** `get_workflow_state` and `terminate_workflow` resolve an instance through the CALLING app's
+app-id, and `stage_run` executes in the MOVER's runtime — so the routes that touch the workflow must
+live there. A producer-hosted copy would look under `medallion-producer`, find nothing, and **accept
+the call anyway**: a 202 for a terminate that stopped nothing, which is the trap `promotions.py`
+records from the other direction. But a mover is bus-only — no gateway row, no Ingress — so a route
+hosted only there is a lever nobody can pull. The producer authenticates and authorizes (same door as
+`/produce`: whoever may start this tenant's pipeline may stop it), then forwards over the mover's
+ClusterIP with the service token; the mover does the work under its own app-id.
+
+**Chart:** one ClusterIP Service per mover, and `MEDALLION_MOVER_URLS` built from the SAME values list
+that renders the movers — so a deployment that adds one gets its routes with no second edit. Verified
+by rendering: all three movers appear. One gateway row, on the producer.
+
+**Two pieces of dead prose removed on the way**, both about the deleted `cascade_via_publish`: an
+orphaned `#:` docstring block in `core/config.py` still describing the flag's behaviour ("with this
+on, the mover registers, publishes, and stops") above unrelated fields, and the chart toggle covered
+in the pubsub row.
+
+Thirteen tests across both halves, RED by construction — `stage_ops.py` does not exist at HEAD, so
+every route answered 404. They cover the read, the wire shape, that the spec does not leak, terminate,
+404 on both verbs, that a 404 terminates nothing, 503 with no engine, the forward target, an
+unconfigured mover naming what IS configured, the listing, and an unreachable mover as 502.
+
 </details>
 
 <details><summary><b>No status route for stage_run or train_run — the cascade's workflow instances are unobservable over HTTP</b> <i>(mgt, rule DWF-MGT-002, ADJUSTED)</i></summary>
@@ -1206,6 +1242,39 @@ still answers the question actually asked.
 
 The `stage_run` half is separate because `stage_run` executes in the MOVER, which has no Service and
 no gateway row — see the terminate row below for that work.
+
+
+**FIXED 2026-08-25 — the `stage_run` half now lands too, so this row is fully closed.**
+`GET /api/movers/{mover}/stages/{instance_id}`, plus `GET /api/movers` so a caller need not guess a
+mover's name to find the routes.
+
+The wire shape is a DECLARED field list (`instance_id`, `status`, `submission_id`, `polls_done`), not
+the SDK's `WorkflowState` — which carries the whole `StageJobSpec`, its URIs and its lineage blob. A
+status question must not disclose them to answer, and a test asserts the spec does not leak.
+
+**THE SPLIT ACROSS TWO APPS IS FORCED, NOT CHOSEN, and both halves are pinned because either alone is
+useless.** `get_workflow_state` and `terminate_workflow` resolve an instance through the CALLING app's
+app-id, and `stage_run` executes in the MOVER's runtime — so the routes that touch the workflow must
+live there. A producer-hosted copy would look under `medallion-producer`, find nothing, and **accept
+the call anyway**: a 202 for a terminate that stopped nothing, which is the trap `promotions.py`
+records from the other direction. But a mover is bus-only — no gateway row, no Ingress — so a route
+hosted only there is a lever nobody can pull. The producer authenticates and authorizes (same door as
+`/produce`: whoever may start this tenant's pipeline may stop it), then forwards over the mover's
+ClusterIP with the service token; the mover does the work under its own app-id.
+
+**Chart:** one ClusterIP Service per mover, and `MEDALLION_MOVER_URLS` built from the SAME values list
+that renders the movers — so a deployment that adds one gets its routes with no second edit. Verified
+by rendering: all three movers appear. One gateway row, on the producer.
+
+**Two pieces of dead prose removed on the way**, both about the deleted `cascade_via_publish`: an
+orphaned `#:` docstring block in `core/config.py` still describing the flag's behaviour ("with this
+on, the mover registers, publishes, and stops") above unrelated fields, and the chart toggle covered
+in the pubsub row.
+
+Thirteen tests across both halves, RED by construction — `stage_ops.py` does not exist at HEAD, so
+every route answered 404. They cover the read, the wire shape, that the spec does not leak, terminate,
+404 on both verbs, that a 404 terminates nothing, 503 with no engine, the forward target, an
+unconfigured mover naming what IS configured, the listing, and an unreachable mover as 502.
 
 </details>
 

@@ -162,6 +162,13 @@ spec:
               {{- end }}
             {{- end }}
             - { name: MEDALLION_TRANSFORM_ROUTES, value: {{ toJson $routes | quote }} }
+            {{- /* Where each mover answers, for the operator proxy above. Built from the SAME list that
+                   renders the movers, so a deployment that adds one gets its routes with no second edit. */}}
+            {{- $moverUrls := dict }}
+            {{- range .Values.medallion.movers }}
+            {{- $_ := set $moverUrls .name (printf "http://%s-%s:%v" (include "lance.fullname" $) .name $port) }}
+            {{- end }}
+            - { name: MEDALLION_MOVER_URLS, value: {{ toJson $moverUrls | quote }} }
             {{- /* The producer needs the catalog for the PROMOTION RESUME, not for a stage of its own:
                    an approved hold publishes the version it was taken on, which is a call to this door.
 
@@ -476,5 +483,19 @@ spec:
             {{- include "lance.tmpMount" $root | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
+---
+{{- /* A mover is BUS-ONLY and stays that way: no gateway row, no Ingress. This Service exists for one
+       caller — the producer, which proxies the cascade's operator routes (`/movers/{name}/stages/...`)
+       here. It has to be the mover that runs them, because `terminate_workflow` resolves the instance
+       through the CALLING app's app-id, and a producer-hosted terminate would find nothing and accept
+       the call anyway. ClusterIP only; the mover authenticates the producer by the app token. */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lance.fullname" $root }}-{{ .name }}
+  labels: {{- include "lance.labels" $root | nindent 4 }}
+spec:
+  ports: [{ name: http, port: {{ $port }}, targetPort: http }]
+  selector: { app.kubernetes.io/component: {{ .name }}, app.kubernetes.io/instance: {{ $root.Release.Name }} }
 {{- end }}
 {{- end }}
