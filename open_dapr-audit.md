@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **19 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **22 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -1528,6 +1528,22 @@ project_actor.py:451 (the return value is dropped) —
 
 **Verifier (ADJUSTED).** The code is as quoted (`lakehouse.py:294-324`, `project_actor.py:451`), but the failure chain breaks at two points. (1) A pending task is not collectable while it is awaiting real work: every await in `_drive` -&gt; `run_publish_for` -&gt; `run_publish` is anchored — `await asyncio.to_thread(publish_token, settings)` (lakehouse.py:375) is held by the executor's callback chain, and every `project_handle.get()/list_tasks()/fire()/record_publish()` and `publisher.create_table()` await goes through the Dapr proxy's HTTP transport, whose futures hold `Task.__step` in their done-callbacks; between `create_task` and the first step the loop's ready-queue handle holds it. The finding offers no sequence in which the only reference is the task itself. (2) Even granting collection, the `finally` DOES run: `Task.__del__` only logs "Task was destroyed but it is pending!"; the suspended coroutine is then deallocated, which calls `coro.close()`, throwing GeneratorExit at the await point and executing the non-awaiting `finally: _RUNNING.discard(project_id)` (lakehouse.py:321-322). So `_RUNNING` is cleared and the 60 s watchdog re-drives, which the saga is explicitly built for ("Safe to call again after any crash: every step converges on the same `pending_publish_id`", saga.py:158). The residual is hygiene, not a stuck instance — info, not warning.
 
+
+**FIXED 2026-08-25 — two defects, and the finding named the smaller one.**
+
+(1) The task now lives in a module-level `_TASKS` set with a done-callback that removes it. asyncio
+keeps only a WEAK reference to a running task, so an unreferenced one may be collected mid-flight;
+the caller's returned handle does not count, because `run_watchdog` discards it. A collected task
+loses the publish AND leaks `_RUNNING`, since `_drive`'s `finally` never runs.
+
+(2) `_RUNNING.add(project_id)` moved to AFTER `create_task`. Claiming first meant a `create_task`
+that raised left the id claimed by a task that does not exist.
+
+**Either way the symptom is the same and is invisible:** `spawn_publish` logs "already running" and
+stands down on every later watchdog tick, so the project can never publish again and nothing names
+why. Three tests; the two wedges were observed RED against the restored pre-fix shape, and the third
+pins the concurrency guard the fix must not weaken.
+
 </details>
 
 <details><summary><b>The "publishing but carries no publish token" refusal is raised outside the try, so no `publish_failed` is ever recorded</b> <i>(actors-annotator, rule N/A, ADJUSTED)</i></summary>
@@ -1560,6 +1576,20 @@ saga.py:190-198 —
                 project.pending_publish_at = datetime.now(UTC)
 ```
 both minted in one branch of one actor turn and persisted by a single `_store`; nothing anywhere clears either. So id-without-instant cannot be produced by any code path — the finding concedes this and rests on a July-2026 state row written in a six-minute window between two commits. Further, the proposed correction is inert: because `pending_publish_id is not None`, a post-`publish_failed` retry re-enters PUBLISHING with the same half-token and re-raises, so the project would oscillate rather than recover. Note also that the two sibling raises above the try (saga.py:162 "project does not exist", saga.py:189 "is X, not publishing") are correctly unrecorded, which is the family this one belongs to.
+
+
+**FIXED 2026-08-25.** The refusal moved inside the saga's `try`, so the existing `except` arm
+fires `publish_failed` with the reason.
+
+**Only that one moved, and the reasoning is why the other two stayed.** `publish_failed` is this
+saga's sole exit. Raised outside the try, this refusal left a project in PUBLISHING with no token, no
+recorded reason and no transition out — and `publish_failed` is a RESTING state precisely so a
+project can be published again. Every later watchdog tick re-entered, re-refused and re-stranded it.
+
+The two sibling raises correctly remain outside: "annotation project does not exist" has no project
+to move, and "is `<state>`, not publishing" is a state from which `publish_failed` would itself be an
+illegal transition — firing it there would replace a clean refusal with a state-machine error. That
+guard has its own test.
 
 </details>
 
@@ -1599,6 +1629,19 @@ so a bare `@actormethod()` stores literal `None`. `proxies.py:32-37` then reads
         return _translating(getattr(self._proxy, wire))
 ```
 — the attribute exists, so the `name` default never applies and `getattr(self._proxy, None)` raises `TypeError: attribute name must be string`. The blast radius is as stated: such a call from `_report_state` is swallowed by the deliberate `except Exception` at actor.py:327-333, leaving a silently stale index — the exact failure class proxies.py's own docstring says the module exists to end. The coverage gap is real: `tests/unit/test_actor_proxy_names.py` pins eight (interface, python, wire) triples and sweeps for raw `ActorProxy.create`, but has no equivalent of `services/notifications/tests/test_actor_proxies.py:69-74 test_every_interface_method_declares_an_explicit_wire_name` (`assert all(isinstance(v.__actormethod__, str) and v.__actormethod__ for v in declared)`). I verified every current annotator declaration names its wire id (tenant_actor 2, actor.py 5, project_actor 10), so there is no live defect today — info is the correct severity for a missing invariant test.
+
+
+**FIXED 2026-08-25 — in BOTH proxies, because the two files carry the identical line.**
+
+`getattr(declared, "__actormethod__", name)` looks like it defaults, and does not: the default
+applies only when the attribute is ABSENT, while a decorator that recorded no wire name leaves it
+PRESENT and `None`. That `None` reached `getattr(self._proxy, None)`, which raises
+`TypeError: attribute name must be string` from inside the proxy — a type error about strings,
+naming neither the interface nor the method, for what is a mis-declared actor method.
+
+Both `annotator/projects/proxies.py` and `notifications/proxies.py` now refuse by name. The test is
+parametrized across the two on purpose: a spot fix on one leaves the same hole in the other, which is
+exactly how this shape reappears.
 
 </details>
 

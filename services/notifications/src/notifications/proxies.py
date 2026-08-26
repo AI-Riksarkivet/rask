@@ -72,6 +72,13 @@ class TypedActorProxy:
         if declared is None:
             raise AttributeError(f"{self._interface.__name__} declares no method {name!r}")
         wire = getattr(declared, "__actormethod__", name)
+        if wire is None:
+            # PRESENT-and-None is not the same as absent, and only the second reaches the default
+            # above. A decorator that recorded no wire name therefore handed `None` to `getattr`,
+            # which raises "attribute name must be string" from inside the proxy — a TypeError about
+            # strings, naming neither the interface nor the method, for what is a mis-declared actor
+            # method. Refuse here, by name.
+            raise AttributeError(f"{self._interface.__name__}.{name} is declared with no actor wire name")
         return _translating(getattr(self._proxy, wire))
 
 

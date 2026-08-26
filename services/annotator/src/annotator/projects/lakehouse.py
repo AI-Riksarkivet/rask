@@ -294,12 +294,16 @@ class CatalogPublisher:
 _RUNNING: set[str] = set()
 
 
+#: Strong references to in-flight saga tasks. asyncio holds only a weak reference to a running task,
+#: so without this a publish could be collected mid-flight — losing the work and leaking `_RUNNING`.
+_TASKS: set[asyncio.Task[None]] = set()
+
+
 def spawn_publish(project_id: str) -> asyncio.Task[None] | None:
     """Schedule the saga for one project, unless it is already running here."""
     if project_id in _RUNNING:
         logger.debug("publish for %s already running — the tick stands down", project_id)
         return None
-    _RUNNING.add(project_id)
 
     async def _drive() -> None:
         try:
@@ -321,7 +325,18 @@ def spawn_publish(project_id: str) -> asyncio.Task[None] | None:
         finally:
             _RUNNING.discard(project_id)
 
-    return asyncio.get_running_loop().create_task(_drive())
+    task = asyncio.get_running_loop().create_task(_drive())
+    # Claimed only once the task EXISTS. Adding to `_RUNNING` first meant a `create_task` that raised
+    # pinned the id forever, and `spawn_publish` would then stand down on every later tick — a project
+    # that can never publish again, with nothing naming why.
+    _RUNNING.add(project_id)
+    # A STRONG REFERENCE, which asyncio requires and this did not hold: the event loop keeps only a
+    # weak one, so an unreferenced task can be garbage-collected mid-flight. That loses the publish
+    # AND leaks `_RUNNING`, because `_drive`'s `finally` never runs. The caller's returned handle is
+    # not enough — `run_watchdog` discards it.
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
+    return task
 
 
 async def run_publish_for(project_id: str) -> PublishOutcome | None:

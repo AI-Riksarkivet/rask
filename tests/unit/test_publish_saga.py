@@ -509,3 +509,54 @@ async def test_no_pin_travels_when_the_capture_is_ambiguous() -> None:
     await _run(project, tasks, publisher)
 
     assert publisher.pin is None
+
+
+# --------------------------------------------------------------------------------------------------
+# A refusal must still leave the project somewhere it can leave from
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_TOKENLESS_publishing_project_is_moved_to_publish_failed_not_stranded() -> None:
+    """The refusal at "publishing but carries no publish token" was raised OUTSIDE the saga's `try`.
+
+    `publish_failed` is the saga's only exit and it is fired from that try's `except` arm. Raised
+    before it, the refusal left the project in PUBLISHING with no token, no reason recorded, and no
+    transition out — and `publish_failed` is a RESTING state precisely so a project can be published
+    again. Every later watchdog tick re-entered, re-refused, and re-stranded it.
+
+    Contrast the two sibling raises that correctly stay outside: "annotation project does not exist"
+    has no project to move, and "is <state>, not publishing" is a state from which `publish_failed`
+    would itself be an illegal transition. Only this one describes a project that IS publishing.
+    """
+    project = _Project(token=None)
+    tasks = {"t0": _Task("t0", TaskState.ACCEPTED)}
+
+    with pytest.raises(PublishRefusal):
+        await _run(project, tasks, _Publisher())
+
+    assert "publish_failed" in project.fired, f"the project was stranded in PUBLISHING; it fired {project.fired}"
+    assert project.doc["state"] == str(ProjectState.PUBLISH_FAILED)
+
+
+@pytest.mark.asyncio
+async def test_the_recorded_reason_NAMES_the_missing_token() -> None:
+    """A resting state nobody can diagnose is only half an exit."""
+    project = _Project(token=None)
+
+    with pytest.raises(PublishRefusal):
+        await _run(project, {"t0": _Task("t0", TaskState.ACCEPTED)}, _Publisher())
+
+    assert "publish token" in str(project.doc.get("publish_error") or ""), f"the failure reason does not name the cause: {project.doc.get('publish_error')!r}"
+
+
+@pytest.mark.asyncio
+async def test_a_NON_publishing_project_is_still_refused_WITHOUT_a_transition() -> None:
+    """The guard that must not move. `publish_failed` from DRAFT is an illegal transition, so firing
+    it here would replace a clean refusal with a state-machine error."""
+    project = _Project(state=ProjectState.DRAFT)
+
+    with pytest.raises(PublishRefusal):
+        await _run(project, {"t0": _Task("t0", TaskState.ACCEPTED)}, _Publisher())
+
+    assert project.fired == [], f"a non-publishing project should transition nowhere; it fired {project.fired}"

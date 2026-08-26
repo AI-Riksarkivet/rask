@@ -189,13 +189,24 @@ async def run_publish(
         raise PublishRefusal(f"project {project.project_id} is {project.state}, not publishing — the saga runs only after the publish transition")
     publish_id = project.pending_publish_id
     published_at = project.pending_publish_at
-    if not publish_id or published_at is None:
-        # The actor mints this at the `publish` transition. Its absence means the state machine and
-        # this saga disagree about what happened, and guessing a token would defeat the whole
-        # idempotency argument — so this stops rather than inventing one.
-        raise PublishRefusal(f"project {project.project_id} is publishing but carries no publish token or instant — refusing to mint one here")
 
     try:
+        # INSIDE the try, unlike the two refusals above, and the difference is which state the
+        # project is left in. `publish_failed` is this saga's only exit and it is fired from this
+        # try's `except` arm. Raised outside it, this refusal left a project in PUBLISHING with no
+        # token, no recorded reason and no transition out — and every later watchdog tick re-entered,
+        # re-refused and re-stranded it. `publish_failed` is a RESTING state precisely so a project
+        # can be published again.
+        #
+        # The two siblings above stay outside on purpose: "does not exist" has no project to move,
+        # and "is <state>, not publishing" is a state from which `publish_failed` would itself be an
+        # illegal transition. Only THIS one describes a project that is genuinely publishing.
+        if not publish_id or published_at is None:
+            # The actor mints this at the `publish` transition. Its absence means the state machine
+            # and this saga disagree about what happened, and guessing a token would defeat the whole
+            # idempotency argument — so this stops rather than inventing one.
+            raise PublishRefusal(f"project {project.project_id} is publishing but carries no publish token or instant — refusing to mint one here")
+
         await _note(project_handle, "reading tasks")
         listing = await project_handle.list_tasks()
         pairs = await collect(project_handle, task_handle, sorted(listing["tasks"]))
