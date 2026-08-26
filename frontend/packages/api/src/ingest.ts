@@ -89,6 +89,28 @@ export interface IngestRequest {
 	idempotencyKey?: string;
 }
 
+/**
+ * A refusal from an ingest door, carrying the STATUS as well as the words.
+ *
+ * The status is the whole point. Without it every failure collapses into one string and a caller can
+ * only render a single message for all of them — which is how the run-detail page came to report a
+ * 403 as "No such run. The ingest plane has no record of <id>". Measured on the live estate
+ * 2026-08-26: the record existed, the workflow existed (35 rows in the Dapr state store), and the
+ * signed-in user simply lacked `admin` on the project. The page sent them to hunt for a lost run
+ * instead of to an admin, and it did so in a confidently-worded sentence.
+ *
+ * Still an `Error`, so every existing `catch` and every `throw` site keeps working unchanged.
+ */
+export class IngestRefusal extends Error {
+	readonly status: number;
+
+	constructor(message: string, status: number) {
+		super(message);
+		this.name = 'IngestRefusal';
+		this.status = status;
+	}
+}
+
 async function refuse(res: Response, what: string): Promise<never> {
 	// problem+json `detail` carries the real refusal (400 unknown kind, 409, 503 retryable). Falling
 	// back to the status line stops a non-JSON error body from masking the failure entirely.
@@ -101,7 +123,7 @@ async function refuse(res: Response, what: string): Promise<never> {
 	} catch {
 		// non-JSON error body — keep the status line
 	}
-	throw new Error(`${what}: ${detail}`);
+	throw new IngestRefusal(`${what}: ${detail}`, res.status);
 }
 
 /** Accept an ingest run. Returns as soon as the run is dispatched — 202 means 202. */

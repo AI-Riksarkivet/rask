@@ -39,6 +39,29 @@
 	// page can get wrong, because it turns a typo into an apparently-live harvest.
 	const failed = $derived(runQuery.error);
 
+	// A REFUSAL AND AN ABSENCE ARE DIFFERENT FACTS, and this page reported both as the second one.
+	//
+	// Measured on the live estate 2026-08-26: a run was started in project `demo`, the signed-in user
+	// held only `namespace:silver#writer`, and the read door answered 403 — while the page said "No
+	// such run. The ingest plane has no record of <id>. Neither its accepted record nor a workflow for
+	// it exists." Every clause of that was false: the record existed, and so did the workflow (35 rows
+	// in the Dapr state store). Telling an operator their run has vanished when it is merely not theirs
+	// to see sends them hunting for it instead of to an admin, in a confidently-worded sentence.
+	//
+	// The status now survives the whole way. `IngestRefusal` carries it out of `@rask/api`, and the
+	// remote function re-throws it via `error()` — a plain thrown Error is redacted to "Internal Error"
+	// on its way to the browser, which is what flattened every cause into one message in the first
+	// place. Read defensively from both shapes: an HttpError surfaces as `{status, body:{message}}`.
+	const failedStatus = $derived(
+		(failed as { status?: number; body?: { status?: number } } | undefined)?.status ??
+			(failed as { body?: { status?: number } } | undefined)?.body?.status,
+	);
+	const failedDetail = $derived(
+		(failed as { body?: { message?: string } } | undefined)?.body?.message ??
+			(failed as { message?: string } | undefined)?.message ??
+			'',
+	);
+
 	// Terminal states stop the poll, and so does a failure. Polling a finished run forever is how a
 	// status page becomes the busiest client of the service it reports on; polling a run that does
 	// not exist is that plus a permanent lie on screen.
@@ -245,9 +268,25 @@
 				>
 					<CircleX class="h-5 w-5 shrink-0" />
 					<span>
-						<strong>No such run.</strong> The ingest plane has no record of
-						<span class="font-mono">{runId}</span>. Neither its accepted record nor a workflow for
-						it exists — a run that had merely lost its progress would still answer here.
+						{#if failedStatus === 403}
+							<strong>You do not have access to this run.</strong> It may well exist — the ingest
+							plane refused to describe it to you, which is a different thing from it being gone. Ask
+							an admin for the grant the door names below, rather than hunting for a lost run.
+						{:else if failedStatus === 404}
+							<strong>No such run.</strong> The ingest plane has no record of
+							<span class="font-mono">{runId}</span>. Neither its accepted record nor a workflow for
+							it exists — a run that had merely lost its progress would still answer here.
+						{:else if failedStatus === 503}
+							<strong>The ingest plane did not answer.</strong> This says nothing about
+							<span class="font-mono">{runId}</span> either way — the run may be progressing normally
+							behind an engine that is momentarily unreachable. Retry before concluding anything.
+						{:else}
+							<strong>This run could not be read.</strong> The ingest plane refused the request for
+							<span class="font-mono">{runId}</span>{failedStatus ? ` with HTTP ${failedStatus}` : ''}.
+						{/if}
+						{#if failedDetail}
+							<span class="mt-2 block font-mono text-xs opacity-80">{failedDetail}</span>
+						{/if}
 					</span>
 				</p>
 			{:else if run === undefined}

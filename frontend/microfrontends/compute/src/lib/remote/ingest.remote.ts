@@ -1,10 +1,12 @@
 import * as v from 'valibot';
+import { error } from '@sveltejs/kit';
 import { command, query, getRequestEvent } from '$app/server';
 import { env } from '$env/dynamic/private';
 import { lineageAuthHeaders } from '@rask/api/runs-feed';
 import { isIngestJob } from './ingest-job';
 import {
 	getIngestRun,
+	IngestRefusal,
 	ingestLifecycle,
 	listIngestSources,
 	startIngest as postIngest,
@@ -57,7 +59,23 @@ const LINEAGE_API = env.LINEAGE_API ?? 'http://localhost:8001';
  * the first run's cached answer for every id.
  */
 export const getIngestRunStatus = query(RunId, async (runId): Promise<IngestRun> => {
-	return getIngestRun(runId, getRequestEvent().fetch, bearerHeaders());
+	try {
+		return await getIngestRun(runId, getRequestEvent().fetch, bearerHeaders());
+	} catch (cause) {
+		// RE-THROW AS AN HttpError, so the STATUS reaches the browser.
+		//
+		// A plain thrown Error is redacted to "Internal Error" on its way to the client — SvelteKit
+		// only sends `error()` through intact. So without this the page received one opaque failure
+		// for every cause and rendered its single message, which was "No such run. The ingest plane
+		// has no record of <id>."
+		//
+		// That was measured wrong on the live estate 2026-08-26: a 403 (the signed-in user held no
+		// `admin` on the project) was reported as a vanished run, while the record AND its workflow
+		// both existed. Telling someone their run is gone when it is merely not theirs to see sends
+		// them to the wrong place, confidently. The page now branches on this status.
+		if (cause instanceof IngestRefusal) error(cause.status, cause.message);
+		throw cause;
+	}
 });
 
 /**
