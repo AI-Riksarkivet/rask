@@ -3,15 +3,18 @@ the SPA's /serve page reads raw. Mounted at the root (no /api/v1 prefix),
 include_in_schema=False. Uses api_route(methods=…) deliberately — this is a
 transparent proxy, not an application route."""
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
+from compute import security
 from compute.dependencies import HttpDep
 from ray_kit import dashboard
 from service_kit.dependencies import SettingsDep
 
 
-router = APIRouter(include_in_schema=False)
+# GATED AT THE ROUTER, and per route would not be enough: `_register_proxy` adds a
+# `{path:path}` catch-all, so ANYTHING the Ray dashboard serves is reachable through it.
+router = APIRouter(include_in_schema=False, dependencies=[Depends(security.require_read)])
 
 # READ-ONLY on purpose. The SPA's /serve page only *reads* Serve status, and this
 # proxy is unauthenticated (see docs/architecture: no app auth). Ray's dashboard

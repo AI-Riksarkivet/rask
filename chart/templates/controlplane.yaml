@@ -49,6 +49,20 @@ spec:
             - name: RASK_PROJECT_URL_SCHEME
               value: {{ .Values.controlplane.urlScheme | quote }}
             {{- include "rask.otelEnv" (list . "controlplane") | nindent 12 }}
+            {{- if .Values.auth.enabled }}
+            {{- /* THE USER DOOR. `GET /api/projects/` enumerates every tenant in the estate — slug,
+                   team, workload type, k8s namespace and each project's LIVE INGRESS HOST — and the
+                   gateway carries it to the public edge. It answered anonymously until 2026-08-26
+                   because this service declared no settings class with the estate's auth knobs, so
+                   there was no `LANCE_OIDC_ENABLED` to bind and no values change could gate it.
+                   It now declares ControlplaneSettings(GovernedAuthSettings, BaseSettings) and gates
+                   its router on the estate reader tier; this env is what feeds that door. Emitting
+                   the block without the code, or the code without the block, both look wired and do
+                   nothing — the `explorer.yaml` failure. Prefix is LANCE_, matching the mixin. */}}
+            {{- include "lance.governedOidcEnv" (list . "LANCE") | nindent 12 }}
+            {{- include "lance.governedFgaEnv" (list . "LANCE") | nindent 12 }}
+            {{- with include "lance.governedFgaPins" (list . "LANCE") }}{{- . | nindent 12 }}{{- end }}
+            {{- end }}
           readinessProbe:
             httpGet: {path: /api/health, port: http}
             initialDelaySeconds: 5

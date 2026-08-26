@@ -65,6 +65,12 @@ _SETTINGS: list[tuple[str, str, str]] = [
     ("services/notifications", "notifications.config", "NotificationsSettings"),
     ("services/flows", "flows.config", "FlowsSettings"),
     ("services/ingest", "ingest.auth", "IngestAuthSettings"),
+    # The two services the gateway publishes that had NO auth code path at all until 2026-08-26 —
+    # so no settings class either, and nothing for this roster to check. `ComputeSettings` subclasses
+    # the shared `Settings` (it reads ray_dashboard_url and the rest of the common surface);
+    # `ControlplaneSettings` is a bare BaseSettings + the mixin, since it reads none of it.
+    ("services/compute", "compute.config", "ComputeSettings"),
+    ("services/controlplane", "controlplane.config", "ControlplaneSettings"),
     # Subclasses of service_kit.media.config.Settings. None declares `populate_by_name`, and
     # GovernedAuthSettings is a plain mixin rather than a BaseSettings, so none inherited it.
     ("services/search", "search.core.config", "SearchSettings"),

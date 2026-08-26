@@ -175,8 +175,10 @@ spec:
             {{- if and $root.Values.auth.enabled $svc.governedAuth }}
             {{- /* The USER door, for services that declare `governedAuth` — NOT every frontDoor
                    service. `frontDoor` means "the gateway routes to it", which is a different
-                   question: the gateway and compute read no auth settings at all, so keying on it
-                   emitted seven variables neither service reads. `ingest.auth.authorize_ingest` refuses
+                   question: the GATEWAY reads no auth settings at all, so keying on it emits
+                   variables that service never reads. (`compute` was the second example here until
+                   2026-08-26; it now declares GovernedAuthSettings and gates both routers, so it
+                   carries `governedAuth: true` and this env is exactly what feeds its door.) `ingest.auth.authorize_ingest` refuses
                    the service-token path when the caller is the public gateway, and then has nowhere
                    to fall through to unless OIDC is wired — so closing that bypass without this left
                    a signed-in project admin with NO way in and the UI path dead rather than merely

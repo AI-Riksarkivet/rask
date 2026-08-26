@@ -1,10 +1,12 @@
 """compute service DI: the Ray Job SDK client + the dashboard HTTP client, from app.state."""
 
+from functools import lru_cache
 from typing import Annotated
 
 import httpx
 from fastapi import Depends, Request
 
+from compute.config import ComputeSettings
 from ray_kit import JobSubmissionClient, build_client
 
 
@@ -27,3 +29,17 @@ def get_ray_client(request: Request) -> JobSubmissionClient | None:
 
 HttpDep = Annotated[httpx.AsyncClient, Depends(get_http)]
 RayClientDep = Annotated[JobSubmissionClient | None, Depends(get_ray_client)]
+
+
+@lru_cache(maxsize=1)
+def get_compute_settings() -> ComputeSettings:
+    """The service's own settings, carrying the estate's auth knobs.
+
+    Separate from `app.state.settings` (the generic object the lifespan builds) because
+    `make_auth_deps` binds against a TYPE, and the generic one has no auth fields to bind. Built once;
+    `lru_cache` on a module-level function, never on a method (writing-python).
+    """
+    return ComputeSettings()
+
+
+ComputeSettingsDep = Annotated[ComputeSettings, Depends(get_compute_settings)]

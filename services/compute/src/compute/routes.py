@@ -1,8 +1,9 @@
 """Ray Dashboard endpoints — viewer's normalized `/api/v1/ray/*` (health, jobs,
 cluster, …). Thin shell over ray_kit.dashboard."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from compute import security
 from compute.dependencies import HttpDep, RayClientDep
 from ray_kit import dashboard
 from ray_kit.schemas import (
@@ -18,7 +19,9 @@ from ray_kit.schemas import (
 from service_kit.dependencies import SettingsDep
 
 
-router = APIRouter(prefix="/ray", tags=["ray"])
+# GATED AT THE ROUTER. Every route below reads the Ray plane through a dashboard the chart
+# deliberately token-protects, and this service holds that token — see `security.py`.
+router = APIRouter(prefix="/ray", tags=["ray"], dependencies=[Depends(security.require_read)])
 
 
 @router.get("/health")

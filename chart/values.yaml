@@ -235,6 +235,15 @@ services:
     frontDoor: true
     waitFor: []
     rayClient: true # dashboard introspection + /api/serve proxy => gets the RAY_AUTH_* pair when ray.auth.enabled
+    # THE USER DOOR. `fleet.yaml`'s own comment used to give this service as the reason `frontDoor`
+    # is not the right key — "the gateway and compute read no auth settings at all, so keying on it
+    # emitted seven variables neither service reads". That was true and is not any more: `compute`
+    # now declares `ComputeSettings(GovernedAuthSettings, Settings)` and gates both its routers on
+    # the estate reader tier. Without this flag the door is built and never fed — the env it reads is
+    # simply absent, so `oidc_enabled` stays False and every route answers anonymously while the code
+    # reports authorization as configured. That is the `explorer.yaml` failure verbatim (the viewer
+    # streamed page images wide open because the auth env was emitted for the annotator alone).
+    governedAuth: true
   # The studio flow-builder's server half: the node catalog, graph validation, and runs on two lanes
   # (inline, or the Dapr Workflow orchestrator when a sidecar is injected). It needs NOTHING to boot —
   # no store, no cluster — so it is part of the default install: the builder's client-side lane works

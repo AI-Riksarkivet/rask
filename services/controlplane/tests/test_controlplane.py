@@ -8,13 +8,14 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    # RASK_API_PREFIX=/api mirrors the deployed fleet; the shared Settings also
-    # *requires* viewer in/out, so set dummies even though controlplane ignores them.
-    monkeypatch.setenv("RASK_API_PREFIX", "/api")
-    monkeypatch.setenv("RASK_VIEWER_INPUT", "s3://unused")
-    monkeypatch.setenv("RASK_VIEWER_OUTPUT", "s3://unused")
-
+def client() -> Iterator[TestClient]:
+    # The env moved to conftest.py, and the move was a FIX rather than tidying. This fixture used to
+    # `monkeypatch.setenv("RASK_API_PREFIX", "/api")` and import `controlplane` on the next line,
+    # which is correct only while this fixture is the first thing to touch the package — the app is
+    # built at module level, so the prefix is decided by the first importer. A second test module
+    # importing `controlplane.routes` at collection time built it under the code default `/api/v1`
+    # and every route here answered 404. conftest.py runs before test modules; monkeypatch cannot,
+    # being function-scoped.
     from controlplane import app
 
     with TestClient(app) as c:
