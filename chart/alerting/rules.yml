@@ -596,3 +596,83 @@ groups:
             both dead. Either the scrape job was removed from chart/templates/otel-collector.yaml or
             the collector is not running. This alert is the reason their silence is not mistaken for
             health.
+
+  # ==================================================================================================
+  # Dapr workflow history — the one plane the sidecar exports NO metric about.
+  #
+  # Every other group here alerts on a series something already emits. This one could not: enumerated
+  # live on 2026-08-26 against the `ingest` sidecar, the ENTIRE metric surface daprd exports is
+  # dapr_error_code_total, dapr_grpc_io_*, dapr_http_*, dapr_runtime_component_{init_total,loaded} and
+  # go_*. No workflow metric, no actor metric, no state-store metric — and `dapr_runtime_workflow_*`,
+  # which DaprConsumerWedge above already documents as unreliable in this codebase, is not merely
+  # unreliable here, it is absent. There is nothing to scrape, so there was nothing to alert on.
+  #
+  # WHY IT MATTERS ENOUGH TO BUILD A MEASUREMENT FOR. Workflow history is append-only and
+  # `spec.workflow.stateRetentionPolicy` (chart/templates/observability.yaml) is the only thing that
+  # removes it — the CRD is explicit that without it instances are never purged, and this estate has
+  # deliberately NO application-side purge to fall back on (DaprWorkflowClient exposes purge but no
+  # list-instances API, so a sweep could not name what to purge after a restart). If the policy is
+  # dropped by a values edit, or its `dapr.io/config` annotation is re-gated the way it once was, or
+  # the scheduler simply stops collecting, the first symptom is a full disk. Both measurements this
+  # estate has of workflow-history volume — 1367 rows on 2026-08-10, 7239 on 2026-08-26 — happened
+  # because a person went looking.
+  #
+  # AND WHY IT ALERTS ON AGE, NOT VOLUME. Row count varies legitimately with load, so a threshold on
+  # it is either noisy or useless. Age tests the PROPERTY: the oldest surviving history row must be
+  # younger than the longest window the policy grants. That claim is true under any load.
+  #
+  # The series come from the `sqlquery/daprstate` receiver in chart/templates/otel-collector.yaml,
+  # which runs one query against the Dapr state store's own database. That dependency is pinned in
+  # both directions by test_every_collector_sourced_ALERT_names_a_metric_the_RECEIVER_declares: these
+  # rules cannot ship without the receiver, and the receiver cannot be deleted (nor its metrics
+  # renamed) while the rules are here.
+  - name: dapr-workflow-state
+    rules:
+
+      # 2851200 = 792h = the longest configured window (720h) + a 72h collection margin. The margin is
+      # for the scheduler's own cadence, not slack: a row is only eligible once its instance reaches a
+      # terminal state, so a legitimately-retained row can be a little older than the nominal window.
+      # This literal MUST move with dapr.workflowRetention in chart/values.yaml — rules.yml is mounted
+      # via .Files.Get and cannot be templated, so the coupling is held by a test instead:
+      # test_the_workflow_history_alert_threshold_TRACKS_the_retention_policy.
+      #
+      # `for: 30m` rather than something shorter because this is a slow failure with a slow fix. It is
+      # never urgent by the minute and a brief blip during a scheduler restart should not page.
+      - alert: DaprWorkflowHistoryNotCollected
+        expr: max(dapr_workflow_history_oldest_age_seconds) > 2851200
+        for: 30m
+        labels:
+          severity: warning
+          service: dapr
+        annotations:
+          summary: "Dapr workflow history is outliving its retention policy"
+          description: >-
+            A workflow-history row in the Dapr state store is older than the longest configured
+            retention window (dapr.workflowRetention in chart/values.yaml) plus a collection margin,
+            so the scheduler has stopped collecting. Nothing else purges this: the policy applies only
+            to instances that NEWLY reach a terminal state, so every instance that terminates while
+            this is broken has to be purged by hand afterwards. Runbook:
+            docs/runbooks/RUNBOOK-oncall.md#workflow-history-not-collected
+
+      # Two rules, not one composite — GreptimeDB refuses `X > N or absent(X)` outright (HTTP 500).
+      # See the note at NotificationsReconcilerStalled, and the gates that enforce it
+      # (test_no_alert_rule_combines_absent_with_a_set_operator).
+      #
+      # This is the watcher's watcher, and it is not decoration. `max(...)` over an empty vector
+      # returns nothing, so a receiver that stops running makes the rule above permanently quiet —
+      # which is exactly what a healthy, well-collected store also looks like. `dapr_workflow_state_rows`
+      # is read for nothing else; its whole job is to be PRESENT.
+      - alert: DaprWorkflowStateMetricsMissing
+        expr: absent(dapr_workflow_state_rows)
+        for: 15m
+        labels:
+          severity: warning
+          service: dapr
+        annotations:
+          summary: "Nothing is measuring the Dapr workflow state store"
+          description: >-
+            No `dapr_workflow_state_rows` series exists, so DaprWorkflowHistoryNotCollected is dead
+            and its silence means nothing. Either the sqlquery/daprstate receiver was removed from
+            chart/templates/otel-collector.yaml, or it is running and cannot reach the state store's
+            database. Runbook:
+            docs/runbooks/RUNBOOK-oncall.md#workflow-history-not-collected

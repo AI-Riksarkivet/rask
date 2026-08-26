@@ -178,6 +178,17 @@ spec:
                 {{- if and .Values.dapr.sidecars .Values.stateStore.enabled }}
                 {{- $ageClients = concat $ageClients .Values.stateStore.scopes }}
                 {{- end }}
+                {{- /* The in-cluster OTel Collector is a 5432 client too: its `sqlquery/daprstate`
+                       receiver reads the workflow-history volume and age that nothing else can
+                       measure (daprd exports no workflow or state-store metric at all). Blocked here
+                       and the receiver retries forever, DaprWorkflowStateMetricsMissing fires, and
+                       the retention alert it guards goes blind. Gated on the same three conditions
+                       that render the receiver, so a prod estate on an EXTERNAL Collector does not
+                       carry an allow-entry for a pod it never deploys. */}}
+                {{- $oc := .Values.observability.otelCollector | default dict }}
+                {{- if and .Values.observability.enabled $oc.enabled (not $oc.externalEndpoint) .Values.stateStore.enabled }}
+                {{- $ageClients = append $ageClients "otel-collector" }}
+                {{- end }}
                 values:
                   {{- range ($ageClients | uniq) }}
                   - {{ . }}

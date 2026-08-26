@@ -4348,6 +4348,24 @@ _THIRD_PARTY_ALERT_GROUPS = {
     ),
 }
 
+#: Alert group -> the OTel Collector receiver id that DECLARES its series. A group here is neither
+#: first-party (no rask instrument writes it) nor third-party (nobody else's exporter writes it
+#: either): the metric is declared IN THIS REPO, by a receiver in chart/templates/otel-collector.yaml.
+#:
+#: `sqlquery/daprstate` is the case that forced the third class into existence. The Dapr sidecar
+#: exports NO workflow, actor or state-store metric at all — enumerated live on 2026-08-26 against the
+#: `ingest` sidecar, the whole surface is dapr_error_code_total, dapr_grpc_io_*, dapr_http_*,
+#: dapr_runtime_component_{init_total,loaded} and go_*, and `dapr_runtime_workflow_*` (which this
+#: file's own DaprConsumerWedge note already calls unreliable here) is absent outright. So there is no
+#: scrape target to point at: the only way to alert on workflow-history retention is to measure the
+#: state store directly, which the Collector does with a SQL query rather than a new service.
+#:
+#: It gets a binding for exactly the reason the other two classes have one. A rule naming a metric the
+#: receiver does not declare never fires, and never firing is what a healthy estate looks like.
+_COLLECTOR_ALERT_GROUPS: dict[str, str] = {
+    "dapr-workflow-state": "sqlquery/daprstate",
+}
+
 
 def test_every_ALERT_GROUP_is_either_first_party_or_declared_third_party() -> None:
     """The gate below covered ONE group of eight, and a scope that narrow is its own hazard.
@@ -4361,13 +4379,14 @@ def test_every_ALERT_GROUP_is_either_first_party_or_declared_third_party() -> No
     groups = {g["name"] for g in rules["groups"]}
 
     assert groups, "no alert groups parsed — the check would pass vacuously"
-    unclassified = sorted(groups - set(_ALERT_GROUP_SOURCES) - set(_THIRD_PARTY_ALERT_GROUPS))
+    unclassified = sorted(groups - set(_ALERT_GROUP_SOURCES) - set(_THIRD_PARTY_ALERT_GROUPS) - set(_COLLECTOR_ALERT_GROUPS))
     assert not unclassified, (
-        f"these alert groups are neither checked against a service's instruments nor declared "
-        f"third-party: {unclassified}. Add the group's metrics module to _ALERT_GROUP_SOURCES, or "
-        "record in _THIRD_PARTY_ALERT_GROUPS whose exporter emits its series."
+        f"these alert groups are neither checked against a service's instruments, nor bound to a "
+        f"Collector receiver, nor declared third-party: {unclassified}. Add the group's metrics module "
+        "to _ALERT_GROUP_SOURCES, name the receiver that declares its series in _COLLECTOR_ALERT_GROUPS, "
+        "or record in _THIRD_PARTY_ALERT_GROUPS whose exporter emits them."
     )
-    stale = sorted((set(_ALERT_GROUP_SOURCES) | set(_THIRD_PARTY_ALERT_GROUPS)) - groups)
+    stale = sorted((set(_ALERT_GROUP_SOURCES) | set(_THIRD_PARTY_ALERT_GROUPS) | set(_COLLECTOR_ALERT_GROUPS)) - groups)
     assert not stale, f"these groups are classified but no longer exist in rules.yml: {stale}"
 
 
@@ -4956,6 +4975,108 @@ def test_the_greptimedb_memory_threshold_tracks_the_chart_limit() -> None:
         f"GreptimeDBMemoryHigh fires at {threshold} bytes, which is {ratio:.0%} of the configured "
         f"limit {raw}. Below 60% it is noise; above 85% it cannot pre-empt the OOMKill it exists for. "
         f"Move the literal in chart/alerting/rules.yml when you move the limit in chart/values.yaml."
+    )
+
+
+def _collector_declared_metrics(receiver: str) -> set[str]:
+    """The `metric_name` values a sqlquery receiver declares in the RENDERED collector config.
+
+    Rendered, not grepped out of the template: the receiver is gated, so a text match would keep
+    passing after a values change that stops it shipping — the exact shape of "the rule is fine and
+    nothing produces its series".
+    """
+    config = _collector_config(_rendered_docs())
+    return {
+        metric["metric_name"]
+        for query in (config.get("receivers", {}).get(receiver) or {}).get("queries", [])
+        for metric in query.get("metrics", [])
+        if "metric_name" in metric
+    }
+
+
+@pytest.mark.parametrize("group_name", sorted(_COLLECTOR_ALERT_GROUPS))
+def test_every_collector_sourced_ALERT_names_a_metric_the_RECEIVER_declares(group_name: str) -> None:
+    """The target-level gate for series the Collector itself produces.
+
+    `test_every_job_selector_names_a_real_scrape_job` binds a rule to a SCRAPE job; nothing bound a
+    rule to a receiver that synthesises metrics without scraping anything, and a sqlquery receiver is
+    exactly that. Both directions matter and both are asserted: a rule may not name an undeclared
+    metric, and a declared metric that no rule reads is a query running every collection interval for
+    nobody.
+
+    The match pattern is derived from the prefixes actually DECLARED, the same way the first-party
+    gate derives its own — a fixed prefix list would silently stop matching the day the metrics are
+    renamed, which is the failure this class of gate exists to prevent.
+    """
+    receiver = _COLLECTOR_ALERT_GROUPS[group_name]
+    declared = _collector_declared_metrics(receiver)
+    assert declared, f"the {receiver} receiver declares no metrics at all, so every {group_name} rule is dead"
+
+    prefixes = {"_".join(name.split("_")[:2]) for name in declared}
+    rules = yaml.safe_load((REPO / "chart/alerting/rules.yml").read_text())
+    group = next((g for g in rules["groups"] if g["name"] == group_name), None)
+    assert group is not None, f"no {group_name} alert group — its failures can never page"
+
+    referenced: set[str] = set()
+    dangling: list[str] = []
+    for rule in group.get("rules", []):
+        expr = str(rule.get("expr", ""))
+        for token in re.findall(r"\b[a-z_][a-z0-9_]*\b", expr):
+            if not any(token.startswith(prefix) for prefix in prefixes):
+                continue
+            referenced.add(token)
+            if token not in declared:
+                dangling.append(f"{rule['alert']}: {token}")
+
+    assert not dangling, (
+        f"{len(dangling)} {group_name} rule(s) name a metric the `{receiver}` receiver does not "
+        f"declare, so they can never fire:\n" + "\n".join(f"  - {d}" for d in dangling) + f"\ndeclared: {sorted(declared)}"
+    )
+    unread = sorted(declared - referenced)
+    assert not unread, (
+        f"the `{receiver}` receiver declares {unread} and no {group_name} rule reads them — a query "
+        "billed to every collection interval, answering nothing. Alert on it or stop collecting it."
+    )
+
+
+def _duration_seconds(value: str) -> int:
+    """`720h` / `90m` -> seconds. The only two units the chart's own render guard admits."""
+    match = re.fullmatch(r"([1-9][0-9]*)(h|m)", str(value))
+    assert match, f"unrecognised retention duration {value!r} — teach this gate the unit rather than skipping it"
+    return int(match.group(1)) * (3600 if match.group(2) == "h" else 60)
+
+
+def test_the_workflow_history_alert_threshold_TRACKS_the_retention_policy() -> None:
+    """DaprWorkflowHistoryNotCollected's literal must stay just above the LONGEST retention window.
+
+    Same coupling problem as GreptimeDBMemoryHigh, same reason it needs a test: rules.yml is mounted
+    with `.Files.Get` and cannot be templated, so the threshold is a hardcoded number while the policy
+    it is derived from lives in values.yaml. Lengthen `failed` to 2160h and the alert starts firing on
+    a correctly-retained estate; shorten every window to 24h and it can only fire a month after
+    collection has already stopped.
+
+    The band is deliberately tight on the low side. The threshold must exceed the longest window —
+    below it, rows the policy is still entitled to keep look like a failure — but not by so much that
+    the alert waits weeks to notice the scheduler has stopped collecting.
+    """
+    exprs = dict(_alert_exprs())
+    expr = exprs.get("DaprWorkflowHistoryNotCollected")
+    assert expr, "DaprWorkflowHistoryNotCollected is gone — delete this gate with it, do not leave it passing vacuously"
+    match = re.search(r">\s*(\d+)\s*$", expr)
+    assert match, f"DaprWorkflowHistoryNotCollected no longer ends in a seconds literal: {expr!r}"
+    threshold = int(match.group(1))
+
+    values = yaml.safe_load((REPO / "chart/values.yaml").read_text())
+    retention = values["dapr"]["workflowRetention"]
+    longest = max(_duration_seconds(retention[state]) for state in ("completed", "failed", "terminated"))
+
+    ratio = threshold / longest
+    assert 1.05 <= ratio <= 1.50, (
+        f"DaprWorkflowHistoryNotCollected fires at {threshold}s, which is {ratio:.2f}x the longest "
+        f"configured retention window ({longest}s). At or below 1.0x it fires on history the policy is "
+        f"still entitled to keep; above 1.5x it waits weeks to report that collection has stopped. "
+        f"Move the literal in chart/alerting/rules.yml when you move dapr.workflowRetention in "
+        f"chart/values.yaml."
     )
 
 

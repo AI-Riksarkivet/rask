@@ -784,3 +784,71 @@ tests:
       - eval_time: 15m
         alertname: GreptimeDBDown
         exp_alerts: []
+
+  # ------------------------------------------------------------------------------------------------
+  # Dapr workflow history retention. The threshold is 2851200s = 792h = the longest configured
+  # retention window (720h) plus a 72h collection margin; the coupling to values.yaml is held by
+  # test_the_workflow_history_alert_threshold_TRACKS_the_retention_policy, since rules.yml is mounted
+  # via .Files.Get and cannot be templated.
+  # ------------------------------------------------------------------------------------------------
+
+  # A history row 33.5 days old — past 792h — held for 40 min. The scheduler has stopped collecting.
+  - interval: 1m
+    input_series:
+      - series: "dapr_workflow_history_oldest_age_seconds"
+        values: "2900000+0x44"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: DaprWorkflowHistoryNotCollected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: dapr
+            exp_annotations:
+              summary: "Dapr workflow history is outliving its retention policy"
+              description: "A workflow-history row in the Dapr state store is older than the longest configured retention window (dapr.workflowRetention in chart/values.yaml) plus a collection margin, so the scheduler has stopped collecting. Nothing else purges this: the policy applies only to instances that NEWLY reach a terminal state, so every instance that terminates while this is broken has to be purged by hand afterwards. Runbook: docs/runbooks/RUNBOOK-oncall.md#workflow-history-not-collected"
+
+  # A week-old oldest row under a 720h policy is the HEALTHY steady state and must not page. This is
+  # the case that stops the threshold being tightened to something that fires on correct retention.
+  - interval: 1m
+    input_series:
+      - series: "dapr_workflow_history_oldest_age_seconds"
+        values: "604800+0x44"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: DaprWorkflowHistoryNotCollected
+        exp_alerts: []
+
+  # ABSENT IS NOT ZERO, applied to the measurement itself. If the sqlquery receiver stops running,
+  # `max(dapr_workflow_history_oldest_age_seconds)` evaluates over an empty vector and the alert above
+  # goes quiet — indistinguishable from a healthy, well-collected store. This is what refuses that.
+  - interval: 1m
+    input_series:
+      - series: "dapr_workflow_history_oldest_age_seconds"
+        values: "604800+0x24"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DaprWorkflowStateMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: dapr
+            exp_annotations:
+              summary: "Nothing is measuring the Dapr workflow state store"
+              description: "No `dapr_workflow_state_rows` series exists, so DaprWorkflowHistoryNotCollected is dead and its silence means nothing. Either the sqlquery/daprstate receiver was removed from chart/templates/otel-collector.yaml, or it is running and cannot reach the state store's database. Runbook: docs/runbooks/RUNBOOK-oncall.md#workflow-history-not-collected"
+      # ...and the age rule is indeed silent here, on a series that is well inside the window. The two
+      # cases together are the whole argument: quiet-because-healthy and quiet-because-blind look the
+      # same from one rule and different from two.
+      - eval_time: 20m
+        alertname: DaprWorkflowHistoryNotCollected
+        exp_alerts: []
+
+  # The receiver is running and reporting a row count → the watcher's own watcher stays quiet.
+  - interval: 1m
+    input_series:
+      - series: "dapr_workflow_state_rows"
+        values: "412+0x24"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DaprWorkflowStateMetricsMissing
+        exp_alerts: []

@@ -21,6 +21,11 @@ external, so the in-cluster dev Collector isn't gated by it.
 {{- $fullname := include "lance.fullname" . }}
 {{- $sa := printf "%s-otel-collector" $fullname }}
 {{- $greptime := printf "http://%s:%v/v1/otlp" (include "lance.greptimeHost" .) $o.greptimePort }}
+{{- /* The Dapr state store's own database is only worth querying when there IS one: the state store
+       component must be enabled (nothing writes workflow history otherwise) and Postgres must exist,
+       either in-cluster or as age.externalHost. Gated rather than always-on because a receiver that
+       cannot connect retries forever and fills the log with a failure that is not one. */ -}}
+{{- $daprState := and .Values.dapr.enabled .Values.stateStore.enabled (or .Values.age.enabled .Values.age.externalHost) }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -284,6 +289,57 @@ data:
                   target_label: namespace
                 - source_labels: [__meta_kubernetes_pod_name]
                   target_label: pod
+{{- if $daprState }}
+      # DAPR WORKFLOW HISTORY — measured by QUERY, because there is nothing to scrape.
+      #
+      # Every other metric in this file arrives from a target that already exports it. This one cannot:
+      # enumerated live on 2026-08-26 against the `ingest` sidecar, daprd's ENTIRE metric surface is
+      # dapr_error_code_total, dapr_grpc_io_*, dapr_http_*, dapr_runtime_component_{init_total,loaded}
+      # and go_*. No workflow metric, no actor metric, no state-store metric — and
+      # `dapr_runtime_workflow_*` (already documented as unreliable for this codebase in
+      # chart/alerting/rules.yml) is absent outright. A fourth scrape job would have had no target.
+      #
+      # So the state store is read directly. `spec.workflow.stateRetentionPolicy` in observability.yaml
+      # is the ONLY thing that removes workflow history — there is deliberately no application-side
+      # purge (DaprWorkflowClient has no list-instances API, so a sweep could not name what to purge
+      # after a restart) — and if it stops collecting, the first symptom is a full disk. These two
+      # gauges are what chart/alerting/rules.yml's `dapr-workflow-state` group alerts on, pinned in
+      # both directions by test_every_collector_sourced_ALERT_names_a_metric_the_RECEIVER_declares.
+      #
+      # A COLLECTOR RECEIVER RATHER THAN A postgres_exporter SIDECAR: no second image to vendor, scan
+      # and size, no second credential path, and the query lives in the file that already owns "get
+      # this series into GreptimeDB". Cost measured on the live store: 4.7ms over a 7.5MB table.
+      #
+      # THE AGE METRIC READS HISTORY ROWS ONLY, and that filter is load-bearing rather than tidy. A
+      # workflow's `metadata` row keeps its original insertdate across `continue_as_new`, so a
+      # long-running recurring workflow — which this estate has, in the movers' watch loops — would
+      # look arbitrarily old forever and the alert would fire on a perfectly healthy store. History
+      # rows are rewritten per turn, so their age is the property the retention policy actually
+      # governs. Key shape verified live: `<app>||dapr.internal.default.<app>.workflow||<id>||history-000006`.
+      #
+      # The password is an ENV REFERENCE, not a literal: the Collector expands ${env:...} at load, and
+      # the value arrives by secretKeyRef on the Deployment below, so no credential is in this ConfigMap.
+      sqlquery/daprstate:
+        driver: postgres
+        datasource: "host={{ include "lance.ageConnectHost" . }} port={{ .Values.age.port }} user={{ .Values.age.user }} password=${env:DAPRSTATE_PASSWORD} dbname={{ .Values.age.stateDb }} sslmode=disable"
+        collection_interval: 5m
+        queries:
+          - sql: "select count(*)::bigint as workflow_rows, coalesce(extract(epoch from now() - min(insertdate) filter (where key like '%||history-%')), 0)::bigint as oldest_history_age_seconds from {{ .Values.stateStore.tableName }} where key like '%workflow%'"
+            metrics:
+              # Volume. Read by DaprWorkflowStateMetricsMissing and by nothing else — its job is to be
+              # PRESENT, so that the age rule going quiet can be told apart from the age rule going blind.
+              - metric_name: dapr_workflow_state_rows
+                value_column: workflow_rows
+                value_type: int
+                data_type: gauge
+              # The property. NO `unit:` field, and the name carries `_seconds` itself — declaring a unit
+              # would make the OTLP->Prometheus convention APPEND the suffix, which is exactly how
+              # `outbox_oldest_age` shipped as a rule that could never fire (see rules.yml:22-27).
+              - metric_name: dapr_workflow_history_oldest_age_seconds
+                value_column: oldest_history_age_seconds
+                value_type: int
+                data_type: gauge
+{{- end }}
     processors:
       memory_limiter:
         check_interval: 1s
@@ -400,7 +456,7 @@ data:
           processors: [memory_limiter, k8sattributes, filter/drop_keepalive, batch]
           exporters: [otlphttp/greptime_traces]
         metrics:
-          receivers: [otlp, prometheus]
+          receivers: [otlp, prometheus{{ if $daprState }}, sqlquery/daprstate{{ end }}]
           processors: [memory_limiter, k8sattributes, batch]
           exporters: [otlphttp/greptime]
         logs:
@@ -431,6 +487,15 @@ spec:
         - name: otel-collector
           image: {{ $c.image }}
           args: ["--config=/etc/otelcol/config.yaml"]
+{{- if $daprState }}
+          # The Dapr state store's Postgres password, for the sqlquery/daprstate receiver. By
+          # secretKeyRef so it stays out of the ConfigMap, `helm get manifest` and `kubectl describe`;
+          # the config references it as ${env:DAPRSTATE_PASSWORD}, expanded by the Collector at load.
+          env:
+            - name: DAPRSTATE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: postgres-password }
+{{- end }}
           ports:
             - { name: otlp-grpc, containerPort: 4317 }
             - { name: otlp-http, containerPort: 4318 }

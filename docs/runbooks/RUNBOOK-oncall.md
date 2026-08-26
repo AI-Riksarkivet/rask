@@ -34,6 +34,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 | `outbox_depth` sustained > 0, `outbox_oldest_age_seconds` climbing | [Outbox not draining](#outbox-not-draining) |
 | Catalog reads/writes fail, Lance data unreachable | [RustFS down](#rustfs-down--data-plane) |
 | No lineage, `/runs` empty or erroring, FGA also failing | [AGE down](#age-postgres-down--lineage--fga) |
+| `DaprWorkflowHistoryNotCollected` / `DaprWorkflowStateMetricsMissing` firing | [Workflow history not collected](#workflow-history-not-collected) |
 
 ---
 
@@ -165,3 +166,64 @@ sized via the `resources.age` tier (1Gi in prod).
 **Act.** Recover the pod/volume; lineage self-bootstraps the graph on reconnect (`ensure_graph()`). For
 prod, externalize to a replicated managed Postgres and take real backups
 ([RUNBOOK-restore.md](RUNBOOK-restore.md)).
+
+## Workflow history not collected
+
+**Symptom.** `DaprWorkflowHistoryNotCollected` — the oldest workflow-history row in the Dapr state store
+is older than the longest configured retention window plus its collection margin. Or
+`DaprWorkflowStateMetricsMissing`, which means the measurement itself has stopped and the first alert
+can no longer fire at all.
+
+**Cause.** Workflow history is append-only and `spec.workflow.stateRetentionPolicy` on the `lance-tracing`
+Configuration is the ONLY thing that removes it. There is deliberately no application-side purge to fall
+back on: `DaprWorkflowClient` exposes `purge_workflow(instance_id)` but no list-instances API, so after a
+restart nothing can name the instances whose history persists. Three ways it breaks — the policy dropped by
+a values edit (`dapr.workflowRetention.enabled`), the `dapr.io/config` annotation re-gated so sidecars stop
+referencing the Configuration at all (it was once gated on `otelEnabled`, which silently took retention
+down with telemetry), or the Dapr scheduler failing to collect.
+
+**Diagnose.**
+
+```bash
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+# 1. is the policy live, and what does it say
+kubectl get configuration.dapr.io lance-tracing -o jsonpath='{.spec.workflow}'
+
+# 2. does every workflow-hosting sidecar still reference that Configuration
+kubectl get pods -o custom-columns='POD:.metadata.name,CFG:.metadata.annotations.dapr\.io/config' --no-headers
+
+# 3. what the alert is reading — volume, and the age spread by day
+kubectl exec rask-age-0 -- bash -lc "psql -U lance -d daprstate -tAc \
+  \"select count(*), min(insertdate)::date, max(insertdate)::date from state where key like '%workflow%'\""
+```
+
+`count(expiredate) = 0` across the whole table is **expected and not a symptom** — the scheduler enforces
+retention by DELETING rows, not by writing a TTL column. Judge collection by the age distribution, never by
+that count.
+
+For `DaprWorkflowStateMetricsMissing`, the target is the Collector, not Dapr: check that the
+`sqlquery/daprstate` receiver is still in `chart/templates/otel-collector.yaml`, that the collector pod is
+running, and that it can reach AGE on 5432 (under `networkPolicy.enabled` the `otel-collector` component
+must be in the age-postgres ingress allow-list).
+
+**Act.** Restore the policy, then purge what accumulated while it was off — the policy applies only to
+workflows that *newly* reach a terminal state, so it cannot reach backwards and the backlog stays forever
+otherwise. Purge through the sidecar, never with a direct `DELETE` on `daprstate.state`, which bypasses the
+actor runtime that owns those keys:
+
+```bash
+POD=$(kubectl get pod --no-headers -o name | grep rask-ingest | head -1)
+IDS=$(kubectl exec rask-age-0 -- bash -lc "psql -U lance -d daprstate -tAc \
+  \"select distinct split_part(key,'||',3) from state \
+    where key like '%workflow%' and insertdate < '<cutoff-date>'\"")
+for id in $IDS; do
+  kubectl exec ${POD#pod/} -c ingest -- \
+    curl -s -X POST "http://127.0.0.1:3500/v1.0-beta1/workflows/dapr/$id/purge"
+done
+```
+
+Two things that bite here. The distinct ids are **not** all instances — activity records are keyed
+`<instance-uuid>:0004`, so a loop that assumes one id per instance purges the wrong set (purging the real
+instances collects their activity keys anyway). And purge requires a TERMINAL instance; a COMPLETED one
+accepts it with no `--force` involved.
