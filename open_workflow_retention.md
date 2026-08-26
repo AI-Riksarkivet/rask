@@ -80,11 +80,31 @@ it cannot reach backwards.
 **Done means:** those 64 instances are gone from the state store, and a re-measure shows the earliest
 `insertdate` inside the retention window.
 
-**How.** `dapr workflow purge --app-id ingest --all-older-than 720h`. Read
-`docs.dapr.io/.../howto-manage-workflow` first: purge accepts only COMPLETED / FAILED / TERMINATED
-instances, and the `--force` variant is documented as risking corruption unless no instances are
-active. Do not reach for a direct `DELETE` on `daprstate.state` — it bypasses the actor runtime that
-owns those keys.
+**How — measured 2026-08-26, and simpler than the docs' CLI path suggests.** There is no `dapr` CLI
+on this host and none is needed: the sidecar's HTTP API is reachable from the app container
+(`/v1.0/healthz` → 204), and a sampled orphan resolves as **COMPLETED** —
+
+```json
+{"instanceID":"357e0f98-6e75-548c-94f6-c4e6d40804b9","workflowName":"ingest_run",
+ "createdAt":"2026-08-07T11:41:44Z","runtimeStatus":"COMPLETED"}
+```
+
+Terminal, so purge accepts it and **no `--force` is involved** (this note previously implied it was;
+that was over-cautious). One loop over 64 ids, one app-id:
+
+```bash
+POD=$(kubectl get pod --no-headers -o name | grep rask-ingest | head -1)
+IDS=$(kubectl exec rask-age-0 -- bash -lc "psql -U lance -d daprstate -tAc \
+  \"select distinct split_part(key,'||',3) from state \
+    where key like '%workflow%' and insertdate < '2026-08-08'\"")
+for id in $IDS; do
+  kubectl exec ${POD#pod/} -c ingest -- \
+    curl -s -X POST "http://127.0.0.1:3500/v1.0-beta1/workflows/dapr/$id/purge"
+done
+```
+
+Do not reach for a direct `DELETE` on `daprstate.state` — it bypasses the actor runtime that owns
+those keys. Re-measure afterwards with the queries below.
 
 **Cost of leaving it:** disk only. These rows are inert — no correctness consequence, no replay
 consequence. Rank it accordingly.
@@ -97,19 +117,30 @@ workflow-history volume — 1367 on 2026-08-10 and 7239 on 2026-08-26 — happen
 looking. If the policy is dropped by a values edit, or the annotation is re-gated, or the scheduler
 stops collecting, the first symptom is a full disk.
 
-**This is the item worth doing first.** It is the difference between "retention is fixed" and "we can
-tell when retention breaks", and it is a handful of lines in a file that already has ten rules.
+**This is the item worth doing first, and it is NOT the quick one** — see the measured obstacle below.
+It is the difference between "retention is fixed" and "we can tell when retention breaks".
 
 **Done means:** a vmalert rule that fires when workflow-history rows grow monotonically past a
 threshold, or when the oldest row's age exceeds the longest configured retention (720h) plus a margin.
 The second framing is better — it tests the *property* rather than a volume that legitimately varies
 with load.
 
-**Note a real obstacle:** the alerting chain is vmalert → GreptimeDB over PromQL, and row counts in a
-Postgres state store are not a series anyone exports today. Either a small exporter or a Dapr metric
-that already carries it. Check `dapr_runtime_workflow_*` before writing an exporter — that family is
-already referenced in `rules.yml:83`, and its `status` label is documented there as unreliable for
-this codebase, so read that comment before depending on any of it.
+**The obstacle is real and now measured, so do not start by looking for a metric.** Enumerated every
+family the `ingest` sidecar exports on 2026-08-26:
+
+```
+dapr_error_code_total · dapr_grpc_io_* · dapr_http_* ·
+dapr_runtime_component_init_total · dapr_runtime_component_loaded · go_*
+```
+
+**No workflow, actor or state-store metric is emitted at all.** `dapr_runtime_workflow_*` — the family
+`rules.yml:83` already documents as unreliable for this codebase — is not merely unreliable here, it
+is absent. The alerting chain is vmalert → GreptimeDB over PromQL, so with no series there is nothing
+to write a rule against.
+
+That makes R2 a small EXPORTER (run the count query, expose a gauge), not a rules edit — new
+infrastructure, and the reason this item is the highest-value one on the list rather than the
+quickest. Size it accordingly before promising it.
 
 ### U1 — five operator routes with no caller
 
