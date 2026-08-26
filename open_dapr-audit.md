@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **29 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **30 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -553,6 +553,37 @@ The consequences check out too. `lineage.py:117-118` says outright that `version
 The test claim is accurate: `test_replay_hygiene.py:307  monkeypatch.setattr(staging, "discover_staged", lambda uri, run_id: ["{}"])` — staging answers non-empty on BOTH attempts, so the drive never reaches the branch; `test_partial_ack_duplication.py:292  monkeypatch.setattr(runtime, "purge_staged", lambda *a, **k: None, raising=False)` removes the purge entirely.
 
 Severity: warning is correct. It needs two independent crash events (a drain whose result was never recorded plus a finalize that dies post-commit), nothing is duplicated or lost, and the damage is a false terminal report plus an ungated version — not a stuck instance or a double side effect.
+
+
+**FIXED 2026-08-25 — owner ruling: the catalog read door, and the audit's own prescribed fix was
+REJECTED for good reason.**
+
+The audit says move `purge_staged` into `emit_terminal`. That would have been a worse bug than the
+one it fixes: `emit_terminal` is dispatched at FIVE sites and three of them run when `finalize` never
+did — the deadline branch, the cancel branch and the error boundary — and the deadline branch's own
+comment says the staged fragments must SURVIVE, because "recoverable by a re-run, which converges
+because unit ids are content-derived". Purging there would delete recoverable bytes on every operator
+cancel and every 24h deadline.
+
+**The door existed and was unreachable, and the cause was the ORDER of two guards.**
+`dataplane.commit_appended_fragments` had `if not fragments: raise` sitting ABOVE the `if run_id:`
+marker check, so a post-purge retry — which by construction has nothing to offer — was refused 400
+before the catalog ever looked. The two are now swapped: empty-plus-a-known-marker is answered with
+that run's own `(version, rows)` and writes nothing, while empty without a marker is still refused.
+No new endpoint; the door was already there.
+
+**`finalize_run` asks before asserting nothing landed.** Reaching that branch with an empty list has
+two very different causes — a run that genuinely wrote nothing, and a retry of a run that already
+committed — and only the catalog can tell them apart. Before this they produced an identical record,
+and the distinction was unrecoverable because the evidence was the staging it had just purged. The
+report now carries the real version and a `publish_reason` that says which case it is.
+
+**The dev path deliberately still reports None.** `LocalCatalog` has no `commit` and no marker, so it
+cannot recognise its own earlier commit either; reporting a version it has not verified would be the
+same false claim in a different place.
+
+Eight tests across both services. The catalog half was RED on the guard order; the ingest half was
+re-proven by reverting the report and watching the replay case collapse back onto the empty one.
 
 </details>
 

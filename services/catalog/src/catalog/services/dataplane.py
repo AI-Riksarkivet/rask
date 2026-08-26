@@ -653,10 +653,24 @@ def commit_appended_fragments(
     concurrent appends and conflicts only with Overwrite/Restore (transaction.md); a stale/incompatible
     commit raises, mapped by :func:`_classify_commit_error`. Returns ``(version, row_count)``.
     """
-    if not fragments:
-        raise InvalidInputError("no fragments to commit")
     if read_version < 0:
         raise InvalidInputError(f"read_version must be non-negative, got {read_version}")
+    # THE MARKER CHECK COMES FIRST, and the order is the whole point. It used to sit below the
+    # empty-fragments guard, which made it unreachable for the replay that needs it most: ingest's
+    # `finalize_run` purges the staged manifests immediately after committing, so a retry finds
+    # staging empty AND its carried fallback empty, and asks with nothing. Refused 400 before the
+    # catalog ever looked, it reported `committed_version: None, rows: 0` for a run whose rows had
+    # landed — false lineage for work that succeeded.
+    #
+    # Empty-plus-a-known-marker is not a meaningless commit; it is the question "what did I commit?",
+    # and this is the only thing that can answer it. Empty WITHOUT a marker still is meaningless, and
+    # is still refused below.
+    if run_id:
+        already = _find_run_commit(location, so, run_id, read_version)
+        if already is not None:
+            return already
+    if not fragments:
+        raise InvalidInputError("no fragments to commit")
     # Client-controlled input: a malformed fragment dict raises KeyError/TypeError/ValueError from
     # ``from_json`` (outside the OSError taxonomy) — translate to a 400, never a 500 (audit 2026-07-14).
     try:
@@ -668,14 +682,10 @@ def commit_appended_fragments(
     # location (no malice required) could otherwise commit a 200-OK-but-UNREADABLE current version that
     # breaks reads for EVERY reader until an operator restores. Pre-verify the files exist under the table
     # location; a failed check leaves the table untouched (400) instead of poisoning its current version.
-    # IDEMPOTENT REPLAY (2026-08-07): a retried commit carrying a run_id is answered with the
-    # version that run already committed — checked BEFORE the file-existence verification, because
-    # a replay may arrive after maintenance compacted the staged files away, and refusing the
-    # replay for missing files it no longer needs would fail a commit that already succeeded.
-    if run_id:
-        already = _find_run_commit(location, so, run_id, read_version)
-        if already is not None:
-            return already
+    # The marker check ran at the TOP of this function — before the empty-fragments guard, and so
+    # necessarily before this file-existence verification too. That ordering also serves the reason
+    # recorded here: a replay may arrive after maintenance compacted the staged files away, and
+    # refusing it for missing files it no longer needs would fail a commit that already succeeded.
     _verify_fragment_data_files(location, so, fragments)
     op = lance.LanceOperation.Append(frags)
     try:

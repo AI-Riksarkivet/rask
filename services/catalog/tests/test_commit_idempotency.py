@@ -107,3 +107,49 @@ def test_an_interleaved_FOREIGN_commit_does_not_hide_the_replay(dataset_uri: str
 
     assert replay == first
     assert lance.dataset(dataset_uri).count_rows() == 3, "replay after an interleaved commit still duplicated"
+
+
+# --------------------------------------------------------------------------------------------------
+# The replay that arrives with NOTHING to commit
+# --------------------------------------------------------------------------------------------------
+
+
+def test_an_EMPTY_replay_is_answered_with_the_runs_own_commit(dataset_uri: str) -> None:
+    """The door was unreachable for the case that needs it most, and the ORDER of two guards is why.
+
+    `if not fragments: raise` sat ABOVE the `if run_id:` marker check, so a retry carrying an empty
+    list could never reach the dedupe -- it was refused 400 before the catalog ever looked.
+
+    That is exactly the state an ingest retry arrives in. `finalize_run` purges the staged manifests
+    immediately after committing, so a replay finds staging empty AND its carried fallback empty, and
+    asks with nothing. Refused, it reported `committed_version: None, rows: 0` for a run that had
+    committed -- false lineage for work that landed.
+
+    Empty-plus-a-known-marker is not a meaningless commit. It is the question "what did I commit?",
+    and the catalog is the only thing that can answer it.
+    """
+    fragments = _staged_fragments(dataset_uri, [1, 2, 3])
+    first = dataplane.commit_appended_fragments(dataset_uri, {}, fragments, read_version=1, run_id="run-purged")
+
+    answered = dataplane.commit_appended_fragments(dataset_uri, {}, [], read_version=1, run_id="run-purged")
+
+    assert answered == first, "the catalog could not name the version this run committed"
+    assert lance.dataset(dataset_uri).count_rows() == 3, "answering the question must not write anything"
+
+
+def test_an_EMPTY_commit_from_an_UNKNOWN_run_is_still_refused(dataset_uri: str) -> None:
+    """The guard the reorder must not remove. Nothing staged and no prior commit is a genuinely
+    meaningless request, and answering it with the dataset's current version is the very thing the
+    ingest defect did -- reporting a version this run did not produce."""
+    from lance_namespace import InvalidInputError
+
+    with pytest.raises(InvalidInputError):
+        dataplane.commit_appended_fragments(dataset_uri, {}, [], read_version=1, run_id="run-never-ran")
+
+
+def test_an_EMPTY_commit_with_NO_run_id_is_still_refused(dataset_uri: str) -> None:
+    """No marker means no question to answer, so the empty guard applies unchanged."""
+    from lance_namespace import InvalidInputError
+
+    with pytest.raises(InvalidInputError):
+        dataplane.commit_appended_fragments(dataset_uri, {}, [], read_version=1)

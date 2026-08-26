@@ -486,6 +486,27 @@ async def reconcile_from_queue(chunk: ChunkSpec) -> dict[str, Any]:
         await queue.close()
 
 
+def _prior_commit_for_run(catalog: object, spec: RunSpec) -> tuple[int, int] | None:
+    """The version THIS run already committed, or None.
+
+    Asked with an EMPTY fragment list on purpose: that is the shape a post-purge replay is in, and the
+    catalog answers it from the run marker without writing anything. Any failure answers None —
+    including the deliberate refusal an unknown run gets — because "I cannot tell" and "it never
+    committed" lead to the same honest report, and a status read must not raise into a terminal path.
+    """
+    commit = getattr(catalog, "commit", None)
+    if commit is None:
+        return None
+    try:
+        # read_version=0 so the marker scan walks EVERY version. It scans versions AFTER the floor,
+        # so a floor that is too high would hide the run's own commit — and this caller does not know
+        # which version the run based its commit on, only that it may have made one.
+        version, rows = commit(spec.project, spec.dataset, [], 0, spec.run_id)
+    except Exception:
+        return None
+    return (int(version), int(rows))
+
+
 def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *, read_version: int = 0, fallback_dropped: bool = False) -> dict[str, Any]:
     """Commit the run's fragments as ONE version, through the lander.
 
@@ -569,6 +590,21 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *,
         # TWO ordinary paths reach it: a source that enumerated zero units, and a run whose every
         # unit failed validation.
         result = Lander(catalog).commit_fragments(uri, all_fragments, run_id=spec.run_id)
+        # ASK BEFORE ASSERTING NOTHING LANDED. Reaching here with an empty list has two very different
+        # causes, and only the catalog can tell them apart: a run that genuinely wrote nothing, and a
+        # RETRY of a run that already committed — `finalize_run` purges the staged manifests right
+        # after the commit, so a replay finds staging empty and its carried fallback empty too.
+        #
+        # The catalog answers by the run marker, and answering is all it does: an empty commit that
+        # carries a known run_id returns that run's own `(version, rows)` and writes nothing, while an
+        # unknown one is still refused. Without this the branch below reported `committed_version:
+        # None, rows: 0` for a run whose rows had landed — false lineage for work that succeeded, and
+        # unrecoverable, because the evidence it would need was the staging it had already purged.
+        #
+        # LocalCatalog has no `commit` and no marker (`lander.py` short-circuits an empty list to the
+        # dataset's CURRENT version), so the dev path keeps reporting None. That is honest: it has no
+        # way to recognise its own earlier commit either.
+        prior = _prior_commit_for_run(catalog, spec)
         # STILL PURGED. A run whose staged manifests were all truncated (`staging.py` skips those)
         # arrives here with an empty list and would strand its staged bytes with nothing left to
         # collect them.
@@ -576,9 +612,10 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *,
         return {
             # NOT `result.version`. That is the version the dataset ALREADY had — the previous run's,
             # or the empty v1 `ensure_dataset` created — and reporting it is the "committed_version
-            # it did not produce" half of this defect.
-            "committed_version": None,
-            "rows": 0,
+            # it did not produce" half of this defect. `prior` is a different fact entirely: the
+            # version THIS run committed, recognised by its own marker, or None if it never did.
+            "committed_version": prior[0] if prior else None,
+            "rows": prior[1] if prior else 0,
             "dataset_rows": result.rows,
             "errors": errors,
             # UNCHANGED derivation, deliberately: `test_run_chain.py` drives exactly
@@ -591,7 +628,7 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str], *,
             "published": None,
             "from_version": None,
             "to_version": None,
-            "publish_reason": "nothing to commit",
+            "publish_reason": "already committed by this run" if prior else "nothing to commit",
             "publish_error": None,
         }
 
