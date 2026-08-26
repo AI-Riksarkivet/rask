@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { Radio } from '@lucide/svelte';
-	import { goto } from '$app/navigation';
+	import { goto, replaceState } from '$app/navigation';
 	import { base } from '$app/paths';
+	import { page } from '$app/state';
 	import LineageGraph from '$lib/lineage/LineageGraph.svelte';
 	import { LineageState } from '$lib/lineage/store.svelte';
 	import { createLineageClient } from '@rask/api/lineage';
@@ -28,6 +29,45 @@
 
 	/** Last layout-build cost (ms), reported up by the graph — shown in the header corner. */
 	let buildMs = $state(0);
+
+	/**
+	 * FOCUS LIVES IN THE URL, which is how Marquez does it: its graph route carries the focused node
+	 * and its ActionBar writes `searchParams.set('depth', …)`, so a focused graph is bookmarkable and
+	 * shareable rather than trapped in component state. This zone already uses the same idiom one
+	 * route over — `/lineage/columns?dataset=`.
+	 *
+	 * Read once into state rather than `$derived` from `page.url`: the graph WRITES focus back
+	 * (a click re-roots), and a derived value would be clobbered on the next render before the URL
+	 * had caught up.
+	 */
+	const initialKind = page.url.searchParams.get('kind') === 'job' ? 'job' : 'dataset';
+	const initialNode = page.url.searchParams.get('node');
+	const initialDepth = page.url.searchParams.get('depth');
+	let focusNode = $state<{ kind: 'dataset' | 'job'; name: string } | null>(
+		initialNode ? { kind: initialKind, name: initialNode } : null,
+	);
+	// `all` is a real value, not a missing one — it is the Full Graph switch Marquez ships beside
+	// Depth, so it has to survive a reload distinctly from "no depth given".
+	let focusDepth = $state<number | null>(
+		initialDepth === 'all' ? null : initialDepth ? Number(initialDepth) : 2,
+	);
+
+	// Mirror focus back into the URL. `replaceState` rather than `goto`: re-rooting the graph is not
+	// a navigation, and pushing history would make Back walk every node the user clicked through
+	// instead of leaving the page.
+	$effect(() => {
+		const url = new URL(page.url);
+		if (focusNode) {
+			url.searchParams.set('node', focusNode.name);
+			url.searchParams.set('kind', focusNode.kind);
+			url.searchParams.set('depth', focusDepth === null ? 'all' : String(focusDepth));
+		} else {
+			url.searchParams.delete('node');
+			url.searchParams.delete('kind');
+			url.searchParams.delete('depth');
+		}
+		if (url.href !== page.url.href) replaceState(url, page.state);
+	});
 </script>
 
 <svelte:head><title>Lineage graph · rask</title></svelte:head>
@@ -56,7 +96,14 @@
 	     them (`lib/elements/GraphElement.svelte`); this page is the other surface that owns a router,
 	     and it had been mounting the graph without either — so every node click called an undefined
 	     `navigate` and the canvas was a dead end. -->
-	<LineageGraph {store} {base} navigate={(href) => void goto(href)} bind:buildMs />
+	<LineageGraph
+		{store}
+		{base}
+		navigate={(href) => void goto(href)}
+		bind:buildMs
+		bind:focusNode
+		bind:focusDepth
+	/>
 </div>
 
 <style>

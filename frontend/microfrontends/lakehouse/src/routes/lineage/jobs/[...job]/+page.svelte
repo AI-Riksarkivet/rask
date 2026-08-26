@@ -3,7 +3,7 @@
 	// datasets it reads (upstream) and writes (downstream), and the raw OpenLineage facets from
 	// its most recent event. The route is a REST segment (`jobs/[...job]`) because a job identity
 	// is `namespace/name` and so carries a `/` (e.g. `ray-jobs/embed_features`).
-	import { ArrowLeft, Cpu } from '@lucide/svelte';
+	import { ArrowLeft, Cpu, Network } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { enter } from '@rask/ui/motion';
@@ -84,6 +84,12 @@
 	<a class="back" href="{base}/lineage/jobs"><ArrowLeft size={12} /> jobs</a>
 	<header>
 		<h1 class="mono"><Cpu size={15} /> {jobId}</h1>
+		<!-- The dataset page has had this link for a while and the job page had none, so a job was a
+		     dead end: you could read WHICH datasets it touched but never see them as a graph. The
+		     graph roots on either kind, so the only difference is `kind=job`. -->
+		<a class="viewlink" href={`${base}/lineage?node=${encodeURIComponent(jobId)}&kind=job&depth=1`}>
+			<Network size={12} /> graph
+		</a>
 	</header>
 
 	<div class="grid">
@@ -164,6 +170,26 @@
 </div>
 
 <style>
+	/* Matches the dataset page's `.viewlink` — Svelte styles are per-component, so the rule cannot be
+	   shared between the two routes without moving the chrome into @rask/ui, which one link does not
+	   justify. */
+	.viewlink {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		color: var(--mut);
+		font-size: 11px;
+		text-decoration: none;
+	}
+	.viewlink:hover {
+		color: var(--ink);
+	}
+	header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+	}
 	.page {
 		max-width: 980px;
 		margin: 0 auto;

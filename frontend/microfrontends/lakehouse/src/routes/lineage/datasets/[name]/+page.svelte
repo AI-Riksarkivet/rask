@@ -108,7 +108,14 @@
 		<a class="viewlink" href={`${base}/lineage/columns?dataset=${encodeURIComponent(name)}`}>
 			<Columns3 size={12} /> column lineage
 		</a>
-		<a class="viewlink" href="{base}/lineage"><Network size={12} /> graph</a>
+		<!-- Carries the dataset, so the graph opens ROOTED on it rather than on the whole estate —
+		     the same query-param idiom as the columns link directly above. -->
+		<a
+			class="viewlink"
+			href={`${base}/lineage?node=${encodeURIComponent(name)}&kind=dataset&depth=1`}
+		>
+			<Network size={12} /> graph
+		</a>
 	</header>
 
 	<div class="grid">

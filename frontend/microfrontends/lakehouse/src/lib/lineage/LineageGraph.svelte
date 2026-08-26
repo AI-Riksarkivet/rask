@@ -47,11 +47,24 @@
 		base = '',
 		navigate,
 		buildMs = $bindable(0),
+		focusNode = $bindable(null),
+		focusDepth = $bindable(2),
 	}: {
 		store: LineageState;
 		base?: string;
 		navigate?: (href: string) => void;
 		buildMs?: number;
+		/**
+		 * The node the graph is rooted on, and how far around it to draw. BINDABLE and stated in
+		 * PUBLIC terms — `{kind, name}`, never the prefixed node id — so a caller can put focus in
+		 * the URL without depending on this component's id convention.
+		 *
+		 * That is what Marquez does: its ActionBar writes `searchParams.set('depth', …)` and its
+		 * graph route carries `?tableLevelNode=`, so a focused graph is bookmarkable and shareable.
+		 * This zone already uses the same idiom one route over (`/lineage/columns?dataset=`).
+		 */
+		focusNode?: { kind: 'dataset' | 'job'; name: string } | null;
+		focusDepth?: number | null;
 	} = $props();
 
 	// The canvas follows the estate theme LIVE (the shell's theme button toggles `.dark` on
@@ -94,14 +107,14 @@
 	};
 
 	/**
-	 * Fold the run-event feed into one entry per job, plus which jobs produced each dataset.
-	 *
-	 * Shared by the Jobs and Pipeline planes deliberately: they are two renderings of one fact
-	 * (which job read what and wrote what), and two copies of this fold would let them disagree
-	 * about it while both looking plausible.
+	 * Fold the run-event feed into one entry per job: what it read, what it wrote, and how its most
+	 * recent run ended.
 	 *
 	 * Oldest-first (`.reverse()` — the feed arrives newest-first) so the LAST write of each field
 	 * wins and `state`/`author` end up describing the most recent run of that job.
+	 *
+	 * Note the union is per JOB NAME across every run, which is what makes a job that reads a table
+	 * in one run and writes it in another look like a cycle — see the guard where the edges are built.
 	 */
 	function collectJobs(): Map<string, JobAgg> {
 		const jobs = new Map<string, JobAgg>();
@@ -125,9 +138,9 @@
 	}
 
 	/**
-	 * Node-id namespaces for the pipeline plane, the one canvas holding BOTH kinds. A job id and a
-	 * dataset id come from different namespaces and could collide; the prefix also makes a click
-	 * self-describing, so routing reads the NODE rather than the active view.
+	 * Node-id namespaces. The canvas holds BOTH kinds, and a job id and a dataset id come from
+	 * different namespaces and could collide; the prefix also makes a click self-describing, so
+	 * focus and the Open link read the KIND off the node itself.
 	 *
 	 * Spelled exactly as Marquez spells it — `generateNodeId` in `web/src/helpers/nodes.ts` returns
 	 * `` `${type.toLowerCase()}:${namespace}:${name}` `` — so the two are cross-referenceable rather
@@ -140,27 +153,19 @@
 	const jobId = (job: string) => `${JOB_PREFIX}${job}`;
 	const dsId = (ds: string) => `${DATASET_PREFIX}${ds}`;
 
-	/** The focused node id (prefixed), and how many LOGICAL hops around it to draw — `null` is All.
-	 *  Pipeline-plane only: it is the one plane where the estate view is unreadable, and the two
-	 *  single-kind projections are small enough to click straight through. */
-	let focused = $state<string | null>(null);
-	let focusDepth = $state<number | null>(2);
+	/** The prefixed id the graph filters on — derived from the public prop, never stored twice. */
+	const focused = $derived(
+		focusNode ? (focusNode.kind === 'job' ? jobId(focusNode.name) : dsId(focusNode.name)) : null,
+	);
+	const focusedName = $derived(focusNode?.name ?? null);
 	const FOCUS_DEPTHS: (number | null)[] = [1, 2, 3, null];
 
-	/** The focused node's own name, unprefixed — the label the focus bar prints. */
-	const focusedName = $derived(
-		focused?.startsWith(JOB_PREFIX)
-			? focused.slice(JOB_PREFIX.length)
-			: focused?.startsWith(DATASET_PREFIX)
-				? focused.slice(DATASET_PREFIX.length)
-				: null,
+	/** Where the focus bar's "Open" goes — the detail page for whatever is focused. */
+	const focusedHref = $derived(
+		focusNode
+			? `${base}/lineage/${focusNode.kind === 'job' ? 'jobs' : 'datasets'}/${encodeURIComponent(focusNode.name)}`
+			: null,
 	);
-	/** Where the focus bar's "Open" goes — the same detail route a click used to navigate to. */
-	const focusedHref = $derived.by(() => {
-		if (!focused || !focusedName) return null;
-		const kind = focused.startsWith(JOB_PREFIX) ? 'jobs' : 'datasets';
-		return `${base}/lineage/${kind}/${encodeURIComponent(focusedName)}`;
-	});
 
 	let nodes = $state.raw<FlowNode[]>([]);
 	let edges = $state.raw<
@@ -355,7 +360,13 @@
 		// re-rooting. This zone's graph is estate-level and owns no such route, so the two are split:
 		// the click re-roots here, and navigation moves to the focus bar's "Open", where it is
 		// labelled rather than implied. Clicking the focused node again clears it.
-		focused = focused === raw ? null : raw;
+		if (focused === raw) {
+			focusNode = null;
+			return;
+		}
+		focusNode = raw.startsWith(JOB_PREFIX)
+			? { kind: 'job', name: raw.slice(JOB_PREFIX.length) }
+			: { kind: 'dataset', name: raw.slice(DATASET_PREFIX.length) };
 	}
 </script>
 
@@ -421,7 +432,7 @@
 							navigate(focusedHref);
 						}}>Open</a
 					>
-					<button class="fclear" onclick={() => (focused = null)}>Clear</button>
+					<button class="fclear" onclick={() => (focusNode = null)}>Clear</button>
 				{/if}
 			</div>
 		</Panel>
