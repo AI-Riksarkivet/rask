@@ -384,9 +384,30 @@ rather than volume, and why the `absent()` companion is not decoration);
 `docs/runbooks/RUNBOOK-oncall.md#workflow-history-not-collected` (diagnose + purge procedure); and four
 gates in `tests/unit/test_invariants.py` binding rule ↔ receiver ↔ threshold ↔ key shape.
 
-**Not covered, stated rather than glossed.** The `compute/ingest` lifecycle controls shipped in
-`4e44584c` are browser-verified on the DISABLED path only — no live ingest run existed to exercise
-button → door → 202 → refresh against. Six unit tests cover the client seam; that is not the same claim.
+**The lifecycle controls are now verified on BOTH paths (2026-08-26).** They shipped in `4e44584c`
+proven only on the DISABLED path, because no live ingest run existed to click Terminate on. Closed by
+starting one: `acme/u2verify` over `acme-bucket`, run `c146ea3b`, started through the ETL form as a
+signed-in user rather than by curl.
+
+Every link exercised in the browser: Terminate and Pause rendered ENABLED on a RUNNING run (Resume
+disabled, with its reason) → click → the door's own 202 wording appeared verbatim ("further scheduling
+stops, but work already in flight may still complete, so this is not immediate") → the state flipped
+RUNNING → FAILED **with no manual reload**, which is the single-flight `.refresh()` doing its job → all
+three buttons re-rendered disabled with correct new reasons. The run recorded `terminated by operator
+with 6636 units enumerated`. Zero console messages.
+
+**No provisioning or grant was needed, and the earlier attempt failed for a reason worth recording.**
+It targeted project `demo` — which is `RASK_INGEST_SERVICE_PROJECT`, the SERVICE-token project, not a
+tenant. Its bronze namespace does not exist and the signed-in user is not its admin, so the run died on
+`namespace 'demo-bronze' is not provisioned` and the UI could not read it. The estate already had five
+projects the user administers with provisioned bronze namespaces. The lesson is the diagnosis: two
+distinct 403s (cross-project service token, and a user lacking `can_administer`) plus a missing
+namespace, all reachable from one wrong project name.
+
+**One legibility finding, not fixed.** An operator-terminated run lands in `FAILED`; the ingest model
+has no `TERMINATED` terminal state (`TERMINAL = ['COMPLETE', 'COMPLETE_WITH_ERRORS', 'FAILED']`). The
+REASON is honest and on screen — `terminated by operator with …` — but in a run LIST a deliberate stop
+is indistinguishable from a crash without opening it. Worth a distinct state; not changed here.
 
 ## Team/role administration — WONTFIX until the Keycloak sync (2026-07-23)
 
