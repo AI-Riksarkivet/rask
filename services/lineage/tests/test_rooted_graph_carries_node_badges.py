@@ -75,8 +75,7 @@ async def test_the_rooted_graph_carries_versions_and_failure(repo: LineageReposi
         "it would render no version chips at all, which is indistinguishable from a table never written"
     )
     assert by_id["gold$catalog"].failed is True, (
-        "a FAILED producing run did not reach the rooted node, so the canvas would show a healthy card "
-        "for a dataset whose last write failed"
+        "a FAILED producing run did not reach the rooted node, so the canvas would show a healthy card for a dataset whose last write failed"
     )
     assert by_id["bronze$events"].failed is False, "a dataset with no failing run must not be flagged"
 
@@ -99,9 +98,7 @@ async def test_rooted_and_estate_agree_on_the_same_dataset(repo: LineageReposito
 
 
 @pytest.mark.asyncio
-async def test_the_rooted_rollup_is_scoped_to_the_neighbourhood(
-    repo: LineageRepository, calls: list[tuple[str, dict[str, Any] | None]]
-) -> None:
+async def test_the_rooted_rollup_is_scoped_to_the_neighbourhood(repo: LineageRepository, calls: list[tuple[str, dict[str, Any] | None]]) -> None:
     """The rooted read must ask about ITS datasets, not fold the estate's writes to answer.
 
     Reusing `_ESTATE_WRITES` here would produce identical badges on this fixture and pass the two

@@ -53,9 +53,7 @@
 	 *  zig-zag rounds less rather than overshooting into the next segment. */
 	const RADIUS = 8;
 
-	const route = $derived(
-		(data as { route?: ElkRoute } | undefined)?.route ?? null,
-	);
+	const route = $derived((data as { route?: ElkRoute } | undefined)?.route ?? null);
 
 	/** True while ELK's route still describes THIS edge's current endpoints. */
 	const routeIsCurrent = $derived(
@@ -116,11 +114,7 @@
 			// ANCHORED TO THE LIVE HANDLES, not to ELK's start/end: Svelte Flow positions handles on
 			// the node's edge and ELK reports its own port coordinate, so using ELK's endpoints leaves
 			// a visible gap between the arrow and the card. The bends in between are ELK's.
-			const points = [
-				{ x: sourceX, y: sourceY },
-				...route.bendPoints,
-				{ x: targetX, y: targetY },
-			];
+			const points = [{ x: sourceX, y: sourceY }, ...route.bendPoints, { x: targetX, y: targetY }];
 			// The MIDDLE VERTEX of the route, not the midpoint of the straight line between the ends:
 			// on an edge that turns a corner those are different places, and the second one can land
 			// on top of the node the route was steered around.
