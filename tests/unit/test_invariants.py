@@ -74,11 +74,12 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # before the staged object is dropped, is what makes a recovered event restart a halted cascade
     # instead of merely repairing the graph.
     ("services/lineage/src/lineage/api/reconcile_cron.py", "settings.dapr_topic"): "lineage-relay",
-    # CONTROL — a governance refresh hint. `service_kit/control_events.py` declares these best-effort by
-    # contract: a consumer re-reads state through the governed path, so a dropped one costs a re-read.
-    # ONE row where there were two: the catalog and maintenance copies collapsed into the shared
-    # emitter every producer now imports (see `test_the_control_emitter_has_exactly_one_implementation`).
-    ("packages/service-kit/src/service_kit/control_emit.py", "self._topic"): "control",
+    # CONTROL — no longer a row here, and the reason is a change to the estate rather than to this file.
+    # `DaprControlEmitter.emit` used to publish DIRECTLY; it now goes through
+    # `outbox.publish_with_outbox`, which is a `_TRANSPORT_MODULE` and so is deliberately unclassified
+    # (a transport publishes whatever its caller chose). The control lane's durability question moved
+    # with it: a dropped `table_published` is no longer merely "a refresh hint" — under the tag-driven
+    # cascade it is the ONLY thing that wakes the next hop — and staging is what answers that now.
     # TRIGGER — an instruction to DO work. Correctly bare: the outbox re-ingests lineage, it never
     # re-fires triggers. Their durability question is a different one, and is DECIDED: the caller-retry
     # idempotency-token contract is the carrier (docs/architecture/medallion-cascade.md, the dropped obligation-carrier ruling).

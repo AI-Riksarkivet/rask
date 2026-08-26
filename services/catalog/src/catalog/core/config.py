@@ -390,6 +390,17 @@ class Settings(BaseSettings):
     #: the medallion `/bronze-arrival` subscription reacts to, a lost one does not merely under-report
     #: provenance: the whole bronze->silver->gold run silently never happens.
     lineage_outbox_uri: str = Field(default="", alias="LANCE_LINEAGE_OUTBOX_URI")
+    #: The CONTROL lane's outbox prefix — and it must NOT be the lineage one. Each prefix is drained
+    #: by a lane-specific relay that re-ingests what it finds, so sharing would feed each relay the
+    #: other lane's events.
+    #:
+    #: Why the control lane needs one at all: `table_published` is what wakes the next cascade hop.
+    #: The mover does not fire its own topic and the medallion plane runs no cron and no reconcile
+    #: binding, so it never re-reads the tag. `DaprControlEmitter.emit` swallows a publish failure by
+    #: design — it is called after the change is already made and audited, so raising would turn a
+    #: delivered mutation into a 500 — which meant a NATS blip cancelled the cascade outright with
+    #: every pod green. Staged, the event survives to be re-published.
+    control_outbox_uri: str = Field(default="", alias="LANCE_CONTROL_OUTBOX_URI")
 
     def storage_options(self) -> dict[str, str]:
         """Return the ``storage.*`` properties with the prefix stripped, for pylance."""

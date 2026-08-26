@@ -1049,10 +1049,6 @@ medallion:
   # mover's withheld only the next TRIGGER — a refused batch was already committed into the tier and
   # visible to anyone reading `latest`. Only the tag is a boundary.
   #
-  # OFF by default and gated at boot on `compute` + a catalog URL: the tag move IS the trigger, so a
-  # stage that writes nothing or cannot reach the catalog would stop the cascade with every pod
-  # green. It should die once every estate runs on it.
-  cascadeViaPublish: false
   # Ray TRAIN head (#115): values-wired passthrough for the /train head + the submit-and-ack trainer
   # consumer (both live in the medallion-producer app). Defaults mirror services/medallion/core/config.py so a
   # deployment can retarget topic/entrypoint/identity/registry namespace without an image rebuild.

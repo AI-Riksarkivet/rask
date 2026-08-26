@@ -164,9 +164,17 @@ async def publish_table(
     # consumers to check whether a "published" notice actually published.
     #
     # `extra` carries the RANGE, which is the whole point of the signal (D-R3) — a consumer turns
-    # {from, to} straight into `_row_created_at_version > from AND <= to` and keeps no bookmark. A
-    # consumer that MISSES this event loses nothing: the `published` tag still answers "what is
-    # ready?", which is why the tag is the truth and this is merely the wake-up.
+    # {from, to} straight into `_row_created_at_version > from AND <= to` and keeps no bookmark.
+    #
+    # THIS COMMENT USED TO SAY a consumer that misses the event "loses nothing", because the tag still
+    # answers "what is ready?". That is true of a POLLING consumer and false of the one that matters:
+    # under `medallion.cascadeViaPublish` the mover deliberately does not fire its own topic, so the
+    # silver->gold hop happens ONLY when `/publication-arrival` receives this event — and the
+    # medallion plane runs no cron and no reconcile binding, so it never re-reads the tag. A dropped
+    # event there cancels the cascade outright, with every pod green.
+    #
+    # The emitter now STAGES through the control outbox, so a failed publish leaves a recoverable
+    # object rather than nothing, and `cascadeViaPublish` refuses to start without one configured.
     if result.advanced:
         await emit_control(
             control,

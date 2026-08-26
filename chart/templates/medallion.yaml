@@ -162,12 +162,16 @@ spec:
               {{- end }}
             {{- end }}
             - { name: MEDALLION_TRANSFORM_ROUTES, value: {{ toJson $routes | quote }} }
-            {{- if .Values.medallion.cascadeViaPublish }}
-            - { name: MEDALLION_CASCADE_VIA_PUBLISH, value: "true" }
-            {{- /* The producer needs the catalog for the PROMOTION RESUME, not for a stage of its
-                   own: an approved hold publishes the version it was taken on, which is a call to
-                   this door. Without these the settings guard refuses at boot — which it did, and
-                   correctly, when the flag was rendered here without them. */}}
+            {{- /* The producer needs the catalog for the PROMOTION RESUME, not for a stage of its own:
+                   an approved hold publishes the version it was taken on, which is a call to this door.
+
+                   GATED ON `qualityReview`, which is what creates promotions — it used to be gated on
+                   `cascadeViaPublish`, and that flag is DEAD: the app deleted it when the second
+                   promotion door was removed, and `extra="ignore"` meant the env var it rendered was
+                   silently dropped rather than refused. So on the DEFAULT chart the producer had no
+                   catalog URL at all, and `publish_promotion` — which no longer skips terminal tiers —
+                   would fail its resume with nothing having asked for it. */}}
+            {{- if .Values.medallion.qualityReview }}
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" .) .Values.services.catalog.port | quote }} }
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" .Values.rustfs.bucket | quote }} }
             - { name: MEDALLION_CATALOG_SERVICE_IDENTITY, value: {{ .Values.medallion.producer.serviceIdentity | quote }} }
@@ -433,13 +437,6 @@ spec:
             - { name: MEDALLION_CATALOG_SERVICE_IDENTITY, value: {{ .serviceIdentity | quote }} }
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.rustfs.bucket | quote }} }
-            {{- if $root.Values.medallion.cascadeViaPublish }}
-            # The catalog gates now. `MEDALLION_QUALITY_*` below is deliberately still rendered when
-            # `quality` is on — the mover SKIPS its local gate under this flag rather than the chart
-            # withholding the config, so flipping the flag back restores the old behaviour with no
-            # values change and no redeploy of a different shape.
-            - { name: MEDALLION_CASCADE_VIA_PUBLISH, value: "true" }
-            {{- end }}
             {{- if $root.Values.medallion.quality }}
             # Validator gate: after the compute write, assert the stage's data is good enough to promote
             # (row_count > 0, key column non-null); a failure emits the dataQualityAssertions facet but does

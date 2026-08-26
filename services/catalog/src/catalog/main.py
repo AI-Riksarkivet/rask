@@ -187,6 +187,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         pubsub=settings.control_pubsub,
         timeout_seconds=settings.control_emit_timeout_seconds,
         service="catalog",
+        # Staged when configured, plain publish when not — opt-in, exactly like the lineage outbox.
+        outbox_uri=settings.control_outbox_uri,
+        storage_options=settings.storage_options(),
     )
     # Per-subject user state on the Dapr state store (endpoints/user_state.py). Built unconditionally: it
     # is a client over the local sidecar, so construction is pure and does no I/O — a deployment without a

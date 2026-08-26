@@ -71,6 +71,7 @@ async def submit_stage_job(
     lineage_json: str = "",
     originator: str = "",
     project: str = "",
+    from_version: int | None = None,
 ) -> str:
     """Submit (or re-attach to) the stage transform on the Ray cluster and RETURN — never block.
 
@@ -106,6 +107,11 @@ async def submit_stage_job(
         "FROM_URI": from_uri,
         "TO_URI": to_uri,
         "STAGE": stage,
+        # THE DELTA BOUNDARY. Always present, and EMPTY rather than omitted when there is no floor:
+        # the runner reads `e.get("BASE_VERSION", "").strip()` and already treats empty as "read
+        # everything", so an empty string is the one spelling that has a defined meaning downstream.
+        # A first publication genuinely has no floor; that is not a missing value.
+        "BASE_VERSION": "" if from_version is None else str(from_version),
         "LINEAGE_JSON": lineage_json,
         "S3_ENDPOINT": settings.s3_endpoint,
         "S3_KEY": settings.s3_access_key_id,

@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **27 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **29 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -1275,6 +1275,42 @@ answering 202 with no sidecar would tell an operator a runaway was stopped when 
 
 **Verifier (CONFIRMED).** Reproduced at HEAD. packages/service-kit/src/service_kit/control_emit.py:107-114 swallows every publish failure — `except Exception as exc: self._emit_failed.add(1, {...}); log.warning("control_publish_failed", ...)` — under a counter whose own description reads "fail-open: the change itself still happened and is audited, only the live-refresh hint is lost" (control_emit.py:96-99), and emit_control's docstring (control_emit.py:143) repeats "best-effort — the emitter swallows every error". services/catalog/src/catalog/api/v1/endpoints/publication.py:163-164 carries the premise the cascade falsifies: "A consumer that MISSES this event loses nothing: the `published` tag still answers 'what is ready?'". The mover really does stop at the catalog: HEAD transform.py's `elif decision is GateOutcome.PUBLISH and result is not None:` branch calls only `catalog_register.publish_stage_output` and never `settings.pub_topic`, and gate_decision.py:20-27 states the intent ("PUBLISH = 'let the catalog's gate rule, and its tag move is the trigger'"). The only consumer is services/medallion/src/medallion/api/bronze_arrival.py:96-113 (/publication-arrival), and the medallion plane has no cron/reconcile binding anywhere in chart/templates, so nothing polls the tag. There is no outbox on the control lane — control_emit calls dapr_publish.publish_event directly, while every lineage emit in medallion goes through outbox.publish_lineage_with_outbox. Two notes that strengthen rather than weaken it: (a) the finding's precondition is correct at HEAD (chart/values.yaml:1034 `cascadeViaPublish: false`), and (b) the working tree has DELETED the flag from the app (config.py:370 "that flag chose between two enforcement points and is gone"; gate_decision returns PUBLISH whenever `has_target and has_catalog`, and chart/templates/medallion.yaml renders MEDALLION_CATALOG_URL unconditionally for every mover) — so on the working tree this becomes the DEFAULT and only door. Warning is the right severity: the published data stays correct and consumable, only the next tier silently never runs.
 
+
+**FIXED 2026-08-25 — owner ruling: extend the EXISTING outbox, not a second one.**
+
+`publish_lineage_with_outbox` is generalised to `publish_with_outbox(key=…)` — one mechanism, two
+lanes — and `DaprControlEmitter` routes through it, keyed on `event_id` (already the client-side
+dedupe key, so a re-published event is recognised rather than double-applied). **Each lane keeps its
+OWN prefix**, and that is not a detail: the lineage relay re-ingests whatever it finds into the
+lineage repository, so one shared prefix would feed each relay the other lane's events.
+
+**The swallow deliberately stays.** `emit` is called after the change is made and audited, so raising
+would turn a delivered mutation into a 500 the caller retries. What changed is that the event is no
+longer GONE.
+
+**The finding was UNDERSTATED, and re-reading the code is what showed it.** It describes the hazard as
+conditional on `medallion.cascadeViaPublish`. That flag no longer exists — the second promotion door
+was deleted and the flag with it — so the cascade rides `table_published` on EVERY deployment, not an
+opt-in one. Its "gate cascadeViaPublish at boot" alternative is therefore moot, and is recorded as
+moot rather than quietly skipped.
+
+**Both false prose claims are corrected in place**, not annotated: the counter description no longer
+says "only the live-refresh hint is lost", and `publication.py` no longer says a consumer that misses
+the event "loses nothing". Each now names the consumer that cannot recover. That wording is asserted
+by a test, because prose telling an operator the loss is free is what made this invisible.
+
+**Two defects found while fixing it, both stated rather than folded in:**
+
+1. The chart still rendered `MEDALLION_CASCADE_VIA_PUBLISH` for a flag the app deleted. `extra="ignore"`
+   meant it was silently dropped, so the toggle did nothing — dead config removed.
+2. Worse, and live: that dead flag GATED three real env vars the producer needs for the promotion
+   resume (`MEDALLION_CATALOG_URL`/`_ROOT`/`_SERVICE_IDENTITY`). On the default chart the producer had
+   no catalog URL at all — and `publish_promotion` no longer skips terminal tiers, so an approved
+   promotion's resume would fail with nothing having asked for it. Re-gated on `qualityReview`, which
+   is what actually creates promotions.
+
+Five tests; the staging wedge was proven RED by reverting the emitter to a plain publish.
+
 </details>
 
 <details><summary><b>The publication trigger's {from_version, to_version} range is published, silently discarded by the consumer model, and never reaches the job that reads it — the CDF delta read is dead config</b> <i>(pubsub, rule N/A, ADJUSTED)</i></summary>
@@ -1297,6 +1333,22 @@ answering 202 with no sidecar would tell an operator a runaway was stopped when 
 ```
 
 **Verifier (ADJUSTED).** services/medallion/src/medallion/services/publication_trigger.py:147-148 stamps `"from_version": extra.get("from_version"), "to_version": extra.get("to_version")` onto the trigger. services/medallion/src/medallion/services/trigger_guards.py:102 is `model_config = ConfigDict(extra="ignore")` and neither field is declared — and the model's own docstring at line 90 names them as an example of what is tolerated-but-undeclared ("``from_version``/``to_version`` already ride this payload"), so they are dropped at `StageTrigger.model_validate(data)` (trigger_guards.py:194). `grep -rn from_version services/medallion/src` returns only publication_trigger, two docstrings, and catalog_register.py:248-249 (which parses the catalog's PUBLISH RESPONSE, not the trigger) — no consumer of the trigger's range exists. services/medallion/src/medallion/services/ray_submit.py:105-140's env_vars dict has FROM_URI/TO_URI/STAGE/LINEAGE_JSON/S3_*/OTEL_*/RASK_PARAM_* and no BASE_VERSION; the workload prefix is applied locally (`**{f"RASK_PARAM_{key}": value ...}`) so no lane can smuggle it in. Estate-wide, BASE_VERSION appears only at runners/dummy/src/dummy_runner/job.py:7,9,73-75, scripts/ray_dummy_job.py:11 and one runner test. runners/dummy/src/dummy_runner/job.py:42-44 therefore always takes `if base_version is None: return ds.to_table(with_row_id=True)` — the whole upstream tier — and the redelivery no-op at job.py:94-95 (`if delta.num_rows == 0`) is indeed unreachable for a non-empty source.
+
+
+**FIXED 2026-08-25 — all three links, because the gap sat BETWEEN files that each looked correct.**
+
+`StageTrigger` now declares `from_version`/`to_version` — the very fields its own docstring cites as
+the additive-evolution example, while `extra="ignore"` discarded them at parse. `submit_stage`
+threads the floor off the trigger (the same carrier it already reads `originator`/`project` from),
+and `ray_submit` exports `BASE_VERSION`.
+
+**Empty rather than omitted when there is no floor.** `runners/dummy/job.py` reads
+`e.get("BASE_VERSION", "").strip()` and already treats empty as "read everything", so an empty string
+is the one spelling with a defined meaning downstream. A dataset's FIRST publication genuinely has no
+floor; that is not a missing value, and it has its own test.
+
+Four tests driving the whole chain rather than any one file. Two were RED at the model, two at the
+submit; the export half was re-proven by removing the line and watching them fail.
 
 </details>
 

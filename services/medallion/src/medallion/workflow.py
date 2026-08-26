@@ -373,6 +373,9 @@ def submit_stage(ctx: WorkflowActivityContext, spec: StageJobSpec) -> str:
             # is what lets a FAILED job be traced back to the person whose cascade it was.
             originator=str((spec.trigger or {}).get("originator") or ""),
             project=str((spec.trigger or {}).get("project") or ""),
+            # The delta boundary rides the trigger too, and reaches the job as `BASE_VERSION`. Read
+            # off the raw trigger for the same reason the two above are: this is the carrier.
+            from_version=(spec.trigger or {}).get("from_version"),
         )
     )
 

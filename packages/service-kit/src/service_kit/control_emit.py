@@ -39,13 +39,13 @@ from typing import Any, Protocol, runtime_checkable
 from dapr.aio.clients import DaprClient
 from opentelemetry import metrics
 
-from service_kit import dapr_publish
 from service_kit.control_events import (
     CONTROL_TOPIC,
     CatalogControlEvent,
     ControlAction,
     ControlObjectType,
 )
+from service_kit.lakehouse import outbox
 
 
 log = logging.getLogger(__name__)
@@ -81,36 +81,78 @@ class DaprControlEmitter:
     which producer's bus path is degrading.
     """
 
-    def __init__(self, client: DaprClient, *, pubsub: str, topic: str, timeout_seconds: float, service: str) -> None:
+    def __init__(
+        self,
+        client: DaprClient,
+        *,
+        pubsub: str,
+        topic: str,
+        timeout_seconds: float,
+        service: str,
+        outbox_uri: str = "",
+        storage_options: dict[str, str] | None = None,
+    ) -> None:
         self._client = client
         self._pubsub = pubsub
         self._topic = topic
         self._timeout_seconds = timeout_seconds
         self._service = service
+        #: The control lane's OWN outbox prefix — never the lineage one. Each prefix is drained by a
+        #: lane-specific relay that re-ingests what it finds, so sharing would feed each the other's
+        #: events. Empty means unstaged, which is the pre-existing fail-open behaviour.
+        self._outbox_uri = outbox_uri
+        self._storage_options = dict(storage_options or {})
+        #: Held as a real attribute, not read back off the OTel `Counter` (whose description lives in a
+        #: private field). What this string SAYS is load-bearing — the previous wording told operators
+        #: a dropped control event costs nothing, which is how this went unnoticed — so it is asserted
+        #: by a test, and a test should not have to reach into another library's internals to do it.
+        self.failure_description = (
+            f"{service} control-plane emits that failed to reach the bus. The change ITSELF still "
+            "happened and is audited. Whether anything is lost depends on the consumer: a console "
+            "ring buffer or a tag-polling reader loses only a refresh hint, but under "
+            "medallion.cascadeViaPublish the downstream cascade rides `table_published` and does "
+            "NOT poll — a dropped event there cancels the next hop outright. When an outbox is "
+            "configured the event stays STAGED and its relay re-publishes it; without one this "
+            "counter rising means cascades were silently abandoned."
+        )
         self._emit_failed = metrics.get_meter(f"lance.{service}").create_counter(
             f"{service}.control_emit.failed",
             unit="{event}",
-            description=(
-                f"Best-effort {service} control-plane emits that failed terminally (fail-open: the change "
-                "itself still happened and is audited, only the live-refresh hint is lost)."
-            ),
+            description=self.failure_description,
         )
 
     async def emit(self, event: CatalogControlEvent) -> None:
+        """Publish one control event, STAGED when an outbox is configured.
+
+        Still swallows the failure, and that part is deliberate: this is called after the change has
+        already happened and been audited, so raising here would turn a delivered mutation into a 500
+        the caller retries. What changed is that the event is no longer GONE — it is staged before the
+        publish and dropped only on ack, so a relay can re-publish it. `event_id` is the key: it is
+        the client-side dedupe key, so a re-published event is recognised rather than double-applied.
+        """
         try:
-            await dapr_publish.publish_event(
+            await outbox.publish_with_outbox(
                 self._client,
-                timeout_seconds=self._timeout_seconds,
+                outbox_uri=self._outbox_uri,
+                storage_options=self._storage_options,
+                key=event.event_id,
+                event_json=event.model_dump_json(),
                 pubsub_name=self._pubsub,
                 topic_name=self._topic,
-                data=event.model_dump_json(),
-                data_content_type="application/json",
+                timeout_seconds=self._timeout_seconds,
             )
         except Exception as exc:
             self._emit_failed.add(1, {f"lance.{self._service}.action": event.action})
             log.warning(
                 "control_publish_failed",
-                extra={"action": event.action, "object_id": event.object_id, "error": str(exc)},
+                extra={
+                    "action": event.action,
+                    "object_id": event.object_id,
+                    "error": str(exc),
+                    # Whether this is recoverable at all, said in the line itself — an operator
+                    # reading it should not have to go and check how the service was configured.
+                    "staged": bool(self._outbox_uri),
+                },
             )
 
 
@@ -122,12 +164,22 @@ def make_control_emitter(
     service: str,
     topic: str = CONTROL_TOPIC,
     timeout_seconds: float,
+    outbox_uri: str = "",
+    storage_options: dict[str, str] | None = None,
 ) -> ControlEmitter:
     """The chosen control emitter: a Dapr publisher when enabled and a sidecar client is present, else
     the no-op (dev/off, like lineage). Built once in the service's lifespan onto
     ``app.state.control_emitter``."""
     if enabled and dapr is not None:
-        return DaprControlEmitter(dapr, pubsub=pubsub, topic=topic, timeout_seconds=timeout_seconds, service=service)
+        return DaprControlEmitter(
+            dapr,
+            pubsub=pubsub,
+            topic=topic,
+            timeout_seconds=timeout_seconds,
+            service=service,
+            outbox_uri=outbox_uri,
+            storage_options=storage_options,
+        )
     return NoopControlEmitter()
 
 

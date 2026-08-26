@@ -174,6 +174,43 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
             yield run_id, stream.readall().decode("utf-8")
 
 
+async def publish_with_outbox(
+    publisher: object,
+    *,
+    outbox_uri: str,
+    storage_options: StorageOptions,
+    key: str,
+    event_json: str,
+    pubsub_name: str,
+    topic_name: str,
+    timeout_seconds: float,
+) -> None:
+    """Durably publish ANY bus event: stage → publish → drop-on-ack (#4).
+
+    Lane-agnostic on purpose. The lineage lane was the first user and `publish_lineage_with_outbox`
+    still names it, but the control lane needs the identical guarantee — a dropped `table_published`
+    under `cascadeViaPublish` cancels the whole downstream cascade — and a SECOND implementation is
+    how two mechanisms doing one job drift apart (owner ruling 2026-08-25).
+
+    ``key`` is the caller's identity for the event: a lineage `run_id`, a control `event_id`. It is
+    only ever an object-name component, so any stable per-event string works.
+
+    **Each lane MUST use its own ``outbox_uri``.** The prefix is drained by a lane-specific relay that
+    re-ingests what it finds — the lineage relay writes into the lineage repository — so mixing lanes
+    in one prefix would feed each relay the other's events.
+    """
+    return await _publish_staged(
+        publisher,
+        outbox_uri=outbox_uri,
+        storage_options=storage_options,
+        key=key,
+        event_json=event_json,
+        pubsub_name=pubsub_name,
+        topic_name=topic_name,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 async def publish_lineage_with_outbox(
     publisher: object,
     *,
@@ -185,7 +222,35 @@ async def publish_lineage_with_outbox(
     topic_name: str,
     timeout_seconds: float,
 ) -> None:
-    """Durably publish a lineage event: stage → publish → drop-on-ack (#4).
+    """Durably publish a LINEAGE event — `publish_with_outbox` keyed by `run_id`.
+
+    Kept as the lineage lane's name so its six call sites read in the vocabulary of the thing they
+    publish, and so a reader of this module can see which lanes exist.
+    """
+    return await _publish_staged(
+        publisher,
+        outbox_uri=outbox_uri,
+        storage_options=storage_options,
+        key=run_id,
+        event_json=event_json,
+        pubsub_name=pubsub_name,
+        topic_name=topic_name,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+async def _publish_staged(
+    publisher: object,
+    *,
+    outbox_uri: str,
+    storage_options: StorageOptions,
+    key: str,
+    event_json: str,
+    pubsub_name: str,
+    topic_name: str,
+    timeout_seconds: float,
+) -> None:
+    """The mechanism both lanes share.
 
     With no ``outbox_uri`` configured this degrades to a plain publish (pre-#4 behavior), so the outbox is
     opt-in. A publish failure PROPAGATES (the producer's existing RETRY / redelivery handles it) and leaves
@@ -199,7 +264,7 @@ async def publish_lineage_with_outbox(
 
     staged = bool(outbox_uri)
     if staged:
-        await run_in_threadpool(stage_event, outbox_uri, storage_options, run_id, event_json)
+        await run_in_threadpool(stage_event, outbox_uri, storage_options, key, event_json)
         outbox_metrics.record_staged()
     try:
         await dapr_publish.publish_event(
@@ -220,4 +285,4 @@ async def publish_lineage_with_outbox(
     outbox_metrics.record_published()
     if staged:
         with suppress(Exception):
-            await run_in_threadpool(drop_event, outbox_uri, storage_options, _object_key(run_id, event_json))
+            await run_in_threadpool(drop_event, outbox_uri, storage_options, _object_key(key, event_json))

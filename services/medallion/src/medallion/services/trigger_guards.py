@@ -104,6 +104,13 @@ class StageTrigger(BaseModel):
     token: str | None = None
     dataset: str | None = None
     namespace: str | None = None
+    #: THE CDF DELTA BOUNDARY. Declared, because `extra="ignore"` DISCARDS what is not — and these two
+    #: are the very fields the docstring above cites as its additive-evolution example. They were
+    #: published by `publication_trigger`, dropped here at parse, and so never exported as
+    #: `BASE_VERSION`, leaving the Ray stage job to rescan the whole tier that D1 promises it will not.
+    #: `from_version` is None on a dataset's FIRST publication and means "everything", not "missing".
+    from_version: int | None = None
+    to_version: int | None = None
     project: str | None = None
     #: The HUMAN the cascade is running for, threaded from the head. Unvalidated here for the same
     #: reason `project` is: it is a claim, checked where it is used. It never authorizes anything —
