@@ -83,9 +83,10 @@ func extraArgs(kv []string) []dagger.BuildArg {
 // `name` is the dockerfile stem: gateway, compute, controlplane, rest-catalog, ray-cluster, ray-lance,
 // runner, assist-runner, cnpg-age-ext.
 func (m *Rask) Image(
-	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo",
+	// +ignore=["**/.venv", ".git", "**/node_modules", "**/.svelte-kit", "**/.turbo",
 	//          ".localbin", ".playwright-cli", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
-	//          "**/coverage", "**/storybook-static", "**/build"]
+	//          "**/coverage", "**/storybook-static", "**/build",
+	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache"]
 	// +defaultPath="/"
 	src *dagger.Directory,
 	// Dockerfile stem under .docker/.
@@ -121,9 +122,10 @@ func (m *Rask) Image(
 // `runner` is a directory under runners/ that ships its own uv.lock — the lock is what seals the
 // workload's environment away from the root one.
 func (m *Rask) RunnerImage(
-	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo",
+	// +ignore=["**/.venv", ".git", "**/node_modules", "**/.svelte-kit", "**/.turbo",
 	//          ".localbin", ".playwright-cli", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
-	//          "**/coverage", "**/storybook-static", "**/build"]
+	//          "**/coverage", "**/storybook-static", "**/build",
+	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache"]
 	// +defaultPath="/"
 	src *dagger.Directory,
 	// Runner directory under runners/.
@@ -147,9 +149,10 @@ func (m *Rask) RunnerImage(
 // `zone` is a directory under frontend/microfrontends and becomes the APP build arg, exactly as
 // `make frontend-images` passed it to docker buildx before this module took the build over.
 func (m *Rask) ZoneImage(
-	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo",
+	// +ignore=["**/.venv", ".git", "**/node_modules", "**/.svelte-kit", "**/.turbo",
 	//          ".localbin", ".playwright-cli", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
-	//          "**/coverage", "**/storybook-static", "**/build"]
+	//          "**/coverage", "**/storybook-static", "**/build",
+	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache"]
 	// +defaultPath="/"
 	src *dagger.Directory,
 	// Zone directory under frontend/microfrontends.

@@ -138,7 +138,8 @@ func (m *Rask) Audit(
 	ctx context.Context,
 	// +ignore=["**/.venv", "**/node_modules", ".git", "**/.svelte-kit", "**/.turbo",
 	//          ".localbin", "**/test-results", "**/playwright-report", "**/coverage",
-	//          "**/storybook-static", "**/build"]
+	//          "**/storybook-static", "**/build",
+	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache"]
 	// +defaultPath="/"
 	// +optional
 	src *dagger.Directory,
@@ -160,7 +161,8 @@ func (m *Rask) ScanConfig(
 	ctx context.Context,
 	// +ignore=["**/.venv", "**/node_modules", ".git", "**/.svelte-kit", "**/.turbo",
 	//          ".localbin", "**/test-results", "**/playwright-report", "**/coverage",
-	//          "**/storybook-static", "**/build"]
+	//          "**/storybook-static", "**/build",
+	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache"]
 	// +defaultPath="/"
 	// +optional
 	src *dagger.Directory,
@@ -229,7 +231,8 @@ func (m *Rask) ScanSecrets(
 	ctx context.Context,
 	// +ignore=["**/.venv", "**/node_modules", "**/.svelte-kit", "**/.turbo", ".localbin",
 	//          "**/test-results", "**/playwright-report", "**/coverage", "**/storybook-static",
-	//          "**/build"]
+	//          "**/build",
+	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache"]
 	// +defaultPath="/"
 	// +optional
 	src *dagger.Directory,
