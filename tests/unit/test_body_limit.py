@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterator
 
-from catalog.api.body_limit import BodySizeLimitMiddleware
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from service_kit.body_limit import BodySizeLimitMiddleware
 
 
 class _PassThrough(BaseHTTPMiddleware):

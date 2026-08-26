@@ -1,5 +1,15 @@
 """Request body-size limit — a pure-ASGI middleware that rejects oversized bodies with 413.
 
+MOVED HERE FROM `catalog/api/body_limit.py` (2026-08-26, owner ruling). It was written for the
+catalog and applied to the catalog alone, while five other apps built by `make_service_app` — the
+GATEWAY among them, which buffers every proxied body whole and is the one app published at the edge —
+got CORS + RequestID + Timing and no ceiling at all. `register_middleware` now installs it for every
+service, so one cannot be added without a cap and a new route cannot arrive uncapped.
+
+The shared default is a DoS CEILING, not a business rule: it exists to stop a multi-GB body reaching a
+buffer, not to say what a payload should be. A service needing more sets its own — the catalog keeps
+256 MiB explicitly, because Arrow-IPC writes are exactly the case this was built for.
+
 The Arrow-IPC write endpoints (``/v1/table/{id}/create|insert|merge_insert``) read the whole request body
 into memory before the handler runs, so a single unbounded POST — e.g. a multi-GB media blob pushed through
 the catalog instead of the direct storage/vending path — OOMs the worker. This enforces the cap *before* the

@@ -19,7 +19,6 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespaceError
 from pydantic import SecretStr
 
-from catalog.api.body_limit import BodySizeLimitMiddleware
 from catalog.api.dapr import register_control_dapr
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from catalog.api.maintenance_mode import maintenance_middleware
@@ -31,6 +30,7 @@ from catalog.core.namespace import build_namespace
 from catalog.core.vending import make_vendor
 from catalog.services import warehouses
 from service_kit import setup_logging
+from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.control_emit import make_control_emitter
 from service_kit.governed import fga
 from service_kit.governed.audit import configure_audit

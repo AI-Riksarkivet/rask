@@ -25,6 +25,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.config import Settings
 
 
@@ -74,3 +75,8 @@ def register_middleware(app: FastAPI, settings: Settings) -> None:
         )
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(TimingMiddleware)
+    # THE BODY CEILING, for every service rather than the one it was written for. Pure-ASGI, so the
+    # cap applies as bytes ARRIVE — before the body is buffered and independent of how the endpoint
+    # reads it. Added last so it sits OUTERMOST: an over-cap request is refused before RequestID or
+    # Timing do any work on it.
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)

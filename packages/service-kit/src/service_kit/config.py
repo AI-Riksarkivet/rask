@@ -36,6 +36,15 @@ class Settings(BaseSettings):
 
     http_timeout: float = Field(default=15.0, alias="RASK_HTTP_TIMEOUT")
 
+    #: The request-body ceiling every app built by `make_service_app` enforces (`body_limit.py`).
+    #:
+    #: A DoS BOUND, not a business rule. It exists so a multi-GB body cannot reach a buffer — five
+    #: apps had no ceiling at all until 2026-08-26, the gateway included, and the gateway buffers
+    #: every proxied body whole. Generous on purpose: a route that wants a real limit states its own,
+    #: and the catalog sets 256 MiB explicitly for Arrow-IPC writes (it builds its own app, so it is
+    #: not double-capped).
+    max_body_bytes: int = Field(default=64 * 1024 * 1024, alias="RASK_MAX_BODY_BYTES")
+
     # OpenTelemetry opt-in. When true, OTLP/HTTP traces are exported to the
     # endpoint configured by OTEL_EXPORTER_OTLP_ENDPOINT. Also auto-enabled when
     # that env var is present, even if this flag is false.
