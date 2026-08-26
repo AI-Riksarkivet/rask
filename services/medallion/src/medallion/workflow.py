@@ -359,6 +359,11 @@ def submit_stage(ctx: WorkflowActivityContext, spec: StageJobSpec) -> str:
     Re-attach rather than re-submit is what makes a replayed activity safe: the id is deterministic in
     `(stage, token, from->to)`, so a second execution of this activity finds the first one's job.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
+    # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
+    spec = StageJobSpec.model_validate(spec)
     from medallion.core.config import get_settings
     from medallion.services.ray_submit import submit_stage_job
 
@@ -389,6 +394,11 @@ def submit_stage(ctx: WorkflowActivityContext, spec: StageJobSpec) -> str:
 
 def poll_stage(ctx: WorkflowActivityContext, payload: PollInput) -> str | None:
     """ONE status read. The workflow owns the waiting; this owns only the question."""
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
+    # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
+    payload = PollInput.model_validate(payload)
     import httpx
 
     from medallion.core.config import get_settings
@@ -411,6 +421,11 @@ def publish_stage_ready(ctx: WorkflowActivityContext, payload: StageReport) -> N
     not a privileged back channel, and a payload this activity malformed would be DROPped exactly as
     an external one would.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
+    # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
+    payload = StageReport.model_validate(payload)
     from dapr.aio.clients import DaprClient
 
     from medallion.core.config import get_settings
@@ -463,6 +478,11 @@ def report_stage_outcome(ctx: WorkflowActivityContext, payload: StageReport) -> 
     line and the counter; the lineage reconciler is what reconciles storage truth (A13), and S5's
     compensation slice is where a failed promotion grows a saga.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
+    # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
+    payload = StageReport.model_validate(payload)
     outcome = payload.outcome
     spec = payload.spec
 
@@ -804,6 +824,11 @@ def train_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
 
 def poll_train(ctx: WorkflowActivityContext, payload: PollInput) -> str | None:
     """ONE status read of the training job. The workflow owns the waiting."""
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
+    # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
+    payload = PollInput.model_validate(payload)
     import httpx
 
     from medallion.core.config import get_settings
@@ -836,6 +861,11 @@ def report_train_outcome(ctx: WorkflowActivityContext, payload: TrainReport) -> 
     end FAILED, so a lineage outage would leave the workflow unable to finish reporting a failure —
     strictly worse than the silence it replaces.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
+    # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
+    payload = TrainReport.model_validate(payload)
     spec = payload.spec
     outcome = payload.outcome
 
@@ -1083,6 +1113,11 @@ def resolve_review_policy(ctx: WorkflowActivityContext, spec: PromotionSpec) -> 
     behaviour rather than parking promotions on an event no one will raise — and "keep the old
     behaviour" means BLOCK, which is what the gate did before, not promote.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
+    # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
+    spec = PromotionSpec.model_validate(spec)
     from medallion.core.config import get_settings
 
     settings = get_settings()
@@ -1100,6 +1135,11 @@ def request_approval(ctx: WorkflowActivityContext, spec: PromotionSpec) -> bool:
     process emitter, so that path is a no-op here and the ask would be silently swallowed — the exact
     class of defect this feature exists to fix.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
+    # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
+    spec = PromotionSpec.model_validate(spec)
     from dapr.aio.clients import DaprClient
 
     from medallion.core.config import get_settings
@@ -1185,6 +1225,11 @@ def publish_promotion(ctx: WorkflowActivityContext, spec: PromotionSpec) -> None
     Falls back to the trigger when the spec carries no version, which is a hold taken before the
     cascade moved to publishing. That is a migration case with a real answer, not a silent fallback.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
+    # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
+    spec = PromotionSpec.model_validate(spec)
     from dapr.aio.clients import DaprClient
 
     from medallion.core.config import get_settings
@@ -1243,6 +1288,11 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: PromotionRepor
     Workflow history is retention-bounded (7d COMPLETED / 30d FAILED), so it is a cache; lineage is
     the durable record. A decision surviving only in history is one the estate forgets.
     """
+    # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
+    # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
+    # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
+    # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
+    payload = PromotionReport.model_validate(payload)
     from dapr.aio.clients import DaprClient
 
     from medallion.core.config import get_settings
