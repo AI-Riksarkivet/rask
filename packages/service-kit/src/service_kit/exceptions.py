@@ -151,3 +151,27 @@ def register_handlers(app: FastAPI) -> None:
                 ],
             },
         )
+
+    @app.exception_handler(Exception)
+    async def _unexpected(request: Request, exc: Exception) -> JSONResponse:
+        """The CATCH-ALL. Without it anything that is not a `DomainError` fell through to starlette's
+        default — a `text/plain` 500 reading "Internal Server Error" — which is a third error envelope
+        on services whose every other answer is RFC 9457, and one no client parsing problem+json can
+        read.
+
+        A FIXED body, never the exception. The reference is explicit that internals reach logs only:
+        the traceback goes to `log.exception` (inside the active OTel span), and the caller gets a
+        stable title and detail. Leaking `str(exc)` here would put native/Arrow/S3 error text and
+        filesystem paths on the wire for any unhandled fault.
+        """
+        log.exception("unhandled error", extra={"method": request.method, "path": request.url.path})
+        return JSONResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            media_type=PROBLEM_JSON,
+            content={
+                "type": "about:blank#internalerror",
+                "title": "Internal Server Error",
+                "status": HTTPStatus.INTERNAL_SERVER_ERROR,
+                "detail": "Internal Server Error",
+            },
+        )

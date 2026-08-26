@@ -317,18 +317,26 @@ def test_two_spellings_of_one_person_are_two_inboxes(label: str, left: str, righ
 
 @pytest.mark.parametrize("subject", ["", "   "])
 def test_a_verified_token_with_an_unusable_subject_crashes_the_door_instead_of_refusing_it(subject: str) -> None:
-    """GAP, pinned. `IDToken.sub` is a bare `str` with no `min_length`, so a conformant-looking token can
-    carry an empty (or whitespace-only) one, and `current_subject` hands it straight on.
+    """HALF-CLOSED, and the remaining half is still pinned. `IDToken.sub` is a bare `str` with no
+    `min_length`, so a conformant-looking token can carry an empty (or whitespace-only) one, and
+    `current_subject` hands it straight on.
 
     `inbox_actor_id` then does the right thing — there is no anonymous inbox, so it raises — but nothing
-    catches a `ValueError` on this path: `register_handlers` maps `DomainError` and `RequestValidationError`
-    and there is no catch-all. The caller receives a bare 500 with no problem+json body, which is the one
-    shape this plane's refusals are supposed never to take.
+    on this path raises a `DomainError`, so the answer depended entirely on whether a catch-all existed.
+    It did not: `register_handlers` mapped `DomainError` and `RequestValidationError` and nothing else,
+    so the caller got a BARE 500 with no problem+json body — the one shape this plane's refusals are
+    supposed never to take. That half is fixed (open_fastapi-audit, the missing-catch-all finding):
+    `register_handlers` now installs an `Exception` handler, so the envelope is problem+json and the
+    traceback goes to the log instead of nowhere.
+
+    WHAT IS STILL WRONG, and why this test keeps its name: 500 is not the honest status. An unusable
+    subject is a bad credential, not a server fault, and the door should refuse it BY NAME. Until it
+    does, monitoring reads a rejected token as this service crashing.
 
     The REAL `inbox_for` has to run for this, so the actor plane is deliberately not patched out — the
     refusal happens while composing the id, before any sidecar channel is opened.
 
-    Rewrite when the door refuses an unusable subject by name.
+    Rewrite again when the door refuses an unusable subject by name.
     """
     app = FastAPI()
     register_handlers(app)
@@ -341,8 +349,9 @@ def test_a_verified_token_with_an_unusable_subject_crashes_the_door_instead_of_r
     with TestClient(app, raise_server_exceptions=False) as door:
         response = door.get("/notifications/inbox")
 
+    # The envelope is now guaranteed; the STATUS is the half still open.
+    assert response.headers["content-type"].startswith("application/problem+json")
     assert response.status_code == 500
-    assert not response.headers["content-type"].startswith("application/problem+json")
 
 
 # ── the cursor discloses the row the filter just removed ────────────────────────────────────────────
@@ -572,23 +581,31 @@ async def test_a_terminal_state_re_emitted_with_a_new_instant_never_moves_the_ro
     ],
 )
 def test_a_state_store_outage_reaches_the_browser_as_a_bare_500(monkeypatch: pytest.MonkeyPatch, method: str, path: str, body: dict[str, Any] | None) -> None:
-    """GAP, pinned, and it undercuts a distinction this plane paid to make.
+    """HALF-CLOSED, and the remaining half is still pinned.
 
     `InboxUnreadable` exists so that "there is something here I refuse to serve" is a 503 problem+json
     rather than an empty 200 — the estate's own hard-won rule. The ORDINARY outage does not travel that
-    path: an unreachable sidecar or state store raises whatever the SDK raises, `_translating` re-raises
-    anything that is not an `InboxUnreadable` untouched, and no handler covers it. The caller gets a bare
-    500 with no problem+json body, so a client cannot tell a broken inbox from a broken service, and the
-    one refusal shape this plane guarantees is absent exactly when a dependency is down.
+    path: an unreachable sidecar or state store raises whatever the SDK raises, and `_translating`
+    re-raises anything that is not an `InboxUnreadable` untouched. With no catch-all, that reached the
+    browser as a bare 500 with no problem+json body at all.
 
-    Rewrite when the door maps a transport failure to 503-with-a-reason.
+    The ENVELOPE half is fixed (open_fastapi-audit, the missing-catch-all finding): `register_handlers`
+    now installs an `Exception` handler, so every refusal on this plane is problem+json and the SDK's
+    message goes to the log rather than the wire.
+
+    WHAT IS STILL WRONG: the STATUS. A dependency being down is a 503, and this answers 500, so a client
+    still cannot tell a broken state store from a broken service — the distinction `InboxUnreadable` was
+    built to make, absent exactly when a dependency is down.
+
+    Rewrite again when the door maps a transport failure to 503-with-a-reason.
     """
     faulty = _Inbox(fault=RuntimeError("dapr: could not reach state store lance-statestore"))
     with TestClient(_door(faulty, monkeypatch), raise_server_exceptions=False) as door:
         response = door.request(method, path, json=body)
 
+    # The envelope is now guaranteed; the STATUS is the half still open.
+    assert response.headers["content-type"].startswith("application/problem+json")
     assert response.status_code == 500
-    assert not response.headers["content-type"].startswith("application/problem+json")
 
 
 def test_the_refusal_body_carries_a_fixed_reason_while_the_envelope_goes_to_the_log(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

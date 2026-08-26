@@ -17,6 +17,7 @@ from fastapi import APIRouter, FastAPI
 
 from service_kit.config import Settings
 from service_kit.exceptions import register_handlers
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.middleware import register_middleware
 from service_kit.otel import setup_otel
 from service_kit.slash import SlashToleranceMiddleware
@@ -144,6 +145,18 @@ def make_service_app(
         openapi_url=f"{settings.api_prefix}/openapi.json" if settings.docs_enabled else None,
     )
     register_handlers(app)
+    # AND the lance_namespace translator, because the governed kernel these apps call raises those
+    # types: `governed/fga.py` raises `ServiceUnavailableError` on an FGA outage under a docstring
+    # promising "outage → ServiceUnavailableError → 503". Without this the fleet apps could not map
+    # one, so that outage answered a text/plain 500 — monitoring cannot tell a dependency being down
+    # from this service being broken, and `notifications/api/visibility.py` answered the same class of
+    # failure two different ways inside ONE function.
+    #
+    # `ingest/__init__.py` already did exactly this on top of the factory, with the reason in a
+    # comment ("A DENIAL MUST BE A 403, NOT A 500"). Doing it HERE instead of per app also settles the
+    # divergence open_python-audit X11 files — ingest's 422 body differing from its three fleet
+    # siblings — by making all of them one shape rather than by removing what made ingest right.
+    install_problem_handlers(app, logging.getLogger(__name__))
     register_middleware(app, settings)
 
     for router in routers:

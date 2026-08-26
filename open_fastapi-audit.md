@@ -428,7 +428,9 @@ services/gateway/src/gateway/__init__.py:325-327: `if request.url.path == f"{pre
 
 </details>
 
-<details><summary><b>Four fleet apps install no catch-all, so any unhandled exception answers text/plain — a third error envelope no client can parse</b> <i>(exception-handlers.md, ADJUSTED)</i></summary>
+<details><summary><b>~~Four fleet apps install no catch-all, so any unhandled exception answers text/plain — a third error envelope no client can parse~~</b> <i>(exception-handlers.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-26.** `register_handlers` installs an `Exception` catch-all — a fixed problem+json 500 with the traceback going to `log.exception` and nothing of the exception on the wire — so every app in the estate now shares one error envelope. And `make_service_app` also installs `install_problem_handlers`, so the four factory-only apps (compute, controlplane, flows, notifications) can map the `lance_namespace` errors their own governed kernel raises: an FGA outage now answers **503**, honouring the contract `governed/fga.py` documents, instead of a text/plain 500. Option B of the taxonomy question, chosen on precedent rather than preference — `ingest/__init__.py` already did exactly this on top of the factory and explains why in a comment, and doing it in the FACTORY also settles `open_python-audit` X11 (ingest's 422 differing from its three fleet siblings) by making all five one shape rather than by removing what made ingest right. Pinned by `packages/service-kit/tests/test_catch_all_handler.py` (5 tests, 4 RED before). **Two GAP tests in `test_adversarial_inbox.py` were rewritten, not deleted**: both named this missing catch-all as their cause, and both are now HALF closed — the envelope is guaranteed, the STATUS is not. An unusable subject and a state-store outage each still answer 500 where they should answer a named 4xx and a 503; those halves stay pinned under their original names with the residual spelled out.
 
 **Rule.** exception-handlers.md: "One handler per exception class, registered in main.py" + "media_type=application/problem+json on every Problem-shaped response"
 
