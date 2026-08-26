@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ingest.api import router as ingest_router
 from ingest.health import router as health_router
@@ -374,7 +375,8 @@ class _DaprWorkflowReader:
         try:
             import dapr.ext.workflow as wf
 
-            state = wf.DaprWorkflowClient().get_workflow_state(run_id, fetch_payloads=True)
+            client = wf.DaprWorkflowClient()
+            state = client.get_workflow_state(run_id, fetch_payloads=True)
         except Exception:
             # No sidecar, or the instance is unknown. The caller falls back to the accepted record;
             # a status endpoint that 500s when the engine is unreachable fails at precisely the
@@ -389,4 +391,82 @@ class _DaprWorkflowReader:
         # directly would work — WorkflowState.__getattr__ proxies to the wrapped object — but
         # `runtime_status` is a property that re-maps to a DIFFERENT enum, so the attribute and the
         # dict disagree on their vocabulary. One accessor, one vocabulary.
-        return dict(state.to_json())
+        return _with_fanout_progress(client, run_id, dict(state.to_json()))
+
+
+class _WorkflowStateLike(Protocol):
+    """The one method this module reads off a workflow state — see `state`'s note on `to_json()`."""
+
+    def to_json(self) -> dict[str, object]: ...
+
+
+class _WorkflowStateReader(Protocol):
+    """The one method `_with_fanout_progress` needs from the SDK client.
+
+    Protocols rather than `Any`: the helper is handed a real `DaprWorkflowClient` in production and a
+    double in tests, and naming exactly what it calls is what keeps the double honest — and what lets
+    `ty` narrow the `None` branch below instead of being told to look away.
+    """
+
+    def get_workflow_state(self, instance_id: str, *, fetch_payloads: bool = True) -> _WorkflowStateLike | None: ...
+
+
+def _as_custom_status(payload: object) -> dict[str, object]:
+    """The custom status as a mapping — `{}` for absent, unparseable, or non-object."""
+    if not isinstance(payload, str) or not payload:
+        return {}
+    try:
+        loaded = json.loads(payload)
+    except ValueError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _with_fanout_progress(client: _WorkflowStateReader, run_id: str, payload: dict[str, object]) -> dict[str, object]:
+    """Sum the CHILDREN's progress into the parent's status while the fan-out is running.
+
+    `chunk_run` publishes per-chunk progress on its own instance, under a heading calling it "THE
+    FAN-OUT'S ONLY PROGRESS SIGNAL" — and nothing read it. The parent's status for the whole fan-out
+    is what it set BEFORE dispatch (`units_total`, `chunks`), with no `units_done` key, so
+    `GET /v1/ingests/{id}` fell through to the accepted record's `0`. An operator watching a 10M-unit
+    harvest read "0 of 10,000,000" for hours on a run landing rows the whole time — which is
+    indistinguishable from a wedged run, the state this plane's terminate door exists for.
+
+    Done on the READ side deliberately. Aggregating in the parent means racing a timer against the
+    fan-out, which adds actions to `ingest_run`'s stream and so breaks replay for every in-flight
+    instance. This costs nothing durable: the child ids are derived exactly as the workflow derives
+    them, and the chunk count is already in the parent's own status.
+
+    Four things it does NOT do, each for a reason:
+      * not once the run is terminal — `finalize`'s output is then authoritative, and fanning out
+        would be N wasted round-trips on every poll of a finished run;
+      * not when the parent already carries `units_done` — it sets that itself once the fan-in
+        returns, and that aggregate outranks this one;
+      * not without a chunk count — before `enumerate_chunks` returns there are no children, and
+        guessing an id range costs a round-trip per guess against an engine answering None to each;
+      * not partially — a child read that RAISES abandons the whole sum, because an undercount would
+        render as progress going backwards, which reads as corruption rather than as a failed read.
+    """
+    if str(payload.get("runtime_status") or "") != "RUNNING":
+        return payload
+    custom = _as_custom_status(payload.get("serialized_custom_status"))
+    chunks = custom.get("chunks")
+    if not isinstance(chunks, int) or chunks <= 0 or "units_done" in custom:
+        return payload
+
+    done = 0
+    for index in range(chunks):
+        try:
+            child = client.get_workflow_state(f"{run_id}-c{index}", fetch_payloads=True)
+        except Exception:
+            logger.debug("child progress unavailable for run %s chunk %d", run_id, index, exc_info=True)
+            return payload
+        if child is None:
+            # Scheduled as a batch, but they appear one at a time. Absent means "not started yet",
+            # which is a 0, not an error.
+            continue
+        reported = _as_custom_status(dict(child.to_json()).get("serialized_custom_status")).get("units_done")
+        if isinstance(reported, int):
+            done += reported
+
+    return {**payload, "serialized_custom_status": json.dumps({**custom, "units_done": done})}

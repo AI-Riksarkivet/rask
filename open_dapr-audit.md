@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **22 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **23 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -981,6 +981,33 @@ __init__.py:357  `state = wf.DaprWorkflowClient().get_workflow_state(run_id, fet
 So the child's `ctx.set_custom_status(json.dumps({"chunk_id": chunk.chunk_id, "units_done": units_done, "units_expected": chunk.expected_units}))` at :788 lands on the child instance and no code path in this estate reads it, despite the heading above it at :776-781 calling it "THE FAN-OUT'S ONLY PROGRESS SIGNAL". The parent's status for the whole fan-out is what :550 set — `json.dumps({"units_total": units_total, "chunks": len(chunks)})`, no `units_done` key — and `units_done` first appears at :677, after `when_all` has already returned.
 
 The fallback chain confirms the operator-visible outcome: runs.py:362-363 tries `output.get("rows")` (no output until finalize returns), then the parent custom status (no key), and runs.py:376 falls through to `record.units_done`, whose only definition is `units_done: int = 0` (runs.py:92) with no writer anywhere — `grep -n units_done` over src shows no store update between accept and terminal. api.py:538 renders `units_done=record.units_done`, i.e. 0, for the entire multi-hour fan-out. Warning is the right grade: an observability gap that makes a working run read as a wedged one, not data loss.
+
+
+**FIXED 2026-08-25 — on the READ side, which is the half that carries no replay risk.**
+`_DaprWorkflowReader.state` now sums the children's reported `units_done` into the parent's status
+while the fan-out is running. The child ids are derived exactly as the workflow derives them
+(`{run_id}-c{i}`) and the chunk count is already in the parent's own status, so nothing durable
+changes.
+
+**The finding offered three fixes and two of them were wrong for this estate.** Aggregating in the
+parent means racing a timer against the fan-out and re-arming it — that ADDS actions to `ingest_run`'s
+stream, so every in-flight instance replays into `_get_wrong_action_name_error` and the deploy needs a
+drain. Deleting the signal was the other option, and it would have thrown away the only per-chunk
+progress that exists. The read-side fan-out gets the operator the number at zero replay cost.
+
+**Four cases it deliberately does NOT fan out for**, each with its own test: a terminal run (the
+output is then authoritative, and fanning out is N wasted round-trips per poll of a finished run); a
+parent already carrying `units_done` (it sets that itself once the fan-in returns, and that aggregate
+outranks this one); a parent with no chunk count (before `enumerate_chunks` returns there are no
+children, and guessing an id range costs a round-trip per guess); and a child read that RAISES — the
+sum is abandoned wholesale, because a partial one renders as progress going BACKWARDS on the next
+poll, which reads as corruption rather than as a failed read.
+
+Six tests. Two were RED; four are guards.
+
+**Two typing notes, because both were fixed rather than suppressed.** `ruff` refused `Any` for the
+client, and `ty` then refused `object.to_json()` — so the helper names two Protocols, one for the
+client's single method and one for the state's. That is narrowing, not looking away.
 
 </details>
 
