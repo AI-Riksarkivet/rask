@@ -1518,7 +1518,7 @@
 		border: none;
 		border-radius: 6px;
 		background: transparent;
-		color: var(--muted);
+		color: var(--mut);
 		font: inherit;
 		font-size: 11px;
 		cursor: pointer;
@@ -1596,7 +1596,7 @@
 	}
 	.hcuri {
 		font-size: 10px;
-		color: var(--muted);
+		color: var(--mut);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -1617,13 +1617,13 @@
 	}
 	.hcdim {
 		font-size: 10px;
-		color: var(--muted);
+		color: var(--mut);
 	}
 	.hctag {
 		font-size: 9px;
 		padding: 0 4px;
 		border-radius: 4px;
-		color: var(--muted);
+		color: var(--mut);
 		background: color-mix(in srgb, var(--ink) 7%, transparent);
 	}
 	.hchint {
@@ -1687,7 +1687,7 @@
 		border: none;
 		border-radius: 5px;
 		background: transparent;
-		color: var(--muted);
+		color: var(--mut);
 		cursor: pointer;
 	}
 	.dclose:hover {
@@ -1701,7 +1701,7 @@
 		margin: 0;
 	}
 	.dgrid dt {
-		color: var(--muted);
+		color: var(--mut);
 		font-size: 10px;
 	}
 	.dgrid dd {
@@ -1716,7 +1716,7 @@
 		white-space: nowrap;
 	}
 	.dbad {
-		color: var(--danger, #d9534f);
+		color: var(--fail);
 		font-weight: 600;
 	}
 	.dchips {
@@ -1728,7 +1728,7 @@
 		padding: 0 4px;
 		border-radius: 4px;
 		font-size: 9px;
-		color: var(--muted);
+		color: var(--mut);
 		background: color-mix(in srgb, var(--ink) 7%, transparent);
 	}
 	.drel h3 {
@@ -1737,7 +1737,7 @@
 		font-weight: 600;
 		letter-spacing: 0.03em;
 		text-transform: uppercase;
-		color: var(--muted);
+		color: var(--mut);
 	}
 	.drel ul {
 		margin: 0;
@@ -1768,7 +1768,7 @@
 	.dnone {
 		margin: 0;
 		padding: 2px 4px;
-		color: var(--muted);
+		color: var(--mut);
 		font-style: italic;
 	}
 	.dfoot {

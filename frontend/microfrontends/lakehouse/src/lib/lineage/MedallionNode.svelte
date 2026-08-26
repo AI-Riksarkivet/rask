@@ -167,7 +167,7 @@
 		border: none;
 		border-radius: 4px;
 		background: transparent;
-		color: var(--mut, var(--muted));
+		color: var(--mut);
 		font-size: 13px;
 		line-height: 1;
 		cursor: pointer;

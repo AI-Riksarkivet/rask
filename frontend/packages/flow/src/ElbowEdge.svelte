@@ -109,21 +109,50 @@
 	 * anchor in another is how a label ends up floating beside an edge it does not belong to — which
 	 * matters here because the column graph labels every edge with its transformation.
 	 */
+	/** The point half way along a polyline, measured by length. */
+	function pointAtHalfLength(points: { x: number; y: number }[]): { x: number; y: number } {
+		const first = points[0] ?? { x: 0, y: 0 };
+		let total = 0;
+		for (let i = 1; i < points.length; i += 1) {
+			const a = points[i - 1];
+			const b = points[i];
+			if (a && b) total += Math.hypot(b.x - a.x, b.y - a.y);
+		}
+		let travelled = 0;
+		const half = total / 2;
+		for (let i = 1; i < points.length; i += 1) {
+			const a = points[i - 1];
+			const b = points[i];
+			if (!a || !b) continue;
+			const seg = Math.hypot(b.x - a.x, b.y - a.y);
+			if (travelled + seg >= half) {
+				// `seg` is non-zero here: a zero-length segment cannot carry `travelled` past `half`
+				// unless `half` is already 0, which the degenerate guard below covers.
+				const t = seg === 0 ? 0 : (half - travelled) / seg;
+				return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+			}
+			travelled += seg;
+		}
+		return first;
+	}
+
 	const geometry = $derived.by((): { path: string; labelX: number; labelY: number } => {
 		if (routeIsCurrent && route) {
 			// ANCHORED TO THE LIVE HANDLES, not to ELK's start/end: Svelte Flow positions handles on
 			// the node's edge and ELK reports its own port coordinate, so using ELK's endpoints leaves
 			// a visible gap between the arrow and the card. The bends in between are ELK's.
 			const points = [{ x: sourceX, y: sourceY }, ...route.bendPoints, { x: targetX, y: targetY }];
-			// The MIDDLE VERTEX of the route, not the midpoint of the straight line between the ends:
-			// on an edge that turns a corner those are different places, and the second one can land
-			// on top of the node the route was steered around.
-			const mid = points[Math.floor(points.length / 2)] ?? points[0];
-			return {
-				path: roundedPath(points),
-				labelX: mid?.x ?? sourceX,
-				labelY: mid?.y ?? sourceY,
-			};
+			// HALFWAY ALONG THE PATH BY LENGTH, not the middle vertex and not the midpoint of the
+			// straight line between the ends.
+			//
+			// The straight-line midpoint can land on top of the very node the route was steered
+			// around. The middle vertex is worse in the common case: orthogonal routes share vertical
+			// channels, so every edge converging on one node puts its label at almost the same point —
+			// measured on the column graph, pairs of `IDENTITY` labels stacked on each other and read
+			// as one smudge. Arc length spreads them, because two edges into the same node still
+			// differ in where their halfway point falls.
+			const mid = pointAtHalfLength(points);
+			return { path: roundedPath(points), labelX: mid.x, labelY: mid.y };
 		}
 		const [smooth, labelX, labelY] = getSmoothStepPath({
 			sourceX,

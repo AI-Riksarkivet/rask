@@ -83,7 +83,7 @@
 		font-size: 9px;
 		padding: 0 4px;
 		border-radius: 4px;
-		color: var(--muted);
+		color: var(--mut);
 		background: color-mix(in srgb, var(--ink) 8%, transparent);
 	}
 </style>
