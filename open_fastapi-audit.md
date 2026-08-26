@@ -50,7 +50,7 @@ verifier, and the corrected form is what appears here. 2 were refuted outright.
 
 ## Scorecard
 
-> ### RE-VERIFIED AT HEAD `fe789bfc`, 2026-08-26 — **55 of 60 still real; 4 drained since (51 open)**
+> ### RE-VERIFIED AT HEAD `fe789bfc`, 2026-08-26 — **55 of 60 still real; 5 drained since (50 open)**
 >
 > Ten read-only agents, one per lane, re-opened every finding against the current code. **Nothing was
 > refuted and nothing was undecidable**: 55 STILL_REAL (5 high / 22 medium / 28 low), 4 ALREADY_FIXED,
@@ -183,7 +183,24 @@ controlplane/routes.py:36-38 `@router.get("/")` / `def list_projects(reader: Rea
 
 </details>
 
-<details><summary><b>`open_reader`/`open_writer` fall back to the estate's catalog service credential when the request carries no bearer — the confused deputy their own docstrings name, with no non-request caller to justify it</b> <i>(authn.md + authz.md, CONFIRMED)</i></summary>
+<details><summary><b>~~`open_reader`/`open_writer` fall back to the estate's catalog service credential when the request carries no bearer — the confused deputy their own docstrings name, with no non-request caller to justify it~~</b> <i>(authn.md + authz.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-26 — `3bf79958`.** Owner ruling: never substitute, and delete the dead config. All
+> three seams forward `caller_token` alone; `MEDIA_CATALOG_TOKEN` is removed from the media settings,
+> from `explorer.yaml` (Secret + env) and from `values.yaml`.
+>
+> The finding's central claim was verified rather than trusted, and it held three ways: all eight call
+> sites are request-scoped annotator routes; the credential had no other consumer in the tree; and the
+> cited justification — "the publish saga, which outlives any request" — names a REAL saga that mints
+> its own bearer from Dex (`annotator/projects/lakehouse.py:388`) and never touched this seam. The
+> branch existed solely for the case it must not serve.
+>
+> Not overcorrected: the movers' `MEDALLION_CATALOG_TOKEN` stays and is pinned by a test, because they
+> genuinely have no caller to forward.
+>
+> Worth keeping: `tests/unit/test_catalog_caller_token.py` already argued this principle in its own
+> docstring — "whose stated reason does not apply to a request-scoped read" — and encoded the
+> exception in its last parametrized case anyway. That exception was the hole.
 
 **Rule.** authn.md § API keys ("Don't reuse this for end users") / authz.md: authorization scope must equal the caller's scope; `service_kit/governed/deps.py:130-138` states the exact rule this violates
 
