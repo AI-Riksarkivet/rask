@@ -173,8 +173,18 @@ class CatalogServiceClient:
 
     # ── the two doors ─────────────────────────────────────────────────────────────────
 
-    def ensure(self, namespace: str, dataset: str) -> str:
+    def ensure(self, namespace: str, dataset: str, external_base: str | None = None) -> str:
         """Create the namespace and the table if absent; return the location the catalog vends.
+
+        ``external_base`` registers the root this dataset's blob descriptors may point at. It is
+        stamped into the SCHEMA at creation — the same mechanism `lander.create_empty` uses — because
+        the catalog's create door takes an Arrow schema and nothing else, and the base has to be
+        recorded before the first fragment lands.
+
+        The parameter existed on `LocalCatalog.ensure` and not here, so `runtime.py`'s call worked in
+        every unit test and died in-cluster with `unexpected keyword argument \'external_base\'` at
+        the activity that creates the table — measured on a real backfill 2026-08-26. A two-sided seam
+        only holds if both sides accept the same call.
 
         THREE steps, not two. The design said "create the table, then commit fragments", and against
         a real catalog that fails at the first call with
@@ -200,7 +210,7 @@ class CatalogServiceClient:
         self._ensure_namespace(namespace)
         # The create's OWN response carries the location, so the happy path costs one call, not two —
         # and more importantly it does not re-ask a read door the question the read door cannot answer.
-        created = self._create_empty(namespace, dataset)
+        created = self._create_empty(namespace, dataset, external_base)
         if created is not None:
             return created
 
@@ -376,7 +386,7 @@ class CatalogServiceClient:
                 )
             raise CatalogError(f"catalog refused namespace {namespace!r} ({response.status_code}): {response.text[:300]}")
 
-    def _create_empty(self, namespace: str, dataset: str) -> str | None:
+    def _create_empty(self, namespace: str, dataset: str, external_base: str | None = None) -> str | None:
         """Step 1 of the creation two-step — zero rows, so no data byte transits the catalog.
 
         Returns the location the catalog vends, or None when the table already existed (409).
@@ -391,9 +401,16 @@ class CatalogServiceClient:
         import httpx
         import pyarrow as pa
 
+        from service_kit.lakehouse import blobs
+
+        # Stamp the approved external base onto the schema before the create, exactly as the local
+        # path does — the catalog's door carries a schema and nothing else, so this is where the base
+        # has to ride.
+        schema = blobs.stamp_external_base(self._schema, external_base) if external_base else self._schema
+
         sink = pa.BufferOutputStream()
-        with pa.ipc.new_stream(sink, self._schema) as writer:
-            writer.write_table(self._schema.empty_table())
+        with pa.ipc.new_stream(sink, schema) as writer:
+            writer.write_table(schema.empty_table())
         body = sink.getvalue().to_pybytes()
 
         url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/create"
