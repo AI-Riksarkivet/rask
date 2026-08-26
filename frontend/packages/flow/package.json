@@ -19,7 +19,8 @@
 		"fmt:check": "rsvelte-fmt --check ."
 	},
 	"dependencies": {
-		"@xyflow/svelte": "^1.4.2"
+		"@xyflow/svelte": "^1.4.2",
+		"elkjs": "^0.12.0"
 	},
 	"devDependencies": {
 		"@rask/config": "workspace:*",

@@ -7,8 +7,12 @@
  * - `StaticFlow` — the SSR renderer: explicit dims and handle positions so it renders with no browser
  *   layout engine at all (media's `/diagram` static-HTML endpoint). Deliberately NOT the viewer with
  *   props off — the two have incompatible contracts (client hooks vs server render).
- * - `layout` — the layered barycentre placer. Generic coordinates math that was misfiled under
- *   `panels/lineage` while the FGA access graph imported it cross-domain.
+ * - `layout` — the SYNCHRONOUS layered barycentre placer. Generic coordinates math that was misfiled
+ *   under `panels/lineage` while the FGA access graph imported it cross-domain. It implements the
+ *   first three phases of Sugiyama and stops before coordinate assignment.
+ * - `elkLayout` — the ASYNC upgrade over elkjs, which does the phase `layout` skips (plus dummy-node
+ *   edge routing and real component packing). Same algorithm family Marquez uses for the same
+ *   picture. Both ship: a caller that must place inside one tick still needs the sync one.
  * - `FlowAutoFit` — the one surviving copy (`maxZoom: 1`).
  *
  * `./styles.css` is the vendor sheet's `--xy-*` theme mapped onto the OKLCH tokens — imported per zone
@@ -29,4 +33,6 @@ export { default as GraphCanvas } from './GraphCanvas.svelte';
 export { default as StaticFlow } from './StaticFlow.svelte';
 export { default as FlowAutoFit } from './FlowAutoFit.svelte';
 export { depths, layout } from './layout';
+export { elkLayout } from './elk-layout';
 export type { LayoutEdge, Placed } from './layout';
+export type { ElkLayoutOptions } from './elk-layout';

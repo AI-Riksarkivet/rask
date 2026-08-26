@@ -32,7 +32,7 @@
 	import type { LineageState } from '$lib/lineage/store.svelte';
 	import { useColorMode } from '@rask/ui/color-mode';
 	import { LAYER } from '@rask/api/lineage';
-	import { depths, layout } from '@rask/flow';
+	import { depths, elkLayout, layout } from '@rask/flow';
 
 	/**
 	 * `base` and `navigate` arrive as PROPS rather than from `$app/paths` and `$app/navigation`.
@@ -167,6 +167,15 @@
 			: null,
 	);
 
+	/**
+	 * ELK is ASYNC, and the build below is not. The sync `layout()` still runs first so the canvas
+	 * paints immediately with usable coordinates; ELK's better ones land a tick later and are applied
+	 * only if no newer build has started since — otherwise a slow layout for a stale graph would
+	 * overwrite the positions of the graph actually on screen. That race is real here because the
+	 * store polls, and focusing a node rebuilds while a previous run may still be resolving.
+	 */
+	let buildGeneration = 0;
+
 	let nodes = $state.raw<FlowNode[]>([]);
 	let edges = $state.raw<
 		{ id: string; source: string; target: string; animated: boolean; type: string }[]
@@ -261,10 +270,14 @@
 		// node. Without it this canvas is 79 nodes at 1,200×2,750px, a 1:2.3 aspect in a 16:9
 		// viewport, so `fitView` clamps to minZoom and every card renders ~20px wide.
 		//
-		// A hop here is a LOGICAL one — dataset → job → dataset, i.e. TWO graph edges — because
-		// this plane alternates the kinds. Depth 1 therefore reads as "the runs that touch this
-		// table and the tables they touch", which is what a person means by one hop; counting raw
-		// edges would make every odd depth end on a job and look truncated.
+		// DEPTH IS GRAPH HOPS, exactly as Marquez counts it (`?depth=N` handed straight to its
+		// lineage API, defaulting to 2 in `TableLevel.tsx`). Because the graph alternates kinds, one
+		// hop off a dataset reaches its JOBS and two reaches the tables those jobs touch — so an odd
+		// depth legitimately ends on a job, and 2 is the default for the same reason it is theirs.
+		//
+		// This counted LOGICAL hops (doubled) at first, which made depth 1 mean "runs plus their
+		// tables". Nicer in isolation, and wrong: the number then meant something different here than
+		// in the tool it is modelled on, to anyone comparing the two.
 		//
 		// Filtering happens BEFORE layout on purpose: laying out the full graph and then hiding
 		// nodes would leave the survivors on their estate-wide coordinates, scattered across a
@@ -277,7 +290,7 @@
 			}
 			const keep = new Set<string>([focused]);
 			let frontier = [focused];
-			for (let hop = 0; hop < focusDepth * 2 && frontier.length > 0; hop += 1) {
+			for (let hop = 0; hop < focusDepth && frontier.length > 0; hop += 1) {
 				const next: string[] = [];
 				for (const id of frontier) {
 					for (const n of adj.get(id) ?? []) {
@@ -298,6 +311,25 @@
 
 		const depth = depths(ids, derive);
 		const place = layout(ids, derive, (id) => depth.get(id) ?? 0);
+
+		// Hand the SAME id/edge set to ELK for the phases `layout()` skips — coordinate assignment,
+		// dummy-node edge routing and component packing. Untracked: this reads `nodes` to re-place
+		// them, and tracking that would make the effect retrigger itself forever.
+		const generation = ++buildGeneration;
+		void elkLayout(ids, derive)
+			.then((elk) => {
+				if (generation !== buildGeneration || elk.size === 0) return;
+				untrack(() => {
+					nodes = nodes.map((n) => {
+						const p = elk.get(n.id);
+						return p ? { ...n, position: p } : n;
+					});
+				});
+			})
+			.catch(() => {
+				// A failed layout is not a failed graph: the sync placement is already on screen and
+				// correct enough to read, so this degrades rather than blanking the canvas.
+			});
 
 		const dsNodes: FlowNode[] = [...dsSet].map((id) => {
 			const meta = dsMeta.get(id);
@@ -406,7 +438,11 @@
 					<span class="fhint">click a node to focus</span>
 					<span class="fsep">·</span>
 				{/if}
-				<span class="flabel">depth</span>
+				<span
+					class="flabel"
+					title="graph hops from the focused node — a hop alternates dataset and job, as in Marquez"
+					>hops</span
+				>
 				{#each FOCUS_DEPTHS as d (d ?? 'all')}
 					<button
 						class="fd"
