@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from ingest.workflow import ingest_run, terminate_chunks
+from ingest.workflow import TerminateChunksInput, ingest_run, terminate_chunks
 
 
 if TYPE_CHECKING:
@@ -33,6 +33,21 @@ SPEC: dict[str, Any] = {"run_id": "r-abandon", "kind": "test-src", "project": "p
 #: A ceiling low enough that the deadline branch is taken, resolved as an activity result.
 LIMITS: dict[str, Any] = {"max_run_hours": 1.0, "max_units": 0}
 HANDLE: dict[str, Any] = {"location": "s3://b/t.lance", "read_version": 1}
+
+
+def _recorded(payload: object) -> dict[str, Any]:
+    """An activity input as the RUNTIME records it: JSON, never the model instance.
+
+    Activities declare Pydantic inputs now (DWF-ACT-009) and the SDK coerces on the worker side, so a
+    workflow body hands `call_activity` a MODEL. History still holds the serialized form, so a fake
+    context that stored the instance would let assertions read attributes the real recorded payload
+    does not have — a double diverging from the thing it doubles.
+    """
+    dump = getattr(payload, "model_dump", None)
+    if callable(dump):
+        dumped = dump(mode="json")
+        return dumped if isinstance(dumped, dict) else {}
+    return payload if isinstance(payload, dict) else {}
 
 
 class _Task:
@@ -59,7 +74,7 @@ class _Ctx:
         self.instance_id = "r-abandon"
 
     def call_activity(self, fn: Any, *, input: Any = None, retry_policy: Any = None) -> _Task:  # noqa: A002
-        self.activities.append((fn.__name__, input))
+        self.activities.append((fn.__name__, _recorded(input)))
         return _Task()
 
     def call_child_workflow(self, fn: Any, *, input: Any = None, instance_id: str | None = None) -> _Task:  # noqa: A002
@@ -170,7 +185,7 @@ def test_terminate_chunks_is_best_effort_and_never_raises(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(wf_sdk, "DaprWorkflowClient", _Boom)
 
-    out = terminate_chunks(cast(Any, object()), {"child_ids": ["a", "b"]})
+    out = terminate_chunks(cast(Any, object()), TerminateChunksInput(child_ids=["a", "b"]))
 
     assert out == {"terminated": 0, "requested": 2}, "a failing terminate must be counted, not raised"
     assert attempted == ["a", "b"], "one child failing must not stop the others being tried"
@@ -187,11 +202,11 @@ def test_terminate_chunks_counts_what_it_actually_stopped(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(wf_sdk, "DaprWorkflowClient", _Half)
 
-    assert terminate_chunks(cast(Any, object()), {"child_ids": ["c0", "c1", "c2"]}) == {"terminated": 2, "requested": 3}
+    assert terminate_chunks(cast(Any, object()), TerminateChunksInput(child_ids=["c0", "c1", "c2"])) == {"terminated": 2, "requested": 3}
 
 
 def test_no_children_is_a_cheap_no_op() -> None:
-    assert terminate_chunks(cast(Any, object()), {"child_ids": []}) == {"terminated": 0, "requested": 0}
+    assert terminate_chunks(cast(Any, object()), TerminateChunksInput(child_ids=[])) == {"terminated": 0, "requested": 0}
 
 
 def test_OPERATOR_CANCELLATION_stops_the_children_and_leaves_a_FAIL_record() -> None:

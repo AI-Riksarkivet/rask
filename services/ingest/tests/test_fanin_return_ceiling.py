@@ -49,6 +49,21 @@ def _remember_fanout(_tasks: Any) -> Any:
     return task
 
 
+def _recorded(payload: object) -> dict[str, Any]:
+    """An activity input as the RUNTIME records it: JSON, never the model instance.
+
+    Activities declare Pydantic inputs now (DWF-ACT-009) and the SDK coerces on the worker side, so a
+    workflow body hands `call_activity` a MODEL. History still holds the serialized form, so a fake
+    context that stored the instance would let assertions read attributes the real recorded payload
+    does not have — a double diverging from the thing it doubles.
+    """
+    dump = getattr(payload, "model_dump", None)
+    if callable(dump):
+        dumped = dump(mode="json")
+        return dumped if isinstance(dumped, dict) else {}
+    return payload if isinstance(payload, dict) else {}
+
+
 class _Task:
     """A stand-in for a durabletask task — identity is all the `when_*` comparisons use."""
 
@@ -78,7 +93,7 @@ class _Ctx:
         self.timers: int = 0
 
     def call_activity(self, fn: Any, *, input: Any = None, retry_policy: Any = None) -> _Task:  # noqa: A002 — the runtime's own keyword
-        self.activities.append((getattr(fn, "__name__", str(fn)), input or {}))
+        self.activities.append((getattr(fn, "__name__", str(fn)), _recorded(input)))
         return _Task()
 
     def call_child_workflow(self, fn: Any, *, input: Any = None, instance_id: str | None = None) -> _Task:  # noqa: A002

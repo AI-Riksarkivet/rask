@@ -25,7 +25,7 @@ import pytest
 from dapr.ext.workflow import WorkflowActivityContext
 from ingest import lineage as lineage_mod
 from ingest.adapters import register_builtin_sources
-from ingest.workflow import ChunkResult, ChunkSpec, RunSpec, emit_start, emit_terminal, enumerate_chunks
+from ingest.workflow import ChunkResult, ChunkSpec, EnumerateChunksInput, RunOutcome, RunSpec, TerminalInput, emit_start, emit_terminal, enumerate_chunks
 
 
 NATS_URL = os.getenv("RASK_NATS_URL", "nats://localhost:4222")
@@ -80,7 +80,10 @@ def test_enumerate_produces_chunks_not_units(activity_ctx: WorkflowActivityConte
     # inside it would enumerate its own Lance files as units.
     spec = RunSpec(run_id="r1", kind="local-dir", project="p", dataset="pages", options={"root": str(source)})
 
-    chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": _empty_bronze(tmp_path / "bronze.lance")})
+    chunks = enumerate_chunks(
+        activity_ctx,
+        EnumerateChunksInput(spec=spec, dataset_uri=_empty_bronze(tmp_path / "bronze.lance"), max_units=0, incremental_max_rows=0),
+    )
 
     assert isinstance(chunks, list), f"enumeration was refused: {chunks}"
     assert len(chunks) == 1, "5 units must be ONE chunk, not five activity results"
@@ -105,7 +108,10 @@ def test_enumeration_slices_at_the_chunk_boundary(activity_ctx: WorkflowActivity
     wf_mod.CHUNK_SIZE = 3
     try:
         spec = RunSpec(run_id="r2", kind="local-dir", project="p", dataset="d", options={"root": str(source)})
-        chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": _empty_bronze(tmp_path / "bronze.lance")})
+        chunks = enumerate_chunks(
+            activity_ctx,
+            EnumerateChunksInput(spec=spec, dataset_uri=_empty_bronze(tmp_path / "bronze.lance"), max_units=0, incremental_max_rows=0),
+        )
     finally:
         wf_mod.CHUNK_SIZE = original
 
@@ -124,10 +130,10 @@ def test_a6_lineage_start_precedes_the_work_and_a_terminal_always_follows(activi
     """
     spec = RunSpec(run_id="r3", kind="local-dir", project="p", dataset="d", options={"root": str(tmp_path)})
 
-    emit_start(activity_ctx, spec.model_dump())
+    emit_start(activity_ctx, spec)
     emit_terminal(
         activity_ctx,
-        {"spec": spec.model_dump(), "outcome": {"status": "FAILED", "committed_version": None, "rows": 0, "errors": {"k": "boom"}}},
+        TerminalInput(spec=spec, outcome=RunOutcome.model_validate({"status": "FAILED", "committed_version": None, "rows": 0, "errors": {"k": "boom"}})),
     )
 
     kinds = [e.event_type for e in lineage_mod.recorded_events()]
@@ -169,7 +175,10 @@ async def test_a4_a7_the_full_chain_lands_rows_and_commits_once(activity_ctx: Wo
     LocalCatalog(BRONZE_SCHEMA).ensure_at(uri)
     monkeypatch.setenv("RASK_INGEST_ACTIVE_DATASET", uri)
 
-    chunks = enumerate_chunks(activity_ctx, {"spec": spec.model_dump(), "dataset_uri": _empty_bronze(tmp_path / "bronze.lance")})
+    chunks = enumerate_chunks(
+        activity_ctx,
+        EnumerateChunksInput(spec=spec, dataset_uri=_empty_bronze(tmp_path / "bronze.lance"), max_units=0, incremental_max_rows=0),
+    )
     assert isinstance(chunks, list), f"enumeration was refused: {chunks}"
     chunk = ChunkSpec.model_validate(chunks[0])
     assert await publish_chunk_units(chunk) == 4

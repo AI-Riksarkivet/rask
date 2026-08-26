@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from ingest.workflow import ingest_run
+from ingest.workflow import RunOutcome, RunSpec, TerminalInput, ingest_run
 
 
 if TYPE_CHECKING:
@@ -39,6 +39,21 @@ def _remember_fanout(_tasks: Any) -> Any:
     task = _Task()
     _FANOUT.append(task)
     return task
+
+
+def _recorded(payload: object) -> dict[str, Any]:
+    """An activity input as the RUNTIME records it: JSON, never the model instance.
+
+    Activities declare Pydantic inputs now (DWF-ACT-009) and the SDK coerces on the worker side, so a
+    workflow body hands `call_activity` a MODEL. History still holds the serialized form, so a fake
+    context that stored the instance would let assertions read attributes the real recorded payload
+    does not have — a double diverging from the thing it doubles.
+    """
+    dump = getattr(payload, "model_dump", None)
+    if callable(dump):
+        dumped = dump(mode="json")
+        return dumped if isinstance(dumped, dict) else {}
+    return payload if isinstance(payload, dict) else {}
 
 
 class _Task:
@@ -77,7 +92,7 @@ class _Ctx:
         self.statuses: list[str] = []
 
     def call_activity(self, fn: Any, *, input: Any = None, retry_policy: Any = None) -> _Task:  # noqa: A002 — the runtime's own keyword
-        self.activities.append((getattr(fn, "__name__", str(fn)), input or {}))
+        self.activities.append((getattr(fn, "__name__", str(fn)), _recorded(input)))
         return _Task()
 
     # `instance_id` is accepted (and unused — this fake returns a completed task) because the REAL
@@ -241,7 +256,10 @@ def test_the_SUCCESS_path_is_untouched_by_the_boundary() -> None:
     gen.send(ok)  # finalize's outcome -> emit_terminal
 
     assert ctx.activities[-1][0] == "emit_terminal"
-    assert ctx.activities[-1][1]["outcome"] == ok
+    # The CANONICAL form, not the sparse dict the test wrote. Activities declare Pydantic inputs now
+    # (DWF-ACT-009), so the body validates the outcome into `RunOutcome` and history carries every
+    # declared field rather than only the keys this test happened to set. Same meaning, fuller record.
+    assert ctx.activities[-1][1]["outcome"] == RunOutcome.model_validate(ok).model_dump(mode="json")
 
     with pytest.raises(StopIteration) as stop:
         gen.send(None)
@@ -335,10 +353,10 @@ def test_a_terminal_run_is_COUNTED_by_status_and_volume(monkeypatch: pytest.Monk
 
     emit_terminal(
         cast("Any", None),
-        {
-            "spec": {"run_id": "run-1", "project": "acme", "dataset": "d", "kind": "k", "source": "s"},
-            "outcome": {"status": "FAILED", "rows": 12, "errors_total": 3},
-        },
+        TerminalInput(
+            spec=RunSpec.model_validate({"run_id": "run-1", "project": "acme", "dataset": "d", "kind": "k", "source": "s"}),
+            outcome=RunOutcome.model_validate({"status": "FAILED", "rows": 12, "errors_total": 3}),
+        ),
     )
 
     assert runs and runs[0][1].get("lance.ingest.status") == "FAILED", f"the run verdict was not counted: {runs}"
@@ -382,10 +400,10 @@ def test_the_terminal_span_names_the_RUN_and_marks_a_failed_one(monkeypatch: pyt
     with provider.get_tracer("test").start_as_current_span("activity: emit_terminal"):
         emit_terminal(
             cast("Any", None),
-            {
-                "spec": {"run_id": "run-77", "project": "acme", "dataset": "pages", "kind": "k", "source": "s"},
-                "outcome": {"status": "FAILED", "rows": 0, "errors_total": 2},
-            },
+            TerminalInput(
+                spec=RunSpec.model_validate({"run_id": "run-77", "project": "acme", "dataset": "pages", "kind": "k", "source": "s"}),
+                outcome=RunOutcome.model_validate({"status": "FAILED", "rows": 0, "errors_total": 2}),
+            ),
         )
 
     (span,) = exporter.get_finished_spans()

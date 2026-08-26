@@ -25,7 +25,7 @@ import pytest
 from ingest.identity import unit_id
 from ingest.lander import CREATION_FLAGS
 from ingest.worker import units_to_table
-from ingest.workflow import enumerate_chunks
+from ingest.workflow import EnumerateChunksInput, RunSpec, enumerate_chunks
 
 
 if TYPE_CHECKING:
@@ -124,16 +124,20 @@ def _seed_bronze(uri: str, keys: list[str]) -> None:
 
 
 def _enumerate(ctx: WorkflowActivityContext, root: Path, uri: str) -> list[dict[str, Any]]:
-    payload = {
-        "spec": {
-            "run_id": "conv-test",
-            "kind": "local-dir",
-            "project": "p",
-            "dataset": "d",
-            "options": {"root": str(root)},
-        },
-        "dataset_uri": uri,
-    }
+    payload = EnumerateChunksInput(
+        spec=RunSpec.model_validate(
+            {
+                "run_id": "conv-test",
+                "kind": "local-dir",
+                "project": "p",
+                "dataset": "d",
+                "options": {"root": str(root)},
+            }
+        ),
+        dataset_uri=uri,
+        max_units=0,
+        incremental_max_rows=0,
+    )
     chunks = enumerate_chunks(ctx, payload)
     # `enumerate_chunks` may return a compact REFUSAL dict instead of chunks (the unit ceiling and
     # the gRPC dispatch budget). Every test through this helper is well under both, so a dict here

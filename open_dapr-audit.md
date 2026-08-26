@@ -7,7 +7,7 @@ audited as they sit on disk). Unsettled work; **delete this file when the backlo
 **No code was changed by this audit.** It is a read-only pass whose deliverable is this backlog.
 
 > **PROGRESS (live).** This backlog is being drained under a `/goal` run.
-> **23 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
+> **24 of 48 closed — the critical tier is complete, and every flows WARNING is closed**
 > (one flows `info` remains, the DWF-ACT-002 idempotency-key row). Findings marked **FIXED** below carry the commit and the test that
 > pins them. The file is deleted when the count reaches 48.
 >
@@ -1346,6 +1346,42 @@ The failure claim is REFUTED by measurement. The finding asserts "a Lance Append
 The dedupe is not lost either: `dataplane.py:625-628` skips versions `&lt;= read_version`, so presenting 0 makes `_find_run_commit` scan MORE versions, not fewer — strictly more likely to recognise the run's own commit. And `lander.py:146` short-circuits an empty list before `read_version` is used at all.
 
 The cross-deploy premise is also weaker than stated. runtime.py:236-240 documents a rollout path for the CHUNK descriptor shape (`if chunk.keys:` inline branch), not for the finalize envelope, and no comment or test anywhere claims an older build's finalize input existed without `read_version`. Severity info is right; the framing needs the failure sentence removed.
+
+
+**FIXED 2026-08-25 — owner ruling: type the signatures ("do what best practices").**
+
+The ruling matters because the estate had a WRITTEN position on the other side, in
+`flows/activities.py`: "a plain dict is the shape that survives a model gaining a field." That
+argument was about replay compatibility, which the owner waived — and it is also out of date. Checked
+against the installed SDK rather than assumed: `workflow_runtime.py:56 _coerce_activity_input` →
+`_model_protocol.coerce_to_model` coerces an activity's input into whatever model its second
+parameter is annotated with, duck-typed on `model_dump`/`model_validate`. The annotation is enforced
+by the runtime, so it is not decoration.
+
+All ten activities are typed. Six already validated a whole `RunSpec`/`ChunkSpec` by hand and now
+just name it. Four read composite dicts and get declared envelopes — `EnumerateChunksInput`,
+`FinalizeInput`, `TerminalInput`, `TerminateChunksInput` — with **every field required**, because
+each is unconditionally supplied at every call site and a default would only mask the very defect
+this closes. The worst of those reads was `int(payload.get("read_version") or 0)`: a missing key
+silently became base version 0, which is what makes the catalog unable to recognise its own earlier
+commit and lands the run's rows twice.
+
+**The workflow bodies now pass models too**, because `call_activity` is generic in the activity's
+declared input and `ty` correctly refused the dicts. History is unchanged — a model and its
+`model_dump()` serialize to the same JSON — and the action stream is untouched, so no drain.
+
+**It immediately found a real bug, which is the argument for the rule.** `RunOutcome` never declared
+`units_total`, so pydantic's `extra="ignore"` dropped it at every terminal record. That went unseen
+while the workflow handed `emit_terminal` a raw dict — history kept the key even though the model
+discarded it — and typing made the loss visible. The field is now declared, beside the publication
+verdict fields whose comment tells the same story about the same failure.
+
+**Workflow BODIES still validate by hand**, and two comments now say why: the SDK coerces activity
+input, not workflow input. My first pass deleted those two lines as though they were the activities'
+and the suite caught it.
+
+No new test file: the change is proven by the 546 existing ingest tests, four of which had to be
+updated to the canonical form and are RED against the old shape.
 
 </details>
 

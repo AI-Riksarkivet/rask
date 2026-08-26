@@ -50,6 +50,21 @@ def _remember_fanout(_tasks: Any) -> Any:
     return task
 
 
+def _recorded(payload: object) -> dict[str, Any]:
+    """An activity input as the RUNTIME records it: JSON, never the model instance.
+
+    Activities declare Pydantic inputs now (DWF-ACT-009) and the SDK coerces on the worker side, so a
+    workflow body hands `call_activity` a MODEL. History still holds the serialized form, so a fake
+    context that stored the instance would let assertions read attributes the real recorded payload
+    does not have — a double diverging from the thing it doubles.
+    """
+    dump = getattr(payload, "model_dump", None)
+    if callable(dump):
+        dumped = dump(mode="json")
+        return dumped if isinstance(dumped, dict) else {}
+    return payload if isinstance(payload, dict) else {}
+
+
 class _Task:
     """A stand-in for a durabletask task — identity is all `when_any` comparisons use."""
 
@@ -80,7 +95,7 @@ class _Ctx:
         self.statuses: list[str] = []
 
     def call_activity(self, fn: Any, *, input: Any = None, retry_policy: Any = None) -> _Task:  # noqa: A002 — the runtime's own keyword
-        self.activities.append((getattr(fn, "__name__", str(fn)), input or {}))
+        self.activities.append((getattr(fn, "__name__", str(fn)), _recorded(input)))
         return _Task()
 
     # `instance_id` is accepted (and unused — this fake returns a completed task) because the REAL
@@ -181,12 +196,12 @@ def test_the_ceilings_are_read_in_ACTIVITY_scope_and_default_to_unbounded(activi
     monkeypatch.delenv("RASK_INGEST_MAX_RUN_HOURS", raising=False)
     monkeypatch.delenv("RASK_INGEST_MAX_UNITS", raising=False)
     monkeypatch.delenv("RASK_INGEST_INCREMENTAL_MAX_ROWS", raising=False)
-    assert resolve_limits(activity_ctx, SPEC) == {"max_run_hours": 0.0, "max_units": 0, "incremental_max_rows": 0}
+    assert resolve_limits(activity_ctx, RunSpec.model_validate(SPEC)) == {"max_run_hours": 0.0, "max_units": 0, "incremental_max_rows": 0}
 
     monkeypatch.setenv("RASK_INGEST_MAX_RUN_HOURS", "24")
     monkeypatch.setenv("RASK_INGEST_MAX_UNITS", "500")
     monkeypatch.setenv("RASK_INGEST_INCREMENTAL_MAX_ROWS", "1000")
-    assert resolve_limits(activity_ctx, SPEC) == {"max_run_hours": 24.0, "max_units": 500, "incremental_max_rows": 1000}
+    assert resolve_limits(activity_ctx, RunSpec.model_validate(SPEC)) == {"max_run_hours": 24.0, "max_units": 500, "incremental_max_rows": 1000}
 
 
 def test_an_EMPTY_env_value_is_unbounded_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -205,7 +220,7 @@ def test_ACCEPT_TIME_limits_on_the_spec_win_over_the_deployment(activity_ctx: Wo
     monkeypatch.setenv("RASK_INGEST_MAX_UNITS", "500")
     monkeypatch.setenv("RASK_INGEST_INCREMENTAL_MAX_ROWS", "999")
 
-    resolved = resolve_limits(activity_ctx, {**SPEC, "limits": {"max_run_hours": 1.0, "max_units": 9, "incremental_max_rows": 7}})
+    resolved = resolve_limits(activity_ctx, RunSpec.model_validate({**SPEC, "limits": {"max_run_hours": 1.0, "max_units": 9, "incremental_max_rows": 7}}))
 
     assert resolved == {"max_run_hours": 1.0, "max_units": 9, "incremental_max_rows": 7}
 

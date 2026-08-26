@@ -390,6 +390,13 @@ class RunOutcome(BaseModel):
     #: How many entries `errors` WOULD hold unbounded. Equal to `len(errors)` until the cap bites.
     errors_total: int = 0
     status: str = "COMPLETE"
+    #: DECLARED for the same reason the publication verdict below is, and found by the same class of
+    #: failure. `finalize` and the workflow's refusal/empty/failed paths all set `units_total` on the
+    #: outcome, and every one of them was dropped here by pydantic's default `extra="ignore"`. It
+    #: went unnoticed while the workflow handed `emit_terminal` a RAW DICT, because history kept the
+    #: key even though this model discarded it; typing the activity's input (DWF-ACT-009) made the
+    #: loss visible, which is precisely the validation the typing exists to buy.
+    units_total: int = 0
     #: THE PUBLICATION VERDICT, and it has to be DECLARED to survive.
     #:
     #: `finalize_run` has always returned these keys and the pull surface has always rendered them —
@@ -417,7 +424,7 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
     """
     spec = RunSpec.model_validate(payload)
 
-    yield ctx.call_activity(emit_start, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+    yield ctx.call_activity(emit_start, input=spec, retry_policy=ACTIVITY_RETRY)
 
     # THE ERROR BOUNDARY — every exit routes through ONE terminal step.
     #
@@ -471,7 +478,7 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
         # After `emit_start` on purpose: a run must be visible in the graph before anything can refuse it,
         # so a run that dies resolving its own policy is still a visibly incomplete run rather than an
         # absence someone has to notice.
-        resolved_limits: dict[str, Any] = yield ctx.call_activity(resolve_limits, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+        resolved_limits: dict[str, Any] = yield ctx.call_activity(resolve_limits, input=spec, retry_policy=ACTIVITY_RETRY)
         limits = RunLimits.model_validate(resolved_limits)
 
         # BEFORE the fan-out, not before the commit. D6's creation two-step said "created empty before
@@ -488,7 +495,7 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
         # One resolution, carried; never two derivations of one location. The BASE VERSION rides the same
         # handle for the same reason, and finding F12a is what it costs when it does not — see
         # `DatasetHandle`.
-        handle: dict[str, Any] = yield ctx.call_activity(ensure_dataset, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+        handle: dict[str, Any] = yield ctx.call_activity(ensure_dataset, input=spec, retry_policy=ACTIVITY_RETRY)
         target = DatasetHandle.model_validate(handle)
 
         chunks: list[dict[str, Any]] = yield ctx.call_activity(
@@ -496,15 +503,15 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
             # The ceiling travels WITH the request. It is resolved (`resolve_limits`, above) before
             # this call precisely so the activity can refuse before building a payload the transport
             # cannot carry — see `enumerate_chunks` for why the check below cannot do it alone.
-            input={
-                "spec": spec.model_dump(),
-                "dataset_uri": target.location,
-                "max_units": limits.max_units,
+            input=EnumerateChunksInput(
+                spec=spec,
+                dataset_uri=target.location,
+                max_units=limits.max_units,
                 # Travels with the request for the same reason `max_units` does: resolved once, in
                 # activity scope, and pinned in history — a ceiling the body re-read would replay
                 # against whatever the deployment says now.
-                "incremental_max_rows": limits.incremental_max_rows,
-            },
+                incremental_max_rows=limits.incremental_max_rows,
+            ),
             retry_policy=ACTIVITY_RETRY,
         )
         # The enumerated total, published as CUSTOM STATUS so it is readable while the run is still
@@ -534,10 +541,7 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
             terminal_emitted = True
             yield ctx.call_activity(
                 emit_terminal,
-                input={
-                    "spec": spec.model_dump(),
-                    "outcome": RunOutcome(status="FAILED", errors={"run": reason}, errors_total=1).model_dump(),
-                },
+                input=TerminalInput(spec=spec, outcome=RunOutcome(status="FAILED", errors={"run": reason}, errors_total=1)),
                 retry_policy=ACTIVITY_RETRY,
             )
             return RunOutcome(status="FAILED", errors={"run": reason}, errors_total=1).model_dump()
@@ -581,7 +585,7 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
                 errors_total=1,
             ).model_dump()
             terminal_emitted = True
-            yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": refused}, retry_policy=ACTIVITY_RETRY)
+            yield ctx.call_activity(emit_terminal, input=TerminalInput(spec=spec, outcome=RunOutcome.model_validate(refused)), retry_policy=ACTIVITY_RETRY)
             return refused
 
         # AN EMPTY SOURCE IS A SUCCESS WITH ZERO ROWS, and it short-circuits HERE.
@@ -604,7 +608,7 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
             empty: dict[str, Any] = RunOutcome(status="COMPLETE", rows=0).model_dump()
             empty["units_total"] = 0
             terminal_emitted = True
-            yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": empty}, retry_policy=ACTIVITY_RETRY)
+            yield ctx.call_activity(emit_terminal, input=TerminalInput(spec=spec, outcome=RunOutcome.model_validate(empty)), retry_policy=ACTIVITY_RETRY)
             return empty
 
         # Fan out. when_all is fan-in: the parent suspends until every child has drained, and survives
@@ -683,9 +687,9 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
             # JetStream subject and DELETES the per-run durable (`runtime.release_run_units` →
             # `queue.release_run`) — the exact consumer every live `drain_chunk` is pulling from.
             # Abandoning the fan-out and then pulling the queue out from under it is §2.4.
-            yield ctx.call_activity(terminate_chunks, input={"child_ids": child_ids}, retry_policy=ACTIVITY_RETRY)
+            yield ctx.call_activity(terminate_chunks, input=TerminateChunksInput(child_ids=child_ids), retry_policy=ACTIVITY_RETRY)
             terminal_emitted = True
-            yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": terminal}, retry_policy=ACTIVITY_RETRY)
+            yield ctx.call_activity(emit_terminal, input=TerminalInput(spec=spec, outcome=RunOutcome.model_validate(terminal)), retry_policy=ACTIVITY_RETRY)
             return terminal
 
         results = fanout.get_result()
@@ -727,17 +731,17 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
         # own earlier commit rather than appending the run's rows a second time (F12a, `DatasetHandle`).
         outcome: dict[str, Any] = yield ctx.call_activity(
             finalize,
-            input={
-                "spec": spec.model_dump(),
-                "fragments": fragments,
+            input=FinalizeInput(
+                spec=spec,
+                fragments=fragments,
                 # So `finalize_run` can tell "this run genuinely wrote nothing" from "its fallback
                 # was too large to carry" — the two look identical from an empty list.
-                "fallback_dropped": fallback_dropped,
-                "errors": errors,
-                "errors_total": errors_total,
-                "units_total": units_total,
-                "read_version": target.read_version,
-            },
+                fallback_dropped=fallback_dropped,
+                errors=errors,
+                errors_total=errors_total,
+                units_total=units_total,
+                read_version=target.read_version,
+            ),
             retry_policy=ACTIVITY_RETRY,
         )
     except Exception as exc:
@@ -763,11 +767,11 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[A
         # return still costs a real workflow-history event on every one of them. The branch is
         # replay-safe: `child_ids` derives from `chunks`, an ACTIVITY RESULT, so it is history.
         if child_ids:
-            yield ctx.call_activity(terminate_chunks, input={"child_ids": child_ids}, retry_policy=ACTIVITY_RETRY)
-        yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": failed}, retry_policy=ACTIVITY_RETRY)
+            yield ctx.call_activity(terminate_chunks, input=TerminateChunksInput(child_ids=child_ids), retry_policy=ACTIVITY_RETRY)
+        yield ctx.call_activity(emit_terminal, input=TerminalInput(spec=spec, outcome=RunOutcome.model_validate(failed)), retry_policy=ACTIVITY_RETRY)
         return failed
 
-    yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": outcome}, retry_policy=ACTIVITY_RETRY)
+    yield ctx.call_activity(emit_terminal, input=TerminalInput(spec=spec, outcome=RunOutcome.model_validate(outcome)), retry_policy=ACTIVITY_RETRY)
     return outcome
 
 
@@ -792,11 +796,14 @@ def chunk_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
 
     Nothing here polls (A13): the activity blocks on JetStream's server-fulfilled pull fetch.
     """
+    # The WORKFLOW body still validates by hand. The SDK coerces an ACTIVITY's input into its
+    # annotated model (`workflow_runtime._coerce_activity_input`); a workflow body's input is not
+    # coerced, so this line is what makes `chunk` a model rather than a dict.
     chunk = ChunkSpec.model_validate(payload)
 
-    yield ctx.call_activity(publish_units, input=chunk.model_dump(), retry_policy=ACTIVITY_RETRY)
+    yield ctx.call_activity(publish_units, input=chunk, retry_policy=ACTIVITY_RETRY)
 
-    drained: dict[str, Any] = yield ctx.call_activity(drain_chunk, input=chunk.model_dump(), retry_policy=ACTIVITY_RETRY)
+    drained: dict[str, Any] = yield ctx.call_activity(drain_chunk, input=chunk, retry_policy=ACTIVITY_RETRY)
 
     errors: dict[str, str] = dict(drained.get("errors") or {})
     # The drain already capped its own payload, so `len(errors)` is not the count — it reports the
@@ -810,7 +817,7 @@ def chunk_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
     # `count` for a pointer chunk, `len(keys)` for a legacy inline one — `expected_units` is the one
     # place that difference is resolved, so no other site has to know which form it holds.
     if errors_total or int(drained.get("units_done") or 0) < chunk.expected_units:
-        reconciled: dict[str, Any] = yield ctx.call_activity(reconcile_chunk, input=chunk.model_dump(), retry_policy=ACTIVITY_RETRY)
+        reconciled: dict[str, Any] = yield ctx.call_activity(reconcile_chunk, input=chunk, retry_policy=ACTIVITY_RETRY)
         extra = {key: value for key, value in (reconciled.get("errors") or {}).items() if key not in errors}
         errors.update(extra)
         errors_total += len(extra)
@@ -843,18 +850,72 @@ def chunk_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Generator[An
 # ── activities — every non-deterministic thing lives behind one of these ───────────────
 
 
-def emit_start(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
+# --------------------------------------------------------------------------------------------------
+# ACTIVITY ENVELOPES (DWF-ACT-009)
+#
+# dapr-ext-workflow 1.18 coerces an activity's input into whatever model its second parameter is
+# annotated with — `workflow_runtime._coerce_activity_input` -> `_model_protocol.coerce_to_model`,
+# duck-typed on `model_dump`/`model_validate` rather than importing pydantic. So an annotation here
+# is enforced by the runtime, not decoration.
+#
+# The four composite envelopes below exist because those activities read raw dicts, and every read
+# was of the form `payload.get("fragments") or []` / `payload.read_version`. A key
+# that went missing — a caller edited, a field renamed — did not raise; it became a plausible DEFAULT,
+# and the run continued with an empty fragment list or a base version of 0. The second of those is
+# the one that commits a run's rows a second time.
+#
+# Every field is REQUIRED on purpose. Each is unconditionally supplied at every call site, so a
+# default here would only ever mask the defect this closes. The six activities that already took a
+# whole `RunSpec`/`ChunkSpec` simply name it now, and their manual `model_validate` first line goes.
+# --------------------------------------------------------------------------------------------------
+
+
+class EnumerateChunksInput(BaseModel):
+    """`enumerate_chunks`' envelope: the run, its target, and the two ceilings that travel with it."""
+
+    spec: RunSpec
+    dataset_uri: str
+    max_units: int
+    incremental_max_rows: int
+
+
+class FinalizeInput(BaseModel):
+    """`finalize`'s envelope. `read_version` is the load-bearing field: defaulting it to 0 makes the
+    catalog unable to recognise its own earlier commit, and the run's rows land twice."""
+
+    spec: RunSpec
+    fragments: list[str]
+    fallback_dropped: bool
+    errors: dict[str, str]
+    errors_total: int
+    units_total: int
+    read_version: int
+
+
+class TerminalInput(BaseModel):
+    """`emit_terminal`'s envelope: the run and the outcome being recorded for it."""
+
+    spec: RunSpec
+    outcome: RunOutcome
+
+
+class TerminateChunksInput(BaseModel):
+    """`terminate_chunks`' envelope: the child instance ids the parent has abandoned."""
+
+    child_ids: list[str]
+
+
+def emit_start(ctx: WorkflowActivityContext, spec: RunSpec) -> None:
     """Lineage START, through lineage-kit. A run is visible in the graph before it does any work.
 
     Deliberately first: the medallion emitted only on COMPLETE, so a run that died mid-harvest left
     NO record at all — not a failed one, none. A START here means a crashed run is a visibly
     incomplete run rather than an absence someone has to notice.
     """
-    spec = RunSpec.model_validate(payload)
     _lineage().start(spec.run_id, spec.project, spec.dataset, spec.kind, spec.options, spec.originator)
 
 
-def resolve_limits(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
+def resolve_limits(ctx: WorkflowActivityContext, spec: RunSpec) -> dict[str, Any]:
     """Read the run's POLICY ceilings — the plane's one sanctioned env read for them.
 
     AN ACTIVITY, not a module constant, and that is the entire point: an activity's result is written
@@ -865,11 +926,10 @@ def resolve_limits(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dic
     a run can be pinned to what it was ACCEPTED with rather than to what the pod that first executed
     it happened to hold.
     """
-    spec = RunSpec.model_validate(payload)
     return (spec.limits or RunLimits.from_env()).model_dump()
 
 
-def ensure_dataset(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
+def ensure_dataset(ctx: WorkflowActivityContext, spec: RunSpec) -> dict[str, Any]:
     """Create the run's bronze dataset EMPTY, carrying the creation-time flags. D6 step 1.
 
     Idempotent, so a replay is a no-op rather than a second create — which matters because this runs
@@ -882,7 +942,7 @@ def ensure_dataset(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dic
     """
     from ingest.runtime import ensure_dataset_at
 
-    location, read_version = ensure_dataset_at(RunSpec.model_validate(payload))
+    location, read_version = ensure_dataset_at(spec)
     return DatasetHandle(location=location, read_version=read_version).model_dump()
 
 
@@ -987,7 +1047,7 @@ def _refuse_oversized_dispatch(chunks: list[dict[str, Any]], *, units: int, max_
     return None
 
 
-def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
+def enumerate_chunks(ctx: WorkflowActivityContext, payload: EnumerateChunksInput) -> list[dict[str, Any]] | dict[str, Any]:
     """Walk the source adapter and slice it into chunk descriptors.
 
     An activity, not workflow code, because it does network I/O — and because enumeration itself must
@@ -1020,8 +1080,8 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
     from ingest.identity import unit_id
     from ingest.sources import SourceSpec, build_source, iter_versioned_unit_keys
 
-    spec = RunSpec.model_validate(payload["spec"])
-    uri = str(payload["dataset_uri"])
+    spec = payload.spec
+    uri = payload.dataset_uri
 
     # THE ANTI-JOIN — what makes repeated ingest CONVERGE (owner goal 2026-08-07). Before this,
     # `lander.py` committed a blind Append and a re-run duplicated every row: nine runs of one
@@ -1055,9 +1115,9 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
         # checking once it is already in memory would enforce nothing. Refusing — never sampling —
         # because a truncated anti-join INVERTS: a partial "already have" set makes the run treat
         # rows bronze holds as new and re-land every one of them.
-        if not anti_join_within_ceiling(rows, int(payload.get("incremental_max_rows") or 0)):
+        if not anti_join_within_ceiling(rows, payload.incremental_max_rows):
             raise AntiJoinUnavailable(
-                f"{uri} holds {rows} rows, above the {payload.get('incremental_max_rows')}-row "
+                f"{uri} holds {rows} rows, above the {payload.incremental_max_rows}-row "
                 f"RASK_INGEST_INCREMENTAL_MAX_ROWS ceiling. The anti-join reads every id to learn what "
                 f"bronze already has, and it cannot be truncated — a partial answer re-lands rows that "
                 f"are already there. Raise the ceiling, or narrow the source so the run does not need it."
@@ -1115,11 +1175,11 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
                 options=spec.options,
             ).model_dump()
         )
-    refusal = _refuse_oversized_dispatch(chunks, units=len(pairs), max_units=int(payload.get("max_units") or 0))
+    refusal = _refuse_oversized_dispatch(chunks, units=len(pairs), max_units=payload.max_units)
     return refusal if refusal is not None else chunks
 
 
-def drain_chunk(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
+def drain_chunk(ctx: WorkflowActivityContext, chunk: ChunkSpec) -> dict[str, Any]:
     """Consume this chunk's units: fetch, validate, stage a fragment, ack. The plane's actual work.
 
     Safe to retry, which is the only reason it can be an activity at all. Every unit acked by a
@@ -1131,11 +1191,10 @@ def drain_chunk(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[s
     """
     from ingest.runtime import drain_chunk_units
 
-    chunk = ChunkSpec.model_validate(payload)
     return _run_async(drain_chunk_units(chunk))
 
 
-def publish_units(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> int:
+def publish_units(ctx: WorkflowActivityContext, chunk: ChunkSpec) -> int:
     """Publish this chunk's units onto the JetStream work queue.
 
     Idempotent by construction under replay: JetStream dedupes on the message id within the stream's
@@ -1145,11 +1204,10 @@ def publish_units(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> int:
     """
     from ingest.runtime import publish_chunk_units
 
-    chunk = ChunkSpec.model_validate(payload)
     return _run_async(publish_chunk_units(chunk))
 
 
-def reconcile_chunk(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
+def reconcile_chunk(ctx: WorkflowActivityContext, chunk: ChunkSpec) -> dict[str, Any]:
     """Storage truth for a chunk whose drained signal was lost — the dead-man's one read.
 
     Asks the QUEUE what is outstanding rather than a ledger: with WORK_QUEUE retention an acked unit
@@ -1158,11 +1216,10 @@ def reconcile_chunk(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> di
     """
     from ingest.runtime import reconcile_from_queue
 
-    chunk = ChunkSpec.model_validate(payload)
     return _run_async(reconcile_from_queue(chunk))
 
 
-def finalize(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
+def finalize(ctx: WorkflowActivityContext, payload: FinalizeInput) -> dict[str, Any]:
     """The lander: fragments -> ONE Lance commit, registered through the catalog.
 
     `read_version` comes from the INPUT and is never re-read here. Dapr re-executes an activity whose
@@ -1173,30 +1230,30 @@ def finalize(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str,
     """
     from ingest.runtime import finalize_run
 
-    spec = RunSpec.model_validate(payload["spec"])
+    spec = payload.spec
     outcome = finalize_run(
         spec,
-        payload.get("fragments") or [],
-        payload.get("errors") or {},
-        read_version=int(payload.get("read_version") or 0),
-        fallback_dropped=bool(payload.get("fallback_dropped")),
+        payload.fragments,
+        payload.errors,
+        read_version=payload.read_version,
+        fallback_dropped=bool(payload.fallback_dropped),
     )
     # Carried into the terminal output so a FINISHED run still reports what it set out to do — the
     # custom status is the live view, this is the permanent one.
-    outcome["units_total"] = int(payload.get("units_total") or 0)
+    outcome["units_total"] = payload.units_total
     # The EXACT failure count, which `errors` no longer is once the cap bites (`bound_errors`).
-    outcome["errors_total"] = int(payload.get("errors_total") or len(outcome.get("errors") or {}))
+    outcome["errors_total"] = payload.errors_total
     return outcome
 
 
-def emit_terminal(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
+def emit_terminal(ctx: WorkflowActivityContext, payload: TerminalInput) -> None:
     """Lineage COMPLETE or FAIL — the FAIL branch is the gap the medallion head never closed.
 
     A run that fails must leave a FAIL record, not silence. The medallion turned a ValueError into a
     400 and emitted nothing, so a failed harvest was indistinguishable from one that never started.
     """
-    spec = RunSpec.model_validate(payload["spec"])
-    outcome = RunOutcome.model_validate(payload["outcome"])
+    spec = payload.spec
+    outcome = payload.outcome
 
     # RELEASE WHAT THIS RUN LEFT QUEUED, on every terminal path.
     #
@@ -1279,7 +1336,7 @@ def _run_async(coro: Any) -> Any:  # noqa: ANN401
 WORKFLOWS = (ingest_run, chunk_run)
 
 
-def terminate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
+def terminate_chunks(ctx: WorkflowActivityContext, payload: TerminateChunksInput) -> dict[str, Any]:
     """Stop the fan-out's children before the run reclaims their queue. §2.4.
 
     **THE DEFECT THIS CLOSES.** Two paths abandon a live fan-out — the run deadline, and the error
@@ -1309,7 +1366,7 @@ def terminate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> d
     is already terminating, and a tidy-up that fails must not turn a run that recorded its outcome
     into one that died. Terminating an already-terminal child is the NORMAL race, not an error.
     """
-    child_ids = [str(cid) for cid in (payload.get("child_ids") or [])]
+    child_ids = payload.child_ids
     if not child_ids:
         return {"terminated": 0, "requested": 0}
 
