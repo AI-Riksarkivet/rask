@@ -19,6 +19,8 @@ dependencies = [
     "opentelemetry-instrumentation-requests>=0.65b0",
     "opentelemetry-instrumentation-grpc>=0.65b0",
     "opentelemetry-instrumentation-aiohttp-client>=0.65b0",
+    "opentelemetry-instrumentation-botocore>=0.65b0",
+    "opentelemetry-instrumentation-urllib3>=0.65b0",
 ]
 
 # The governed/lakehouse/lancekit subpackages ported from packages/common (gate 3, R19) carry their

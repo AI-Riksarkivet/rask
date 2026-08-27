@@ -159,4 +159,29 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
         from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
 
         AioHttpClientInstrumentor().instrument(tracer_provider=tracer_provider, meter_provider=meter_provider)
+
+    # botocore — THE OBJECT STORE. Every S3 call in the estate rode this uninstrumented: vending
+    # (`catalog/core/vending.py`), the warehouse registry (`catalog/services/warehouses.py`), the
+    # records plane (`service_kit/lakehouse/records.py`) and `storage/client.py`. boto3 is built on
+    # botocore, so instrumenting the lower layer covers every client the estate constructs without
+    # any of them changing.
+    #
+    # The failure this closes is the one the `requests` note above already names: an uninstrumented
+    # EXPENSIVE leg beside instrumented cheap ones does not make the trace incomplete, it makes it
+    # MISLEADING. A request that spent four seconds in S3 and one that spent none looked identical.
+    with suppress(ImportError):
+        from opentelemetry.instrumentation.botocore import BotocoreInstrumentor
+
+        BotocoreInstrumentor().instrument(tracer_provider=tracer_provider)
+
+    # urllib3 — THE KUBERNETES LEG, and the one no other instrumentor reaches. The k8s client
+    # (`controlplane/k8s.py`) speaks urllib3 directly rather than requests or httpx, so the
+    # controlplane's whole reason for existing — reading Project CRs for the home picker — produced no
+    # client span at all. It also catches any library that vendors urllib3 without going through
+    # `requests`.
+    with suppress(ImportError):
+        from opentelemetry.instrumentation.urllib3 import URLLib3Instrumentor
+
+        URLLib3Instrumentor().instrument(tracer_provider=tracer_provider, meter_provider=meter_provider)
+
     return True
