@@ -1213,7 +1213,27 @@ media.py:301-302 — `path = build_clip(source, f"{handle.id}--{doc_id}", lo, hi
 
 </details>
 
-<details><summary><b>`/api/thumbnail` and `/api/chunk-frame` read a descriptor-declared blob whole into memory with no ceiling and no `Accept-Ranges`, while their sibling on the same table streams</b> <i>(file-handling.md + streaming.md, ADJUSTED)</i></summary>
+<details><summary><b>~~`/api/thumbnail` and `/api/chunk-frame` read a descriptor-declared blob whole into memory with no ceiling and no `Accept-Ranges`, while their sibling on the same table streams~~</b> <i>(file-handling.md + streaming.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27.** Both routes now serve through `media.py::blob_response`, which probes the
+> open handle and branches on `MAX_BUFFERED_BLOB_BYTES` (1 MiB, the reference table's boundary): at or
+> below it the buffered single-shot `Response` is unchanged, and above it the blob streams through
+> `_stream_handle` in `_STREAM_CHUNK` windows with an exact `Content-Length`. **The threshold, not the
+> 413.** This finding's own analysis is that there is no failure at HEAD and the right answer is
+> hardening — and a refusal is the wrong hardening twice over: 413 is defined against the REQUEST
+> body, and answering a legitimately-large derivative with an error trades an unbounded read for a
+> broken route. **The Accept-Ranges half is dropped**, as the finding directs: no client range-requests
+> a thumbnail served `public, max-age=86400`. The handle is passed in rather than re-taken, because
+> `take_blobs` is object-store IO and re-taking it would double that on the common path.
+> **Two things fell out.** `payload_size`'s size probe was duplicated logic and is now the same
+> `_handle_size`, whose seek-fallback re-seeks to 0 — the old copy left the cursor at EOF, harmless
+> where it was discarded and a silent empty read here. And `f.read()` became `f.read(size)` on the
+> buffered path, so the bound holds even on the branch that does not stream.
+> `services/viewer/tests/test_derivative_blob_streaming.py` (6 tests, all 6 RED first) pins it by
+> recording the LENGTH ARGUMENT of every read — a 3 MiB payload read whole and read in chunks yield
+> identical bytes, so only the argument distinguishes them — plus an `ast` walk of both route bodies
+> for a `read()` with no bound, parsed rather than grepped so the comments explaining the fix cannot
+> satisfy it.
 
 **Rule.** file-handling.md § Pick the right response type (`Response(content=bytes)` is for "Tiny file (&lt; 1 MB), already in memory"; anything larger → `StreamingResponse`)
 

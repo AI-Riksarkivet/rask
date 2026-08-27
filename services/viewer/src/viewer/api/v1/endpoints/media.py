@@ -24,6 +24,7 @@ from urllib.parse import quote
 import lance
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
+from lance.blob import BlobFile
 
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, ValidationError
 from service_kit.governed.audit import FAILURE, audit
@@ -42,6 +43,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["media"])
 
 _STREAM_CHUNK = 1 << 20  # 1 MiB: amortizes seek cost, bounds per-stream memory
+
+#: Above this a derivative is streamed instead of buffered. file-handling.md's response-type table
+#: puts `Response(content=bytes)` at "tiny file (< 1 MB), already in memory" and everything larger in
+#: a `StreamingResponse`. The thumbnail and frame routes serve cached derivatives that sit far below
+#: it — but "far below it" was the descriptor's promise, not this service's decision: both columns
+#: are resolved from the dataset descriptor at request time, so an unbounded `read()` there
+#: materialises whatever the DATA names. A threshold rather than a refusal, because a large
+#: derivative is still a legitimate one and 413 is defined against the request body, not the response.
+MAX_BUFFERED_BLOB_BYTES = 1 << 20
+
+#: Both derivative routes are cacheable for a day; the media route deliberately is not.
+_DERIVATIVE_CACHE = {"Cache-Control": "public, max-age=86400"}
 
 #: The frame-index column of a frames table. A reserved contract name (like
 #: ``_rowid``), not corpus knowledge: frame keys are identity.key_fields plus
@@ -74,6 +87,57 @@ def stream_blob_range(ds: lance.LanceDataset, column: str, rowid: int, *, start:
     with blob as f:
         f.seek(start)
         remaining = end - start + 1
+        while remaining > 0:
+            chunk = f.read(min(_STREAM_CHUNK, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+def _handle_size(f: BlobFile) -> int:
+    """Length of an open blob handle, leaving the read position at the start.
+
+    The `size()` fallback is for handles that predate it; the re-seek is not cosmetic — the fallback
+    leaves the cursor at EOF, and `blob_response` reads from the same handle it probed.
+    """
+    try:
+        return f.size()
+    except AttributeError:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(0)
+        return size
+
+
+def blob_response(blob: BlobFile, *, mime: str, empty_detail: str) -> Response:
+    """Serve a derivative blob, buffering it only while it stays small.
+
+    Takes the OPEN HANDLE rather than `(ds, column, rowid)`: both callers have already taken it and
+    null-checked it with their own 404 wording, and `take_blobs` is object-store IO on a media route
+    — re-taking it here would double that on the common path to save passing one argument.
+    """
+    size = _handle_size(blob)
+    if size > MAX_BUFFERED_BLOB_BYTES:
+        return StreamingResponse(
+            _stream_handle(blob, size),
+            media_type=mime,
+            # Known exactly from the probe, so the caller gets a progress bar rather than a chunked
+            # stream of unknown length. Safe to declare because the generator owns this handle: the
+            # bytes it yields and the size measured here come from the same open blob.
+            headers={**_DERIVATIVE_CACHE, "Content-Length": str(size)},
+        )
+    with blob as f:
+        data = f.read(size)
+    if not data:
+        raise NotFoundError(empty_detail)
+    return Response(content=data, media_type=mime, headers=_DERIVATIVE_CACHE)
+
+
+def _stream_handle(blob: BlobFile, size: int) -> Iterator[bytes]:
+    """Yield a whole blob in bounded chunks, closing the handle when the client goes away."""
+    with blob as f:
+        remaining = size
         while remaining > 0:
             chunk = f.read(min(_STREAM_CHUNK, remaining))
             if not chunk:
@@ -140,11 +204,7 @@ def payload_size(ds: lance.LanceDataset, column: str, rowid: int) -> int:
     if blob is None:
         raise NotFoundError("media not available")
     with blob as f:
-        try:
-            return f.size()
-        except AttributeError:
-            f.seek(0, 2)
-            return f.tell()
+        return _handle_size(f)
 
 
 # ── descriptor lookups local to the media routes ────────────────────────────
@@ -213,11 +273,7 @@ def thumbnail(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> Res
     blob = ds.take_blobs(binding.thumbnail, ids=[rowid])[0]
     if blob is None:
         raise NotFoundError("no thumbnail for doc_id")
-    with blob as f:
-        data = f.read()
-    if not data:
-        raise NotFoundError("no thumbnail for doc_id")
-    return Response(content=data, media_type=mime, headers={"Cache-Control": "public, max-age=86400"})
+    return blob_response(blob, mime=mime, empty_detail="no thumbnail for doc_id")
 
 
 @router.get("/chunk-frame/{doc_id}/{group_id}/{chunk_id}")
@@ -274,11 +330,7 @@ def chunk_frame(
     # Same pylance-10 null slot as the sites above; the surrounding try only covers the take itself.
     if blob is None:
         raise NotFoundError("no frame for chunk")
-    with blob as f:
-        data = f.read()
-    if not data:
-        raise NotFoundError("frame body empty")
-    return Response(content=data, media_type=mime, headers={"Cache-Control": "public, max-age=86400"})
+    return blob_response(blob, mime=mime, empty_detail="frame body empty")
 
 
 @router.get("/media-clip/{doc_id}")
