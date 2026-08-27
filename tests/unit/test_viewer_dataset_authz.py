@@ -64,6 +64,32 @@ class _Registry:
         return type("H", (), {"descriptor": _descriptor(dataset_id, row_table)})()
 
 
+class _Authz:
+    """What the faked `batch_check` should answer, set per-app by `_app`.
+
+    A holder plus one autouse patch, rather than threading `monkeypatch` into every test signature:
+    the fake has to live at MODULE level (it replaces `ds.fga.batch_check`) while the answer it gives
+    is per-test.
+    """
+
+    allow: Any = True
+    seen: list[dict[str, Any]] | None = None
+
+
+_authz = _Authz()
+
+
+@pytest.fixture(autouse=True)
+def _fake_batch_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _batch(_client: Any, *, user: str, relation: str, objects: list[str], **_kw: Any) -> dict[str, bool]:
+        for obj in objects:
+            if _authz.seen is not None:
+                _authz.seen.append({"user": user, "relation": relation, "obj": obj})
+        return {obj: (_authz.allow if isinstance(_authz.allow, bool) else obj in _authz.allow) for obj in objects}
+
+    monkeypatch.setattr(ds.fga, "batch_check", _batch)
+
+
 def _app(registry: _Registry, *, allow: Any, seen: list[dict[str, Any]] | None = None, fga_enabled: bool = False) -> FastAPI:
     """The router with the registry faked and the checker overridden.
 
@@ -71,10 +97,13 @@ def _app(registry: _Registry, *, allow: Any, seen: list[dict[str, Any]] | None =
     corpus and not another — which is the case the endpoint exists for.
     """
 
-    async def checker(*, user: str, relation: str, obj: str) -> bool:
-        if seen is not None:
-            seen.append({"user": user, "relation": relation, "obj": obj})
-        return allow if isinstance(allow, bool) else obj in allow
+    # RECORDED THROUGH `batch_check`, NOT `check`. The listing used to make one `check` per corpus
+    # through `asyncio.gather`; it now makes ONE `batch_check` over the whole candidate set
+    # (open_fastapi-audit). `seen` keeps the same shape — one entry per object asked about — so every
+    # assertion about the subject, the relation and the object identifier reads exactly as before. That
+    # is the point: the properties these tests pin did not change, only the number of round trips.
+    _authz.allow = allow
+    _authz.seen = seen
 
     app = FastAPI()
     app.include_router(router)
@@ -92,8 +121,21 @@ def _app(registry: _Registry, *, allow: Any, seen: list[dict[str, Any]] | None =
         }
     )
     app.dependency_overrides[get_viewer_settings] = lambda: settings
-    deps = ds.CheckerDep.__metadata__[0].dependency  # the get_checker callable this module annotates with
-    app.dependency_overrides[deps] = lambda: checker
+    # The listing takes the RAW client now — `FgaChecker` is one relation on one object by design and
+    # cannot express a batch. A sentinel suffices: `fga.batch_check` itself is faked by the autouse
+    # fixture below, so nothing ever calls into the SDK.
+    client_dep = ds.FgaClientDep.__metadata__[0].dependency
+    app.dependency_overrides[client_dep] = lambda: object()
+    # The checker is still injected for the DESCRIPTOR route, which asks about one object and rightly
+    # still uses it.
+    checker_dep = ds.CheckerDep.__metadata__[0].dependency
+
+    async def _one(*, user: str, relation: str, obj: str) -> bool:
+        if seen is not None:
+            seen.append({"user": user, "relation": relation, "obj": obj})
+        return allow if isinstance(allow, bool) else obj in allow
+
+    app.dependency_overrides[checker_dep] = lambda: _one
     subject_dep = ds.CurrentSubject.__metadata__[0].dependency
     app.dependency_overrides[subject_dep] = lambda: "gina"
 
@@ -114,9 +156,15 @@ def _permitted(dataset_id: str) -> str:
     return corpus_object(ViewerSettings(), dataset_id, "chunks")
 
 
+# NOTE on `fga_enabled=True` below. These tests assert WHAT THE LISTING ASKS OpenFGA — the object
+# identifier, the relation, the subject — and with authz OFF there is nothing to ask: the route returns
+# every corpus without constructing an object at all, which is what it has always meant to do and what
+# `test_the_same_corpus_still_lists_when_authz_is_OFF` pins. Previously the permissive checker was still
+# CALLED, so these assertions happened to see a call that carried no decision. Turning authz on is what
+# makes them assert the thing their names claim.
 def test_the_listing_returns_ONLY_the_corpora_the_caller_may_see(registry: _Registry) -> None:
     """The defect, stated directly: it used to return both."""
-    client = TestClient(_app(registry, allow={_permitted("vasa")}))
+    client = TestClient(_app(registry, allow={_permitted("vasa")}, fga_enabled=True))
 
     body = client.get("/api/datasets").json()
 
@@ -126,7 +174,7 @@ def test_the_listing_returns_ONLY_the_corpora_the_caller_may_see(registry: _Regi
 def test_a_caller_with_nothing_gets_an_empty_list_not_a_403(registry: _Registry) -> None:
     """Filtered, not refused. The honest answer to "what can I search" is a shorter list — a 403
     would also confirm that corpora exist, which is the thing being protected."""
-    client = TestClient(_app(registry, allow=False))
+    client = TestClient(_app(registry, allow=False, fga_enabled=True))
 
     r = client.get("/api/datasets")
 
@@ -138,7 +186,7 @@ def test_the_check_names_the_CATALOG_object_not_an_invented_one(registry: _Regis
     """The object must be the same identifier the annotator writes through and the catalog
     authorizes on — `table:<namespace>$<table>` — or the two planes disagree about one corpus."""
     seen: list[dict[str, Any]] = []
-    client = TestClient(_app(registry, allow=True, seen=seen))
+    client = TestClient(_app(registry, allow=True, seen=seen, fga_enabled=True))
 
     client.get("/api/datasets")
 
@@ -150,7 +198,7 @@ def test_the_relation_is_METADATA_not_data_access(registry: _Registry) -> None:
     """Listing a corpus and reading its descriptor is metadata. Gating on `can_read_data` would hide
     corpora from someone allowed to know they exist."""
     seen: list[dict[str, Any]] = []
-    client = TestClient(_app(registry, allow=True, seen=seen))
+    client = TestClient(_app(registry, allow=True, seen=seen, fga_enabled=True))
 
     client.get("/api/datasets")
 
@@ -160,7 +208,7 @@ def test_the_relation_is_METADATA_not_data_access(registry: _Registry) -> None:
 
 def test_the_check_uses_the_VERIFIED_subject(registry: _Registry) -> None:
     seen: list[dict[str, Any]] = []
-    client = TestClient(_app(registry, allow=True, seen=seen))
+    client = TestClient(_app(registry, allow=True, seen=seen, fga_enabled=True))
 
     client.get("/api/datasets")
 

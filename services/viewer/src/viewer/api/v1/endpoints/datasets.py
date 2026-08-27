@@ -7,7 +7,6 @@ descriptor`` hands the frontend the full merged descriptor it renders from
 skipped from the listing (logged), never half-served.
 """
 
-import asyncio
 import logging
 
 from fastapi import APIRouter
@@ -15,13 +14,14 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from service_kit.exceptions import ForbiddenError
+from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, audit
 from service_kit.lancekit.descriptor import DatasetDescriptor
 from service_kit.lancekit.registry import DatasetRegistry, UnknownDatasetError
 from service_kit.media.authz import corpus_object
 from service_kit.media.deps import StateDep
 from service_kit.media.state import AppState, dataset_handle
-from viewer.api.security import READ_METADATA, CheckerDep, CurrentSubject, SettingsDep
+from viewer.api.security import READ_METADATA, CheckerDep, CurrentSubject, FgaClientDep, SettingsDep
 
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ def _registry(state: AppState) -> DatasetRegistry:
 
 
 @router.get("/datasets")
-async def list_datasets(state: StateDep, checker: CheckerDep, subject: CurrentSubject, settings: SettingsDep) -> DatasetsResponse:
+async def list_datasets(state: StateDep, client: FgaClientDep, subject: CurrentSubject, settings: SettingsDep) -> DatasetsResponse:
     """The corpora this CALLER may see.
 
     It used to be every corpus on disk, to anyone. A corpus list is itself sensitive — it names data
@@ -102,7 +102,7 @@ async def list_datasets(state: StateDep, checker: CheckerDep, subject: CurrentSu
             # The ROW table is the visibility gate: the one search actually reads. Gating on ALL
             # tables would make visibility mean "may read everything" — stricter than the question
             # ("may I search this corpus"). None = the corpus declares no search: a real shape, and
-            # `_may_see` DENIES it under authz rather than inventing an object to check (guessing an
+            # the listing DENIES it under authz rather than inventing an object to check (guessing an
             # identifier would authorize against something the catalog never governs).
             search = descriptor.declared.search
             collected.append((summary, search.row_table if search is not None else None))
@@ -110,18 +110,28 @@ async def list_datasets(state: StateDep, checker: CheckerDep, subject: CurrentSu
 
     pairs = await run_in_threadpool(_collect)
 
-    # Checked CONCURRENTLY: a registry of a dozen corpora would otherwise pay a dozen serial
-    # round-trips to OpenFGA on the first page every user loads. With FGA off the checker is a local
-    # `return True`, so this costs nothing on a dev stack.
-    async def _may_see(dataset_id: str, table: str | None) -> bool:
-        if table is None:
-            # Nothing to name as an FGA object. Deny under authz rather than guess an identifier —
-            # but only when authz is ON, so a dev stack with FGA off still lists it as it always did.
-            return not settings.fga_enabled
-        return await checker(user=subject, relation=READ_METADATA, obj=corpus_object(settings, dataset_id, table))
+    # ONE round trip, not one per corpus. This used to `asyncio.gather` a `checker(...)` per corpus,
+    # under a comment reasoning carefully about serial-vs-concurrent — which is the right analysis of
+    # LATENCY and the wrong question. `gather` makes N calls cheap; it does not make them fewer, and
+    # this is the first call every zone makes on page load, so it was N OpenFGA requests per user per
+    # page. `authz.md`: "prefer batch_check over many checks when filtering — same network round-trip
+    # cost as one call", with a filtered list as its named example. The estate already agrees with
+    # itself twice: `lineage/api/fga_deps.py` and `notifications/api/visibility.py`.
+    #
+    # THE TABLE-LESS RULE IS UNCHANGED and still keyed on `settings.fga_enabled`, not on whether a
+    # client happens to be present. A corpus that declares no search names no FGA object, so it is
+    # decided BEFORE the batch rather than given a guessed identifier: denied when authz is on, listed
+    # when it is off, exactly as before.
+    if not settings.fga_enabled:
+        return DatasetsResponse(datasets=[s for s, _t in pairs])
 
-    permitted = await asyncio.gather(*(_may_see(s.id, table) for s, table in pairs))
-    return DatasetsResponse(datasets=[s for (s, _t), ok in zip(pairs, permitted, strict=True) if ok])
+    tabled = [(summary, table) for summary, table in pairs if table is not None]
+    if not tabled or client is None:
+        return DatasetsResponse(datasets=[])
+
+    objects = [corpus_object(settings, summary.id, table) for summary, table in tabled]
+    verdicts = await fga.batch_check(client, user=subject, relation=READ_METADATA, objects=objects)
+    return DatasetsResponse(datasets=[summary for (summary, _t), obj in zip(tabled, objects, strict=True) if verdicts.get(obj, False)])
 
 
 @router.get("/datasets/{dataset_id}/descriptor")
