@@ -905,7 +905,9 @@ services/viewer/src/viewer/api/v1/endpoints/objects.py:228-234 — `async def li
 
 ### Low — 28
 
-<details><summary><b>The estate's highest-privilege router — raw OpenFGA tuple write/delete — is gated by nine hand-written calls instead of one router-level dependency</b> <i>(authn.md + authz.md, ADJUSTED)</i></summary>
+<details><summary><b>~~The estate's highest-privilege router — raw OpenFGA tuple write/delete — is gated by nine hand-written calls instead of one router-level dependency~~</b> <i>(authn.md + authz.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27.** `router = APIRouter(prefix="/v1/access", tags=["access"], dependencies=[Depends(estate_gate)])`, and the nine hand-written `_estate_gate(...)` calls are gone. The gate returns `None` now; handlers that need the client take a separate `EstateFgaClient` dependency, so authorization and injection stop being one call every handler has to remember. **BOTH halves, as the Fix asks:** the router dependency fixes the SHAPE (route ten inherits the gate), and `tests/unit/test_access_router_gate.py` fixes the ENUMERATION by walking the router's actual routes — so a gate quietly dropped, or a route added to a different router, is caught by something that counts rather than something that reads. A third test pins that hoisting did not weaken the check: still `can_observe_events` on the FIXED root object, still 501 with FGA off, still fail-closed 503 when unwired. Three tests RED before. The refactor moved real behaviour, so `test_access_admin.py` was updated rather than patched around: the tests that asserted the gate THROUGH a handler now assert it on the gate itself — through a handler they would have silently stopped testing anything while continuing to pass.
 
 **Rule.** authn.md § Protected routes: "Apply at the router level when *every* route in the group needs the same check — cheaper to read and harder to forget"
 

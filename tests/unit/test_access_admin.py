@@ -27,6 +27,7 @@ from catalog.schemas import (
     AccessTuple,
     TupleCondition,
 )
+from fastapi.routing import APIRoute
 from lance_namespace import (
     InvalidInputError,
     ServiceUnavailableError,
@@ -38,6 +39,16 @@ from service_kit.governed import fga
 
 def _settings(*, fga_enabled: bool = True) -> Any:
     return SimpleNamespace(fga_enabled=fga_enabled, fga_root_object="warehouse:lance_catalog", fga_model_id=None)
+
+
+def _fga_client(stub: Any = None) -> Any:
+    """A stand-in for the injected `OpenFgaClient`.
+
+    The handlers take the client as a DEPENDENCY now rather than getting it back from the gate, so the
+    tests pass one explicitly. Typed loosely on purpose: every test that needs real behaviour
+    monkeypatches the module-level `ep.fga.*` functions, and the ones that do not never touch it.
+    """
+    return stub if stub is not None else object()
 
 
 def _request(client: Any = None) -> Any:
@@ -90,7 +101,8 @@ def _read(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> tuple[dict[str, Any
     monkeypatch.setattr(ep.fga, "read_tuples", _fake_read_tuples)
     response = asyncio.run(
         ep.read_access_tuples(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=_token("root_admin"),
             **kwargs,
@@ -102,20 +114,23 @@ def _read(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> tuple[dict[str, Any
 # ── the estate gate (mirrors /v1/events) ─────────────────────────────────────────────────────────────
 
 
-def test_gate_is_can_observe_events_on_the_root_object(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    _read(monkeypatch, object_type="table")
+def test_gate_is_can_observe_events_on_the_root_object(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+    # THE GATE ITSELF, not a handler. It moved to a router dependency, so calling a handler directly no
+    # longer runs it — a version of this test that still went through `_read` would assert nothing at
+    # all while continuing to pass for the wrong reason.
+    asyncio.run(ep.estate_gate(request=_request(client=_fga_client()), settings=_settings(), token=_token("root_admin")))
     # Estate-wide surface → platform privilege on the FIXED root object, never a caller-supplied one.
     assert gate_seen == {"relation": "can_observe_events", "obj": "warehouse:lance_catalog"}
 
 
 def test_fga_off_is_unsupported(rec: _AuditRecorder) -> None:
     with pytest.raises(UnsupportedOperationError):
-        asyncio.run(ep.read_access_tuples(request=_request(client=object()), settings=_settings(fga_enabled=False), token=None))
+        asyncio.run(ep.estate_gate(request=_request(client=_fga_client()), settings=_settings(fga_enabled=False), token=None))
 
 
 def test_enabled_but_unwired_client_fails_closed(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
     with pytest.raises(ServiceUnavailableError):
-        asyncio.run(ep.read_access_tuples(request=_request(client=None), settings=_settings(), token=None))
+        asyncio.run(ep.estate_gate(request=_request(client=None), settings=_settings(), token=None))
     assert gate_seen == {}  # 503'd before any check could run
 
 
@@ -147,7 +162,7 @@ def test_qualified_userset_filter_passes_verbatim(gate_seen: dict[str, Any], rec
 
 def test_user_only_filter_is_a_400_explaining_why(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
     with pytest.raises(InvalidInputError, match="object type"):
-        asyncio.run(ep.read_access_tuples(request=_request(client=object()), settings=_settings(), token=None, user="alice"))
+        asyncio.run(ep.read_access_tuples(client=_fga_client(), request=_request(client=_fga_client()), settings=_settings(), token=None, user="alice"))
 
 
 def test_no_filter_reads_the_whole_store(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -157,7 +172,7 @@ def test_no_filter_reads_the_whole_store(gate_seen: dict[str, Any], rec: _AuditR
 
 def test_unknown_object_type_is_a_400(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
     with pytest.raises(InvalidInputError, match="gizmo"):
-        asyncio.run(ep.read_access_tuples(request=_request(client=object()), settings=_settings(), token=None, object_type="gizmo"))
+        asyncio.run(ep.read_access_tuples(client=_fga_client(), request=_request(client=_fga_client()), settings=_settings(), token=None, object_type="gizmo"))
 
 
 # ── pagination ────────────────────────────────────────────────────────────────────────────────────────
@@ -189,7 +204,8 @@ def _mutate(monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, 
     handler = ep.write_access_tuple if write else ep.delete_access_tuple
     response = asyncio.run(
         handler(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=_token("root_admin"),
             body=body,
@@ -252,10 +268,10 @@ def _mutate_recording_emission(
             raise ServiceUnavailableError("authorization service unavailable")
 
     monkeypatch.setattr(ep.fga, "write_tuples" if write else "delete_tuples", _fake_mutation)
-    request = _request(client=object())
+    request = _request(client=_fga_client())
     request.app.state.control_emitter = emitter
     handler = ep.write_access_tuple if write else ep.delete_access_tuple
-    asyncio.run(handler(request=request, settings=_settings(), token=_token("root_admin"), body=body))
+    asyncio.run(handler(client=_fga_client(), request=request, settings=_settings(), token=_token("root_admin"), body=body))
     return emitter
 
 
@@ -299,7 +315,7 @@ def test_write_rejects_a_derived_can_relation(gate_seen: dict[str, Any], rec: _A
     # error class the idempotent-duplicate handling swallows, so it must never leave this process.
     body = AccessTuple(user="alice", relation="can_read_data", object="table:db1$t")
     with pytest.raises(InvalidInputError, match="can_read_data"):
-        asyncio.run(ep.write_access_tuple(request=_request(client=object()), settings=_settings(), token=None, body=body))
+        asyncio.run(ep.write_access_tuple(client=_fga_client(), request=_request(client=_fga_client()), settings=_settings(), token=None, body=body))
 
 
 def test_write_rejects_unknown_type_and_bare_object(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
@@ -307,7 +323,8 @@ def test_write_rejects_unknown_type_and_bare_object(gate_seen: dict[str, Any], r
         with pytest.raises(InvalidInputError):
             asyncio.run(
                 ep.write_access_tuple(
-                    request=_request(client=object()),
+                    client=_fga_client(),
+                    request=_request(client=_fga_client()),
                     settings=_settings(),
                     token=None,
                     body=AccessTuple(user="alice", relation="reader", object=bad),
@@ -320,7 +337,7 @@ def test_write_rejects_unknown_type_and_bare_object(gate_seen: dict[str, Any], r
 
 def test_model_returns_the_checked_in_dsl_and_pinned_id(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
     client = SimpleNamespace(get_authorization_model_id=lambda: "01MODEL")
-    response = asyncio.run(ep.get_access_model(request=_request(client=client), settings=_settings(), token=None))
+    response = asyncio.run(ep.get_access_model(client=_fga_client(client), request=_request(client=client), settings=_settings(), token=None))
     assert response.authorization_model_id == "01MODEL"
     assert response.dsl == fga.load_model_dsl() and "type table" in response.dsl
 
@@ -335,7 +352,8 @@ def test_check_probes_any_defined_relation_with_qualified_subject(gate_seen: dic
     monkeypatch.setattr(ep.fga, "check", _fake_check)
     response = asyncio.run(
         ep.check_access(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=_token("root_admin"),
             body=AccessCheckBody(user="alice", relation="writer", object="namespace:bronze"),
@@ -364,7 +382,8 @@ def test_check_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _Audit
     with pytest.raises(InvalidInputError, match="can_fly"):
         asyncio.run(
             ep.check_access(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=None,
                 body=AccessCheckBody(user="alice", relation="can_fly", object="table:db1$t"),
@@ -394,13 +413,18 @@ def test_list_objects_clears_the_estate_gate_and_qualifies_a_bare_subject(
     monkeypatch.setattr(ep.fga, "list_objects", _fake)
     response = asyncio.run(
         ep.list_access_objects(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=_token("root_admin"),
             body=AccessListObjectsRequest(user="alice", relation="can_read_data", type="table"),
         )
     )
-    assert (gate_seen["relation"], gate_seen["obj"]) == ("can_observe_events", "warehouse:lance_catalog")
+    # The GATE assertion moved out of this test: it is a router dependency now, so a direct handler
+    # call does not run it and `gate_seen` would stay empty no matter what the route declares.
+    # `test_gate_is_can_observe_events_on_the_root_object` asserts the relation and object, and
+    # `test_access_router_gate.py` asserts every route carries it — including this one.
+    # What remains here is what this test is actually named for.
     # qualify=False with a pre-resolved subject — the same double-prefix guard `check` carries.
     assert seen == {"user": "user:alice", "relation": "can_read_data", "object_type": "table", "qualify": False}
     assert response.objects == ["table:db1$t", "table:db1$u"]
@@ -421,7 +445,8 @@ def test_list_objects_sends_a_userset_verbatim(gate_seen: dict[str, Any], rec: _
     monkeypatch.setattr(ep.fga, "list_objects", _fake)
     asyncio.run(
         ep.list_access_objects(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=None,
             body=AccessListObjectsRequest(user="role:validators#assignee", relation="can_promote", type="namespace"),
@@ -434,7 +459,8 @@ def test_list_objects_rejects_an_unknown_type_and_a_phantom_relation(gate_seen: 
     with pytest.raises(InvalidInputError, match="dragon"):
         asyncio.run(
             ep.list_access_objects(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=None,
                 body=AccessListObjectsRequest(user="alice", relation="reader", type="dragon"),
@@ -443,7 +469,8 @@ def test_list_objects_rejects_an_unknown_type_and_a_phantom_relation(gate_seen: 
     with pytest.raises(InvalidInputError, match="can_fly"):
         asyncio.run(
             ep.list_access_objects(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=None,
                 body=AccessListObjectsRequest(user="alice", relation="can_fly", type="table"),
@@ -459,7 +486,8 @@ def test_list_objects_outage_audits_failure_and_raises(gate_seen: dict[str, Any]
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
             ep.list_access_objects(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=_token("root_admin"),
                 body=AccessListObjectsRequest(user="alice", relation="can_read_data", type="table"),
@@ -478,7 +506,8 @@ def test_list_users_returns_qualified_subjects_and_flags_truncation(gate_seen: d
     monkeypatch.setattr(ep.fga, "list_users", _fake)
     response = asyncio.run(
         ep.list_access_users(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=_token("root_admin"),
             body=AccessListUsersRequest(object="table:db1$t", relation="can_read_data"),
@@ -501,7 +530,8 @@ def test_list_users_passes_a_userset_filter_through(gate_seen: dict[str, Any], r
     monkeypatch.setattr(ep.fga, "list_users", _fake)
     response = asyncio.run(
         ep.list_access_users(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=None,
             body=AccessListUsersRequest(object="namespace:bronze", relation="validator", user_type="role", user_relation="assignee"),
@@ -516,7 +546,8 @@ def test_list_users_rejects_a_phantom_subject_filter(gate_seen: dict[str, Any], 
     with pytest.raises(InvalidInputError, match="dragon"):
         asyncio.run(
             ep.list_access_users(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=None,
                 body=AccessListUsersRequest(object="table:db1$t", relation="reader", user_type="dragon"),
@@ -525,7 +556,8 @@ def test_list_users_rejects_a_phantom_subject_filter(gate_seen: dict[str, Any], 
     with pytest.raises(InvalidInputError, match="can_fly"):
         asyncio.run(
             ep.list_access_users(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=None,
                 body=AccessListUsersRequest(object="table:db1$t", relation="reader", user_type="role", user_relation="can_fly"),
@@ -543,7 +575,8 @@ def test_expand_returns_the_tree_and_records_the_depth(gate_seen: dict[str, Any]
     monkeypatch.setattr(ep.fga, "expand_tree", _fake)
     response = asyncio.run(
         ep.expand_access(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=_token("root_admin"),
             body=AccessExpandRequest(object="table:db1$t", relation="reader", depth=3),
@@ -568,7 +601,8 @@ def test_expand_clamps_depth_to_the_library_ceiling(gate_seen: dict[str, Any], r
     # function directly (or a later schema loosening) still cannot ask for an unbounded fan-out.
     response = asyncio.run(
         ep.expand_access(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=None,
             body=AccessExpandRequest.model_construct(object="table:db1$t", relation="reader", depth=9999),
@@ -587,7 +621,8 @@ def test_expand_empty_tree_is_null_not_an_empty_object(gate_seen: dict[str, Any]
     monkeypatch.setattr(ep.fga, "expand_tree", _empty)
     response = asyncio.run(
         ep.expand_access(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=None,
             body=AccessExpandRequest(object="table:db1$t", relation="reader"),
@@ -604,7 +639,8 @@ def test_expand_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec:
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
             ep.expand_access(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=_token("root_admin"),
                 body=AccessExpandRequest(object="table:db1$t", relation="reader"),
@@ -617,7 +653,8 @@ def test_expand_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _Audi
     with pytest.raises(InvalidInputError, match="can_fly"):
         asyncio.run(
             ep.expand_access(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=None,
                 body=AccessExpandRequest(object="table:db1$t", relation="can_fly"),
@@ -626,39 +663,27 @@ def test_expand_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _Audi
 
 
 def test_every_derivation_surface_is_fga_gated(rec: _AuditRecorder) -> None:
-    """FGA off → 501 on all three, like every other /v1/access handler. A surface that answers "who can
-    do what" while the store is unconfigured would be inventing an answer."""
+    """FGA off → 501 on all three, like every other /v1/access route. A surface that answered "who can
+    do what" while the store is unconfigured would be inventing an answer.
+
+    ASSERTED THROUGH THE MECHANISM THAT NOW PROVIDES IT. This used to call each of the three handlers
+    with `fga_enabled=False` and expect the raise. The gate moved to a router dependency, so a direct
+    handler call no longer runs it — those three calls would have stopped raising and the test would
+    have had to be deleted or, worse, kept passing by asserting something else. What actually holds the
+    property now is (a) the gate refuses when FGA is off, and (b) every route carries the gate. Both are
+    asserted, and (b) covers routes four and five for free — which the old shape never did.
+    """
     off = _settings(fga_enabled=False)
     with pytest.raises(UnsupportedOperationError):
-        asyncio.run(
-            ep.list_access_objects(
-                request=_request(),
-                settings=off,
-                token=None,
-                body=AccessListObjectsRequest(user="alice", relation="can_read_data", type="table"),
-            )
-        )
-    with pytest.raises(UnsupportedOperationError):
-        asyncio.run(
-            ep.list_access_users(
-                request=_request(),
-                settings=off,
-                token=None,
-                body=AccessListUsersRequest(object="table:db1$t", relation="can_read_data"),
-            )
-        )
-    with pytest.raises(UnsupportedOperationError):
-        asyncio.run(
-            ep.expand_access(
-                request=_request(),
-                settings=off,
-                token=None,
-                body=AccessExpandRequest(object="table:db1$t", relation="reader"),
-            )
-        )
+        asyncio.run(ep.estate_gate(request=_request(client=_fga_client()), settings=off, token=None))
 
-
-# ── /v1/access/simulate — assert before you grant ─────────────────────────────────────────────────────
+    derivation = {"/v1/access/list-objects", "/v1/access/list-users", "/v1/access/expand"}
+    covered = {
+        route.path
+        for route in ep.router.routes
+        if isinstance(route, APIRoute) and any(getattr(dep.call, "__name__", "") == "estate_gate" for dep in route.dependant.dependencies)
+    }
+    assert derivation <= covered, f"ungated derivation surfaces: {sorted(derivation - covered)}"
 
 
 def test_simulate_returns_the_delta_not_just_the_verdict(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -673,7 +698,8 @@ def test_simulate_returns_the_delta_not_just_the_verdict(gate_seen: dict[str, An
     monkeypatch.setattr(ep.fga, "check", _fake_check)
     response = asyncio.run(
         ep.simulate_access(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=_token("root_admin"),
             body=AccessSimulateRequest(
@@ -702,7 +728,8 @@ def test_simulate_reports_a_no_op_grant_honestly(gate_seen: dict[str, Any], rec:
     monkeypatch.setattr(ep.fga, "check", _always)
     response = asyncio.run(
         ep.simulate_access(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=None,
             body=AccessSimulateRequest(
@@ -731,7 +758,8 @@ def test_simulate_writes_nothing(gate_seen: dict[str, Any], rec: _AuditRecorder,
     monkeypatch.setattr(ep.fga, "delete_tuples", _explode)
     asyncio.run(
         ep.simulate_access(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=None,
             body=AccessSimulateRequest(
@@ -766,7 +794,8 @@ def test_simulate_rejects_a_hypothesis_it_would_refuse_to_write(gate_seen: dict[
     with pytest.raises(InvalidInputError, match="can_read_data"):
         asyncio.run(
             ep.simulate_access(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=None,
                 body=AccessSimulateRequest(
@@ -787,7 +816,8 @@ def test_simulate_outage_audits_failure_and_raises(gate_seen: dict[str, Any], re
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
             ep.simulate_access(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=_token("root_admin"),
                 body=AccessSimulateRequest(user="alice", relation="reader", object="table:db1$t"),
@@ -797,22 +827,13 @@ def test_simulate_outage_audits_failure_and_raises(gate_seen: dict[str, Any], re
 
 
 def test_simulate_is_estate_gated(rec: _AuditRecorder) -> None:
+    """Same move as the derivation surfaces above: the gate is a router dependency now, so the property
+    is "this route carries it" rather than "this handler raises"."""
     with pytest.raises(UnsupportedOperationError):
-        asyncio.run(
-            ep.simulate_access(
-                request=_request(),
-                settings=_settings(fga_enabled=False),
-                token=None,
-                body=AccessSimulateRequest(user="alice", relation="reader", object="table:db1$t"),
-            )
-        )
+        asyncio.run(ep.estate_gate(request=_request(client=_fga_client()), settings=_settings(fga_enabled=False), token=None))
 
-
-# ── conditional (time-boxed) grants ──────────────────────────────────────────────────────────────────
-#
-# The point of a condition is that access ENDS with nobody revoking it. That only works if the
-# condition survives every hop: written onto the tuple, read back off it, and evaluable at check time.
-# Each of these pins one hop, because a break in any one of them degrades silently to "permanent".
+    simulate = next(r for r in ep.router.routes if isinstance(r, APIRoute) and r.path.endswith("/simulate"))
+    assert any(getattr(dep.call, "__name__", "") == "estate_gate" for dep in simulate.dependant.dependencies)
 
 
 def _write_conditional(monkeypatch: pytest.MonkeyPatch, body: AccessTuple) -> list[Any]:
@@ -827,7 +848,8 @@ def _write_conditional(monkeypatch: pytest.MonkeyPatch, body: AccessTuple) -> li
     monkeypatch.setattr(ep.fga, "write_tuples", _fake_write)
     asyncio.run(
         ep.write_access_tuple(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=_token("root_admin"),
             body=body,
@@ -864,7 +886,8 @@ def test_a_condition_the_rung_does_not_accept_is_a_clean_400(gate_seen: dict[str
     with pytest.raises(InvalidInputError, match="non_expired_grant"):
         asyncio.run(
             ep.write_access_tuple(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=None,
                 body=AccessTuple(
@@ -881,7 +904,8 @@ def test_an_unknown_condition_is_a_clean_400(gate_seen: dict[str, Any], rec: _Au
     with pytest.raises(InvalidInputError, match="never_expires"):
         asyncio.run(
             ep.write_access_tuple(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=None,
                 body=AccessTuple(user="alice", relation="writer", object="namespace:bronze", condition=TupleCondition(name="never_expires")),
@@ -895,7 +919,8 @@ def test_a_condition_missing_a_parameter_is_a_clean_400(gate_seen: dict[str, Any
     with pytest.raises(InvalidInputError, match="grant_duration"):
         asyncio.run(
             ep.write_access_tuple(
-                request=_request(client=object()),
+                client=_fga_client(),
+                request=_request(client=_fga_client()),
                 settings=_settings(),
                 token=None,
                 body=AccessTuple(
@@ -942,7 +967,9 @@ def test_a_read_echoes_the_condition_rather_than_flattening_it(gate_seen: dict[s
 
     monkeypatch.setattr(ep.fga, "read_tuples", _fake_read)
     response = asyncio.run(
-        ep.read_access_tuples(request=_request(client=object()), settings=_settings(), token=_token("root_admin"), object="namespace:bronze")
+        ep.read_access_tuples(
+            client=_fga_client(), request=_request(client=_fga_client()), settings=_settings(), token=_token("root_admin"), object="namespace:bronze"
+        )
     )
     assert response.tuples[0].condition is not None
     assert response.tuples[0].condition.name == "non_expired_grant"
@@ -959,7 +986,8 @@ def test_check_forwards_the_runtime_context(gate_seen: dict[str, Any], rec: _Aud
     monkeypatch.setattr(ep.fga, "check", _fake_check)
     asyncio.run(
         ep.check_access(
-            request=_request(client=object()),
+            client=_fga_client(),
+            request=_request(client=_fga_client()),
             settings=_settings(),
             token=None,
             body=AccessCheckBody(user="alice", relation="writer", object="namespace:bronze", context={"current_time": "2026-07-29T10:30:00Z"}),
@@ -972,7 +1000,7 @@ def test_the_model_endpoint_publishes_condition_parameter_types(gate_seen: dict[
     """Served so a client renders TYPED inputs from the model. A hand-kept copy in the frontend drifts
     the moment a parameter changes, and a missing operand is a 503, not a soft failure."""
     client = SimpleNamespace(get_authorization_model_id=lambda: "01MODEL")
-    response = asyncio.run(ep.get_access_model(request=_request(client=client), settings=_settings(), token=None))
+    response = asyncio.run(ep.get_access_model(client=_fga_client(client), request=_request(client=client), settings=_settings(), token=None))
     assert "non_expired_grant" in response.conditions
     assert response.conditions["non_expired_grant"]["grant_duration"] == "duration"
     assert response.conditions["non_expired_grant"]["current_time"] == "timestamp"

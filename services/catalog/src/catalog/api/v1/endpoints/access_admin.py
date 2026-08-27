@@ -22,7 +22,7 @@ import logging
 from functools import lru_cache
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from lance_namespace import (
     InvalidInputError,
     ServiceUnavailableError,
@@ -58,7 +58,6 @@ from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/access", tags=["access"])
 
 #: OpenFGA's Read page-size ceiling — a larger request is a server-side 400, so cap it at the API edge.
 _MAX_PAGE_SIZE = 100
@@ -142,8 +141,43 @@ def _qualified_subject(user: str) -> str:
     return user if ":" in user else f"user:{user}"
 
 
-async def _estate_gate(request: Request, settings: Settings, token: CurrentToken) -> OpenFgaClient:
-    """The estate-admin door every ``/v1/access`` handler clears (mirrors ``/v1/events``).
+def _require_fga_client(request: Request) -> OpenFgaClient:
+    """The wired client, or the same 503 the gate raises.
+
+    Duplicated with `estate_gate` deliberately and minimally: FastAPI resolves dependencies
+    independently, so this cannot read the gate's result. Both raise the identical error, and the gate
+    runs first, so the branch here is unreachable in practice — it exists so the TYPE is honest.
+    """
+    client = getattr(request.app.state, "fga", None)
+    if client is None:
+        raise ServiceUnavailableError("authorization service is not available")
+    return client
+
+
+#: The raw OpenFGA client, for the handlers that operate on the tuple store directly.
+#:
+#: SEPARATE FROM THE GATE on purpose. `estate_gate` used to return this, so authorization and injection
+#: were one call and every handler had to make it. Splitting them lets the gate live on the router —
+#: where a new route inherits it — while a handler that needs the client says so in its own signature.
+#:
+#: Non-optional: `estate_gate` has already refused an unwired client with a 503 before any handler runs,
+#: so `None` is unreachable here and typing it optional would push a check into nine places that the
+#: door has already made once.
+EstateFgaClient = Annotated[OpenFgaClient, Depends(_require_fga_client)]
+
+
+async def estate_gate(request: Request, settings: SettingsDep, token: CurrentToken) -> None:
+    """The estate-admin door every ``/v1/access`` route clears (mirrors ``/v1/events``).
+
+    ON THE ROUTER, not called nine times by hand. This used to be `_estate_gate`, opened explicitly at
+    the top of all nine handlers — every one of them correct, which is exactly the hazard: the tenth
+    route is the one that forgets, and nothing would have said so. `authn.md` gives the rule directly —
+    "apply at the router level when every route in the group needs the same check — cheaper to read and
+    harder to forget" — and this is the estate's highest-privilege router, reading and WRITING the raw
+    tuple store that is the authorization state of everything.
+
+    It returns None now rather than the client. Handlers that need the client object take `FgaClientDep`
+    instead, so the gate does one job and the injection does the other.
 
     FGA off → 501 (there is no store to administer, unlike the events feed which still serves its buffer);
     enabled-but-unwired → 503 fail-closed; then ``can_observe_events`` on the fixed root object — a
@@ -156,12 +190,17 @@ async def _estate_gate(request: Request, settings: Settings, token: CurrentToken
     if client is None:
         raise ServiceUnavailableError("authorization service is not available")
     await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
-    return client
+
+
+#: ONE DOOR for the whole router. See `estate_gate` — this replaces nine hand-written calls, and is
+#: declared here rather than at the top of the file only because it must follow the function it names.
+router = APIRouter(prefix="/v1/access", tags=["access"], dependencies=[Depends(estate_gate)])
 
 
 @router.get("/tuples")
 async def read_access_tuples(
     request: Request,
+    client: EstateFgaClient,
     settings: SettingsDep,
     token: CurrentToken,
     object_type: Annotated[str | None, Query(description="scan one whole type (e.g. 'table')")] = None,
@@ -178,7 +217,6 @@ async def read_access_tuples(
     Read API cannot answer it (add ``object_type`` or ``object``; per-subject enumeration across all types
     is a ListObjects question, not a Read). No filter reads the whole store, paginated.
     """
-    client = await _estate_gate(request, settings, token)
     if object is not None:
         obj_filter: str | None = _validated_object(object)
     elif object_type is not None:
@@ -257,8 +295,7 @@ def _validated_write_tuple(body: AccessTuple) -> fga.ClientTuple:
     return fga.ClientTuple(user=_qualified_subject(body.user), relation=body.relation, object=obj, condition=condition)
 
 
-async def _mutate_tuple(request: Request, settings: Settings, token: CurrentToken, body: AccessTuple, *, write: bool) -> AccessTuple:
-    client = await _estate_gate(request, settings, token)
+async def _mutate_tuple(client: OpenFgaClient, request: Request, settings: Settings, token: CurrentToken, body: AccessTuple, *, write: bool) -> AccessTuple:
     tup = _validated_write_tuple(body)
     actor = token.sub if token else "anonymous"
     event = "access_tuple_write" if write else "access_tuple_delete"
@@ -289,30 +326,29 @@ async def _mutate_tuple(request: Request, settings: Settings, token: CurrentToke
 
 
 @router.post("/tuples")
-async def write_access_tuple(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
+async def write_access_tuple(client: EstateFgaClient, request: Request, settings: SettingsDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
     """Write ONE raw tuple (idempotent — a duplicate write is success), echoing the tuple as stored.
 
     Only a directly-assignable relation the compiled model defines on the object's type is accepted (a
     derived ``can_*`` action or an unknown type/relation is a 400) — the raw-tuple analog of the
     per-object grant surface's grantable-rung guard, without its table/namespace restriction.
     """
-    return await _mutate_tuple(request, settings, token, body, write=True)
+    return await _mutate_tuple(client, request, settings, token, body, write=True)
 
 
 @router.delete("/tuples")
-async def delete_access_tuple(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
+async def delete_access_tuple(client: EstateFgaClient, request: Request, settings: SettingsDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
     """Delete ONE raw tuple (idempotent — an already-absent tuple is success), echoing the tuple removed."""
-    return await _mutate_tuple(request, settings, token, body, write=False)
+    return await _mutate_tuple(client, request, settings, token, body, write=False)
 
 
 @router.get("/model")
-async def get_access_model(request: Request, settings: SettingsDep, token: CurrentToken) -> AccessModelResponse:
+async def get_access_model(client: EstateFgaClient, request: Request, settings: SettingsDep, token: CurrentToken) -> AccessModelResponse:
     """The authorization model — the checked-in ``model.fga`` DSL text plus the pinned model id.
 
     Read-only and estate-admin gated: the model reveals the whole privilege topology (which rungs derive
     which actions), the same platform-tier disclosure as the tuple listing.
     """
-    client = await _estate_gate(request, settings, token)
     model_id = client.get_authorization_model_id() or settings.fga_model_id or ""
     return AccessModelResponse(
         dsl=fga.load_model_dsl(),
@@ -322,7 +358,7 @@ async def get_access_model(request: Request, settings: SettingsDep, token: Curre
 
 
 @router.post("/check")
-async def check_access(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessCheckBody) -> AccessCheckResult:
+async def check_access(client: EstateFgaClient, request: Request, settings: SettingsDep, token: CurrentToken, body: AccessCheckBody) -> AccessCheckResult:
     """One ``(user, relation, object)`` OpenFGA Check over ANY model type — the estate-wide extension of
     the per-object ``…/access/check`` playground (#68), which stays as-is for table/namespace owners.
 
@@ -336,7 +372,6 @@ async def check_access(request: Request, settings: SettingsDep, token: CurrentTo
     clock, deliberately — a check that silently substituted "now" would answer a question the caller
     did not ask, and the whole point of the explorer is asking "was this true at 14:00?".
     """
-    client = await _estate_gate(request, settings, token)
     obj = _validated_object(body.object)
     fga_type = obj.partition(":")[0]
     if body.relation not in _defined_relations(fga_type):
@@ -363,7 +398,9 @@ def _validated_relation(obj_or_type: str, relation: str) -> str:
 
 
 @router.post("/list-objects")
-async def list_access_objects(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessListObjectsRequest) -> AccessListObjectsResponse:
+async def list_access_objects(
+    client: EstateFgaClient, request: Request, settings: SettingsDep, token: CurrentToken, body: AccessListObjectsRequest
+) -> AccessListObjectsResponse:
     """ "What can this subject reach?" — every ``type`` object on which ``user`` holds ``relation``.
 
     The forward half of the explorer, and the answer ``GET /tuples`` structurally cannot give: Read needs
@@ -375,7 +412,6 @@ async def list_access_objects(request: Request, settings: SettingsDep, token: Cu
     because this model deliberately refuses ``team#member`` on resource rungs — a team reaches data
     through a role, and only the userset question shows that.
     """
-    client = await _estate_gate(request, settings, token)
     if body.type not in _model_types():
         raise InvalidInputError(f"{body.type!r} is not a type the authorization model defines")
     relation = _validated_relation(body.type, body.relation)
@@ -392,14 +428,15 @@ async def list_access_objects(request: Request, settings: SettingsDep, token: Cu
 
 
 @router.post("/list-users")
-async def list_access_users(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessListUsersRequest) -> AccessListUsersResponse:
+async def list_access_users(
+    client: EstateFgaClient, request: Request, settings: SettingsDep, token: CurrentToken, body: AccessListUsersRequest
+) -> AccessListUsersResponse:
     """ "Who can do this?" — every subject holding ``relation`` on ``object``, effective access included.
 
     The inverse of list-objects and the primitive a revoke needs BEFORE it writes: a tuple sitting high in
     the hierarchy can revoke access for many principals at once, and "are you sure?" is not an answer to
     "how many". Subjects come back fully qualified so a userset is never mistaken for a user.
     """
-    client = await _estate_gate(request, settings, token)
     obj = _validated_object(body.object)
     relation = _validated_relation(obj, body.relation)
     if body.user_type not in _model_types():
@@ -433,7 +470,9 @@ async def list_access_users(request: Request, settings: SettingsDep, token: Curr
 
 
 @router.post("/expand")
-async def expand_access(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessExpandRequest) -> AccessExpandResponse:
+async def expand_access(
+    client: EstateFgaClient, request: Request, settings: SettingsDep, token: CurrentToken, body: AccessExpandRequest
+) -> AccessExpandResponse:
     """WHY a relation resolves — the userset tree, optionally followed through the cascade.
 
     Check answers yes/no and list-users answers who; neither says through WHICH rung or WHICH parent hop,
@@ -446,7 +485,6 @@ async def expand_access(request: Request, settings: SettingsDep, token: CurrentT
     round trip per hop under the browser client's fixed timeout; here it is one gate, one audit row, and
     one response.
     """
-    client = await _estate_gate(request, settings, token)
     obj = _validated_object(body.object)
     relation = _validated_relation(obj, body.relation)
     depth = max(1, min(body.depth, fga.MAX_EXPAND_TREE_DEPTH))
@@ -468,7 +506,9 @@ async def expand_access(request: Request, settings: SettingsDep, token: CurrentT
 
 
 @router.post("/simulate")
-async def simulate_access(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessSimulateRequest) -> AccessSimulateResult:
+async def simulate_access(
+    client: EstateFgaClient, request: Request, settings: SettingsDep, token: CurrentToken, body: AccessSimulateRequest
+) -> AccessSimulateResult:
     """ "Would this grant do what I think?" — a Check evaluated as if ``hypothetical`` existed.
 
     Nothing is written. OpenFGA's contextual tuples are per-request, so the store is untouched and the
@@ -487,7 +527,6 @@ async def simulate_access(request: Request, settings: SettingsDep, token: Curren
     and — more importantly — a hypothesis this API would refuse to write must not be simulatable, or
     the answer describes a grant that cannot exist.
     """
-    client = await _estate_gate(request, settings, token)
     obj = _validated_object(body.object)
     relation = _validated_relation(obj, body.relation)
     user = _qualified_subject(body.user)
