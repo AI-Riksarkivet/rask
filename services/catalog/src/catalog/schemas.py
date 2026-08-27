@@ -608,6 +608,10 @@ class ModelSummary(BaseModel):
 
 class ModelsListResponse(BaseModel):
     models: list[ModelSummary]
+    #: True when the caller's authorization listing hit OpenFGA's server cap, so this page was filtered
+    #: against an INCOMPLETE set of entitlements and may be short. A first-party model, so the flag is a
+    #: real field here; the spec-shaped listings carry the same key in their `context` map instead.
+    authorization_truncated: bool = False
 
 
 # --------------------------------------------------------------------------- #

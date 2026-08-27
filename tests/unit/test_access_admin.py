@@ -387,9 +387,9 @@ def test_list_objects_clears_the_estate_gate_and_qualifies_a_bare_subject(
 ) -> None:
     seen: dict[str, Any] = {}
 
-    async def _fake(_client: Any, **kwargs: Any) -> list[str]:
+    async def _fake(_client: Any, **kwargs: Any) -> Any:
         seen.update(kwargs)
-        return ["table:db1$t", "table:db1$u"]
+        return ep.fga.ObjectListing(objects=["table:db1$t", "table:db1$u"], truncated=False)
 
     monkeypatch.setattr(ep.fga, "list_objects", _fake)
     response = asyncio.run(
@@ -414,9 +414,9 @@ def test_list_objects_sends_a_userset_verbatim(gate_seen: dict[str, Any], rec: _
     # so the userset question is the one that explains a real grant, and it must not be re-prefixed.
     seen: dict[str, Any] = {}
 
-    async def _fake(_client: Any, **kwargs: Any) -> list[str]:
+    async def _fake(_client: Any, **kwargs: Any) -> Any:
         seen.update(kwargs)
-        return []
+        return ep.fga.ObjectListing(objects=[], truncated=False)
 
     monkeypatch.setattr(ep.fga, "list_objects", _fake)
     asyncio.run(

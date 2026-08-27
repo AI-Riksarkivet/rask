@@ -96,10 +96,19 @@ async def list_models(
     """
     names = await run_in_threadpool(registry.list_models, settings.models_root, so)
     names = [name for name in names if _MODEL_RE.fullmatch(name)]
+    authorization_truncated = False
     if settings.fga_enabled and token is not None and client is not None:
-        allowed = set(await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="table"))
+        # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
+        # page cursor below would be minted from the shortened list. Surfaced to the caller rather
+        # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
+        listing = await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="table")
+        allowed = set(listing.objects)
+        authorization_truncated = listing.truncated
         names = [name for name in names if f"table:{fga.canonical_object_id(_segments(name), delimiter=settings.delimiter)}" in allowed]
-    return ModelsListResponse(models=await run_in_threadpool(_summaries, settings, so, names[:limit]))
+    return ModelsListResponse(
+        models=await run_in_threadpool(_summaries, settings, so, names[:limit]),
+        authorization_truncated=authorization_truncated,
+    )
 
 
 @router.post("/{model}/promote", response_model_exclude_none=True)

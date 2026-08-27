@@ -382,7 +382,7 @@ async def list_access_objects(request: Request, settings: SettingsDep, token: Cu
     user = _qualified_subject(body.user)
     subject = token.sub if token else "anonymous"
     try:
-        objects = await fga.list_objects(client, user=user, relation=relation, object_type=body.type, qualify=False)
+        objects = (await fga.list_objects(client, user=user, relation=relation, object_type=body.type, qualify=False)).objects
     except ServiceUnavailableError:
         audit("access_list_objects", FAILURE, subject=subject, resource=f"{body.type}:", reason="authz_unavailable")
         raise

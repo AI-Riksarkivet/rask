@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     ConcurrentModificationError,
@@ -259,14 +259,25 @@ async def create_warehouse(
 
 
 @router.get("", response_model_exclude_none=True)
-async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[WarehouseResponse]:
+async def list_warehouses(response: Response, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[WarehouseResponse]:
     """Every warehouse the caller can read. Governed like the metadata feeds: with FGA on, filtered to the
     warehouses the caller has ``can_get_metadata`` on (never discloses another tenant's bucket names)."""
     _require_enabled(settings)
     records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, settings.storage_options())
+    authorization_truncated = False
     if settings.fga_enabled and client is not None and token is not None:
-        allowed = set(await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="warehouse"))
+        # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
+        # page cursor below would be minted from the shortened list. Surfaced to the caller rather
+        # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
+        listing = await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="warehouse")
+        allowed = set(listing.objects)
+        authorization_truncated = listing.truncated
         records = [r for r in records if f"warehouse:{r['id']}" in allowed]
+        # A BARE LIST has no envelope to carry the flag, and giving this route one would be a breaking
+        # response-shape change for a diagnostic bit. A header says the same thing without moving the
+        # body, under the same key name the enveloped listings use.
+        if authorization_truncated:
+            response.headers["X-Authorization-Truncated"] = "true"
     return [WarehouseResponse(**r) for r in records]
 
 
@@ -301,6 +312,10 @@ class EstateBindingsResponse(BaseModel):
     """``{namespace: warehouse_id}`` — a mapping rather than a list, because every caller so far
     wants to know WHICH warehouse a namespace lives in, and a list would make them re-derive it."""
 
+    authorization_truncated: bool = False
+    """True when the caller's authorization listing hit OpenFGA's server cap, so these bindings were
+    filtered against an INCOMPLETE entitlement set and may be short. See `fga.ObjectListing`."""
+
 
 @router.get("/-/bindings", response_model_exclude_none=True)
 async def list_estate_bindings(
@@ -333,10 +348,19 @@ async def list_estate_bindings(
             f"{len(skipped)} namespace binding(s) could not be read (e.g. {skipped[0]}) — refusing to "
             f"report a partial estate, because a binding you cannot read is a namespace you cannot see."
         )
+    authorization_truncated = False
     if settings.fga_enabled and client is not None and token is not None:
-        allowed = set(await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="warehouse"))
+        # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
+        # page cursor below would be minted from the shortened list. Surfaced to the caller rather
+        # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
+        listing = await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="warehouse")
+        allowed = set(listing.objects)
+        authorization_truncated = listing.truncated
         records = [r for r in records if f"warehouse:{r.get('warehouse_id')}" in allowed]
-    return EstateBindingsResponse(bindings={str(r["top_ns"]): str(r["warehouse_id"]) for r in records})
+    return EstateBindingsResponse(
+        bindings={str(r["top_ns"]): str(r["warehouse_id"]) for r in records},
+        authorization_truncated=authorization_truncated,
+    )
 
 
 @router.get("/{warehouse_id}/namespaces", response_model_exclude_none=True)

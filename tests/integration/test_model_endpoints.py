@@ -193,9 +193,9 @@ def test_promote_rejects_an_arbitrary_tag(models_client: tuple[TestClient, str],
 def _fake_list_objects(allowed: list[str], monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     captured: list[dict] = []
 
-    async def fake(_c: object, *, user: str, relation: str, object_type: str, **_kw: object) -> list[str]:
+    async def fake(_c: object, *, user: str, relation: str, object_type: str, **_kw: object) -> fga_module.ObjectListing:
         captured.append({"user": user, "relation": relation, "object_type": object_type})
-        return allowed
+        return fga_module.ObjectListing(objects=allowed, truncated=False)
 
     monkeypatch.setattr(fga_module, "list_objects", fake)
     return captured
@@ -213,7 +213,11 @@ def test_list_models_filters_to_readable_and_reports_versions(models_client: tup
     resp = client.get("/v1/model", headers={"Authorization": "Bearer t"})
 
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"models": [{"model": "demo", "latest_version": 2, "blessed_version": 1}]}
+    assert resp.json() == {
+        "models": [{"model": "demo", "latest_version": 2, "blessed_version": 1}],
+        # New: the caller can now tell a small estate from a truncated authorization listing.
+        "authorization_truncated": False,
+    }
     assert captured == [{"user": "alice", "relation": "can_get_metadata", "object_type": "table"}]
 
 
@@ -222,7 +226,7 @@ def test_list_models_is_empty_for_a_caller_with_no_grants(models_client: tuple[T
     _fake_list_objects([], monkeypatch)
     resp = client.get("/v1/model", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
-    assert resp.json() == {"models": []}
+    assert resp.json() == {"models": [], "authorization_truncated": False}
 
 
 def test_list_models_requires_authentication(models_client: tuple[TestClient, str]) -> None:

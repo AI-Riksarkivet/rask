@@ -55,11 +55,13 @@ async def _list(
     """
     monkeypatch.setattr(ns_ep.native, "call", lambda _ns, _op, _req: ListTablesResponse(tables=list(backend_tables)))
 
-    async def _fake_list_objects(_client: object, *, user: str, relation: str, object_type: str) -> list[str]:
+    async def _fake_list_objects(_client: object, *, user: str, relation: str, object_type: str) -> ns_ep.fga.ObjectListing:
         assert relation == "can_read_data", f"the listing must be filtered on data access, not on {relation!r}"
         assert object_type == "table"
         assert user == "ivan"
-        return list(allowed or [])
+        # `ObjectListing`, not a bare list: the helper reports whether OpenFGA truncated its answer,
+        # and a double returning the old shape would pass while the route reads `.objects` off a list.
+        return ns_ep.fga.ObjectListing(objects=list(allowed or []), truncated=False)
 
     monkeypatch.setattr(ns_ep.fga, "list_objects", _fake_list_objects)
 
@@ -161,8 +163,8 @@ async def test_the_backend_is_never_asked_to_paginate(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(ns_ep.native, "call", _capture)
 
-    async def _all(_client: object, **_kw: Any) -> list[str]:
-        return ["table:acme-gold$catalog"]
+    async def _all(_client: object, **_kw: Any) -> ns_ep.fga.ObjectListing:
+        return ns_ep.fga.ObjectListing(objects=["table:acme-gold$catalog"], truncated=False)
 
     monkeypatch.setattr(ns_ep.fga, "list_objects", _all)
 

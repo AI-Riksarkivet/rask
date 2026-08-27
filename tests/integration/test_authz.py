@@ -936,10 +936,10 @@ def test_list_tables_filtered_by_list_objects(client: TestClient, fake_ns: Magic
     _wire(client)
     seen: dict = {}
 
-    async def fake_list_objects(_c: object, *, user: str, relation: str, object_type: str) -> list[str]:
+    async def fake_list_objects(_c: object, *, user: str, relation: str, object_type: str) -> fga_module.ObjectListing:
         seen.update(user=user, relation=relation, object_type=object_type)
         # Caller can read users + orders (and some table not in this listing).
-        return ["table:users", "table:orders", "table:elsewhere"]
+        return fga_module.ObjectListing(objects=["table:users", "table:orders", "table:elsewhere"], truncated=False)
 
     monkeypatch.setattr(fga_module, "list_objects", fake_list_objects)
 

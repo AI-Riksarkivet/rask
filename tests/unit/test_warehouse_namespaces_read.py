@@ -130,8 +130,8 @@ def test_the_estate_read_is_FILTERED_to_what_the_caller_may_see(monkeypatch: pyt
     _seed(settings, warehouse_id="mine-wh", bindings=("mine",))
     _seed(settings, warehouse_id="theirs-wh", bindings=("theirs",))
 
-    async def _only_mine(*args: Any, **kwargs: Any) -> list[str]:
-        return ["warehouse:mine-wh"]
+    async def _only_mine(*args: Any, **kwargs: Any) -> fga_module.ObjectListing:
+        return fga_module.ObjectListing(objects=["warehouse:mine-wh"], truncated=False)
 
     monkeypatch.setattr(fga_module, "list_objects", _only_mine)
     result = asyncio.run(

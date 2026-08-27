@@ -187,8 +187,19 @@ async def list_all_tables(
     response.tables = await run_in_threadpool(_collect_tables, ns, settings.delimiter, response.tables, include_declared)
     # When FGA is on and the caller is known, return only the tables they can read.
     if settings.fga_enabled and token is not None and client is not None:
-        allowed = set(await fga.list_objects(client, user=token.sub, relation="can_read_data", object_type="table"))
+        # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
+        # page cursor below would be minted from the shortened list. Surfaced to the caller rather
+        # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
+        listing = await fga.list_objects(client, user=token.sub, relation="can_read_data", object_type="table")
+        allowed = set(listing.objects)
+        authorization_truncated = listing.truncated
         response.tables = [name for name in response.tables if f"table:{name}" in allowed]
+        # THE SPEC'S OWN EXTENSION POINT. `ListTablesResponse` is a `lance_namespace` model with fields
+        # `context`, `tables`, `page_token`, and `context` is documented as "arbitrary context as
+        # key-value pairs ... custom to the specific implementation". So the flag rides there rather
+        # than as a new body field, which would have broken the spec conformance the catalog is built on.
+        if authorization_truncated:
+            response.context = {**(response.context or {}), "authorization_truncated": "true"}
     # Paginate AFTER the FGA filter so pages count only tables the caller can see.
     response.tables, response.page_token = _paginate(response.tables, page_token, limit)
     return response

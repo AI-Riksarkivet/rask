@@ -33,7 +33,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import aiohttp
 from lance_namespace import ServiceUnavailableError
@@ -507,6 +507,23 @@ async def batch_check(
         raise ServiceUnavailableError("authorization service unavailable") from exc
 
 
+class ObjectListing(NamedTuple):
+    """What the caller may reach, AND whether that answer is complete.
+
+    A bare `list[str]` cannot express the difference between "this subject holds three tables" and
+    "the server stopped counting at 1000", and the five governed listings that intersect their rows
+    against this call then mint a page cursor from the shortened list — so paging forward cannot
+    recover the hidden rows either. `pagination.md`'s rule is that the CLIENT must be able to learn
+    the answer was cut; a log tells an operator, which is a different person at a different time.
+
+    A `NamedTuple` so the existing `set(...)`/iteration idioms fail LOUDLY at every call site rather
+    than silently producing a two-element set of `[objects]` and `False`.
+    """
+
+    objects: list[str]
+    truncated: bool
+
+
 async def list_objects(
     client: OpenFgaClient,
     *,
@@ -518,7 +535,7 @@ async def list_objects(
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
-) -> list[str]:
+) -> ObjectListing:
     """Return the objects of ``object_type`` the user has ``relation`` on (e.g. ``table:…``).
 
     Callers pass a BARE subject id (the token's ``sub``) and this prepends ``user:``. Pass
@@ -538,9 +555,25 @@ async def list_objects(
     subject = f"user:{user}" if qualify else user
 
     @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
-    async def _do_list_objects() -> list[str]:
+    async def _do_list_objects() -> ObjectListing:
         response = await client.list_objects(ClientListObjectsRequest(user=subject, relation=relation, type=object_type, context=condition_context(context)))
-        return list(response.objects)
+        objects = list(response.objects)
+        # THE SAME GUARD `list_users` HAS CARRIED SINCE IT WAS WRITTEN, and the asymmetry is how this
+        # one stayed invisible. ListObjects has no pagination either, so a result sitting exactly on
+        # the server's ceiling is far more likely the truncation point than the true count.
+        #
+        # Five governed collection listings intersect their rows against this call, so a silent
+        # truncation hides an entitled caller's OWN rows — and the page cursor is then minted from the
+        # shortened list, so paging forward cannot recover them either. It fails CLOSED (hides rather
+        # than exposes) and only past the cap, which nothing here is near — but "nothing is near it"
+        # is an assumption, and this is what turns it into something the estate would tell you about.
+        truncated = len(objects) >= LIST_OBJECTS_SERVER_CAP
+        if truncated:
+            log.warning(
+                "openfga_list_objects_possibly_truncated",
+                extra={"relation": relation, "object_type": object_type, "objects": len(objects)},
+            )
+        return ObjectListing(objects=objects, truncated=truncated)
 
     try:
         return await _do_list_objects()
@@ -556,6 +589,11 @@ async def list_objects(
 #: OpenFGA's default ``listUsersMaxResults`` — ListUsers has no pagination, so a result this large
 #: is likely the server's silent truncation point, not the true grantee count.
 LIST_USERS_SERVER_CAP = 1000
+
+#: OpenFGA's default ``listObjectsMaxResults``. Same number, same reason, same silent behaviour as its
+#: sibling above — declared beside it deliberately, because the two calls having the same ceiling and
+#: only ONE of them checking it is exactly how the unguarded half went unnoticed.
+LIST_OBJECTS_SERVER_CAP = 1000
 
 
 async def list_users(

@@ -89,7 +89,9 @@ def _wire(
         outcome = lists.get(relation, [])
         if isinstance(outcome, Exception):
             raise outcome
-        return outcome
+        # `list_objects` returns an `ObjectListing` now — the truncation flag travels with the result so
+        # a caller can tell a short answer from a complete one.
+        return ep.fga.ObjectListing(objects=list(outcome), truncated=False)
 
     monkeypatch.setattr(ep.fga, "check", _fake_check)
     monkeypatch.setattr(ep.fga, "list_objects", _fake_list)
@@ -158,9 +160,9 @@ def test_slow_fga_degrades_on_the_shared_budget(monkeypatch: pytest.MonkeyPatch)
         await asyncio.sleep(0.5)
         return True
 
-    async def _slow_list(*_a: Any, **_k: Any) -> list[str]:
+    async def _slow_list(*_a: Any, **_k: Any) -> Any:
         await asyncio.sleep(0.5)
-        return ["project:acme"]
+        return ep.fga.ObjectListing(objects=["project:acme"], truncated=False)
 
     monkeypatch.setattr(ep.fga, "check", _slow_check)
     monkeypatch.setattr(ep.fga, "list_objects", _slow_list)
