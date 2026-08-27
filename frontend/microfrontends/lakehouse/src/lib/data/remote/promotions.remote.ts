@@ -37,7 +37,13 @@ export const getHeldPromotion = query(
 		parsedGateway(await gatewayJSON(`/api/promotions/${enc(instanceId)}`), HeldPromotionSchema),
 );
 
-/** Approve or reject a held promotion. Approving RESUMES the cascade; rejecting leaves it held.
+/** Approve or reject a held promotion. Approving RESUMES the cascade.
+ *
+ *  REJECTING IS TERMINAL, and this said the opposite until 2026-08-27. `workflow.py:1062-1069`
+ *  emits a `REJECTED` outcome and RETURNS — the orchestration completes, the instance 404s, and
+ *  nothing can reopen it. Describing that as "leaves it held" invited a validator to reject a
+ *  promotion believing they could revisit it, which is the one mistake this surface must not
+ *  encourage: the decision is recorded against their subject and the cascade stops there.
  *
  * Single-flights its own read so the card re-renders from the server's answer rather than from an
  * assumption about what the decision did — `void`, never `await`, because the refresh must not gate

@@ -53,7 +53,8 @@
 		<h1 class="text-lg font-semibold">Held promotion</h1>
 		<p class="text-muted-foreground text-sm">
 			A stage's quality gate found this promotion unusual rather than broken, so it is waiting for a
-			validator instead of being dropped. Approving resumes the cascade; rejecting leaves it held.
+			validator instead of being dropped. Approving resumes the cascade. Rejecting is FINAL — the
+			review closes, the version stays unpublished, and this promotion cannot be reopened.
 		</p>
 	</div>
 
