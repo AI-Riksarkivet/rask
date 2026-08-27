@@ -4340,7 +4340,50 @@ _ALERT_GROUP_SOURCES: dict[str, tuple[str, ...]] = {
     # `test_every_FIRST_PARTY_INSTRUMENT_is_read_by_some_alert_rule` now does.
     "lance-ingest": ("services/ingest/src/ingest/metrics.py",),
     "lance-flows": ("services/flows/src/flows/metrics.py",),
+    # Both moved OUT of `_THIRD_PARTY_ALERT_GROUPS` 2026-08-27 (open_fastapi-audit). Neither entry was
+    # true, and being there exempted the group from the phantom gate entirely.
+    #
+    # `lance-catalog` claimed the catalog "ships no metrics.py — its rules ride the shared HTTP server
+    # metrics". Both halves false: `catalog.writes.shed` is created by `_meter.create_counter` in
+    # `api/load_shed.py` (not a file called metrics.py, which is what the claim was built on), and no
+    # lance-catalog rule references any `http_server_*` series.
+    #
+    # `ray` was not named by the audit at all — the classification gate below found it. It claimed
+    # "Ray's own metrics, exported by the Ray dashboard's Prometheus endpoint", and two of its five
+    # rules query `ray_control_probes_total` / `ray_control_jobs_known`, which ray-kit instruments.
+    "lance-catalog": (
+        "services/catalog/src/catalog/api/load_shed.py",
+        "services/catalog/src/catalog/core/lineage_emit.py",
+    ),
+    "ray": ("packages/ray-kit/src/ray_kit/metrics.py",),
 }
+
+#: Series namespaces the estate QUERIES but does not emit, with who does emit them.
+#:
+#: `ray` is genuinely MIXED, which neither classification could express: ray-kit instruments
+#: `ray.control.*` while Ray's own exporter produces `ray_node_*`, `ray_serve_*`, `ray_data_*`,
+#: `ray_tasks`, `ray_resources` and more. The alternative was splitting the alert group in two, and
+#: that renames an operator-facing group — runbooks and dashboards reference these names — to solve a
+#: modelling problem. So the exemption is by NAMESPACE, not by exempting a whole group from the gate.
+#:
+#: Enumerating Ray's series one by one was the first attempt and is the wrong shape: Ray's set is large
+#: and evolves with the version, so the list would rot into a second false claim of exactly the kind
+#: this finding is about.
+_EXTERNAL_SERIES_PREFIXES: dict[str, str] = {
+    "ray_": "Ray's own dashboard/Prometheus exporter",
+}
+
+#: The carve-out that keeps the gate sharp. Without it the `ray_` rule would also excuse a TYPO in
+#: ray-kit's own series (`ray_control_probes_totl`), which is the failure the gate exists for.
+_OWNED_DESPITE_EXTERNAL_PREFIX: tuple[str, ...] = ("ray_control_",)
+
+
+def _is_external_series(name: str) -> bool:
+    """True when a series is emitted by something outside this repo."""
+    if name.startswith(_OWNED_DESPITE_EXTERNAL_PREFIX):
+        return False
+    return name.startswith(tuple(_EXTERNAL_SERIES_PREFIXES))
+
 
 #: UCUM unit -> the suffix the OTLP->Prometheus exporter APPENDS to the series name. A unit in curly
 #: braces is a dimensionless annotation (`{event}`, `{run}`) and is dropped, which is why counters keep
@@ -4351,7 +4394,6 @@ _UCUM_SUFFIX = {"s": "seconds", "ms": "milliseconds", "By": "bytes"}
 
 #: Groups whose rules query series the estate does not instrument, with why. An entry is a claim.
 _THIRD_PARTY_ALERT_GROUPS = {
-    "lance-catalog": "the catalog ships no metrics.py — its rules ride the shared HTTP server metrics that service_kit.setup_otel's FastAPI instrumentation emits automatically, not a first-party instrument",
     "lance-infra": "infrastructure series (NATS, CloudNativePG, RustFS) exported by their own operators",
     "lance-http": (
         "the FastAPI instrumentor's own RED series (`http_server_duration_milliseconds_*`), emitted "
@@ -4361,7 +4403,6 @@ _THIRD_PARTY_ALERT_GROUPS = {
         "a rule naming the bare form matches nothing and can never fire"
     ),
     "dapr-control-plane": "Dapr's own control-plane metrics, emitted by the sidecar injector and placement service",
-    "ray": "Ray's own metrics, exported by the Ray dashboard's Prometheus endpoint",
     "lance-observability": (
         "the telemetry backend's own health, from the `greptimedb` scrape job in otel-collector.yaml. "
         "`up` and `process_start_time_seconds` are synthesised by the SCRAPER and `process_resident_memory_bytes` "
@@ -4432,9 +4473,14 @@ def test_every_first_party_ALERT_names_a_metric_the_service_actually_EMITS(group
     sources = [(REPO / path).read_text() for path in _ALERT_GROUP_SOURCES[group_name]]
     # The name AND its declared unit, because the unit changes the series name. `observable_gauge` is in
     # the alternation because the outbox age is one — an omission that would have made this whole check
-    # vacuous for the very metric that motivated it.
+    # vacuous for the very metric that motivated it. `gauge` (the SYNCHRONOUS one) joined it 2026-08-27
+    # for the identical reason: ray-kit's `ray.control.jobs_known` is a plain `create_gauge`, so the
+    # first run of this gate over the `ray` group reported a real instrument as a phantom. Third time
+    # this file has been bitten by a matcher narrower than the values it must classify.
     instruments = [
-        m for source in sources for m in re.findall(r'create_(?:counter|up_down_counter|histogram|observable_gauge)\(\s*"([^"]+)"(.*?)\)', source, re.DOTALL)
+        m
+        for source in sources
+        for m in re.findall(r'create_(?:counter|up_down_counter|histogram|observable_gauge|gauge)\(\s*"([^"]+)"(.*?)\)', source, re.DOTALL)
     ]
     assert instruments, f"parsed no instruments out of {_ALERT_GROUP_SOURCES[group_name]} — the check would pass vacuously"
 
@@ -4462,7 +4508,9 @@ def test_every_first_party_ALERT_names_a_metric_the_service_actually_EMITS(group
         referenced |= set(re.findall(pattern, rule["expr"]))
     assert referenced, f"the {group_name} rules reference no metric with any of its own prefixes {prefixes}"
 
-    phantom = sorted(referenced - emitted)
+    # Series emitted outside this repo, subtracted by NAMESPACE rather than by exempting the whole
+    # group from the gate — which is the modelling error this replaces.
+    phantom = sorted(name for name in referenced - emitted if not _is_external_series(name))
     assert phantom == [], (
         f"these {group_name} alerts query series no instrument emits, so they can never fire: {phantom}. "
         f"{list(_ALERT_GROUP_SOURCES[group_name])} creates {sorted(emitted)}"
@@ -4579,7 +4627,7 @@ def test_every_PANEL_query_names_a_series_some_instrument_emits() -> None:
     emitted: set[str] = set()
     for path in sources:
         text = (REPO / path).read_text()
-        for name, tail in re.findall(r'create_(?:counter|up_down_counter|histogram|observable_gauge)\(\s*"([^"]+)"(.*?)\)', text, re.DOTALL):
+        for name, tail in re.findall(r'create_(?:counter|up_down_counter|histogram|observable_gauge|gauge)\(\s*"([^"]+)"(.*?)\)', text, re.DOTALL):
             base = name.replace(".", "_")
             unit = re.search(r'unit\s*=\s*"([^"]*)"', tail)
             suffix = _UCUM_SUFFIX.get(unit.group(1)) if unit else None
@@ -4600,7 +4648,7 @@ def test_every_PANEL_query_names_a_series_some_instrument_emits() -> None:
         for key, value in (doc.get("data") or {}).items():
             if not key.endswith(".json") or not isinstance(value, str):
                 continue
-            phantom |= set(pattern.findall(value)) - emitted
+            phantom |= {name for name in set(pattern.findall(value)) - emitted if not _is_external_series(name)}
 
     assert not phantom, (
         f"these dashboard panels query first-party series no instrument emits, so they render empty: {sorted(phantom)}. "
@@ -4917,7 +4965,7 @@ def test_every_FIRST_PARTY_INSTRUMENT_is_read_by_some_alert_rule() -> None:
     unread: list[str] = []
     for module, group_name in sorted(_METRICS_MODULE_GROUPS.items()):
         source = (REPO / module).read_text()
-        instruments = re.findall(r'create_(?:counter|up_down_counter|histogram|observable_gauge)\(\s*"([^"]+)"', source)
+        instruments = re.findall(r'create_(?:counter|up_down_counter|histogram|observable_gauge|gauge)\(\s*"([^"]+)"', source)
         assert instruments, f"parsed no instruments out of {module} — this check would pass vacuously"
 
         group = by_name.get(group_name)
@@ -5575,3 +5623,78 @@ def test_a_read_only_rootfs_is_SURVIVABLE_on_every_first_party_pod() -> None:
                 naked.append(f"{doc['metadata']['name']}/{container['name']}")
 
     assert not naked, f"read-only rootfs with no writable /tmp: {sorted(naked)}"
+
+
+#: The calls that CREATE a first-party metric. A module containing any of these emits a series the
+#: estate owns, whatever the file is named.
+_INSTRUMENT_FACTORIES = ("create_counter", "create_histogram", "create_observable_gauge", "create_gauge", "create_up_down_counter")
+
+
+def _modules_declaring_instruments() -> dict[str, list[str]]:
+    """Every repo module that creates a metric, keyed by the series names it declares.
+
+    DISCOVERED, not assumed to live in a file called `metrics.py`. That assumption is what made the
+    `lance-catalog` misclassification possible: the catalog's `catalog_writes_shed_total` counter is
+    created in `api/load_shed.py`, so a grep for `metrics.py` found nothing and concluded the group
+    rode shared HTTP-server series instead — a claim that was false in both halves.
+    """
+    found: dict[str, list[str]] = {}
+    for path in (*(REPO / "services").rglob("*.py"), *(REPO / "packages").rglob("*.py")):
+        if "/tests/" in str(path):
+            continue
+        text = path.read_text(errors="ignore")
+        if not any(factory in text for factory in _INSTRUMENT_FACTORIES):
+            continue
+        # The SAME translation the forward gate applies, and it has to be: the instrument is named
+        # `catalog.writes.shed` while the series is `catalog_writes_shed_total`. Matching the raw
+        # instrument name against PromQL would find nothing and report the group as clean — which is
+        # how the first version of this gate passed against the very misclassification it exists to
+        # catch.
+        series: list[str] = []
+        for name, tail in re.findall(r'create_(?:counter|up_down_counter|histogram|observable_gauge|gauge)\(\s*"([^"]+)"(.*?)\)', text, re.DOTALL):
+            base = name.replace(".", "_")
+            unit = re.search(r'unit\s*=\s*"([^"]*)"', tail)
+            suffix = _UCUM_SUFFIX.get(unit.group(1)) if unit else None
+            base = f"{base}_{suffix}" if suffix else base
+            series += [base, f"{base}_total"]
+        if series:
+            found[str(path.relative_to(REPO))] = series
+    return found
+
+
+def test_no_group_is_called_THIRD_PARTY_while_a_first_party_instrument_emits_it() -> None:
+    """An entry in `_THIRD_PARTY_ALERT_GROUPS` is a claim, and a false one disables a gate.
+
+    open_fastapi-audit — "`_THIRD_PARTY_ALERT_GROUPS[\"lance-catalog\"]` is a false claim, and it
+    exempts the catalog's only alert from the phantom-metric gate".
+
+    That entry said the catalog "ships no metrics.py — its rules ride the shared HTTP server metrics".
+    Both halves were false: `catalog_writes_shed_total` is created by `_meter.create_counter` in
+    `api/load_shed.py`, and no `lance-catalog` rule references any `http_server_*` series. The cost is
+    precisely what `test_every_first_party_ALERT_names_a_metric_the_service_actually_EMITS` exists to
+    prevent — being in the third-party map means that parametrized gate SKIPS the group, so a typo in
+    the one rule guarding the catalog's write-capacity ceiling would pass `promtool check rules`,
+    `promtool test rules` and every chart invariant, and simply never fire.
+
+    So the classification itself is now gated. A group may only be declared third-party if no module
+    in this repo creates the series it queries — discovered by the instrument FACTORY CALL rather than
+    by filename, so the next first-party instrument outside a `metrics.py` is not silently reclassified
+    the same way.
+    """
+    rules = yaml.safe_load((REPO / "chart/alerting/rules.yml").read_text())
+    emitted = {name: module for module, names in _modules_declaring_instruments().items() for name in names}
+
+    misclassified: dict[str, list[str]] = {}
+    for group in rules["groups"]:
+        if group["name"] not in _THIRD_PARTY_ALERT_GROUPS:
+            continue
+        referenced = " ".join(rule.get("expr", "") for rule in group.get("rules") or [])
+        ours = sorted({f"{name} ({module})" for name, module in emitted.items() if name in referenced})
+        if ours:
+            misclassified[group["name"]] = ours
+
+    assert not misclassified, (
+        f"these groups are declared third-party but query series this repo instruments: {misclassified}. "
+        f"A third-party entry exempts the group from the phantom-metric gate, so a typo in its rules "
+        f"would never be caught and the alert would silently never fire"
+    )
