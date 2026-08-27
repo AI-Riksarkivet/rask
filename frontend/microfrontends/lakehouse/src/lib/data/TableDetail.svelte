@@ -105,8 +105,13 @@
 		const current = table;
 		const res = await fetchProducers(current);
 		if (table !== current) return; // latest-wins
-		quality = deriveQuality(res);
-		producerRuns = res?.producers ?? null;
+		// `fetchProducers` is status-aware now (a 403 must not read as "no runs"). This surface
+		// already renders its own denied/unauthorized/offline states off `lastStatus` for the DETAIL
+		// read, so here the unsuccessful cases collapse to `null` — "the store did not answer" — which
+		// is exactly what `producerRuns`'s own comment above already promised.
+		const producers = res.ok ? res.data : null;
+		quality = deriveQuality(producers);
+		producerRuns = producers?.producers ?? null;
 	}
 
 	const unauthorized = $derived(detail === null && lastStatus === 401);

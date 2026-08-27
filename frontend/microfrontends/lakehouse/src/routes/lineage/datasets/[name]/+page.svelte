@@ -51,6 +51,33 @@
 	const upstream = $derived(neighborState?.for === name ? neighborState.upstream : []);
 	const downstream = $derived(neighborState?.for === name ? neighborState.downstream : []);
 
+	/**
+	 * WHY A DENIAL IS ITS OWN STATE, and not `[]`.
+	 *
+	 * `getJSON` maps 401 / 403 / offline all to `null`, so this page used to render every one of them
+	 * as an empty list — and an empty list here is not silence, it is a SENTENCE. Measured on the
+	 * deployed estate, two identities on one URL: the owner saw `LATEST RUNS 5` and a downstream of
+	 * `bind86-gold$catalog`; a caller without `can_get_metadata` was told "No producing runs recorded
+	 * for this dataset yet" and "none — nothing derives from it yet". Both statements were false, and
+	 * the page stated them with no hedge while the service had correctly answered 403.
+	 *
+	 * That is the same failure the lineage store's own hard-failure guard exists to prevent (a failed
+	 * read must never read as empty), and it is the estate's show-the-denial ruling: an ungated thing
+	 * is rendered WITH ITS REASON, never quietly omitted. `null` is "not asked yet" — before the first
+	 * read settles the page must claim nothing at all.
+	 */
+	let producersDenied = $state<string | null>(null);
+	let neighborsDenied = $state<string | null>(null);
+
+	/** A refusal we may repeat to the reader, or `null` when the read simply did not succeed for some
+	 *  other reason (offline, 5xx) — those are the store's business, not a governance answer. */
+	function denialOf(res: { ok: boolean; status?: number; detail?: string }): string | null {
+		if (res.ok) return null;
+		if (res.status === 401) return 'Sign in to see this.';
+		if (res.status === 403) return res.detail || 'You do not have access to this.';
+		return null;
+	}
+
 	// The distinct Lance versions this dataset was written at (from its producing runs) — the
 	// version options the schema-time-travel viewer steps through.
 	const versions = $derived([
@@ -64,13 +91,24 @@
 			fetchDownstream(current),
 		]);
 		if (name !== current) return; // latest-wins
-		if (prod) producerState = { for: current, runs: prod.producers ?? [] };
-		if (up || down) {
+		// The DENIAL is recorded before the data, so a refused read can never leave a stale `[]`
+		// standing in for an answer nobody was given.
+		producersDenied = denialOf(prod);
+		neighborsDenied = denialOf(up) ?? denialOf(down);
+		if (prod.ok) producerState = { for: current, runs: prod.data.producers ?? [] };
+		if (up.ok || down.ok) {
 			neighborState = {
 				for: current,
-				upstream: up?.related ?? (neighborState?.for === current ? neighborState.upstream : []),
-				downstream:
-					down?.related ?? (neighborState?.for === current ? neighborState.downstream : []),
+				upstream: up.ok
+					? (up.data.related ?? [])
+					: neighborState?.for === current
+						? neighborState.upstream
+						: [],
+				downstream: down.ok
+					? (down.data.related ?? [])
+					: neighborState?.for === current
+						? neighborState.downstream
+						: [],
 			};
 		}
 	}
@@ -134,7 +172,9 @@
 							>{u.name}</a
 						>
 					{:else}
-						<span class="mut">none — a source dataset</span>
+						<span class="mut" class:denied={neighborsDenied}>
+							{neighborsDenied ?? 'none — a source dataset'}
+						</span>
 					{/each}
 				</div>
 				<div class="rel-group">
@@ -144,15 +184,24 @@
 							>{d.name}</a
 						>
 					{:else}
-						<span class="mut">none — nothing derives from it yet</span>
+						<span class="mut" class:denied={neighborsDenied}>
+							{neighborsDenied ?? 'none — nothing derives from it yet'}
+						</span>
 					{/each}
 				</div>
 			</div>
 		</section>
 
 		<section class="runs" {@attach enter({ y: 6, delay: 0.05 })}>
-			<h2>Latest runs <span class="count mono">{producers.length}</span></h2>
-			{#if producers.length === 0}
+			<!-- The COUNT is suppressed under a denial too: "0" is as much a claim as the sentence
+			     below it, and it is the number a reader actually scans. -->
+			<h2>
+				Latest runs
+				{#if !producersDenied}<span class="count mono">{producers.length}</span>{/if}
+			</h2>
+			{#if producersDenied}
+				<p class="hint denied">{producersDenied}</p>
+			{:else if producers.length === 0}
 				<p class="hint">No producing runs recorded for this dataset yet.</p>
 			{/if}
 			{#each producers as r (r.run_id)}
@@ -259,6 +308,13 @@
 	.hint {
 		color: var(--mut);
 		font-size: 12px;
+	}
+	/* A denial reads as a STATEMENT ABOUT YOU, not as absent data — so it is styled apart from the
+	   muted "nothing here" text it replaces rather than sharing its voice. `--mut` is the muted TEXT
+	   token; `--muted` is a SURFACE and renders near-black on a dark panel. */
+	.denied {
+		color: var(--amber);
+		font-style: normal;
 	}
 	.mut {
 		color: var(--faint);

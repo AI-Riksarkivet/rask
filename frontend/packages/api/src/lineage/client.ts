@@ -44,7 +44,11 @@ export interface LineageClient {
 	 *  rollups) in ONE request — replaces the per-dataset /producers + /graph fan-out that cost
 	 *  hundreds of requests per refresh at estate scale. */
 	fetchEstateGraph: (limit: number) => Promise<EstateGraph | null>;
-	fetchProducers: (name: string) => Promise<Producers | null>;
+	/** The runs that wrote this dataset. STATUS-AWARE for the same reason `fetchReaders` below is:
+	 *  `getJSON` maps 401/403/offline all to `null`, and a page that renders `null` as an empty list
+	 *  states "no producing runs recorded for this dataset yet" to a caller who is simply not allowed
+	 *  to see them. Measured on the deployed estate: a non-admin was told 0 runs where there were 5. */
+	fetchProducers: (name: string) => Promise<ApiResult<Producers>>;
 	/** The read-audit query (#41): who READ this dataset. Owner-gated (stricter than /producers), so
 	 *  it's status-aware — a 403 ("owner access required") must read differently from offline or an
 	 *  empty log. */
@@ -75,8 +79,12 @@ export interface LineageClient {
 	}) => Promise<Datasets | null>;
 	/** Direct dataset-level neighbors (the backend's own /upstream + /downstream reads) — what a dataset
 	 *  was derived from / what derives from it, without assembling the whole subgraph client-side. */
-	fetchUpstream: (name: string) => Promise<Neighbors | null>;
-	fetchDownstream: (name: string) => Promise<Neighbors | null>;
+	/** what this dataset was derived FROM. Status-aware — see `fetchProducers`: a denial rendered as "none" is a false
+	 *  statement about the graph, not a missing edge. */
+	fetchUpstream: (name: string) => Promise<ApiResult<Neighbors>>;
+	/** what derives FROM this dataset. Status-aware — see `fetchProducers`: a denial rendered as "none" is a false
+	 *  statement about the graph, not a missing edge. */
+	fetchDownstream: (name: string) => Promise<ApiResult<Neighbors>>;
 	fetchSearch: (q: string, limit?: number) => Promise<SearchResults | null>;
 	fetchJobs: () => Promise<Jobs | null>;
 	fetchNamespaces: () => Promise<Namespaces | null>;
@@ -127,7 +135,7 @@ export function createLineageClient({
 		fetchGraph: (name, depth) =>
 			getJSON<LineageGraph>(`datasets/${enc(name)}/graph${depth ? `?depth=${depth}` : ''}`),
 		fetchEstateGraph: (limit) => getJSON<EstateGraph>(`graph?limit=${limit}`),
-		fetchProducers: (name) => getJSON<Producers>(`datasets/${enc(name)}/producers`),
+		fetchProducers: (name) => requestJSON<Producers>('/api', `datasets/${enc(name)}/producers`),
 		fetchReaders: (name) => requestJSON<Readers>('/api', `datasets/${enc(name)}/readers`),
 		fetchEvents: (opts = {}) => {
 			const p = new URLSearchParams();
@@ -151,8 +159,8 @@ export function createLineageClient({
 			const qs = p.toString();
 			return getJSON<Datasets>(`datasets${qs ? `?${qs}` : ''}`);
 		},
-		fetchUpstream: (name) => getJSON<Neighbors>(`datasets/${enc(name)}/upstream`),
-		fetchDownstream: (name) => getJSON<Neighbors>(`datasets/${enc(name)}/downstream`),
+		fetchUpstream: (name) => requestJSON<Neighbors>('/api', `datasets/${enc(name)}/upstream`),
+		fetchDownstream: (name) => requestJSON<Neighbors>('/api', `datasets/${enc(name)}/downstream`),
 		fetchSearch: (q, limit = 10) => getJSON<SearchResults>(`search?q=${enc(q)}&limit=${limit}`),
 		fetchJobs: () => getJSON<Jobs>('jobs'),
 		fetchNamespaces: () => getJSON<Namespaces>('namespaces'),
