@@ -17,7 +17,6 @@ from fastapi import APIRouter, FastAPI
 
 from service_kit.config import Settings
 from service_kit.exceptions import register_handlers
-from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.middleware import register_middleware
 from service_kit.otel import setup_otel
 from service_kit.probes import ReadyCheck, make_probes_router
@@ -105,6 +104,40 @@ def default_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncCon
 type LifespanFactory = Callable[[Settings], Callable[[FastAPI], AbstractAsyncContextManager[None]]]
 
 
+def _install_ns_problem_handlers(app: FastAPI) -> None:
+    """Install the Lance-Namespace problem-detail translators, IF this deployable has them.
+
+    THE IMPORT IS DEFERRED, and that is a packaging constraint rather than a performance one.
+    `lance_namespace` lives behind service-kit's `[governed]` / `[lakehouse]` extras and MUST stay
+    there: this library is shared by every service including the storeless ones, so a Lance dependency
+    in its base is a Lance dependency in the gateway. Importing it at module scope made
+    `import service_kit` itself require the extra, which is how the gateway image stopped building at
+    all — `ModuleNotFoundError: No module named 'lance_namespace'`, caught by `.docker/import-gate.py`
+    while every test stayed green (the workspace venv resolves the extra through a sibling member).
+
+    SKIPPING IS SOUND, NOT A SILENT DEGRADATION, and this is the load-bearing argument. These handlers
+    translate `lance_namespace` EXCEPTION TYPES. If the package is not importable then those classes do
+    not exist in this process, so no code in it can raise one — and the governed kernel that raises them
+    (`service_kit.governed.fga`) sits behind the very same extra, so it is absent too. There is nothing
+    left for the handler to catch. A deployable that DOES serve that surface declares the extra and gets
+    the handlers exactly as before.
+
+    A missing `lance_namespace` is tolerated; anything else is re-raised. A broken import INSIDE
+    `ns_errors` must not be swallowed as "the extra is absent" — that would turn a real defect into a
+    quietly unhandled error class.
+    """
+    try:
+        from service_kit.lakehouse.ns_errors import install_problem_handlers
+    except ModuleNotFoundError as exc:
+        if exc.name != "lance_namespace":
+            raise
+        logging.getLogger(__name__).debug(
+            "lance_namespace absent — Lance-Namespace problem handlers not installed; nothing in this deployable can raise those types"
+        )
+        return
+    install_problem_handlers(app, logging.getLogger(__name__))
+
+
 def make_service_app(
     *,
     title: str,
@@ -158,7 +191,7 @@ def make_service_app(
     # comment ("A DENIAL MUST BE A 403, NOT A 500"). Doing it HERE instead of per app also settles the
     # divergence open_python-audit X11 files — ingest's 422 body differing from its three fleet
     # siblings — by making all of them one shape rather than by removing what made ingest right.
-    install_problem_handlers(app, logging.getLogger(__name__))
+    _install_ns_problem_handlers(app)
     register_middleware(app, settings)
 
     # THE OPERATIONAL PROBES, root-mounted, for every app this factory builds.

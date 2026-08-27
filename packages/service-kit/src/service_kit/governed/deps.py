@@ -63,10 +63,19 @@ class FgaChecker(Protocol):
 class AuthDeps:
     """The dependencies one service's routes annotate with."""
 
-    def __init__(self, authenticate: Any, current_subject: Any, get_checker: Any) -> None:
+    def __init__(self, authenticate: Any, current_subject: Any, get_checker: Any, get_fga_client: Any) -> None:
         self.authenticate = authenticate
         self.current_subject = current_subject
         self.get_checker = get_checker
+        #: The RAW client, for the filtering paths `FgaChecker` deliberately cannot express.
+        #:
+        #: The checker Protocol is one relation on one object, by design — an endpoint should not be
+        #: able to write tuples or enumerate objects through it. That narrowness is right for a route
+        #: guard and wrong for a filtered LIST, where `authz.md` says to prefer `batch_check`: "same
+        #: network round-trip cost as one call". Without this accessor the only way to batch was to
+        #: reach into `request.app.state` by hand, which is how the viewer ended up making one check
+        #: per corpus on the first call every zone makes.
+        self.get_fga_client = get_fga_client
 
 
 def make_auth_deps(settings_dep: Any) -> AuthDeps:
@@ -124,7 +133,27 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
 
         return _check
 
-    return AuthDeps(authenticate=authenticate, current_subject=current_subject, get_checker=get_checker)
+    def get_fga_client(request: Request, settings: settings_dep) -> Any:
+        """The raw client, with the SAME fail-closed posture as the checker.
+
+        FGA off → `None`, matching `get_checker`'s permissive branch: a caller batching against a
+        disabled store has nothing to ask. FGA on but unwired → 503, never a permissive fallback, for
+        the reason the checker states — a broken authz layer must not degrade into an open one.
+        """
+        if not settings.fga_enabled:
+            return None
+        client = getattr(request.app.state, "fga", None)
+        if client is None:
+            audit("authz", FAILURE, reason="client_unavailable")
+            raise ServiceUnavailableError("Authorization is enabled but unavailable")
+        return client
+
+    return AuthDeps(
+        authenticate=authenticate,
+        current_subject=current_subject,
+        get_checker=get_checker,
+        get_fga_client=get_fga_client,
+    )
 
 
 def raw_bearer(credentials: _CredentialsDep) -> str | None:

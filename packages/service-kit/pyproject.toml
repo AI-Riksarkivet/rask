@@ -6,27 +6,6 @@ requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
     "storage",
-    # BASE, not an extra, because `service_kit/__init__.py` imports it UNCONDITIONALLY:
-    # `from service_kit.lakehouse.ns_errors import install_problem_handlers`, and `ns_errors` does a
-    # module-level `from lance_namespace import ...` (not under TYPE_CHECKING). It was declared only
-    # behind the `[governed]` and `[lakehouse]` extras, so `import service_kit` was broken for any
-    # consumer that took this library bare.
-    #
-    # SIX deployables declare bare `service-kit` (flows, ingest, compute, gateway, controlplane,
-    # notifications) and five of them resolve `lance-namespace` TRANSITIVELY, by luck, through some
-    # other dependency. The gateway does not — so its image would not build at all:
-    #
-    #   import gate FAILED — 1/1 modules could not be IMPORTED:
-    #     gateway: ModuleNotFoundError: No module named 'lance_namespace'
-    #
-    # The other five were one dependency bump from the same break. The extras keep everything else
-    # they carry; only this one moves, because only this one is required to `import service_kit`.
-    #
-    # This library IS meant to stay dependency-light, and that intent is not served by a declaration
-    # that lies — a truly optional lakehouse layer needs the `__init__` import made lazy, which is a
-    # design change rather than a packaging one. Declaring what the code already requires is the fix
-    # for the build being broken; making it genuinely optional is a separate decision.
-    "lance-namespace>=0.11.0",
     "fastapi>=0.115",
     "pydantic>=2.7",
     "pydantic-settings>=2.5",

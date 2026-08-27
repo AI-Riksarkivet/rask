@@ -24,10 +24,23 @@ from __future__ import annotations
 
 import json
 
-from lance_namespace import ErrorCode
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from service_kit.lakehouse.ns_errors import problem_body
+from service_kit.problem import problem_body
+
+
+#: `ErrorCode.INVALID_INPUT`, as the integer it already is on the wire (`ErrorCode` is an IntEnum).
+#:
+#: SPELLED AS A LITERAL because this middleware is registered for EVERY app `make_service_app` builds,
+#: including storeless ones like the gateway — importing the enum here is what made `import
+#: service_kit` require the `[governed]`/`[lakehouse]` extras and stopped the gateway image building.
+#: Deferring the import into the reject path would be worse, not better: it would turn a build-time
+#: failure into a request-time one, on the exact request that is already going wrong.
+#:
+#: A hard-coded wire constant is only honest if something proves it still matches, so
+#: `test_body_limit_code_matches_the_lance_namespace_enum` pins it against the real enum in an
+#: environment that has it.
+_INVALID_INPUT = 13
 
 
 _PROBLEM_JSON = b"application/problem+json"
@@ -89,7 +102,7 @@ class BodySizeLimitMiddleware:
         # must answer before the body is buffered — so the shape comes from `ns_errors` instead.
         body = json.dumps(
             problem_body(
-                ErrorCode.INVALID_INPUT,
+                _INVALID_INPUT,
                 status=413,
                 title="Payload Too Large",
                 slug="payload-too-large",
