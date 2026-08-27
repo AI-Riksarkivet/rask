@@ -51,6 +51,21 @@ COPY scripts/ray_lance_job.py scripts/ray_stage_job.py scripts/ray_train_job.py 
 # CDF delta read, merge_insert on the stable id, catalog-registered commit. Baked like any other job
 # so the end-to-end lane is provable with no GPU and no model download.
 COPY scripts/ray_dummy_job.py /home/ray/jobs/
+# ...AND ITS PACKAGE, which this image carried the script for but not the code — so the baked job
+# died `ModuleNotFoundError: No module named 'dummy_runner'` the moment anything ran it, while the
+# `dummy` TransformSpec stayed declared and the door stayed open onto a broken image. Reproduced on
+# the deployed head (ray-lance:main-9a7d113f) before this line existed.
+#
+# `.docker/ray-cluster.dockerfile` has carried the same COPY since A11 and explains the reasoning at
+# length; the short version is that `python /home/ray/jobs/ray_dummy_job.py` puts that directory on
+# `sys.path[0]`, so `from dummy_runner.job import main` resolves with no PYTHONPATH edit and — the
+# part that matters — NO second dependency resolution. `dummy_runner` imports pyarrow and lance and
+# nothing else, both already present, so a source copy adds no resolvable dependency and stays
+# inside the "a workload's awkward dependencies are ITS problem" ruling.
+#
+# Baked, never `runtime_env`: Ray documents that as development-only, and a probe that ran
+# differently from the lane it probes would be worth nothing.
+COPY runners/dummy/src/dummy_runner /home/ray/jobs/dummy_runner
 
 ARG BUILD_DATE
 ARG VCS_REF

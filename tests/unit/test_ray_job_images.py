@@ -195,3 +195,80 @@ def test_the_declared_transform_door_knows_what_the_cluster_image_bakes() -> Non
         "A declaration door that disagrees with the image either refuses a valid job or accepts one that "
         "cannot run."
     )
+
+
+# ---------------------------------------------------------------------------------------------
+# A BAKED SCRIPT IS NOT A BAKED JOB. Everything above proves each `.py` the fleet can submit is
+# COPYed into the image that runs it — and every one of those tests passed while the dummy lane was
+# dead on the deployed cluster, because `ray_dummy_job.py` does nothing on its own:
+#
+#     $ kubectl exec ray-lance-head-… -- python /home/ray/jobs/ray_dummy_job.py
+#     ModuleNotFoundError: No module named 'dummy_runner'
+#
+# `.docker/ray-cluster.dockerfile` had carried `COPY runners/dummy/src/dummy_runner …` since A11;
+# `.docker/ray-lance.dockerfile` copied the script and not the package, and no test compared the two.
+# The `dummy` TransformSpec stayed declared the whole time, so the catalog's door was open onto an
+# image that could not run what it advertised — a 404-shaped failure wearing a 200.
+#
+# The rule below is the general one, not a dummy-lane special case: a baked job that imports a
+# package living under `runners/*/src/` needs that package in the same image, and a future runner
+# with the same shape is caught the day its job script is baked rather than the day it is submitted.
+# ---------------------------------------------------------------------------------------------
+
+_RUNNERS = _REPO / "runners"
+#: `from <pkg>.x import y` / `import <pkg>` at any indentation — a runner import inside a function
+#: (a deliberate pattern for deferring a heavy import) counts exactly as much as one at module scope.
+_IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
+
+
+def _runner_packages() -> dict[str, Path]:
+    """Every importable package a sealed runner exposes, as ``name -> path``."""
+    return {p.name: p for src in _RUNNERS.glob("*/src") for p in src.iterdir() if p.is_dir() and not p.name.startswith((".", "_"))}
+
+
+def _baked_job_scripts(dockerfile: Path) -> list[Path]:
+    """The repo-relative `.py` scripts a dockerfile COPYs into the Ray job directory."""
+    scripts: list[Path] = []
+    for line in dockerfile.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("COPY") or _JOB_DIR not in stripped:
+            continue
+        for token in stripped.split():
+            if token.endswith(".py"):
+                scripts.append(_REPO / token)
+    return scripts
+
+
+@pytest.mark.parametrize(
+    "dockerfile",
+    [_DOCKERFILE, _CLUSTER_DOCKERFILE],
+    ids=lambda p: p.name,
+)
+def test_a_baked_job_gets_the_runner_package_it_imports(dockerfile: Path) -> None:
+    """Both Ray images, one rule — the demo image is where this actually broke.
+
+    Parametrised over BOTH dockerfiles rather than asserted on the one that failed: the cluster image
+    was already correct, so a test written only against `ray-lance` would pass today and say nothing
+    about the image the chart deploys. Two images with one contract is the point.
+    """
+    packages = _runner_packages()
+    assert packages, "found no runners/*/src/<pkg> — this test would be vacuous"
+
+    body = dockerfile.read_text(encoding="utf-8")
+    missing: list[str] = []
+    for script in _baked_job_scripts(dockerfile):
+        if not script.exists():  # a different test owns "the script exists"; do not double-report
+            continue
+        for imported in set(_IMPORT_RE.findall(script.read_text(encoding="utf-8"))):
+            if imported not in packages:
+                continue
+            # The COPY may name the source path in either dockerfile's idiom (`--chown` or not), so
+            # match on the source path itself rather than on a whole-line spelling.
+            source = f"runners/{packages[imported].parents[1].name}/src/{imported}"
+            if source not in body:
+                missing.append(f"{script.name} imports `{imported}` but {dockerfile.name} never COPYs {source}")
+
+    assert not missing, (
+        "a baked Ray job cannot import its own runner package, so it dies `ModuleNotFoundError` the "
+        "moment anything submits it — while every 'is the script baked' test above stays green:\n  " + "\n  ".join(missing)
+    )
