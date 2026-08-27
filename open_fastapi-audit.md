@@ -670,7 +670,9 @@ chart/templates/controlplane.yaml:40-52 runs `ports:\n  - name: http\n    contai
 
 </details>
 
-<details><summary><b>The Dapr sidecar's shutdown is not bounded against the pod's drain window — daprd's 5 s default kills the publish path the app still needs while it drains</b> <i>(kubernetes.md + microservices.md, CONFIRMED)</i></summary>
+<details><summary><b>~~The Dapr sidecar's shutdown is not bounded against the pod's drain window — daprd's 5 s default kills the publish path the app still needs while it drains~~</b> <i>(kubernetes.md + microservices.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-27.** `rask.daprAnnotations` now emits `dapr.io/block-shutdown-duration`, derived from `lifecycle.sidecarBlockShutdownSeconds` — **all 16 sidecar pods**, verified on the render, not just the fleet. The grace period is raised 30 → 40 to budget the sidecar drain `microservices.md` adds to the no-sidecar formula ("+ ~10 s — Dapr flushes pending acks"), and the arithmetic is STATED in values.yaml the way `dapr-resiliency.yaml` states its own: `grace >= preStop + sidecarBlock + buffer`, with the block bounded on both sides — longer than preStop or the sidecar still goes first, shorter than grace or the kubelet SIGKILLs it mid-flush having made it decline to flush earlier. Three numbers, one values block, so they cannot drift. **The grace-period half the previous finding deferred here is included:** fleet.yaml and controlplane.yaml declared no `terminationGracePeriodSeconds` at all — eight other templates do — so the six fleet pods silently took the kubelet's 30 s default, a number nobody chose. Pinned by `tests/unit/test_sidecar_drain_budget.py` (4 tests, all RED before).
 
 **Rule.** microservices.md: § Dapr + Kubernetes interplay — "What changes vs the no-sidecar deployment: terminationGracePeriodSeconds = preStop + in-flight + lifespan + buffer **+ sidecar drain time (~10 s — Dapr flushes pending acks)**"
 

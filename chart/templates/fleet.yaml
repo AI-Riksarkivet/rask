@@ -51,6 +51,11 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{/* The drain budget, from the same `lifecycle` block as preStop and the sidecar block —
+           see the arithmetic in values.yaml. These pods declared none, so they silently took the
+           kubelet's 30s default: a number nobody chose and no comment describes, on pods that all
+           run a Dapr sidecar whose flush the default does not budget for. */}}
+      terminationGracePeriodSeconds: {{ $root.Values.lifecycle.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "rask.serviceAccountName" $root }}
       {{- $waits := list -}}
       {{- range $dep := ($svc.waitFor | default list) -}}

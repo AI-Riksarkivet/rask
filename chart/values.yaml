@@ -536,9 +536,30 @@ resources:
 # SIGTERM, else every rollout connection-refuses in-flight requests (and the apps' /readyz shutting_down
 # branch is dead code). terminationGracePeriodSeconds bounds preStop + the app's own drain; compaction
 # gets a longer budget so an in-flight sweep/Lance write is never SIGKILLed mid-transaction.
+#
+# THE ARITHMETIC, stated rather than implied, because three numbers here have to agree and nothing
+# else forces them to:
+#
+#     terminationGracePeriodSeconds  >=  preStopSeconds              (endpoint removal propagates)
+#                                      + sidecarBlockShutdownSeconds (daprd flushes pending acks)
+#                                      + buffer (5s)
+#
+# The sidecar term is the one that was missing entirely. `rask.daprAnnotations` said nothing about
+# shutdown, so daprd took its own 5s default — and the kubelet SIGTERMs every container in the pod
+# SIMULTANEOUSLY, so the sidecar was gone before the app's drain window had properly opened. A mover
+# that finished its Lance write and then called publish_event to fire the next stage published at a
+# sidecar that had already stopped: the write landed, the cascade trigger did not, and nothing
+# distinguishes that from a stage with no successor.
+#
+# `sidecarBlockShutdownSeconds` must sit BETWEEN the two: longer than preStopSeconds or the sidecar
+# still goes first, shorter than the grace period or the kubelet SIGKILLs it mid-flush having made it
+# decline to flush earlier.
 lifecycle:
   preStopSeconds: 5
-  terminationGracePeriodSeconds: 30
+  # 20s = 5 (preStop) + 10 (sidecar drain, the ~10s microservices.md budgets for Dapr flushing pending
+  # acks) + 5 (buffer). It was 30, which was the no-sidecar formula applied to pods that all run one.
+  terminationGracePeriodSeconds: 40
+  sidecarBlockShutdownSeconds: 20
   maintenanceTerminationGracePeriodSeconds: 120
 
 # --- Pod hardening (applied to every FIRST-PARTY app container via the lance.securityContext helper) --

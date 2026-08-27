@@ -208,6 +208,15 @@ dapr.io/log-as-json: "true"
 dapr.io/max-body-size: {{ . | quote }}
 {{- end }}
 dapr.io/app-token-secret: {{ $root.Release.Name }}-dapr-app-token
+{{- /* THE SIDECAR MUST OUTLIVE THE APP'S DRAIN, not race it. This block emitted nothing about
+       shutdown, so daprd took its 5s default while the app was still inside its own preStop sleep —
+       and since the kubelet SIGTERMs every container simultaneously, the sidecar was gone before the
+       app had begun draining. A mover mid-handler finished its Lance write and then published the
+       next stage's trigger at a sidecar that had already stopped: the write landed, the cascade did
+       not, and that is indistinguishable from a stage with no successor.
+       Derived from the same `lifecycle` block that feeds preStop and the grace period, so the three
+       numbers cannot drift — see the arithmetic in values.yaml. */}}
+dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sidecarBlockShutdownSeconds) | quote }}
 {{- include "lance.daprSidecarResources" $root | nindent 0 }}
 {{- /* DANGLING-REFERENCE GUARD. The `lance-tracing` Configuration renders inside
        `{{- if .Values.dapr.enabled }}` (observability.yaml:18), while this annotation used to be
