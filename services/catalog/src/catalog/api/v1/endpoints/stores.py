@@ -76,7 +76,7 @@ async def _attached_versioned(state: UserStateStore | None) -> tuple[list[Store]
     return ([] if stored is None else _ATTACHED.validate_python(stored.value)), etag
 
 
-@router.get("/stores", response_model=StoreRegistry, summary="Every registered object store")
+@router.get("/stores", summary="Every registered object store")
 async def list_stores(state: UserStateStoreDep) -> StoreRegistry:
     """The whole registry in one response — it is estate config, and the tier view needs all of it."""
     return StoreRegistry(stores=[*registered_stores(), *await _attached(state)])
@@ -84,7 +84,6 @@ async def list_stores(state: UserStateStoreDep) -> StoreRegistry:
 
 @router.post(
     "/stores",
-    response_model=StoreRegistry,
     status_code=201,
     summary="Attach an object store for browsing",
 )
@@ -148,7 +147,6 @@ async def attach_store(
 
 @router.get(
     "/stores/tiers",
-    response_model=dict[str, list[Store]],
     summary="Stores grouped by medallion tier",
 )
 async def stores_by_tier(state: UserStateStoreDep) -> dict[str, list[Store]]:

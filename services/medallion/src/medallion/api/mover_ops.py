@@ -76,7 +76,7 @@ async def _forward(request: Request, settings: Any, mover: str, path: str, *, me
     return response.json()
 
 
-@router.get("/movers", response_model=MoverInventory)
+@router.get("/movers")
 async def list_movers(settings: SettingsDep, _subject: Annotated[str | None, Depends(authorize_produce)]) -> MoverInventory:
     return MoverInventory(movers=sorted((settings.mover_urls or {}).keys()))
 

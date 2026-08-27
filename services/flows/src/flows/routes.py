@@ -79,7 +79,7 @@ def run_id_for(subject: str, idempotency_key: str) -> str:
     return f"run-{uuid.uuid5(RUN_NAMESPACE, '\x00'.join((subject, 'flows', idempotency_key))).hex}"
 
 
-@router.get("/catalog", response_model=CatalogResponse)
+@router.get("/catalog")
 async def get_catalog(
     subject: security.CurrentSubject,
     checker: security.CheckerDep,
@@ -90,7 +90,7 @@ async def get_catalog(
     return CatalogResponse(kinds=CATALOG)
 
 
-@router.post("/validate", response_model=ValidateResponse)
+@router.post("/validate")
 async def validate(
     graph: FlowGraph,
     subject: security.CurrentSubject,
@@ -252,7 +252,7 @@ class TerminateAccepted(BaseModel):
     detail: str = "further scheduling stops; work already in flight may still complete"
 
 
-@router.post("/runs/{run_id}/terminate", response_model=TerminateAccepted, status_code=HTTPStatus.ACCEPTED)
+@router.post("/runs/{run_id}/terminate", status_code=HTTPStatus.ACCEPTED)
 async def terminate_run(
     run_id: str,
     reader: RunReaderDep,
@@ -286,7 +286,7 @@ async def terminate_run(
     return TerminateAccepted(run_id=run_id)
 
 
-@router.get("/runs/{run_id}", response_model=RunState)
+@router.get("/runs/{run_id}")
 async def get_run(
     run_id: str,
     runs: RunsDep,

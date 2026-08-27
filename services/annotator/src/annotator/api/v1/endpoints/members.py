@@ -93,7 +93,7 @@ def _direct_grants(tuples: list[Any], obj: str) -> list[Member]:
     return [Member(user=t.user, relation=t.relation) for t in tuples if t.object == obj and t.relation in GRANTABLE]
 
 
-@router.get("/{project_id}/members", response_model=MemberList)
+@router.get("/{project_id}/members")
 async def list_members(project_id: ProjectId, checker: CheckerDep, subject: CurrentSubject, fga_client: FgaClientDep) -> MemberList:
     """Who holds which rung directly on this project.
 
@@ -110,7 +110,7 @@ async def list_members(project_id: ProjectId, checker: CheckerDep, subject: Curr
     return MemberList(members=_direct_grants(tuples, obj))
 
 
-@router.put("/{project_id}/members", status_code=status.HTTP_200_OK, response_model=MemberList)
+@router.put("/{project_id}/members", status_code=status.HTTP_200_OK)
 async def grant_member(
     project_id: ProjectId, payload: GrantRequest, checker: CheckerDep, subject: CurrentSubject, fga_client: FgaClientDep, control: ControlEmitterDep
 ) -> MemberList:
@@ -149,7 +149,7 @@ async def grant_member(
     return MemberList(members=_direct_grants(existing, obj))
 
 
-@router.delete("/{project_id}/members", status_code=status.HTTP_200_OK, response_model=MemberList)
+@router.delete("/{project_id}/members", status_code=status.HTTP_200_OK)
 async def revoke_member(
     project_id: ProjectId, payload: GrantRequest, checker: CheckerDep, subject: CurrentSubject, fga_client: FgaClientDep, control: ControlEmitterDep
 ) -> MemberList:

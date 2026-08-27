@@ -70,7 +70,7 @@ async def _state_or_404(client: Any, instance_id: str, *, payloads: bool) -> Any
     return state
 
 
-@router.get("/stages/{instance_id}", response_model=StageRunState)
+@router.get("/stages/{instance_id}")
 async def show_stage(instance_id: str, request: Request, _token: Annotated[None, Depends(require_dapr_token)]) -> StageRunState:
     """DWF-MGT-002. Before this, an in-flight cascade stage was unobservable over HTTP entirely —
     `services/compute` proxies Ray read-only and knows nothing about the workflow watching it."""
@@ -91,7 +91,7 @@ async def show_stage(instance_id: str, request: Request, _token: Annotated[None,
     )
 
 
-@router.post("/stages/{instance_id}/terminate", status_code=202, response_model=StageTerminateAccepted)
+@router.post("/stages/{instance_id}/terminate", status_code=202)
 async def terminate_stage(instance_id: str, request: Request, _token: Annotated[None, Depends(require_dapr_token)]) -> StageTerminateAccepted:
     """DWF-MGT-003 for the cascade.
 

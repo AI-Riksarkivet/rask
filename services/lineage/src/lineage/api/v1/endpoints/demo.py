@@ -132,7 +132,7 @@ def _read_dataset(name: str, uri: str, opts: dict[str, str], max_versions: int) 
     return payload
 
 
-@router.get("/datasets", response_model=DemoDatasets)
+@router.get("/datasets")
 async def demo_datasets(request: Request, settings: SettingsDep, token: CurrentToken) -> DemoDatasets:
     """The medallion datasets as they currently exist on S3 — schema per Lance version + rows.
 

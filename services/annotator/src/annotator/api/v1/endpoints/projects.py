@@ -66,7 +66,7 @@ class CreateProjectRequest(BaseModel):
     ontology: LabelOntology = Field(default_factory=LabelOntology)
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, response_model=AnnotationProject)
+@router.post("", status_code=status.HTTP_201_CREATED)
 async def create_annotation_project(payload: CreateProjectRequest, checker: CheckerDep, subject: CurrentSubject, fga_client: FgaClientDep) -> AnnotationProject:
     """Create a project in `draft`. 403 when the caller is not a member of the target tenant.
 
@@ -190,7 +190,7 @@ MANAGE_RELATION = "can_manage"
 ONTOLOGY_EDITABLE_STATES = frozenset({ProjectState.DRAFT, ProjectState.LABELING})
 
 
-@router.patch("/{project_id}/ontology", response_model=AnnotationProject)
+@router.patch("/{project_id}/ontology")
 async def update_project_ontology(
     project_id: ProjectId,
     payload: UpdateOntologyRequest,

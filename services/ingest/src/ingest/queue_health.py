@@ -102,7 +102,7 @@ class QueueHealth(BaseModel):
         return self
 
 
-@router.get("/queue", response_model=QueueHealth)
+@router.get("/queue")
 async def queue_health() -> QueueHealth:
     """Report the queue's state. Always 200 — this is a diagnostic, not a gate.
 

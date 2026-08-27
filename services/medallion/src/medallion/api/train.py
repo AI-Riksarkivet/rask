@@ -182,7 +182,7 @@ def _train_client(request: Request) -> Any:
     return client
 
 
-@router.get("/trains/{instance_id}", response_model=TrainRunState)
+@router.get("/trains/{instance_id}")
 async def show_train(
     instance_id: str,
     request: Request,
@@ -210,7 +210,7 @@ async def show_train(
     return TrainRunState(instance_id=instance_id, status=str(getattr(state.runtime_status, "name", state.runtime_status)), submission_id=submission_id)
 
 
-@router.post("/trains/{instance_id}/terminate", status_code=202, response_model=TrainTerminateAccepted)
+@router.post("/trains/{instance_id}/terminate", status_code=202)
 async def terminate_train(
     instance_id: str,
     request: Request,

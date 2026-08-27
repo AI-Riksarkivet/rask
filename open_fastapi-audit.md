@@ -971,7 +971,9 @@ oidc.py:107-114 `def _require_https(url: str, *, label: str, allow_insecure: boo
 
 </details>
 
-<details><summary><b>21 routes across 7 services declare `response_model=` identical to the return annotation — the redundant form the reference reserves for when the two DIFFER</b> <i>(core-conventions.md + anti-patterns.md, ADJUSTED)</i></summary>
+<details><summary><b>~~21 routes across 7 services declare `response_model=` identical to the return annotation — the redundant form the reference reserves for when the two DIFFER~~</b> <i>(core-conventions.md + anti-patterns.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27.** All removed — **29 sites, not 21**: eight more had appeared since the audit was written, which is the argument for a gate rather than a one-time sweep. `tests/unit/test_response_model_is_not_redundant.py` walks every route in `services/` with AST and refuses any `response_model=` that restates its own return annotation, so the thirtieth cannot arrive quietly. The sanctioned uses are untouched and verified: three `response_model=None` (a different statement — it suppresses serialization rather than restating it) and the two genuine widenings where the wire shape really does differ from the return type (`gateway /healthz` returning a `JSONResponse` under `response_model=Liveness`, and `flows/routes.py`). The audit's own cost note is repeated in the test docstring rather than quietly improved on: this is cosmetic. FastAPI infers the identical response field from the annotation alone and runs the identical dump-and-revalidate either way, so the claimed per-row saving on the bounded listings does not exist. What it buys is that `response_model=` means something again where it appears.
 
 **Rule.** core-conventions.md § Return type or `response_model`: "When possible, include a return type… **When to use `response_model` instead**: If the return type differs from what should be sent over the wire" / anti-patterns.md: "Return a Pydantic model AND set `response_model=` to the same class — Model gets constructed twice (validate + serialize)"
 

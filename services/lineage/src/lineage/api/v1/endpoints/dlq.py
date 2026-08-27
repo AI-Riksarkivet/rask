@@ -57,7 +57,7 @@ def _summary(run_id: str, event_json: str) -> DlqEvent:
     )
 
 
-@router.get("", response_model=DlqBacklog)
+@router.get("")
 async def list_dlq(
     settings: SettingsDep,
     token: CurrentToken,
@@ -85,7 +85,7 @@ async def list_dlq(
     return DlqBacklog(depth=depth, oldest_age_seconds=oldest_age, events=visible, limit=limit)
 
 
-@router.post("/{run_id}/replay", response_model=DlqReplayResponse)
+@router.post("/{run_id}/replay")
 async def replay_dlq(
     run_id: str,
     request: Request,

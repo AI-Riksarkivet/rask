@@ -163,7 +163,7 @@ async def _authorized_dataset(
     return await run_in_threadpool(_open, state, table, token)
 
 
-@router.get("/pages", response_model=PageListing, summary="Pages in a bronze page dataset")
+@router.get("/pages", summary="Pages in a bronze page dataset")
 async def list_pages(
     state: StateDep,
     checker: CheckerDep,

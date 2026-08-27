@@ -63,7 +63,7 @@ TERMINATE_TIMEOUT_SECONDS = 5.0
 router = APIRouter(tags=["ingest"])
 
 
-@router.get("/sources", response_model=list[SourceDescriptor])
+@router.get("/sources")
 async def list_sources() -> list[SourceDescriptor]:
     """The registered source kinds and the options each takes.
 
@@ -372,7 +372,7 @@ class RunListResponse(BaseModel):
     )
 
 
-@router.post("/ingests", status_code=status.HTTP_202_ACCEPTED, response_model=IngestAccepted)
+@router.post("/ingests", status_code=status.HTTP_202_ACCEPTED)
 async def create_ingest(
     body: IngestRequest,
     response: Response,
@@ -430,7 +430,7 @@ async def _refuse_unusable_source(body: IngestRequest) -> None:
         raise ValidationError(str(exc)) from None
 
 
-@router.get("/ingests", response_model=RunListResponse)
+@router.get("/ingests")
 async def list_ingests(
     request: Request,
     store: Annotated[RunStore, Depends(get_store)],
@@ -476,7 +476,7 @@ async def list_ingests(
     return RunListResponse(runs=visible)
 
 
-@router.get("/ingests/{run_id}", response_model=RunStatusResponse)
+@router.get("/ingests/{run_id}")
 async def get_ingest(
     run_id: str,
     request: Request,
@@ -561,7 +561,7 @@ async def get_ingest(
     )
 
 
-@router.post("/ingests/{run_id}/terminate", status_code=status.HTTP_202_ACCEPTED, response_model=TerminateAccepted)
+@router.post("/ingests/{run_id}/terminate", status_code=status.HTTP_202_ACCEPTED)
 async def terminate_ingest(
     run_id: str,
     request: Request,
@@ -704,7 +704,7 @@ async def _lifecycle(
     )
 
 
-@router.post("/ingests/{run_id}/pause", status_code=status.HTTP_202_ACCEPTED, response_model=LifecycleAccepted)
+@router.post("/ingests/{run_id}/pause", status_code=status.HTTP_202_ACCEPTED)
 async def pause_ingest(
     run_id: str,
     request: Request,
@@ -738,7 +738,7 @@ async def pause_ingest(
     )
 
 
-@router.post("/ingests/{run_id}/resume", status_code=status.HTTP_202_ACCEPTED, response_model=LifecycleAccepted)
+@router.post("/ingests/{run_id}/resume", status_code=status.HTTP_202_ACCEPTED)
 async def resume_ingest(
     run_id: str,
     request: Request,
