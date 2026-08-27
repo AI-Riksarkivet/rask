@@ -2920,43 +2920,12 @@ def test_every_mover_that_hosts_a_workflow_is_scoped_to_the_actor_state_store() 
     )
 
 
-def test_the_kubelet_probes_the_inbox_on_a_path_the_service_actually_serves() -> None:
-    """The chart probes a LITERAL; the app derives that path from `RASK_API_PREFIX`. Nothing renders
-    the two together, and a mismatch is a CrashLoopBackOff whose cause is in neither file.
-
-    `chart/templates/fleet.yaml` takes `healthPath | default "/livez"` for liveness and
-    `readyPath | default "/readyz"` for readiness, and `services.notifications` overrides neither — so
-    both defaults are load-bearing here. They are root-mounted literals, which is the point: the
-    service's own suite proves the API-prefixed badge moves with `RASK_API_PREFIX`
-    (`services/notifications/tests/test_probe_wiring.py`) while these two must not, and neither half
-    can see a mismatch alone.
-
-    The app is rebuilt under the chart's own prefix rather than the ambient one, because `app` is a
-    module-level singleton built from the environment at import — asking the process's current app
-    would answer about whichever suite imported it first.
-    """
-    import importlib
-    import os
-
-    docs = _rendered_docs()
-    config = _fleet_config(docs)
-    container = _notifications_container(docs)
-    probed = {container[probe]["httpGet"]["path"] for probe in ("livenessProbe", "readinessProbe")}
-
-    previous = os.environ.get("RASK_API_PREFIX")
-    os.environ["RASK_API_PREFIX"] = config["RASK_API_PREFIX"]
-    try:
-        import notifications
-
-        served = set(importlib.reload(notifications).app.openapi()["paths"])
-    finally:
-        if previous is None:
-            os.environ.pop("RASK_API_PREFIX", None)
-        else:
-            os.environ["RASK_API_PREFIX"] = previous
-        importlib.reload(importlib.import_module("notifications"))
-
-    assert probed <= served, f"the kubelet probes {sorted(probed - served)}, which the service does not serve under {config['RASK_API_PREFIX']}"
+# `test_the_kubelet_probes_the_inbox_on_a_path_the_service_actually_serves` lived here and is GONE,
+# subsumed rather than deleted for tidiness: `tests/unit/test_probe_paths_are_served.py` asks the same
+# question — is every path the chart probes one the app actually mounts — of every first-party app in
+# the render, under that container's own chart env, instead of notifications alone. Keeping both would
+# leave two mechanisms for one claim, and the weaker one was the reason the audit filed
+# "the probe-path-is-actually-served gate covers exactly one of the fifteen apps".
 
 
 def _notifications_cron_component(docs: list[dict]) -> dict:

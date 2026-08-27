@@ -1401,7 +1401,36 @@ runners/assist/server.py:246-249 — `@app.get("/livez")` / `def livez() -> dict
 
 </details>
 
-<details><summary><b>The probe-path-is-actually-served gate covers exactly one of the fifteen apps, and controlplane bypasses the mechanism the gate reads</b> <i>(health-checks.md, ADJUSTED)</i></summary>
+<details><summary><b>~~The probe-path-is-actually-served gate covers exactly one of the fifteen apps, and controlplane bypasses the mechanism the gate reads~~</b> <i>(health-checks.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27.** The Fix as written: `tests/unit/test_probe_paths_are_served.py` iterates every
+> first-party Deployment in the render, imports each app under that container's OWN chart env, and
+> asserts every probe path is in `app.openapi()["paths"]`. **14 apps, up from 1** — controlplane
+> included, which the old `services.*`-keyed lookup could not see.
+>
+> **Two things keep it derived rather than a longer list.** The uvicorn target comes from the render
+> itself (`args[0]` is `catalog.main:app`, `ingest:create_app`, `gateway:app`), so a new Deployment is
+> covered the moment it renders. And the env is assembled from the container's `envFrom` ConfigMaps
+> and `env` entries — not scaffolding to make an import succeed but the property under test: `catalog`
+> will not import at all without `LANCE_S3_ACCESS_KEY_ID`, which the chart supplies, and asking
+> whether an app serves its probes is only meaningful under the config it is actually given.
+> A `valueFrom` gets a placeholder — a secret is not resolvable from a render and never decides
+> where a route mounts.
+>
+> **A coverage finding has no natural RED, so the gate's teeth were demonstrated instead of asserted.**
+> With `services.compute.healthPath` temporarily set to `/api/v1/health` — the code default, while the
+> chart sets `RASK_API_PREFIX=/api`, i.e. exactly this finding's drift class — the new gate FAILED on
+> `rask-compute/compute`; the old notifications-only gate could not have. values.yaml was restored and
+> verified clean with `git diff --quiet`. A permanent negative control (`test_the_gate_can_actually_FAIL`)
+> pins that the child does not report every path as served, so the 14 green rows cannot be vacuous.
+>
+> **The old gate is DELETED, not left beside it.** `test_the_kubelet_probes_the_inbox_on_a_path_the_
+> service_actually_serves` asked the same question of notifications alone; keeping both would leave two
+> mechanisms for one claim, and the weaker one is what this finding is about. A comment at its old site
+> says where the claim went.
+> Each app is imported in a SUBPROCESS: these build settings singletons and instrument themselves at
+> import, and pulling thirteen of them into the pytest process would leave that state behind for
+> several thousand unrelated tests. Costs ~30s.
 
 **Rule.** health-checks.md: probe wiring must be verified against what the app mounts (the reference's mount rule — probes root-mounted, chart pointing at them)
 
