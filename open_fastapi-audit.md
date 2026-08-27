@@ -1125,7 +1125,9 @@ packages/service-kit/src/service_kit/governed/dapr_auth.py:93-97 `raise HTTPExce
 
 </details>
 
-<details><summary><b>lancekit's catalog-error translator relays the upstream response body into the client-visible detail on the 5xx branch, defeating ns_errors' 5xx redaction</b> <i>(exception-handlers.md, CONFIRMED)</i></summary>
+<details><summary><b>~~lancekit's catalog-error translator relays the upstream response body into the client-visible detail on the 5xx branch, defeating ns_errors' 5xx redaction~~</b> <i>(exception-handlers.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-27.** The `ApiException` catch-all raises `ServiceUnavailableError("the catalog is unavailable")` and sends `exc.body`/`exc.reason` to `log.exception` — "never include exception internals in the response body — those leak via logs only". It was a 503 whose detail was the raw body of whatever answered, rendered verbatim because `service_kit`'s handler keeps 4xx-style messages, which routed around the 5xx redaction `ns_errors` exists to enforce; on the failure this branch actually catches the responder is usually an ingress or sidecar returning an HTML error page. **The four 4xx branches are untouched, and three are pinned so they stay that way** — there the upstream body IS the catalog's own redacted problem+json, and relaying it is what turns an opaque 500 into the answer the direct path gives. A blanket redaction would have been the easy over-correction and would have undone a recorded, correct decision. Pinned by `packages/service-kit/tests/test_catalog_error_relay.py` (4 tests, 1 RED for the defect and 3 guarding what must not change).
 
 **Rule.** exception-handlers.md: "Never include exception internals in the response body — those leak via logs only"
 

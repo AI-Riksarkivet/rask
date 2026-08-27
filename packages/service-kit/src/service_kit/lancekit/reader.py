@@ -32,6 +32,7 @@ that, which is what the parity test exercises.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -48,6 +49,9 @@ from service_kit.exceptions import (
     UnauthorizedError,
     ValidationError,
 )
+
+
+log = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
@@ -323,7 +327,20 @@ def translate_catalog_errors() -> Iterator[None]:
     except (_api_exc.BadRequestException, _api_exc.UnprocessableEntityException) as exc:
         raise ValidationError(f"catalog rejected the request: {exc.body}") from exc
     except _api_exc.ApiException as exc:
-        raise ServiceUnavailableError(f"catalog unavailable: {exc.body or exc.reason}") from exc
+        # A STABLE SENTENCE, not the upstream body — and this branch specifically, not the four above.
+        #
+        # `ns_errors.problem_detail` replaces `str(exc)` with a fixed "Internal Server Error" on every
+        # 5xx so paths, DSNs and driver text cannot reach a client; `_UNREDACTED_5XX` has exactly one
+        # member and says why. Relaying `exc.body` here routed around that: a 503 whose detail is
+        # whatever answered, rendered verbatim because `service_kit`'s handler keeps 4xx-style messages.
+        #
+        # The 4xx branches above are DIFFERENT and stay as they are: there the body IS the catalog's own
+        # redacted problem+json, and relaying it is what turns an opaque 500 into the answer the direct
+        # path gives — their rationale is recorded and correct. This branch is the one that fires when
+        # the responder is NOT the catalog, and on the failure it actually catches that is usually an
+        # ingress or sidecar returning an HTML error page or a proxy diagnostic.
+        log.exception("catalog_unavailable", extra={"reason": exc.reason, "body": exc.body})
+        raise ServiceUnavailableError("the catalog is unavailable") from exc
 
 
 class RestCatalogTransport:
