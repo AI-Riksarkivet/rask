@@ -5698,3 +5698,57 @@ def test_no_group_is_called_THIRD_PARTY_while_a_first_party_instrument_emits_it(
         f"A third-party entry exempts the group from the phantom-metric gate, so a typo in its rules "
         f"would never be caught and the alert would silently never fire"
     )
+
+
+# ---------------------------------------------------------------------------------------------
+# `runAsNonRoot` CANNOT VERIFY A NAMED USER, so an image the chart hardens must declare a numeric one.
+#
+# `lance.securityContext` sets `runAsNonRoot: true` on every first-party app container, and its own
+# comment says that "enforces the image's non-root USER (catalog uid 10001 …) at admission". It does
+# not. The kubelet compares a NUMBER against 0, so an image ending `USER app` is refused outright:
+#
+#   Error: container has runAsNonRoot and image has non-numeric user (app),
+#          cannot verify user is non-root
+#
+# Measured on the k3s estate 2026-08-27, when a helm upgrade first applied that hardening to six
+# fleet containers: gateway, compute, controlplane, flows, ingest and notifications all wedged in
+# `CreateContainerConfigError` while their previous pods kept serving — so nothing went down, nothing
+# alerted, and the six deployments simply stopped being able to roll. The images that were ALREADY
+# hardened (rest-catalog, frontend, assist-runner) end `USER 10001` and were unaffected, which is the
+# whole tell: the six dockerfiles create their user with `useradd --uid 10001 app` and then name it.
+#
+# The fix belongs in the dockerfile rather than the chart: `lance.securityContext` is shared by images
+# with DIFFERENT users (the web images run `bun`), so a blanket `runAsUser` in the helper would be
+# wrong for some of them, while a numeric `USER` is correct for every image on its own terms — and it
+# is the estate's own dockerfile rule (non-root UID >= 10000).
+# ---------------------------------------------------------------------------------------------
+
+_DOCKER_DIR = REPO / ".docker"
+#: `USER root` is legitimate for an image the chart does not harden (a Postgres extension build).
+_ROOT_BY_DESIGN = {"cnpg-age-ext.dockerfile"}
+
+
+def _final_user(dockerfile: Path) -> str | None:
+    """The last `USER` a dockerfile declares — the one the container actually runs as."""
+    users = re.findall(r"^USER\s+(\S+)", dockerfile.read_text(encoding="utf-8"), re.MULTILINE)
+    return users[-1] if users else None
+
+
+def test_an_image_the_chart_hardens_declares_a_NUMERIC_user() -> None:
+    """A named `USER` plus `runAsNonRoot` is a container that cannot start."""
+    offenders: list[str] = []
+    for dockerfile in sorted(_DOCKER_DIR.glob("*.dockerfile")):
+        if dockerfile.name in _ROOT_BY_DESIGN:
+            continue
+        user = _final_user(dockerfile)
+        if user is None or user.isdigit():
+            continue
+        offenders.append(f"{dockerfile.name} ends `USER {user}`")
+
+    assert not offenders, (
+        "`lance.securityContext` sets runAsNonRoot on every first-party app container, and the kubelet "
+        "refuses a non-numeric user with `cannot verify user is non-root` — the container never starts, "
+        "the old pod keeps serving, and the deployment silently stops being able to roll:\n  "
+        + "\n  ".join(offenders)
+        + "\nDeclare the uid the dockerfile already creates (e.g. `USER 10001`), not its name."
+    )

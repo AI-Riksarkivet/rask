@@ -82,7 +82,12 @@ ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-USER app
+# NUMERIC, not `app`. The kubelet compares runAsNonRoot against a NUMBER, so a named user is
+# refused outright — `cannot verify user is non-root` — and the container never starts while its
+# previous pod keeps serving, so the deployment silently stops being able to roll. Same uid the
+# useradd above creates; only the spelling changes. Pinned by
+# tests/unit/test_invariants.py::test_an_image_the_chart_hardens_declares_a_NUMERIC_user
+USER 10001
 EXPOSE 8830
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \

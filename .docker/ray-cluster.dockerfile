@@ -164,7 +164,12 @@ ENV PATH=/opt/venv/bin:$PATH \
     NUMEXPR_NUM_THREADS=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-USER app
+# NUMERIC, not `app`. The kubelet compares runAsNonRoot against a NUMBER, so a named user is
+# refused outright — `cannot verify user is non-root` — and the container never starts while its
+# previous pod keeps serving, so the deployment silently stops being able to roll. Same uid the
+# useradd above creates; only the spelling changes. Pinned by
+# tests/unit/test_invariants.py::test_an_image_the_chart_hardens_declares_a_NUMERIC_user
+USER 10001
 WORKDIR /app
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
