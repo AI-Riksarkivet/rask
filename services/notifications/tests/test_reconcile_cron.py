@@ -18,6 +18,7 @@ Four claims, and no lower layer can express any of them:
 """
 
 import importlib
+import logging
 from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -40,6 +41,7 @@ from notifications.api.reconciler import (
 )
 from notifications.api.settings import IngressSettings, get_ingress_settings
 from notifications.config import get_notifications_settings
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 TOKEN = "cron-token"
@@ -103,6 +105,10 @@ def _app(*, feed: _FakeFeed | None, cursor: _FakeCursor | None, actors: bool = T
     lets a test express "the lifespan did not run" as a state that the route must refuse.
     """
     app = FastAPI()
+    # The translator this service installs in production. The Dapr-token refusal is a
+    # `PermissionDeniedError` now rather than an `HTTPException` (open_fastapi-audit), so a bare app
+    # with no translator renders it as a 500 instead of the 403 this test is about.
+    install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(reconcile_cron.router)
     app.state.notifications_settings = get_notifications_settings()
     app.state.fga = None

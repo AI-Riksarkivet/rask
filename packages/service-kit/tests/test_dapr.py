@@ -76,16 +76,17 @@ def test_require_dapr_token_REFUSES_a_public_caller_even_with_a_valid_token(monk
     invocation of one is never legitimate, which is why the refusal comes before the token is even
     compared.
     """
-    from fastapi import HTTPException
+    # `PermissionDeniedError`, not `HTTPException`: the guard raises a DOMAIN error now so its 403
+    # wears the estate's problem+json envelope (open_fastapi-audit).
+    from lance_namespace import PermissionDeniedError
 
     from service_kit.governed.dapr_auth import require_dapr_token
 
     monkeypatch.setenv("APP_API_TOKEN", "shared-secret")
 
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(PermissionDeniedError) as caught:
         require_dapr_token(dapr_api_token="shared-secret", dapr_caller_app_id="gateway")
-    assert caught.value.status_code == 403
-    assert "public front door" in str(caught.value.detail)
+    assert "public front door" in str(caught.value)
 
 
 def test_require_dapr_token_REFUSES_a_public_caller_even_in_DEV(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,15 +95,16 @@ def test_require_dapr_token_REFUSES_a_public_caller_even_in_DEV(monkeypatch: pyt
     With no token configured the token comparison is a no-op, so if the public-caller refusal were
     conditional on it, dev would have no guard at all on routes that are sidecar-only by design.
     """
-    from fastapi import HTTPException
+    # `PermissionDeniedError`, not `HTTPException`: the guard raises a DOMAIN error now so its 403
+    # wears the estate's problem+json envelope (open_fastapi-audit).
+    from lance_namespace import PermissionDeniedError
 
     from service_kit.governed.dapr_auth import require_dapr_token
 
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
 
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(PermissionDeniedError):
         require_dapr_token(dapr_caller_app_id="gateway")
-    assert caught.value.status_code == 403
 
 
 def test_the_LEGITIMATE_delivery_paths_are_untouched(monkeypatch: pytest.MonkeyPatch) -> None:

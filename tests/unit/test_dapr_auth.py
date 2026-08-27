@@ -14,10 +14,11 @@ import asyncio
 from typing import Any
 
 import pytest
-from fastapi import HTTPException
+from lance_namespace import PermissionDeniedError
 from lineage.core.config import LineageSettings
 
 from service_kit.governed.dapr_auth import assert_app_token_configured, require_dapr_token
+from service_kit.lakehouse.ns_errors import problem_detail
 
 
 # --------------------------------------------------------------------------- #
@@ -42,18 +43,21 @@ def test_matching_token_passes(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_mismatch_or_missing_header_is_403(monkeypatch: pytest.MonkeyPatch, presented: str | None) -> None:
     """CONTRACT: with the token set, any non-matching/absent ``dapr-api-token`` header is a 403."""
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    with pytest.raises(HTTPException) as exc:
+    # `PermissionDeniedError`, not `HTTPException`: the guard raises a DOMAIN error now so its 403
+    # wears the same problem+json envelope as every other refusal (open_fastapi-audit). The status is
+    # still 403 — asserted through the translator that renders it, which is what a caller actually sees.
+    with pytest.raises(PermissionDeniedError):
         require_dapr_token(presented)
-    assert exc.value.status_code == 403
+    assert problem_detail(PermissionDeniedError("x"))[0] == 403
 
 
 def test_non_ascii_header_is_a_clean_403(monkeypatch: pytest.MonkeyPatch) -> None:
     """CONTRACT: the compare is over BYTES — ``secrets.compare_digest`` on str raises ``TypeError``
     for non-ASCII, which would turn an attacker-controlled header into a 500 instead of a 403."""
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(PermissionDeniedError):
         require_dapr_token("sécrét")
-    assert exc.value.status_code == 403
+    assert problem_detail(PermissionDeniedError("x"))[0] == 403
 
 
 # --------------------------------------------------------------------------- #

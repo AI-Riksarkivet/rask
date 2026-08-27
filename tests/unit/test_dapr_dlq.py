@@ -16,6 +16,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from service_kit.lakehouse.ns_errors import install_problem_handlers
+
 
 def _mover_app(monkeypatch: pytest.MonkeyPatch, dlq_topic: str | None) -> TestClient:
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
@@ -29,6 +31,7 @@ def _mover_app(monkeypatch: pytest.MonkeyPatch, dlq_topic: str | None) -> TestCl
 
     get_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     register_stage_route(app)
     get_settings.cache_clear()
     return TestClient(app)
@@ -89,6 +92,7 @@ def test_lineage_subscription_declares_dlq_when_configured(monkeypatch: pytest.M
 
     get_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     register_dapr(app)
     get_settings.cache_clear()
     subs = {s["topic"]: s for s in _subs(TestClient(app))}
@@ -112,6 +116,7 @@ def test_lineage_parking_rides_its_OWN_durable_component_never_the_replay_one(mo
 
     get_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     register_dapr(app)
     get_settings.cache_clear()
     subs = {s["topic"]: s for s in _subs(TestClient(app))}
@@ -121,6 +126,7 @@ def test_lineage_parking_rides_its_OWN_durable_component_never_the_replay_one(mo
     monkeypatch.delenv("LINEAGE_DLQ_PUBSUB")
     get_settings.cache_clear()
     app2 = FastAPI()
+    install_problem_handlers(app2, logging.getLogger(__name__))
     register_dapr(app2)
     get_settings.cache_clear()
     subs2 = {s["topic"]: s for s in _subs(TestClient(app2))}
@@ -168,6 +174,7 @@ def test_a_parked_delivery_names_the_author_whose_provenance_was_lost(monkeypatc
 
     get_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     dapr_mod.register_dapr(app)
     get_settings.cache_clear()
     client = TestClient(app)

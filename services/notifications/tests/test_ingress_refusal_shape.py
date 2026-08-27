@@ -13,6 +13,7 @@ Two properties, therefore, asserted on the BODY rather than on the status alone:
 reason a caller can act on, and it carries no `status` field for a log pipeline to mistake for one.
 """
 
+import logging
 from collections.abc import Iterator
 from typing import Any, cast
 
@@ -24,6 +25,7 @@ from notifications.api import subscriptions as subscriptions_module
 from notifications.api.settings import get_ingress_settings
 from notifications.config import get_notifications_settings
 from notifications.proxies import TypedActorProxy
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 TOKEN = "the-app-api-token"
@@ -68,6 +70,7 @@ def door(monkeypatch: pytest.MonkeyPatch, plane: _Plane) -> Iterator[TestClient]
     monkeypatch.setenv("APP_API_TOKEN", TOKEN)
     get_ingress_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     app.state.notifications_settings = get_notifications_settings()
     app.state.fga = None
     subscriptions_module.register_subscriptions(app)
@@ -113,7 +116,22 @@ def test_a_refused_delivery_and_a_handled_one_cannot_be_confused_for_each_other(
 
     assert (handled.status_code, handled.json()) == (200, {"status": "SUCCESS"})
     assert refused.status_code == 403
-    assert "status" not in refused.json(), "the refusal answers in the sidecar's own vocabulary — DROP is an ACK, and this would be read as one"
+    # THE PROPERTY, RESTATED PRECISELY — and it is stronger than the original, not weaker.
+    #
+    # This asserted `"status" not in body`. The refusal is now RFC 9457 problem+json
+    # (open_fastapi-audit: the guard raised a bare `HTTPException` that no app mapped, so this one 403
+    # arrived as `{"detail"}` while every other error in the service carried type/title/code), and
+    # problem+json REQUIRES a numeric `status`. The literal assertion and the envelope cannot both hold.
+    #
+    # What this test actually protects is that a refusal cannot be read as an ACK. Dapr's vocabulary is
+    # three STRING verbs — SUCCESS, RETRY, DROP — and DROP is an ack. A numeric 403 is in none of them,
+    # and the response is a 403 rather than the 200 that made DROP ambiguous in the first place. So the
+    # check is on the VERB, which is what a log pipeline could actually mistake, not on the key name.
+    body = refused.json()
+    assert body.get("status") not in {"SUCCESS", "RETRY", "DROP"}, (
+        "the refusal answers in the sidecar's own vocabulary — DROP is an ACK, and this would be read as one"
+    )
+    assert body["status"] == 403, "problem+json's `status` must be the numeric code, not a verb"
     assert len(plane.boxes["alice"]) == 1, "exactly the handled delivery landed"
 
 

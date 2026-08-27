@@ -39,6 +39,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lineage.models import RunEvent
 
+from service_kit.lakehouse.ns_errors import install_problem_handlers
+
 
 _VALID = {
     "eventType": "COMPLETE",
@@ -88,6 +90,7 @@ def _delivery_app(monkeypatch: pytest.MonkeyPatch, *, dlq_topic: str | None = No
 
     get_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     register_dapr(app)
     get_settings.cache_clear()
     repo = _FakeRepo()
@@ -134,6 +137,7 @@ def test_dapr_disabled_registers_no_ingest_route_at_all(monkeypatch: pytest.Monk
 
     get_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     register_dapr(app)
     get_settings.cache_clear()
     client = TestClient(app)

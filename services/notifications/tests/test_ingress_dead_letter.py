@@ -30,6 +30,7 @@ from notifications.api import metrics as metrics_module
 from notifications.api import subscriptions as subscriptions_module
 from notifications.api.settings import get_ingress_settings
 from notifications.config import get_notifications_settings
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 DLQ_TOPIC = "dlq.notifications"
@@ -63,6 +64,7 @@ def _app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
     get_ingress_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     app.state.notifications_settings = get_notifications_settings()
     app.state.fga = None
     subscriptions_module.register_subscriptions(app)

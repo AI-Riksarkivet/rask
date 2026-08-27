@@ -21,7 +21,8 @@ import secrets
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Final
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, Request
+from lance_namespace import PermissionDeniedError
 from starlette.responses import Response
 
 
@@ -90,16 +91,22 @@ def require_dapr_token(
     ``Depends(...)``, so FastAPI resolves the new header itself and every door it guards is fixed
     without touching a single endpoint signature.
     """
+    # A DOMAIN ERROR, not `HTTPException`, so the refusal wears the same RFC 9457 envelope as every
+    # other error in these services. The bare form was mapped by NO app, so this one 403 arrived as
+    # FastAPI's default `{"detail": ...}` body while its neighbours carried `type`/`title`/`code`.
+    #
+    # `PermissionDeniedError` rather than `service_kit.exceptions.ForbiddenError`, and that is verified
+    # rather than preferred: this module is shared by both planes and they install different handlers.
+    # The four lance apps install `install_problem_handlers` ONLY, so a fleet `DomainError` would fall
+    # to the catch-all and answer 500 there. A `LanceNamespaceError` is mapped by both — the lance apps
+    # directly, the fleet apps since `make_service_app` began installing the same translator.
     if is_public_caller(dapr_caller_app_id):
-        raise HTTPException(
-            status_code=403,
-            detail=f"{dapr_caller_app_id!r} is a public front door: its Dapr app-token authenticates the proxy, not the caller",
-        )
+        raise PermissionDeniedError(f"{dapr_caller_app_id!r} is a public front door: its Dapr app-token authenticates the proxy, not the caller")
     expected = os.environ.get("APP_API_TOKEN")
     # compare_digest: the token is the only guard on these routes, so no timing side-channel; bytes
     # (not str) so a non-ASCII header value is a clean 403, never a TypeError.
     if expected and not secrets.compare_digest((dapr_api_token or "").encode(), expected.encode()):
-        raise HTTPException(status_code=403, detail="invalid or missing Dapr app-api-token")
+        raise PermissionDeniedError("invalid or missing Dapr app-api-token")
 
 
 def assert_app_token_configured(*, dapr_enabled: bool) -> None:
@@ -327,6 +334,8 @@ def guard_actor_routes(app: FastAPI) -> None:
     from fastapi.responses import JSONResponse  # imported here, not at module scope: keeps this module import-light
     from starlette.middleware.base import BaseHTTPMiddleware
 
+    from service_kit.lakehouse.ns_errors import problem_detail
+
     async def _guard(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         if request.url.path.startswith(ACTOR_PATH_PREFIXES):
             try:
@@ -334,8 +343,14 @@ def guard_actor_routes(app: FastAPI) -> None:
                     dapr_api_token=request.headers.get("dapr-api-token"),
                     dapr_caller_app_id=request.headers.get("dapr-caller-app-id"),
                 )
-            except HTTPException as refusal:
-                return JSONResponse({"detail": refusal.detail}, status_code=refusal.status_code)
+            except PermissionDeniedError as refusal:
+                # RENDERED HERE, because middleware cannot reach the app's exception handlers: a
+                # `BaseHTTPMiddleware` raise happens outside `ExceptionMiddleware`, so an unrendered
+                # domain error would answer 500 instead of 403. `problem_detail` is the SAME translator
+                # the handler uses, so the refusal a caller sees is byte-identical whether it came from
+                # the dependency or from here — which is the point of moving off `HTTPException` at all.
+                status, body = problem_detail(refusal)
+                return JSONResponse(body, status_code=status, media_type="application/problem+json")
         return await call_next(request)
 
     app.add_middleware(BaseHTTPMiddleware, dispatch=_guard)

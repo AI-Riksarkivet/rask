@@ -21,11 +21,14 @@ asserted is that the guard is actually MOUNTED and matches the right paths — a
 nothing installs would pass a direct call and leave the hole open.
 """
 
+import logging
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from service_kit.governed.dapr_auth import guard_actor_routes
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 ALICE = "YWxpY2U"  # base64url("alice"), exactly as the exploit would compose it
@@ -35,6 +38,9 @@ ALICE = "YWxpY2U"  # base64url("alice"), exactly as the exploit would compose it
 def client() -> TestClient:
     """An app carrying the guard plus one route at each side of the boundary."""
     app = FastAPI()
+    # The translator every app using this guard installs in production; without it the guard's
+    # `PermissionDeniedError` renders as a 500 rather than the 403 under test.
+    install_problem_handlers(app, logging.getLogger(__name__))
     guard_actor_routes(app)
 
     @app.put("/actors/{actor_type}/{actor_id}/method/{method}")

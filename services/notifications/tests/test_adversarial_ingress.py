@@ -14,6 +14,7 @@ closing it turns the suite red until the marker goes with it.
 
 import asyncio
 import json
+import logging
 from collections.abc import Iterator
 from typing import Any, cast
 
@@ -33,6 +34,7 @@ from notifications.api.settings import get_ingress_settings
 from notifications.api.visibility import Visibility
 from notifications.config import get_notifications_settings
 from notifications.proxies import TypedActorProxy, inbox_actor_id
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 LINEAGE = "http://lineage.invalid"
@@ -112,6 +114,7 @@ def authenticated_bus(monkeypatch: pytest.MonkeyPatch, plane: _Plane) -> Iterato
     monkeypatch.setenv("RASK_NOTIFICATIONS_DLQ_TOPIC", "dlq.notifications")
     get_ingress_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     app.state.notifications_settings = get_notifications_settings()
     app.state.fga = None
     subscriptions_module.register_subscriptions(app)
@@ -187,6 +190,7 @@ def test_no_ingest_route_exists_when_dapr_ingest_is_disabled(monkeypatch: pytest
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
     get_ingress_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     try:
         subscriptions_module.register_subscriptions(app)
         assert "/lineage-events" not in {getattr(route, "path", "") for route in app.routes}

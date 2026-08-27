@@ -19,10 +19,14 @@ service-only boundary, NOT a user-authorization one.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from annotator.api.v1.endpoints import jobs as jobs_ep
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 BODY = {"producer": "grounding-dino", "op": "predict", "scope": {"level": "corpus", "keys": []}}
@@ -30,6 +34,11 @@ BODY = {"producer": "grounding-dino", "op": "predict", "scope": {"level": "corpu
 
 def _client() -> TestClient:
     app = FastAPI()
+    # The translator every app using this guard installs in production. The Dapr-token refusal is a
+    # `PermissionDeniedError` now rather than an `HTTPException`, so its 403 wears the same problem+json
+    # envelope as every other error (open_fastapi-audit) — and a bare app that installs no translator
+    # renders it as a 500 instead.
+    install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(jobs_ep.router)
     return TestClient(app, raise_server_exceptions=False)
 

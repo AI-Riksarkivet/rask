@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -25,6 +26,7 @@ from lineage.core.reconcile import (
 )
 from lineage.schemas import DatasetSummary, ReconcileState
 
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.lakehouse.schema import SchemaFields
 
 
@@ -395,6 +397,8 @@ def _cron_app(repo: _FakeRepo) -> Any:
     from lineage.core.config import get_settings
 
     app = FastAPI()
+
+    install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(build_reconcile_cron_router("reconcile-cron"))
     app.dependency_overrides[get_repository] = lambda: repo
     # a zero-arg lambda, NOT ``_settings`` itself — FastAPI introspects the override's signature, and
@@ -473,11 +477,15 @@ def test_mount_reconcile_cron_production_gate() -> None:
     from lineage.main import mount_reconcile_cron
 
     bare = FastAPI()
+
+    install_problem_handlers(bare, logging.getLogger(__name__))
     assert mount_reconcile_cron(bare, None) is False
     assert mount_reconcile_cron(bare, "") is False
     assert TestClient(bare).options("/reconcile-cron").status_code == 404  # nothing mounted
 
     mounted = FastAPI()
+
+    install_problem_handlers(mounted, logging.getLogger(__name__))
     assert mount_reconcile_cron(mounted, "reconcile-cron") is True
     assert TestClient(mounted).options("/reconcile-cron").status_code == 200  # the Dapr discovery ack
 

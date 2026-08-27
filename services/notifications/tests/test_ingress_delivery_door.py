@@ -19,6 +19,7 @@ The old form is reproduced below and shown to ingest the forged event, because "
 is only interesting next to what happens when it does not.
 """
 
+import logging
 from collections.abc import Iterator
 from typing import Any, cast
 
@@ -33,6 +34,7 @@ from notifications.api.settings import get_ingress_settings
 from notifications.api.visibility import Visibility
 from notifications.config import get_notifications_settings
 from notifications.proxies import TypedActorProxy
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 TOKEN = "the-sidecars-app-token"
@@ -76,6 +78,7 @@ def plane() -> _Plane:
 def _build(plane: _Plane, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     get_ingress_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     app.state.notifications_settings = get_notifications_settings()
     app.state.fga = None
     subscriptions_module.register_subscriptions(app)
@@ -186,6 +189,7 @@ def test_dapr_ingest_with_a_token_builds_the_subscription(monkeypatch: pytest.Mo
     monkeypatch.setenv("APP_API_TOKEN", TOKEN)
     get_ingress_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
 
     subscriptions_module.register_subscriptions(app)
 
