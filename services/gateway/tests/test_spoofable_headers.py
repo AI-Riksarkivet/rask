@@ -125,3 +125,68 @@ def test_FastAPI_binds_the_FIRST_duplicate_which_is_why_the_strip_is_required(gw
 
     assert client_first.json()["bound"] == "medallion", "FastAPI no longer binds the first duplicate — re-derive the threat model"
     assert daprd_first.json()["bound"] == "gateway"
+
+
+# ── the forwarded chain ─────────────────────────────────────────────────────────────────────────
+#
+# open_fastapi-audit — "The gateway's `--forwarded-allow-ips=127.0.0.1` can never match the Ingress
+# controller that calls it, and the client-controlled X-Forwarded-For is forwarded to every backend
+# untouched".
+#
+# Same argument as the block above, one header family along: `x-forwarded-for`, `-proto` and `-host`
+# are a PROXY's assertions about a client, and anything arriving on the gateway's public listener was
+# written by that client. The finding is careful that this is latent today — nothing in the Python
+# estate reads a client IP or a scheme, verified by grep — so it is a trap that arms the moment
+# anything does, not a live bypass.
+#
+# THE GATEWAY OWNS THE CHAIN rather than passing it through. It does not need to know which peers are
+# trustworthy to do that: uvicorn's `--proxy-headers --forwarded-allow-ips` has already made that
+# decision by the time a request reaches the app, and `request.client.host` / `request.url.scheme`
+# ARE its answer — the real client when the peer is a declared proxy, the immediate peer otherwise.
+# Re-stamping from those two values is therefore correct under every trust configuration, and it is
+# the only shape that stays correct when the CIDR is fixed at deploy time.
+
+
+@pytest.mark.parametrize("header", ["x-forwarded-for", "x-forwarded-proto", "x-forwarded-host"])
+def test_a_client_cannot_dictate_the_forwarded_chain(proxied, header: str) -> None:
+    """A forged value must never reach a backend verbatim."""
+    client, captured = proxied
+    client.get("/api/ray/jobs", headers={header: "203.0.113.9"})
+
+    assert captured, "the request never reached the upstream"
+    assert captured[0].headers.get(header) != "203.0.113.9", (
+        f"the client's own `{header}` reached the backend untouched — every downstream reader of the "
+        "forwarded chain would take the caller's word for who the caller is"
+    )
+
+
+def test_the_gateway_STAMPS_the_chain_it_stripped(proxied) -> None:
+    """Stripping alone would be worse than passing through: a backend with no chain at all cannot
+    tell a direct call from a proxied one. The gateway replaces the claim with its own."""
+    client, captured = proxied
+    client.get("/api/ray/jobs", headers={"x-forwarded-for": "203.0.113.9"})
+
+    forwarded = captured[0].headers
+    assert forwarded.get("x-forwarded-for"), "the chain was stripped and never re-stamped"
+    assert forwarded.get("x-forwarded-proto") in {"http", "https"}, f"no resolved scheme was forwarded: {forwarded.get('x-forwarded-proto')!r}"
+    assert forwarded.get("x-forwarded-host"), "no host was forwarded"
+
+
+def test_the_stamped_client_is_the_one_UVICORN_resolved(gw) -> None:
+    """The trust decision belongs to uvicorn's `--forwarded-allow-ips`, not to a second copy here.
+
+    `request.client` is already the proxy-resolved value, so a gateway that re-stamps from it inherits
+    that decision instead of re-implementing it — and a CIDR fixed at deploy time then changes the
+    forwarded chain without any code change.
+    """
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("x-forwarded-for", ""))
+        return httpx.Response(200, stream=httpx.ByteStream(b"{}"), headers={"content-type": "application/json"})
+
+    with TestClient(gw.app, client=("198.51.100.7", 1234)) as client:
+        gw.app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client.get("/api/ray/jobs", headers={"x-forwarded-for": "203.0.113.9"})
+
+    assert seen and seen[0] == "198.51.100.7", f"the forwarded client was {seen!r}, not the peer the server resolved"

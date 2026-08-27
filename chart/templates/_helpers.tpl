@@ -944,6 +944,33 @@ topologySpreadConstraints:
      (#136): under memory pressure the handler missed the deadline, so kills presented as
      CrashLoopBackOff probe failures instead of the OOM they were. Boot is the slowest window a pod
      has, so the startup probe is the last place to keep the default. */}}
+{{/* THE TRUSTED-PROXY POSTURE the fleet images document, rendered so production actually runs it.
+     Call: include "rask.proxyHeaderArgs" $root   (emits two uvicorn args).
+
+     Six dockerfiles end with `CMD ["uvicorn", …, "--proxy-headers", "--forwarded-allow-ips", …]` and
+     a comment reading as a deployment requirement ("MUST be the cluster edge's CIDR at deploy time
+     … never '*'"). The chart overrides `command`/`args` for every one of them, so NONE of it ran —
+     six images documenting a posture production never had. Owner decision 2026-08-27: the chart
+     carries it.
+
+     `127.0.0.1` — uvicorn's own default, and what those CMDs hardcode — is the value you would use
+     if the proxy were a sidecar in the same pod. It is the Ingress controller, in another pod on
+     another IP, so the match can never succeed and every forwarded header is silently ignored. Set
+     `forwardedAllowIps` to the ingress controller's pod CIDR to make the client IP real. The default
+     stays 127.0.0.1 so this changes nothing silently on an existing install.
+
+     `*` IS REFUSED HERE, not in a comment. It trusts every peer, so any client's `x-forwarded-for`
+     becomes the resolved client IP — the dockerfiles already said "never '*'", and this finding is
+     precisely about a comment not being a mechanism. */}}
+{{- define "rask.proxyHeaderArgs" -}}
+{{- $cidr := .Values.forwardedAllowIps | default "127.0.0.1" -}}
+{{- if eq (toString $cidr) "*" -}}
+{{- fail "forwardedAllowIps must not be '*': it trusts every peer, so any client can forge its own source IP via x-forwarded-for. Set it to the ingress controller's pod CIDR." -}}
+{{- end -}}
+- "--proxy-headers"
+- "--forwarded-allow-ips={{ $cidr }}"
+{{- end -}}
+
 {{- define "rask.fleetProbes" -}}
 {{- $svc := . -}}
 {{- $live := ($svc.healthPath | default "/livez") -}}

@@ -46,6 +46,7 @@ spec:
             - "controlplane:app"
             - "--host=0.0.0.0"
             - "--port={{ .Values.controlplane.port }}"
+            {{- include "rask.proxyHeaderArgs" . | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.controlplane.port }}

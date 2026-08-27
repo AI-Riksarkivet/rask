@@ -1507,7 +1507,46 @@ chart/templates/ha.yaml:11 — `{{- range $c := list "catalog" "lineage" "gatewa
 
 </details>
 
-<details><summary><b>The gateway's `--forwarded-allow-ips=127.0.0.1` can never match the Ingress controller that calls it, and the client-controlled X-Forwarded-For is forwarded to every backend untouched</b> <i>(kubernetes.md + microservices.md, ADJUSTED)</i></summary>
+<details><summary><b>~~The gateway's `--forwarded-allow-ips=127.0.0.1` can never match the Ingress controller that calls it, and the client-controlled X-Forwarded-For is forwarded to every backend untouched~~</b> <i>(kubernetes.md + microservices.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27**, all three parts of the Fix, and the finding's own two corrections are kept:
+> it is LATENT (nothing in the estate reads a client IP or scheme), and `extraArgs` always was an
+> override path — what was missing is a dedicated knob.
+>
+> **(1) `forwardedAllowIps` is a top-level values key**, rendered by `rask.proxyHeaderArgs` into every
+> fleet pod. Default stays `127.0.0.1` so an existing install changes nothing silently; the comment
+> says to set the ingress controller's pod CIDR. **`*` is REFUSED at render time** with `fail` — the
+> dockerfiles already said "never '*'" in a comment, and this finding is precisely about a comment
+> not being a mechanism.
+>
+> **(2) The gateway OWNS the forwarded chain.** `x-forwarded-for`, `-proto` and `-host` joined
+> `_CLIENT_SPOOFABLE` (stripped inbound) and `_forwarded_chain` re-stamps them. **No second trust
+> decision is made in the app**, deliberately: `--proxy-headers --forwarded-allow-ips` has already
+> been applied by the time a request reaches ASGI, so `request.client` and `request.url.scheme` ARE
+> uvicorn's answer — the real client when the peer is a declared proxy, the immediate peer otherwise.
+> Re-stamping from those two is correct under every trust configuration, and fixing the CIDR at
+> deploy time changes what backends see without touching code. Stripping WITHOUT re-stamping was
+> rejected: a backend with no chain at all cannot tell a direct call from a proxied one.
+>
+> **(3) The CMD-vs-command question, decided (owner, 2026-08-27): the chart carries the posture.**
+> Six dockerfiles ended with `CMD [… "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1"]` under
+> comments reading as deployment requirements, and the chart overrides `command`/`args` for every one
+> — so production ran none of it. All six fleet pods now render both flags. The alternative (delete
+> the flags from the images) was rejected because it leaves the trap armed one hop further in: with
+> the gateway stamping the chain, a backend that trusts the gateway resolves the REAL client, so the
+> estate is correct the moment anything starts reading it.
+>
+> **The lance plane is deliberately untouched** — its images document no such posture, and the gate
+> derives its expected set BY READING THE DOCKERFILES rather than listing services, so an image that
+> starts or stops claiming `--proxy-headers` moves the gate with it.
+> Pinned by `services/gateway/tests/test_spoofable_headers.py` (+5 tests) and
+> `tests/unit/test_forwarded_allow_ips.py` (8 tests); 12 RED first. `helm lint` and
+> `make prod-render-check` clean.
+> **One unrelated defect fell out and is fixed here:** `test_the_gateway_probe_REPORTS_the_drain` read
+> `gateway.app` — a module singleton whose lifespan `finally` sets `shutting_down = True` — so any
+> earlier test that ran a TestClient context left the flag set and this one failed on a 200
+> precondition it never established. It now enters the lifespan, which sets the flag the way a real
+> boot does, instead of patching around the leak.
 
 **Rule.** microservices.md: § Service-to-service authn — the edge is the only place a client's identity assertion can be refused; kubernetes.md: § Full Deployment YAML — env/args must reflect the deploy topology
 

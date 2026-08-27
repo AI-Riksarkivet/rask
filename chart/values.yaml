@@ -95,6 +95,21 @@ config:
 # list — catalog, lineage), unconditionally, so each service renders from exactly ONE template under
 # every singleTenant combination: the fleet entries from fleet.yaml, catalog+lineage from
 # services.yaml. A new lakehouse entry added to this map must also be added to that list.
+# The peers whose `x-forwarded-*` headers uvicorn may believe, for EVERY fleet pod (rendered by
+# rask.proxyHeaderArgs alongside --proxy-headers).
+#
+# 127.0.0.1 is uvicorn's own default and what the six fleet dockerfiles hardcode in their CMD — the
+# value you would use if the proxy were a sidecar in the same pod. It is not: the gateway's proxy is
+# the INGRESS CONTROLLER, in another pod on another IP, so the match can never succeed and every
+# forwarded header is silently ignored. Set this to the ingress controller's pod CIDR (k3s default
+# 10.42.0.0/16) for the client IP and scheme to be real. Left at the default here so an existing
+# install changes nothing silently.
+#
+# '*' IS REFUSED at render time — it trusts every peer, so any client could forge its own source IP.
+# The gateway strips and re-stamps the forwarded chain either way (see _CLIENT_SPOOFABLE), so a
+# backend never sees a client's own claim; this key decides only whose claim the gateway believes.
+forwardedAllowIps: 127.0.0.1
+
 services:
   # ---- rask fleet (uvicorn modules, one Deployment each via templates/fleet.yaml) ----
   # (core-api/search-api/volumes-api died in the R6/R20 media wave: the S3 object browser
@@ -351,7 +366,6 @@ services:
     port: 8888
     replicas: 1
     frontDoor: true
-    extraArgs: ["--proxy-headers", "--forwarded-allow-ips=127.0.0.1"]
     # The gateway proxies /api/* to backends, so probing a proxied path would couple its readiness
     # to an upstream — it must stay Ready in a front-door-only install (no domain backends).
     # THAT REASON IS INTACT AND THE EXCEPTION IS GONE. Both probes pointed at the gateway's own

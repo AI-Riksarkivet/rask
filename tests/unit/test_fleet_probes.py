@@ -142,14 +142,19 @@ def test_the_gateway_probe_REPORTS_the_drain() -> None:
     """
     import gateway
 
-    client = TestClient(gateway.app)
-    assert client.get("/healthz").status_code == 200
+    # THROUGH THE LIFESPAN, which is what makes this order-independent. `gateway.app` is a module
+    # singleton and the lifespan's `finally` sets `shutting_down = True`, so any earlier test that ran
+    # a TestClient context leaves the flag set — this test then read 503 for its 200 precondition and
+    # failed on a state it never established. Entering the lifespan sets it False the way a real boot
+    # does, rather than patching the flag to paper over the leak.
+    with TestClient(gateway.app) as client:
+        assert client.get("/healthz").status_code == 200
 
-    gateway.app.state.shutting_down = True
-    try:
-        response = client.get("/healthz")
-    finally:
-        gateway.app.state.shutting_down = False
+        gateway.app.state.shutting_down = True
+        try:
+            response = client.get("/healthz")
+        finally:
+            gateway.app.state.shutting_down = False
 
     assert response.status_code == 503, (
         "the gateway answers /healthz 200 while draining, so the kubelet keeps routing to it through "

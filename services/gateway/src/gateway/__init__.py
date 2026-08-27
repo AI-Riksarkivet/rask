@@ -77,8 +77,35 @@ _CLIENT_SPOOFABLE = frozenset(
         # stamps on the way in, a client that sets it names itself an allowlisted service — the
         # same laundering as the caller-app-id, one header along.
         b"x-lance-service-identity",
+        # The forwarded chain is a PROXY's assertion about a client, and anything arriving on this
+        # listener was written by the client. Stripped here and re-stamped below from the values the
+        # server resolved — stripping alone would be worse than passing through, because a backend
+        # with no chain at all cannot tell a direct call from a proxied one.
+        b"x-forwarded-for",
+        b"x-forwarded-proto",
+        b"x-forwarded-host",
     }
 )
+
+
+def _forwarded_chain(request: Request) -> list[tuple[bytes, bytes]]:
+    """The forwarded headers the GATEWAY asserts, replacing whatever the client claimed.
+
+    NO SECOND TRUST DECISION HERE, and that is the point. `--proxy-headers --forwarded-allow-ips` has
+    already been applied by the time a request reaches the app, so `request.client` and
+    `request.url.scheme` ARE uvicorn's answer: the real client when the immediate peer is a declared
+    proxy, the immediate peer otherwise. Re-stamping from those two values is therefore correct under
+    every trust configuration, and fixing the CIDR at deploy time changes what backends see without
+    touching this code. A second CIDR check here could only disagree with the first.
+    """
+    chain: list[tuple[bytes, bytes]] = []
+    if request.client is not None:
+        chain.append((b"x-forwarded-for", request.client.host.encode()))
+    chain.append((b"x-forwarded-proto", request.url.scheme.encode()))
+    host = request.headers.get("host")
+    if host:
+        chain.append((b"x-forwarded-host", host.encode()))
+    return chain
 
 
 def _rewrite_location(location: str) -> str:
@@ -496,6 +523,7 @@ async def proxy(path: str, request: Request) -> Response:
         # broken backend — answering 502 here would tell an operator a healthy service is down.
         raise HTTPException(status_code=400, detail=f"unrepresentable request path: {exc}") from exc
     headers = [(k, v) for k, v in request.headers.raw if k.lower() not in _HOP_BY_HOP and k.lower() not in _CLIENT_SPOOFABLE]
+    headers += _forwarded_chain(request)
     upstream_req = client.build_request(request.method, url, headers=headers, content=await request.body())
     try:
         upstream_resp = await client.send(upstream_req, stream=True)
