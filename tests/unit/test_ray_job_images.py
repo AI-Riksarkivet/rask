@@ -283,38 +283,7 @@ def _baked_job_scripts(dockerfile: Path) -> list[Path]:
     return scripts
 
 
-#: `ray-lance` is the DEMO image (`make ray-demo`, `deploy/ray-lance-demo.yaml`) and it bakes
-#: `ray_stage_job.py` because `test_every_submit_entrypoint_is_baked_into_the_ray_image` requires
-#: every submit entrypoint to be present — but it is a `rayproject/ray` base with four pip pins and
-#: no uv sync, so it cannot provide `service_kit`, and the job dies on import. MEASURED on the k3s
-#: estate 2026-08-27, driving a real 50k `/produce`:
-#:
-#:   ray-silver-e2e-verify-…  FAILED
-#:   File "/home/ray/jobs/ray_stage_job.py", line 65, in <module>
-#:       from service_kit.lakehouse import media
-#:   ModuleNotFoundError: No module named 'service_kit'
-#:
-#: The import arrived in 5a8dd3b7 (B14, "one implementation of the derivers") and nothing gated it.
-#: The cluster image is unaffected — `uv sync --package ratch` pulls `service-kit[lancekit]`.
-#:
-#: STRICT, and not skip/ignore: the estate's cascade currently runs on this head, so this is a live
-#: defect, not a curiosity. The fix is to give `ray-lance` the fleet's stack the way
-#: `.docker/ray-cluster.dockerfile` does, or to stop pointing `MEDALLION_RAY_ADDRESS` at the demo
-#: head. Strict means this goes RED the moment either lands — which is the signal to delete this.
-_RAY_LANCE_CANNOT_RUN_THE_STAGE_JOB = pytest.mark.xfail(
-    strict=True,
-    reason="ray-lance is the demo image and provides no service_kit, so the baked ray_stage_job.py dies on import",
-)
-
-
-@pytest.mark.parametrize(
-    "dockerfile",
-    [
-        pytest.param(_DOCKERFILE, marks=_RAY_LANCE_CANNOT_RUN_THE_STAGE_JOB),
-        _CLUSTER_DOCKERFILE,
-    ],
-    ids=lambda p: p.name,
-)
+@pytest.mark.parametrize("dockerfile", [_DOCKERFILE, _CLUSTER_DOCKERFILE], ids=lambda p: p.name)
 def test_a_baked_job_gets_every_repo_package_it_imports(dockerfile: Path) -> None:
     """Both Ray images, one rule — and it is the rule two separate outages already broke.
 

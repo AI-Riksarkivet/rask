@@ -32,6 +32,38 @@ FROM rayproject/ray:2.58.0-py312-cpu@sha256:c3c9573c5c6bfe4127885f79622d6a32064d
 # lance_ray's write strips blob-v2 typing (verified live — read_lance turns a blob column into plain
 # large_binary), so the job round-trips blobs via pylance and derives here rather than falling back
 # in-process. Drop this + the round-trip when lance-ray gains inline-blob-preserving read/write.
+# THE FLEET'S OWN STACK, so the baked production jobs can actually run.
+#
+# `ray_stage_job.py` — the per-stage cascade transform every mover submits — imports
+# `service_kit.lakehouse`. This image did not provide it, so the job died on line 65 the moment
+# anything submitted it. MEASURED on the k3s estate, driving a real 50k `/produce`:
+#
+#   ray-silver-e2e-verify-…  FAILED
+#   ModuleNotFoundError: No module named 'service_kit'
+#
+# while the mover logged `medallion_stage_dispatched_to_workflow` and reported a terminal job — a
+# dead cascade wearing a dispatched one. Pinned by `test_a_baked_job_gets_every_repo_package_it_imports`.
+#
+# EXPORTED, NOT SYNCED. `.docker/ray-cluster.dockerfile` builds a `/opt/venv` from the root lock, which
+# is right for a `nvidia/cuda` base it owns outright. This base is `rayproject/ray`, which brings its
+# OWN interpreter and Ray installation — a second venv beside it would leave the job running under
+# whichever python `ray job submit` picked. So the LOCK still decides the versions (`uv export
+# --frozen`, same root lock, same resolution as the fleet) and they are installed into Ray's python.
+# `--no-emit-workspace` keeps the first-party members out: they are COPYed as sources below, for the
+# same reason `dummy_runner` is — no second resolution, and `sys.path[0]` finds them.
+#
+# BEFORE the explicit pins below, deliberately: if a transitive dep disagrees about pyarrow, the
+# pinned line is what must win, and pip applies last-write.
+COPY --from=ghcr.io/astral-sh/uv:0.5@sha256:7bff3c3776ec467fc1437960f2c469d8beb30f536a6465a3350c647ccd260ec2 /uv /usr/local/bin/uv
+RUN --mount=type=bind,source=uv.lock,target=/tmp/w/uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=/tmp/w/pyproject.toml \
+    --mount=type=bind,source=packages,target=/tmp/w/packages \
+    --mount=type=bind,source=services,target=/tmp/w/services \
+    uv export --directory /tmp/w --package service-kit --frozen --no-hashes \
+      --no-emit-workspace --no-dev -o /tmp/service-kit-requirements.txt \
+ && pip install --no-cache-dir -r /tmp/service-kit-requirements.txt \
+ && rm -f /tmp/service-kit-requirements.txt
+
 RUN pip install --no-cache-dir "lance-ray==0.5.0" "pylance==10.0.0" "pyarrow==25.0.0" "pillow==11.3.0"
 
 # OTel SDK + OTLP/HTTP exporter so the train job (ray_train_job.py) can export its run metrics to
@@ -66,6 +98,10 @@ COPY scripts/ray_dummy_job.py /home/ray/jobs/
 # Baked, never `runtime_env`: Ray documents that as development-only, and a probe that ran
 # differently from the lane it probes would be worth nothing.
 COPY runners/dummy/src/dummy_runner /home/ray/jobs/dummy_runner
+# The two workspace packages the baked PRODUCTION jobs import, beside them for the same reason —
+# `service_kit` depends on `storage`, so both must be present or the first import fails on the second.
+COPY packages/service-kit/src/service_kit /home/ray/jobs/service_kit
+COPY packages/storage/src/storage /home/ray/jobs/storage
 
 ARG BUILD_DATE
 ARG VCS_REF
