@@ -837,7 +837,9 @@ packages/service-kit/src/service_kit/governed/fga.py:541-543 — `async def _do_
 
 </details>
 
-<details><summary><b>`GET /v1/table/{id}/history` takes an unvalidated `limit: int = 50` that drives one object-store transaction read per version — and `limit=-1` defeats the bound entirely, returning all-but-one version</b> <i>(pagination.md, ADJUSTED)</i></summary>
+<details><summary><b>~~`GET /v1/table/{id}/history` takes an unvalidated `limit: int = 50` that drives one object-store transaction read per version — and `limit=-1` defeats the bound entirely, returning all-but-one version~~</b> <i>(pagination.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27.** `limit: Annotated[int, Query(ge=1, le=200)] = 50`, exactly as the Fix asks. `ge=1` is the load-bearing half: the implementation slices `versions()[:limit]`, so `?limit=-1` meant all-but-the-last rather than "no limit" — a bound a minus sign turned inside out, which is worse than no bound because the caller got a plausible answer. `le=200` makes the ceiling the route's own docstring describes actually true, and matches the sibling annotator route. Deeper history should get the keyset cursor rather than a raised ceiling, as the Fix notes. Pinned by `services/catalog/tests/test_history_limit_bound.py` (4 tests, all RED before) — two declarative on the parameter's constraints and two behavioural, asserting a 422 the caller can read rather than a silently clamped page.
 
 **Rule.** pagination.md: anti-pattern 'Page-size with no upper bound (`page_size: int = 20`) — `?page_size=999999` exhausts memory and bandwidth. Fix: `Field(le=100)`'; and the `PaginationParams` rule that page params are validated at the boundary (`Query(ge=1, le=N)`), not clamped downstream.
 

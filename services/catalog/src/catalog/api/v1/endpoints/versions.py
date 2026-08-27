@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     BatchCommitTablesRequest,
@@ -52,7 +53,16 @@ async def table_history(
     so: StorageOptionsDep,
     token: CurrentToken,
     client: FgaClientDep,
-    limit: int = 50,
+    # BOUNDED AT THE DOOR, and `ge=1` is the load-bearing half. The implementation slices
+    # `versions()[:limit]`, so a negative value did not mean "no limit" or "one row" — Python read
+    # `?limit=-1` as all-but-the-last and returned nearly the whole history. A bound a minus sign turns
+    # inside out is worse than no bound, because the caller gets a plausible-looking answer.
+    #
+    # `le` makes the ceiling this route's docstring already describes actually true. It is not an
+    # amplification guard: `versions()` cannot manufacture reads that do not exist, so a huge limit on a
+    # five-version table still does five reads. Deeper history should get the keyset cursor the sibling
+    # routes use (`page_token` = last version, `version < page_token`) rather than a raised ceiling.
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> dict[str, object]:
     """The table's commit log — one row per version, newest first: **what** changed and **when**.
 
