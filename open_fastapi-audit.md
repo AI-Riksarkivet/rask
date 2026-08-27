@@ -648,7 +648,9 @@ packages/service-kit/src/service_kit/__init__.py:144-157 is the whole compositio
 
 </details>
 
-<details><summary><b>controlplane has no preStop drain delay, and the invariant test written to prevent exactly that cannot see it</b> <i>(kubernetes.md + microservices.md, CONFIRMED)</i></summary>
+<details><summary><b>~~controlplane has no preStop drain delay, and the invariant test written to prevent exactly that cannot see it~~</b> <i>(kubernetes.md + microservices.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-27.** Both halves. `controlplane.yaml` carries `{{- include "lance.preStop" . }}` (landed with the securityContext in `dd225c35`), so the Deployment serving `/api/projects` no longer drops in-flight reads on every `helm upgrade`. And the gate is fixed rather than the tuple, as the finding asks: `test_every_first_party_deployment_is_hardened` now derives its subjects from the render via `_first_party_deployments` instead of naming ten fragments that omitted controlplane, compute, flows, ingest, maintenance, viewer, search and annotator — a gate whose own docstring argues "an every claim in prose is worth nothing" was making exactly that claim with a literal list. It also checks per CONTAINER now; the old version matched on document text, so a second container could satisfy the check for the first. PROVEN, not assumed: with controlplane's preStop temporarily removed the derived gate fails (`rask-controlplane/controlplane missing ['preStop']`) where the tuple version could not match the name at all. The `terminationGracePeriodSeconds` half the Fix mentions belongs to the separate Dapr-shutdown finding — no fleet Deployment sets one — and stays open there.
 
 **Rule.** kubernetes.md: § Shutdown sequence — preStop closes the gap between endpoint removal and SIGTERM; § Full Deployment YAML lifecycle.preStop
 

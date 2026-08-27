@@ -501,30 +501,34 @@ def test_every_first_party_deployment_is_hardened() -> None:
     template). preStop matters most on the gateway: it is the INGRESS, so without a drain delay a rolling
     update drops in-flight requests while kube-proxy is still routing to the terminating pod.
 
-    NOTE the hand-written `first_party` tuple below, and what it cost: it named ten Deployments and
-    omitted compute, controlplane, flows and ingest, so those four were skipped in silence by a gate
-    whose whole purpose is coverage. The hardening gate added alongside this one DERIVES its subject
-    list from the render for that reason; this tuple stays only because probes/preStop have per-service
-    exemptions that list does not.
-    """
-    rendered = _helm_template()
+    IT NO LONGER NAMES ITS OWN SUBJECTS. This carried a hand-written tuple of ten name fragments —
+    gateway, catalog, lineage, compaction, medallion-producer, the three movers, web, notifications —
+    which omitted controlplane, compute, flows, ingest, maintenance, viewer, search and annotator. So a
+    gate whose docstring argues that "an every claim in prose is worth nothing" made exactly that kind
+    of claim with a literal list, and controlplane shipped with no preStop at all: a first-party
+    Deployment serving `/api/projects` through the gateway, dropping in-flight project reads on every
+    `helm upgrade` for as long as kube-proxy took to notice the endpoint removal.
 
-    first_party = (
-        "gateway", "catalog", "lineage", "compaction", "medallion-producer",
-        "bronze-to-silver", "silver-to-gold", "media-to-silver", "web",
-        "notifications",
-    )  # fmt: skip
+    It now derives its subjects from the render (`_first_party_deployments`), so a NEW Deployment is
+    checked by default rather than invisible until somebody remembers it. Per CONTAINER, too — the
+    tuple version matched on the doc text, so a second container in a pod could satisfy the check for
+    the first.
+    """
     unhardened: list[str] = []
-    for doc in rendered.split("\n---"):
-        if "kind: Deployment" not in doc:
-            continue
-        m = re.search(r"^\s*name:\s*(\S+)", doc, re.MULTILINE)
-        name = m.group(1) if m else "?"
-        if not any(f in name for f in first_party):
-            continue
-        missing = [k for k in ("livenessProbe", "readinessProbe", "preStop") if k not in doc]
-        if missing:
-            unhardened.append(f"{name} missing {missing}")
+    for doc in _first_party_deployments(_rendered_docs("explorer.enabled=true")):
+        name = doc["metadata"]["name"]
+        for container in doc["spec"]["template"]["spec"].get("containers") or []:
+            missing = [
+                key
+                for key, present in (
+                    ("livenessProbe", "livenessProbe" in container),
+                    ("readinessProbe", "readinessProbe" in container),
+                    ("preStop", bool((container.get("lifecycle") or {}).get("preStop"))),
+                )
+                if not present
+            ]
+            if missing:
+                unhardened.append(f"{name}/{container['name']} missing {missing}")
     assert not unhardened, f"first-party Deployments are not hardened: {unhardened}"
 
 
