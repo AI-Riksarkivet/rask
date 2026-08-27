@@ -1169,7 +1169,9 @@ packages/service-kit/src/service_kit/draining.py:69-72 `raise HTTPException(stat
 
 </details>
 
-<details><summary><b>`GET /api/page` stamps `Content-Type: image/jpeg` on an opaque governed payload — the tier schema carries no MIME and the table is a free query parameter</b> <i>(file-handling.md + streaming.md, ADJUSTED)</i></summary>
+<details><summary><b>~~`GET /api/page` stamps `Content-Type: image/jpeg` on an opaque governed payload — the tier schema carries no MIME and the table is a free query parameter~~</b> <i>(file-handling.md + streaming.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27.** `sniff_media_type(payload)` reads magic bytes and defaults to `application/octet-stream` — evidence where there is any, an honest admission where there is not. A guess is worse than an admission: "bytes I cannot describe" is true, `image/jpeg` over a WAV is not. **The load-bearing half the finding names is done too:** `has_image` → `has_payload`, and the modality vocabulary ("image bytes", "harvest produced none") is gone from a seam that serves an ARBITRARY governed table — CLAUDE.md's test for a shared seam is "would this be right for audio?". `has_image` survives one release as a `computed_field` MIRROR (not a default, so the two cannot disagree) because web zones are separate Deployments from the viewer: a rolling upgrade pairs an old `rask-web-lakehouse` with a new viewer, and `storage.ts` reads the old name. The lakehouse zone reads `has_payload ?? has_image` for the same window. Pinned by `services/viewer/tests/test_page_bytes_mime.py` (8 tests, RED before) across jpeg/png/pdf/wav/unknown/empty. One existing test's fixture was the literal string `b"JPEGBYTES"` — with sniffing it would correctly serve `octet-stream`, so it now carries real JPEG magic bytes and its content-type assertion tests the ROUTE rather than the fixture.
 
 **Rule.** file-handling.md § Anti-patterns ("media_type=... for previewable content — set the real MIME type"); the reference's whole premise that a byte response declares what it actually is
 

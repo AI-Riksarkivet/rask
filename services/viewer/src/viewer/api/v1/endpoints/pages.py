@@ -25,7 +25,7 @@ import httpx
 import lance
 from fastapi import APIRouter, Query, Response
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
 from service_kit.governed.audit import FAILURE, audit
@@ -53,16 +53,69 @@ class Page(BaseModel):
     source_uri: str
     stage: str
     size: int
-    #: False when the harvest left this page's payload null. Surfaced rather than hidden: a page
-    #: that failed to fetch is a real state of the dataset, and a viewer that silently skips it
-    #: reports a volume as complete when it is not.
-    has_image: bool
+    #: False when this row's payload is null. Surfaced rather than hidden: a row that failed to
+    #: acquire is a real state of the dataset, and a viewer that silently skips it reports a corpus as
+    #: complete when it is not.
+    #:
+    #: MODALITY-FREE. This was `has_image`, and the route it describes serves an ARBITRARY governed
+    #: table — audio, video and PDF corpora included. CLAUDE.md's test for a shared seam is "would this
+    #: be right for audio?", and `has_image` is not.
+    has_payload: bool
+
+    @computed_field
+    @property
+    def has_image(self) -> bool:
+        """Deprecated alias for `has_payload`. REMOVE after one release.
+
+        A rename is a wire change, and the web zones are their own Deployments — during a rolling
+        upgrade an old `rask-web-lakehouse` pod talks to a new viewer, and `storage.ts` reads
+        `has_image`. Dropping it in the same release would break exactly that window. `computed_field`
+        rather than a plain property so it is actually SERIALISED; it mirrors rather than defaults, so
+        the two can never disagree.
+        """
+        return self.has_payload
 
 
 class PageListing(BaseModel):
     #: The catalog table id these pages came from (e.g. bronze$pages).
     dataset: str
     pages: list[Page]
+
+
+#: Magic-byte prefixes for the formats a governed corpus actually carries. Evidence, not assumption:
+#: a JPEG really does start `FF D8 FF`.
+_MAGIC: tuple[tuple[bytes, str], ...] = (
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"%PDF", "application/pdf"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"II*\x00", "image/tiff"),
+    (b"MM\x00*", "image/tiff"),
+    (b"OggS", "audio/ogg"),
+    (b"fLaC", "audio/flac"),
+    (b"\x1a\x45\xdf\xa3", "video/webm"),
+)
+
+
+def sniff_media_type(payload: bytes) -> str:
+    """What these bytes are, or an honest admission that we cannot tell.
+
+    The governed tier schema is `{id, payload, stage, lineage, source_rowid}` with `payload` OPAQUE,
+    and `table` is a caller-supplied catalog id — so there is no MIME to read anywhere. This route used
+    to answer `image/jpeg` regardless, which is false for the audio, video and PDF corpora the same
+    route serves.
+
+    `application/octet-stream` for anything unrecognised, because a guess is worse than an admission:
+    "bytes I cannot describe" is true, while `image/jpeg` over a WAV is not.
+    """
+    for prefix, media_type in _MAGIC:
+        if payload.startswith(prefix):
+            return media_type
+    # RIFF is a container: the format is the four bytes at offset 8, not the header.
+    if payload.startswith(b"RIFF") and len(payload) >= 12:
+        return {b"WAVE": "audio/wav", b"AVI ": "video/x-msvideo", b"WEBP": "image/webp"}.get(payload[8:12], "application/octet-stream")
+    return "application/octet-stream"
 
 
 def _resolve(state: StateDep, table: str, token: str | None) -> str:
@@ -189,13 +242,13 @@ async def list_pages(
                 source_uri=rows.column("source_uri")[i].as_py() or "",
                 stage=rows.column("stage")[i].as_py() or "",
                 size=len(payload) if payload else 0,
-                has_image=payload is not None,
+                has_payload=payload is not None,
             )
         )
     return PageListing(dataset=table, pages=pages)
 
 
-@router.get("/page", summary="One page's image bytes")
+@router.get("/page", summary="One row's payload bytes")
 async def get_page(
     state: StateDep,
     checker: CheckerDep,
@@ -219,9 +272,9 @@ async def get_page(
     if payload is None:
         # A registered page whose harvest produced no bytes. 404 with the reason, so the UI can say
         # "this page failed to harvest" instead of rendering a broken image icon.
-        raise NotFoundError(f"page {page_id} has no image payload (harvest produced none)")
+        raise NotFoundError(f"row {page_id} in {table!r} has no payload")
     return Response(
         content=payload,
-        media_type="image/jpeg",
+        media_type=sniff_media_type(payload),
         headers={"Cache-Control": "public, max-age=300"},
     )

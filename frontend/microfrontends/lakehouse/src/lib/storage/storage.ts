@@ -160,15 +160,23 @@ export function fmtModified(iso: string | null): string {
 // shows `.lance` fragments and a `_versions` manifest — bytes, not pages. These read the dataset
 // as what it is: rows with a blob-v2 image column, served page-at-a-time by the viewer.
 
-/** One page's metadata. `has_image` is false when the harvest produced no payload for that row —
- *  surfaced rather than hidden, because a viewer that silently skips a failed page reports a volume
- *  as complete when it is not. */
+/** One row's metadata. `has_payload` is false when the row carries no bytes — surfaced rather than
+ *  hidden, because a viewer that silently skips a failed row reports a corpus as complete when it is
+ *  not. */
 export type Page = {
 	id: number;
 	source_uri: string;
 	stage: string;
 	size: number;
-	has_image: boolean;
+	/** True when this row carries payload bytes.
+	 *
+	 *  Renamed from `has_image`: the route serves an ARBITRARY governed table — audio, video and PDF
+	 *  corpora included — so the field must not name one modality. `optional` because the viewer emits
+	 *  both names for one release: web pods and the viewer are separate Deployments, so a rolling
+	 *  upgrade briefly pairs an old zone with a new viewer and vice versa. */
+	has_payload?: boolean;
+	/** @deprecated Mirror of `has_payload`, emitted for one release. Read `has_payload`. */
+	has_image?: boolean;
 };
 
 export type PageListing = { dataset: string; pages: Page[] };

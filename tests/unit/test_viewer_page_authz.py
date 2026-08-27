@@ -110,7 +110,7 @@ def _fake_dataset(monkeypatch: pytest.MonkeyPatch) -> None:
     the real code path, which is the thing being asserted.
     """
     monkeypatch.setattr(pg.lance, "dataset", lambda *_a, **_kw: object())
-    monkeypatch.setattr(pg, "read_aligned_table", lambda _ds, _columns=None, **_kw: _Rows([0, 1], [b"JPEGBYTES", None]))
+    monkeypatch.setattr(pg, "read_aligned_table", lambda _ds, _columns=None, **_kw: _Rows([0, 1], [_JPEG, None]))
 
 
 def _catalog_ok(seen_headers: list[dict[str, str]] | None = None) -> Any:
@@ -140,6 +140,13 @@ def _catalog_ok(seen_headers: list[dict[str, str]] | None = None) -> Any:
 # --- the gate ---------------------------------------------------------------------------------
 
 
+#: REAL magic bytes, not the string "JPEGBYTES". The route sniffs the payload now instead of asserting
+#: `image/jpeg` over whatever it was handed (open_fastapi-audit), so a fixture that is not actually a
+#: JPEG would correctly be served as `application/octet-stream` — and the content-type assertion below
+#: would be testing the fixture rather than the route.
+_JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00"
+
+
 def test_page_BYTES_are_refused_without_a_grant() -> None:
     """The defect, stated directly: this used to return the image to anyone."""
     client = TestClient(_app(allow=False))
@@ -147,7 +154,7 @@ def test_page_BYTES_are_refused_without_a_grant() -> None:
     r = client.get("/api/page", params={"table": TABLE, "id": 0})
 
     assert r.status_code == 403
-    assert b"JPEGBYTES" not in r.content
+    assert _JPEG not in r.content
 
 
 def test_the_page_LISTING_is_refused_without_a_grant() -> None:
@@ -194,7 +201,7 @@ def test_a_granted_caller_still_gets_the_bytes(monkeypatch: pytest.MonkeyPatch) 
     r = client.get("/api/page", params={"table": TABLE, "id": 0})
 
     assert r.status_code == 200
-    assert r.content == b"JPEGBYTES"
+    assert r.content == _JPEG
     assert r.headers["content-type"] == "image/jpeg"
 
 

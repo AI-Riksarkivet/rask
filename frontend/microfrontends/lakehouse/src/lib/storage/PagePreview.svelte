@@ -29,7 +29,9 @@
 			pages = res.data.pages;
 			// Land on the first page that actually has bytes — selecting a failed harvest by default
 			// would open the viewer on a broken image.
-			selected = pages.find((p) => p.has_image)?.id ?? null;
+			// `has_payload ?? has_image`: the viewer emits both for one release, and web pods roll
+			// separately from it — so during an upgrade this may see either name.
+			selected = pages.find((p) => (p.has_payload ?? p.has_image))?.id ?? null;
 			status = 200;
 			detail = '';
 		} else {
@@ -68,7 +70,7 @@
 					<button
 						class="thumb"
 						class:active={page.id === selected}
-						disabled={!page.has_image}
+						disabled={!(page.has_payload ?? page.has_image)}
 						onclick={() => (selected = page.id)}
 						title={page.has_image ? `Page ${page.id}` : `Page ${page.id} — no image payload`}
 					>
