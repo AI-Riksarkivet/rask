@@ -20,12 +20,14 @@ how all three work. See docs/RESILIENCE.md + docs/RAY-TRAIN.md.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from contextlib import suppress
 
 import httpx
 
-from medallion.core.config import MedallionSettings
+from medallion.core.config import MedallionSettings, get_settings
 from medallion.services.transform_spec import resolve_transform_async
 from ray_kit import submit as rk
 
@@ -37,6 +39,62 @@ log = logging.getLogger(__name__)
 # poll — nothing observes a job to SUCCEEDED any more, so only the FAILED/STOPPED test
 # survives, and only at submit time.
 _TERMINAL_BAD = frozenset({"FAILED", "STOPPED"})
+
+
+#: The ONE Ray dashboard client for this worker process.
+#:
+#: Every submit used to open an `httpx.AsyncClient` in an `async with` and tear it down on the way out
+#: — one TCP connect, one TLS handshake and one pool teardown per activity, on a durable workflow that
+#: runs these repeatedly. `production-patterns.md`: "One engine, one HTTP client, per process."
+#:
+#: MODULE-LEVEL rather than lifespan-owned, and that is the honest shape rather than a shortcut: a
+#: workflow ACTIVITY has no `Request` and no reachable `app.state`, so the reference's literal
+#: prescription cannot apply. The client gets the WORKER's lifetime instead, and `close_ray_client()`
+#: is called from the mover's shutdown — a module-level client nothing closes trades a per-call
+#: teardown for a permanent leak plus an "Unclosed client session" on every stop.
+#:
+#: Guarded by a lock: two activities starting concurrently would otherwise both see `None` and build
+#: two clients, one of which is then leaked with no reference to close it.
+_client: httpx.AsyncClient | None = None
+_client_address: str | None = None
+_client_lock = asyncio.Lock()
+
+
+async def ray_client() -> httpx.AsyncClient:
+    """The pooled client, built on first use and rebuilt if the Ray address changes.
+
+    KEYED ON THE ADDRESS, not merely cached. An `AsyncClient` binds `base_url` at construction, so a
+    plain "build once" cache would keep answering with a client pointed at whatever address happened to
+    be configured the FIRST time an activity ran — silently, and long after the setting changed. That is
+    free in production, where the address is stable, and it is the difference between a cache and a
+    stale global.
+    """
+    global _client, _client_address
+    settings = get_settings()
+    address = settings.ray_address
+    if _client is not None and not getattr(_client, "is_closed", False) and _client_address == address:
+        return _client
+    async with _client_lock:
+        if _client is None or getattr(_client, "is_closed", False) or _client_address != address:
+            if _client is not None:
+                with suppress(Exception):
+                    await _client.aclose()
+            _client = httpx.AsyncClient(base_url=address, timeout=settings.ray_request_timeout_seconds)
+            _client_address = address
+    return _client
+
+
+async def close_ray_client() -> None:
+    """Close the pooled client. Idempotent, so a double shutdown is not an error."""
+    global _client, _client_address
+    # TOLERANT ON PURPOSE, for the same reason the mover's teardown suppresses: a shutdown that raises
+    # on an already-broken (or substituted) client must not stop the rest of the teardown. The refs are
+    # dropped either way, so a failed close cannot leave a stale client answering later callers.
+    if _client is not None:
+        with suppress(Exception):
+            await _client.aclose()
+    _client = None
+    _client_address = None
 
 
 def train_submission_id(token: str) -> str:
@@ -207,8 +265,8 @@ async def submit_stage_job(
     # expires and the broker redelivers forever. A job that dies commits nothing and rings nothing;
     # the lineage reconciler catches it against storage truth, and the deterministic submission id
     # makes a redelivered trigger re-attach instead of starting a second job.
-    async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
-        await rk.submit_or_reattach(client, submission_id, body)
+    client = await ray_client()
+    await rk.submit_or_reattach(client, submission_id, body)
     log.info(
         "ray_stage_job_submitted",
         extra={"submission_id": submission_id, "stage": stage, "lane": spec.name if spec else "", "declared": spec is not None},
@@ -304,22 +362,22 @@ async def submit_train_job(
         # metadata as `Dict[str, str]`, which every value here already is.
         "metadata": {key: value for key, value in (("rask.originator", originator), ("rask.project", project), ("rask.token", token)) if value},
     }
-    async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
-        try:
-            response = await client.post("/api/jobs/", json=body)
-            if response.status_code < 400:
-                log.info("ray_train_job_submitted", extra={"submission_id": submission_id, "model": model})
-                return "submitted"
-            existing = await client.get(f"/api/jobs/{submission_id}")
-            if existing.status_code == 200:
-                if existing.json().get("status") in _TERMINAL_BAD:
-                    log.warning("ray_train_job_previously_failed", extra={"submission_id": submission_id})
-                    return "already_failed"
-                log.info("ray_train_job_reattach", extra={"submission_id": submission_id})
-                return "attached"
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise rk.RayJobError(f"failed to submit ray train job {submission_id}: {exc}") from exc
+    client = await ray_client()
+    try:
+        response = await client.post("/api/jobs/", json=body)
+        if response.status_code < 400:
+            log.info("ray_train_job_submitted", extra={"submission_id": submission_id, "model": model})
+            return "submitted"
+        existing = await client.get(f"/api/jobs/{submission_id}")
+        if existing.status_code == 200:
+            if existing.json().get("status") in _TERMINAL_BAD:
+                log.warning("ray_train_job_previously_failed", extra={"submission_id": submission_id})
+                return "already_failed"
+            log.info("ray_train_job_reattach", extra={"submission_id": submission_id})
+            return "attached"
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise rk.RayJobError(f"failed to submit ray train job {submission_id}: {exc}") from exc
     return "submitted"
 
 

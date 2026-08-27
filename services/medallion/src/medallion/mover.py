@@ -27,6 +27,7 @@ from fastapi.concurrency import run_in_threadpool
 from medallion.api.events import register_stage_route
 from medallion.api.stage_ops import router as stage_ops_router
 from medallion.core.config import apply_dapr_secrets, get_settings
+from medallion.services.ray_submit import close_ray_client
 from service_kit import setup_logging
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed import fga
@@ -130,6 +131,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # raises on a already-broken connection must not stop the rest of the teardown.
         with suppress(Exception):
             app.state.catalog_http.close()
+        # And the RAY client, which the workflow activities pool at module level. It cannot live on
+        # `app.state` — an activity has no `Request` and no way to reach it — so it takes the worker's
+        # lifetime instead, and this is where that lifetime ends. Without this the pooling would trade a
+        # per-call teardown for a permanent leak plus an "Unclosed client session" on every stop.
+        with suppress(Exception):
+            await close_ray_client()
         if app.state.fga is not None:
             with suppress(Exception):
                 await app.state.fga.close()

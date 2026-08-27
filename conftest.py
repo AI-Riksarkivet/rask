@@ -181,3 +181,27 @@ def respx_allows_unused_routes() -> Iterator[None]:
         yield
     finally:
         respx.mock._assert_all_called = True
+
+
+@pytest.fixture(autouse=True)
+def _reset_pooled_ray_client() -> Iterator[None]:
+    """Drop `ray_submit`'s module-level Ray client between tests.
+
+    That client is pooled for the WORKER's lifetime — a Dapr workflow activity has no `Request` and no
+    reachable `app.state`, so that is the only lifetime available to it (open_fastapi-audit). Under
+    pytest the "worker" is the whole session, so without this a client built by one test is reused by
+    the next, and a later test installing a `MockTransport` through `httpx.AsyncClient` never sees it
+    because no new client is constructed.
+
+    In the ROOT conftest rather than per-suite: the affected tests live in both `services/medallion/
+    tests/` and `tests/unit/`, and two copies of a reset fixture is the drift this file exists to
+    avoid. Import is local and guarded so a run that never touches medallion pays nothing.
+    """
+    yield
+    try:
+        from medallion.services.ray_submit import close_ray_client
+    except ImportError:  # pragma: no cover - medallion not installed in this env
+        return
+    import asyncio
+
+    asyncio.run(close_ray_client())
