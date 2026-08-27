@@ -39,6 +39,7 @@ from service_kit.governed import fga
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.middleware import RequestIDMiddleware
 from service_kit.obs import configure_app_logging
 from service_kit.probes import router as probes_router
 from storage import s3_client
@@ -207,6 +208,11 @@ app = FastAPI(
 # Problem+json handlers (parity with catalog/lineage — maintenance runs the same lance stack, so an
 # unhandled LanceNamespaceError must surface as the same RFC 9457 body, not Starlette's plain 500 text).
 install_problem_handlers(app, log)
+# ONE ID PER REQUEST, reaching the logs. `RequestIDMiddleware` mints or echoes `X-Request-ID`, puts
+# it on `request.state` and publishes it to the context var `setup_logging`'s filter reads — so a
+# caller can quote an id from a failed request and an operator can grep for it. Pure ASGI, so it
+# passes streaming bodies through untouched (this plane serves Arrow IPC).
+app.add_middleware(RequestIDMiddleware)
 
 # /livez + /readyz — the shared router, not a hand-rolled copy (service_kit.probes).
 app.include_router(probes_router)

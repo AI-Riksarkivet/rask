@@ -44,6 +44,7 @@ from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.middleware import RequestIDMiddleware
 from service_kit.obs import configure_app_logging
 from service_kit.probes import router as health_router
 
@@ -179,6 +180,11 @@ app = FastAPI(
 # so a LanceNamespaceError (or any unhandled error) must surface as the same RFC 9457 body, not
 # Starlette's plain 500 text. Installed BEFORE the routers so no route can outrun the taxonomy.
 install_problem_handlers(app, log)
+# ONE ID PER REQUEST, reaching the logs. `RequestIDMiddleware` mints or echoes `X-Request-ID`, puts
+# it on `request.state` and publishes it to the context var `setup_logging`'s filter reads — so a
+# caller can quote an id from a failed request and an operator can grep for it. Pure ASGI, so it
+# passes streaming bodies through untouched (this plane serves Arrow IPC).
+app.add_middleware(RequestIDMiddleware)
 app.include_router(health_router)
 app.include_router(produce_router)
 # The multimodal head (§9): POST /ingest-media lands external media as bronze blobs + triggers the

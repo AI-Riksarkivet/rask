@@ -40,6 +40,7 @@ from service_kit.governed.secrets import fetch_required_secrets
 from service_kit.governed.user_state import UserStateStore
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.middleware import RequestIDMiddleware
 from service_kit.obs import configure_app_logging
 from service_kit.probes import make_probes_router
 from service_kit.schemas.health import Readiness, ReadinessStatus
@@ -260,6 +261,11 @@ app.include_router(api_router)
 register_control_dapr(app)
 # Read-only maintenance gate (no-op unless LANCE_MAINTENANCE_READ_ONLY=true).
 app.middleware("http")(maintenance_middleware)
+# ONE ID PER REQUEST, reaching the logs. `RequestIDMiddleware` mints or echoes `X-Request-ID`, puts
+# it on `request.state` and publishes it to the context var `setup_logging`'s filter reads — so a
+# caller can quote an id from a failed request and an operator can grep for it. Pure ASGI, so it
+# passes streaming bodies through untouched (this plane serves Arrow IPC).
+app.add_middleware(RequestIDMiddleware)
 # Reject oversized request bodies with 413 before they are buffered (Arrow-IPC OOM guard). See body_limit.py.
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=_settings.max_body_bytes)
 # Outermost (added LAST → wraps everything, runs FIRST): shed a bulk-write burst with 429 once the

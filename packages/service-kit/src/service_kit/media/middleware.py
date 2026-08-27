@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.media.config import Settings
+from service_kit.middleware import RequestIDMiddleware
 
 
 def register_middleware(app: FastAPI, settings: Settings) -> None:
@@ -34,3 +35,10 @@ def register_middleware(app: FastAPI, settings: Settings) -> None:
     # a handler-side `read(cap + 1)` bounds that handler's memory and nothing about the landing zone.
     # Pure-ASGI, so this refuses as bytes arrive — before starlette spools anything.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
+    # THE EXEMPTION THIS MODULE RECORDED IS OVER. Its docstring refused a `BaseHTTPMiddleware`
+    # RequestID/Timing pair because that class fully buffers the response body and would break the
+    # `/api/explorer` Range streaming 206 seeking depends on — and it named the remedy: "use a pure ASGI
+    # middleware that passes through streaming bodies". `RequestIDMiddleware` is exactly that now, so
+    # these three apps get the same one id every other service has, and the streaming they traded it for
+    # is untouched: only the response START message is rewritten, never a body chunk.
+    app.add_middleware(RequestIDMiddleware)

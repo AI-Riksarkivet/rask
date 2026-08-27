@@ -30,6 +30,7 @@ from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.middleware import RequestIDMiddleware
 from service_kit.obs import configure_app_logging
 from service_kit.probes import make_probes_router
 from service_kit.schemas.health import Readiness, ReadinessStatus
@@ -165,6 +166,11 @@ app.include_router(api_router)
 
 
 install_problem_handlers(app, log)
+# ONE ID PER REQUEST, reaching the logs. `RequestIDMiddleware` mints or echoes `X-Request-ID`, puts
+# it on `request.state` and publishes it to the context var `setup_logging`'s filter reads — so a
+# caller can quote an id from a failed request and an operator can grep for it. Pure ASGI, so it
+# passes streaming bodies through untouched (this plane serves Arrow IPC).
+app.add_middleware(RequestIDMiddleware)
 
 
 async def _graph_ready(request: Request) -> Readiness:

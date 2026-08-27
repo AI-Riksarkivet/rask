@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI
 
 from service_kit.config import Settings
+from service_kit.context import RequestIdFilter
 from service_kit.exceptions import register_handlers
 from service_kit.middleware import register_middleware
 from service_kit.otel import setup_otel
@@ -63,7 +64,17 @@ def setup_logging() -> None:
     if not any(h.get_name() == "rask-stdout" for h in root.handlers):
         handler = logging.StreamHandler(sys.stdout)
         handler.set_name("rask-stdout")
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s — %(message)s"))
+        # THE REQUEST ID JOINS EVERY RECORD HERE. `RequestIDMiddleware` mints one and echoes it to the
+        # caller; until this filter existed nothing read it, so a user could quote an id from a failed
+        # request and an operator had nothing to grep for.
+        #
+        # A FILTER on the one handler, not a `LoggingMiddleware`: a middleware annotates only the
+        # records it writes itself, while this covers every module in every service — libraries
+        # included — with no per-service edit. Outside a request it renders `-`, which is why the
+        # context var defaults to a visible placeholder rather than an empty string that would read
+        # like a formatting bug.
+        handler.addFilter(RequestIdFilter())
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s [%(request_id)s] — %(message)s"))
         root.addHandler(handler)
 
 
