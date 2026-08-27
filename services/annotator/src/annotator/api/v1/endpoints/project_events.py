@@ -24,7 +24,8 @@ The fourth precondition — every task terminal — is NOT checked here. It live
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any, Final, Literal, cast
+from enum import StrEnum
+from typing import Annotated, Any, Final, cast
 
 from fastapi import APIRouter, Path, Query, status
 from pydantic import BaseModel, Field
@@ -524,15 +525,33 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: St
     return {"sent": len(payload.items), "created": len(created), "task_ids": created}
 
 
+class TaskInclude(StrEnum):
+    """What extra payload the task listing should carry.
+
+    One member today, and it is still an enum rather than a bool: `?include=details` is the queue UI's
+    payload while the bare listing is the publish precondition, and a second projection is the obvious
+    next request. A closed set makes a typo a 422 naming the legal values instead of a 200 carrying the
+    wrong shape.
+    """
+
+    DETAILS = "details"
+
+
 @router.get("/{project_id}/tasks")
 async def list_project_tasks(
     project_id: ProjectId,
     checker: CheckerDep,
     subject: CurrentSubject,
-    # A CLOSED SET, not a bare string. `?include=detials` used to return the plain index with no
-    # `details` key and no error, so the caller could not tell a misspelling from a project that had
-    # none. A Literal makes the typo a 422.
-    include: Literal["details"] | None = None,
+    # A STRENUM, not a bare string. `?include=detials` used to return the plain index with no `details`
+    # key and no error, so the caller could not tell a misspelling from a project that had none — a
+    # silent wrong answer with a 200 on it.
+    #
+    # A StrEnum rather than a `Literal` (which closes the set equally well) because that is what
+    # `core-conventions.md` names for fixed-set query values — "auto-documents as a dropdown in /docs
+    # and beats Query(pattern=…)" — and because the estate already has 23 of them, one doing exactly
+    # this job one service over (`InboxFilter` on the notifications inbox). A Literal here would make
+    # this route the outlier rather than the rule.
+    include: TaskInclude | None = None,
     # THE PAGE. `Semaphore(16)` below bounds CONCURRENCY, not COUNT — sixteen at a time, ten thousand
     # times, is still ten thousand actor round trips. Nothing caps the collection either: the send door
     # caps one CALL at 1000 items, while tasks accumulate one per sent item per consensus replica for
@@ -556,7 +575,10 @@ async def list_project_tasks(
     """
     await _check(checker, subject, "can_view", f"annotation_project:{project_id}", "project.list_tasks")
     listing = await _project_proxy(project_id).list_tasks()
-    if include != "details":
+    # Against the MEMBER, not the string. A StrEnum compares equal to its value so the old form still
+    # worked, but comparing to a literal here would leave the enum decorative — a renamed member
+    # would keep this branch silently correct against the old spelling.
+    if include is not TaskInclude.DETAILS:
         return listing
 
     import asyncio  # noqa: PLC0415 - stdlib, endpoint-local

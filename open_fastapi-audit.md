@@ -993,7 +993,9 @@ services/viewer/src/viewer/api/v1/endpoints/pages.py:140-147 `@router.get("/page
 
 </details>
 
-<details><summary><b>`GET /{project_id}/tasks?include=` is a fixed-set query value typed as bare `str` — a typo silently returns the wrong response shape with 200</b> <i>(core-conventions.md + anti-patterns.md, CONFIRMED)</i></summary>
+<details><summary><b>~~`GET /{project_id}/tasks?include=` is a fixed-set query value typed as bare `str` — a typo silently returns the wrong response shape with 200~~</b> <i>(core-conventions.md + anti-patterns.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-27.** `include: TaskInclude | None`, a `StrEnum` — which is what `core-conventions.md` names for fixed-set query values ("auto-documents as a dropdown in /docs and beats Query(pattern=…)"), and what the estate already does one service over with `InboxFilter`. The pagination fix earlier this session had closed the set with a `Literal`, which 422s a typo just as well — but it made this route the outlier rather than the rule, so the gate was tightened to require the StrEnum and the type follows the reference. The branch compares against the MEMBER (`include is not TaskInclude.DETAILS`) rather than the string: a StrEnum compares equal to its value, so the literal form kept working and would have left the enum decorative — a renamed member would have kept that branch silently correct against the old spelling. Pinned by `tests/unit/test_project_tasks_pagination.py::test_include_is_a_STRENUM_not_a_bare_string` (RED against the Literal). One member today, deliberately still an enum: a second projection is the obvious next request.
 
 **Rule.** core-conventions.md § Constrained query values via `StrEnum`: "For fixed-set query values (sort order, status, format) use `StrEnum` — auto-documents as a dropdown in `/docs` and beats `Query(pattern=…)`"
 
