@@ -1450,7 +1450,44 @@ tests/unit/test_invariants.py:2919-2921 — `docs = _rendered_docs()` / `config 
 
 </details>
 
-<details><summary><b>No PodDisruptionBudget for any front-door fleet service except the gateway, and values-prod leaves all of them single-replica</b> <i>(kubernetes.md + microservices.md, ADJUSTED)</i></summary>
+<details><summary><b>~~No PodDisruptionBudget for any front-door fleet service except the gateway, and values-prod leaves all of them single-replica~~</b> <i>(kubernetes.md + microservices.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27**, in the order the Fix demands — scale first, bound second, because a
+> `minAvailable: 1` PDB over a single replica blocks every voluntary drain, which is `ha.yaml`'s own
+> header warning.
+>
+> **(1) values-prod** raises `ingest`, `compute` and `controlplane` to 2. **(2) `ha.yaml` no longer
+> carries a literal.** It was `list "catalog" "lineage" "gateway"`, UNGATED — so enabling PDBs without
+> scaling wrote exactly the drain-blocking budget its header warns about. It now ranges
+> `.Values.services` gated on `replicas > 1`, plus a controlplane block (that service reads
+> `.Values.controlplane`, not `.Values.services`, which is how it stays invisible to chart-wide
+> fixes). Prod goes from 3 backend PDBs to 6. **(3) `lance.spreadConstraints` is now called by
+> `fleet.yaml` and `controlplane.yaml`** — fleet.yaml was the one template that never did, and the
+> GATEWAY is what runs two replicas there. Both pods on one node and its PDB permitted nothing, at
+> the hop every request in the estate passes through.
+>
+> **`controlplane` could not be scaled at all**: its template hardcoded `replicas: 1`. Now
+> values-driven, in the `hasKey|ternary` form the estate requires — `| default 1` would swallow an
+> explicit 0, and `test_no_numeric_helm_default_can_swallow_an_explicit_zero` caught that here.
+>
+> **THE FINDING'S HEADLINE CLAIM IS REFUTED, not deferred.** It calls notifications the "genuine
+> residue" and the sharpest case, citing values.yaml's argument that replicas are safe there. That
+> argument covers the ACTOR plane (Dapr placement spreads actor ids) and the BUS subscription
+> (`queueGroupName` makes replicas a competing-consumer group), and both are true. The finding never
+> reaches the third ingress: the cron reconciler's overlap guard is an `asyncio.Lock`, per PROCESS,
+> so two replicas both tick, both read the same un-advanced cursor and both walk the same rows —
+> double FGA and actor load, silently, exactly when lineage or the sidecar is already slow.
+> `test_notifications_stays_single_replica_while_its_single_flight_lock_is_process_local` went RED
+> when I scaled it. **Owner ruling 2026-08-27: leave it at one replica and record the refutation.**
+> The availability gap is real and stays open; its exit condition is written down (a cross-pod guard
+> that SKIPS — not an actor, which queues).
+> `flows` stays at 1 for the reason the finding itself gives, and is now pinned so a later sweep does
+> not "finish the job": its run store is a process-local dict with no durable fallback, unlike
+> ingest's, so a second replica would 404 a live run.
+> Pinned by `tests/unit/test_prod_ha_posture.py` (7 tests, 5 RED first), rendered against
+> `values-prod.yaml` because none of this is observable in the single-replica dev profile. It also
+> gates the INVERSE hazard — no PDB over a single replica — so the wrong half cannot be added later.
+> `helm lint` and `make prod-render-check` clean (PDBs 17 -> 20, spread 17).
 
 **Rule.** kubernetes.md: § PodDisruptionBudget — "almost free, often skipped ... protects against losing all replicas during a node drain or cluster upgrade"
 

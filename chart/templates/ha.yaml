@@ -1,25 +1,55 @@
 {{- /*
-HA for the stateless request-serving services (catalog, lineage, gateway). Off by default (single-node
-kind); the prod overlay enables the PDB after bumping replicas. The stateful stores (AGE/RustFS) get HA from
-their operators in rask (CNPG / rustfs-operator), NOT from here. The event-driven movers/producer are
-intentionally excluded — eviction is safe (Dapr redelivers; ingest is idempotent). The P5 micro-frontend
-zones get NO PDB at their 1-replica default (a single-replica minAvailable=1 PDB would block every
-voluntary drain); once frontend.replicas > 1 (the prod overlay) a PDB per zone renders below — the zones
-are the Ingress-routed north-south edge, so an unbounded drain there defeats the replica bump.
+HA for the stateless request-serving services — the lakehouse pair AND the fleet, derived from
+`.Values.services` rather than named, plus controlplane from its own values block. Off by default
+(single-node kind); the prod overlay enables the PDB after bumping replicas. The stateful stores
+(AGE/RustFS) get HA from their operators in rask (CNPG / rustfs-operator), NOT from here. The
+event-driven movers/producer are intentionally excluded — eviction is safe there (Dapr redelivers, and
+the medallion ingest path is idempotent).
+
+ONE RULE THROUGHOUT, and it is why every block below is gated: a `minAvailable: 1` PDB over a SINGLE
+replica blocks every voluntary drain, so a node cordon hangs instead of proceeding. Scale first, bound
+second. That gate used to apply only to the P5 micro-frontend zones (the Ingress-routed north-south
+edge, where an unbounded drain defeats the replica bump); the backend list was a literal and ungated,
+so enabling PDBs without scaling wrote exactly the budget this warning describes.
 */ -}}
 {{- if .Values.podDisruptionBudget.enabled }}
-{{- range $c := list "catalog" "lineage" "gateway" }}
+{{/* EVERY service in `.Values.services`, gated on replicas > 1 — the lakehouse pair (catalog,
+     lineage) and the fleet (gateway, compute, flows, ingest, notifications) alike. This was a literal
+     `list "catalog" "lineage" "gateway"`, ungated: with PDBs enabled and a service left at one
+     replica it wrote a `minAvailable: 1` budget over a single pod, which blocks EVERY voluntary drain
+     — a node cordon then hangs instead of proceeding. That is this file's own header warning, applied
+     to the backends rather than only to the zones. Scale first, bound second, never the inverse.
+     `controlplane` renders from its own template and reads `.Values.controlplane`, not
+     `.Values.services`; being outside this map is how it stayed invisible to chart-wide fixes, so it
+     gets its own block below rather than being forgotten again. */}}
+{{- range $name, $svc := $.Values.services }}
+{{- if gt (int ((hasKey $svc "replicas") | ternary $svc.replicas 1)) 1 }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "lance.fullname" $ }}-{{ $c }}
+  name: {{ include "lance.fullname" $ }}-{{ $name }}
   labels: {{- include "lance.labels" $ | nindent 4 }}
 spec:
   minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
   selector:
     matchLabels:
-      app.kubernetes.io/component: {{ $c }}
+      app.kubernetes.io/component: {{ $name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+{{- end }}
+{{- end }}
+{{- if gt (int ((hasKey $.Values.controlplane "replicas") | ternary $.Values.controlplane.replicas 1)) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lance.fullname" $ }}-controlplane
+  labels: {{- include "lance.labels" $ | nindent 4 }}
+spec:
+  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: controlplane
       app.kubernetes.io/instance: {{ $.Release.Name }}
 {{- end }}
 {{- if and .Values.frontend.enabled (gt (int (ternary .Values.frontend.replicas 1 (hasKey .Values.frontend "replicas"))) 1) }}

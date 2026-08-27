@@ -7,7 +7,10 @@ metadata:
   labels:
     {{- include "rask.componentLabels" (list . $name) | nindent 4 }}
 spec:
-  replicas: 1
+  {{- /* A LITERAL until 2026-08-27, so this service could not be scaled from values at all — the
+         same "second hand-written template" that kept it out of every `services.*`-keyed probe fix.
+         Default 1: the prod overlay is what bumps it, alongside its PDB. */}}
+  replicas: {{ (hasKey .Values.controlplane "replicas") | ternary .Values.controlplane.replicas 1 }}
   selector:
     matchLabels:
       {{- include "rask.selectorLabels" . | nindent 6 }}
@@ -33,6 +36,7 @@ spec:
            run a Dapr sidecar whose flush the default does not budget for. */}}
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "rask.fullname" . }}-controlplane
+      {{- include "lance.spreadConstraints" "controlplane" | nindent 6 }}
       containers:
         - name: controlplane
           image: {{ include "rask.image" (list . "controlplane") | quote }}

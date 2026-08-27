@@ -71,6 +71,12 @@ spec:
         {{- end }}
         {{- end }}
       {{- end }}
+      {{- /* THE ONE TEMPLATE THAT NEVER CALLED THIS, which mattered most here: the gateway is the
+             only fleet service the prod overlay has ever run at replicas: 2, and it is the ingress
+             every request in the estate passes through. Both pods on one node and the node's failure
+             takes the estate down with a PodDisruptionBudget that permitted nothing — the exact
+             failure the helper's own docstring records. Harmless at one replica. */}}
+      {{- include "lance.spreadConstraints" $name | nindent 6 }}
       containers:
         - name: {{ $name }}
           image: {{ include "rask.image" (list $root $name) | quote }}

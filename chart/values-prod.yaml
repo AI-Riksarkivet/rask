@@ -48,6 +48,33 @@ services:
   # component=gateway either way.
   gateway:
     replicas: 2
+  # --- Scaled 2026-08-27 (open_fastapi-audit: "No PodDisruptionBudget for any front-door fleet
+  # service except the gateway, and values-prod leaves all of them single-replica"). Each of these
+  # argues at its own definition site that it scales safely, and prod then left it at one — so a node
+  # drain on a cluster upgrade was a full outage window for each. notifications is the sharpest:
+  # every zone polls its bell.
+  # notifications is DELIBERATELY ABSENT and must stay at 1, and the audit finding that asked for it
+  # to be scaled is REFUTED here rather than quietly dropped. Its values.yaml entry argues two planes
+  # tolerate replicas — Dapr placement spreads actor ids, and the bus subscription's queueGroupName
+  # makes replicas a competing-consumer group — and both are true. The finding stopped there. The
+  # THIRD ingress is the cron reconciler, whose overlap guard is an `asyncio.Lock`: per process. At
+  # two replicas both pods tick, both read the same un-advanced cursor, and both walk the same rows —
+  # double the FGA and actor load, silently, exactly when lineage or the sidecar is already slow.
+  # Enforced by tests/unit/test_invariants.py::test_notifications_stays_single_replica_while_its_
+  # single_flight_lock_is_process_local, which also states what would unblock it: a cross-pod guard
+  # that SKIPS (not an actor — actors are turn-based, so ticks would queue instead).
+  ingest:
+    replicas: 2 # the run store is an explicitly NON-authoritative read-side index that falls back to the durable workflow engine on a miss
+  compute:
+    replicas: 2 # a stateless proxy over the Ray dashboard — it holds nothing
+  # flows is DELIBERATELY ABSENT and must stay at 1: .docker/flows.dockerfile records that its run
+  # store is a process-local dict (v0) with no durable fallback, so a second worker would answer
+  # GET /flows/runs/{id} with a 404 for a live run. Raise it when that store is durable, not before.
+  # Pinned by tests/unit/test_prod_ha_posture.py.
+# controlplane renders from its own template, so it is not under `services:` — the reason it kept
+# missing chart-wide fixes. A read-only k8s client for Project CRs; it holds no state.
+controlplane:
+  replicas: 2
 frontend:
   replicas: 2
   # A governed backend needs a UI that can sign in. auth.enabled is true above, and
