@@ -57,4 +57,14 @@ class GovernedAuthSettings:
             raise ValueError("LANCE_OIDC_ISSUER and LANCE_OIDC_AUDIENCE are required when OIDC is enabled")
         if self.fga_enabled and not self.oidc_enabled:
             raise ValueError("LANCE_OIDC_ENABLED is required when LANCE_FGA_ENABLED is set (authz needs a verified subject)")
+        # AN `http://` ISSUER IS A MISCONFIGURATION, AND IT BELONGS HERE. `_require_https` catches it at
+        # VERIFY time and raises `UnauthenticatedError`, which every call site maps to 401 "Invalid or
+        # expired token" — so an operator who shipped `LANCE_OIDC_ISSUER=http://…` got a service where
+        # every VALID bearer answered 401 with the body a genuinely expired token gets, indistinguishable
+        # to the caller. A scheme is knowable at construction, which is what this validator is for.
+        #
+        # The `jwks_uri` half cannot move here: it comes from DISCOVERY, so settings never sees it and
+        # `_require_https` remains the backstop for that path.
+        if self.oidc_enabled and self.oidc_issuer and not self.oidc_allow_insecure and not self.oidc_issuer.startswith("https://"):
+            raise ValueError("LANCE_OIDC_ISSUER must use HTTPS (set LANCE_OIDC_ALLOW_INSECURE=true for a dev IdP)")
         return self

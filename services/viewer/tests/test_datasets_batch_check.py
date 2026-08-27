@@ -22,8 +22,14 @@ have called the old code correct.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 import pytest
 from viewer.api.v1.endpoints import datasets as ds
+
+
+if TYPE_CHECKING:
+    from openfga_sdk.client import OpenFgaClient
 
 
 def test_the_listing_batches_its_authorization() -> None:
@@ -57,7 +63,7 @@ async def test_exactly_one_round_trip_for_many_corpora(monkeypatch: pytest.Monke
     # covered by `tests/unit/test_viewer_dataset_authz.py`; what this pins is the call COUNT, which no
     # latency measurement can see — `asyncio.gather` made N calls fast, not fewer.
     objects = [f"table:corpus{i}$chunks" for i in range(10)]
-    verdicts = await ds.fga.batch_check(object(), user="gina", relation="can_get_metadata", objects=objects)
+    verdicts = await ds.fga.batch_check(cast("OpenFgaClient", object()), user="gina", relation="can_get_metadata", objects=objects)
 
     assert len(calls) == 1, f"ten corpora cost {len(calls)} OpenFGA round trips"
     assert calls[0]["objects"] == objects, "the batch did not carry the whole candidate set"

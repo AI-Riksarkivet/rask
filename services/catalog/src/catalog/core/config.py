@@ -353,6 +353,14 @@ class Settings(BaseSettings):
             raise ValueError("LANCE_OIDC_ISSUER and LANCE_OIDC_AUDIENCE are required when OIDC is enabled")
         if self.fga_enabled and not self.oidc_enabled:
             raise ValueError("LANCE_OIDC_ENABLED is required when LANCE_FGA_ENABLED is set (authz needs a user)")
+        # Mirrors `service_kit.governed.settings.GovernedAuthSettings`, which this class predates and
+        # whose docstring makes the contract explicit: the aliases are byte-identical so one set of
+        # `LANCE_*` variables configures every service, and a rule enforced in only one of the two is
+        # precisely the silent split it warns about. An `http://` issuer would otherwise surface as a
+        # 401 on every request — identical to an expired token, and the catalog is the service that
+        # OWNS the tuple store.
+        if self.oidc_enabled and self.oidc_issuer and not self.oidc_allow_insecure and not self.oidc_issuer.startswith("https://"):
+            raise ValueError("LANCE_OIDC_ISSUER must use HTTPS (set LANCE_OIDC_ALLOW_INSECURE=true for a dev IdP)")
         if self.lineage_emit_enabled and self.lineage_transport == "http" and not self.lineage_url:
             raise ValueError("LANCE_LINEAGE_URL is required for the http lineage transport")
         return self

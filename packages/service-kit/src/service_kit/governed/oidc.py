@@ -36,6 +36,7 @@ Security posture (see CHANGELOG in the task notes):
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import NamedTuple
 from urllib.parse import urlsplit
@@ -105,13 +106,25 @@ class _Provider(NamedTuple):
     algorithms: list[str]
 
 
+log = logging.getLogger(__name__)
+
+
 def _require_https(url: str, *, label: str, allow_insecure: bool) -> None:
     """Reject non-HTTPS ``url`` unless ``allow_insecure`` is set (dev-only escape hatch)."""
     if allow_insecure:
         return
     if urlsplit(url).scheme != "https":
-        # Configuration error, surfaced at verify time as an opaque auth failure but
-        # logged distinctly: an http issuer/jwks in production is a misconfiguration.
+        # A CONFIGURATION ERROR WEARING A CALLER'S VERDICT. This raises `UnauthenticatedError`, which
+        # every call site maps to 401 "Invalid or expired token" — so without the log line below, a
+        # valid bearer and a misconfigured issuer are the same answer to the caller AND the same silence
+        # in the logs. This comment used to claim the failure was "logged distinctly" while the module
+        # imported no logging at all; the claim is now true rather than deleted, because it is the
+        # right behaviour and only the implementation was missing.
+        #
+        # The ISSUER case is caught earlier, at settings construction (`GovernedAuthSettings`), where a
+        # misconfiguration belongs. This stays for `jwks_uri`, which comes from discovery and so cannot
+        # be seen until verify time.
+        log.warning("oidc_insecure_url", extra={"label": label, "scheme": urlsplit(url).scheme})
         raise UnauthenticatedError(f"OIDC {label} must use HTTPS (set LANCE_OIDC_ALLOW_INSECURE=true for dev IdPs)")
 
 

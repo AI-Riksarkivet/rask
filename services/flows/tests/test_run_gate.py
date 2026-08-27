@@ -102,7 +102,10 @@ def test_a_governed_stack_with_no_verifier_is_a_503_not_an_open_door() -> None:
     settings = FlowsSettings(
         serve_url="http://serve.invalid:8000",
         oidc_enabled=True,
-        oidc_issuer="http://dex.test/dex",
+        # https, because an `http://` issuer is now refused at CONSTRUCTION — it was surfacing as a
+        # 401 on every request, indistinguishable from an expired token. The issuer here is a fake
+        # either way; what these tests exercise is the missing VERIFIER, not the scheme.
+        oidc_issuer="https://dex.test/dex",
         oidc_audience="rask",
         fga_enabled=True,
     )
@@ -198,7 +201,10 @@ def test_a_governed_stack_with_no_verifier_will_not_read_a_run_either() -> None:
     settings = FlowsSettings(
         serve_url="http://serve.invalid:8000",
         oidc_enabled=True,
-        oidc_issuer="http://dex.test/dex",
+        # https, because an `http://` issuer is now refused at CONSTRUCTION — it was surfacing as a
+        # 401 on every request, indistinguishable from an expired token. The issuer here is a fake
+        # either way; what these tests exercise is the missing VERIFIER, not the scheme.
+        oidc_issuer="https://dex.test/dex",
         oidc_audience="rask",
         fga_enabled=True,
     )

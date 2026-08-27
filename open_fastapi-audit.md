@@ -949,7 +949,9 @@ datasets.py:118-125 `async def _may_see(dataset_id: str, table: str | None) -> b
 
 </details>
 
-<details><summary><b>An `http://` OIDC issuer in production surfaces as an opaque 401 on every request, and the "logged distinctly" the code promises does not exist</b> <i>(authn.md + authz.md, CONFIRMED)</i></summary>
+<details><summary><b>~~An `http://` OIDC issuer in production surfaces as an opaque 401 on every request, and the "logged distinctly" the code promises does not exist~~</b> <i>(authn.md + authz.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-27.** Both halves the Fix names. An `http://` issuer with `oidc_allow_insecure` false is now a startup `ValueError` in `GovernedAuthSettings._validate_governed_auth` — where a misconfiguration belongs, beside the invariants it already checks — instead of a per-request 401 indistinguishable from an expired token. Mirrored in **catalog's inline twin**, which `governed/settings.py` says must stay byte-identical: a rule enforced in one of the two is precisely the silent split that docstring warns about, and the catalog is the service that owns the tuple store. `_require_https` stays as the runtime backstop for `jwks_uri`, which comes from DISCOVERY and so cannot be seen at construction — and it now emits the `oidc_insecure_url` warning its comment had claimed for as long as the module imported no logging at all. The claim was made true rather than deleted, because the behaviour it described was the right one. Pinned by `packages/service-kit/tests/test_oidc_insecure_issuer.py` (6 tests, 2 RED for the real defects and the rest guarding the dev escape hatch, the FGA-off case and the https path). Two `services/flows` tests used an `http://` fake issuer and now use `https://` — the scheme was incidental to what they exercise (a missing verifier).
 
 **Rule.** authn.md § Boundary error mapping / § Putting it together: a misconfiguration must be distinguishable from a caller verdict; `GovernedAuthSettings._validate_governed_auth` is the estate's own "fail fast at construction rather than fail open at request time" precedent
 
