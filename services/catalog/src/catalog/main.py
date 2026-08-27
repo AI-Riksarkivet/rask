@@ -32,6 +32,7 @@ from catalog.services import warehouses
 from service_kit import setup_logging
 from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.control_emit import make_control_emitter
+from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.audit import configure_audit
 from service_kit.governed.dapr_auth import assert_app_token_configured
@@ -274,6 +275,12 @@ app.add_middleware(BodySizeLimitMiddleware, max_bytes=_settings.max_body_bytes)
 app.add_middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max_concurrent_writes)
 
 
+# AND the fleet handlers, before the lance translator. `service_kit.exceptions.DomainError`
+# subclasses `HTTPException`, so without `register_handlers` starlette's built-in handler renders
+# it — status and headers intact, `{"detail": ...}` body — which is how the draining 503 came to
+# declare problem+json over a body that was not one. Registered FIRST so the lance translator
+# still wins for `RequestValidationError`, exactly the order `make_service_app` uses.
+register_handlers(app)
 install_problem_handlers(app, log)
 
 

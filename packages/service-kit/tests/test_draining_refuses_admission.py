@@ -35,6 +35,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from service_kit.draining import draining, refuse_when_draining, retry_when_draining
+from service_kit.exceptions import register_handlers
 
 
 class _State:
@@ -61,6 +62,11 @@ class TestThePredicate:
         SERVING — defaulting an unset flag to "draining" would take them permanently out of service
         the moment this dependency was applied."""
         app = FastAPI()
+        # The refusal is a `ServiceUnavailableError` now rather than an `HTTPException` carrying a
+        # Content-Type header (open_fastapi-audit: that header claimed problem+json over a `{"detail"}`
+        # body). `DomainError` subclasses `HTTPException`, so without this the starlette fallback still
+        # answers 503 with the header and no envelope — the defect this file asserts against.
+        register_handlers(app)
         scope = {"type": "http", "app": app, "headers": [], "method": "GET", "path": "/"}
         assert draining(Request(scope)) is False
 
@@ -68,6 +74,11 @@ class TestThePredicate:
 class TestTheHttpDoorRefusesWith503:
     def _client(self, *, shutting_down: bool) -> TestClient:
         app = FastAPI()
+        # The refusal is a `ServiceUnavailableError` now rather than an `HTTPException` carrying a
+        # Content-Type header (open_fastapi-audit: that header claimed problem+json over a `{"detail"}`
+        # body). `DomainError` subclasses `HTTPException`, so without this the starlette fallback still
+        # answers 503 with the header and no envelope — the defect this file asserts against.
+        register_handlers(app)
         app.state.shutting_down = shutting_down
 
         @app.post("/produce", dependencies=[Depends(refuse_when_draining)])
@@ -97,6 +108,11 @@ class TestTheHttpDoorRefusesWith503:
 class TestTheSidecarDoorAsksForRedelivery:
     def _client(self, *, shutting_down: bool) -> TestClient:
         app = FastAPI()
+        # The refusal is a `ServiceUnavailableError` now rather than an `HTTPException` carrying a
+        # Content-Type header (open_fastapi-audit: that header claimed problem+json over a `{"detail"}`
+        # body). `DomainError` subclasses `HTTPException`, so without this the starlette fallback still
+        # answers 503 with the header and no envelope — the defect this file asserts against.
+        register_handlers(app)
         app.state.shutting_down = shutting_down
 
         @app.post("/bronze-arrival")
@@ -137,8 +153,20 @@ def test_neither_dependency_touches_a_closing_resource(dep: Callable[..., object
     """`/readyz`'s comment states the rule this shares: once shutting_down flips, that is the answer
     regardless of anything else, and the check must never reach for a dependency that is already
     closing. A drain gate that opened a DB handle would fail during exactly the window it exists for."""
+    import ast
     import inspect
+    import textwrap
 
-    source = inspect.getsource(dep)
+    # THE CODE, not the prose. Scanning raw source matched the DOCSTRING and the comments too, so a
+    # note explaining what a *client* sees tripped a check about touching a client — the same
+    # false-positive class as grepping for a claim that a correction quotes in order to correct it.
+    # The docstring is stripped and comments never survive `ast.unparse`.
+    tree = ast.parse(textwrap.dedent(inspect.getsource(dep)))
+    fn = tree.body[0]
+    assert isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef)
+    if fn.body and isinstance(fn.body[0], ast.Expr) and isinstance(fn.body[0].value, ast.Constant):
+        fn.body = fn.body[1:]
+    source = ast.unparse(fn)
+
     for forbidden in ("await ", "client", "session", "dataset", "connect"):
         assert forbidden not in source, f"{dep} reaches for {forbidden!r} during shutdown"

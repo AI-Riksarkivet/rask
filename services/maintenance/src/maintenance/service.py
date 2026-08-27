@@ -35,6 +35,7 @@ from maintenance.core.config import MaintenanceSettings, apply_dapr_secrets, get
 from maintenance.core.lineage_emit import make_emitter
 from service_kit import setup_logging
 from service_kit.control_emit import make_control_emitter
+from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.fga import dispose as fga_dispose
@@ -211,6 +212,12 @@ app = FastAPI(
 
 # Problem+json handlers (parity with catalog/lineage — maintenance runs the same lance stack, so an
 # unhandled LanceNamespaceError must surface as the same RFC 9457 body, not Starlette's plain 500 text).
+# AND the fleet handlers, before the lance translator. `service_kit.exceptions.DomainError`
+# subclasses `HTTPException`, so without `register_handlers` starlette's built-in handler renders
+# it — status and headers intact, `{"detail": ...}` body — which is how the draining 503 came to
+# declare problem+json over a body that was not one. Registered FIRST so the lance translator
+# still wins for `RequestValidationError`, exactly the order `make_service_app` uses.
+register_handlers(app)
 install_problem_handlers(app, log)
 # ONE ID PER REQUEST, reaching the logs. `RequestIDMiddleware` mints or echoes `X-Request-ID`, puts
 # it on `request.state` and publishes it to the context var `setup_logging`'s filter reads — so a

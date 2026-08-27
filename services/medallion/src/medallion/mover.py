@@ -30,6 +30,7 @@ from medallion.core.config import apply_dapr_secrets, get_settings
 from medallion.services.ray_submit import close_ray_client
 from service_kit import setup_logging
 from service_kit.draining import arm_drain_on_sigterm
+from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.dapr_auth import assert_app_token_configured
@@ -157,6 +158,12 @@ app = FastAPI(
 # Problem+json handlers — parity with catalog/lineage/compaction: medallion runs the same lance stack,
 # so a LanceNamespaceError (or any unhandled error) must surface as the same RFC 9457 body, not
 # Starlette's plain 500 text. Installed BEFORE the routers so no route can outrun the taxonomy.
+# AND the fleet handlers, before the lance translator. `service_kit.exceptions.DomainError`
+# subclasses `HTTPException`, so without `register_handlers` starlette's built-in handler renders
+# it — status and headers intact, `{"detail": ...}` body — which is how the draining 503 came to
+# declare problem+json over a body that was not one. Registered FIRST so the lance translator
+# still wins for `RequestValidationError`, exactly the order `make_service_app` uses.
+register_handlers(app)
 install_problem_handlers(app, log)
 app.include_router(health_router)
 # The DaprApp wrapper serves GET /dapr/subscribe (read by the sidecar at startup) and routes deliveries
