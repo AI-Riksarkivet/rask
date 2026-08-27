@@ -42,9 +42,11 @@ class _S3:
     def __init__(self, calls: list[str]) -> None:
         self._calls = calls
 
-    def get_paginator(self, _op: str) -> Any:
+    def list_objects_v2(self, **_kw: Any) -> dict[str, Any]:
+        # `list_objects_v2`, not `get_paginator`: the route makes ONE bounded call now and hands S3's
+        # own continuation token back, instead of draining the paginator to exhaustion.
         self._calls.append("list")
-        return type("P", (), {"paginate": lambda _self, **_kw: [{"Contents": [{"Key": "a.tif", "Size": 3, "LastModified": None}]}]})()
+        return {"Contents": [{"Key": "a.tif", "Size": 3, "LastModified": None}]}
 
     def head_object(self, **_kw: Any) -> dict[str, Any]:
         self._calls.append("head")

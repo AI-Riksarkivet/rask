@@ -881,7 +881,9 @@ services/annotator/src/annotator/api/v1/endpoints/project_events.py:527-533 — 
 
 </details>
 
-<details><summary><b>`GET /objects` drains the whole boto3 `list_objects_v2` paginator into memory — no `max_keys`, no continuation token on the wire</b> <i>(pagination.md, CONFIRMED)</i></summary>
+<details><summary><b>~~`GET /objects` drains the whole boto3 `list_objects_v2` paginator into memory — no `max_keys`, no continuation token on the wire~~</b> <i>(pagination.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-27.** The route exposes S3's own cursor instead of swallowing it: `max_keys: Query(ge=1, le=1000) = 1000` (the protocol's own ceiling, not an invented number) and `continuation_token`, with `next_continuation_token` added to `S3Listing` — and to its TS twin in `lakehouse/src/lib/storage/storage.ts`, as the Fix asks, declared `optional` so a minute's deploy skew between the two sides cannot make the validator reject a valid listing. The body switched from `get_paginator(...).paginate(...)` to a single `list_objects_v2` call: slicing a fully-drained paginator would have satisfied a `max_keys` parameter while still reading the whole prefix into memory, which is the defect wearing the fix's clothes. Pinned by `services/viewer/tests/test_objects_listing_page.py` (4 tests, all RED before), one of which asserts the handler makes exactly ONE S3 call and fails loudly if a paginator reappears. An existing double in `test_viewer_object_authz.py` implemented only `get_paginator` and was updated with it.
 
 **Rule.** pagination.md: 'Pick the right strategy' — S3's own listing API is natively cursor-paginated; consuming that cursor internally and exposing none is the 'unbounded fetch-all' the whole reference exists to prevent. Also the `Page[Item]`/`CursorPage[Item]` envelope rule: `S3Listing` carries no `next_token`.
 

@@ -144,6 +144,13 @@ class S3Listing(BaseModel):
     prefix: str
     prefixes: list[str]
     objects: list[S3Object]
+    next_continuation_token: str | None = None
+    """S3's own opaque cursor, handed straight back.
+
+    The route used to consume this internally and expose nothing, which is the "unbounded fetch-all"
+    `pagination.md` exists to prevent: the caller could ask neither for less nor for more. The token is
+    already opaque, so there is no cursor to invent — only one to stop swallowing. `None` means this
+    was the last page."""
 
 
 class S3ObjectHead(BaseModel):
@@ -231,6 +238,12 @@ async def list_objects(
     settings: SettingsDep,
     bucket: BucketName,
     prefix: Annotated[str, Query(description='Key prefix to list under (delimiter "/").')] = "",
+    # S3's own per-call ceiling is 1000 keys, so `le` matches the protocol rather than inventing a
+    # number. Every growth driver under a flat prefix here is monotonic — one object per Lance
+    # fragment, one manifest per commit, one transaction per commit, and the cascade commits per stage
+    # per run — so "one level" is not a bound.
+    max_keys: Annotated[int, Query(ge=1, le=1000, description="Maximum keys per page (S3 caps at 1000).")] = 1000,
+    continuation_token: Annotated[str | None, Query(description="Opaque cursor from a previous page's next_continuation_token.")] = None,
 ) -> S3Listing:
     """List one delimiter-scoped level of `bucket`/`prefix` for the storage browser.
 
@@ -240,28 +253,42 @@ async def list_objects(
 
     def _blocking() -> S3Listing:
         client = _client_for(bucket)
-        paginator = client.get_paginator("list_objects_v2")
         prefixes: list[str] = []
         objects: list[S3Object] = []
-        # The pagination itself is inside the block: boto3's paginator is LAZY, so the
-        # first HTTP call — and therefore NoSuchBucket — happens on iteration, not on
-        # `paginate(...)`. Wrapping only the call would translate nothing.
+        # ONE call, not a drained paginator. The paginator was lazy — the first HTTP call, and so
+        # NoSuchBucket, happened on ITERATION — and it iterated to exhaustion, which is the defect:
+        # slicing a fully-drained paginator would have satisfied a `max_keys` parameter while still
+        # reading the whole prefix into memory. Still inside `s3_errors` for the same translation.
+        request: dict[str, object] = {
+            "Bucket": _registered_bucket(bucket),
+            "Prefix": prefix,
+            "Delimiter": "/",
+            "MaxKeys": max_keys,
+        }
+        if continuation_token:
+            request["ContinuationToken"] = continuation_token
         with s3_errors(bucket=bucket):
-            for page in paginator.paginate(Bucket=_registered_bucket(bucket), Prefix=prefix, Delimiter="/"):
-                prefixes.extend(cp["Prefix"] for cp in page.get("CommonPrefixes", []))
-                for obj in page.get("Contents", []):
-                    # Skip the prefix's own placeholder key (the "folder" marker).
-                    if obj["Key"] == prefix:
-                        continue
-                    last_modified = obj.get("LastModified")
-                    objects.append(
-                        S3Object(
-                            key=obj["Key"],
-                            size=obj["Size"],
-                            last_modified=last_modified.isoformat() if last_modified is not None else None,
-                        )
-                    )
-        return S3Listing(bucket=bucket, prefix=prefix, prefixes=prefixes, objects=objects)
+            page = client.list_objects_v2(**request)
+        prefixes.extend(cp["Prefix"] for cp in page.get("CommonPrefixes", []))
+        for obj in page.get("Contents", []):
+            # Skip the prefix's own placeholder key (the "folder" marker).
+            if obj["Key"] == prefix:
+                continue
+            last_modified = obj.get("LastModified")
+            objects.append(
+                S3Object(
+                    key=obj["Key"],
+                    size=obj["Size"],
+                    last_modified=last_modified.isoformat() if last_modified is not None else None,
+                )
+            )
+        return S3Listing(
+            bucket=bucket,
+            prefix=prefix,
+            prefixes=prefixes,
+            objects=objects,
+            next_continuation_token=page.get("NextContinuationToken"),
+        )
 
     try:
         return await run_in_threadpool(_blocking)

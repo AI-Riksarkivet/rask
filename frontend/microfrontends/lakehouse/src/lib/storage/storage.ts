@@ -63,6 +63,12 @@ const S3ListingSchema = v.object({
 	prefix: v.string(),
 	prefixes: v.array(v.string()),
 	objects: v.array(S3ObjectSchema),
+	// S3's own opaque cursor, handed straight through. The route used to drain the paginator to
+	// exhaustion and expose nothing, so this browser could neither ask for less nor ask for more.
+	// `optional`, not required: a validator that REJECTED a listing without it would break every
+	// client the moment the two sides deployed a minute apart, which is the failure a mirrored schema
+	// exists to avoid. Null/absent both mean "this was the last page".
+	next_continuation_token: v.optional(v.nullable(v.string())),
 });
 export type S3Listing = v.InferOutput<typeof S3ListingSchema>;
 
