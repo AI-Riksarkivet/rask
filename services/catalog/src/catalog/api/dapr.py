@@ -24,6 +24,7 @@ from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 from pydantic import ValidationError
 
+from catalog.api.dependencies import SettingsDep
 from catalog.core.config import get_settings
 from catalog.services import warehouses
 from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
@@ -33,7 +34,12 @@ from service_kit.governed.dapr_auth import require_dapr_token
 log = logging.getLogger(__name__)
 
 
-async def on_control_event(body: dict[str, Any], request: Request, _: Annotated[None, Depends(require_dapr_token)]) -> dict[str, str]:
+async def on_control_event(
+    body: dict[str, Any],
+    request: Request,
+    settings: SettingsDep,
+    _: Annotated[None, Depends(require_dapr_token)],
+) -> dict[str, str]:
     """Buffer one Dapr-delivered control-plane CloudEvent into this replica's ring buffer.
 
     ``body["data"]`` is the ``CatalogControlEvent`` (Dapr parses it since we publish with
@@ -63,7 +69,7 @@ async def on_control_event(body: dict[str, Any], request: Request, _: Annotated[
         buffer.append(event)
     cache = getattr(request.app.state, "warehouse_binding_cache", None)
     if cache is not None:
-        evicted = warehouses.evict_stale_bindings(cache, action=event.action, object_id=event.object_id, extra=event.extra, delimiter=get_settings().delimiter)
+        evicted = warehouses.evict_stale_bindings(cache, action=event.action, object_id=event.object_id, extra=event.extra, delimiter=settings.delimiter)
         if evicted:
             log.info("binding_cache_evicted", extra={"action": event.action, "object_id": event.object_id, "evicted": evicted})
     return {"status": "SUCCESS"}
@@ -78,6 +84,11 @@ def register_control_dapr(app: FastAPI) -> None:
     ``queueGroupName`` (broadcast: every replica buffers every event) and **no** dead-letter topic — the ring
     buffer tolerates loss by design (drop-oldest + ``reset`` on a cursor gap), so a parked delivery would add
     nothing over the client's next re-read."""
+    # NOT injectable, and deliberately so: this runs at STARTUP wiring time, where there is no request
+    # and therefore no dependency graph to resolve against. `app.dependency_overrides` cannot reach it
+    # by construction, so a test that needs different settings here monkeypatches — which is the honest
+    # answer at this boundary rather than the default habit it looks like elsewhere. The REQUEST-time
+    # readers above take theirs by injection.
     settings = get_settings()
     dapr_app = DaprApp(app)
     if settings.control_emit_enabled:

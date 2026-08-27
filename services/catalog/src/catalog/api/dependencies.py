@@ -149,7 +149,7 @@ def _namespace_for_root(request: Request, settings: Settings, root_uri: str) -> 
     return conn
 
 
-async def get_namespace(request: Request) -> LanceNamespace:
+async def get_namespace(request: Request, settings: SettingsDep) -> LanceNamespace:
     """The backend namespace for this request.
 
     Default: the single connection built once in the lifespan. With ``warehouses_enabled`` (#3-A) and a
@@ -158,7 +158,12 @@ async def get_namespace(request: Request) -> LanceNamespace:
     An UNBOUND namespace (the common case) always falls through to the default root: existing single-bucket
     behaviour is untouched, and the binding lookup is skipped entirely when the feature is off."""
     default_ns: LanceNamespace = request.app.state.namespace
-    settings = get_settings()
+    # SETTINGS BY INJECTION, not by calling the provider. FastAPI keys `app.dependency_overrides` on the
+    # dependency CALLABLE, so a body call to `get_settings()` opts this dependency out of the override
+    # map without saying so: an override that reaches every `SettingsDep` route silently missed this
+    # one, and a test exercising a warehouse-routed path under it would have been green against the
+    # wrong configuration. `get_settings` is cached per request, so a route that already declares
+    # `SettingsDep` pays nothing for this.
     if not settings.warehouses_enabled:
         return default_ns
     object_id = request.path_params.get("id")

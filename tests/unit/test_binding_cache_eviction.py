@@ -28,6 +28,18 @@ def _cache() -> dict[str, dict[str, str]]:
 # ---------------------------------------------------------------- the eviction rules
 
 
+def _settings() -> Any:
+    """The settings the handler now takes by INJECTION rather than calling `get_settings()` in its body.
+
+    That change is the point of open_fastapi-audit's DI-seam finding: a body call opts the route out of
+    `app.dependency_overrides`. A direct call like this one has to pass what FastAPI would have
+    resolved, so the test exercises the same value the route receives in production.
+    """
+    from catalog.core.config import Settings
+
+    return Settings.model_validate({"LANCE_REST_IMPL": "dir", "LANCE_S3_ACCESS_KEY_ID": "k", "LANCE_S3_SECRET_ACCESS_KEY": "s"})
+
+
 def test_warehouse_deleted_evicts_every_binding_to_that_warehouse() -> None:
     """Both eviction sources fire: the event's own namespaces_dropped list AND the warehouse-id scan
     (a Decision-3 partial delete can unbind more than the event recorded)."""
@@ -114,7 +126,7 @@ def test_the_dapr_handler_evicts_on_a_delivered_event(monkeypatch: Any) -> None:
             }
         }
         request: Any = _Request(cache)  # structural stand-in, same pattern as the door tests
-        result = asyncio.run(on_control_event(body, request, None))
+        result = asyncio.run(on_control_event(body, request, _settings(), None))
         assert result == {"status": "SUCCESS"}
         assert set(cache) == {"beta"}, "the handler did not evict — replica 2 still routes at the deleted bucket"
     finally:
@@ -124,7 +136,7 @@ def test_the_dapr_handler_evicts_on_a_delivered_event(monkeypatch: Any) -> None:
 def test_a_malformed_event_is_dropped_and_evicts_nothing() -> None:
     cache = _cache()
     request: Any = _Request(cache)
-    result = asyncio.run(on_control_event({"data": {"action": "not-a-real-action"}}, request, None))
+    result = asyncio.run(on_control_event({"data": {"action": "not-a-real-action"}}, request, _settings(), None))
     assert result == {"status": "SUCCESS"}
     assert len(cache) == 3
 
@@ -141,4 +153,4 @@ def test_a_handler_without_the_cache_still_acks() -> None:
 
     body = {"data": {"action": "warehouse_deleted", "object_type": "warehouse", "object_id": "warehouse:w", "extra": {}}}
     request: Any = _BareRequest()
-    assert asyncio.run(on_control_event(body, request, None)) == {"status": "SUCCESS"}
+    assert asyncio.run(on_control_event(body, request, _settings(), None)) == {"status": "SUCCESS"}
