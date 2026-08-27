@@ -38,9 +38,9 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-#: The apps composed through `make_service_app`. The gateway is deliberately absent: it builds its own
-#: FastAPI and probes `/healthz`, with a recorded reason (probing a proxied path would couple its
-#: readiness to an upstream).
+#: The apps composed through `make_service_app`. The gateway is absent from THIS list only because it
+#: is not composed by the factory — it builds its own FastAPI. It serves the same pair and is probed
+#: at it; see the gateway block at the end of this file.
 FACTORY_APPS = ["compute", "controlplane", "flows", "notifications"]
 
 
@@ -107,7 +107,14 @@ def test_the_chart_probes_READINESS_at_readyz_not_the_static_badge() -> None:
 
 
 def test_liveness_and_readiness_are_not_the_SAME_path() -> None:
-    """The reference's first rule: two endpoints, two purposes, don't conflate them."""
+    """The reference's first rule: two endpoints, two purposes, don't conflate them.
+
+    NO EXEMPTION LIST. This skipped `-gateway` by name, which is a blind spot rather than a rule: a
+    second front-door service is covered only if someone remembers to add it, and a gateway that
+    later grows the shared pair stays unchecked forever. The follow-up finding asks for the exemption
+    to be DERIVED from what an app serves — and deriving it removed the need for one, because the
+    gateway now serves the pair like everything else.
+    """
     from test_invariants import _rendered_docs  # noqa: PLC0415
 
     conflated: dict[str, str] = {}
@@ -115,8 +122,6 @@ def test_liveness_and_readiness_are_not_the_SAME_path() -> None:
         if doc.get("kind") != "Deployment" or "rask-" not in doc["metadata"]["name"]:
             continue
         name = doc["metadata"]["name"]
-        if name.endswith("-gateway"):
-            continue
         for container in doc["spec"]["template"]["spec"].get("containers") or []:
             live = ((container.get("livenessProbe") or {}).get("httpGet") or {}).get("path")
             ready = ((container.get("readinessProbe") or {}).get("httpGet") or {}).get("path")
@@ -150,3 +155,90 @@ def test_the_gateway_probe_REPORTS_the_drain() -> None:
         "the gateway answers /healthz 200 while draining, so the kubelet keeps routing to it through "
         "SIGTERM — at the one hop every request in the estate passes through"
     )
+
+
+# ── the gateway's exception, re-decided ─────────────────────────────────────────────────────────
+#
+# open_fastapi-audit — "notifications is the one fleet service that serves the standard `/livez` +
+# `/readyz` pair, and the chart probes neither — both probes point at its liveness badge".
+#
+# The routing half of that finding closed with the split above. Its Fix has a SECOND clause: the gate
+# must assert the two probes differ "for any service that mounts the probes router" — i.e. the
+# exemption must be DERIVED from what an app serves, not matched on its name. `test_liveness_and_
+# readiness_are_not_the_SAME_path` did the latter (`name.endswith("-gateway")`), which is a blind
+# spot rather than a rule: a second front-door service is exempted only if someone remembers, and a
+# gateway that later grows the shared pair stays unchecked forever.
+#
+# Deriving it turns out to delete the exemption instead of improving it. The gateway is the one fleet
+# app still hand-rolling its drain check — built with a bare `FastAPI(...)`, serving neither probe,
+# with a `/healthz` that re-implements the `shutting_down` branch `service_kit.probes` owns. That is
+# the exact duplication probes.py's docstring says it exists to delete ("the same twenty lines had
+# already drifted three ways across six hand-rolled copies"), and the ingress is the worst place to
+# keep a private copy.
+#
+# THE RECORDED REASON SURVIVES INTACT, which is why this is not a reversal of values.yaml's note.
+# That note says probing a PROXIED path would couple gateway readiness to an upstream — true, and
+# `/readyz` is not proxied: `make_probes_router()` with no `ready_check` reports `starting` and
+# `shutting_down` and touches nothing else. The gateway gets the estate's readiness contract without
+# acquiring a dependency. `/healthz` stays as its public badge, the way `/api/health` stayed as the
+# fleet's.
+
+
+def test_the_gateway_serves_the_shared_probe_pair() -> None:
+    """The last hand-rolled probe in the estate, at the hop every request passes through."""
+    import gateway
+
+    # THE LIFESPAN RUNS, because `/readyz` gates on `startup_complete` and a bare `TestClient(app)`
+    # never starts it — the probe would answer `starting` forever and the test would be measuring
+    # the harness rather than the app.
+    with TestClient(gateway.app) as client:
+        assert client.get("/livez").status_code == 200, "the gateway serves no /livez — it is the one fleet app that never got the shared, drain-aware pair"
+        assert client.get("/readyz").status_code == 200, "the gateway serves no /readyz"
+
+
+def test_the_gateway_readyz_REPORTS_the_drain() -> None:
+    """A readiness probe that cannot say "draining" is the inversion this whole finding is about."""
+    import gateway
+
+    with TestClient(gateway.app) as client:
+        assert client.get("/readyz").status_code == 200, "the app never became Ready, so the drain proves nothing"
+        gateway.app.state.shutting_down = True
+        try:
+            draining = client.get("/readyz")
+        finally:
+            gateway.app.state.shutting_down = False
+
+    assert draining.status_code == 503, "the gateway stays Ready through SIGTERM at the estate's only ingress"
+    assert draining.json()["status"] == "shutting_down"
+
+
+def test_the_gateway_readiness_still_does_not_ASK_an_upstream() -> None:
+    """values.yaml's recorded reason, pinned rather than argued.
+
+    The exception was recorded because probing a proxied path would couple the front door's readiness
+    to a backend — so a front-door-only install (no domain services) would never go Ready. The fix
+    must not quietly undo that. `_routes()` is populated but every upstream here is unreachable, and
+    readiness must still answer 200: the probe is lifecycle-only, with no `ready_check` behind it.
+    """
+    import gateway
+
+    with TestClient(gateway.app) as client:
+        assert gateway.app.state.routes, "no routes were built, so this proves nothing about upstream coupling"
+        ready = client.get("/readyz")
+
+    assert ready.status_code == 200, "gateway readiness now depends on an upstream — the exact coupling values.yaml recorded the exception to avoid"
+
+
+def test_the_chart_probes_the_gateway_at_the_pair_it_now_serves() -> None:
+    """The app half is worthless if the kubelet still asks the badge."""
+    from test_invariants import _rendered_docs  # noqa: PLC0415
+
+    container = next(
+        c
+        for doc in _rendered_docs()
+        if doc.get("kind") == "Deployment" and doc["metadata"]["name"].endswith("-gateway")
+        for c in doc["spec"]["template"]["spec"]["containers"]
+        if c["name"] == "gateway"
+    )
+    assert container["livenessProbe"]["httpGet"]["path"] == "/livez"
+    assert container["readinessProbe"]["httpGet"]["path"] == "/readyz"

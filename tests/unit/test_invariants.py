@@ -1917,9 +1917,11 @@ def test_every_probe_path_the_chart_configures_is_excluded_from_tracing() -> Non
     each probe costs several spans rather than one.
 
     The cause is a list that drifted from the thing it is supposed to mirror. `rask.otelEnv` excluded
-    `/livez,/readyz,/metrics`, but `chart/templates/fleet.yaml` points both probes at
-    `healthPath | default "/api/health"`, and one service overrides it to `/healthz` — so the two
-    services taking the DEFAULT were traced on every poll.
+    `/livez,/readyz,/metrics`, but `chart/templates/fleet.yaml` pointed both probes at
+    `healthPath | default "/api/health"`, and one service overrode it to `/healthz` — so the two
+    services taking the DEFAULT were traced on every poll. (Those paths have since split to `/livez` +
+    `/readyz` estate-wide, which is exactly the drift this gate refuses to trust a list about: it
+    reads each pod's OWN rendered probes.)
 
     This gate is written against the rendered chart rather than a hardcoded list on purpose: it asks
     each first-party pod what path its OWN probes hit and requires the exclusion on that SAME pod to
@@ -2922,11 +2924,12 @@ def test_the_kubelet_probes_the_inbox_on_a_path_the_service_actually_serves() ->
     """The chart probes a LITERAL; the app derives that path from `RASK_API_PREFIX`. Nothing renders
     the two together, and a mismatch is a CrashLoopBackOff whose cause is in neither file.
 
-    `chart/templates/fleet.yaml` takes `healthPath | default "/api/health"` for both probes, and
-    `services.notifications` sets no `healthPath` — so the default is load-bearing here and is correct
-    only while the prefix is `/api`. The service's own suite proves the badge is mounted UNDER the
-    prefix (`services/notifications/tests/test_probe_wiring.py`); this is the other end of the same
-    claim, and neither half can see the mismatch alone.
+    `chart/templates/fleet.yaml` takes `healthPath | default "/livez"` for liveness and
+    `readyPath | default "/readyz"` for readiness, and `services.notifications` overrides neither — so
+    both defaults are load-bearing here. They are root-mounted literals, which is the point: the
+    service's own suite proves the API-prefixed badge moves with `RASK_API_PREFIX`
+    (`services/notifications/tests/test_probe_wiring.py`) while these two must not, and neither half
+    can see a mismatch alone.
 
     The app is rebuilt under the chart's own prefix rather than the ambient one, because `app` is a
     module-level singleton built from the environment at import — asking the process's current app

@@ -352,14 +352,16 @@ services:
     replicas: 1
     frontDoor: true
     extraArgs: ["--proxy-headers", "--forwarded-allow-ips=127.0.0.1"]
-    # The gateway proxies /api/* to backends, so probing a proxied path would couple
-    # its readiness to an upstream. Probe its own unproxied /healthz instead, so it
-    # stays Ready in a front-door-only install (no domain backends).
-    healthPath: /healthz
-    # And READINESS too, for the same recorded reason: the gateway owns no /readyz, and probing a
-    # proxied path would couple its readiness to an upstream's. It is the one justified exception to
-    # the /readyz default — every other fleet app answers the drain-aware probe.
-    readyPath: /healthz
+    # The gateway proxies /api/* to backends, so probing a proxied path would couple its readiness
+    # to an upstream — it must stay Ready in a front-door-only install (no domain backends).
+    # THAT REASON IS INTACT AND THE EXCEPTION IS GONE. Both probes pointed at the gateway's own
+    # hand-rolled /healthz, which made it the one fleet app outside the estate's drain-aware pair and
+    # the one row every probe gate had to skip by name. It now mounts `service_kit.probes` with NO
+    # ready_check, so /readyz reports `starting`/`shutting_down` and asks no upstream: the recorded
+    # reason never required a private probe, only an unproxied one. /healthz remains as the gateway's
+    # public badge, exactly as /api/health remains the fleet's.
+    healthPath: /livez
+    readyPath: /readyz
     waitFor: []
 
   # ---- lance-ns lakehouse apps (templates/services.yaml; share the catalog image, different entrypoint) ----

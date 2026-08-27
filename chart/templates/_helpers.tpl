@@ -433,8 +433,9 @@ dapr.io/config: "lance-tracing"
      request rate: the RED dashboard reads busy and the latency distribution is dominated by a route
      nobody calls. */}}
 - name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS
-  {{- /* MUST cover every path `fleet.yaml` points a probe at, which is
-         `healthPath | default "/api/health"` — NOT just the operational pair. It listed only
+  {{- /* MUST cover every path `fleet.yaml` points a probe at — NOT just the operational pair, and
+         not whatever those paths happen to be today (they were `healthPath | default "/api/health"`
+         until the probes split). It listed only
          /livez,/readyz,/metrics until 2026-08-23, and the four services taking the default
          (controlplane, compute, ingest, notifications) therefore traced their own kubelet polls
          twice a second: 31,916 spans in three hours, measured, eight times the workflow keepalive
@@ -835,7 +836,8 @@ which is why the fleet carries it too. */}}
 {{- /* Must MATCH `rask.otelEnv`'s list byte for byte — pinned by
      `test_both_planes_agree_on_the_otel_env_that_ACTUALLY_APPLIES`, which caught exactly this
      file being updated in one plane and not the other. Covers every path fleet.yaml points a
-     probe at (`healthPath | default "/api/health"`), not just the operational pair. */}}
+     probe at, not just the operational pair — including `/api/health` and the gateway's `/healthz`,
+     which remain served as badges even though no probe asks for them any more. */}}
 - { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, value: "/livez,/readyz,/healthz,/api/health,/metrics" }
 - { name: OTEL_RESOURCE_ATTRIBUTES, value: "{{ include "rask.otelResourceAttrs" $root }}" }
 {{- end -}}

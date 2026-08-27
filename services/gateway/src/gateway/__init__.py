@@ -33,6 +33,7 @@ from starlette.background import BackgroundTask
 from service_kit import setup_otel
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.middleware import RequestIDMiddleware
+from service_kit.probes import make_probes_router
 from service_kit.schemas.health import Liveness
 
 
@@ -302,10 +303,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Declared BEFORE anything can read it: a flag that exists only on the happy path cannot be what a
     # probe gates on. Armed on SIGTERM rather than on lifespan unwind — see `arm_drain_on_sigterm`.
     app.state.shutting_down = False
+    app.state.startup_complete = False
     _disarm_drain = arm_drain_on_sigterm(app)
     app.state.api_prefix = os.environ.get("RASK_API_PREFIX", "/api/v1").rstrip("/")
     for prefix, upstream_prefix, app_id, fallback in app.state.routes:
         log.info(f"route {prefix} -> {app_id} ({_target_base(app_id, fallback)}{upstream_prefix})")
+    # LAST, after the route table and the client exist: `/readyz` answers `starting` until this
+    # flips, and a flag set before the thing it describes would report Ready on a half-built app.
+    app.state.startup_complete = True
     try:
         yield
     finally:
@@ -361,6 +366,20 @@ async def lineage_sidecar_guard(request: Request, call_next: Callable[[Request],
         if path.startswith(f"/api/lineage/{route}"):
             return JSONResponse(status_code=403, content={"detail": f"sidecar-only lineage route: {route}"})
     return await call_next(request)
+
+
+# THE ESTATE'S ONE DRAIN-AWARE PROBE PAIR, root-mounted (never under the api prefix — a kubelet knows
+# a port and a literal path). The gateway was the last app hand-rolling this: `/healthz` below carries
+# its own copy of the `shutting_down` branch that `service_kit.probes` owns, and probes.py's docstring
+# records what private copies of those twenty lines did last time (three-way drift across six files).
+# The ingress is the worst place to keep one.
+#
+# `make_probes_router()` with NO `ready_check`, deliberately — that is what keeps values.yaml's
+# recorded exception true. It was recorded because probing a PROXIED path would couple the front
+# door's readiness to an upstream, so a front-door-only install would never go Ready. This router
+# reports `starting` and `shutting_down` and asks nothing else, so the gateway gets the estate's
+# readiness contract without acquiring a dependency.
+app.include_router(make_probes_router())
 
 
 # `response_model=` + a `JSONResponse` return, the same shape `service_kit.probes.readyz` uses:

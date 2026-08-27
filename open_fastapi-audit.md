@@ -628,7 +628,7 @@ chart/templates/fleet.yaml:231-235 — `livenessProbe:\n  httpGet: {path: {{ $sv
 
 <details><summary><b>~~`make_service_app` mounts no probes router, so four of the five services it composes have no /readyz at all and the chart uses a static liveness badge as the readiness probe~~</b> <i>(kubernetes.md + microservices.md, ADJUSTED)</i></summary>
 
-> **CLOSED 2026-08-27.** `make_service_app` takes `ready_check: ReadyCheck | None = None` and root-mounts `make_probes_router(ready_check)` unconditionally, so compute, controlplane, flows, ingest and notifications all answer `/livez` + `/readyz`; notifications' hand-rolled mount is gone and it passes `actor_plane_ready` through the parameter. **The sharper half is fixed too:** `fleet.yaml` pointed BOTH probes at `healthPath | default "/api/health"`, a STATIC badge — so readiness answered 200 while the pod drained. Readiness now asks `readyPath | default "/readyz"`, liveness `healthPath | default "/livez"`; `controlplane.yaml` renders its own container and carried its own copy of the conflated pair, fixed the same way. `/api/health` is untouched — it is the documented frontend badge. The gateway keeps `/healthz` for both (recorded exception, now explicit via `readyPath`) and, per the Fix's last sentence, **its probe reports the drain**: it returned `Liveness()` unconditionally, and it is the ingress every request passes through, so a rolling update kept it in rotation through SIGTERM. `arm_drain_on_sigterm` + a 503 branch fix that. Pinned by `tests/unit/test_fleet_probes.py` (13 tests, all RED before). The recorded-decision strand (that `make_service_app` supplies no `/api/health`) is untouched, as the finding asks.
+> **CLOSED 2026-08-27.** `make_service_app` takes `ready_check: ReadyCheck | None = None` and root-mounts `make_probes_router(ready_check)` unconditionally, so compute, controlplane, flows, ingest and notifications all answer `/livez` + `/readyz`; notifications' hand-rolled mount is gone and it passes `actor_plane_ready` through the parameter. **The sharper half is fixed too:** `fleet.yaml` pointed BOTH probes at `healthPath | default "/api/health"`, a STATIC badge — so readiness answered 200 while the pod drained. Readiness now asks `readyPath | default "/readyz"`, liveness `healthPath | default "/livez"`; `controlplane.yaml` renders its own container and carried its own copy of the conflated pair, fixed the same way. `/api/health` is untouched — it is the documented frontend badge. The gateway's probe **reports the drain**, per the Fix's last sentence: it returned `Liveness()` unconditionally, and it is the ingress every request passes through, so a rolling update kept it in rotation through SIGTERM. `arm_drain_on_sigterm` + a 503 branch fix that. (It kept `/healthz` on both probes at this commit as the recorded exception; the follow-up finding below retired that exception entirely — the gateway now mounts the shared pair like every other app, and `/healthz` remains only as its public badge.) Pinned by `tests/unit/test_fleet_probes.py` (13 tests, all RED before). The recorded-decision strand (that `make_service_app` supplies no `/api/health`) is untouched, as the finding asks.
 
 **Rule.** kubernetes.md: § Full Deployment YAML — "Liveness — am I alive? No deps. Readiness — can I serve? Checks deps."
 
@@ -1253,7 +1253,40 @@ media.py:196-200 — `with blob as f:` / `data = f.read()` / ... / `return Respo
 
 </details>
 
-<details><summary><b>notifications is the one fleet service that serves the standard `/livez` + `/readyz` pair, and the chart probes neither — both probes point at its liveness badge</b> <i>(health-checks.md, ADJUSTED)</i></summary>
+<details><summary><b>~~notifications is the one fleet service that serves the standard `/livez` + `/readyz` pair, and the chart probes neither — both probes point at its liveness badge</b>~~ <i>(health-checks.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27.** **The routing half closed as collateral of `b0d984f6`** (the `make_service_app`
+> probes finding, RED-first): `fleet.yaml` now takes `readyPath | default "/readyz"` and
+> `healthPath | default "/livez"`, so `rask-notifications` renders `live=/livez ready=/readyz` and its
+> `make_probes_router(actor_plane_ready)` — the `components` report this finding says was the one thing
+> genuinely lost — is finally the thing the kubelet asks. Verified from the render, not from the diff.
+>
+> **This commit closes the Fix's second clause**, which the collateral fix did not: *assert the two
+> probes differ "for any service that mounts the probes router"* — a DERIVED exemption.
+> `test_liveness_and_readiness_are_not_the_SAME_path` matched on the name instead
+> (`name.endswith("-gateway")`), which is a blind spot rather than a rule: a second front-door service
+> is covered only if someone remembers, and a gateway that later grew the pair would stay unchecked.
+>
+> **Deriving it deleted the exemption rather than improving it.** The gateway was the last app
+> hand-rolling this: a bare `FastAPI(...)`, no `/livez`, no `/readyz`, and a `/healthz` carrying its own
+> copy of the `shutting_down` branch `service_kit.probes` owns — the exact duplication probes.py's
+> docstring exists to delete, kept at the one hop every request in the estate passes through. It now
+> mounts `make_probes_router()` and the chart probes it at `/livez` + `/readyz`; the skip is gone from
+> the gate.
+>
+> **values.yaml's recorded reason survives intact and is pinned by a test.** That note says probing a
+> PROXIED path would couple front-door readiness to an upstream, so a front-door-only install would
+> never go Ready. `/readyz` is not proxied, and the router is mounted with NO `ready_check` — it
+> reports `starting`/`shutting_down` and asks nothing else. The exception never required a private
+> probe, only an unproxied one. `/healthz` stays as the gateway's public badge, exactly as
+> `/api/health` stayed as the fleet's.
+> `startup_complete` is set LAST in the lifespan, after the route table and client exist — a flag set
+> before the thing it describes would report Ready on a half-built app.
+> Pinned by 5 more tests in `tests/unit/test_fleet_probes.py` (17 total, the 5 RED first), and verified
+> on a real socket rather than a TestClient: `/livez` 200 `{"status":"ok"}`, `/readyz` 200
+> `{"status":"ready","components":{}}`, and after `SIGTERM` `/readyz` answered **503** while the process
+> was still accepting connections — the drain window the whole finding is about.
+> Four stale prose claims that still described the pre-split chart were overwritten in the same commit.
 
 **Rule.** health-checks.md: "Two endpoints, two purposes. Don't conflate them" — /readyz is the load-balancer/k8s signal; /livez is the supervisor signal
 
