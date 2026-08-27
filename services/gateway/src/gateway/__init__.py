@@ -32,6 +32,7 @@ from starlette.background import BackgroundTask
 
 from service_kit import setup_otel
 from service_kit.draining import arm_drain_on_sigterm
+from service_kit.middleware import RequestIDMiddleware
 from service_kit.schemas.health import Liveness
 
 
@@ -331,6 +332,20 @@ app = FastAPI(
 # gateway is the front door, so its spans are the root of every request trace;
 # HTTPXClientInstrumentor propagates context to the upstream services.
 setup_otel(app, service_name="gateway")
+
+
+# THE REQUEST ID IS MINTED HERE, at the front door, so ONE value spans the whole trace.
+#
+# The gateway builds its own FastAPI and runs neither `register_middleware` nor the media one, so it
+# minted nothing: every downstream service invented its own id for the same request, and the value the
+# caller was handed matched none of them. An id that differs per hop correlates nothing — the same
+# failure as having none.
+#
+# `X-Request-ID` is not hop-by-hop, so the proxy below already forwards it untouched once it is set;
+# `service_kit.otel.server_request_hook` then puts it on every service's span. A caller-supplied id is
+# PRESERVED rather than replaced, so a client correlating its own logs across the boundary keeps the
+# join.
+app.add_middleware(RequestIDMiddleware)
 
 
 @app.middleware("http")

@@ -9,11 +9,57 @@ module only constructs providers + instruments the app; it hardcodes no target.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable, Mapping
 from contextlib import suppress
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI
 
 from service_kit.config import Settings
+
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+
+
+#: Headers the request hook may copy onto a span, and nothing else.
+#:
+#: An ALLOWLIST rather than a denylist, because the reference's rule is absolute — "Don't put PII
+#: (email, raw user id, auth tokens) in span attributes — those go to the trace backend forever" — and
+#: a denylist is the wrong shape for a rule you cannot walk back. A header added upstream tomorrow is
+#: excluded by default instead of leaking until someone notices.
+_SPAN_HEADERS: dict[str, str] = {
+    "x-request-id": "request.id",
+    # The Dapr caller's app-id: which SERVICE invoked this one, which is attribution rather than
+    # identity. The subject stays off the span deliberately.
+    "dapr-caller-app-id": "rask.caller.app_id",
+}
+
+
+def server_request_hook(span: Span | None, scope: Mapping[str, Any]) -> None:
+    """Join the estate's own `X-Request-ID` to the span it belongs to.
+
+    `RequestIDMiddleware` mints the id, stores it on `request.state` and echoes it to the caller — and
+    it reached no span and no log, so a caller holding an id from a failed request had nothing to
+    search for. The correlation the header exists to provide did not exist.
+
+    IN THE INSTRUMENTATION, not in another middleware, and that is the point rather than a convenience.
+    viewer, search and annotator deliberately run no `BaseHTTPMiddleware` RequestID pair —
+    `media/middleware.py` explains that `BaseHTTPMiddleware` fully buffers the response body, which
+    would break the `/api/explorer` Range streaming that 206 video seeking depends on — and that same
+    docstring names this seam as the remedy: "wire it via OpenTelemetry's ASGI instrumentation". A hook
+    buffers nothing, so it restores correlation for the three apps that consciously traded it away.
+
+    Defensive on both counts the reference's own example is: a missing header is normal (the hook runs
+    on every request in every app), and a non-recording span must cost nothing.
+    """
+    if not (span and span.is_recording()):
+        return
+    headers: Iterable[tuple[bytes, bytes]] = scope.get("headers") or []
+    for raw_key, raw_value in headers:
+        attribute = _SPAN_HEADERS.get(raw_key.decode("latin-1").lower())
+        if attribute and raw_value:
+            span.set_attribute(attribute, raw_value.decode("latin-1"))
 
 
 def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None) -> bool:
@@ -103,7 +149,12 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
     set_logger_provider(logger_provider)
 
-    FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider, meter_provider=meter_provider)
+    FastAPIInstrumentor.instrument_app(
+        app,
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        server_request_hook=server_request_hook,
+    )
     HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider, meter_provider=meter_provider)
     LoggingInstrumentor().instrument(set_logging_format=True, logger_provider=logger_provider)
 

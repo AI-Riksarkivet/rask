@@ -793,7 +793,9 @@ chart/alerting/rules.yml:55 `expr: sum(rate(catalog_writes_shed_total[5m])) > 0`
 
 </details>
 
-<details><summary><b>No `server_request_hook` anywhere: `X-Request-ID` is minted, echoed to the client, and joined to no span and no log — and only 5 of 14 apps mint one at all</b> <i>(observability.md, ADJUSTED)</i></summary>
+<details><summary><b>~~No `server_request_hook` anywhere: `X-Request-ID` is minted, echoed to the client, and joined to no span and no log — and only 5 of 14 apps mint one at all~~</b> <i>(observability.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27.** `setup_otel` installs a `server_request_hook` and passes it to `instrument_app`, so `X-Request-ID` reaches the span of every one of the fourteen apps. In the INSTRUMENTATION rather than another middleware, which is the point: viewer, search and annotator deliberately run no `BaseHTTPMiddleware` RequestID pair — it buffers the response body and would break `/api/explorer` Range streaming — and `media/middleware.py`'s own docstring names this exact seam as the remedy, so the three apps that consciously traded correlation away get it back without touching what they traded it for. The gateway now mints the id (`RequestIDMiddleware`), so ONE value spans the whole trace instead of each service inventing its own; a caller-supplied id is preserved, not replaced. PII stays off the span: the hook reads an ALLOWLIST (`x-request-id`, `dapr-caller-app-id`) rather than a denylist, because the reference's rule is absolute and a header added upstream tomorrow must be excluded by default. Pinned by `packages/service-kit/tests/test_request_id_reaches_the_span.py` (9 tests, all RED before), including one that reads the attribute off a REAL exported span and four that prove no authorization/cookie/user header can reach one. The `make_lance_service_app` half the Fix cross-references belongs to open_python-audit DUP-12 and stays open there.
 
 **Rule.** observability.md: § Request hooks (custom attributes from headers) — the reference's worked example is literally `if rid := headers.get("x-request-id"): span.set_attribute("request.id", rid)`
 
