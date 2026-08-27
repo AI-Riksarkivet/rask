@@ -24,9 +24,9 @@ The fourth precondition — every task terminal — is NOT checked here. It live
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any, Final, cast
+from typing import Annotated, Any, Final, Literal, cast
 
-from fastapi import APIRouter, Path, status
+from fastapi import APIRouter, Path, Query, status
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -529,7 +529,18 @@ async def list_project_tasks(
     project_id: ProjectId,
     checker: CheckerDep,
     subject: CurrentSubject,
-    include: str | None = None,
+    # A CLOSED SET, not a bare string. `?include=detials` used to return the plain index with no
+    # `details` key and no error, so the caller could not tell a misspelling from a project that had
+    # none. A Literal makes the typo a 422.
+    include: Literal["details"] | None = None,
+    # THE PAGE. `Semaphore(16)` below bounds CONCURRENCY, not COUNT — sixteen at a time, ten thousand
+    # times, is still ten thousand actor round trips. Nothing caps the collection either: the send door
+    # caps one CALL at 1000 items, while tasks accumulate one per sent item per consensus replica for
+    # the life of the project, and `consensus_n` multiplies each item into several.
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    # Keyset on the task id, which the handler already sorts — so the tail stays reachable rather than
+    # merely slow. A limit with no cursor would hide the rest of the project behind the first page.
+    cursor: Annotated[str | None, Query()] = None,
 ) -> dict[str, Any]:
     """The task index plus the publish precondition, computed from ONE snapshot.
 
@@ -562,7 +573,16 @@ async def list_project_tasks(
         async with gate:
             return task_id, await _task_proxy(task_id).get()
 
-    pairs = await asyncio.gather(*(_detail(tid) for tid in sorted(listing["tasks"])))
+    # SLICED BEFORE THE GATHER, which is the whole point: paging after the fan-out would still make
+    # every round trip. `may_publish` is untouched — the actor computes it from the FULL index, so the
+    # publish precondition cannot change with the page the UI happens to be reading.
+    task_ids = sorted(listing["tasks"])
+    if cursor is not None:
+        task_ids = [tid for tid in task_ids if tid > cursor]
+    page_ids = task_ids[:limit]
+    next_cursor = page_ids[-1] if len(task_ids) > limit else None
+
+    pairs = await asyncio.gather(*(_detail(tid) for tid in page_ids))
     details: list[dict[str, Any]] = []
     missing: list[str] = []
     for task_id, doc in pairs:
@@ -571,4 +591,4 @@ async def list_project_tasks(
             continue
         events = [] if project_frozen else legal_task_events(TaskState(doc["state"]))
         details.append({**doc, "legal_events": events})
-    return {**listing, "details": details, "missing": missing}
+    return {**listing, "details": details, "missing": missing, "next_cursor": next_cursor}

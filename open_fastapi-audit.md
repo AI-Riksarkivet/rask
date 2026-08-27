@@ -859,7 +859,9 @@ services/catalog/src/catalog/api/v1/endpoints/versions.py:55 — `    limit: int
 
 </details>
 
-<details><summary><b>`GET /projects/{project_id}/tasks?include=details` fans out one Dapr actor round trip per task with no page parameter and no project-level task ceiling</b> <i>(pagination.md, CONFIRMED)</i></summary>
+<details><summary><b>~~`GET /projects/{project_id}/tasks?include=details` fans out one Dapr actor round trip per task with no page parameter and no project-level task ceiling~~</b> <i>(pagination.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-27.** `limit: Annotated[int, Query(ge=1, le=200)] = 100` plus a keyset `cursor` on the sorted task id, sliced BEFORE the `asyncio.gather` — so the bound is on the actor ROUND TRIPS, not just the response body. That distinction is the whole finding: `Semaphore(16)` bounds concurrency, not count, and sixteen at a time ten thousand times is still ten thousand round trips. `next_cursor` rides the response alongside `counts`/`total`/`may_publish`, so the tail stays reachable rather than merely slow. `include` is now `Literal["details"] | None`, so `?include=detials` 422s instead of silently returning the bare index. **`may_publish` is unchanged and pinned:** the actor computes it from the FULL index, so the publish precondition cannot move with whichever page the UI is reading — a page that changed it would be a worse bug than the one fixed. Pinned by `tests/unit/test_project_tasks_pagination.py` (5 tests, all RED before), including one that counts actual actor calls — a response trimmed to `limit` while still asking every actor would look identical from outside and fix nothing.
 
 **Rule.** pagination.md: 'Pick the right strategy' — a list endpoint over a collection that grows needs a page parameter; and the `PaginationParams` rule that the bound is declared on the route, not left to the caller's restraint.
 
