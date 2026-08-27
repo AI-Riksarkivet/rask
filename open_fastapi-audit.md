@@ -626,7 +626,9 @@ chart/templates/fleet.yaml:231-235 — `livenessProbe:\n  httpGet: {path: {{ $sv
 
 </details>
 
-<details><summary><b>`make_service_app` mounts no probes router, so four of the five services it composes have no /readyz at all and the chart uses a static liveness badge as the readiness probe</b> <i>(kubernetes.md + microservices.md, ADJUSTED)</i></summary>
+<details><summary><b>~~`make_service_app` mounts no probes router, so four of the five services it composes have no /readyz at all and the chart uses a static liveness badge as the readiness probe~~</b> <i>(kubernetes.md + microservices.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27.** `make_service_app` takes `ready_check: ReadyCheck | None = None` and root-mounts `make_probes_router(ready_check)` unconditionally, so compute, controlplane, flows, ingest and notifications all answer `/livez` + `/readyz`; notifications' hand-rolled mount is gone and it passes `actor_plane_ready` through the parameter. **The sharper half is fixed too:** `fleet.yaml` pointed BOTH probes at `healthPath | default "/api/health"`, a STATIC badge — so readiness answered 200 while the pod drained. Readiness now asks `readyPath | default "/readyz"`, liveness `healthPath | default "/livez"`; `controlplane.yaml` renders its own container and carried its own copy of the conflated pair, fixed the same way. `/api/health` is untouched — it is the documented frontend badge. The gateway keeps `/healthz` for both (recorded exception, now explicit via `readyPath`) and, per the Fix's last sentence, **its probe reports the drain**: it returned `Liveness()` unconditionally, and it is the ingress every request passes through, so a rolling update kept it in rotation through SIGTERM. `arm_drain_on_sigterm` + a 503 branch fix that. Pinned by `tests/unit/test_fleet_probes.py` (13 tests, all RED before). The recorded-decision strand (that `make_service_app` supplies no `/api/health`) is untouched, as the finding asks.
 
 **Rule.** kubernetes.md: § Full Deployment YAML — "Liveness — am I alive? No deps. Readiness — can I serve? Checks deps."
 

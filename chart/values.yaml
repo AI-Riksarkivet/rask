@@ -356,6 +356,10 @@ services:
     # its readiness to an upstream. Probe its own unproxied /healthz instead, so it
     # stays Ready in a front-door-only install (no domain backends).
     healthPath: /healthz
+    # And READINESS too, for the same recorded reason: the gateway owns no /readyz, and probing a
+    # proxied path would couple its readiness to an upstream's. It is the one justified exception to
+    # the /readyz default — every other fleet app answers the drain-aware probe.
+    readyPath: /healthz
     waitFor: []
 
   # ---- lance-ns lakehouse apps (templates/services.yaml; share the catalog image, different entrypoint) ----

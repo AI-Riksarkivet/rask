@@ -20,6 +20,7 @@ from service_kit.exceptions import register_handlers
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.middleware import register_middleware
 from service_kit.otel import setup_otel
+from service_kit.probes import ReadyCheck, make_probes_router
 from service_kit.slash import SlashToleranceMiddleware
 from storage import derive_hcp_creds
 
@@ -110,6 +111,7 @@ def make_service_app(
     routers: Sequence[APIRouter],
     proxy_router: APIRouter | None = None,
     lifespan: LifespanFactory | None = None,
+    ready_check: ReadyCheck | None = None,
 ) -> FastAPI:
     """Build a backend FastAPI app with shared config/handlers/middleware.
 
@@ -158,6 +160,22 @@ def make_service_app(
     # siblings — by making all of them one shape rather than by removing what made ingest right.
     install_problem_handlers(app, logging.getLogger(__name__))
     register_middleware(app, settings)
+
+    # THE OPERATIONAL PROBES, root-mounted, for every app this factory builds.
+    #
+    # `service_kit.probes` exists so the estate has ONE drain-aware `/livez` + `/readyz` pair — its own
+    # docstring records that the same twenty lines had already drifted three ways across six hand-rolled
+    # copies. This factory then mounted it nowhere, so compute, controlplane, flows and ingest served
+    # neither probe at all and only notifications root-mounted it by hand.
+    #
+    # ROOT, not under `api_prefix`: a kubelet does not know a service's prefix. Unconditional because
+    # the router is dependency-free — `ready_check` is the optional half, for a service with a hard
+    # dependency worth reporting (notifications' actor plane).
+    #
+    # `/api/health` is untouched: it is the frontend-facing badge the estate documents it to be. The
+    # point is that it is not a READINESS answer — it is a constant, so probing it reports "ready"
+    # while the pod drains.
+    app.include_router(make_probes_router(ready_check))
 
     for router in routers:
         app.include_router(router, prefix=settings.api_prefix)

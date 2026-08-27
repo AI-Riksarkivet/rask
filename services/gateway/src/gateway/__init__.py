@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 from service_kit import setup_otel
+from service_kit.draining import arm_drain_on_sigterm
 from service_kit.schemas.health import Liveness
 
 
@@ -297,12 +298,18 @@ async def _merged_openapi(client: httpx.AsyncClient, prefix: str, targets: list[
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
     app.state.routes = _routes()
+    # Declared BEFORE anything can read it: a flag that exists only on the happy path cannot be what a
+    # probe gates on. Armed on SIGTERM rather than on lifespan unwind — see `arm_drain_on_sigterm`.
+    app.state.shutting_down = False
+    _disarm_drain = arm_drain_on_sigterm(app)
     app.state.api_prefix = os.environ.get("RASK_API_PREFIX", "/api/v1").rstrip("/")
     for prefix, upstream_prefix, app_id, fallback in app.state.routes:
         log.info(f"route {prefix} -> {app_id} ({_target_base(app_id, fallback)}{upstream_prefix})")
     try:
         yield
     finally:
+        app.state.shutting_down = True
+        _disarm_drain()
         await app.state.http.aclose()
 
 
@@ -341,8 +348,11 @@ async def lineage_sidecar_guard(request: Request, call_next: Callable[[Request],
     return await call_next(request)
 
 
-@app.get("/healthz")
-async def healthz() -> Liveness:
+# `response_model=` + a `JSONResponse` return, the same shape `service_kit.probes.readyz` uses:
+# the declared schema stays `Liveness` for the OpenAPI contract while the drain branch answers
+# a different body and status.
+@app.get("/healthz", response_model=Liveness)
+async def healthz(request: Request) -> JSONResponse:
     """Gateway process liveness/readiness — served by the gateway itself, never
     proxied (it is not under /api), so it stays green even when no domain
     backends are deployed (e.g. a front-door-only install). Probing a proxied
@@ -351,8 +361,21 @@ async def healthz() -> Liveness:
 
     The body is the estate-wide ``Liveness`` model, so the gateway's probe schema
     matches compute's/controlplane's ``/api/health`` and the lance plane's ``/livez``
-    (the path differs by design — see above — the shape must not)."""
-    return Liveness()
+    (the path differs by design — see above — the shape must not).
+
+    IT REPORTS THE DRAIN, which a constant cannot. This returned `Liveness()` unconditionally, and the
+    gateway is the INGRESS — every request in the estate passes through it — so a rolling update that
+    kept it in rotation through SIGTERM dropped in-flight requests at the one hop that has no
+    alternative. `arm_drain_on_sigterm` flips the flag when the signal ARRIVES rather than when the
+    lifespan unwinds, which is the only ordering that gets the kubelet out before uvicorn stops
+    accepting."""
+    if getattr(request.app.state, "shutting_down", False):
+        return JSONResponse(
+            status_code=503,
+            content={"status": "shutting_down"},
+            media_type="application/problem+json",
+        )
+    return JSONResponse(content=Liveness().model_dump(mode="json"))
 
 
 @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])

@@ -24,16 +24,17 @@ from notifications.api import register_subscriptions, routers
 from notifications.api.reconcile_cron import router as reconcile_router
 from notifications.lifespan import actor_plane_ready, build_actor_host, make_lifespan
 from service_kit import make_service_app
-from service_kit.probes import make_probes_router
 
 
-# The operational probes are ROOT-mounted: a kubelet does not know this service's api prefix.
-# `proxy_router` is `make_service_app`'s one root-mount slot (compute already uses it for its cron
+# `proxy_router` is `make_service_app`'s root-mount slot (compute already uses it for its cron
 # binding, which is delivered to POST /<name> at the root for the same reason).
+#
+# The PROBES used to be mounted here too, by hand — this was the only service that mounted them at
+# all. They moved into `make_service_app`, which now root-mounts them for every app it builds and
+# takes `ready_check=` for the service-specific half; `actor_plane_ready` is passed below.
 _root = APIRouter()
-_root.include_router(make_probes_router(actor_plane_ready))
-# The reconciler's cron binding joins them: Dapr delivers an input binding to POST /<component name>
-# at the root, never under the api prefix, so it belongs in this slot rather than in `routers`.
+# The reconciler's cron binding: Dapr delivers an input binding to POST /<component name> at the root,
+# never under the api prefix, so it belongs in this slot rather than in `routers`.
 _root.include_router(reconcile_router)
 
 # Keep the probes out of the trace stream: a kubelet polling twice a second is otherwise the loudest
@@ -50,7 +51,16 @@ _root.include_router(reconcile_router)
 # may widen it, and rewriting the value to look like the chart's would buy nothing but churn.
 os.environ.setdefault("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", "livez,readyz,health")
 
-app = make_service_app(title="notifications", routers=[health.router, *routers], proxy_router=_root, lifespan=make_lifespan)
+app = make_service_app(
+    title="notifications",
+    routers=[health.router, *routers],
+    proxy_router=_root,
+    lifespan=make_lifespan,
+    # The service-specific half of readiness: a healthy pod whose ACTOR plane never registered
+    # serves a permanently empty bell, and that is the failure worth reporting rather than
+    # restarting.
+    ready_check=actor_plane_ready,
+)
 
 #: The actor plane's own health, defined HERE and not only in the lifespan so it is never merely
 #: absent: a mount that fails below never reaches registration, and a flag that exists only on the
