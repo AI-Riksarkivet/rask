@@ -3,6 +3,21 @@
 # `ray job submit`s scripts/ray_lance_job.py (a genuine distributed lance_ray Lance write against RustFS).
 # NOT for production: production is KubeRay (RayCluster CR) via the rask merge; this proves the
 # ray-cluster + ray-job-submit + distributed-Lance-write seam works end-to-end on kind.
+#
+# ⚠️ READ BEFORE APPLYING THIS OVER A RUNNING HEAD. On an estate where KubeRay is not rendering
+# (`chart/templates/rayservice.yaml` is gated on `singleTenant.enabled`), this hand-applied Deployment
+# is the ONLY Ray, and `medallion.rayAddress` gets pointed at it — so the production cascade runs on
+# the demo head. That is the misconfiguration; the note below is its consequence.
+#
+# The chart never creates this Deployment, only references its hostname, so nothing reconciles it and
+# `kubectl apply -f` here is a hard overwrite. `image: ray-lance:dev` is what `make ray-demo` builds
+# locally, and applying it REPLACES whatever tag the head is serving — including one carrying
+# `service_kit` + `storage` (without which every `ray_stage_job.py` dies `ModuleNotFoundError` and the
+# whole cascade fails while the mover reports a terminal job) and `dummy_runner` (without which the
+# baked dummy job cannot run at all).
+#
+# Read what is actually deployed first, and put it back if it is not `:dev`:
+#   kubectl get deploy ray-lance-head -o jsonpath='{.spec.template.spec.containers[0].image}'
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -31,7 +46,10 @@ spec:
             - --block
           env:
             # In-cluster RustFS — the job reads/writes s3://lance-catalog against this endpoint.
-            - { name: S3_ENDPOINT, value: "http://lance-ns-rustfs:9000" }
+            # `lance-ns-rustfs` is a PRE-RENAME name and resolves to nothing — the chart's RustFS
+            # tenant Service is `rask-rustfs-io`. The live pod had been hand-patched to it; applying
+            # this file put the stale name back and broke Ray's object store.
+            - { name: S3_ENDPOINT, value: "http://rask-rustfs-io:9000" }
             - { name: S3_KEY, value: "rustfsadmin" }
             - { name: S3_SECRET, value: "rustfsadmin" }
             - { name: S3_REGION, value: "us-east-1" }
