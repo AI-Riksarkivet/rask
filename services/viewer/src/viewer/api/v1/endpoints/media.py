@@ -344,7 +344,21 @@ async def media_clip(
         # 503 + Retry-After: a fact the caller can act on. Queueing would have told them nothing and
         # cost a thread to say it.
         raise ServiceUnavailableError(str(exc), headers={"Retry-After": "5"}) from exc
-    return FileResponse(path, media_type=mime, headers={"Cache-Control": "no-store"})
+    # THE STAT WE ALREADY TOOK, handed to starlette so it does not take a second one.
+    #
+    # `build_clip` returns a path it has just confirmed exists; `FileResponse` stats it again when the
+    # response is sent. Between those two moments `evict_old_clips` can unlink it — the cache is bounded
+    # and every build evicts — and the caller gets a 500 for a request that was valid and a file that
+    # was there when it was checked. With the `stat_result` supplied there is no second stat, and on
+    # Linux the inode outlives the unlink for an open handle, so the bytes are still served.
+    #
+    # Best-effort: if the clip is ALREADY gone by the time we stat it, fall through to starlette's own
+    # handling rather than invent a response — that is a genuine 404, not the race.
+    try:
+        stat_result = await asyncio.to_thread(path.stat)
+    except OSError:
+        stat_result = None
+    return FileResponse(path, media_type=mime, headers={"Cache-Control": "no-store"}, stat_result=stat_result)
 
 
 @router.get("/media/{doc_id}")

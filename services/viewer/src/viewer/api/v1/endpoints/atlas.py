@@ -122,6 +122,13 @@ def atlas_points(state: StateDep, space: SpaceParam = None, dataset: DatasetPara
     key = (handle.id, requested.name, ds.version)
     entry = cache.get(key)
     body = entry[0] if entry is not None else None
+    if entry is not None:
+        # A HIT MOVES THE KEY. `evict_to_bounds` pops from the FRONT of a plain dict and insertion order
+        # is its LRU proxy — but only if reads participate. Without this the eviction is FIFO: a hot
+        # atlas payload is dropped on insertion age alone and rebuilt by a full scan+encode of the
+        # table, which is precisely the work this cache exists to avoid. Same one-line defect the clip
+        # cache had, in the sibling that shares its eviction.
+        cache[key] = cache.pop(key)
     if body is None:
         body = build_points(declared, requested, ds)
         # TWO BOUNDS. The count is the lookup bound; the BYTE total is what decides whether the pod

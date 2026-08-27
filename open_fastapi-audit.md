@@ -1191,7 +1191,9 @@ pages.py:196-200 — `return Response(` / `content=payload,` / `media_type="imag
 
 </details>
 
-<details><summary><b>A cached clip can be unlinked between the handler's `exists()` check and Starlette's `os.stat`, turning a valid `/api/media-clip` request into a 500 — and the cache evicts the hottest entry first</b> <i>(file-handling.md + streaming.md, ADJUSTED)</i></summary>
+<details><summary><b>~~A cached clip can be unlinked between the handler's `exists()` check and Starlette's `os.stat`, turning a valid `/api/media-clip` request into a 500 — and the cache evicts the hottest entry first~~</b> <i>(file-handling.md + streaming.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27.** The route hands `FileResponse` the `stat_result` it already took, so starlette does not stat a second time and a concurrent eviction cannot turn a valid request into a 500 — on Linux the inode outlives the unlink for an open handle, so the bytes are still served. An already-missing file falls through to starlette's own handling, because that is a genuine 404 rather than the race. **The audit's correction is honoured: the "hottest entry first" claim is dropped.** `evict_old_clips` was plain FIFO, and the real point is that it was FIFO *because reads never touched mtime* — `_touch` on a cache hit makes mtime mean "last served" and turns the sort that was already there into a true LRU, with no second index to keep in step. The same one-line defect in `atlas.py` is fixed with it: a points-cache hit now moves the key, so `evict_to_bounds` drops the least-recently-USED rather than the oldest-inserted. Pinned by `services/viewer/tests/test_clip_cache_race.py` (5 tests, 4 RED before), one of which proves `stat_result` actually defeats an unlink mid-request.
 
 **Rule.** file-handling.md § Temp files & guaranteed cleanup (the cleanup must not race the stream it is cleaning up around); § Downloads from disk — FileResponse
 

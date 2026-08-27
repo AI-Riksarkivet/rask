@@ -16,9 +16,11 @@ normal Range support, cached on disk and evicted oldest-first.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import tempfile
 import threading
+from contextlib import suppress
 from pathlib import Path
 
 from service_kit.exceptions import ServiceUnavailableError
@@ -100,8 +102,28 @@ def clip_cache_path(cache_key: str, lo: float, hi: float) -> Path:
     return CACHE_DIR / f"{cache_key}_{lo_ms}_{hi_ms}.mp4"
 
 
+def _touch(path: Path) -> Path:
+    """Mark a cache hit, so `evict_old_clips`' existing mtime sort becomes a real LRU.
+
+    Reads never touched mtime, so the eviction was FIFO: it dropped the oldest-CREATED regardless of
+    how hot the clip was, and a long-lived popular excerpt was eventually evicted on age alone and paid
+    another 120s-capped ffmpeg transcode. One `utime` makes mtime mean "last served" and the sort that
+    is already there does the rest — no second index to keep in step with the files.
+
+    Best-effort: a clip evicted between the `exists()` above and this call must still be SERVED (the
+    caller holds the path and the inode outlives the unlink), so a failure here is not worth an error.
+    """
+    with suppress(OSError):
+        os.utime(path, None)
+    return path
+
+
 def evict_old_clips(cache_dir: Path, keep: int = _MAX_CACHED) -> None:
-    """Drop the oldest cached clips beyond ``keep`` (by mtime)."""
+    """Drop the least-recently-SERVED cached clips beyond ``keep``.
+
+    By mtime, which `_touch` refreshes on every cache hit — so this is an LRU rather than the FIFO it
+    was when only writes moved the timestamp.
+    """
     clips = sorted(cache_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
     for stale in clips[keep:]:
         stale.unlink(missing_ok=True)
@@ -116,10 +138,10 @@ def build_clip(source_url: str, cache_key: str, lo: float, hi: float) -> Path:
     """
     out = clip_cache_path(cache_key, lo, hi)
     if out.exists():
-        return out
+        return _touch(out)
     with acquire_build_slot():
         if out.exists():  # built while we waited for a slot
-            return out
+            return _touch(out)
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         tmp = out.with_suffix(".tmp.mp4")
         cmd = [
