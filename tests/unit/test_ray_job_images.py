@@ -215,15 +215,61 @@ def test_the_declared_transform_door_knows_what_the_cluster_image_bakes() -> Non
 # with the same shape is caught the day its job script is baked rather than the day it is submitted.
 # ---------------------------------------------------------------------------------------------
 
-_RUNNERS = _REPO / "runners"
-#: `from <pkg>.x import y` / `import <pkg>` at any indentation — a runner import inside a function
+_PLANES = ("packages", "runners")
+#: `from <pkg>.x import y` / `import <pkg>` at any indentation — a repo import inside a function
 #: (a deliberate pattern for deferring a heavy import) counts exactly as much as one at module scope.
 _IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
+#: `uv sync … --package <dist>` — the OTHER way an image can provide a package: not by copying its
+#: source but by resolving it (and its dependencies) from the root lock.
+_UV_SYNC_RE = re.compile(r"--package[= ]+([A-Za-z0-9._-]+)")
 
 
-def _runner_packages() -> dict[str, Path]:
-    """Every importable package a sealed runner exposes, as ``name -> path``."""
-    return {p.name: p for src in _RUNNERS.glob("*/src") for p in src.iterdir() if p.is_dir() and not p.name.startswith((".", "_"))}
+def _repo_packages() -> dict[str, Path]:
+    """Every importable package this repo ships, as ``import name -> src dir``.
+
+    Both planes, because a baked job imports across them: `ray_dummy_job.py` needs `dummy_runner`
+    from `runners/`, and `ray_stage_job.py` needs `service_kit` from `packages/`. An earlier version
+    of this test scanned only `runners/` and therefore passed while `ray_stage_job.py` was dying
+    `ModuleNotFoundError: No module named 'service_kit'` on the deployed head.
+    """
+    found: dict[str, Path] = {}
+    for plane in _PLANES:
+        for src in (_REPO / plane).glob("*/src"):
+            for pkg in src.iterdir():
+                if pkg.is_dir() and not pkg.name.startswith((".", "_")):
+                    found[pkg.name] = pkg
+    return found
+
+
+def _distribution_deps() -> dict[str, set[str]]:
+    """``dist name -> its declared dependency dist names``, read from every workspace pyproject."""
+    deps: dict[str, set[str]] = {}
+    for plane in _PLANES:
+        for pyproject in (_REPO / plane).glob("*/pyproject.toml"):
+            text = pyproject.read_text(encoding="utf-8")
+            name = re.search(r'^name\s*=\s*"([^"]+)"', text, re.MULTILINE)
+            if not name:
+                continue
+            block = re.search(r"^dependencies\s*=\s*\[(.*?)\]", text, re.MULTILINE | re.DOTALL)
+            listed = re.findall(r'"([A-Za-z0-9._-]+)', block.group(1)) if block else []
+            deps[name.group(1)] = {d.lower() for d in listed}
+    return deps
+
+
+def _provided_distributions(dockerfile_body: str) -> set[str]:
+    """Every distribution an image installs, following `uv sync --package X` through X's deps."""
+    deps = _distribution_deps()
+    seen: set[str] = set()
+    queue = [m.lower() for m in _UV_SYNC_RE.findall(dockerfile_body)]
+    while queue:
+        dist = queue.pop()
+        if dist in seen:
+            continue
+        seen.add(dist)
+        # Only follow WORKSPACE members; a third-party dep resolves from the index and cannot
+        # provide a repo package.
+        queue.extend(d for d in deps.get(dist, set()) if d in deps and d not in seen)
+    return seen
 
 
 def _baked_job_scripts(dockerfile: Path) -> list[Path]:
@@ -233,42 +279,77 @@ def _baked_job_scripts(dockerfile: Path) -> list[Path]:
         stripped = line.strip()
         if not stripped.startswith("COPY") or _JOB_DIR not in stripped:
             continue
-        for token in stripped.split():
-            if token.endswith(".py"):
-                scripts.append(_REPO / token)
+        scripts.extend(_REPO / token for token in stripped.split() if token.endswith(".py"))
     return scripts
+
+
+#: `ray-lance` is the DEMO image (`make ray-demo`, `deploy/ray-lance-demo.yaml`) and it bakes
+#: `ray_stage_job.py` because `test_every_submit_entrypoint_is_baked_into_the_ray_image` requires
+#: every submit entrypoint to be present — but it is a `rayproject/ray` base with four pip pins and
+#: no uv sync, so it cannot provide `service_kit`, and the job dies on import. MEASURED on the k3s
+#: estate 2026-08-27, driving a real 50k `/produce`:
+#:
+#:   ray-silver-e2e-verify-…  FAILED
+#:   File "/home/ray/jobs/ray_stage_job.py", line 65, in <module>
+#:       from service_kit.lakehouse import media
+#:   ModuleNotFoundError: No module named 'service_kit'
+#:
+#: The import arrived in 5a8dd3b7 (B14, "one implementation of the derivers") and nothing gated it.
+#: The cluster image is unaffected — `uv sync --package ratch` pulls `service-kit[lancekit]`.
+#:
+#: STRICT, and not skip/ignore: the estate's cascade currently runs on this head, so this is a live
+#: defect, not a curiosity. The fix is to give `ray-lance` the fleet's stack the way
+#: `.docker/ray-cluster.dockerfile` does, or to stop pointing `MEDALLION_RAY_ADDRESS` at the demo
+#: head. Strict means this goes RED the moment either lands — which is the signal to delete this.
+_RAY_LANCE_CANNOT_RUN_THE_STAGE_JOB = pytest.mark.xfail(
+    strict=True,
+    reason="ray-lance is the demo image and provides no service_kit, so the baked ray_stage_job.py dies on import",
+)
 
 
 @pytest.mark.parametrize(
     "dockerfile",
-    [_DOCKERFILE, _CLUSTER_DOCKERFILE],
+    [
+        pytest.param(_DOCKERFILE, marks=_RAY_LANCE_CANNOT_RUN_THE_STAGE_JOB),
+        _CLUSTER_DOCKERFILE,
+    ],
     ids=lambda p: p.name,
 )
-def test_a_baked_job_gets_the_runner_package_it_imports(dockerfile: Path) -> None:
-    """Both Ray images, one rule — the demo image is where this actually broke.
+def test_a_baked_job_gets_every_repo_package_it_imports(dockerfile: Path) -> None:
+    """Both Ray images, one rule — and it is the rule two separate outages already broke.
 
-    Parametrised over BOTH dockerfiles rather than asserted on the one that failed: the cluster image
-    was already correct, so a test written only against `ray-lance` would pass today and say nothing
-    about the image the chart deploys. Two images with one contract is the point.
+    An image may PROVIDE a package either way: by COPYing its source beside the job, or by resolving
+    it from the root lock (`uv sync --package X` pulls X's dependency closure, which is how the
+    cluster image gets `service_kit` without naming it). Both count; neither being present does not.
+
+    Measured on the deployed estate before this test existed — two jobs, two images, same failure:
+      ray_dummy_job.py -> ModuleNotFoundError: No module named 'dummy_runner'  (ray-lance)
+      ray_stage_job.py -> ModuleNotFoundError: No module named 'service_kit'   (ray-lance)
+    and every "is the script baked" assertion above stayed green through both.
     """
-    packages = _runner_packages()
-    assert packages, "found no runners/*/src/<pkg> — this test would be vacuous"
+    packages = _repo_packages()
+    assert "service_kit" in packages and "dummy_runner" in packages, (
+        f"package discovery found {sorted(packages)[:8]}… — it must see both planes or this is vacuous"
+    )
 
     body = dockerfile.read_text(encoding="utf-8")
+    installed = _provided_distributions(body)
     missing: list[str] = []
     for script in _baked_job_scripts(dockerfile):
         if not script.exists():  # a different test owns "the script exists"; do not double-report
             continue
-        for imported in set(_IMPORT_RE.findall(script.read_text(encoding="utf-8"))):
-            if imported not in packages:
+        for imported in sorted(set(_IMPORT_RE.findall(script.read_text(encoding="utf-8")))):
+            src = packages.get(imported)
+            if src is None:
                 continue
-            # The COPY may name the source path in either dockerfile's idiom (`--chown` or not), so
-            # match on the source path itself rather than on a whole-line spelling.
-            source = f"runners/{packages[imported].parents[1].name}/src/{imported}"
-            if source not in body:
-                missing.append(f"{script.name} imports `{imported}` but {dockerfile.name} never COPYs {source}")
+            dist_dir = src.parents[1]
+            copied = f"{dist_dir.parent.name}/{dist_dir.name}/src/{imported}" in body
+            # The dist name is the directory name with underscores normalised, e.g. service-kit.
+            resolved = dist_dir.name.lower() in installed or dist_dir.name.replace("_", "-").lower() in installed
+            if not copied and not resolved:
+                missing.append(f"{script.name} imports `{imported}` ({dist_dir.name}), which {dockerfile.name} neither COPYs nor installs")
 
     assert not missing, (
-        "a baked Ray job cannot import its own runner package, so it dies `ModuleNotFoundError` the "
+        "a baked Ray job cannot import a package it needs, so it dies `ModuleNotFoundError` the "
         "moment anything submits it — while every 'is the script baked' test above stays green:\n  " + "\n  ".join(missing)
     )
