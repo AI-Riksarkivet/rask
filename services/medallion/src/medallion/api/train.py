@@ -96,7 +96,7 @@ async def train(
     # which is the ONLY moment this run is attributable: everything after here is a bus trigger and a
     # detached Ray job, and the job's own events author as `service-trainer` by design.
     originator: Annotated[str | None, Depends(authorize_train)],
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")] = None,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")],
 ) -> dict[str, Any] | JSONResponse:
     """Request a training run: pin feature versions (omitted → LATEST, resolved HERE) and publish the
     training trigger — 202 with the correlation ``token``. Token-guarded like ``/produce``; a disabled

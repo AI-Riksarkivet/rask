@@ -362,7 +362,7 @@ def test_producer_emits_only_the_bronze_write_event() -> None:
     # never publishes the medallion.bronze trigger. /bronze-arrival reacts to this event and fires it.
     dapr = _FakeDapr()
 
-    result = asyncio.run(produce(cast(Any, dapr), MedallionSettings()))
+    result = asyncio.run(produce(cast(Any, dapr), MedallionSettings(), token="idem-test"))
 
     assert result["status"] == "produced"
     assert len(dapr.calls) == 1

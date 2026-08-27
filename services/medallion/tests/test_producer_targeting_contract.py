@@ -151,7 +151,9 @@ async def test_a_failed_publish_answers_503_and_not_the_202_that_would_hide_it(m
     monkeypatch.setattr(produce_route, "run_produce", _publish_failed)
     # Neither dependency is touched on this path — `run_produce` is patched — so a cast is the
     # honest way to satisfy the resolved-dependency signature without loosening it.
-    response: Any = await produce_route.produce(dapr=cast(DaprClient, _UNUSED), settings=cast(MedallionSettings, _UNUSED), originator=None)
+    response: Any = await produce_route.produce(
+        dapr=cast(DaprClient, _UNUSED), settings=cast(MedallionSettings, _UNUSED), idempotency_key="idem-test", originator=None
+    )
 
     assert response.status_code == 503, "a dropped cascade head must not answer 202 — the run silently never happens"
     assert response.headers["Retry-After"] == "5"
@@ -168,7 +170,9 @@ async def test_a_successful_produce_still_answers_the_202_body(monkeypatch: pyte
     monkeypatch.setattr(produce_route, "run_produce", _ok)
     # Neither dependency is touched on this path — `run_produce` is patched — so a cast is the
     # honest way to satisfy the resolved-dependency signature without loosening it.
-    response: Any = await produce_route.produce(dapr=cast(DaprClient, _UNUSED), settings=cast(MedallionSettings, _UNUSED), originator=None)
+    response: Any = await produce_route.produce(
+        dapr=cast(DaprClient, _UNUSED), settings=cast(MedallionSettings, _UNUSED), idempotency_key="idem-test", originator=None
+    )
 
     assert response == {"status": "produced", "token": "tok", "dataset": "bronze$events"}
 

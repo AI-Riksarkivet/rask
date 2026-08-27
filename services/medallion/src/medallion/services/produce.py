@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from functools import partial
 
 from dapr.aio.clients import DaprClient
@@ -38,7 +37,7 @@ async def produce(
     dapr: DaprClient,
     settings: MedallionSettings,
     *,
-    token: str | None = None,
+    token: str,
     project: str = "",
     originator: str = "",
     rows: int | None = None,
@@ -64,7 +63,14 @@ async def produce(
     the sidecar may have accepted the event before the timeout fired — so a retry that minted a FRESH
     token would double-fire the cascade head as two unrelated runs. A reused token converges instead:
     every downstream run_id derives from it, so the graph MERGEs the duplicate and the overwrite-writes
-    land the same data. Absent (the common fire-and-forget case) → a fresh random token.
+    land the same data.
+
+    IT IS NO LONGER OPTIONAL. This used to end "absent (the common fire-and-forget case) → a fresh
+    random token", and `token = token or uuid.uuid4().hex[:12]` implemented it — which is the platform
+    layer inventing the one value only the CALLER can hold stable across attempts. Paired with the Dapr
+    sidecar's 5xx replay it was the whole defect: three retries of one 500 became three more cascades.
+    The door now requires `Idempotency-Key` (422 without), so the mint is gone and every caller owns
+    its own convergence.
 
     ``project`` (#84 per-tenant routing, opt-in) routes the seed into that project's ACTIVE warehouse
     (``<root>/medallion/<bronze_namespace>``, resolved off the warehouse registry) and project-qualifies
@@ -72,7 +78,6 @@ async def produce(
     can copy it onto the stage trigger. Fail closed: with routing disabled (no ``MEDALLION_CONTROL_ROOT``)
     or no active warehouse it raises :class:`UnresolvableProjectError` — never a fallback to the shared
     ``bronze_uri``. Empty (default) keeps today's behavior byte-identical."""
-    token = token or uuid.uuid4().hex[:12]
     bronze_uri = settings.bronze_uri
     if project:
         if not settings.control_root:

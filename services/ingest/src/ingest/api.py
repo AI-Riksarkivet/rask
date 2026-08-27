@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -183,7 +182,7 @@ async def dispatch_run(
     *,
     store: RunStore,
     starter: WorkflowStarter,
-    idempotency_key: str | None,
+    idempotency_key: str,
     originator: str | None,
 ) -> IngestAccepted:
     """Accept and dispatch one run — everything the door does AFTER authorization.
@@ -216,10 +215,12 @@ async def dispatch_run(
     except SizingRefused as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    # A token-less call gets a fresh run: without a caller key there is nothing to converge ON, and
-    # inventing one would make every retry a new run while pretending otherwise.
-    key = idempotency_key or uuid.uuid4().hex
-    run_id = run_id_for(body.project, key)
+    # The key is REQUIRED at the door now (422 without one), so there is nothing to invent here. This
+    # used to read `key = idempotency_key or uuid.uuid4().hex` under a comment admitting the problem —
+    # "inventing one would make every retry a new run while pretending otherwise" — which is exactly
+    # what it then did for every unkeyed caller. The browser path was safe because the compute zone
+    # sends a deterministic key; curl and scripts/ did not, and those are the callers least likely to.
+    run_id = run_id_for(body.project, idempotency_key)
 
     existing = await store.get(run_id)
     # SAME KEY, DIFFERENT SPEC IS A CONFLICT — on BOTH branches below, which is why it is checked
@@ -233,7 +234,7 @@ async def dispatch_run(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                f"Idempotency-Key {key!r} already names run {run_id} ingesting "
+                f"Idempotency-Key {idempotency_key!r} already names run {run_id} ingesting "
                 f"{existing.kind}:{existing.dataset}, not {body.kind}:{body.dataset} — use a new key for a different request"
             ),
         )
@@ -379,7 +380,7 @@ async def create_ingest(
     store: Annotated[RunStore, Depends(get_store)],
     starter: Annotated[WorkflowStarter, Depends(get_starter)],
     settings: AuthSettingsDep,
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")],
     dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
     # The INVOKING Dapr app-id. Without it the door cannot tell a service from the public front

@@ -303,7 +303,7 @@ def test_produce_route_409s_when_project_routing_is_disabled(monkeypatch: pytest
     app.include_router(router)
     app.dependency_overrides[get_dapr] = lambda: None
     app.dependency_overrides[get_settings] = lambda: MedallionSettings.model_validate({})
-    res = TestClient(app, raise_server_exceptions=False).post("/produce", params={"project": "acme"})
+    res = TestClient(app, raise_server_exceptions=False).post("/produce", params={"project": "acme"}, headers={"Idempotency-Key": "idem-test"})
     assert res.status_code == 409
     assert res.headers["content-type"].startswith("application/problem+json")
 
@@ -363,7 +363,9 @@ _TRAIN_BODY = {"model": "m1", "features": [{"dataset": "silver$feats"}]}
 def test_train_route_ignores_a_caller_supplied_project(monkeypatch: pytest.MonkeyPatch) -> None:
     # Service token + ?project=other on /train: the stray param is IGNORED — the guard passes (pinned to
     # the configured project) and the request proceeds to the handler (here the disabled-head 409).
-    res = _train_client(monkeypatch).post("/train", params={"project": "globex"}, json=_TRAIN_BODY, headers={"dapr-api-token": "s3cret"})
+    res = _train_client(monkeypatch).post(
+        "/train", params={"project": "globex"}, json=_TRAIN_BODY, headers={"dapr-api-token": "s3cret", "Idempotency-Key": "idem-test"}
+    )
     assert res.status_code == 409, res.text
 
 

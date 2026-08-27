@@ -62,7 +62,7 @@ def test_cascade_produces_real_data_and_a_correct_lineage_chain(tmp_path: Any) -
 
     # Head of the pipeline: medallion-producer seeds bronze$events DIRECTLY (real Lance write — R23).
     producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uris["bronze"]})
-    asyncio.run(produce(cast(DaprClient, dapr), producer))
+    asyncio.run(produce(cast(DaprClient, dapr), producer, token="idem-test"))
     bronze_tbl = lance.dataset(uris["bronze"]).to_table()
     bronze_rows = bronze_tbl.num_rows
     assert bronze_rows > 0
@@ -126,7 +126,7 @@ def test_source_rowid_traces_every_derived_row_back_to_its_exact_bronze_source_r
     uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver", "gold")}
     dapr = _FakeDapr()
     producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uris["bronze"]})
-    asyncio.run(produce(cast(DaprClient, dapr), producer))
+    asyncio.run(produce(cast(DaprClient, dapr), producer, token="idem-test"))
 
     # The bronze row identities the whole cascade must be able to name — captured AT seed time
     # (id → _rowid), because _rowid advances on any later overwrite, so only a snapshot taken now is
@@ -242,7 +242,7 @@ def test_project_cascade_routes_into_the_project_warehouse_and_qualifies_lineage
     dapr = _FakeDapr()
 
     producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": decoys["bronze"], "control_root": str(control)})
-    result = asyncio.run(produce(cast(DaprClient, dapr), producer, project="acme"))
+    result = asyncio.run(produce(cast(DaprClient, dapr), producer, token="idem-test", project="acme"))
     assert result["status"] == "produced" and result["dataset"] == "acme-bronze$events"
     assert lance.dataset(str(wh / "medallion" / "bronze")).to_table().num_rows > 0
     assert not Path(decoys["bronze"]).exists()  # fail-closed routing: the shared root was never written
@@ -442,12 +442,12 @@ def test_produce_with_project_fails_closed_when_unresolvable(tmp_path: Any) -> N
     # Routing disabled (no control_root) → refused before any write or publish.
     producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": str(tmp_path / "bronze")})
     with pytest.raises(UnresolvableProjectError):
-        asyncio.run(produce(cast(DaprClient, dapr), producer, project="acme"))
+        asyncio.run(produce(cast(DaprClient, dapr), producer, token="idem-test", project="acme"))
     # Routing enabled but the project has no active warehouse → equally refused.
     (tmp_path / "control" / "_warehouses").mkdir(parents=True)
     configured = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": str(tmp_path / "bronze"), "control_root": str(tmp_path / "control")})
     with pytest.raises(UnresolvableProjectError):
-        asyncio.run(produce(cast(DaprClient, dapr), configured, project="acme"))
+        asyncio.run(produce(cast(DaprClient, dapr), configured, token="idem-test", project="acme"))
     assert dapr.published == [] and not (tmp_path / "bronze").exists()
 
 
@@ -461,7 +461,7 @@ def test_projectless_cascade_is_byte_identical_even_with_routing_configured(tmp_
     dapr = _FakeDapr()
 
     producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uris["bronze"], "control_root": str(control)})
-    asyncio.run(produce(cast(DaprClient, dapr), producer))
+    asyncio.run(produce(cast(DaprClient, dapr), producer, token="idem-test"))
     bronze_event = next(p["data"] for p in dapr.published if p["topic"] == producer.lineage_topic)
     assert bronze_event["outputs"][0]["namespace"] == "bronze"
     assert bronze_event["outputs"][0]["name"] == "bronze$events"

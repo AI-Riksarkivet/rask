@@ -74,6 +74,7 @@ def test_head_resolves_omitted_versions_at_submit_time(monkeypatch: pytest.Monke
         train.submit_train_request(
             cast(Any, dapr),
             _settings(),
+            token="idem-test",
             model="churn",
             features=[{"dataset": "silver$features"}, {"dataset": "gold$catalog", "version": 3}],
         )
@@ -111,7 +112,7 @@ def test_head_surfaces_resolution_and_publish_failures(monkeypatch: pytest.Monke
         raise RuntimeError("no such dataset")
 
     monkeypatch.setattr(train, "_resolve_version", boom)
-    result = asyncio.run(train.submit_train_request(cast(Any, _FakeDapr()), _settings(), model="m", features=[{"dataset": "nope$x"}]))
+    result = asyncio.run(train.submit_train_request(cast(Any, _FakeDapr()), _settings(), token="idem-test", model="m", features=[{"dataset": "nope$x"}]))
     assert result == {"status": "resolve_failed", "dataset": "nope$x"}
 
     class _BoomDapr:
@@ -119,7 +120,9 @@ def test_head_surfaces_resolution_and_publish_failures(monkeypatch: pytest.Monke
             raise RuntimeError("sidecar down")
 
     monkeypatch.setattr(train, "_resolve_version", lambda _s, _d: 1)
-    result = asyncio.run(train.submit_train_request(cast(Any, _BoomDapr()), _settings(), model="m", features=[{"dataset": "silver$features"}]))
+    result = asyncio.run(
+        train.submit_train_request(cast(Any, _BoomDapr()), _settings(), token="idem-test", model="m", features=[{"dataset": "silver$features"}])
+    )
     assert result["status"] == "publish_failed"
 
 
@@ -143,7 +146,7 @@ def test_train_route_409_when_the_head_is_not_configured() -> None:
     app.include_router(router)
     app.dependency_overrides[get_dapr] = lambda: None
     app.dependency_overrides[get_settings] = lambda: _settings(MEDALLION_RAY_ENABLED="false")
-    response = TestClient(app).post("/train", json={"model": "m", "features": [{"dataset": "a$b"}]})
+    response = TestClient(app).post("/train", json={"model": "m", "features": [{"dataset": "a$b"}]}, headers={"Idempotency-Key": "idem-test"})
     assert response.status_code == 409  # explicit contract, never a silent 202
 
 
@@ -346,6 +349,7 @@ def test_head_rejects_an_oversized_config() -> None:
         train.submit_train_request(
             cast(Any, _FakeDapr()),
             _settings(),
+            token="idem-test",
             model="m",
             features=[{"dataset": "a$b", "version": 1}],
             config={"blob": "x" * 10_000},

@@ -48,7 +48,7 @@ class _FakeDapr:
 def _bronze(tmp_path: Path) -> str:
     uri = str(tmp_path / "bronze")
     settings = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uri})
-    asyncio.run(produce(cast(DaprClient, _FakeDapr()), settings))
+    asyncio.run(produce(cast(DaprClient, _FakeDapr()), settings, token="idem-test"))
     return uri
 
 

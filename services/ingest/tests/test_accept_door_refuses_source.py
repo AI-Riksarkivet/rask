@@ -116,5 +116,6 @@ async def test_the_check_runs_BEFORE_dispatch(lance_root: str, tmp_path, monkeyp
             store=cast(Any, None),
             starter=cast(Any, None),
             settings=cast(Any, None),
+            idempotency_key="idem-test",
         )
     assert dispatched == [], "the run was dispatched despite a refused source — the table gets orphaned"

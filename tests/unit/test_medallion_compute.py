@@ -262,7 +262,7 @@ def test_produce_seeds_real_bronze_and_emits_its_version(tmp_path: Any) -> None:
     settings = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": bronze})
     dapr = _FakeDapr()
 
-    result = asyncio.run(produce(cast(DaprClient, dapr), settings))
+    result = asyncio.run(produce(cast(DaprClient, dapr), settings, token="idem-test"))
     assert result["status"] == "produced"
     # bronze$events really exists, and the emitted lineage records its real version.
     assert lance.dataset(bronze).to_table().num_rows > 0
@@ -284,7 +284,7 @@ def test_produce_idempotency_token_converges_retries(tmp_path: Any) -> None:
     events = [p for p in dapr.published if p["topic"] == settings.lineage_topic]
     assert events[0]["data"]["run"]["runId"] == events[1]["data"]["run"]["runId"]
 
-    fresh = asyncio.run(produce(cast(DaprClient, dapr), settings))
+    fresh = asyncio.run(produce(cast(DaprClient, dapr), settings, token="idem-test"))
     assert fresh["token"] not in ("retry-key-1", "")  # no key → fresh random token, distinct run
     third = [p for p in dapr.published if p["topic"] == settings.lineage_topic][2]
     assert third["data"]["run"]["runId"] != events[0]["data"]["run"]["runId"]

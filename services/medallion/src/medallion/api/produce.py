@@ -44,7 +44,7 @@ async def produce(
     dapr: DaprClientDep,
     settings: SettingsDep,
     originator: Annotated[str | None, Depends(authorize_produce)],
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")] = None,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")],
     project: ProjectParam = None,
     # The bronze volume this call writes. Optional, and absent means the seeder's own default — the
     # cascade is byte-identical to before unless a caller asks for something else.

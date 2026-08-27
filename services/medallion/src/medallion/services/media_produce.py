@@ -16,7 +16,6 @@ from __future__ import annotations
 import io
 import json
 import logging
-import uuid
 
 import pyarrow.fs as pafs
 from dapr.aio.clients import DaprClient
@@ -95,7 +94,7 @@ def _split_source_uri(source_uri: str) -> tuple[str, str]:
     return (base, leaf) if base else ("", source_uri)
 
 
-async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str | None = None, originator: str | None = None) -> dict[str, str]:
+async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str, originator: str | None = None) -> dict[str, str]:
     """Land external media as bronze blobs, emit its lineage, and trigger the media chain.
 
     Returns ``{"status": "media_disabled"}`` when the head isn't configured (the route maps it to 409 —
@@ -106,7 +105,6 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
         return {"status": "media_disabled"}
     # Idempotency: reuse a caller-supplied key (its 503-retry contract) so a retry MERGEs on the same
     # deterministic run_ids instead of double-firing the media chain (bug hunt 2026-07-13).
-    token = token or uuid.uuid4().hex[:12]
     with tracer.start_as_current_span("medallion.ingest_media") as span:
         result = await run_in_threadpool(_seed_and_ingest, settings)
         span.set_attribute("lance.version", result.version)

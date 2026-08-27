@@ -67,7 +67,7 @@ async def test_produce_forwards_the_row_count_to_the_seeder(monkeypatch: pytest.
     monkeypatch.setattr(produce_module, "seed_bronze", _capturing_seeder(seen))
     settings = MedallionSettings.model_validate({"MEDALLION_COMPUTE_ENABLED": "true", "MEDALLION_BRONZE_URI": "memory://bronze"})
     with pytest.raises(_Stop):
-        await produce_module.produce(cast("Any", None), settings, rows=137)
+        await produce_module.produce(cast("Any", None), settings, token="idem-test", rows=137)
     assert seen.get("rows") == 137, f"seed_bronze saw {seen!r}"
 
 
@@ -78,5 +78,5 @@ async def test_absent_rows_lets_the_seeder_choose(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(produce_module, "seed_bronze", _capturing_seeder(seen))
     settings = MedallionSettings.model_validate({"MEDALLION_COMPUTE_ENABLED": "true", "MEDALLION_BRONZE_URI": "memory://bronze"})
     with pytest.raises(_Stop):
-        await produce_module.produce(cast("Any", None), settings)
+        await produce_module.produce(cast("Any", None), settings, token="idem-test")
     assert "rows" not in seen, f"produce restated a default the seeder owns: {seen!r}"

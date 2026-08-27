@@ -32,7 +32,7 @@ async def ingest_media(
     dapr: DaprClientDep,
     settings: SettingsDep,
     originator: Annotated[str | None, Depends(authorize_ingest_media)],
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")] = None,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")],
 ) -> dict[str, str] | JSONResponse:
     """Land external media as bronze blobs and trigger the media chain — the multimodal cascade head (§9).
 

@@ -144,15 +144,26 @@ def test_run_id_is_deterministic_across_processes() -> None:
     assert run_id_for("p1", "k") != run_id_for("p1", "other")
 
 
-def test_missing_key_does_not_collide_across_callers(
+def test_a_keyless_call_is_REFUSED_rather_than_given_its_own_run(
     client: tuple[TestClient, _RecordingStarter, InMemoryRunStore],
 ) -> None:
-    """Token-less calls get distinct runs — there is no caller key to converge on."""
+    """This test used to assert the opposite, and the opposite was the defect.
+
+    It read "token-less calls get distinct runs — there is no caller key to converge on", and pinned
+    two unkeyed POSTs producing two runs. That is exactly what made this door unsafe behind a Dapr
+    sidecar that replays 5xx: `key = idempotency_key or uuid.uuid4().hex` minted a fresh key per
+    attempt, so a replayed 500 started a second ingest rather than converging on the first
+    (open_fastapi-audit, the Dapr-retry finding).
+
+    "There is no caller key to converge on" was the correct diagnosis and the wrong conclusion. The
+    answer is to require one, not to invent one — a 422 naming the missing header is a better answer
+    than a silently duplicated run. The door now refuses, and nothing is dispatched."""
     c, starter, _ = client
-    a = c.post("/v1/ingests", json=BODY)
-    b = c.post("/v1/ingests", json=BODY)
-    assert a.json()["run_id"] != b.json()["run_id"]
-    assert len(starter.dispatched) == 2
+    first = c.post("/v1/ingests", json=BODY)
+    second = c.post("/v1/ingests", json=BODY)
+    assert first.status_code == 422, f"an unkeyed ingest was accepted: {first.text}"
+    assert second.status_code == 422
+    assert starter.dispatched == [], "a keyless call dispatched work before being refused"
 
 
 def test_unknown_source_kind_is_refused_loudly(

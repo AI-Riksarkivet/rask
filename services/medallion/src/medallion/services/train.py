@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import uuid
 from typing import Any
 
 from dapr.aio.clients import DaprClient
@@ -130,7 +129,7 @@ async def submit_train_request(
     model: str,
     features: list[dict[str, Any]],
     config: dict[str, Any] | None = None,
-    token: str | None = None,
+    token: str,
     originator: str = "",
 ) -> dict[str, Any]:
     """Resolve feature-version pins and publish the training trigger; returns ``{token, features}``.
@@ -141,7 +140,6 @@ async def submit_train_request(
     """
     # Idempotency: a caller-supplied key (its 503-retry contract) REUSES the token, so deterministic
     # run_ids MERGE the duplicate instead of double-firing an unrelated training run (bug hunt 2026-07-13).
-    token = token or uuid.uuid4().hex[:12]
     # Claim-check guard: the trigger carries pointers + a SMALL config — never data-shaped content
     # (NATS messages must stay small JSON; an inlined matrix would degrade the broker for everyone).
     if len(json.dumps(config or {})) > _MAX_CONFIG_BYTES:
