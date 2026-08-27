@@ -922,6 +922,48 @@ topologySpreadConstraints:
         app.kubernetes.io/component: {{ . }}
 {{- end -}}
 
+{{/* THE FLEET'S PROBE TRIPLE — one definition for fleet.yaml's range AND controlplane.yaml.
+     Call: include "rask.fleetProbes" $svc   (pass an empty dict to take every default).
+
+     Two templates rendering the same three probes is how controlplane missed two fixes in a row: it
+     is written by hand rather than by fleet.yaml's range, so the measured `timeoutSeconds` fix had to
+     be copied across and the startupProbe never arrived at all. One definition, and a test that
+     asserts the two render identically, is what stops a third divergence.
+
+     THE STARTUP PROBE IS THE POINT. `lance.appProbes` has carried one since prod-readiness P1 and
+     states the hazard: uvicorn runs the FastAPI lifespan BEFORE it binds the socket, so every
+     pre-bind second is a connection REFUSED rather than a slow 200 — liveness alone gives a hard
+     `initialDelaySeconds 15 + 3 x 20s` ~= 55s ceiling and then SIGKILLs into CrashLoopBackOff,
+     exactly when a dependency is already slow. The fleet's lifespans are not faster than the
+     lakehouse plane's: notifications does an OIDC discovery fetch, two OpenFGA provision round-trips
+     (at first-install time, while OpenFGA is itself starting), actor registration and a 10s proxy
+     warm-up; ingest resolves FGA and starts a Dapr WorkflowRuntime. 30 x 10s = the same 300s budget
+     the lakehouse plane gets, deliberately not a second number to keep in step.
+
+     `timeoutSeconds: 5` on ALL THREE. k8s defaults it to 1, measured racing the OOM killer on compute
+     (#136): under memory pressure the handler missed the deadline, so kills presented as
+     CrashLoopBackOff probe failures instead of the OOM they were. Boot is the slowest window a pod
+     has, so the startup probe is the last place to keep the default. */}}
+{{- define "rask.fleetProbes" -}}
+{{- $svc := . -}}
+{{- $live := ($svc.healthPath | default "/livez") -}}
+startupProbe:
+  httpGet: { path: {{ $live }}, port: http }
+  periodSeconds: 10
+  failureThreshold: 30
+  timeoutSeconds: 5
+readinessProbe:
+  httpGet: { path: {{ $svc.readyPath | default "/readyz" }}, port: http }
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+livenessProbe:
+  httpGet: { path: {{ $live }}, port: http }
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  timeoutSeconds: 5
+{{- end -}}
+
 {{- define "lance.appProbes" -}}
 {{/* startupProbe gates liveness+readiness until boot completes: the FastAPI lifespan (Dapr secret fetch
      ~80s worst case + AGE pool + DDL + FGA provision) runs BEFORE uvicorn accepts connections, so nothing

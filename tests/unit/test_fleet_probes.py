@@ -242,3 +242,124 @@ def test_the_chart_probes_the_gateway_at_the_pair_it_now_serves() -> None:
     )
     assert container["livenessProbe"]["httpGet"]["path"] == "/livez"
     assert container["readinessProbe"]["httpGet"]["path"] == "/readyz"
+
+
+# ── the boot window ─────────────────────────────────────────────────────────────────────────────
+#
+# open_fastapi-audit — "The six fleet pods have no startupProbe, and controlplane also missed the
+# measured probe-timeout fix — the lakehouse helper carries both and the fleet templates carry
+# neither".
+
+
+#: `periodSeconds × failureThreshold` for the lakehouse plane's `lance.appProbes` — 30 × 10s. The
+#: fleet's boot budget is held to the same floor rather than a new number, because the two planes run
+#: the same uvicorn against the same dependencies and a second figure would only be a second thing to
+#: keep in step.
+BOOT_BUDGET_SECONDS = 300
+
+
+def _fleet_service_names() -> set[str]:
+    """The services `fleet.yaml` and `controlplane.yaml` render, read from the chart itself.
+
+    DERIVED, because a literal list here is the very failure this finding is about: controlplane is
+    invisible to anything keyed on `services.*`, and it is precisely the row that missed two probe
+    fixes in a row. `$lakehouse` is parsed out of fleet.yaml rather than restated, so moving a service
+    between the two planes cannot leave this gate asserting about the wrong set.
+    """
+    import re  # noqa: PLC0415
+
+    import yaml  # noqa: PLC0415
+
+    template = (pathlib.Path(__file__).resolve().parents[2] / "chart/templates/fleet.yaml").read_text()
+    match = re.search(r"\$lakehouse := list ([^\n]+)", template)
+    assert match, "fleet.yaml no longer declares $lakehouse — this gate can no longer tell the planes apart"
+    lakehouse = set(re.findall(r'"([^"]+)"', match.group(1)))
+
+    values = yaml.safe_load((pathlib.Path(__file__).resolve().parents[2] / "chart/values.yaml").read_text())
+    return (set(values["services"]) - lakehouse) | {"controlplane"}
+
+
+def _http_probed_containers() -> list[tuple[str, dict]]:
+    """Every FLEET container the kubelet probes over HTTP, derived from the render.
+
+    TWO DELIBERATE BOUNDS, both narrower than "every first-party pod", and neither silent.
+
+    The seven web pods use `lance.tcpProbes` (a TCP accept on the Bun server's port). This finding is
+    about the HTTP fleet, and widening to them would be a different claim from a different boot
+    profile smuggled in under this one.
+
+    The lakehouse plane (`lance.appProbes`: catalog, lineage, maintenance, the producer, the movers)
+    is excluded for the same reason and is the finding's own EXEMPLAR — it is what already carries a
+    startupProbe. It does keep k8s's 1s probe timeout, which the #136 measurement argues against for
+    any pod under memory pressure; that is a separate observation, recorded rather than fixed here.
+    """
+    from test_invariants import _first_party_deployments, _rendered_docs  # noqa: PLC0415
+
+    fleet = _fleet_service_names()
+    found = []
+    for doc in _first_party_deployments(_rendered_docs()):
+        name = doc["metadata"]["name"]
+        for container in doc["spec"]["template"]["spec"].get("containers") or []:
+            if container["name"] not in fleet:
+                continue
+            if ((container.get("livenessProbe") or {}).get("httpGet") or {}).get("path"):
+                found.append((f"{name}/{container['name']}", container))
+    assert len(found) >= len(fleet), f"only {len(found)} of {len(fleet)} fleet containers were found in the render — the gate is testing less than it claims"
+    return found
+
+
+def test_every_http_probed_pod_gets_a_boot_window() -> None:
+    """Uvicorn runs the lifespan BEFORE it binds, so every pre-bind second is a connection refused.
+
+    `lance.appProbes` states the hazard and defends against it — "liveness … SIGKILLs a
+    still-initializing pod into CrashLoopBackOff exactly when a dependency is already slow" — and the
+    fleet templates, which compose services with slower lifespans than the lakehouse plane's, carried
+    no startupProbe at all. Liveness alone gives a hard `initialDelaySeconds 15 + 3 × 20s ≈ 55s`
+    ceiling: notifications does an OIDC discovery fetch, two OpenFGA provision round-trips (at
+    first-install time, when OpenFGA is itself starting), actor registration and a 10s proxy warm-up
+    inside that.
+    """
+    naked = [name for name, container in _http_probed_containers() if not container.get("startupProbe")]
+    assert not naked, f"these pods have no startupProbe, so liveness starts SIGKILLing them ~55s into a boot that can legitimately take longer: {naked}"
+
+
+def test_the_boot_window_is_actually_long_enough() -> None:
+    """A startupProbe present but tight is the same failure with an extra field."""
+    short = {}
+    for name, container in _http_probed_containers():
+        probe = container.get("startupProbe") or {}
+        budget = probe.get("periodSeconds", 10) * probe.get("failureThreshold", 3)
+        if budget < BOOT_BUDGET_SECONDS:
+            short[name] = budget
+    assert not short, f"boot budgets below the lakehouse plane's {BOOT_BUDGET_SECONDS}s: {short}"
+
+
+def test_no_probe_keeps_the_one_second_default_that_was_MEASURED_to_misfire() -> None:
+    """#136: under memory pressure the handler missed k8s's 1s deadline, so OOM kills presented as
+    CrashLoopBackOff probe failures. The fix was recorded in fleet.yaml and applies to every probe on
+    every first-party pod — a startupProbe fires during the slowest window of all."""
+    tight = {}
+    for name, container in _http_probed_containers():
+        for kind in ("startupProbe", "readinessProbe", "livenessProbe"):
+            probe = container.get(kind)
+            if probe and probe.get("timeoutSeconds", 1) < 5:
+                tight[f"{name}:{kind}"] = probe.get("timeoutSeconds", 1)
+    assert not tight, f"these probes keep a timeout below the measured 5s: {tight}"
+
+
+def test_controlplane_is_probed_through_the_SAME_helper_as_the_fleet() -> None:
+    """The second hand-written probe block is what let controlplane miss two fixes in a row.
+
+    It is rendered by its own template rather than fleet.yaml's range, so it needed the `timeoutSeconds`
+    fix copied by hand and never got the startupProbe at all. Asserting the two render IDENTICALLY is
+    what makes a third divergence impossible — a shared helper is only worth anything if nothing is
+    allowed to drift from it.
+    """
+    probed = dict(_http_probed_containers())
+    controlplane = next(container for name, container in probed.items() if name.endswith("-controlplane/controlplane"))
+    compute = next(container for name, container in probed.items() if name.endswith("-compute/compute"))
+
+    for kind in ("startupProbe", "readinessProbe", "livenessProbe"):
+        assert controlplane.get(kind) == compute.get(kind), (
+            f"controlplane's {kind} differs from the fleet's: {controlplane.get(kind)} vs {compute.get(kind)} — the hand-written second copy has drifted again"
+        )

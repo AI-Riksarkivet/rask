@@ -247,26 +247,11 @@ spec:
                handler is `return Liveness()`. So the readiness probe answered 200 while the pod was
                draining, and the kubelet kept routing to it: the readiness contract inverted.
                `service_kit.probes` reports `starting`, `shutting_down` and a service's own hard
-               dependency, and nothing asked it. `readyPath` exists for the gateway, which probes
-               `/healthz` for a recorded reason (probing a proxied path would couple its readiness to
-               an upstream). `/api/health` is untouched — it is the frontend-facing badge. */}}
-          readinessProbe:
-            httpGet: {path: {{ $svc.readyPath | default "/readyz" }}, port: http}
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            # k8s defaults timeoutSeconds to 1 — measured racing the OOM killer on compute (#136):
-            # under memory pressure the health handler missed the 1 s deadline, so kills presented
-            # as CrashLoopBackOff probe failures instead of the OOM they were. 5 s is still tight
-            # enough to catch a hung service within one period.
-            timeoutSeconds: 5
-          {{/* LIVENESS IS A DIFFERENT QUESTION and must not share the readiness path: "am I alive?
-               No deps" versus "can I serve? Checks deps". One path serving both means neither is
-               actually being asked. */}}
-          livenessProbe:
-            httpGet: {path: {{ $svc.healthPath | default "/livez" }}, port: http}
-            initialDelaySeconds: 15
-            periodSeconds: 20
-            timeoutSeconds: 5
+               dependency, and nothing asked it. `/api/health` is untouched — it is the
+               frontend-facing badge. The three probes, the boot budget and the measured 5s timeout
+               now live in ONE helper shared with controlplane.yaml, which is hand-written and had
+               already drifted from this block twice. */}}
+{{- include "rask.fleetProbes" $svc | nindent 10 }}
           resources:
             {{- /* A service may name its OWN tier (resources.<name>); otherwise the shared fleet one.
                  compute needs it — see the values comment: the Ray SDK does not fit in 512Mi. */}}

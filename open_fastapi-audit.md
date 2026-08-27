@@ -1306,7 +1306,34 @@ chart/templates/fleet.yaml:223 and :232 are the same expression — `httpGet: {p
 
 </details>
 
-<details><summary><b>The six fleet pods have no startupProbe, and controlplane also missed the measured probe-timeout fix — the lakehouse helper carries both and the fleet templates carry neither</b> <i>(health-checks.md, CONFIRMED)</i></summary>
+<details><summary><b>~~The six fleet pods have no startupProbe, and controlplane also missed the measured probe-timeout fix — the lakehouse helper carries both and the fleet templates carry neither~~</b> <i>(health-checks.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-27.** The Fix as written: a `rask.fleetProbes` helper now emits all three probes,
+> and BOTH `fleet.yaml` and the hand-written `controlplane.yaml` include it. Rendered budget for
+> gateway, compute, controlplane, flows, ingest and notifications: `start=/livez`, 30 x 10s = **300s**,
+> the same figure `lance.appProbes` gives the lakehouse plane — deliberately not a second number to
+> keep in step. `timeoutSeconds: 5` is on all three, including the startup probe: boot is the slowest
+> window a pod has, so it is the last place to keep k8s's 1s default that #136 measured misfiring
+> against the OOM killer.
+>
+> **The timeout half was already fixed** — `controlplane.yaml` had picked it up by hand before this
+> commit — so what closes here is the startupProbe plus the duplication that let the drift happen
+> twice. `test_controlplane_is_probed_through_the_SAME_helper_as_the_fleet` asserts the two render
+> IDENTICALLY, which is the part that prevents a third divergence; a shared helper nothing checks
+> against is just a fourth place to look.
+>
+> **Two bounds, stated rather than taken quietly.** The gate covers the fleet's HTTP-probed
+> containers, derived by parsing `$lakehouse` out of fleet.yaml and subtracting it from
+> `.Values.services` (plus controlplane, the row that is invisible to anything keyed on `services.*`
+> — the exact reason it missed both fixes). It does NOT cover the seven web pods, which use
+> `lance.tcpProbes` and have a different boot profile, and it does not cover the lakehouse plane,
+> which is this finding's own exemplar. **One thing found while gating and NOT fixed here:**
+> `lance.appProbes` keeps k8s's 1s timeout on startup and readiness (3s on liveness), which the #136
+> measurement argues against for any pod under memory pressure — and the lakehouse pods do the heavy
+> Arrow/Lance work. That is a separate finding this audit did not raise, recorded here rather than
+> swept in under this one.
+> Pinned by 4 tests in `tests/unit/test_fleet_probes.py` (2 RED first; the timeout and helper-parity
+> gates were already green and pin what would otherwise regress silently). `helm lint` clean.
 
 **Rule.** health-checks.md: "Slow startup → startup probe. If your lifespan takes &gt;15s … add a startupProbe so liveness doesn't kill the pod during boot"
 

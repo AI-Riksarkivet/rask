@@ -72,18 +72,10 @@ spec:
                it for READINESS reports "ready" while the pod drains; `/readyz` reports lifecycle
                state. This file renders its own container and so had its own copy of the conflated
                pair. */}}
-          readinessProbe:
-            httpGet: {path: /readyz, port: http}
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            # k8s defaults timeoutSeconds to 1; the fleet raised it to 5 after a measured OOM race
-            # presented as CrashLoopBackOff probe failures (#136). Same reasoning, same number.
-            timeoutSeconds: 5
-          livenessProbe:
-            httpGet: {path: /livez, port: http}
-            initialDelaySeconds: 15
-            periodSeconds: 20
-            timeoutSeconds: 5
+          {{/* The SAME helper fleet.yaml uses. This block was hand-written and drifted twice: it
+               needed the measured `timeoutSeconds: 5` fix copied across by hand, and it never got a
+               startupProbe at all. `dict` = every default, which is what this service wants. */}}
+{{- include "rask.fleetProbes" dict | nindent 10 }}
           resources:
             {{- toYaml .Values.resources.fleet | nindent 12 }}
           {{/* Same hardening + scratch pair as the fleet, and for the same reason: this file called
