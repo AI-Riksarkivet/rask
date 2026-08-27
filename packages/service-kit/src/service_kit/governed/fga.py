@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
@@ -522,6 +523,30 @@ class ObjectListing(NamedTuple):
 
     objects: list[str]
     truncated: bool
+
+
+async def dispose(app: object) -> None:
+    """Close the OpenFGA client this app opened, if it opened one.
+
+    THE FACTORY'S PACKAGE OWNS THE DISPOSAL, which is the whole point rather than a convenience. Five
+    lifespans call `make_client` and exactly one of them closed the result — the other four each would
+    have needed their own copy of the same six lines, which is how four of them came to be missing it.
+    One helper beside the factory makes the pairing hard to forget instead of easy.
+
+    The SDK is aiohttp-backed, so an unclosed client is collected with its session open: one half-open
+    connection per replica on OpenFGA until its own idle timeout, and the only trace is an "Unclosed
+    client session" line on the way out.
+
+    SUPPRESSED, NEVER RAISED. A shutdown path that raises hides whatever came after it, and a failed
+    close cannot be retried against anything on a pod that is already leaving. Absent or `None` is
+    silent too: FGA-off stacks never build one, and a lifespan that failed before it got that far must
+    still be able to unwind.
+    """
+    client = getattr(getattr(app, "state", None), "fga", None) or getattr(getattr(app, "state", None), "fga_client", None)
+    if client is None:
+        return
+    with suppress(Exception):
+        await client.close()
 
 
 async def list_objects(

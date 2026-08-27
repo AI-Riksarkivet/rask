@@ -1081,7 +1081,9 @@ services/medallion/src/medallion/workflow.py:310-324: `def poll_stage(...)` / `"
 
 </details>
 
-<details><summary><b>Four lifespans build an aiohttp-backed OpenFGA client and never close it — the estate has the exact fix written down at a fifth site</b> <i>(dependencies.md + production-patterns.md + health-checks.md + health-checks.md, ADJUSTED)</i></summary>
+<details><summary><b>~~Four lifespans build an aiohttp-backed OpenFGA client and never close it — the estate has the exact fix written down at a fifth site~~</b> <i>(dependencies.md + production-patterns.md + health-checks.md + health-checks.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27.** `service_kit.governed.fga.dispose(app)` — the Fix's better half ("make it un-forgettable rather than per-service") rather than the notifications block copied four more times. All five lifespans call it, **notifications included**: its correct block was replaced by the shared one, so there is one disposer beside the factory instead of five copies four of which were missing. It covers `app.state.fga` AND `fga_client`, so maintenance's different attribute name stops mattering. annotator and viewer had a BARE `yield` — nothing below ran if the app raised — so both are now `try/finally`, which also lands the X13 half the Fix says arrives in the same edit. **The genuinely unfiled sliver is fixed too:** the annotator's control-emitter `DaprClient`, a `grpc.aio` channel built in the lifespan and closed nowhere, is now closed beside the FGA session. Everything suppresses rather than raises, for the reason the original block gives — a shutdown path that raises hides whatever came after it, and a failed close has nothing to retry against on a pod that is leaving. Pinned by `packages/service-kit/tests/test_fga_client_disposal.py` (8 tests, all RED before), including that a FAILING close does not stop the teardown. Duplicate of open_python-audit SKG-07, as the finding's own correction notes.
 
 **Rule.** production-patterns.md § Lifespan → Rules: "Always clean up after `yield`. Pools leak on shutdown otherwise." and § Graceful shutdown: "Order matters: outermost first (clients we initiated)"
 

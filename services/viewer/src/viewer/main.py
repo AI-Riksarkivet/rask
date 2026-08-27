@@ -18,6 +18,7 @@ from service_kit import setup_logging
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
+from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.media.config import get_settings
@@ -84,16 +85,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # at the START of termination, and that window is exactly when the sidecar is still
     # delivering. Owner ruling 2026-08-25.
     _disarm_drain = arm_drain_on_sigterm(app)
-    yield
-    _disarm_drain()
-    app.state.shutting_down = True
-    for resource in (state.http, state.embedder, state.reranker):
-        close = getattr(resource, "close", None)
-        if close is not None:
-            try:
-                close()
-            except Exception:
-                logger.warning("error closing %s on shutdown", type(resource).__name__)
+    # A BARE `yield`, so nothing below ran if the app raised — teardown belongs in a `finally`.
+    # `production-patterns.md`: "Always clean up after `yield`. Pools leak on shutdown otherwise."
+    try:
+        yield
+    finally:
+        # The OpenFGA client this lifespan opened. Its SDK is aiohttp-backed, so collecting it unclosed
+        # leaves one half-open connection per replica until OpenFGA's own idle timeout, with an
+        # "Unclosed client session" line as the only trace. Disposal lives beside the factory
+        # (`service_kit.governed.fga.dispose`) rather than as a sixth copy of the same block.
+        await fga_dispose(app)
+        _disarm_drain()
+        app.state.shutting_down = True
+        for resource in (state.http, state.embedder, state.reranker):
+            close = getattr(resource, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:
+                    logger.warning("error closing %s on shutdown", type(resource).__name__)
 
 
 # Application logging, before the app exists — every module here uses getLogger(__name__), and

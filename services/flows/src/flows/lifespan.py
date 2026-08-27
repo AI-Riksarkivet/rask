@@ -30,6 +30,7 @@ from flows.config import build_flows_settings
 from flows.dependencies import FlowRunReader, FlowScheduler, ScheduleUnconfirmed
 from service_kit.config import Settings
 from service_kit.governed.actor_state_store import probe_actor_state_store
+from service_kit.governed.fga import dispose as fga_dispose
 
 
 log = logging.getLogger(__name__)
@@ -131,6 +132,10 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         try:
             yield
         finally:
+            # The OpenFGA client this lifespan opened — aiohttp-backed, so collected unclosed it leaves
+            # one half-open connection per replica until OpenFGA's idle timeout. Disposal lives beside
+            # the factory rather than as another copy of the same block.
+            await fga_dispose(app)
             # The client is closed FIRST and unconditionally. `WorkflowRuntime.shutdown()` talks to the
             # sidecar, so it CAN raise — and if it does while it runs first, every pooled connection
             # leaks on the way out. A release must not sit behind an operation that can fail.

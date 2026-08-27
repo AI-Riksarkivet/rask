@@ -29,6 +29,7 @@ from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.actor_warmup import warm_actor_proxy_factory
 from service_kit.governed.dapr_auth import guard_actor_routes
+from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.schemas.health import Readiness, ReadinessStatus
 
 
@@ -185,9 +186,9 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
             # timeout, and the only trace is an "Unclosed client session" line on the way out.
             # Suppressed rather than raised: a shutdown path that raises hides whatever came after it,
             # and there is nothing a failed close can be retried against on a pod that is leaving.
-            fga_client = getattr(app.state, "fga", None)
-            if fga_client is not None:
-                with suppress(Exception):
-                    await fga_client.close()
+            # This block was the estate's only correct one, and is now the shared
+            # `service_kit.governed.fga.dispose` its four siblings adopted — one disposer beside the
+            # factory rather than five copies, four of which were missing.
+            await fga_dispose(app)
 
     return lifespan

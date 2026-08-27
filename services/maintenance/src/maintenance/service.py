@@ -37,6 +37,7 @@ from service_kit import setup_logging
 from service_kit.control_emit import make_control_emitter
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import assert_app_token_configured
+from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.middleware import RequestIDMiddleware
@@ -184,6 +185,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         app.state.shutting_down = True
+        # Same disposal as every sibling. Maintenance stores it as `app.state.fga_client` rather than
+        # `fga`; the shared disposer covers both names so the difference stops mattering.
+        await fga_dispose(app)
         if dapr_client is not None:
             with suppress(Exception):
                 await dapr_client.close()
