@@ -234,9 +234,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.http = httpx.Client(base_url=settings.frame_base)
     app.state.models = Models(settings)
+    # Declared BEFORE anything can read them, and flipped on the two sides of the yield — that split
+    # is what makes `/readyz` a check rather than a constant. Uvicorn does not bind until this
+    # function reaches the yield, so anything set above is true for every request the pod ever
+    # serves; only the `finally` side can distinguish one post-boot moment from another.
+    app.state.shutting_down = False
+    app.state.startup_complete = True
     try:
         yield
     finally:
+        app.state.shutting_down = True
         app.state.http.close()
 
 
@@ -244,16 +251,31 @@ app = FastAPI(title="assist-runner", lifespan=lifespan)
 
 
 @app.get("/livez")
-def livez() -> dict[str, bool]:
-    """Process-up (the k8s liveness/startup signal — never touches the models)."""
+async def livez() -> dict[str, bool]:
+    """Process-up (the k8s liveness/startup signal — never touches the models).
+
+    `async def`, so liveness is answered ON the event loop. A plain `def` is normally right in this
+    codebase because FastAPI threadpools it — but the threadpool on this pod is where inference runs,
+    so a sync liveness handler queues behind the workload and fails exactly when the pod is busiest.
+    There is no I/O here to yield for.
+    """
     return {"ok": True}
 
 
 @app.get("/readyz")
-def readyz() -> dict[str, bool]:
-    """Ready only once both models are loaded (the lifespan finished)."""
-    if getattr(app.state, "models", None) is None:
-        raise HTTPException(status_code=503, detail="models not loaded")
+async def readyz() -> dict[str, bool]:
+    """Ready once the lifespan has finished and until it starts draining.
+
+    THIS USED TO TEST `app.state.models is None`, which the lifespan assigns before it yields — so
+    after boot the branch was unreachable and the route was a constant 200 with the shape of a check.
+    Gating on the lifecycle flags instead gives it a state that can actually change. The runner stays
+    sealed: this mirrors `service_kit.probes`' contract by hand rather than importing it, because the
+    platform's lib is deliberately not in this project's dependency closure.
+    """
+    if getattr(app.state, "shutting_down", False):
+        raise HTTPException(status_code=503, detail="shutting down")
+    if not getattr(app.state, "startup_complete", False):
+        raise HTTPException(status_code=503, detail="starting")
     return {"ok": True}
 
 

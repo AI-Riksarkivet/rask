@@ -1353,7 +1353,35 @@ chart/templates/_helpers.tpl:915-919 — "startupProbe gates liveness+readiness 
 
 </details>
 
-<details><summary><b>The assist runner's `/livez` is a sync `def` on the blocking threadpool — the exact shape service_kit.probes was created to delete — and its `/readyz` never reports draining</b> <i>(health-checks.md, ADJUSTED)</i></summary>
+<details><summary><b>~~The assist runner's `/livez` is a sync `def` on the blocking threadpool — the exact shape service_kit.probes was created to delete — and its `/readyz` never reports draining~~</b> <i>(health-checks.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-27.** The finding's own scope correction is honoured: nothing here imports
+> `service_kit` into a sealed runner or makes a runner look like a fleet service.
+>
+> **The readiness half — the part the finding says survives — is fixed.** `readyz` tested
+> `app.state.models is None`, and the lifespan assigns `models` before it yields; uvicorn does not
+> bind until then, so the branch was unreachable for every request the pod ever served and the route
+> was a constant 200 shaped like a check. It now gates on `startup_complete`/`shutting_down`, set on
+> the two sides of the yield — mirroring `service_kit.probes`' contract by hand, since the platform
+> lib is deliberately outside this project's dependency closure.
+>
+> **The liveness half lands in the weaker form the reference actually states**, not the one the
+> finding disputes. Both runners' `/livez` are now `async def` — not because sync `def` is wrong in
+> general (it is normally right here, and the finding is correct that 40 anyio tokens will not
+> saturate), but because the threadpool ON THIS POD is where inference runs, and a handler that
+> returns a literal has nothing to yield for. Liveness should not queue behind the workload.
+>
+> **insid3's `/readyz` is deliberately left a plain `def`, and the gate says so.** `_get_model()`
+> loads weights on first call — that blocking load is exactly what makes it a real readiness check,
+> and it belongs on the threadpool. Made `async` to match its sibling, the first probe after a cold
+> start would hold the event loop for the whole load. The docstring records this so the next sweep
+> does not "fix" it.
+> Pinned by `tests/unit/test_runner_probes.py` (4 tests, 3 RED first), which reads every
+> `runners/*/server.py` with `ast` rather than importing one — a runner's torch/ultralytics stack must
+> never enter the fleet's resolution, so the seal holds and the gate still covers a runner added
+> later. Its second gate is stated as a property, not a symptom: a `/readyz` that reads only
+> attributes assigned BEFORE the lifespan's yield cannot fail after boot, while one that reads
+> nothing from `app.state` (insid3) is making a real dependency call and is left alone.
 
 **Rule.** health-checks.md: "/livez … Cheap — return 200 if the event loop is responsive"; "(shutting down) 503 — Lifespan post-yield started"
 

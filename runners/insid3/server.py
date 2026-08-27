@@ -112,12 +112,20 @@ app = FastAPI(title="insid3-assist")
 
 
 @app.get("/livez")
-def livez() -> dict[str, bool]:
+async def livez() -> dict[str, bool]:
+    """`async def` so liveness answers on the event loop — the threadpool on this pod is where
+    inference runs, and a sync handler would queue liveness behind the workload."""
     return {"ok": True}
 
 
 @app.get("/readyz")
 def readyz() -> dict[str, bool]:
+    """Plain `def` DELIBERATELY, and it must stay one: `_get_model()` loads weights on first call.
+
+    That blocking load is what makes this a real readiness check rather than a constant — but it
+    belongs on the threadpool. Made `async def` to match its sibling above, the first probe after a
+    cold start would hold the event loop for the whole load and stall every other request on the pod.
+    """
     with _model_lock:
         _get_model()
     return {"ok": True}
