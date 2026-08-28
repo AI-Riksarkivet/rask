@@ -25,6 +25,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.concurrency import run_in_threadpool
 
 from search.api.dependencies import EmbedderFactoryDep, RerankerFactoryDep, StateDep
+from search.api.security import AuthorizedCorpora, CheckerDep, CurrentSubject, SettingsDep, require_search
 from search.core.rate_limit import SEARCH_LIMIT, SEARCH_SCOPE, limiter
 from search.services.filters import TOPIC_FILTER, extract_filters
 from search.services.fuse import reciprocal_rank_fusion
@@ -119,14 +120,19 @@ def search_get(
     state: StateDep,
     get_embedder: EmbedderFactoryDep,
     get_reranker: RerankerFactoryDep,
-    # FAN-OUT. Repeat it (`?corpus=a&corpus=b`) to search several at once. Its own name rather than
-    # overloading `dataset`: a repeated `dataset` would change that param's type from the caller's
-    # point of view, and every existing client sends exactly one.
-    corpus: Annotated[list[str] | None, Query(description="Fan out across these corpora, fused by RRF")] = None,
+    # FAN-OUT, ALREADY AUTHORIZED. `?corpus=a&corpus=b` still declares the fan-out (the dependency
+    # takes the same query param), but what arrives here is the SUBSET this caller may read —
+    # filtered, not refused, per `datasets.list_datasets`' rule. `None` means a single-corpus search,
+    # which the dependency has already 403'd if the caller is not entitled to it. The gate is a
+    # dependency because this handler is a sync `def` with a blocking Lance body and cannot await
+    # the checker itself (open_python-audit X6 / VS-13).
+    corpus: AuthorizedCorpora = None,
 ) -> list[dict[str, Any]]:
     spec = _spec_from_query(request)
-    if corpus:
-        return _fused_search(state, corpus, request, spec, get_embedder, get_reranker)
+    if corpus is not None:
+        # An empty list means the caller asked to fan out and may read NONE of them: an empty result
+        # is the same shorter-list answer, not an error.
+        return _fused_search(state, corpus, request, spec, get_embedder, get_reranker) if corpus else []
     handle = dataset_handle(state, spec.dataset)
     filters = extract_filters(request.query_params, _filterable(handle, spec.table))
     # Empty-input short-circuit: only the topic facet triggers filter-only
@@ -226,10 +232,14 @@ async def search_post(
     get_embedder: EmbedderFactoryDep,
     get_reranker: RerankerFactoryDep,
     spec: Annotated[PostSearchSpec, Depends(_post_spec)],
+    subject: CurrentSubject,
+    checker: CheckerDep,
+    settings: SettingsDep,
     image: Annotated[UploadFile | None, File()] = None,
     dataset: Annotated[str | None, Query(description="Dataset id (default DB when omitted)")] = None,
     table: Annotated[str | None, Query(description="Searchable table name (the corpus default when omitted)")] = None,
 ) -> list[dict[str, Any]]:
+    await require_search(state, dataset, subject=subject, checker=checker, settings=settings)
     image_bytes = None
     if image is not None:
         # Bound the read so a large multipart part can't be buffered whole
@@ -312,6 +322,9 @@ async def search_similar(
     # re-audit of the search closure, whose note claimed all three entry points were covered.
     request: Request,
     state: StateDep,
+    subject: CurrentSubject,
+    checker: CheckerDep,
+    settings: SettingsDep,
     key: Annotated[str, Query(description="The seed row, its identity fields joined by '/'")],
     n: Annotated[int, Query(ge=1, le=200, description="How many neighbours")] = 24,
     space: Annotated[str | None, Query(description="Declared vector space (the corpus's first when omitted)")] = None,
@@ -330,5 +343,10 @@ async def search_similar(
     The seed is excluded from its own results — it ranks first at distance 0, and a "more like this"
     whose best answer is the thing you clicked reads as broken.
     """
+    # AUTHORIZED BEFORE THE SEED IS READ. This route takes a raw SQL `where` ANDed into the query
+    # (open_python-audit VS-13 names that as the sharp edge of the service having no authz at all);
+    # the predicate stays — `duration > 60` is a real feature — but it can now only ever run against
+    # a corpus this caller may read.
+    await require_search(state, dataset, subject=subject, checker=checker, settings=settings)
     spec = SimilarSpec(key=key, n=n, space=space, where=where)
     return await run_in_threadpool(_run_similar, state, spec, dataset, table)
