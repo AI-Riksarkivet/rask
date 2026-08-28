@@ -708,7 +708,7 @@ The estate has a platform library and does not use it consistently: the governed
 
 #### The high-severity items in this epic
 
-<details><summary><b>DUP-01</b> [**OPEN**] — The governed-auth bootstrap (OIDC verifier + FGA provision/make_client) is copy-pasted into 8 lifespans <i>(cross-service, duplication, effort M)</i></summary>
+<details><summary><b>DUP-01</b> [**FIXED**] — The governed-auth bootstrap (OIDC verifier + FGA provision/make_client) is copy-pasted into 8 lifespans <i>(cross-service, duplication, effort M)</i></summary>
 
 **Sites:** `services/catalog/src/catalog/main.py:89`, `services/lineage/src/lineage/main.py:86`, `services/viewer/src/viewer/main.py:52`, `services/annotator/src/annotator/main.py:54`, `services/medallion/src/medallion/producer.py:71` *(+3 more)*
 
@@ -723,6 +723,9 @@ The estate has a platform library and does not use it consistently: the governed
 
 
 **RE-VERIFIED 2026-08-28 — CONFIRMED, high, effort L, and its harm is no longer theoretical.** The 2026-08-24 re-verify's headline ('no bootstrap module exists') is now false — `attach_auth` exists — which makes it WORSE, not fixed: the estate is half-migrated, the state the finding predicts costs most. **Phase 0 was a LIVE OUTAGE and is CLOSED (``99229c18``)**: the `search` auth seam landed for `X6` with every part except the one line that connects it, so on an auth-enabled estate every search route answered 503. That is the DUP-01 mechanism verbatim — the identical 503 `f24fae39` had fixed for compute and controlplane six days earlier, in a commit that did not look at search. It is now gated estate-wide by `tests/unit/test_governed_services_wire_their_gate.py`. Phases 1-3 (collapsing the ten inline copies onto the helper) remain.
+
+
+**FIXED (2026-08-28), phases 1-3.** `attach_auth` gains `provision`/`fatal` params; `build_fga_client` for the non-lifespan consumer; ten (eleven — cascade_backfill was the missed copy) inline bootstraps collapsed. Two anti-regression gates (wire + one-implementation). Adversarially rejected for a fabricated docstring origin and three flattened structured audit events (`openfga_provisioned` et al.) — reverted/restored as structured single-emitter events with obs.py's register updated.
 
 </details>
 
@@ -885,7 +888,7 @@ Sequential awaits over independent I/O, full-table reads to serve one row, and c
 
 #### The high-severity items in this epic
 
-<details><summary><b>ANN-03</b> [**OPEN**] — Per-item actor round-trips are awaited sequentially on send, publish and list — up to 2000 serialised sidecar calls in one request <i>(annotator, resources, effort M)</i></summary>
+<details><summary><b>ANN-03</b> [**FIXED**] — Per-item actor round-trips are awaited sequentially on send, publish and list — up to 2000 serialised sidecar calls in one request <i>(annotator, resources, effort M)</i></summary>
 
 **Sites:** `services/annotator/src/annotator/api/v1/endpoints/project_events.py:457`, `services/annotator/src/annotator/api/v1/endpoints/project_events.py:464`, `services/annotator/src/annotator/api/v1/endpoints/project_events.py:467`, `services/annotator/src/annotator/projects/saga.py:136`, `services/annotator/src/annotator/projects/saga.py:138` *(+3 more)*
 
@@ -902,6 +905,9 @@ Sequential awaits over independent I/O, full-table reads to serve one row, and c
 
 
 **RE-VERIFIED 2026-08-28 — CONFIRMED, high, effort L.** Real on all three paths. **Do NOT apply the finding's prescribed fix as written**: actor reentrancy is disabled estate-wide, so `gather` over calls to ONE actor id queues on the turn lock and buys ~2x rather than 16x — a green benchmark over an unfixed endpoint. The fix needs a `SendMany` actor method applying every task to the index in ONE `save_state` (today it is a read-modify-write of the whole project index per item, O(N^2) bytes), with bounded `gather` only for the per-task `seed` calls that address DIFFERENT actor ids. The un-paginated `list_projects` is a separate defect needing a `limit`/`cursor` contract change — not to be smuggled in.
+
+
+**FIXED (2026-08-28).** SendMany actor method (one save_state; the O(N^2)-bytes read-modify-write per item became one) + bounded seed fan-out on the send path; `collect` fanned out over the per-task actors with a lowest-index-after-gather refusal on the publish path. `list_projects` excluded as a separate pagination-contract defect (re-verification ruling). Workflow-implemented, adversarially rejected for 19 red fakes + the undone collect half, both repaired.
 
 </details>
 
@@ -1571,7 +1577,7 @@ sites and the evidence as measured at `871b5e14`.
 | ID | Status | → | Sev | Cat | Eff | Finding | Sites |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `ANN-02` | **FIXED** | E3 | **HIGH** | resilience | M | Publish saga is fire-and-forget with a module-global in-flight set — a lost task strands the project in `publishing` forever | `services/annotator/src/annotator/projects/lakehouse.py:277`, `services/annotator/src/annotator/projects/lakehouse.py:280` *(+2 more)* |
-| `ANN-03` | **OPEN** | E8 | **HIGH** | resources | M | Per-item actor round-trips are awaited sequentially on send, publish and list — up to 2000 serialised sidecar calls in one request | `services/annotator/src/annotator/api/v1/endpoints/project_events.py:457`, `services/annotator/src/annotator/api/v1/endpoints/project_events.py:464` *(+6 more)* |
+| `ANN-03` | **FIXED** | E8 | **HIGH** | resources | M | Per-item actor round-trips are awaited sequentially on send, publish and list — up to 2000 serialised sidecar calls in one request | `services/annotator/src/annotator/api/v1/endpoints/project_events.py:457`, `services/annotator/src/annotator/api/v1/endpoints/project_events.py:464` *(+6 more)* |
 | `ANN-04` | **OPEN** | E5 | med | config | S | CORS `allow_methods` omits PUT/PATCH/DELETE while seven routes serve exactly those methods | `services/annotator/src/annotator/main.py:125`, `services/annotator/src/annotator/api/v1/endpoints/tasks.py:247` *(+6 more)* |
 | `ANN-05` | **OPEN** | E4 | med | error-handling | M | Ontology enforcement fails open on the two BULK-WRITE paths (send + import) when a stored ontology will not parse | `services/annotator/src/annotator/api/v1/endpoints/project_events.py:368`, `services/annotator/src/annotator/api/v1/endpoints/tasks.py:329` *(+2 more)* |
 | `ANN-06` | **OPEN** | E3 | med | error-handling | M | Domain errors cross the actor boundary as formatted strings reconstructed by regex | `services/annotator/src/annotator/projects/proxies.py:60`, `services/annotator/src/annotator/projects/proxies.py:73` *(+2 more)* |
@@ -2183,7 +2189,7 @@ sites and the evidence as measured at `871b5e14`.
 
 | ID | Status | → | Sev | Cat | Eff | Finding | Sites |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `DUP-01` | **OPEN** | E6 | **HIGH** | duplication | M | The governed-auth bootstrap (OIDC verifier + FGA provision/make_client) is copy-pasted into 8 lifespans | `services/catalog/src/catalog/main.py:89`, `services/lineage/src/lineage/main.py:86` *(+6 more)* |
+| `DUP-01` | **FIXED** | E6 | **HIGH** | duplication | M | The governed-auth bootstrap (OIDC verifier + FGA provision/make_client) is copy-pasted into 8 lifespans | `services/catalog/src/catalog/main.py:89`, `services/lineage/src/lineage/main.py:86` *(+6 more)* |
 | `DUP-03` | **PARTIAL** | E6 | **HIGH** | duplication | M | `authorize_produce` and `authorize_ingest` are two ~120-line copies of one dual-auth door | `services/medallion/src/medallion/api/produce_auth.py:41`, `services/medallion/src/medallion/api/produce_auth.py:58` *(+2 more)* |
 | `DUP-04` | **PARTIAL** | E6 | **HIGH** | duplication | S | catalog's `_bucket_client` builds boto3 directly, bypassing packages/storage and losing s3v4, path-style and timeouts | `services/catalog/src/catalog/services/warehouses.py:41`, `services/catalog/src/catalog/core/vending.py:195` *(+2 more)* |
 | `X4` | **PARTIAL** | E10 | **HIGH** | observability | S | `configure_app_logging`'s allow-list is stale: `maintenance` calls it but is not on the list, while dead names `compaction` and `common` are | `packages/service-kit/src/service_kit/obs.py:27`, `services/maintenance/src/maintenance/service.py:45` *(+3 more)* |
