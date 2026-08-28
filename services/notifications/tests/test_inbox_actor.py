@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from notifications.config import get_notifications_settings
 from notifications.errors import InboxUnreadable
 from notifications.feed import unread_count
-from notifications.inbox_actor import COMPACTION_REMINDER, META_KEY, ROWS_KEY, InboxActor, InboxActorInterface
+from notifications.inbox_actor import COMPACTION_REMINDER, DIGEST_KEY, DIGEST_REMINDER, META_KEY, ROWS_KEY, InboxActor, InboxActorInterface
 from notifications.models import InboxMeta, InboxPointer, InboxRows, NotificationReason, notification_id
 from notifications.proxies import inbox_actor_id
 
@@ -1084,3 +1084,127 @@ async def test_the_digest_drain_does_not_re_enter_its_own_actor(monkeypatch: pyt
     assert opened == [], f"the digest re-entered its own actor via inbox_for: {opened}"
     assert len(delivered) == 1, f"the digest did not reach the channel exactly once: {delivered}"
     assert delivered[0][0] == "alice@example.test"
+
+
+# ── the digest window cannot be orphaned open ───────────────────────────────────────────────────
+#
+# Found by the Jobs-gap audit (2026-08-28), filed as DEFECT_INDEPENDENT_OF_MECHANISM: the one-shot
+# digest reminder lives in the Scheduler's etcd and `DIGEST_KEY` lives in Postgres, with no
+# transaction between them — the exact split the module docstring names, for which COMPACTION has a
+# read-path repair and the digest had NONE. Three paths stranded `pending=True` with no reminder
+# left: the Scheduler loses the one-shot; `_RETRY_THE_ONE_SHOT` exhausts its six retries; or
+# `drain_digest`'s state write fails inside `_send_digest`'s catch-all — the callback then reports
+# SUCCESS, the runtime removes the fired one-shot, and pending was never flipped. After any of them,
+# every future deferred notification told itself a window was already open, forever. Silently: the
+# bell stays correct and failures still send immediately, which is exactly why nothing reported it.
+#
+# Jobs would NOT fix this — it has the identical two-store split — which is why the fix is the same
+# shape compaction already uses: the record carries its own `due_at`, and the ARM path repairs an
+# overdue window instead of refusing it.
+
+
+def _digest_record(actor: _Actor) -> dict[str, Any]:
+    manager = cast("_FakeStateManager", actor._state_manager)
+    raw = manager.staged.get(DIGEST_KEY, manager.store.get(DIGEST_KEY))
+    assert raw, "no digest record stored at all"
+    return json.loads(raw)
+
+
+def _put_digest_record(actor: _Actor, record: dict[str, Any]) -> None:
+    cast("_FakeStateManager", actor._state_manager).store[DIGEST_KEY] = json.dumps(record)
+
+
+@pytest.mark.asyncio
+async def test_a_lost_one_shot_is_re_armed_once_overdue() -> None:
+    """Path (a): the Scheduler forgot the reminder; the next ARM is the read-path repair."""
+    actor = _Actor()
+    await actor.arm_digest({"seconds": 60})
+    # The split-store loss: etcd forgets, Postgres remembers.
+    actor.reminders.pop(DIGEST_REMINDER)
+    # The window is long past due (one full retry schedule beyond the deadline).
+    record = _digest_record(actor)
+    record["due_at"] = datetime.now(UTC).timestamp() - 200
+    _put_digest_record(actor, record)
+
+    result = await actor.arm_digest({"seconds": 60})
+
+    assert result["armed"] is True, "an overdue pending window refused to re-arm — the orphan is permanent"
+    assert DIGEST_REMINDER in actor.reminders, "the repair claimed to arm but registered nothing"
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_pending_record_with_no_due_time_is_repairable() -> None:
+    """A record written before `due_at` existed cannot prove it is overdue — treat it as repairable,
+    because the alternative is exactly the permanent orphan (worst case: one early digest)."""
+    actor = _Actor()
+    _put_digest_record(actor, {"pending": True, "seconds": 60})
+
+    result = await actor.arm_digest({"seconds": 60})
+
+    assert result["armed"] is True
+    assert DIGEST_REMINDER in actor.reminders
+
+
+@pytest.mark.asyncio
+async def test_a_pending_window_that_is_NOT_overdue_still_refuses() -> None:
+    """The guard the docstring records must survive the repair: re-arming a live window on every
+    deferred notification pushes it forward forever, and a steady trickle never digests."""
+    actor = _Actor()
+    await actor.arm_digest({"seconds": 3600})
+    first_due = actor.reminders[DIGEST_REMINDER]
+
+    result = await actor.arm_digest({"seconds": 3600})
+
+    assert result["armed"] is False, "a live window was re-armed — the trickle defect is back"
+    assert actor.reminders[DIGEST_REMINDER] == first_due
+
+
+@pytest.mark.asyncio
+async def test_a_failed_drain_write_RAISES_so_the_declared_retry_governs_it() -> None:
+    """Path (c): if closing the window cannot be persisted, the tick must FAIL — that is the one
+    failure class `_RETRY_THE_ONE_SHOT` was declared for, and a swallow here makes the runtime
+    remove the fired one-shot with `pending` still True."""
+    actor = _Actor()
+    await actor.arm_digest({"seconds": 60})
+
+    import notifications.proxies as proxies
+
+    async def _ok(subject: str, payload: dict[str, Any]) -> None:
+        return None
+
+    manager = cast("_FakeStateManager", actor._state_manager)
+    # The push is stubbed because with no channels configured `digest_push_into` returns None and
+    # `_send_digest` returns before draining — the property here is about the DRAIN's commit.
+    original = proxies.digest_push_into
+    proxies.digest_push_into = cast(Any, lambda _actor: _ok)
+    try:
+        manager.save_error = RuntimeError("state store down mid-save")
+        with pytest.raises(RuntimeError, match="mid-save"):
+            await actor._send_digest()
+    finally:
+        proxies.digest_push_into = original
+
+
+@pytest.mark.asyncio
+async def test_a_failed_PUSH_is_still_swallowed() -> None:
+    """The other half must not change: once the window is durably closed, a channel failure is not a
+    reason to re-fire — the rows are still in the inbox and the bell is correct."""
+    actor = _Actor()
+    await actor.deliver(_delivery("run-1"))
+    await actor.arm_digest({"seconds": 60})
+
+    import notifications.proxies as proxies
+
+    def _push(_actor: Any) -> Any:
+        async def _fail(subject: str, payload: dict[str, Any]) -> None:
+            raise RuntimeError("smtp is down")
+
+        return _fail
+
+    original = proxies.digest_push_into
+    proxies.digest_push_into = cast(Any, _push)
+    try:
+        await actor._send_digest()
+    finally:
+        proxies.digest_push_into = original
+    assert _digest_record(actor)["pending"] is False, "the window did not close durably before the push"

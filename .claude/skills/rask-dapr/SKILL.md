@@ -79,12 +79,38 @@ actor placement/turn semantics.
   the first rather than replacing it); it creates a second stateful store (the Scheduler's etcd)
   that every policy create/update/delete/drop/undrop path must mirror, invisible to the render
   gates and the drift report; and the sweep is single-flight, so per-target wakeups queue on the
-  same lock. **Revisit trigger — the edge-triggered case:** a discrete event that must fire ONCE at
-  a moment where lateness ≈ wrongness ("expire this grant at T+24h"; auto-purge-at-trash-deadline
-  instead of the sweep merely REPORTING expired trash). Bindings cannot express one-shots, the
-  Scheduler already runs here (actor reminders use it), and Jobs is the idiomatic answer THEN —
-  minding its guarantee: at-least-once, durability over punctuality. Calendar semantics in a policy
-  ("02:00 in the project's timezone") are NOT that trigger: still computable from data at each tick.
+  same lock. **AUDITED ESTATE-WIDE 2026-08-28** (10 time-shaped clusters,
+  adversarial, fable agents): **zero SHOULD_USE_JOBS.** Every hypothesised consumer dissolved on
+  inspection — the candidates below are REFUTED and must not be re-proposed without new facts:
+  * *auto-purge at trash deadline* → already shipped as a sweep flag (`MAINTENANCE_TRASH_PURGE_ENABLED`,
+    report-only default is a recorded destruction posture). A purge tolerates a tick's lateness and
+    must re-verify state at execution anyway (`purge.due_records` is the one shared rule), so the
+    sweep is the CORRECT mechanism, not a stand-in.
+  * *TTL grants* → already live as an FGA CEL condition (`non_expired_grant`, model.fga:481) —
+    check-time evaluation, strictly better than revoke-at-T (no window a crashed revoker leaves open).
+  * *per-subject digest one-shots* → actor reminders, correctly (the state lives in the actor's turn;
+    reminders ride the same Scheduler Jobs would). The audit's ONE finding here was a repairability
+    defect, not a mechanism error — fixed 2026-08-28 (`_digest_orphaned` read-path repair; Jobs has
+    the identical two-store split and would not have helped).
+  **The real revisit trigger:** a one-shot that is scoped to NOTHING that already holds state — no
+  actor to remind, no workflow to time, no record a scan can evaluate. Example: an estate-wide digest
+  at a fixed local time per timezone cohort. None exists. Calendar semantics in a per-entity policy
+  ("02:00 in the project's timezone") are NOT it: still computable from data at each tick.
+
+## Jobs vs Workflow vs reminder — where a DELAY belongs
+
+One question decides it: **where does the state live?**
+
+| The scheduled thing is… | Use | Why |
+| --- | --- | --- |
+| one step of a stateful multi-step process | **Workflow timer** | the process already holds the context (run record, idempotency key, what to emit on outcome); resumes mid-process after a crash |
+| a wakeup for state living in an actor | **actor reminder** | runs under the actor's turn lock — the plane's own concurrency control; Jobs would land at the app and have to re-invoke the actor anyway |
+| a bare future trigger with no surrounding state | **Jobs** | one etcd row + a callback; a workflow here would be an orchestrator used as an alarm clock (history rows, replay, determinism rules, zero orchestration) |
+| recurring scan-and-converge | **cron binding** | as ruled above |
+
+Two failure smells, one per direction: a workflow whose body is ONLY `create_timer` → should be
+Jobs; Jobs callbacks that CHAIN (A schedules B schedules C, payload accumulating state) → a
+hand-built workflow without history, replay or per-step retry — should be Workflow.
 
 ## The one open candidate
 

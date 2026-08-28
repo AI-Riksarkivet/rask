@@ -109,13 +109,22 @@ _DROP_THE_TICK: Final = ActorReminderFailurePolicy.drop_policy()
 #:
 #: `_DROP_THE_TICK` above is right for the periodic compaction reminder: the next tick IS the retry.
 #: The digest reminder fires ONCE (`period=0`), and `arm_digest` writes `DIGEST_KEY={"pending": True}`
-#: before registering it, which `_digest_pending()` then treats as "a window is already open" and
-#: refuses to re-arm. So a single failed digest tick left the window open, never re-fired and never
-#: re-armable — silent and permanent, the failure class the reminder exists to prevent.
+#: before registering it, which `_digest_pending()` treats as "a window is already open" and refuses
+#: to re-arm. This policy is the FIRST belt against a failed tick; `_digest_orphaned()` is the second
+#: — once the window is a full retry schedule past its `due_at`, the ARM path re-registers instead of
+#: refusing, so exhausting these retries (or the Scheduler losing the one-shot outright) is no longer
+#: silent and permanent.
 #:
 #: Same shape and reasoning as the annotator's `_RETRY_THE_ONE_SHOT` for its lease expiry, and bounded
 #: for the same reason: a permanently poisoned tick still has to give up rather than pin the actor.
 _RETRY_THE_ONE_SHOT: Final = ActorReminderFailurePolicy.constant_policy(interval=timedelta(seconds=10), max_retries=6)
+
+#: How far past its `due_at` a pending digest window may run before the ARM path treats it as
+#: ORPHANED and re-registers the one-shot. One full `_RETRY_THE_ONE_SHOT` schedule (6 x 10s) plus
+#: slack: within it, a slow-but-alive tick may still fire and a repair would double the digest;
+#: beyond it, the reminder is provably gone — the Scheduler lost it, or the retries exhausted, and
+#: either way nothing will ever close the window again without this.
+_DIGEST_REARM_GRACE_S: Final = 70.0
 
 
 def _parse[T: BaseModel](partition: str, raw: str, model: type[T]) -> T:
@@ -543,7 +552,7 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         pending.
         """
         seconds = int(payload["seconds"])
-        if await self._digest_pending():
+        if await self._digest_pending() and not await self._digest_orphaned():
             return {"armed": False, "seconds": seconds}
         # ONE-SHOT: `period=0` fires once and the runtime removes it. A repeating reminder had to be
         # unregistered on drain, and that disarm could be refused — silently, into
@@ -551,13 +560,47 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         # period, forever. A window that closes itself needs no second call to have been correct.
         # (The annotator's lease reminder documents the same primitive: "`period=0` = fire once".)
         await self.register_reminder(DIGEST_REMINDER, b"", timedelta(seconds=seconds), timedelta(0), failure_policy=_RETRY_THE_ONE_SHOT)
-        await self._state_manager.set_state(DIGEST_KEY, json.dumps({"pending": True, "seconds": seconds}))
+        # `due_at` is what makes an orphan DETECTABLE. The reminder lives in the Scheduler's etcd and
+        # this record in Postgres, with no transaction between them — the same split the compaction
+        # docstring names, and compaction's read-path repair is only possible because its meta carries
+        # a due time. Without one here, a lost one-shot left `pending: true` unfalsifiable forever.
+        await self._state_manager.set_state(DIGEST_KEY, json.dumps({"pending": True, "seconds": seconds, "due_at": datetime.now(UTC).timestamp() + seconds}))
         await self._state_manager.save_state()
         return {"armed": True, "seconds": seconds}
 
     async def _digest_pending(self) -> bool:
         has, raw = await self._state_manager.try_get_state(DIGEST_KEY)
         return bool(has and raw and json.loads(raw).get("pending"))
+
+    async def _digest_orphaned(self) -> bool:
+        """A pending window whose reminder is provably gone — the ARM path is its repair path.
+
+        Three ways `pending: true` outlives its reminder, none of them observable from outside: the
+        Scheduler's etcd loses the one-shot; `_RETRY_THE_ONE_SHOT` exhausts and the runtime drops it;
+        or a drain that could not persist reported success anyway (now impossible — `_send_digest`
+        lets that raise — but the first two remain). After any of them every deferred notification
+        for this subject was told a window is already open, forever, silently: failures still sent
+        immediately and the bell stayed correct, which is exactly why nothing reported it. Found by
+        the Jobs-gap audit, 2026-08-28; the Jobs API carries the identical two-store split, so the
+        fix is this repair, not a different scheduler.
+
+        A record with no `due_at` predates this field and cannot prove it is overdue — treated as
+        orphaned, because the alternative is the permanent orphan (worst case: one early digest).
+        """
+        has, raw = await self._state_manager.try_get_state(DIGEST_KEY)
+        if not (has and raw):
+            return False
+        record = json.loads(raw)
+        if not record.get("pending"):
+            return False
+        due_at = record.get("due_at")
+        if due_at is None:
+            logger.warning("inbox_digest_orphan_repaired", extra={"reason": "legacy_record_no_due_at"})
+            return True
+        overdue = datetime.now(UTC).timestamp() > float(due_at) + _DIGEST_REARM_GRACE_S
+        if overdue:
+            logger.warning("inbox_digest_orphan_repaired", extra={"reason": "overdue", "due_at": due_at})
+        return overdue
 
     async def drain_digest(self) -> dict[str, Any]:
         """What the digest window accumulated: the UNREAD, UNSENT rows, and the window closed.
@@ -609,8 +652,14 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         push = digest_push_into(self)
         if push is None:
             return
+        # THE DRAIN IS OUTSIDE THE SWALLOW, and that split is load-bearing. If closing the window
+        # cannot be PERSISTED, this tick must fail so `_RETRY_THE_ONE_SHOT` re-fires it — a swallow
+        # here made the callback report success, the runtime removed the fired one-shot, and
+        # `pending: true` stood forever (the orphan the audit found). A failed PUSH after a durable
+        # close is the opposite case and keeps the swallow: the rows are still in the inbox, the
+        # bell is correct, and re-firing would be the duplicate email a person notices most.
+        drained = await self.drain_digest()
         try:
-            drained = await self.drain_digest()
             for payload in drained["pointers"]:
                 await push(self._subject(), payload)
         except Exception:
