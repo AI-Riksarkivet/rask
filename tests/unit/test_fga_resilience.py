@@ -194,22 +194,27 @@ def test_write_tuples_fails_closed_on_network_error() -> None:
 class _TransactionalStore:
     """A fake that behaves the way a real OpenFGA store actually does on ``Write``.
 
-    The whole call is ONE transaction: if any tuple in the batch already exists, the server rejects the
-    entire write with ``write_failed_due_to_invalid_input`` and persists NOTHING. Verified against the live
-    OpenFGA on 2026-07-26 — writing [existing, new] left only `existing` behind, and the new tuple was
-    silently lost. Modelling that here is the point: a fake that accepts partial batches would let the bug
-    back in.
+    The whole call is ONE transaction. WITHOUT a conflict option, any already-present tuple rejects
+    the entire write with ``write_failed_due_to_invalid_input`` and persists NOTHING (verified live
+    2026-07-26 — writing [existing, new] left only `existing` behind). WITH
+    ``on_duplicate_writes=IGNORE`` (SDK >= 0.10.4, server 1.18.3, verified live 2026-08-28 for
+    SKG-01), the same batch answers 200 and lands the non-duplicates in the SAME transaction.
+    Modelling BOTH is the point: the old shape is what a server too old for the option still does,
+    and the fail-closed test below pins what happens then.
     """
 
-    def __init__(self, existing: set[tuple[str, str, str]]) -> None:
+    def __init__(self, existing: set[tuple[str, str, str]], *, honours_conflict: bool = True) -> None:
         self.tuples = set(existing)
+        self.honours_conflict = honours_conflict
         self.write_calls: list[int] = []  # batch size per call, so the fast path stays provable
 
-    async def write(self, request: ClientWriteRequest) -> object:
+    async def write(self, request: ClientWriteRequest, options: dict[str, object] | None = None) -> object:
         batch = [(t.user, t.relation, t.object) for t in request.writes or []]
         self.write_calls.append(len(batch))
+        conflict = (options or {}).get("conflict")
+        ignore_duplicates = self.honours_conflict and getattr(conflict, "on_duplicate_writes", None) is not None
         dupes = [t for t in batch if t in self.tuples]
-        if dupes:
+        if dupes and not ignore_duplicates:
             raise ApiException(
                 status=400,
                 reason=f"cannot write a tuple which already exists: {dupes[0]}: invalid write input",
@@ -246,8 +251,30 @@ def test_write_tuples_lands_siblings_when_one_tuple_already_exists() -> None:
 
     assert ("user:alice", "owner", "warehouse:wh-a") in store.tuples, "the owner grant was dropped because a SIBLING tuple already existed"
     assert ("project:acme", "project", "warehouse:wh-a") in store.tuples
-    # One transactional attempt, then one write per tuple — the fast path is not paid for twice.
-    assert store.write_calls == [3, 1, 1, 1]
+    # ONE transactional call: the conflict option lands the siblings server-side (SKG-01 replaced
+    # the client-side one-tuple-at-a-time fallback, which paid [3, 1, 1, 1] here).
+    assert store.write_calls == [3]
+
+
+def test_a_server_too_old_for_the_conflict_option_fails_CLOSED() -> None:
+    """The property the deleted prose-matching fallback actually protected, kept honestly: against
+    a server that 400s duplicates regardless of the option, the seam must raise 503 — never guess
+    from the message text that the post-condition might hold. A silent success here is exactly the
+    warehouse-owner bug (siblings dropped, caller told the grant landed)."""
+    store = _TransactionalStore({("user:alice", "owner", "warehouse:wh-a")}, honours_conflict=False)
+    with pytest.raises(ServiceUnavailableError):
+        asyncio.run(
+            fga.write_tuples(
+                cast(OpenFgaClient, store),
+                [ClientTuple(user="user:alice", relation="owner", object="warehouse:wh-a")],
+                actor="test",
+                origin="admin_api",
+                retry_attempts=1,
+                retry_backoff_seconds=0.0,
+                retry_max_backoff_seconds=0.0,
+            )
+        )
+    assert store.tuples == {("user:alice", "owner", "warehouse:wh-a")}, "a failed write mutated the store"
 
 
 def test_write_tuples_batch_without_duplicates_stays_one_call() -> None:
@@ -288,7 +315,7 @@ def test_write_tuples_single_duplicate_is_still_a_no_op() -> None:
         )
     )
     assert store.tuples == {seeded}
-    assert store.write_calls == [1]  # no pointless fallback for a batch of one
+    assert store.write_calls == [1]  # one call; the server ignores the duplicate and answers 200
 
 
 @pytest.mark.parametrize(
