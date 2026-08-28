@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import re
 from collections.abc import Mapping
 
@@ -124,15 +123,6 @@ def trace_env() -> dict[str, str]:
     carrier: dict[str, str] = {}
     propagate.inject(carrier)
     return {k.upper(): v for k, v in carrier.items() if k in ("traceparent", "tracestate")}
-
-
-def lineage_env() -> dict[str, str]:
-    """This pod's ``RASK_LINEAGE_*`` config, forwarded into a job's ``runtime_env``.
-
-    A job that grows lineage-kit emission inherits the same endpoint and namespace the fleet uses. Empty
-    when unconfigured — the job's lineage-kit degrades to its no-op emitter.
-    """
-    return {k: v for k, v in os.environ.items() if k.startswith("RASK_LINEAGE_")}
 
 
 async def job_status(client: httpx.AsyncClient, sub_id: str) -> str | None:
