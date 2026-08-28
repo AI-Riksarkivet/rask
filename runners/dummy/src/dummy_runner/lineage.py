@@ -34,7 +34,10 @@ from typing import Any
 _PRODUCER = "https://github.com/AI-Riksarkivet/rask/runners/dummy"
 _RUN_SCHEMA = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
 _BASE_FACET = "https://openlineage.io/spec/1-0-5/OpenLineage.json#/$defs/BaseFacet"
-_VERSION_FACET = "https://openlineage.io/spec/facets/1-0-0/DatasetVersionDatasetFacet.json#/$defs/DatasetVersionDatasetFacet"
+# 1-0-1, matching the FIVE platform-side citations (service-kit's kernel, the stage and train jobs)
+# — this said 1-0-0, the drift `tests/unit/test_lineage_emitters_share_one_wire_contract.py` was
+# written to catch and caught on its first run.
+_VERSION_FACET = "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json#/$defs/DatasetVersionDatasetFacet"
 
 #: The only states a person is told about. START/RUNNING notify nobody by product decision, and
 #: RECONCILED is lineage's own repair marker rather than an outcome anyone chose.
