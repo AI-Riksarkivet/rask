@@ -50,7 +50,7 @@ log = logging.getLogger(__name__)
 COMPACTION = "compaction"
 
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event (spec-required).
-_PRODUCER = "https://github.com/Borg93/lance-ns/tree/main/services/compaction/core/lineage_emit.py"
+_PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/services/maintenance/src/maintenance/core/lineage_emit.py"
 
 #: Standard ``ErrorMessageRunFacet`` schema URL — the SAME one the medallion FAIL emitter stamps
 #: (``medallion/schemas/events.py``), so both failure surfaces are one spec version.

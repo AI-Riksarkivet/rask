@@ -87,11 +87,6 @@ _MEM_WAL_DIR = "_mem_wal"
 #: so a naive scan reports it once per dataset forever.
 _RESERVED_MARKER = ".lance-reserved"
 
-#: Written by Lance as a discovery shortcut. The spec: "purely an optimization", "always safe to
-#: delete". It is never referenced by a manifest, so a naive scan would report it every single run —
-#: which is how a report trains its reader to ignore it. Classified, not listed as drift.
-_VERSION_HINT = "latest_version_hint.json"
-
 #: Ceiling on versions inspected per dataset. A table with a very long history would otherwise make
 #: one report O(versions x fragments) — and this pass runs over every dataset in every bucket.
 #: Hitting it is REPORTED (`incomplete`), never silently truncated: a partial referenced-set would
@@ -308,10 +303,15 @@ def _unscannable_reason(fs: pafs.FileSystem, prefix: str, referenced: set[str], 
         ),
     ):
         try:
-            if fs.get_file_info(f"{prefix}/{directory}").type == pafs.FileType.Directory:
-                return f"{prefix}: {why}"
-        except Exception:  # noqa: S110 — an unstattable path is not evidence of the layout
-            continue
+            probe = fs.get_file_info(f"{prefix}/{directory}")
+        except Exception as exc:
+            # A merely-absent probe returns NotFound; a RAISE is a transient object-store / permission
+            # failure — we could not determine whether this layout is present, and a layout we cannot
+            # rule out is one we must not certify. Fail CLOSED so the dataset reads checked=False rather
+            # than falling through to a scan that would name a live branch's files as orphans.
+            return f"{prefix}: layout probe for `{directory}/` failed ({type(exc).__name__}: {exc}) — cannot certify the dataset is scannable"
+        if probe.type == pafs.FileType.Directory:
+            return f"{prefix}: {why}"
 
     # A referenced path that is not here means the dataset spans roots (base_paths / shallow clone).
     # Checked against the exact-match entries only; the trailing-slash entries are sidecar DIRECTORIES.

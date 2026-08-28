@@ -32,6 +32,7 @@ parse is reported as an incomplete scan, never allowed to void a category.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -577,28 +578,36 @@ async def load_sources(
     bucket_client: Any,
     delimiter: str,
 ) -> Sources:
-    """Read all seven sources, independently. Nothing here raises."""
+    """Read all seven sources. Nothing here raises.
+
+    The five reads that depend on nothing — FGA tuples, the three registries, the bucket listing — run
+    CONCURRENTLY; each is independent IO into a different store, so serialising them only sums their
+    latencies. The namespace scan is the one dependent read (it consumes the warehouse records to reach
+    every registered root, diff2 F3.3), so it awaits after the gather rather than joining it.
+    """
     sources = Sources()
-    sources.tuples, sources.tuples_error = await _fga_source(sources, client)
-    sources.project_records, sources.project_records_error = await _registry_source(
-        sources, "registry:projects", control_root, storage_options, _PROJECTS_PREFIX, ("id",)
+    (
+        (sources.tuples, sources.tuples_error),
+        (sources.project_records, sources.project_records_error),
+        (sources.warehouse_records, sources.warehouse_records_error),
+        (sources.bindings, sources.bindings_error),
+        (sources.buckets, sources.buckets_error),
+    ) = await asyncio.gather(
+        _fga_source(sources, client),
+        _registry_source(sources, "registry:projects", control_root, storage_options, _PROJECTS_PREFIX, ("id",)),
+        _registry_source(sources, "registry:warehouses", control_root, storage_options, _WAREHOUSES_PREFIX, ("id", "bucket", "project")),
+        _registry_source(sources, "registry:bindings", control_root, storage_options, _BINDINGS_PREFIX, ("top_ns", "warehouse_id")),
+        _bucket_source(sources, bucket_client),
     )
-    sources.warehouse_records, sources.warehouse_records_error = await _registry_source(
-        sources, "registry:warehouses", control_root, storage_options, _WAREHOUSES_PREFIX, ("id", "bucket", "project")
-    )
-    sources.bindings, sources.bindings_error = await _registry_source(
-        sources, "registry:bindings", control_root, storage_options, _BINDINGS_PREFIX, ("top_ns", "warehouse_id")
-    )
-    # EVERY root, not just the shared one (diff2 F3.3). Reuses the warehouse registry already loaded
-    # above rather than reading it again — two reads would be two answers, and the second could
-    # disagree with the one `dangling_bindings` was computed from.
+    # EVERY root, not just the shared one (diff2 F3.3). Reuses the warehouse registry loaded above rather
+    # than reading it again — two reads would be two answers, and the second could disagree with the one
+    # `dangling_bindings` was computed from.
     warehouse_roots = sorted({str(r["root_uri"]) for r in (sources.warehouse_records or []) if r.get("root_uri")})
     namespace_roots = [namespace_root, *(r for r in warehouse_roots if r != namespace_root)]
     scanned, sources.namespaces_error = await _read_blocking("catalog:namespaces", _top_level_namespaces_across, namespace_roots, storage_options, delimiter)
     if scanned is not None:
         sources.namespaces, unreadable_roots = scanned
         sources.incomplete.extend(IncompleteScan(source=f"catalog:namespaces:{root}", reason=reason) for root, reason in unreadable_roots)
-    sources.buckets, sources.buckets_error = await _bucket_source(sources, bucket_client)
     return sources
 
 

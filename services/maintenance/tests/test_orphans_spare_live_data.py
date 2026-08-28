@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import posixpath
 from pathlib import Path
+from typing import cast
 
 import lance
 import pyarrow as pa
@@ -159,3 +160,33 @@ class TestUnreadableIsNotClean:
         assert report.datasets_unreadable == 1
         assert report.incomplete, "an unreadable dataset must be NAMED, so the reader knows what to distrust"
         assert report.total == len(report.orphans)
+
+
+class _RaisesOnLayoutProbe:
+    """A filesystem whose `tree/` layout probe RAISES (transient S3 / permission), instead of the
+    NotFound a merely-absent key returns — the exact case the scan must not read as "no branches"."""
+
+    def __init__(self, inner: pafs.FileSystem, probe_path: str) -> None:
+        self._inner = inner
+        self._probe_path = probe_path
+
+    def get_file_info(self, arg: object) -> object:
+        if isinstance(arg, str) and arg == self._probe_path:
+            raise OSError("transient object-store error stat-ing the layout probe")
+        return self._inner.get_file_info(arg)
+
+
+class TestAnUncertifiableLayoutIsNotClean:
+    def test_a_RAISING_branch_probe_fails_closed(self, dataset: str) -> None:
+        """A `tree/` probe that raises means we could not certify the dataset has no branches. That
+        must render as `checked=False`, never fall through to a scan that names a live branch's files
+        as orphans — "could not look" is not "there was nothing there"."""
+        # cast: the scan only calls fs.get_file_info, so the duck-typed double satisfies the contract
+        # under test without being a real (C-extension, unsubclassable) pyarrow FileSystem.
+        fs = cast(pafs.FileSystem, _RaisesOnLayoutProbe(pafs.LocalFileSystem(), f"{dataset}/tree"))
+
+        result = scan_dataset(fs, dataset, dataset)
+
+        assert result.checked is False
+        assert result.orphans == []
+        assert result.reason

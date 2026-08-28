@@ -745,3 +745,61 @@ def test_a_category_WITH_a_door_still_gates(tmp_path: Path, monkeypatch: pytest.
     assert report.counts["ghost_projects"] == 1
     assert report.total == 1, "a clearable category must still gate"
     assert report_is_clean(report) is not None
+
+
+# --------------------------------------------------------------------------- #
+# load_sources reads the independent stores concurrently (not one-at-a-time)
+# --------------------------------------------------------------------------- #
+
+
+def test_load_sources_reads_the_independent_stores_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The five source reads that depend on nothing (FGA tuples, the three registries, the bucket
+    listing) are independent IO, so they must run OVERLAPPED — the namespace scan alone waits, because
+    it consumes the warehouse records. Instrumenting each read's start/end proves the overlap: run
+    sequentially, exactly one read is in flight before the first one finishes; run concurrently, they
+    all start before any ends.
+    """
+    log: list[tuple[str, str]] = []
+
+    async def _instrument(name: str, ret: Any) -> Any:
+        log.append(("start", name))
+        # Two yields so the event loop can interleave every scheduled read before any resumes to end.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        log.append(("end", name))
+        return ret
+
+    async def _fake_fga(_sources: Any, _client: Any) -> Any:
+        return await _instrument("fga", (None, None))
+
+    async def _fake_registry(_sources: Any, source_name: str, *_a: Any, **_k: Any) -> Any:
+        return await _instrument(source_name, ([], None))
+
+    async def _fake_bucket(_sources: Any, _bucket_client: Any) -> Any:
+        return await _instrument("buckets", (None, None))
+
+    def _fake_namespaces(*_a: Any, **_k: Any) -> Any:
+        return ({}, [])
+
+    monkeypatch.setattr(mod, "_fga_source", _fake_fga)
+    monkeypatch.setattr(mod, "_registry_source", _fake_registry)
+    monkeypatch.setattr(mod, "_bucket_source", _fake_bucket)
+    monkeypatch.setattr(mod, "_top_level_namespaces_across", _fake_namespaces)
+
+    asyncio.run(
+        mod.load_sources(
+            client=cast(Any, object()),
+            control_root="file:///control",
+            namespace_root="file:///data",
+            storage_options=cast(Any, {}),
+            bucket_client=cast(Any, object()),
+            delimiter="/",
+        )
+    )
+
+    starts_before_first_end = 0
+    for kind, _name in log:
+        if kind == "end":
+            break
+        starts_before_first_end += 1
+    assert starts_before_first_end >= 2, f"the independent source reads ran sequentially, not overlapped: {log}"

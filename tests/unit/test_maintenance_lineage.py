@@ -79,6 +79,24 @@ def test_build_maintenance_event_shape() -> None:
     assert "facets" not in event["outputs"][0]
 
 
+def test_producer_uri_names_this_repo_and_this_service() -> None:
+    # The spec-required OpenLineage ``producer`` is wire-visible on every RunEvent. It must resolve —
+    # the repo is AI-Riksarkivet/rask and the code lives in services/maintenance, not the dissolved
+    # Borg93/lance-ns services/compaction path (which now 404s).
+    event = build_maintenance_event(
+        table_id="ns$table",
+        namespace="ns",
+        job_namespace="compaction",
+        run_id="r1",
+        event_time="2026-06-30T00:00:00Z",
+    )
+    producer = event["producer"]
+    assert "lance-ns" not in producer, producer
+    assert "services/compaction" not in producer, producer
+    assert "AI-Riksarkivet/rask" in producer, producer
+    assert "services/maintenance" in producer, producer
+
+
 def test_maintenance_event_round_trips_through_lineage_run_event() -> None:
     # The wire contract: the lineage service must parse a compaction event as a successful, versionless,
     # input-less run on the dataset — so it records a WROTE with no version + no DERIVED_FROM (no inputs).
