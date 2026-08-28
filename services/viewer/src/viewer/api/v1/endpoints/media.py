@@ -34,7 +34,7 @@ from service_kit.lancekit.registry import DatasetHandle, table_dataset
 from service_kit.media.authz import corpus_object
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
-from viewer.api.security import READ_DATA, CheckerDep, CurrentSubject, SettingsDep
+from viewer.api.security import READ_DATA, REQUIRE_MEDIA_BYTES, CheckerDep, CurrentSubject, SettingsDep
 from viewer.services.clips import MAX_CLIP_S, ClipBusyError, build_clip
 
 
@@ -250,7 +250,7 @@ def _frames_binding(handle: DatasetHandle) -> tuple[str, str, str | None] | None
 # ── routes ───────────────────────────────────────────────────────────────────
 
 
-@router.get("/thumbnail/{doc_id}")
+@router.get("/thumbnail/{doc_id}", dependencies=[REQUIRE_MEDIA_BYTES])
 def thumbnail(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> Response:
     handle = dataset_handle(state, dataset)
     declared = handle.descriptor.declared
@@ -276,7 +276,7 @@ def thumbnail(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> Res
     return blob_response(blob, mime=mime, empty_detail="no thumbnail for doc_id")
 
 
-@router.get("/chunk-frame/{doc_id}/{group_id}/{chunk_id}")
+@router.get("/chunk-frame/{doc_id}/{group_id}/{chunk_id}", dependencies=[REQUIRE_MEDIA_BYTES])
 def chunk_frame(
     doc_id: str,
     group_id: int,
@@ -413,7 +413,7 @@ async def media_clip(
     return FileResponse(path, media_type=mime, headers={"Cache-Control": "no-store"}, stat_result=stat_result)
 
 
-@router.get("/media/{doc_id}")
+@router.get("/media/{doc_id}", dependencies=[REQUIRE_MEDIA_BYTES])
 def media(doc_id: str, request: Request, state: StateDep, dataset: DatasetParam = None) -> Response:
     handle = dataset_handle(state, dataset)
     declared = handle.descriptor.declared

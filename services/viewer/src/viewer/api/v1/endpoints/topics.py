@@ -24,6 +24,7 @@ from service_kit.lancekit import store
 from service_kit.lancekit.topics_meta import NOISE_LABEL
 from service_kit.media.deps import StateDep
 from service_kit.media.state import dataset_handle
+from viewer.api.security import REQUIRE_CORPUS_DATA
 from viewer.schemas.topics import TopicsResponse
 
 
@@ -44,7 +45,7 @@ def _decode_jsonb(raw: Any) -> Any:
     return json.loads(raw) if isinstance(raw, str) else raw
 
 
-@router.get("")
+@router.get("", dependencies=[REQUIRE_CORPUS_DATA])
 def get_topics(state: StateDep, dataset: str | None = None) -> TopicsResponse:
     """The topic hierarchy for the treemap, or ``built: false`` if not generated yet."""
     handle = dataset_handle(state, dataset)

@@ -20,6 +20,7 @@ from service_kit.lancekit.registry import table_dataset
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
 from service_kit.pagination import Page, PaginationDep, build_page
+from viewer.api.security import REQUIRE_CORPUS_METADATA, CorpusFactsVisible
 from viewer.api.v1.endpoints.chunks import alignments_binding
 from viewer.schemas.system import ColumnKind, DbFacts, FilterColumn, HealthResponse, VllmPing
 
@@ -34,10 +35,15 @@ DURATION_COLUMN = "duration"
 
 
 @router.get("/health")
-def health(state: StateDep, dataset: DatasetParam = None) -> HealthResponse:
+def health(state: StateDep, facts_visible: CorpusFactsVisible, dataset: DatasetParam = None) -> HealthResponse:
     """Frontend status badge: pings vLLM embed/rerank, reports DB facts.
 
-    ALWAYS 200 — this is the media plane's liveness/capability probe, not a dataset read.
+    ALWAYS 200 — this is the media plane's liveness/capability probe, not a dataset read. That
+    contract is why this route is EXEMPT from the corpus decorator gate its siblings carry: a 401/403
+    here would recreate the red-dot regression below in a new costume. Authorization is SOFT instead
+    — `CorpusFactsVisible` never raises for an anonymous caller, and when the caller is not entitled
+    the corpus FACTS (table names, row counts, the store path) are REDACTED while the probe still
+    answers 200 with encoder reachability, which names no corpus.
 
     It used to resolve the dataset FIRST, so a deployment whose corpus volume is empty (now the chart
     default: ``explorer.corpus.mode=emptyDir``, since the old hostPath wedged every fresh cluster) answered
@@ -82,6 +88,11 @@ def health(state: StateDep, dataset: DatasetParam = None) -> HealthResponse:
         reason = f"{type(e).__name__}: {str(e).splitlines()[0][:200]}"
         return HealthResponse(db=None, db_error=reason, embed=embed, rerank=rerank)
 
+    if not facts_visible:
+        # Redacted, not refused: the probe's job (is the service up, are the encoders reachable)
+        # is answered; what the caller may not have is the corpus's shape.
+        return HealthResponse(db=None, db_error="not authorized to read corpus facts", embed=embed, rerank=rerank)
+
     declared = handle.descriptor.declared
     tables = handle.descriptor.tables
     row_table = declared.search.row_table if declared.search is not None else None
@@ -125,7 +136,7 @@ def _filterable(column: ColumnInfo, exclude: set[str]) -> ColumnKind | None:
     return _column_kind(column.arrow_type)
 
 
-@router.get("/columns")
+@router.get("/columns", dependencies=[REQUIRE_CORPUS_METADATA])
 def columns(state: StateDep, dataset: DatasetParam = None) -> list[FilterColumn]:
     """Filterable scalar columns of the declared row table (name + friendly kind).
 
@@ -164,7 +175,7 @@ class DocumentsPage(Page[dict[str, Any]]):
         return self.items
 
 
-@router.get("/documents")
+@router.get("/documents", dependencies=[REQUIRE_CORPUS_METADATA])
 def documents(
     state: StateDep,
     # THE ESTATE'S SHARED OFFSET PARAMS, and the reason they are a dependency rather than two

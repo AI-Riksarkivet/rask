@@ -35,6 +35,7 @@ from service_kit.lancekit.registry import DatasetHandle, table_dataset
 from service_kit.media.cache_bounds import evict_to_bounds
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
+from viewer.api.security import REQUIRE_CORPUS_DATA, REQUIRE_CORPUS_METADATA
 from viewer.api.v1.endpoints.chunks import alignments_binding
 from viewer.api.v1.endpoints.media import FRAME_INDEX_COLUMN
 from viewer.api.v1.endpoints.system import DURATION_COLUMN
@@ -79,7 +80,7 @@ def _built_rows(ds: lance.LanceDataset, space: AtlasSpace) -> int:
     return ds.count_rows(filter=f"{space.x} IS NOT NULL")
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[REQUIRE_CORPUS_METADATA])
 def atlas_status(state: StateDep, space: SpaceParam = None, dataset: DatasetParam = None) -> dict[str, Any]:
     """Which projection spaces are built, plus the requested space's row count.
 
@@ -105,7 +106,7 @@ def atlas_status(state: StateDep, space: SpaceParam = None, dataset: DatasetPara
     }
 
 
-@router.get("/points")
+@router.get("/points", dependencies=[REQUIRE_CORPUS_DATA])
 def atlas_points(state: StateDep, space: SpaceParam = None, dataset: DatasetParam = None) -> Response:
     """One Apache Arrow IPC stream for the scatter renderer (coords + codes + keys)."""
     handle = dataset_handle(state, dataset)
@@ -225,7 +226,7 @@ def _attach_frame_captions(handle: DatasetHandle, rows: list[dict[str, Any]]) ->
         logger.warning("frame caption attach failed", exc_info=True)
 
 
-@router.get("/chunk/{doc_id}/{group_id}/{chunk_id}")
+@router.get("/chunk/{doc_id}/{group_id}/{chunk_id}", dependencies=[REQUIRE_CORPUS_DATA])
 def atlas_chunk(
     state: StateDep,
     doc_id: str,
@@ -249,7 +250,7 @@ def atlas_chunk(
     return _finalize_hits(handle, rows)[0]
 
 
-@router.post("/chunks/by-key")
+@router.post("/chunks/by-key", dependencies=[REQUIRE_CORPUS_DATA])
 def atlas_chunks_by_key(state: StateDep, body: ChunkKeys, dataset: DatasetParam = None) -> dict[str, Any]:
     """Full hits for rows addressed BY KEY — the join a labelling queue needs (#60).
 
@@ -292,7 +293,7 @@ def atlas_chunks_by_key(state: StateDep, body: ChunkKeys, dataset: DatasetParam 
     return {"rows": _finalize_hits(handle, rows), "key_fields": key_fields}
 
 
-@router.post("/chunks")
+@router.post("/chunks", dependencies=[REQUIRE_CORPUS_DATA])
 def atlas_chunks(state: StateDep, body: ChunkRowIds, dataset: DatasetParam = None) -> list[dict[str, Any]]:
     """Full hits for a lasso/box/legend selection, addressed by ``_rowid``.
 

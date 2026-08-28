@@ -22,6 +22,7 @@ from service_kit.lancekit import store
 from service_kit.lancekit.predicate import eq
 from service_kit.media.deps import StateDep
 from service_kit.media.state import dataset_handle
+from viewer.api.security import REQUIRE_CORPUS_DATA
 from viewer.schemas.diarization import DiarizationResponse, SpeakerTurn
 
 
@@ -42,7 +43,7 @@ def _not_built(doc_id: str) -> DiarizationResponse:
     return DiarizationResponse(built=False, doc_id=doc_id)
 
 
-@router.get("/{doc_id}")
+@router.get("/{doc_id}", dependencies=[REQUIRE_CORPUS_DATA])
 def get_diarization(doc_id: str, state: StateDep, dataset: str | None = None) -> DiarizationResponse:
     """A recording's speaker turns (sorted by start), or ``built: false`` if absent."""
     handle = dataset_handle(state, dataset)

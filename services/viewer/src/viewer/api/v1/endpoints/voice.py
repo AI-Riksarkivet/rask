@@ -23,6 +23,7 @@ from starlette.concurrency import run_in_threadpool
 from service_kit.exceptions import ServiceUnavailableError, ValidationError
 from service_kit.media.deps import StateDep
 from service_kit.media.state import AppState, dataset_handle
+from viewer.api.security import REQUIRE_CORPUS_DATA, REQUIRE_CORPUS_METADATA
 from viewer.schemas.voice import VoiceIdentityResponse, VoiceSimilarResponse, VoiceStatusResponse
 from viewer.services import voice_service
 from viewer.services.voice_service import MAX_N
@@ -72,13 +73,13 @@ def voice_encoder(state: AppState) -> "ServeEncoder":
     return ServeEncoder(url)
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[REQUIRE_CORPUS_METADATA])
 def voice_status(state: StateDep, dataset: str | None = None) -> VoiceStatusResponse:
     """Whether the voice tables exist + their row counts (no error when absent)."""
     return voice_service.voice_status(dataset_handle(state, dataset))
 
 
-@router.get("/similar")
+@router.get("/similar", dependencies=[REQUIRE_CORPUS_DATA])
 def voice_similar(
     state: StateDep,
     doc_id: str,
@@ -110,7 +111,7 @@ def voice_similar(
     )
 
 
-@router.get("/identity")
+@router.get("/identity", dependencies=[REQUIRE_CORPUS_DATA])
 def voice_identity(state: StateDep, doc_id: str, speaker: str, dataset: str | None = None) -> VoiceIdentityResponse:
     """The global identity cluster for one (``doc_id``, ``speaker``).
 
@@ -123,7 +124,7 @@ def voice_identity(state: StateDep, doc_id: str, speaker: str, dataset: str | No
     return voice_service.speaker_identity(handle, doc_id=doc_id, speaker=speaker)
 
 
-@router.post("/similar")
+@router.post("/similar", dependencies=[REQUIRE_CORPUS_DATA])
 async def voice_similar_upload(
     state: StateDep,
     file: Annotated[UploadFile, File()],

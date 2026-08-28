@@ -22,6 +22,7 @@ from service_kit.lancekit.predicate import eq
 from service_kit.lancekit.registry import table_dataset
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
+from viewer.api.security import REQUIRE_CORPUS_DATA
 
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ def alignments_binding(declared: Declared) -> tuple[str, str] | None:
     return (table, column) if column else None
 
 
-@router.get("/doc-chunks/{doc_id}")
+@router.get("/doc-chunks/{doc_id}", dependencies=[REQUIRE_CORPUS_DATA])
 def doc_chunks(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> dict[str, Any]:
     """A document's chunks, ordered by declared start time. One lazy
     fetch drives both a clickable chunk timeline and (flattened) the player's
@@ -77,7 +78,7 @@ def doc_chunks(doc_id: str, state: StateDep, dataset: DatasetParam = None) -> di
     return {"doc_id": doc_id, "chunks": rows}
 
 
-@router.get("/chunk-alignments/{doc_id}/{group_id}/{chunk_id}")
+@router.get("/chunk-alignments/{doc_id}/{group_id}/{chunk_id}", dependencies=[REQUIRE_CORPUS_DATA])
 def chunk_alignments(
     doc_id: str,
     group_id: int,

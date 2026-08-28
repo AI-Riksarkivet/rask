@@ -63,9 +63,10 @@ class FgaChecker(Protocol):
 class AuthDeps:
     """The dependencies one service's routes annotate with."""
 
-    def __init__(self, authenticate: Any, current_subject: Any, get_checker: Any, get_fga_client: Any) -> None:
+    def __init__(self, authenticate: Any, current_subject: Any, get_checker: Any, get_fga_client: Any, optional_subject: Any = None) -> None:
         self.authenticate = authenticate
         self.current_subject = current_subject
+        self.optional_subject = optional_subject
         self.get_checker = get_checker
         #: The RAW client, for the filtering paths `FgaChecker` deliberately cannot express.
         #:
@@ -114,6 +115,31 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
         """
         return token.sub if token is not None else ANONYMOUS_SUBJECT
 
+    def optional_subject(request: Request, settings: settings_dep, credentials: _CredentialsDep) -> str:  # type: ignore[valid-type]
+        """The verified principal, or ``anon`` — soft ONLY on absence.
+
+        For always-answering surfaces (a health badge that must stay 200) where `current_subject`'s
+        401-on-missing is the wrong contract. The softness is precisely scoped: NO credential →
+        `anon` (the caller gets whatever anonymous is entitled to, which under FGA is nothing); a
+        PRESENTED credential that fails verification still raises — a bad token must never be
+        silently downgraded to anonymous, or a caller cannot tell an expired session from an empty
+        entitlement; and enabled-but-unwired still fails closed with 503, exactly as `authenticate`.
+        """
+        if not settings.oidc_enabled:
+            return ANONYMOUS_SUBJECT
+        verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
+        if verifier is None:
+            audit("authn", FAILURE, reason="verifier_unavailable")
+            raise ServiceUnavailableError("Authentication is enabled but unavailable")
+        if credentials is None or not credentials.credentials:
+            return ANONYMOUS_SUBJECT
+        try:
+            token = verifier.verify(credentials.credentials)
+        except Exception:
+            audit("authn", FAILURE, reason="invalid_token")
+            raise
+        return token.sub
+
     def get_checker(request: Request, settings: settings_dep) -> FgaChecker:  # type: ignore[valid-type]
         """Resolve the FGA checker — see this module's docstring for the three outcomes."""
         if not settings.fga_enabled:
@@ -151,6 +177,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
     return AuthDeps(
         authenticate=authenticate,
         current_subject=current_subject,
+        optional_subject=optional_subject,
         get_checker=get_checker,
         get_fga_client=get_fga_client,
     )

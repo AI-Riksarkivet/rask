@@ -67,3 +67,135 @@ BROWSE_STORAGE = "can_browse_storage"
 # The two object-naming rules (`corpus_object`, `table_object`) moved to `service_kit.media.authz`
 # when the annotator's assist plane needed the same object. Import them from there — this module's
 # own docstring is why they must not be written twice.
+
+
+# ── the corpus gate, as a DECORATOR dependency ──────────────────────────────────────────────────
+#
+# open_python-audit (P0): 24 of the viewer's 32 routes served corpus-derived content with no subject
+# and no checker — the listing was gated while the content behind it was not, so knowing a `doc_id`
+# was authorization. The fix is a dependency FACTORY rather than 24 inline checks, for one hard
+# reason and one design reason. Hard: most of these routes are sync `def` with blocking Lance bodies
+# (correctly threadpooled), and a sync body cannot `await` the checker — a dependency runs ON the
+# loop, before the handler is threadpooled, so the bodies change zero lines. Design: the gate rides
+# `dependencies=[...]` in the route decorator, and `test_every_corpus_route_is_gated` walks the
+# app's dependant graph requiring a verified subject on every non-exempt route — deny-by-default,
+# so route 33 arrives gated or argued, never silently open.
+
+from starlette.concurrency import run_in_threadpool  # noqa: E402
+
+from service_kit.exceptions import ForbiddenError  # noqa: E402
+from service_kit.governed.audit import FAILURE, audit  # noqa: E402
+from service_kit.media import state as _media_state  # noqa: E402
+from service_kit.media.authz import corpus_object  # noqa: E402
+from service_kit.media.deps import DatasetParam, StateDep  # noqa: E402
+
+
+#: The verified principal, or ``anon`` — soft only on ABSENCE (a presented-but-invalid token still
+#: raises; enabled-but-unwired still 503s). For the health badge, whose recorded contract is
+#: "ALWAYS 200".
+OptionalSubject = Annotated[str, Depends(_deps.optional_subject)]
+
+
+def _corpus_gate(relation: str):
+    """Gate a route on ``relation`` over the corpus's VISIBILITY object.
+
+    The object follows `datasets.py`'s recorded rule: the search ROW table is the corpus's
+    visibility object, and a corpus that declares no search block is DENIED under authz rather than
+    checked against an invented identifier — "guessing an identifier would authorize against
+    something the catalog never governs".
+
+    FGA OFF RETURNS BEFORE ANYTHING RESOLVES — not merely "the checker is permissive". The early
+    return is what keeps dev byte-identical (no extra registry open on every request) and keeps
+    every FGA-off test harness, whose fake states cannot survive a real `dataset_handle`, out of
+    this dependency entirely.
+    """
+
+    async def _gate(
+        state: StateDep,
+        subject: CurrentSubject,
+        checker: CheckerDep,
+        settings: SettingsDep,
+        dataset: DatasetParam = None,
+    ) -> None:
+        if not settings.fga_enabled:
+            return
+        # Threadpooled: a COLD registry open is Lance/S3 under a lock (VS-02), and this runs on the
+        # loop. The handler's own `dataset_handle` call then hits the registry's cache.
+        handle = await run_in_threadpool(_media_state.dataset_handle, state, dataset)
+        search = handle.descriptor.declared.search
+        if search is None or not search.row_table:
+            audit("viewer.corpus.read", FAILURE, subject=subject, resource=handle.id, relation=relation)
+            raise ForbiddenError(f"corpus {handle.id!r} declares no searchable table, so no visibility object exists to authorize against")
+        obj = corpus_object(settings, handle.id, search.row_table)
+        if not await checker(user=subject, relation=relation, obj=obj):
+            audit("viewer.corpus.read", FAILURE, subject=subject, resource=handle.id, relation=relation)
+            raise ForbiddenError(f"{subject} lacks {relation} on {obj}")
+
+    return Depends(_gate)
+
+
+def _media_bytes_gate():
+    """The media-byte family's gate: `can_read_data` over the DOCUMENT binding's table.
+
+    A different object than `_corpus_gate` on purpose — it is the one `pages.py` and `media_clip`
+    already check for byte reads, so the family stays on one grant. A corpus with no document
+    binding falls through: every route in the family 404s that case in-body, and a 404 for an
+    absent binding is uniform across callers (no existence oracle is created).
+    """
+
+    async def _gate(
+        state: StateDep,
+        subject: CurrentSubject,
+        checker: CheckerDep,
+        settings: SettingsDep,
+        dataset: DatasetParam = None,
+    ) -> None:
+        if not settings.fga_enabled:
+            return
+        handle = await run_in_threadpool(_media_state.dataset_handle, state, dataset)
+        binding = handle.descriptor.declared.document
+        if binding is None:
+            return
+        obj = corpus_object(settings, handle.id, binding.table)
+        if not await checker(user=subject, relation=READ_DATA, obj=obj):
+            audit("viewer.media.read", FAILURE, subject=subject, resource=handle.id, relation=READ_DATA)
+            raise ForbiddenError(f"{subject} lacks {READ_DATA} on {obj}")
+
+    return Depends(_gate)
+
+
+async def corpus_facts_visible(
+    state: StateDep,
+    subject: OptionalSubject,
+    checker: CheckerDep,
+    settings: SettingsDep,
+    dataset: DatasetParam = None,
+) -> bool:
+    """May this caller see the health badge's corpus FACTS (table names, row counts)?
+
+    The badge's recorded contract is ALWAYS 200 (a probe that cannot distinguish "service down"
+    from "no corpus mounted" is worse than no probe — measured live 2026-07-28), so the corpus gate
+    cannot ride it: this SOFT gate never raises for an anonymous caller, and the handler REDACTS
+    the db facts instead of refusing the probe. Encoder reachability is never gated — it names no
+    corpus. An unresolvable dataset returns True: there are no facts to protect, and the handler's
+    own error path reports `db_error` as before.
+    """
+    if not settings.fga_enabled:
+        return True
+    try:
+        handle = await run_in_threadpool(_media_state.dataset_handle, state, dataset)
+    except Exception:
+        return True
+    search = handle.descriptor.declared.search
+    if search is None or not search.row_table:
+        return False
+    return await checker(user=subject, relation=READ_METADATA, obj=corpus_object(settings, handle.id, search.row_table))
+
+
+CorpusFactsVisible = Annotated[bool, Depends(corpus_facts_visible)]
+
+#: Decorator dependencies for the gate shapes. Instantiated ONCE so every route shares the same
+#: dependency object and FastAPI's per-request cache resolves each at most once per request.
+REQUIRE_CORPUS_DATA = _corpus_gate(READ_DATA)
+REQUIRE_CORPUS_METADATA = _corpus_gate(READ_METADATA)
+REQUIRE_MEDIA_BYTES = _media_bytes_gate()

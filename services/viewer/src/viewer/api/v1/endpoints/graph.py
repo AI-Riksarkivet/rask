@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict
 from service_kit.lancekit import store
 from service_kit.media.deps import StateDep
 from service_kit.media.state import dataset_handle
+from viewer.api.security import REQUIRE_CORPUS_DATA, REQUIRE_CORPUS_METADATA
 from viewer.schemas.graph import (
     CypherResponse,
     EntityClip,
@@ -302,7 +303,7 @@ def _run_rows(res: _GraphResources, cypher: str) -> list[dict[str, Any]]:
     return result.to_pylist() if hasattr(result, "to_pylist") else list(result)
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[REQUIRE_CORPUS_METADATA])
 def get_status(state: StateDep, dataset: str | None = None) -> GraphStatusResponse:
     """Row counts for the explorer header, or ``built: false`` if the KG is absent."""
     res = _resources(dataset_handle(state, dataset))
@@ -324,7 +325,7 @@ class CypherRequest(BaseModel):
     limit: int = _DEFAULT_LIMIT
 
 
-@router.post("/cypher")
+@router.post("/cypher", dependencies=[REQUIRE_CORPUS_DATA])
 def run_cypher(body: CypherRequest, state: StateDep, dataset: str | None = None) -> CypherResponse:
     """Run arbitrary read Cypher; invalid queries return ``error`` (HTTP 200)."""
     res = _resources(dataset_handle(state, dataset))
@@ -350,7 +351,7 @@ def run_cypher(body: CypherRequest, state: StateDep, dataset: str | None = None)
     )
 
 
-@router.get("/search")
+@router.get("/search", dependencies=[REQUIRE_CORPUS_DATA])
 def search_entities(q: str, state: StateDep, dataset: str | None = None) -> GraphSearchResponse:
     """Entity-name substring matches (top 10 by mention count). ``q`` never hits Cypher."""
     res = _resources(dataset_handle(state, dataset))
@@ -392,7 +393,7 @@ def _clip(row: dict[str, Any], title_column: str | None) -> EntityClip:
     )
 
 
-@router.get("/entity/{entity_id}")
+@router.get("/entity/{entity_id}", dependencies=[REQUIRE_CORPUS_DATA])
 def get_entity(entity_id: str, state: StateDep, dataset: str | None = None) -> GraphEntityResponse:
     """An entity's properties + clips + relationship neighbours + co-occurrences.
 
@@ -459,7 +460,7 @@ def get_entity(entity_id: str, state: StateDep, dataset: str | None = None) -> G
     )
 
 
-@router.get("/subgraph")
+@router.get("/subgraph", dependencies=[REQUIRE_CORPUS_DATA])
 def get_subgraph(
     state: StateDep,
     entity_id: str | None = None,
