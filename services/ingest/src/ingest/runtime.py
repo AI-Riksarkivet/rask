@@ -431,6 +431,9 @@ async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
 #: nats connect to a dead address had still not returned after 60s with `connect_timeout`,
 #: `allow_reconnect=False` and `max_reconnect_attempts=0` ALL set, so `asyncio.wait_for` around the
 #: whole thing is the only reliable bound. Without it this call took the ingest suite from 21s to 150s.
+#:
+#: It bounds the RELEASE only now. The connect carries its own bound since the measurement moved into
+#: the seam (`queue.CONNECT_TIMEOUT_SECONDS`), where the three activity bodies inherit it too.
 RELEASE_TIMEOUT_SECONDS = 5.0
 
 
@@ -452,7 +455,7 @@ async def release_run_units(run_id: str) -> int:
 
     queue = None
     try:
-        queue = await asyncio.wait_for(WorkQueue.connect(nats_url()), timeout=RELEASE_TIMEOUT_SECONDS)
+        queue = await WorkQueue.connect(nats_url(), timeout=RELEASE_TIMEOUT_SECONDS)
         return await asyncio.wait_for(queue.release_run(run_id), timeout=RELEASE_TIMEOUT_SECONDS)
     except Exception:
         _log.warning("could not release queued units for run %s — they may remain on the stream", run_id, exc_info=True)

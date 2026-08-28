@@ -24,6 +24,7 @@ redeliver forever — hence `max_deliver` and the dlq.ingest.tasks parking subje
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -140,6 +141,28 @@ def _dedupe_id(task: UnitTask) -> str:
     return hashlib.sha256(f"{task.run_id}\\x00{task.key}".encode()).hexdigest()
 
 
+#: How long a connect may take before the caller gets an error instead of a hang. Module-level and
+#: resolved at CALL time (not baked into a default argument) so a test can shrink it.
+#:
+#: The bound is `asyncio.wait_for` and NOT the client's own `connect_timeout`, because the client's
+#: is measurably not a bound: `inspect_queue` and `runtime.RELEASE_TIMEOUT_SECONDS` both record the
+#: same observation — a connect to a dead address with `connect_timeout`, `allow_reconnect=False` and
+#: `max_reconnect_attempts=0` ALL set had still not returned after 60 seconds. `connect_timeout` caps
+#: one dial attempt; nothing caps the retry loop around it.
+CONNECT_TIMEOUT_SECONDS = 5.0
+
+
+class BrokerUnreachable(RuntimeError):
+    """The broker did not complete a connection inside the bound.
+
+    RAISED rather than hung, which is the whole point. `publish_units`, `drain_chunk` and
+    `reconcile_chunk` are Dapr activities, and a Dapr activity has no execution timeout — so an
+    unbounded connect leaves the activity running, `ACTIVITY_RETRY` unfired, the child workflow
+    unreturned and the parent's `when_all` never complete. The run sits RUNNING forever with no error
+    recorded anywhere. A raise costs a retry; a hang costs the run.
+    """
+
+
 class WorkQueue:
     """Publish and consume unit tasks over JetStream."""
 
@@ -148,8 +171,24 @@ class WorkQueue:
         self._js = js
 
     @classmethod
-    async def connect(cls, servers: str | list[str], **options: Any) -> Self:  # noqa: ANN401
-        nc = await nats.connect(servers, **options)
+    async def connect(cls, servers: str | list[str], *, timeout: float | None = None, **options: Any) -> Self:  # noqa: ANN401
+        """Connect, bounded. Raises :class:`BrokerUnreachable` rather than waiting forever.
+
+        THE BOUND LIVES HERE, not at the call sites, so every caller inherits it and a new one cannot
+        forget it — which is exactly how three of the four sites came to be unbounded while the
+        plane's own comments described the hazard in two of them.
+
+        `connect_timeout` is passed through as well, so the client gives up on each individual dial
+        attempt too; it is defence in depth, not the guarantee. Reconnect behaviour is deliberately
+        left at the client's default: the drain holds this connection for the length of a chunk, and
+        disabling reconnect to make the initial connect fail faster would trade a bounded startup for
+        a broker blip killing a live drain.
+        """
+        bound = CONNECT_TIMEOUT_SECONDS if timeout is None else timeout
+        try:
+            nc = await asyncio.wait_for(nats.connect(servers, **{"connect_timeout": bound, **options}), timeout=bound)
+        except TimeoutError as exc:
+            raise BrokerUnreachable(f"no connection to the broker at {servers} within {bound}s") from exc
         return cls(nc, nc.jetstream())
 
     async def ensure_stream(self) -> None:
