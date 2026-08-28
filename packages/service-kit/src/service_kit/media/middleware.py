@@ -26,7 +26,11 @@ def register_middleware(app: FastAPI, settings: Settings) -> None:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        # The annotator serves PUT/PATCH/DELETE (members, drafts, ontology, project events); with the
+        # write verbs absent, a cross-origin browser preflight for them is answered without them in
+        # Access-Control-Allow-Methods and the real request is blocked. These are the methods the
+        # media apps actually route.
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
         expose_headers=["Content-Range", "Content-Length", "Accept-Ranges"],
     )

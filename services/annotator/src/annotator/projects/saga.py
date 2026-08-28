@@ -36,8 +36,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from typing import Any, Protocol
+
+from pydantic import BaseModel, ConfigDict
 
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import AnnotationProject, Draft, ProjectState, Task, TaskState
@@ -92,11 +93,12 @@ class TaskHandle(Protocol):
     async def get_draft(self) -> dict[str, Any] | None: ...
 
 
-@dataclass(frozen=True)
-class PublishOutcome:
+class PublishOutcome(BaseModel):
     """What the saga did. `already_published` distinguishes a converged retry from fresh work —
     without it a caller cannot tell "I published this" from "this was already published", and a
     notification would fire twice for one publish."""
+
+    model_config = ConfigDict(frozen=True)
 
     project_id: str
     publish_id: str

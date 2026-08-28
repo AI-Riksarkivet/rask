@@ -387,8 +387,12 @@ def project_facet(project: AnnotationProject, plan: PublishPlan, *, frozen_at: d
     # happened to be annotated, which is not what the number means.
     origins: dict[str, int] = {}
     datasets: dict[str, int] = {}
-    for task_id in {r["task_id"] for r in plan.rows}:
-        row = next(r for r in plan.rows if r["task_id"] == task_id)
+    # One pass: the FIRST row seen for a task id speaks for that task (all its rows share the same
+    # source), so a single scan recording first-seen rows replaces the per-task rescan.
+    first_row: dict[str, dict[str, Any]] = {}
+    for r in plan.rows:
+        first_row.setdefault(r["task_id"], r)
+    for row in first_row.values():
         origins[row["item_source_kind"]] = origins.get(row["item_source_kind"], 0) + 1
         if row["item_dataset"]:
             datasets[row["item_dataset"]] = datasets.get(row["item_dataset"], 0) + 1

@@ -26,14 +26,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from enum import StrEnum
-from typing import Annotated, Any, Final, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
 from fastapi import APIRouter, Path, Query, status
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from annotator.api.dependencies import ControlEmitterDep
-from annotator.api.security import CheckerDep, CurrentSubject
+from annotator.api.security import CheckerDep, CurrentSubject, FgaChecker
 from annotator.projects.machines import FROZEN_PROJECT_STATES, PROJECT_EDGES, IllegalTransition, legal_task_events, project_transition
 from annotator.projects.models import ItemSource, MediaRef, ProjectState, Shape, Task, TaskState, new_id
 from annotator.projects.ontology import LabelOntology, ShapeLike, membership_violation
@@ -43,6 +43,12 @@ from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 from service_kit.lakehouse.warehouse_registry import namespace_for, namespace_tiers
 from service_kit.media.deps import StateDep
+
+
+if TYPE_CHECKING:
+    # Resolves the `_task_proxy` return type without importing the actor module (which pulls in
+    # `dapr.actor`) at module scope — the runtime import stays lazy inside the function.
+    from annotator.projects.actor import AnnotationTaskActorInterface
 from service_kit.media.state import dataset_handle
 
 
@@ -172,21 +178,21 @@ def _project_proxy(project_id: str) -> AnnotationProjectActorInterface:
     return cast(AnnotationProjectActorInterface, typed_proxy("AnnotationProjectActor", project_id, AnnotationProjectActorInterface))
 
 
-def _task_proxy(task_id: str) -> Any:
+def _task_proxy(task_id: str) -> AnnotationTaskActorInterface:
     from annotator.projects.actor import AnnotationTaskActorInterface  # noqa: PLC0415 - deliberate, see above
     from annotator.projects.proxies import typed_proxy  # noqa: PLC0415 - same reason
 
-    return typed_proxy("AnnotationTaskActor", task_id, AnnotationTaskActorInterface)
+    return cast(AnnotationTaskActorInterface, typed_proxy("AnnotationTaskActor", task_id, AnnotationTaskActorInterface))
 
 
-async def _check(checker: Any, subject: str, relation: str, obj: str, what: str) -> None:
+async def _check(checker: FgaChecker, subject: str, relation: str, obj: str, what: str) -> None:
     """One relation on one object, fail-closed, audited either way."""
     if not await checker(user=subject, relation=relation, obj=obj):
         audit(what, FAILURE, subject=subject, resource=obj, relation=relation)
         raise ForbiddenError(f"{subject} lacks {relation} on {obj}")
 
 
-async def _authorize_publish(checker: Any, subject: str, project_id: str, namespace: str) -> None:
+async def _authorize_publish(checker: FgaChecker, subject: str, project_id: str, namespace: str) -> None:
     """The two-door crossing of §6.2 (three when the target is validator-gated).
 
     Checked in order and short-circuiting, so the audit trail names the FIRST door that closed rather

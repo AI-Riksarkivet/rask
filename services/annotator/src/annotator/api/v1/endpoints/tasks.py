@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from annotator.api.dependencies import ControlEmitterDep
-from annotator.api.security import CheckerDep, CurrentSubject
+from annotator.api.security import CheckerDep, CurrentSubject, FgaChecker
 from annotator.projects.actor import AnnotationTaskActorInterface
 from annotator.projects.imports import shapes_from_ipc
 from annotator.projects.machines import (
@@ -141,7 +141,7 @@ def _proxy(task_id: str) -> AnnotationTaskActorInterface:
     return cast(AnnotationTaskActorInterface, typed_proxy("AnnotationTaskActor", task_id, AnnotationTaskActorInterface))
 
 
-async def _authorize(checker: Any, subject: str, permission: str, project_id: str, what: str) -> None:
+async def _authorize(checker: FgaChecker, subject: str, permission: str, project_id: str, what: str) -> None:
     """Check one relation on the ANNOTATION PROJECT, fail closed, and audit either way.
 
     The object is `annotation_project:<project_id>`, because that is the type on which
