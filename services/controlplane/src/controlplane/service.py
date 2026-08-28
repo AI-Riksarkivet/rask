@@ -38,10 +38,15 @@ def to_dto(cr: dict[str, Any], url: str) -> ProjectDTO:
 
 
 def list_project_dtos(reader: ProjectReader, scheme: str) -> list[ProjectDTO]:
+    crs = reader.list_projects()
+    if not crs:
+        return []
+    # One cluster-wide ingress lookup for the whole page — not one blocking call per project.
+    hosts = reader.ingress_hosts()
     dtos: list[ProjectDTO] = []
-    for cr in reader.list_projects():
+    for cr in crs:
         ns = _namespace(cr)
-        host = reader.ingress_host(ns) if ns else None
+        host = hosts.get(ns) if ns else None
         url = f"{scheme}://{host}{PROJECT_ENTRY_PATH}" if host else ""
         dtos.append(to_dto(cr, url))
     return sorted(dtos, key=lambda d: d.created_at)

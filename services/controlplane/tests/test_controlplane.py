@@ -95,8 +95,8 @@ def test_list_project_dtos_sorted_by_created_at(monkeypatch: pytest.MonkeyPatch)
                 _cr("a", created="2026-01-01T00:00:00Z"),
             ]
 
-        def ingress_host(self, namespace: str) -> str | None:
-            return None
+        def ingress_hosts(self) -> dict[str, str]:
+            return {}
 
     dtos = list_project_dtos(FakeReader(), "http")
     assert [d.slug for d in dtos] == ["a", "b"]
@@ -110,8 +110,8 @@ def test_list_projects_endpoint_returns_dtos(client: TestClient) -> None:
         def list_projects(self) -> list[dict]:
             return [_cr("demo", team="team-archives", phase="Ready")]
 
-        def ingress_host(self, namespace: str) -> str | None:
-            return None
+        def ingress_hosts(self) -> dict[str, str]:
+            return {}
 
     app.dependency_overrides[get_reader] = lambda: FakeReader()
     try:
@@ -136,8 +136,8 @@ def test_list_projects_endpoint_503_on_k8s_unreachable(client: TestClient) -> No
         def list_projects(self) -> list[dict]:
             raise ConnectionError("k8s unreachable")
 
-        def ingress_host(self, namespace: str) -> str | None:
-            return None
+        def ingress_hosts(self) -> dict[str, str]:
+            return {}
 
     app.dependency_overrides[get_reader] = lambda: UnreachableReader()
     try:
@@ -159,8 +159,8 @@ def test_list_projects_endpoint_does_not_mask_mapping_bug(client: TestClient) ->
         def list_projects(self) -> list[dict]:
             raise KeyError("unexpected CR shape")  # a programming bug, not k8s
 
-        def ingress_host(self, namespace: str) -> str | None:
-            return None
+        def ingress_hosts(self) -> dict[str, str]:
+            return {}
 
     app.dependency_overrides[get_reader] = lambda: BuggyReader()
     try:
@@ -170,6 +170,57 @@ def test_list_projects_endpoint_does_not_mask_mapping_bug(client: TestClient) ->
         app.dependency_overrides.clear()
 
 
+def test_list_projects_endpoint_503_when_kube_config_load_fails(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both the in-cluster and kubeconfig loads failing must surface as 503, not a 500.
+
+    The config load lives in the real reader, and `_K8S_ERRORS` enumerates `ConfigException`
+    for exactly this case. It only reaches the route's try/except if the reader loads config
+    inside its listing call rather than at construction time (construction happens during
+    dependency resolution, before the route body runs).
+    """
+    from controlplane.routes import get_reader
+    from kubernetes import config as kube_config
+
+    get_reader.cache_clear()
+
+    def _raise(*_a: object, **_k: object) -> None:
+        raise kube_config.ConfigException("no kube config available")
+
+    monkeypatch.setattr(kube_config, "load_incluster_config", _raise)
+    monkeypatch.setattr(kube_config, "load_kube_config", _raise)
+
+    try:
+        resp = client.get("/api/projects/")
+    finally:
+        get_reader.cache_clear()
+
+    assert resp.status_code == 503
+
+
+def test_list_project_dtos_resolves_every_host_in_one_bulk_lookup() -> None:
+    """N projects cost one cluster-wide ingress list, not one blocking call per namespace."""
+    from controlplane.service import list_project_dtos
+
+    class CountingReader:
+        def __init__(self) -> None:
+            self.bulk_calls = 0
+
+        def list_projects(self) -> list[dict[str, Any]]:
+            return [_cr("a"), _cr("b"), _cr("c")]
+
+        def ingress_hosts(self) -> dict[str, str]:
+            self.bulk_calls += 1
+            return {"project-a": "a.rask.local", "project-b": "b.rask.local"}
+
+    reader = CountingReader()
+    dtos = list_project_dtos(reader, "http")
+    assert reader.bulk_calls == 1, "hosts must be resolved with a single cluster-wide ingress list"
+    urls = {d.slug: d.url for d in dtos}
+    assert urls["a"] == "http://a.rask.local/overview"
+    assert urls["b"] == "http://b.rask.local/overview"
+    assert urls["c"] == ""  # no ingress for c → empty url
+
+
 def test_to_dto_builds_url_from_ingress_host() -> None:
     from controlplane.service import list_project_dtos
 
@@ -177,9 +228,8 @@ def test_to_dto_builds_url_from_ingress_host() -> None:
         def list_projects(self) -> list[dict[str, Any]]:
             return [_cr("demo", phase="Ready")]
 
-        def ingress_host(self, namespace: str) -> str | None:
-            assert namespace == "project-demo"
-            return "demo.rask.local"
+        def ingress_hosts(self) -> dict[str, str]:
+            return {"project-demo": "demo.rask.local"}
 
     dtos = list_project_dtos(FakeReader(), "http")
     assert dtos[0].url == "http://demo.rask.local/overview"
@@ -192,8 +242,8 @@ def test_url_empty_when_no_ingress() -> None:
         def list_projects(self) -> list[dict[str, Any]]:
             return [_cr("demo", phase="Provisioning")]
 
-        def ingress_host(self, namespace: str) -> str | None:
-            return None
+        def ingress_hosts(self) -> dict[str, str]:
+            return {}
 
     dtos = list_project_dtos(FakeReader(), "http")
     assert dtos[0].url == ""
