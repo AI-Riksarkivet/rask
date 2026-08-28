@@ -1,14 +1,14 @@
 """Version-keyed search result cache — the read-fast tier for the search path.
 
 Mirrors the atlas ``points_cache``: memoize a query's full result on
-``(dataset, table versions, query hash)``. Any write to a table the query reads
+``(dataset, SELECTED search + its table versions, query hash)``. Any write to a table the query reads
 advances that table's Lance version, so the key changes and the stale entry
 becomes unreachable — Firn's invalidation model, no manual busting. The cache
 lives on :class:`~service_kit.media.state.AppState` (per app instance, never
 module-global) and is sized by ``settings.search_cache_size`` (0 = disabled).
 
 It sits at the ROUTER layer (which owns AppState), so :func:`run_search` stays
-pure. The design — key = (dataset, table-version-signature, query-hash) — is the
+pure. The design — key = (dataset, selected-search version-signature, query-hash) — is the
 portable part: it transfers verbatim to whatever owns serving later (e.g. the
 lance-ns catalog), independent of this Python implementation.
 """
@@ -37,11 +37,16 @@ logger = logging.getLogger(__name__)
 CacheKey = tuple[str, str, str]
 
 
-def _search_tables(handle: DatasetHandle) -> list[str]:
-    """Every table a search could read — row table + fts table + vector-binding
+def _search_tables(handle: DatasetHandle, table: str | None) -> list[str]:
+    """Every table the SELECTED search could read — row table + fts table + vector-binding
     tables. A write to any of them must invalidate a cached result, so all of
-    their versions go into the key."""
-    search = handle.descriptor.declared.search
+    their versions go into the key.
+
+    Resolved through ``search_named`` (VS-04): reading ``declared.search`` versioned the DEFAULT's
+    tables whatever the caller selected, so two tables' searches collided on one entry and a write
+    to the non-default table could never invalidate it. An unknown name degrades to ``[]`` — that is
+    unreachable in practice, because ``resolve_target`` 400s the name before anything is stored."""
+    search = handle.descriptor.declared.search_named(table)
     if search is None:
         return []
     tables = {search.row_table}
@@ -52,22 +57,29 @@ def _search_tables(handle: DatasetHandle) -> list[str]:
     return sorted(tables)
 
 
-def version_signature(handle: DatasetHandle) -> str:
-    """A ``table:version|...`` signature over every table a search reads.
+def version_signature(handle: DatasetHandle, table: str | None = None) -> str:
+    """A ``name@table:version|...`` signature over every table the SELECTED search reads.
+
+    The resolved search's NAME leads the signature because two searches may declare the same row
+    table — versions alone cannot tell them apart. Resolving (rather than keying on the raw
+    ``spec.table`` string) is also what collapses ``?table=<default's name>`` and an omitted
+    selector onto one entry: they ask one question.
 
     Reading a table's version is one cheap manifest read (a stat locally, one
     small object read over S3) — far cheaper than the query it guards, so paying
     it on every request (hit or miss) is a good trade. A table that can't be
     opened contributes ``?`` (it degrades to a stable-but-uninvalidatable key
     rather than crashing the request)."""
+    search = handle.descriptor.declared.search_named(table)
+    name = search.name if search is not None else "?"
     parts: list[str] = []
-    for table in _search_tables(handle):
+    for table_name in _search_tables(handle, table):
         try:
-            ds = lance.dataset(handle.table_uri(table), storage_options=handle.storage_options)
-            parts.append(f"{table}:{ds.version}")
+            ds = lance.dataset(handle.table_uri(table_name), storage_options=handle.storage_options)
+            parts.append(f"{table_name}:{ds.version}")
         except Exception:
-            parts.append(f"{table}:?")
-    return "|".join(parts)
+            parts.append(f"{table_name}:?")
+    return f"{name}@{'|'.join(parts)}"
 
 
 def _normalized_query(text: str) -> str:
@@ -114,7 +126,7 @@ def cache_key(
     filters: Mapping[str, str] | None,
     image_bytes: bytes | None,
 ) -> CacheKey:
-    return (handle.id, version_signature(handle), query_hash(spec, filters, image_bytes))
+    return (handle.id, version_signature(handle, spec.table), query_hash(spec, filters, image_bytes))
 
 
 def entry_bytes(result: list[dict[str, Any]]) -> int:

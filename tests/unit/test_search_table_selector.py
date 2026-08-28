@@ -181,3 +181,68 @@ def test_the_spec_carries_the_selector_on_the_wire() -> None:
     searched, not a filter on it."""
     assert SearchSpec().table is None
     assert SearchSpec.model_validate({"table": "lines"}).table == "lines"
+
+
+# ── the result cache must SEE the selector (open_python-audit VS-04) ─────────────────────────────
+#
+# `cache_key` omitted `spec.table` and `version_signature` read the DEFAULT `declared.search`, so
+# two searches over different tables of one corpus collided on one entry — and the stale rows carry
+# `_table` stamped from the first table, labelling the wrong answer as correct. Worse, writes to the
+# NON-default table never advanced any version in the key, so the collision was uninvalidatable.
+# Re-verified 2026-08-28: armed, not firing (no in-repo descriptor declares two searches yet) —
+# insurance bought before the first one exists.
+
+
+class _CacheHandle(_Handle):
+    """`_Handle` plus the three attributes `cache_key` touches: id, storage_options, table_uri.
+
+    The URI deliberately names a path that cannot exist, so `version_signature` takes its
+    established `except Exception -> "table:?"` degradation and the test does no Lance IO."""
+
+    def __init__(self, descriptor: DatasetDescriptor) -> None:
+        super().__init__(descriptor)
+        self.id = "corpus"
+        self.storage_options = None
+        self.asked: list[str] = []
+
+    def table_uri(self, table: str) -> str:
+        self.asked.append(table)
+        return f"/nonexistent/{table}.lance"
+
+
+def _spec(table: str | None) -> object:
+    from search.services.spec import SearchSpec
+
+    return SearchSpec.model_validate({"q": "cat", "table": table} if table else {"q": "cat"})
+
+
+def test_two_searchable_tables_never_share_a_cache_entry() -> None:
+    """Half one: the KEY must differ when the selected table differs."""
+    from search.services.result_cache import cache_key
+
+    handle = _CacheHandle(_descriptor(PAGES_AND_LINES))
+    key_alpha = cache_key(handle, _spec(None), None, None)  # ty: ignore[invalid-argument-type]
+    key_beta = cache_key(handle, _spec("lines"), None, None)  # ty: ignore[invalid-argument-type]
+    assert key_alpha != key_beta, "two different tables' searches share one cache entry — the second caller gets the first table's rows, labelled as its own"
+
+
+def test_the_signature_consults_the_SELECTED_tables_versions() -> None:
+    """Half two: invalidation must track the table actually searched — a write to `lines` must be
+    able to change the key of a `lines` search, which it cannot while the signature reads the
+    default's tables."""
+    from search.services.result_cache import cache_key
+
+    handle = _CacheHandle(_descriptor(PAGES_AND_LINES))
+    cache_key(handle, _spec("lines"), None, None)  # ty: ignore[invalid-argument-type]
+    assert "lines" in handle.asked, f"the signature versioned {handle.asked} while the caller searched `lines` — its writes can never invalidate this entry"
+
+
+def test_the_default_and_its_own_name_share_one_entry() -> None:
+    """The collapse rule: `?table=<default's name>` and an omitted selector ask ONE question and
+    must hit one entry — keying on the raw selector string would split it into two."""
+    from search.services.result_cache import cache_key
+
+    handle = _CacheHandle(_descriptor(PAGES_AND_LINES))
+    named = cache_key(handle, _spec("pages"), None, None)  # ty: ignore[invalid-argument-type]
+    omitted = cache_key(handle, _spec(None), None, None)  # ty: ignore[invalid-argument-type]
+    assert named == omitted, "naming the default split one question into two cache entries"
