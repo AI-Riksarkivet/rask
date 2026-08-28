@@ -77,8 +77,28 @@ async def _attached_versioned(state: UserStateStore | None) -> tuple[list[Store]
 
 
 @router.get("/stores", summary="Every registered object store")
-async def list_stores(state: UserStateStoreDep) -> StoreRegistry:
-    """The whole registry in one response — it is estate config, and the tier view needs all of it."""
+async def list_stores(
+    settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+    state: UserStateStoreDep,
+) -> StoreRegistry:
+    """The whole registry in one response — it is estate config, and the tier view needs all of it.
+
+    ESTATE-ADMIN GATED, on the same relation and object ``attach_store`` uses. Its docstring already
+    states the reason and it applies to the read at least as strongly: a store record names a host
+    and a bucket the whole estate would then see, which is estate-wide disclosure — and reading the
+    list IS the disclosure, where attaching is only the cause of it. Ungated, any authenticated
+    principal (any project member) enumerated every bucket the estate knows, including the
+    ``endpoint`` hosts of third-party buckets someone attached.
+
+    The router-level ``authorize`` cannot cover this: it authorizes ``{id}`` routes under
+    ``_RESOURCES`` and lets id-less collection routes through on authentication alone, which is right
+    for a listing the endpoint then FILTERS (``/v1/warehouses``, ``/v1/model``) and wrong for one it
+    does not. This registry is estate-wide config with no per-item FGA object to filter on, so the
+    honest gate is the estate rung rather than a per-store one.
+    """
+    await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
     return StoreRegistry(stores=[*registered_stores(), *await _attached(state)])
 
 
@@ -149,13 +169,22 @@ async def attach_store(
     "/stores/tiers",
     summary="Stores grouped by medallion tier",
 )
-async def stores_by_tier(state: UserStateStoreDep) -> dict[str, list[Store]]:
+async def stores_by_tier(
+    settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+    state: UserStateStoreDep,
+) -> dict[str, list[Store]]:
     """The tier -> store view, DERIVED from the registry rather than transcribed.
+
+    Gated identically to ``list_stores`` — it is the same disclosure in a different shape, and gating
+    only the flat view would leave the grouped one as the way around it.
 
     Every governed tier appears even when empty: a bronze row with nothing in it says "no store
     backs bronze here", which is a fact worth showing. Roles outside the medallion (raw, derived,
     observability) are grouped under their own names — raw is deliberately not a tier (R23).
     """
+    await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
     stores = [*registered_stores(), *await _attached(state)]
     grouped: dict[str, list[Store]] = {tier.value: [] for tier in GOVERNED_TIERS}
     for store in stores:
