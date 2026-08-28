@@ -104,16 +104,39 @@ def _app(
 
 
 @pytest.fixture(autouse=True)
-def _fake_dataset(monkeypatch: pytest.MonkeyPatch) -> None:
+def _fake_dataset(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     """Stub only the LANCE layer, deliberately leaving `_open` and `_resolve` real.
 
     The first cut stubbed `_open` itself, which made every bearer assertion in this file vacuous:
     `_resolve` never ran, so no header was ever sent and the tests passed against a route that
     forwarded nothing. Stubbing one layer deeper — `lance.dataset` — keeps the catalog round-trip on
     the real code path, which is the thing being asserted.
+
+    A REAL tiny blob-v2 dataset now, not a `read_aligned_table` monkeypatch: VS-05's fix moved the
+    routes off the whole-corpus read onto `id -> _rowid -> take_blobs`, so a patch on the old seam
+    stubbed a function the routes no longer call — nine authz tests errored on an AttributeError
+    while the gate they pin went unexecuted. Serving real bytes through the real read path is the
+    shape a route double cannot drift from.
     """
-    monkeypatch.setattr(pg.lance, "dataset", lambda *_a, **_kw: object())
-    monkeypatch.setattr(pg, "read_aligned_table", lambda _ds, _columns=None, **_kw: _Rows([0, 1], [_JPEG, None]))
+    import lance
+    import pyarrow as pa
+    from lance import blob_array, blob_field
+
+    uri = str(tmp_path_factory.mktemp("authz") / "pages.lance")
+    # The governed-tier columns the LISTING projects (_PAGE_COLUMNS) must exist, or the listing
+    # route fails on schema rather than deciding authorization — which is what this file is for.
+    table = pa.table(
+        {
+            "id": pa.array([0, 1], pa.int64()),
+            "source_uri": pa.array(["iiif://vol/0", "iiif://vol/1"], pa.string()),
+            "stage": pa.array(["bronze", "bronze"], pa.string()),
+            "payload": blob_array([_JPEG, None]),
+        },
+        schema=pa.schema([pa.field("id", pa.int64()), pa.field("source_uri", pa.string()), pa.field("stage", pa.string()), blob_field("payload")]),
+    )
+    lance.write_dataset(table, uri, data_storage_version="2.2", enable_stable_row_ids=True)
+    real = lance.dataset(uri)
+    monkeypatch.setattr(pg.lance, "dataset", lambda *_a, **_kw: real)
 
 
 def _catalog_ok(seen_headers: list[dict[str, str]] | None = None) -> Any:

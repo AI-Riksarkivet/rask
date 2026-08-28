@@ -1,18 +1,28 @@
 """The document viewer's read path — page images out of a BRONZE blob-v2 dataset.
 
 Bronze page datasets store the image bytes in a blob-v2 column (``payload``) alongside the tabular
-columns that say which page each one is. Serving them needs exactly one thing to be right, and it is
-the thing that is easy to get wrong:
+columns that say which page each one is. Serving them needs two things to be right, and each of them
+has already been got wrong once.
 
-READS MUST PRESERVE CARDINALITY. ``read_blobs`` / ``take_blobs`` silently DROP null rows — three
-selected rows with one null payload return two payloads — so pairing their output positionally
-against a scan of the tabular columns misattributes every page after the first gap, with no
-exception raised. A failed harvest or a skipped page is exactly that case. This module therefore
-reads through ``service_kit.lakehouse.blobs.read_aligned_table``
-(``blob_handling="all_binary"``), which returns the blob column and the tabular columns in ONE scan
-with nulls preserved, so alignment holds by construction and there is no mask to keep in step.
+READS MUST PRESERVE CARDINALITY. ``read_blobs`` / ``take_blobs`` silently DROP null rows through
+pylance 9 (three selected rows with one null payload return two payloads) and from 10.0.0 return
+``None`` in that slot instead — so pairing their output POSITIONALLY against a second scan of the
+tabular columns misattributes every page after the first gap, with no exception raised. A failed
+harvest or a skipped page is exactly that case. Neither route here pairs anything by position: the
+listing reads only the blob DESCRIPTORS, which arrive in the same scan as the tabular columns, and
+the byte route resolves ``id`` -> stable ``_rowid`` -> ``take_blobs(ids=[rowid])``, where ``None`` in
+the slot IS the null signal. ``blobs.py`` says the same in its own words — "the take-path remains
+correct for single-row serving (``ids=[rowid]``, where an empty result IS the null signal)".
 
-See ``docs/architecture/lance-blob-v2-findings.md`` for the measurements behind that, and
+READS MUST BE BOUNDED BY THE REQUEST, NOT BY THE DATASET (VS-05). Both routes used to run one
+unfiltered, unbounded ``read_aligned_table`` at ``blob_handling="all_binary"``, which materialises
+EVERY row's bytes: serving one page cost the whole corpus, and the listing's ``limit`` was applied
+only after the scan, so a ``can_get_metadata`` route's memory was bounded by the volume. A blob
+column scanned at DEFAULT ``blob_handling`` yields ``struct<kind, position, size, blob_id,
+blob_uri>`` and reads no object bytes at all, so ``size`` and ``has_payload`` are answerable for
+free; the bytes are fetched for one row, by row id, only on the route that serves them.
+
+See ``docs/architecture/lance-blob-v2-findings.md`` for the measurements behind both rules, and
 ``docs/architecture/document-viewer.md`` for how this endpoint came to exist.
 """
 
@@ -23,17 +33,22 @@ from typing import Annotated
 
 import httpx
 import lance
+import pyarrow as pa
 from fastapi import APIRouter, Query, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
+from lance.blob import BlobFile
 from pydantic import BaseModel, computed_field
 
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
 from service_kit.governed.audit import FAILURE, audit
 from service_kit.governed.deps import RawBearerToken
-from service_kit.lakehouse.blobs import read_aligned_table
+from service_kit.lakehouse.blobs import is_blob_field
+from service_kit.lancekit.predicate import eq
 from service_kit.media.authz import table_object
 from service_kit.media.deps import StateDep
 from viewer.api.security import READ_DATA, READ_METADATA, CheckerDep, CurrentSubject
+from viewer.api.v1.endpoints.media import MAX_BUFFERED_BLOB_BYTES, _handle_size, _stream_handle
 
 
 logger = logging.getLogger(__name__)
@@ -52,6 +67,15 @@ class Page(BaseModel):
     id: int
     source_uri: str
     stage: str
+    #: The payload's length in bytes, read from the blob DESCRIPTOR rather than from the bytes — the
+    #: listing must never dereference a payload (VS-05).
+    #:
+    #: ONE CASE WHERE THAT IS NOT A BYTE COUNT, stated rather than smuggled: for an EXTERNAL
+    #: descriptor (``kind == EXTERNAL_KIND``) ``size == 0`` means THE WHOLE OBJECT, whose length the
+    #: dataset does not carry — see ``carry_external_descriptor`` in ``service_kit.lakehouse.blobs``.
+    #: Such a row reports 0 here. Resolving it would mean a per-row HEAD against the object store,
+    #: which is exactly the IO this listing exists to avoid; no consumer branches on ``size`` (the
+    #: lakehouse zone renders it as a caption), so an honest 0 beats a scan.
     size: int
     #: False when this row's payload is null. Surfaced rather than hidden: a row that failed to
     #: acquire is a real state of the dataset, and a viewer that silently skips it reports a corpus as
@@ -223,6 +247,66 @@ async def _authorized_dataset(
     return await run_in_threadpool(_open, state, table, token)
 
 
+def _page_rows(ds: lance.LanceDataset, limit: int) -> tuple[pa.Table, bool]:
+    """The listing's scan, bounded by the REQUEST, plus whether ``payload`` came back as descriptors.
+
+    ``limit`` is pushed into the scan rather than applied to the result. That is the OOM half of
+    VS-05: capped at 500 by the query model but never handed to Lance, the read was bounded by the
+    volume, so ~10k pages at ~1 MB was ~10 GB materialised to return 100 metadata rows.
+
+    DEFAULT ``blob_handling``, so a blob-v2 ``payload`` arrives as ``struct<kind, position, size,
+    blob_id, blob_uri>`` and no object bytes are read at all.
+
+    The flag exists because ``table`` is a free caller-supplied catalog id: a ``payload`` that is a
+    plain ``large_binary`` column rather than blob-v2 is a reachable shape, and there the same scan
+    returns real bytes that must be measured with ``len``. Asked of ``ds.schema``, not of the result:
+    the scan strips the Arrow extension marker from the returned field (measured on pylance 10.0.0),
+    so ``is_blob_field`` answers False for a blob column read back out of a table.
+    """
+    rows = ds.to_table(columns=[*_PAGE_COLUMNS, "payload"], limit=limit)
+    return rows, is_blob_field(ds.schema.field("payload"))
+
+
+def _take_page(ds: lance.LanceDataset, table: str, page_id: int) -> tuple[BlobFile, int, str]:
+    """Resolve one page's ``id`` to its blob handle, size and sniffed media type. All blocking IO.
+
+    ``id`` -> stable ``_rowid`` -> ``take_blobs(ids=[...])``: ``ids`` survive deletes and compaction
+    where positional ``indices`` do not, and no step pairs a blob read against a second scan, so the
+    null-row landmine in this module's docstring cannot apply. The whole corpus is no longer read to
+    find one row (VS-05).
+
+    First match wins, preserving what ``ids.index(page_id)`` did for a non-unique ``id`` column.
+
+    Only 12 bytes are read to sniff: ``_MAGIC``'s longest prefix is 8 and the RIFF branch needs the
+    four bytes at offset 8, so 12 is exact. The handle is rewound afterwards because the caller reads
+    from the same one.
+
+    Both 404s are decided HERE, before any response object exists — the rule
+    ``services/viewer/tests/test_media_null_payload.py`` exists to enforce: once a streaming response
+    has sent its headers the status is already chosen and an exception can no longer become one.
+    """
+    ids = ds.to_table(columns=["id"], filter=eq("id", page_id), with_row_id=True)
+    if ids.num_rows == 0:
+        raise NotFoundError(f"no page with id {page_id} in {table!r}")
+    rowid = int(ids.column("_rowid")[0].as_py())
+    blob = ds.take_blobs("payload", ids=[rowid])[0]
+    if blob is None:
+        # A registered page whose harvest produced no bytes. 404 with the reason, so the UI can say
+        # "this page failed to harvest" instead of rendering a broken image icon. `None` in the slot
+        # is how pylance 10.0.0 reports it; through 9.0.0 the row was omitted from the list entirely.
+        raise NotFoundError(f"row {page_id} in {table!r} has no payload")
+    size = _handle_size(blob)
+    head = blob.read(min(12, size))
+    blob.seek(0)
+    return blob, size, sniff_media_type(head)
+
+
+def _read_all(blob: BlobFile, size: int) -> bytes:
+    """The whole payload, for a blob small enough to buffer."""
+    with blob as f:
+        return f.read(size)
+
+
 @router.get("/pages", summary="Pages in a bronze page dataset")
 async def list_pages(
     state: StateDep,
@@ -239,17 +323,27 @@ async def list_pages(
     which the ``<img>`` tag streams on demand.
     """
     ds = await _authorized_dataset(state, table, token, checker=checker, subject=subject, relation=READ_METADATA, action="viewer.pages.list")
-    rows = await run_in_threadpool(read_aligned_table, ds, columns=[*_PAGE_COLUMNS, "payload"])
+    rows, descriptors = await run_in_threadpool(_page_rows, ds, limit)
     pages: list[Page] = []
-    for i in range(min(rows.num_rows, limit)):
-        payload = rows.column("payload")[i].as_py()
+    for i in range(rows.num_rows):
+        cell = rows.column("payload")[i]
+        if descriptors:
+            # Cell validity is the null signal for a descriptor column (correct from pylance 9;
+            # lance-blob-v2-findings.md records that it is wrong only at 8.0.0, and every manifest
+            # pins >= 10.0.0). No payload is dereferenced to answer either field.
+            has_payload = bool(cell.is_valid)
+            size = int(cell.as_py()["size"]) if has_payload else 0
+        else:
+            payload = cell.as_py()
+            has_payload = payload is not None
+            size = len(payload) if payload else 0
         pages.append(
             Page(
                 id=rows.column("id")[i].as_py(),
                 source_uri=rows.column("source_uri")[i].as_py() or "",
                 stage=rows.column("stage")[i].as_py() or "",
-                size=len(payload) if payload else 0,
-                has_payload=payload is not None,
+                size=size,
+                has_payload=has_payload,
             )
         )
     return PageListing(dataset=table, pages=pages)
@@ -268,20 +362,29 @@ async def get_page(
 
     Selected by the ``id`` COLUMN, never by row position: positional indexing into a blob read is
     the misattribution bug this module exists to avoid, and a caller holding an id from the listing
-    must get that page or a 404 — never a different one.
+    must get that page or a 404 — never a different one. The filter pushes that selection into the
+    scan, so the cost is one page rather than the corpus (VS-05).
+
+    Buffered while small, streamed above the threshold. ``payload`` is opaque and ``table`` is a free
+    query parameter, so the response size is whatever the DATA names — the same reason `/api/media`
+    draws this line, and the threshold is shared with it rather than re-derived. An EMPTY payload is
+    deliberately a 200 with a zero-length body here, not the 404 `blob_response` gives a derivative:
+    a governed row whose payload is genuinely zero bytes is present, and this route's absence signal
+    is the null above.
     """
     ds = await _authorized_dataset(state, table, token, checker=checker, subject=subject, relation=READ_DATA, action="viewer.page.read")
-    rows = await run_in_threadpool(read_aligned_table, ds, columns=[*_PAGE_COLUMNS, "payload"])
-    ids = rows.column("id").to_pylist()
-    if page_id not in ids:
-        raise NotFoundError(f"no page with id {page_id} in {table!r}")
-    payload = rows.column("payload")[ids.index(page_id)].as_py()
-    if payload is None:
-        # A registered page whose harvest produced no bytes. 404 with the reason, so the UI can say
-        # "this page failed to harvest" instead of rendering a broken image icon.
-        raise NotFoundError(f"row {page_id} in {table!r} has no payload")
+    blob, size, media_type = await run_in_threadpool(_take_page, ds, table, page_id)
+    headers = {"Cache-Control": "public, max-age=300"}
+    if size > MAX_BUFFERED_BLOB_BYTES:
+        return StreamingResponse(
+            _stream_handle(blob, size),
+            media_type=media_type,
+            # Known exactly from the probe, and safe to declare because the generator owns this
+            # handle: the bytes it yields and the size measured here come from the same open blob.
+            headers={**headers, "Content-Length": str(size)},
+        )
     return Response(
-        content=payload,
-        media_type=sniff_media_type(payload),
-        headers={"Cache-Control": "public, max-age=300"},
+        content=await run_in_threadpool(_read_all, blob, size),
+        media_type=media_type,
+        headers=headers,
     )
