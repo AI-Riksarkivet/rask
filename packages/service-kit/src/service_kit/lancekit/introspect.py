@@ -22,6 +22,13 @@ from service_kit.lancekit.blobs import is_blob_field
 
 logger = logging.getLogger(__name__)
 
+#: Markers of a `*.lance` stem the listing saw but Lance cannot open as a dataset — no manifest yet
+#: (half-written) or a reserved artefact. pylance raises a bare ``ValueError`` ("Dataset at path ...
+#: was not found") with no typed error to catch, so the message is the only signal, mirroring
+#: writer.py's ``_COMMIT_CONFLICT_MARKERS``. A transient read (OSError: connection reset, timeout)
+#: matches none of these and so is NOT genuine absence.
+_MISSING_DATASET_MARKERS = ("not found", "does not exist")
+
 
 class ColumnInfo(BaseModel):
     name: str
@@ -95,5 +102,11 @@ def discover_tables(db_path: str | Path, storage_options: dict[str, str] | None 
         try:
             out[stem] = table_info(uri, storage_options)
         except Exception as exc:
-            logger.warning("skipping unreadable table %s: %s", uri, exc)
+            # Only GENUINE absence is safe to drop — the descriptor cross-check then reports the
+            # missing table by name. A transient read failure (S3 reset/timeout) is not absence: it
+            # must propagate so registry.get() fails loudly and retriably, rather than laundering a
+            # flaky read into a permanent "row_table does not exist" for the whole dataset.
+            if not any(m in str(exc).lower() for m in _MISSING_DATASET_MARKERS):
+                raise
+            logger.warning("skipping %s: listed but not a readable Lance dataset: %s", uri, exc)
     return out

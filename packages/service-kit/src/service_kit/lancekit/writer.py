@@ -139,13 +139,16 @@ class LocalCatalogWriteTransport:
         self._ds = ds
 
     def merge_upsert(self, delta: pa.Table, on: str) -> None:
-        self._ds.merge_insert(on).when_matched_update_all().when_not_matched_insert_all().execute(delta)
+        with translate_commit_conflict():
+            self._ds.merge_insert(on).when_matched_update_all().when_not_matched_insert_all().execute(delta)
 
     def merge_insert_only(self, delta: pa.Table, on: str) -> None:
-        self._ds.merge_insert(on).when_not_matched_insert_all().execute(delta)
+        with translate_commit_conflict():
+            self._ds.merge_insert(on).when_not_matched_insert_all().execute(delta)
 
     def delete(self, predicate: str) -> None:
-        self._ds.delete(predicate)
+        with translate_commit_conflict():
+            self._ds.delete(predicate)
 
 
 def _arrow_stream_bytes(delta: pa.Table) -> bytes:
