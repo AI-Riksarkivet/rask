@@ -291,6 +291,7 @@ single file:
 | A zone, a route, data fetching, cross-zone links, the frontend gates | `rask-frontend` |
 | `@rask/ui`, tokens, `class=`, an unstyled page, a new component | `rask-styling` |
 | Whether a feature should tell a PERSON something — emitting a run/control event, a notification that never fired, a new `ControlAction`/`NotificationReason` | `rask-notifications` |
+| A Dapr component vs hand-rolling — queuing, scheduling, locking, config, secrets, middleware; which blocks this estate uses/refused and why | `rask-dapr` |
 | An authorization model, tuples, `.fga` files | `openfga` |
 
 These skills are maintained against the code and **will drift** — when you find a claim that contradicts a file, fix the skill in the same commit as the code.
