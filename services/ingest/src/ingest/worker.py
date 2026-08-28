@@ -41,7 +41,7 @@ import pyarrow as pa
 from pydantic import BaseModel, Field
 
 from ingest.lander import write_unit_fragments
-from ingest.queue import ACK_WAIT_SECONDS, QueueMessage, UnitTask, WorkQueue
+from ingest.queue import ACK_WAIT_SECONDS, MAX_DELIVER, QueueMessage, UnitTask, WorkQueue
 from ingest.sizing import ResolvedSizing, resolve
 from ingest.staging import stage_fragments
 
@@ -271,6 +271,21 @@ def _is_redelivery(msg: QueueMessage) -> bool:
         return False
 
 
+#: Base seconds of nak backoff, multiplied by the delivery attempt. Small — the point is to stop an
+#: undelayed retry storm against a rate-limited endpoint, not to schedule long-horizon work (that is
+#: what the run's own retry is for).
+_NAK_BACKOFF_S = 2.0
+
+
+def _delivery_count(msg: Any) -> int:  # noqa: ANN401 — a nats Msg, typed only under TYPE_CHECKING
+    """This message's delivery attempt (1 on first delivery). Unknown -> 1, so a test double or a
+    non-JetStream message is treated as a first attempt and never trips the exhaustion branch."""
+    try:
+        return int(msg.metadata.num_delivered)
+    except (AttributeError, TypeError, ValueError):
+        return 1
+
+
 class Worker:
     """Consumes one run's units until the chunk drains."""
 
@@ -311,7 +326,24 @@ class Worker:
             await msg.ack()
             logger.warning("unit %s parked, will not be retried: %s", task.key, exc)
             return
-        await msg.nak()
+
+        # LAST CHANCE. JetStream stops redelivering after `max_deliver` and does NOT auto-park to a
+        # subject — it drops. So the terminal transient attempt must park the unit itself, or a unit
+        # whose endpoint stayed down for the whole window vanishes: not on the DLQ the docstring
+        # promises, not in `errors`, invisible to the publish precondition. `_is_redelivery`'s
+        # `num_delivered` is the delivery count; at `MAX_DELIVER` this attempt is the final one.
+        if _delivery_count(msg) >= MAX_DELIVER:
+            reason = f"transient fetch failure exhausted {MAX_DELIVER} deliveries: {exc}"
+            outcome.errors[task.key] = reason
+            await self._q.park_poison(task, reason)
+            await msg.ack()
+            logger.warning("unit %s parked after exhausting redelivery: %s", task.key, exc)
+            return
+
+        # A DELAYED nak — the queue's `max_ack_pending` backpressure protects the rate-limited
+        # endpoint, and an undelayed redelivery re-hits it at once, spending that protection. The
+        # delay grows with the attempt so a persistently-slow endpoint is not hammered on every retry.
+        await msg.nak(delay=_NAK_BACKOFF_S * _delivery_count(msg))
         logger.warning("unit %s failed transiently, redelivering: %s", task.key, exc)
 
     async def _one(self, task: UnitTask) -> tuple[str, bytes] | tuple[None, str]:
