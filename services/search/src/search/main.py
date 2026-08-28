@@ -21,6 +21,8 @@ from search.core.rate_limit import limiter
 from service_kit import setup_logging
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.exceptions import register_handlers
+from service_kit.governed.auth_lifespan import attach_auth
+from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.media.config import get_settings
 from service_kit.media.middleware import register_middleware
@@ -50,6 +52,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         # /livez stays green; per-request resolution surfaces the problem as a domain 404.
         logger.exception("search: default dataset failed to open — serving degraded")
+    # THE LINE THAT MAKES THE GATE FUNCTION. `api/security.py` builds the deps and every route
+    # declares them, but `make_auth_deps.get_checker` is fail-CLOSED: FGA enabled with no client on
+    # `app.state` is a 503, not a permissive fallback. Without this the whole X6 seam — settings
+    # mixin, gated routes, chart env — resolved to "Authorization is enabled but unavailable" on
+    # every request, which is safe and is also the service doing nothing.
+    #
+    # `services/compute/src/compute/lifespan.py` carries the same call and the same warning, six days
+    # older, because compute and controlplane shipped exactly this and it was measured on the live
+    # estate. Third time; hence `tests/unit/test_governed_services_wire_their_gate.py`.
+    await attach_auth(app, settings, service="search")
     app.state.startup_complete = True
     app.state.shutting_down = False
     # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`,
@@ -58,16 +70,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # at the START of termination, and that window is exactly when the sidecar is still
     # delivering. Owner ruling 2026-08-25.
     _disarm_drain = arm_drain_on_sigterm(app)
-    yield
-    _disarm_drain()
-    app.state.shutting_down = True
-    for resource in (state.http, state.embedder, state.reranker):
-        close = getattr(resource, "close", None)
-        if close is not None:
-            try:
-                close()
-            except Exception:
-                logger.warning("error closing %s on shutdown", type(resource).__name__)
+    try:
+        yield
+    finally:
+        # IN A `finally`, because the bare `yield` this replaces meant an exception past it skipped
+        # every close below — the http client, the embedder, the reranker, all leaked on exactly the
+        # path where leaking matters.
+        _disarm_drain()
+        app.state.shutting_down = True
+        await fga_dispose(app)
+        for resource in (state.http, state.embedder, state.reranker):
+            close = getattr(resource, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:
+                    logger.warning("error closing %s on shutdown", type(resource).__name__)
 
 
 # Application logging, before the app exists — every module here uses getLogger(__name__), and
