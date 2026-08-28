@@ -48,6 +48,7 @@ import contextlib
 import hashlib
 import json
 import os
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -164,7 +165,8 @@ def read_unit_slice(dataset_uri: str, run_id: str, offset: int, count: int) -> l
     if _is_object_store(uri):
         bucket, key = _split(uri)
         try:
-            raw = _client().get_object(Bucket=bucket, Key=key)["Body"].read().decode()
+            with contextlib.closing(_client().get_object(Bucket=bucket, Key=key)["Body"]) as body:
+                raw = body.read().decode()
         except Exception as exc:
             raise UnitManifestMissing(run_id, uri) from exc
     else:
@@ -591,6 +593,21 @@ def _split(uri: str) -> tuple[str, str]:
     return bucket, prefix.strip("/")
 
 
+@cache
+def _client_for(endpoint: str | None) -> Any:  # noqa: ANN401 — boto3 client has no public stub; matches `storage.s3_client`
+    """The one S3 client per endpoint, memoized. `storage.s3_client` opens a connection pool, and a
+    fresh one per staging call throws that pool away every time — the endpoint is process-stable and
+    the wrapped client is thread-safe, so one instance serves the whole run.
+
+    KEYED ON THE ENDPOINT, not a bare no-arg cache: the estate swaps MinIO/RustFS/AWS by env alone,
+    so a changed `RASK_S3_ENDPOINT_URL` must build a distinct client rather than return the stale one.
+    Within one process the value does not change, so this is a singleton in practice.
+    """
+    from storage import s3_client
+
+    return s3_client(endpoint)
+
+
 def _client() -> Any:  # noqa: ANN401 — boto3 client has no public stub; matches `storage.s3_client`
     """The estate's sanctioned S3 wrapper. Never boto3 directly — `packages/storage` owns the
     endpoint/credential resolution that keeps this MinIO/RustFS/AWS-agnostic.
@@ -600,9 +617,7 @@ def _client() -> Any:  # noqa: ANN401 — boto3 client has no public stub; match
     (`get_paginator` carried one) or produced a diagnostic, so the annotation bought no safety and
     cost four — and a real typo in a boto3 kwarg would have arrived indistinguishable from them.
     """
-    from storage import s3_client
-
-    return s3_client(os.getenv("RASK_S3_ENDPOINT_URL"))
+    return _client_for(os.getenv("RASK_S3_ENDPOINT_URL"))
 
 
 def _list_object_keys(bucket: str, prefix: str) -> list[str]:
@@ -618,7 +633,8 @@ def _read_all(root: str) -> Iterator[str]:
         bucket, prefix = _split(root)
         client = _client()
         for key in _list_object_keys(bucket, prefix):
-            yield client.get_object(Bucket=bucket, Key=key)["Body"].read().decode()
+            with contextlib.closing(client.get_object(Bucket=bucket, Key=key)["Body"]) as body:
+                yield body.read().decode()
         return
 
     directory = Path(root)

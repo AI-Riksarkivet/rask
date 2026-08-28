@@ -112,7 +112,8 @@ ACTIVITY_RETRY = wf.RetryPolicy(
 #: belong: parked on the queue's DLQ with their reasons.
 MAX_REPORTED_ERRORS = 100
 
-#: The key under which a truncated error map names its own overflow. Reserved, like `__chunk__`.
+#: The key under which a truncated error map names its own overflow. Reserved, like the reconcile
+#: marker's own `chunk:{id}` entries.
 ERRORS_TRUNCATED_KEY = "__truncated__"
 
 

@@ -76,6 +76,11 @@ MAX_ACK_PENDING = int(os.getenv("RASK_INGEST_MAX_ACK_PENDING", "2048"))
 # refused to land.
 MAX_DELIVER = 3
 
+# In-flight publishes per chunk. A chunk is thousands of units, and one-at-a-time made publishing a
+# chunk that many sequential broker round-trips; this bounds the fan-out so a large chunk speeds up
+# without a single publish burst swamping the connection.
+PUBLISH_CONCURRENCY = int(os.getenv("RASK_INGEST_PUBLISH_CONCURRENCY", "64"))
+
 
 class UnitTask(BaseModel):
     """One unit of ingest work. Deliberately a REFERENCE, never the bytes.
@@ -292,7 +297,8 @@ class WorkQueue:
             )
 
     async def publish_units(self, tasks: Sequence[UnitTask]) -> int:
-        """Publish a chunk's units, DEDUPED on a deterministic message id. Returns the count accepted.
+        """Publish a chunk's units, DEDUPED on a deterministic message id. Returns the count the stream
+        ACCEPTED as new — a unit the dedupe window rejected is NOT in it.
 
         `workflow.publish_units` has always documented this — "JetStream dedupes on the message id
         within the stream's duplicate window, and a unit's id is derived from (run, key) — both
@@ -307,16 +313,27 @@ class WorkQueue:
         nats-stream-job, and `DUPLICATE_WINDOW` below for a locally-created stream. Beyond that
         window a replay does re-queue, and the staging layer's exact-cover selection is what absorbs
         it; this shrinks that surface rather than removing it.
+
+        CONCURRENT, bounded. A chunk is thousands of units; awaiting one publish at a time made each
+        chunk that many sequential round-trips to the broker. `PUBLISH_CONCURRENCY` in-flight at once
+        is the throughput without letting one chunk swamp the connection. The count returned is the
+        number of NON-duplicate acks: `PubAck.duplicate` is how JetStream reports a message its dedupe
+        window already holds, and a replay whose whole purpose is to be deduped must not be reported as
+        freshly accepted.
         """
-        published = 0
-        for task in tasks:
-            await self._js.publish(
-                unit_subject(task.run_id),
-                task.model_dump_json().encode(),
-                headers={"Nats-Msg-Id": _dedupe_id(task)},
-            )
-            published += 1
-        return published
+        sem = asyncio.Semaphore(PUBLISH_CONCURRENCY)
+
+        async def _publish(task: UnitTask) -> bool:
+            async with sem:
+                ack = await self._js.publish(
+                    unit_subject(task.run_id),
+                    task.model_dump_json().encode(),
+                    headers={"Nats-Msg-Id": _dedupe_id(task)},
+                )
+            return bool(getattr(ack, "duplicate", False))
+
+        acks = await asyncio.gather(*(_publish(task) for task in tasks))
+        return sum(1 for was_duplicate in acks if not was_duplicate)
 
     async def subscribe(self, run_id: str) -> JetStreamContext.PullSubscription:
         """The run's SHARED durable pull consumer — every worker pulls from this one.

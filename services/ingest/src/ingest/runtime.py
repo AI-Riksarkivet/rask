@@ -346,12 +346,23 @@ async def publish_chunk_units(chunk: ChunkSpec) -> int:
             from ingest.staging import read_unit_slice
 
             pairs = read_unit_slice(chunk.dataset_uri, chunk.run_id, chunk.offset, chunk.count)
+        # The active span's W3C context, captured ONCE here and carried on every unit, so a run's
+        # trace spans api -> workers -> lander. Injected via the propagator rather than reading the
+        # span id by hand — that is what keeps the format the W3C `traceparent` the worker's `extract`
+        # expects. `None` when nothing is sampled (no active span, or an unsampled one), which the
+        # field already permits.
+        from opentelemetry.propagate import inject
+
+        carrier: dict[str, str] = {}
+        inject(carrier)
+        traceparent = carrier.get("traceparent")
         tasks = [
             UnitTask(
                 run_id=chunk.run_id,
                 chunk_id=chunk.chunk_id,
                 key=key,
                 dataset_uri=chunk.dataset_uri,
+                traceparent=traceparent,
                 partition_key=partition_key_for(spec, key),
                 token=token,
             )
@@ -483,7 +494,10 @@ async def reconcile_from_queue(chunk: ChunkSpec) -> dict[str, Any]:
         return {
             "chunk_id": chunk.chunk_id,
             "fragments": [],
-            "errors": {} if drained else {"__chunk__": f"{info.num_pending} units still outstanding"},
+            # Keyed by THIS chunk, not a shared literal: the parent fan-in flattens every child's map
+            # with `merged.update(...)`, so a constant key would collapse N reconciling chunks to one
+            # last-wins message. `chunk:{id}` keeps one diagnostic per chunk.
+            "errors": {} if drained else {f"chunk:{chunk.chunk_id}": f"{info.num_pending} units still outstanding"},
         }
     finally:
         await queue.close()

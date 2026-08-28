@@ -38,6 +38,8 @@ import logging
 from typing import TYPE_CHECKING, Any, Protocol
 
 import pyarrow as pa
+from opentelemetry import context as otel_context
+from opentelemetry.propagate import extract
 from pydantic import BaseModel, Field
 
 from ingest.lander import write_unit_fragments
@@ -431,31 +433,40 @@ class Worker:
                 async def handle(msg: QueueMessage) -> None:
                     nonlocal pending_bytes
                     task = UnitTask.model_validate_json(msg.data)  # type: ignore[attr-defined]
-                    async with sem:
-                        try:
-                            # Kept as ONE value rather than unpacked: `_one` returns
-                            # `tuple[str, bytes] | tuple[None, str]`, and the two halves are
-                            # correlated. Unpacking first breaks that — the refusal branch's `str`
-                            # then rides along into the payload list, which is a `bytes` list.
-                            fetched = await self._one(task)
-                        except Exception as exc:
-                            await self._refuse(msg, task, exc, outcome)
-                            return
-                        if fetched[0] is None:
-                            # Validation refused it: park and ACK. Redelivering corrupt bytes cannot help.
-                            reason = fetched[1]
-                            outcome.errors[task.key] = reason
-                            await self._q.park_poison(task, reason)
-                            await msg.ack()
-                            return
-                        # Held, NOT acked — the ack is owed until this unit's fragment is on the store.
-                        key, payload = fetched
-                        pending.append((key, payload))
-                        pending_parts.append(task.partition_key)
-                        pending_tokens.append(task.token)
-                        pending_msgs.append(msg)
-                        held[id(msg)] = msg
-                        pending_bytes += len(payload)
+                    # Re-attach the producer's trace context so this unit's fetch/validate spans hang
+                    # off the run's trace rather than starting a fresh, orphaned root — the far end of
+                    # the propagation `publish_chunk_units` began. Detached in `finally` so the worker's
+                    # own loop context is restored between units.
+                    ctx_token = otel_context.attach(extract({"traceparent": task.traceparent})) if task.traceparent else None
+                    try:
+                        async with sem:
+                            try:
+                                # Kept as ONE value rather than unpacked: `_one` returns
+                                # `tuple[str, bytes] | tuple[None, str]`, and the two halves are
+                                # correlated. Unpacking first breaks that — the refusal branch's `str`
+                                # then rides along into the payload list, which is a `bytes` list.
+                                fetched = await self._one(task)
+                            except Exception as exc:
+                                await self._refuse(msg, task, exc, outcome)
+                                return
+                            if fetched[0] is None:
+                                # Validation refused it: park and ACK. Redelivering corrupt bytes cannot help.
+                                reason = fetched[1]
+                                outcome.errors[task.key] = reason
+                                await self._q.park_poison(task, reason)
+                                await msg.ack()
+                                return
+                            # Held, NOT acked — the ack is owed until this unit's fragment is on the store.
+                            key, payload = fetched
+                            pending.append((key, payload))
+                            pending_parts.append(task.partition_key)
+                            pending_tokens.append(task.token)
+                            pending_msgs.append(msg)
+                            held[id(msg)] = msg
+                            pending_bytes += len(payload)
+                    finally:
+                        if ctx_token is not None:
+                            otel_context.detach(ctx_token)
 
                 # A REDELIVERED unit never shares a fragment with a fresh one, and that isolation is what
                 # keeps recovery decidable. `discover_staged` resolves an overlap by dropping the
