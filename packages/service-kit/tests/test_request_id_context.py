@@ -84,12 +84,12 @@ def test_the_id_does_NOT_leak_into_the_next_request() -> None:
 
 def test_a_log_record_carries_the_request_id() -> None:
     """The point of the whole chain: an operator can grep for what the caller quoted."""
-    from service_kit.context import RequestIdFilter, request_id_ctx
+    from service_kit.context import CorrelationFilter, request_id_ctx
 
     record = logging.LogRecord("x", logging.INFO, __file__, 1, "msg", None, None)
     token = request_id_ctx.set("deadbeef")
     try:
-        assert RequestIdFilter().filter(record) is True
+        assert CorrelationFilter().filter(record) is True
     finally:
         request_id_ctx.reset(token)
 
@@ -97,9 +97,33 @@ def test_a_log_record_carries_the_request_id() -> None:
 
 
 def test_setup_logging_installs_the_filter() -> None:
-    """A filter nobody installs is the same dead end this finding is about."""
-    import inspect
+    """A filter nobody installs is the same dead end this finding is about.
 
+    ASKED OF THE HANDLER, not of the source text. This read
+    `"RequestIdFilter" in inspect.getsource(setup_logging)`, which passes for a filter that is named
+    and never added, and fails for one that is added under a different name — it broke on exactly
+    that rename. What matters is that the handler `setup_logging` installs stamps the field.
+    """
     from service_kit import setup_logging
 
-    assert "RequestIdFilter" in inspect.getsource(setup_logging)
+    root = logging.getLogger()
+    previous = list(root.handlers)
+    for handler in previous:
+        root.removeHandler(handler)
+    try:
+        setup_logging()
+        stdout_handler = next(h for h in root.handlers if h.get_name() == "rask-stdout")
+        record = logging.LogRecord("x", logging.INFO, __file__, 1, "msg", None, None)
+        for log_filter in stdout_handler.filters:
+            # `Handler.filters` may hold bare callables as well as `Filter` instances; only the latter
+            # is what this asserts about.
+            if isinstance(log_filter, logging.Filter):
+                log_filter.filter(record)
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+        for handler in previous:
+            root.addHandler(handler)
+
+    assert getattr(record, "request_id", None) == "-", "the stdout handler stamps no request_id, so the formatter's field is unfed"
+    assert getattr(record, "trace_id", None) == "-", "the stdout handler stamps no trace_id"

@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI
 
 from service_kit.config import Settings
-from service_kit.context import RequestIdFilter
+from service_kit.context import CorrelationFilter
 from service_kit.exceptions import register_handlers
 from service_kit.middleware import register_middleware
 from service_kit.otel import setup_otel
@@ -73,8 +73,15 @@ def setup_logging() -> None:
         # included — with no per-service edit. Outside a request it renders `-`, which is why the
         # context var defaults to a visible placeholder rather than an empty string that would read
         # like a formatting bug.
-        handler.addFilter(RequestIdFilter())
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s [%(request_id)s] — %(message)s"))
+        handler.addFilter(CorrelationFilter())
+        # THE TRACE ID JOINS IT, and this is the tier that was missing one. `LoggingInstrumentor`
+        # attaches `otelTraceID` to every record, but the only way it ever reached a LINE was
+        # `set_logging_format=True` → `logging.basicConfig(format=...)`, which no-ops because this
+        # handler already exists. So the id rode on every record and printed on none of them: the
+        # OTLP copy in GreptimeDB could be joined to a trace and `kubectl logs` — the copy an
+        # operator reads first — could not. Both fields come from the filter, so this format string
+        # is safe on a record that never met OpenTelemetry.
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s [%(request_id)s] [%(trace_id)s] — %(message)s"))
         root.addHandler(handler)
 
 

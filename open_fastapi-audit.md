@@ -1586,7 +1586,47 @@ chart/templates/ha.yaml:82-92 — `metrics:\n  - type: Resource\n    resource:\n
 
 </details>
 
-<details><summary><b>`setup_otel` passes `logger_provider=` to `LoggingInstrumentor`, which the installed 0.65b0 ignores — and `set_logging_format=True` is a no-op, so fleet stdout carries no trace id</b> <i>(observability.md, ADJUSTED)</i></summary>
+<details><summary><b>~~`setup_otel` passes `logger_provider=` to `LoggingInstrumentor`, which the installed 0.65b0 ignores — and `set_logging_format=True` is a no-op, so fleet stdout carries no trace id~~</b> <i>(observability.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-28.** All three legs, each the way the finding's own triage says.
+>
+> **Leg 1 was a FALSE COMMENT, not a behavioural bug, and is fixed as one.** Read in the installed
+> `LoggingInstrumentor._instrument`: it calls `get_logger_provider()` and never reads a
+> `logger_provider` kwarg — so the argument was inert, but `set_logger_provider` two lines above
+> already made the global correct. The comment claiming the kwarg protected against losing a race on
+> that set-once global is deleted, the inert kwarg with it, and the binding is now ASSERTED
+> (`get_logger_provider() is not logger_provider` → a loud ERROR). That failure is otherwise perfectly
+> silent: records get built, translated and dropped by a proxy's no-op logger.
+>
+> **Leg 2 is the defect.** `set_logging_format=True` reaches `logging.basicConfig(format=...)`, which
+> NO-OPS because `setup_logging` already installed the named `rask-stdout` handler on the root
+> logger — so `otelTraceID` rode on every record and printed on no line. Now
+> `inject_trace_context=True` (same factory injection, without the format call that cannot apply),
+> and `setup_logging`'s own formatter carries `[%(trace_id)s]`.
+>
+> **The formatter cannot depend on OTel being on**, which is the trap in the obvious version of this
+> fix: `logging` raises on a format field the record lacks, and a record with no `otelTraceID` is the
+> normal case in dev, in tests, and wherever `setup_otel` returned False. So `trace_id` is DERIVED by
+> the same filter that already guarantees `request_id` — renamed `RequestIdFilter` →
+> `CorrelationFilter`, since a class stamping a trace id while calling itself the request-id filter
+> is the stale naming this drain keeps paying for. `"0"` and an all-zero id both render `-`, so a
+> line never shows 32 zeros as though they were a trace.
+>
+> **Leg 3 is refuted as filed and replaced with the rule that makes it true.** The finding asks for an
+> invariant that `rask.otelEnv` never renders `OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED`.
+> `tests/unit/test_log_correlation_wiring.py` asserts the stronger, derived form: that variable is
+> set **iff** the container runs under `opentelemetry-instrument`. Both directions are silent faults
+> — a launcher pod without it ships every record TWICE; a bare-uvicorn pod with it installs no
+> handler at all and the OTLP log tier goes quiet. Verified across the render: 7 launcher pods set
+> it, 6 fleet pods do not, no exceptions. Teeth demonstrated by copying the variable into
+> `rask.otelEnv` — the exact sibling-helper accident — which failed all six fleet rows;
+> `_helpers.tpl` restored and verified with `git diff --quiet`.
+> Pinned by `packages/service-kit/tests/test_trace_id_on_stdout.py` (4 tests, 1 RED first — the other
+> three are the guards that would have caught a naive fix) plus 21 render rows.
+> **One brittle test replaced on the way past:** `test_setup_logging_installs_the_filter` asserted
+> `"RequestIdFilter" in inspect.getsource(setup_logging)` — which passes for a filter that is named
+> and never added, fails for one added under another name, and broke on this rename. It now asks the
+> installed handler whether it stamps the fields.
 
 **Rule.** observability.md: § log correlation ("Log the exception inside the active span context — trace_id/span_id ride along") — the estate's stdout tier is the copy an operator reads first, and it carries neither
 

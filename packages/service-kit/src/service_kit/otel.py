@@ -8,6 +8,7 @@ module only constructs providers + instruments the app; it hardcodes no target.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
@@ -16,6 +17,9 @@ from typing import TYPE_CHECKING, Any
 from fastapi import FastAPI
 
 from service_kit.config import Settings
+
+
+log = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
@@ -100,7 +104,7 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     import atexit
 
     from opentelemetry import metrics, trace
-    from opentelemetry._logs import set_logger_provider
+    from opentelemetry._logs import get_logger_provider, set_logger_provider
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
     from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -135,12 +139,16 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     metrics.set_meter_provider(meter_provider)
 
     # Logs: THE THIRD SIGNAL, and the one this seam silently threw away. `LoggingInstrumentor` does
-    # install an OTLP `LoggingHandler`, but with no `logger_provider` argument it binds to the global
-    # `ProxyLoggerProvider`, whose `ProxyLogger` falls back to `_noop_logger`; the handler's `emit`
-    # skips only on `NoOpLogger`, and a proxy is not one. So every record was translated into an OTel
-    # record and then dropped — full cost, no delivery. The provider is passed EXPLICITLY below rather
-    # than relying on `set_logger_provider` having run first, because that global is set-once and a
-    # caller that lost the race would silently re-bind to the proxy.
+    # install an OTLP `LoggingHandler`, but against the global `ProxyLoggerProvider` its `ProxyLogger`
+    # falls back to `_noop_logger`; the handler's `emit` skips only on `NoOpLogger`, and a proxy is
+    # not one. So every record was translated into an OTel record and then dropped — full cost, no
+    # delivery.
+    #
+    # THE BINDING IS THE CONTRACT, and it is asserted rather than described. This used to pass
+    # `logger_provider=` to `instrument()` under a comment claiming that protected against losing a
+    # race on the set-once global. It does not: `LoggingInstrumentor._instrument` calls
+    # `get_logger_provider()` and never reads that kwarg, so the argument was inert and the comment
+    # was false. `set_logger_provider` below is what actually decides, so that is what gets checked.
     #
     # This is what emptied the compliance audit trail: `governed/audit.py` puts every field in
     # `extra={...}`, and the only formatter on that route (`__init__.py`) references no extra key, so an
@@ -148,6 +156,11 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     logger_provider = LoggerProvider(resource=resource)
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
     set_logger_provider(logger_provider)
+    if get_logger_provider() is not logger_provider:
+        # Loudly, because the failure is otherwise perfectly silent: records are built, translated and
+        # dropped by a proxy's no-op logger, with no error and no metric to distinguish it from a
+        # collector that is down.
+        log.error("otel_logger_provider_not_bound", extra={"bound": type(get_logger_provider()).__name__})
 
     FastAPIInstrumentor.instrument_app(
         app,
@@ -156,7 +169,13 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
         server_request_hook=server_request_hook,
     )
     HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider, meter_provider=meter_provider)
-    LoggingInstrumentor().instrument(set_logging_format=True, logger_provider=logger_provider)
+    # `inject_trace_context=`, NOT `set_logging_format=`. Both make the record factory attach
+    # `otelTraceID`/`otelSpanID`, but `set_logging_format` ALSO calls `logging.basicConfig(format=...)`
+    # — which no-ops, because `setup_logging` has already installed the named `rask-stdout` handler on
+    # the root logger. So it asked for a format it could never apply, and the id reached every record
+    # and no line. `setup_logging`'s own formatter prints it now, via the filter that guarantees the
+    # field exists whether or not this function ever ran.
+    LoggingInstrumentor().instrument(inject_trace_context=True)
 
     # Shutdown hooks, because THE FLEET HAS NO LAUNCHER. `opentelemetry-instrument` registers these
     # itself; `command: ["uvicorn"]` does not, so all three batch processors would discard whatever sat
