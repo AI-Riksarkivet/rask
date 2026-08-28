@@ -2493,7 +2493,7 @@ def test_the_chart_tells_kuberay_the_ray_version_the_image_actually_ships() -> N
 
     `chart/values.yaml` declared `rayVersion: "2.56.1"`; the root `uv.lock` resolves ray 2.57.0, and
     `packages/ratch` REQUIRES `ray[data,default]>=2.57`. That matters because
-    `.docker/ray-cluster.dockerfile` builds the image with `uv sync --package ratch` FROM THAT LOCK —
+    `.docker/ray-cluster.dockerfile` builds the image with `uv sync --package ray-cluster-env` FROM THAT LOCK —
     so the chart was telling the KubeRay operator one version while the container ran another.
 
     KubeRay uses `rayVersion` for its own compatibility gating (the chart's auth block already notes
@@ -2517,7 +2517,7 @@ def test_the_chart_tells_kuberay_the_ray_version_the_image_actually_ships() -> N
 
     assert declared.group(1) == resolved, (
         f"chart rayVersion is {declared.group(1)!r} but the image is built from a lock resolving "
-        f"{resolved!r} (.docker/ray-cluster.dockerfile: uv sync --package ratch). KubeRay is being "
+        f"{resolved!r} (.docker/ray-cluster.dockerfile: uv sync --package ray-cluster-env). KubeRay is being "
         f"told about a cluster that does not exist."
     )
 
@@ -2749,26 +2749,28 @@ def test_the_ray_cluster_image_can_read_the_lakehouse() -> None:
 
     WHAT CHANGED, and why this is stricter rather than looser. The trio used to be installed with
     hand-written pins, and this test compared them against `ray-lance.dockerfile`'s hand-written
-    pins — two literals kept equal by a test. The image now resolves `packages/ratch` (the platform's
-    own Ray+Lance package) from the ROOT lock, so it and the fleet agree BY CONSTRUCTION and there is
-    no pin to drift. So the assertion moves to the mechanism: the image builds from the root lock,
-    and that package really does carry the stack.
+    pins — two literals kept equal by a test. The image now resolves `packages/ray-cluster-env` —
+    the deps-only member that NAMES the platform compute environment (open_ray-kernel.md move 13; it
+    replaced `--package ratch`, whose dependency list the image had been inheriting by accident) —
+    from the ROOT lock, so it and the fleet agree BY CONSTRUCTION and there is no pin to drift. So
+    the assertion moves to the mechanism: the image builds from the root lock, and that member
+    really does carry the stack.
     """
     dockerfile = (REPO / ".docker" / "ray-cluster.dockerfile").read_text()
 
-    assert "uv sync --package ratch" in dockerfile, (
-        "the deployed Ray image no longer builds the platform package from the root lock. Without it "
-        "the cluster cannot read the lakehouse at all (ModuleNotFoundError on every stage job), or "
+    assert "uv sync --package ray-cluster-env" in dockerfile, (
+        "the deployed Ray image no longer builds the platform environment from the root lock. Without "
+        "it the cluster cannot read the lakehouse at all (ModuleNotFoundError on every stage job), or "
         "reads it at a different pylance than the fleet writes with — which corrupts the blob read "
         "path silently."
     )
     assert "--frozen" in dockerfile and "--locked" in dockerfile, "the root-lock build must be frozen/locked, or the image can float off the fleet's versions"
 
-    ratch = (REPO / "packages" / "ratch" / "pyproject.toml").read_text()
+    env_member = (REPO / "packages" / "ray-cluster-env" / "pyproject.toml").read_text()
     for package in ("pylance", "lance-ray", "pyarrow", "ray["):
-        assert package in ratch, (
-            f"packages/ratch no longer declares {package!r}, so the Ray image would silently stop carrying it. "
-            "This test reads ratch as the definition of the platform compute stack."
+        assert package in env_member, (
+            f"packages/ray-cluster-env no longer declares {package!r}, so the Ray image would silently stop carrying it. "
+            "This test reads that member as the definition of the platform compute stack."
         )
 
 
@@ -4768,10 +4770,13 @@ def test_the_ray_head_image_the_CHART_CONFIGURES_ships_the_tracing_hook_module()
     text = dockerfile.read_text()
     for module in sorted(modules):
         copied = f"packages/service-kit/src/{module.replace('.', '/')}.py" in text
-        via_ratch = "uv sync --package ratch" in text and "service-kit" in (REPO / "packages" / "ratch" / "pyproject.toml").read_text()
+        # The deps-only member that NAMES the image's environment (open_ray-kernel.md move 13; it
+        # replaced `--package ratch` at the dissolution). The member's pyproject must actually
+        # depend on service-kit, or the sync provides the name and not the module.
+        via_member = "uv sync --package ray-cluster-env" in text and "service-kit" in (REPO / "packages" / "ray-cluster-env" / "pyproject.toml").read_text()
         installed = re.search(r"(pip install|uv (pip )?install)[^\n]*service-kit", text) is not None
 
-        assert copied or via_ratch or installed, (
+        assert copied or via_member or installed, (
             f"{dockerfile.name} backs the Ray head the chart configures, but nothing in it makes {module!r} "
             f"importable. Ray CORE imports the startup hook during boot, so this is a head that fails to "
             f"start, not tracing that stays off."

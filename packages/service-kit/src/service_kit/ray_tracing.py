@@ -31,8 +31,9 @@ audio runner, an image one and one nobody has written yet report identically. Th
 opened anywhere under ``runners/``) and defaulted its service name to that workload.
 
 No new dependency: the Ray image already ships the OTel SDK and the OTLP/HTTP exporter, because
-``packages/ratch`` depends on ``service-kit[lancekit]`` and ``.docker/ray-cluster.dockerfile``
-installs ratch — so ``service_kit`` is importable in every Ray Python process on the cluster.
+``packages/ray-cluster-env`` (the deps-only member naming the Ray images' environment) depends on
+``service-kit[lancekit]`` and ``.docker/ray-cluster.dockerfile`` installs it — so ``service_kit`` is
+importable in every Ray Python process on the cluster.
 """
 
 from __future__ import annotations

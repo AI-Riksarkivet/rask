@@ -42,11 +42,15 @@ WORKDIR /app
 
 # The PLATFORM compute environment, from the ROOT workspace lock.
 #
-# `packages/ratch` is the platform's own Ray+Lance package: ray[data,default], pylance, lance-ray,
-# pyarrow and service-kit[lancekit]. Building from the root lock means this image and the fleet
-# resolve the SAME versions by construction — a split between them is a correctness bug, not a
-# currency preference (measured: pylance 8.0.0 against a 9.0.0-written dataset made the whole
-# row-aligned blob read path unusable and mis-detected payload presence silently).
+# `packages/ray-cluster-env` is a deps-only member NAMING this image's environment: ray[data,
+# default,serve], pylance, lance-ray, pyarrow and service-kit[lancekit] — what the baked job
+# scripts import plus what the head runtime needs (its pyproject carries the measured incidents).
+# It replaced `--package ratch` at the dissolution (2026-08-28, open_ray-kernel.md move 13): the
+# image's environment was whatever ratch happened to depend on, for scripts that never imported
+# ratch. Building from the root lock means this image and the fleet resolve the SAME versions by
+# construction — a split between them is a correctness bug, not a currency preference (measured:
+# pylance 8.0.0 against a 9.0.0-written dataset made the whole row-aligned blob read path unusable
+# and mis-detected payload presence silently).
 #
 # NO WORKLOAD DEPENDENCIES LIVE HERE. This image previously built from `runners/htr/uv.lock`, so
 # every lane inherited torch and htrflow whether it wanted them or not, and the platform's own
@@ -59,14 +63,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=packages,target=packages \
     --mount=type=bind,source=services,target=services \
-    uv sync --package ratch --frozen --no-install-project --no-editable
+    uv sync --package ray-cluster-env --frozen --no-install-project --no-editable
 
 # Step 2: COPY sources, then resolve.
 COPY pyproject.toml uv.lock ./
 COPY packages packages
 COPY services services
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --package ratch --locked --no-editable
+    uv sync --package ray-cluster-env --locked --no-editable
 
 # Optional gated-model fetch step. Uncomment if rask pulls licensed weights at build time.
 # RUN --mount=type=secret,id=hf_token \

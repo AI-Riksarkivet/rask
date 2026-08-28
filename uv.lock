@@ -26,6 +26,7 @@ members = [
     "notifications",
     "rask-workspace",
     "ratch",
+    "ray-cluster-env",
     "ray-kit",
     "search",
     "service-kit",
@@ -3824,6 +3825,29 @@ serve = [
     { name = "uvicorn", extra = ["standard"] },
     { name = "virtualenv" },
     { name = "watchfiles" },
+]
+
+[[package]]
+name = "ray-cluster-env"
+version = "0.0.0"
+source = { virtual = "packages/ray-cluster-env" }
+dependencies = [
+    { name = "jinja2" },
+    { name = "lance-ray" },
+    { name = "pyarrow" },
+    { name = "pylance" },
+    { name = "ray", extra = ["data", "default", "serve"] },
+    { name = "service-kit", extra = ["lancekit"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jinja2", specifier = ">=3.1" },
+    { name = "lance-ray" },
+    { name = "pyarrow" },
+    { name = "pylance", specifier = ">=10.0.0" },
+    { name = "ray", extras = ["data", "default", "serve"], specifier = ">=2.58" },
+    { name = "service-kit", extras = ["lancekit"], editable = "packages/service-kit" },
 ]
 
 [[package]]

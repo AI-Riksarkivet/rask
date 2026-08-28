@@ -1,0 +1,66 @@
+# The Ray images' PLATFORM environment — a named dependency set, deliberately no code.
+#
+# Both Ray images (`.docker/ray-cluster.dockerfile`, `.docker/ray-runner.dockerfile`) build their
+# platform venv with `uv sync --package ray-cluster-env` against the ROOT lock, so the images and
+# the fleet resolve the SAME versions by construction — a split between them is a correctness bug,
+# not a currency preference (measured: pylance 8.0.0 against a 9.0.0-written dataset made the whole
+# row-aligned blob read path unusable and mis-detected payload presence silently).
+#
+# WHY A DEPS-ONLY MEMBER EXISTS AT ALL: the images used to run `uv sync --package ratch`, so the
+# head's environment was whatever ratch happened to depend on — for three baked job scripts
+# (`scripts/ray_{stage,train,lance}_job.py`) that contain the string `ratch` nowhere. When ratch
+# was dissolved (2026-08-28, open_ray-kernel.md move 13), the environment those scripts DO need got
+# this name of its own: what they import (`lance`, `lance_ray`, `pyarrow`, `pyarrow.fs`,
+# `service_kit.lakehouse.*`) plus what the HEAD runtime needs to exist at all (below). Add a
+# dependency here only when a baked script or the head itself imports it — a workload's deps belong
+# to the workload's own image (`ray-runner.dockerfile --runner=<name>`), never to this shared base.
+[project]
+name = "ray-cluster-env"
+version = "0.0.0"
+description = "Dependency set for the Ray head/cluster images — resolved from the root lock; ships no code."
+requires-python = ">=3.13"
+dependencies = [
+    # The baked job scripts' platform seam: service_kit.lakehouse.{blobs,media,stage_stamp} and the
+    # lancekit extra's Lance-plane subtree (the OTel base instrumentation rides service-kit's core).
+    "service-kit[lancekit]",
+    # Lance/Arrow core — `import lance`, `lance.optimize`, `pyarrow`/`pyarrow.fs`.
+    "pylance>=10.0.0",
+    "pyarrow",
+    # The distributed read/write bridge the tabular stage lane drives (`import lance_ray`).
+    "lance-ray",
+    # `serve` is a PLATFORM requirement of the head image, not a workload's. Whenever a RayService
+    # declares serveApplications, the KubeRay operator polls the HEAD's dashboard for their status —
+    # and without ray[serve] that endpoint answers 501, which stalls a zero-downtime upgrade forever.
+    # Measured 2026-08-25 on the live estate: the operator had been erroring every ~17 minutes since
+    # 2026-08-23 with
+    #     GetServeDetails fail: 501 Not Implemented Serve dependencies are not installed.
+    #     Please run `pip install "ray[serve]"`
+    # so the pending cluster could never be confirmed healthy, the switch never happened, and TWO
+    # ready RayClusters sat side by side burning a node's worth of resources
+    # (status: BothActivePendingClustersExist).
+    #
+    # The workload's own image already carries it (`runners/htr` declares ray[data,default,serve]),
+    # which is exactly why this was easy to miss: the SERVING half was fine and the OBSERVING half —
+    # the head's dashboard, which belongs to the platform — was not.
+    "ray[data,default,serve]>=2.58",
+    # jinja2 is a MISSING UPSTREAM DEPENDENCY of ray[serve] 2.58.0, added here because the extra does
+    # not pull it and `import ray.serve` fails without it. Verified against the installed
+    # distribution rather than assumed:
+    #   * ray-2.58.0.dist-info/METADATA declares jinja2 in NO extra (69 Requires-Dist lines carry
+    #     `extra == "serve"`; none of them is jinja2), and
+    #   * ray/serve/_private/haproxy.py:19 does `from jinja2 import Environment` at module load,
+    #     which `import ray.serve` triggers.
+    # Measured in the built image before this line existed:
+    #   ModuleNotFoundError: No module named 'jinja2'. You can run `pip install "ray[serve]"` ...
+    # — an error that names the extra it is already installing, which is why it reads as a bad build
+    # rather than an upstream packaging gap. Drop this when Ray declares it (the ray-haproxy feature
+    # that imports it is new in 2.58).
+    "jinja2>=3.1",
+]
+
+[tool.uv]
+# Deps-only: `uv sync --package ray-cluster-env` resolves this set and installs no project.
+package = false
+
+[tool.uv.sources]
+service-kit = { workspace = true }

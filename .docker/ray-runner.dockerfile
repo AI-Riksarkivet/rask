@@ -76,13 +76,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=packages,target=packages \
     --mount=type=bind,source=services,target=services \
-    uv sync --package ratch --frozen --no-install-project --no-editable
+    uv sync --package ray-cluster-env --frozen --no-install-project --no-editable
 
 COPY pyproject.toml uv.lock ./
 COPY packages packages
 COPY services services
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --package ratch --locked --no-editable
+    uv sync --package ray-cluster-env --locked --no-editable
 
 # ---- workload builder: ONE sealed runner, from ITS OWN lock --------------------------------------
 FROM platform-builder AS workload-builder
