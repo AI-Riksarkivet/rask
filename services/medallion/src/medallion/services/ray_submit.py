@@ -171,9 +171,13 @@ async def submit_stage_job(
         # A first publication genuinely has no floor; that is not a missing value.
         "BASE_VERSION": "" if from_version is None else str(from_version),
         "LINEAGE_JSON": lineage_json,
+        # ENDPOINT, KEY ID AND REGION ONLY — the SECRET is deliberately absent. It rode this dict,
+        # and the Jobs API echoes runtime_env back to any reader of `GET /api/jobs/<id>` (P0, fixed
+        # 2026-08-28). The Ray pods hold S3_SECRET themselves (chart: secretKeyRef onto
+        # infra-credentials; dev: `make ray-up` exports it to the local head), and Ray merges this
+        # dict OVER the process env, so the job's `os.environ` contract is unchanged.
         "S3_ENDPOINT": settings.s3_endpoint,
         "S3_KEY": settings.s3_access_key_id,
-        "S3_SECRET": settings.s3_secret_access_key.get_secret_value(),
         "S3_REGION": settings.s3_region,
         # Forward this pod's OTLP config (the train path below already does) so the job can export the
         # span it parents on the handed-over trace context. The service name is the mover's own — the
@@ -198,7 +202,7 @@ async def submit_stage_job(
         # platform edit.
         #
         # The `RASK_PARAM_` prefix is applied HERE rather than trusted from config, so a lane cannot
-        # reach S3_SECRET, LINEAGE_JSON or an OTEL_* key by choosing a colliding name. The platform
+        # reach LINEAGE_JSON, the S3_* config or an OTEL_* key by choosing a colliding name. The platform
         # never reads these values; their meaning belongs to the workload.
         **{f"RASK_PARAM_{key}": value for key, value in job_params.items()},
         # The job emits its OWN OpenLineage (no Dapr sidecar on Ray pods), so it needs the identity
@@ -206,12 +210,13 @@ async def submit_stage_job(
         # one is what the job stamps on its own events. Carrying only one loses the other lane.
         **({"ORIGINATOR": originator} if originator else {}),
         **({"PROJECT": project} if project else {}),
-        # Unset URL => `emit()` returns early; missing credential => a governed ingest 401s and the
-        # provenance is lost silently.
+        # Unset URL => `emit()` returns early. The service TOKEN is deliberately absent from this
+        # dict — it is the estate's shared credential and rode the echoed runtime_env (the same P0 as
+        # S3_SECRET above); the Ray pods hold LINEAGE_SERVICE_TOKEN themselves and the job reads it
+        # with .get(), so an auth-off profile (no token on the pod) still omits the header correctly.
         **(
             {
                 "LINEAGE_URL": settings.stage_lineage_url,
-                "LINEAGE_SERVICE_TOKEN": os.environ.get("APP_API_TOKEN", ""),
                 "LINEAGE_SERVICE_ID": settings.fga_service_identity,
             }
             if settings.stage_lineage_url
@@ -322,18 +327,16 @@ async def submit_train_job(
                 "REGISTRY_URI": registry_uri,
                 "ARTIFACT_BASE": artifact_base,
                 "LINEAGE_URL": settings.train_lineage_url,
-                # The job authenticates to the lineage ingest as the SERVICE it already is: the shared app
-                # token + its bare FGA subject (D5's `service-trainer`). Without this every training
-                # RunEvent 401'd under auth.enabled and ALL training provenance was silently lost (live
-                # 2026-07-13). Empty app token (dev/auth-off) → header omitted → the ingest stays open.
-                # NOTE the token rides in the Ray runtime_env, which the Ray Jobs API echoes back — the
-                # SAME exposure the S3 credentials below already have. Tighten both together (a secret
-                # mounted on the Ray pods) at the KubeRay merge; see docs/RAY-TRAIN.md D2.
-                "LINEAGE_SERVICE_TOKEN": os.environ.get("APP_API_TOKEN", ""),
+                # The job authenticates to the lineage ingest as the SERVICE it already is (D5's
+                # `service-trainer`) — but the shared app TOKEN no longer rides this dict. It did, and
+                # the old NOTE here conceded the exposure out loud: the Jobs API echoes runtime_env
+                # back. Fixed 2026-08-28 exactly as that note prescribed — a secret mounted on the Ray
+                # pods (secretKeyRef; see chart/templates/rayservice.yaml) — so the job still reads
+                # LINEAGE_SERVICE_TOKEN and S3_SECRET from `os.environ`, now sourced from the pod.
+                # Empty/absent token (dev/auth-off) → header omitted → the ingest stays open.
                 "LINEAGE_SERVICE_ID": settings.trainer_identity,
                 "S3_ENDPOINT": settings.s3_endpoint,
                 "S3_KEY": settings.s3_access_key_id,
-                "S3_SECRET": settings.s3_secret_access_key.get_secret_value(),
                 "S3_REGION": settings.s3_region,
                 # Forward this pod's own OTLP config so the training job's metrics land in the same
                 # GreptimeDB the services use (#18 experiment tracking → Perses). Empty (observability

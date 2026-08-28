@@ -669,7 +669,11 @@ def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkey
     )
     asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
     env = api.posts[0]["runtime_env"]["env_vars"]
-    assert env["S3_SECRET"] == "the-real-secret", "a lane parameter overwrote a real credential"
+    # STRONGER than the original assertion. This checked the real credential SURVIVED the collision
+    # (`env["S3_SECRET"] == "the-real-secret"`); since the Jobs-API-echo P0 fix the credential does
+    # not ride the submission at all — the pod holds it — so the lane's collision target simply does
+    # not exist, and a colliding name must not CREATE it either.
+    assert "S3_SECRET" not in env, "a lane parameter smuggled a credential-shaped key into the submission"
     assert env["LINEAGE_JSON"] == "{}", "a lane parameter overwrote the run's provenance document"
     assert env["OTEL_SERVICE_NAME"] != "spoofed"
     assert env["RASK_PARAM_S3_SECRET"] == "stolen"

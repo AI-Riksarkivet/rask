@@ -407,10 +407,15 @@ sync-favicons:        # copy the shared favicon source → every zone's static/ 
 RAY_HEAD_PORT       ?= 6379
 RAY_DASHBOARD_PORT  ?= 8265
 
+# ray-up exports S3_SECRET (+ the lineage token) to the LOCAL head because the submission body no
+# longer carries them (the Ray Jobs API echoes runtime_env to any reader — open_python-audit P0).
+# In-cluster the pods hold them via secretKeyRef; locally the head process env is the pod. The
+# rustfsadmin default is the same dev constant deploy/ray-lance-demo.yaml already commits.
 ray-up:
 	@if ray status >/dev/null 2>&1; then \
 	  echo "Ray already running. ray-status / ray-down to inspect / stop."; \
 	else \
+	  S3_SECRET=$${S3_SECRET:-rustfsadmin} LINEAGE_SERVICE_TOKEN=$${APP_API_TOKEN:-} \
 	  uv run ray start --head --port=$(RAY_HEAD_PORT) \
 	    --dashboard-host=0.0.0.0 --dashboard-port=$(RAY_DASHBOARD_PORT); \
 	  echo "Ray dashboard: http://localhost:$(RAY_DASHBOARD_PORT)"; \

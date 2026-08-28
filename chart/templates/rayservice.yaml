@@ -174,6 +174,34 @@ spec:
                     secretKeyRef:
                       name: {{ $secretName }}
                       key: HF_TOKEN
+                {{- /* THE JOB SECRETS LIVE ON THE POD, NOT IN THE SUBMISSION (open_python-audit
+                     P0, fixed 2026-08-28). They rode `runtime_env.env_vars`, and the Ray Jobs API
+                     echoes runtime_env back on `GET /api/jobs/<id>` — an unauthenticated dashboard,
+                     proxied by compute at /api/ray/*, published at the edge: one GET yielded the
+                     estate's service credential. Ray merges runtime_env OVER the process env, so
+                     holding them here keeps every job's `os.environ` contract byte-identical while
+                     the submission body carries nothing worth echoing.
+                     secretKeyRef onto Secrets the estate ALREADY owns — the same objects
+                     ExternalSecrets syncs from OpenBao on the prod path. A literal value: here would
+                     put the credential in `helm get manifest`, the exact class the infra-credentials
+                     header documents for the Dex secret. Any future workerGroupSpecs container needs
+                     these entries too (jobs run on workers). */}}
+                - name: S3_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "lance.fullname" . }}-infra-credentials
+                      key: rustfs-secret-key
+                - name: LINEAGE_SERVICE_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Release.Name }}-dapr-app-token
+                      key: token
+                      {{- /* optional: the token Secret renders only with dapr.sidecars, and the jobs
+                           read this with .get() — absent token = header omitted = the open (auth-off)
+                           ingest, which is that profile's correct behaviour. S3_SECRET above is NOT
+                           optional: a job hard-requires it, and a pod that cannot mount it should
+                           fail at schedule time, not at job time. */}}
+                      optional: true
                 {{- /* PRE-STAGED for P7b, and inert today — stated plainly so nobody reads it as wiring
                      that already works. This image is built solely from runners/htr's own lock
                      (.docker/ray-cluster.dockerfile), and lineage-kit is deliberately NOT a dependency
