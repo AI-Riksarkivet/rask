@@ -162,9 +162,14 @@ def _resolve(state: StateDep, table: str, token: str | None) -> str:
     # the rows. This call used to carry no Authorization header whatsoever, which meant it 401'd on
     # any auth-enabled catalog and, when it did succeed, succeeded as nobody in particular.
     headers = {"Authorization": f"Bearer {token}"} if token else {}
+    # THE PROCESS-WIDE POOL, not a fresh client per call (VS-12). A new `httpx.Client(base_url=...)`
+    # here paid a TLS handshake and a throwaway connection pool on every `/api/page(s)`; the pooled
+    # client built once in the lifespan is on `state.http` and `system.py` already reuses it the same
+    # way. It carries no `base_url`, so the resolve passes the catalog URI as an absolute url. The
+    # module fallback only fires for bare `AppState` constructions in unit tests.
+    http = state.http if state.http is not None else httpx
     try:
-        with httpx.Client(base_url=base, timeout=30.0) as http:
-            r = http.post(f"/v1/table/{table}/describe", json={}, headers=headers)
+        r = http.post(f"{base}/v1/table/{table}/describe", json={}, headers=headers, timeout=30.0)
     except httpx.RequestError as exc:
         # AN OUTAGE, NOT AN ABSENCE — and the old message said so ("catalog unreachable") while the
         # class it raised said the opposite. `httpx.RequestError` is the base of ConnectError,

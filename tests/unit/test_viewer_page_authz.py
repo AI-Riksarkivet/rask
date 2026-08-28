@@ -24,7 +24,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -72,6 +71,7 @@ def _app(
     seen: list[dict[str, Any]] | None = None,
     subject: str = "gina",
     token: str | None = "caller-jwt",
+    http: Any | None = None,
 ) -> FastAPI:
     async def checker(*, user: str, relation: str, obj: str) -> bool:
         if seen is not None:
@@ -97,8 +97,17 @@ def _app(
 
     # `storage_options` is a METHOD on the real settings (open_python-audit E2: it performs a
     # blocking Dapr secret fetch, and a @property disguised that as a free attribute read). The
-    # double has to match, or it tests a shape production does not have.
-    state = type("_State", (), {"settings": type("S", (), {"catalog_uri": "http://catalog", "storage_options": lambda _self: {}})()})()
+    # double has to match, or it tests a shape production does not have. `http` carries the pooled
+    # catalog stub `_resolve` posts through (VS-12) — the resolve reuses `state.http` rather than
+    # constructing a client per call.
+    state = type(
+        "_State",
+        (),
+        {
+            "settings": type("S", (), {"catalog_uri": "http://catalog", "storage_options": lambda _self: {}})(),
+            "http": http if http is not None else _catalog_ok(),
+        },
+    )()
     app.dependency_overrides[pg.StateDep.__metadata__[0].dependency] = lambda: state
     return app
 
@@ -140,7 +149,7 @@ def _fake_dataset(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.Temp
 
 
 def _catalog_ok(seen_headers: list[dict[str, str]] | None = None) -> Any:
-    """Patch httpx.Client so `_resolve` reaches a catalog that answers 200 with a location."""
+    """A pooled catalog client `_resolve` posts through — answers 200 with a location."""
 
     class _Resp:
         status_code = 200
@@ -150,17 +159,12 @@ def _catalog_ok(seen_headers: list[dict[str, str]] | None = None) -> Any:
             return {"location": "s3://bkt/tbl.lance"}
 
     class _Client:
-        def __init__(self, **_kw: Any) -> None: ...
-        def __enter__(self) -> _Client:
-            return self
-
-        def __exit__(self, *_exc: object) -> None: ...
-        def post(self, _path: str, **kwargs: Any) -> _Resp:
+        def post(self, _url: str, **kwargs: Any) -> _Resp:
             if seen_headers is not None:
                 seen_headers.append(dict(kwargs.get("headers") or {}))
             return _Resp()
 
-    return _Client
+    return _Client()
 
 
 # --- the gate ---------------------------------------------------------------------------------
@@ -190,14 +194,13 @@ def test_the_page_LISTING_is_refused_without_a_grant() -> None:
     assert client.get("/api/pages", params={"table": TABLE}).status_code == 403
 
 
-def test_bytes_need_can_read_data_while_the_listing_needs_only_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bytes_need_can_read_data_while_the_listing_needs_only_metadata() -> None:
     """The two rungs are DIFFERENT, and that difference is the archival point.
 
     A caller granted metadata may see that a volume of sealed records exists and how many pages it
     has, and still be refused the pixels. Collapsing both onto one relation would silently widen
     whichever surface got the weaker one.
     """
-    monkeypatch.setattr(httpx, "Client", _catalog_ok())
     seen: list[dict[str, Any]] = []
     client = TestClient(_app(allow=True, seen=seen))
 
@@ -208,9 +211,8 @@ def test_bytes_need_can_read_data_while_the_listing_needs_only_metadata(monkeypa
     assert {s["obj"] for s in seen} == {f"table:{TABLE}"}
 
 
-def test_the_check_names_the_CATALOG_table_not_an_invented_object(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_check_names_the_CATALOG_table_not_an_invented_object() -> None:
     """`table:<id>` — the same object the catalog authorizes on and the annotator writes through."""
-    monkeypatch.setattr(httpx, "Client", _catalog_ok())
     seen: list[dict[str, Any]] = []
     client = TestClient(_app(allow=True, seen=seen))
 
@@ -219,9 +221,8 @@ def test_the_check_names_the_CATALOG_table_not_an_invented_object(monkeypatch: p
     assert seen == [{"user": "gina", "relation": READ_DATA, "obj": f"table:{TABLE}"}]
 
 
-def test_a_granted_caller_still_gets_the_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_granted_caller_still_gets_the_bytes() -> None:
     """The gate must not be a wall. Without this the suite would pass with the route deleted."""
-    monkeypatch.setattr(httpx, "Client", _catalog_ok())
     client = TestClient(_app(allow=True))
 
     r = client.get("/api/page", params={"table": TABLE, "id": 0})
@@ -242,7 +243,6 @@ def test_the_denied_caller_is_refused_BEFORE_the_dataset_is_opened(monkeypatch: 
     an inverted-order mutation did not fail it. With a working catalog the check order is the only
     thing that can keep `opened` empty. (Found by mutation, which is exactly what mutation is for.)
     """
-    monkeypatch.setattr(httpx, "Client", _catalog_ok())
     opened: list[str] = []
     monkeypatch.setattr(pg.lance, "dataset", lambda *a, **_kw: opened.append(str(a)))
 
@@ -255,7 +255,7 @@ def test_the_denied_caller_is_refused_BEFORE_the_dataset_is_opened(monkeypatch: 
 # --- the bearer -------------------------------------------------------------------------------
 
 
-def test_the_CALLERS_bearer_is_forwarded_to_the_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_CALLERS_bearer_is_forwarded_to_the_catalog() -> None:
     """Not a service credential, and not nothing.
 
     `raw_bearer`'s own docstring says why a service token is wrong: the catalog checks one relation
@@ -263,26 +263,24 @@ def test_the_CALLERS_bearer_is_forwarded_to_the_catalog(monkeypatch: pytest.Monk
     caller with no grant at all. Before this, the header was absent entirely.
     """
     headers: list[dict[str, str]] = []
-    monkeypatch.setattr(httpx, "Client", _catalog_ok(headers))
-    client = TestClient(_app(allow=True, token="caller-jwt"))
+    client = TestClient(_app(allow=True, token="caller-jwt", http=_catalog_ok(headers)))
 
     client.get("/api/page", params={"table": TABLE, "id": 0})
 
     assert headers == [{"Authorization": "Bearer caller-jwt"}]
 
 
-def test_an_anonymous_caller_sends_no_authorization_header_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_anonymous_caller_sends_no_authorization_header_at_all() -> None:
     """`Bearer None` would be a forged-looking credential; absence is the honest wire."""
     headers: list[dict[str, str]] = []
-    monkeypatch.setattr(httpx, "Client", _catalog_ok(headers))
-    client = TestClient(_app(allow=True, token=None))
+    client = TestClient(_app(allow=True, token=None, http=_catalog_ok(headers)))
 
     client.get("/api/page", params={"table": TABLE, "id": 0})
 
     assert headers == [{}]
 
 
-def test_a_catalog_401_says_WHICH_credential_problem_it_was(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_catalog_401_says_WHICH_credential_problem_it_was() -> None:
     """ "No credential sent" and "credential refused" are different problems with different fixes.
 
     The route already refused to launder 401/403 into "unknown table" — the annotator lost real
@@ -295,18 +293,11 @@ def test_a_catalog_401_says_WHICH_credential_problem_it_was(monkeypatch: pytest.
         status_code = 401
 
     class _Client:
-        def __init__(self, **_kw: Any) -> None: ...
-        def __enter__(self) -> _Client:
-            return self
-
-        def __exit__(self, *_exc: object) -> None: ...
-        def post(self, _path: str, **_kw: Any) -> _Resp:
+        def post(self, _url: str, **_kw: Any) -> _Resp:
             return _Resp()
 
-    monkeypatch.setattr(httpx, "Client", _Client)
-
-    anon = TestClient(_app(allow=True, token=None)).get("/api/page", params={"table": TABLE, "id": 0})
-    held = TestClient(_app(allow=True, token="caller-jwt")).get("/api/page", params={"table": TABLE, "id": 0})
+    anon = TestClient(_app(allow=True, token=None, http=_Client())).get("/api/page", params={"table": TABLE, "id": 0})
+    held = TestClient(_app(allow=True, token="caller-jwt", http=_Client())).get("/api/page", params={"table": TABLE, "id": 0})
 
     assert "no bearer was sent" in anon.text
     assert "bearer was refused" in held.text

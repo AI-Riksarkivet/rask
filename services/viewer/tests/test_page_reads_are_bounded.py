@@ -203,8 +203,14 @@ def _app() -> FastAPI:
     app.dependency_overrides[pg.CurrentSubject.__metadata__[0].dependency] = lambda: "gina"
     app.dependency_overrides[pg.RawBearerToken.__metadata__[0].dependency] = lambda: "caller-jwt"
     # `storage_options` is a METHOD on the real settings (it performs a blocking Dapr secret fetch),
-    # so the double has to be one too or it tests a shape production does not have.
-    state = type("_State", (), {"settings": type("S", (), {"catalog_uri": "http://catalog", "storage_options": lambda _self: {}})()})()
+    # so the double has to be one too or it tests a shape production does not have. `http` carries the
+    # pooled catalog stub `_resolve` posts through (VS-12) — the resolve reuses `state.http` rather
+    # than building a client per call.
+    state = type(
+        "_State",
+        (),
+        {"settings": type("S", (), {"catalog_uri": "http://catalog", "storage_options": lambda _self: {}})(), "http": _catalog_ok()()},
+    )()
     app.dependency_overrides[pg.StateDep.__metadata__[0].dependency] = lambda: state
     return app
 
@@ -213,7 +219,6 @@ def _app() -> FastAPI:
 def counted(dataset_path: Path, monkeypatch: pytest.MonkeyPatch) -> _CountingDataset:
     """Route `_open` at the counting wrapper, leaving `_resolve` and `_open` themselves real."""
     counter = _CountingDataset(lance.dataset(str(dataset_path)))
-    monkeypatch.setattr(pg.httpx, "Client", _catalog_ok())
     monkeypatch.setattr(pg.lance, "dataset", lambda *_a, **_kw: counter)
     return counter
 
@@ -324,7 +329,6 @@ def test_a_payload_over_the_threshold_is_streamed_not_buffered(big_page_path: Pa
     length. Without this test the streaming branch is never entered by the suite at all.
     """
     real = lance.dataset(str(big_page_path))
-    monkeypatch.setattr(pg.httpx, "Client", _catalog_ok())
     monkeypatch.setattr(pg.lance, "dataset", lambda *_a, **_kw: real)
     handle = real.take_blobs("payload", ids=[0])[0]
     assert handle is not None
