@@ -34,7 +34,7 @@ ratelimit = [
     "slowapi>=0.1.10",
 ]
 governed = [
-    "openfga-sdk>=0.9",
+    "openfga-sdk>=0.10.4",
     "pyjwt[crypto]>=2.8",
     "aiohttp",
     "tenacity>=9.1.4",

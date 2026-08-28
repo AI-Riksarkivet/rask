@@ -4098,7 +4098,7 @@ requires-dist = [
     { name = "lance-namespace", marker = "extra == 'lancekit'", specifier = ">=0.11.0" },
     { name = "lance-namespace-urllib3-client", marker = "extra == 'lancekit'", specifier = ">=0.11.0" },
     { name = "lancedb", marker = "extra == 'lancekit'", specifier = ">=0.34.0" },
-    { name = "openfga-sdk", marker = "extra == 'governed'", specifier = ">=0.9" },
+    { name = "openfga-sdk", marker = "extra == 'governed'", specifier = ">=0.10.4" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.44.0" },
     { name = "opentelemetry-instrumentation-aiohttp-client", specifier = ">=0.65b0" },
     { name = "opentelemetry-instrumentation-botocore", specifier = ">=0.65b0" },

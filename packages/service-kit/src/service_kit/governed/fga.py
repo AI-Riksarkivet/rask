@@ -34,7 +34,7 @@ import logging
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, cast
 
 import aiohttp
 from lance_namespace import ServiceUnavailableError
@@ -47,12 +47,15 @@ from openfga_sdk.client.models import (
     ClientListObjectsRequest,
     ClientTuple,
     ClientWriteRequest,
+    ClientWriteRequestOnDuplicateWrites,
+    ConflictOptions,
 )
 from openfga_sdk.client.models.list_users_request import ClientListUsersRequest
 from openfga_sdk.client.models.read_changes_request import ClientReadChangesRequest
 from openfga_sdk.configuration import RetryParams
 from openfga_sdk.exceptions import ApiException
 from openfga_sdk.models.create_store_request import CreateStoreRequest
+from openfga_sdk.models.error_code import ErrorCode
 from openfga_sdk.models.fga_object import FgaObject
 from openfga_sdk.models.read_request_tuple_key import ReadRequestTupleKey
 
@@ -103,15 +106,6 @@ _TRANSIENT_NETWORK: tuple[type[BaseException], ...] = (
 )
 # Every exception class the read/write paths fail CLOSED on (→ 503), never propagate.
 _FAIL_CLOSED: tuple[type[BaseException], ...] = (ApiException, *_TRANSIENT_NETWORK)
-
-# OpenFGA surfaces a duplicate-tuple write as a 400 ValidationException whose body
-# mentions that the tuple already exists. We treat that as success (idempotent
-# grant), since the desired post-condition — the tuple is present — already holds.
-_DUPLICATE_WRITE_MARKERS = ("already exists", "write_failed_due_to_invalid_input")
-
-# The symmetric case on the revoke path: deleting an already-absent tuple (a concurrent revoke)
-# surfaces as the same 400 validation error. Treat it as success — the tuple being gone IS the goal.
-_MISSING_DELETE_MARKERS = ("cannot delete", "does not exist", "write_failed_due_to_invalid_input")
 
 # Reading every tuple on one object (revoke-on-delete) is paginated; bound the page loop so a
 # pathological store / continuation-token bug can't spin forever. One object's grants are few, so
@@ -1115,14 +1109,6 @@ async def read_tuples(
 # --------------------------------------------------------------------------- #
 
 
-def _is_duplicate_write(exc: ApiException) -> bool:
-    """True if a write failed only because the tuple already exists (idempotent grant)."""
-    if exc.status is not None and exc.status != 400:
-        return False
-    body = (str(exc) + " " + (exc.error_message or "")).lower()
-    return any(marker in body for marker in _DUPLICATE_WRITE_MARKERS)
-
-
 #: Where a tuple write came from, recorded on every audit row so provenance can say HOW a grant
 #: happened and not merely who. `create` dwarfs the rest in a real estate — it is the post-registration
 #: seed — and telling it apart from a deliberate admin grant is most of the value.
@@ -1149,7 +1135,7 @@ TupleOrigin = Literal[
 ]
 
 
-def _audit_tuples(action: str, tuples: list[ClientTuple], actor: str, origin: TupleOrigin) -> None:
+def _audit_tuples(action: str, tuples: list[ClientTuple], actor: str, origin: TupleOrigin, **extra: str) -> None:
     """One audit row PER TUPLE, emitted from inside the write path.
 
     This lives here rather than at the call sites because coverage by convention does not hold: of the
@@ -1160,9 +1146,13 @@ def _audit_tuples(action: str, tuples: list[ClientTuple], actor: str, origin: Tu
 
     Emitting from the library makes the coverage structural: a new write site cannot reach OpenFGA
     without passing through here, and ``actor`` is required, so it cannot compile without naming one.
+
+    A row ASSERTS CONFIRMATION unless it says otherwise: extra fields (``reason="tuple_absent"``)
+    are how a path records an attempt whose post-condition held without the server performing
+    anything — a compliance query filtering them out reads only what OpenFGA confirmed.
     """
     for t in tuples:
-        audit(action, SUCCESS, subject=actor, resource=t.object, grantee=t.user, relation=t.relation, origin=origin)
+        audit(action, SUCCESS, subject=actor, resource=t.object, grantee=t.user, relation=t.relation, origin=origin, **extra)
 
 
 async def write_tuples(
@@ -1177,21 +1167,15 @@ async def write_tuples(
 ) -> None:
     """Persist relationship tuples (the single write path after a successful mutation).
 
-    Idempotent **per tuple**, which is not the same thing as per call. An OpenFGA ``Write`` is one
-    transaction: if a single tuple in the batch already exists, the server rejects the ENTIRE write with
-    ``write_failed_due_to_invalid_input`` and nothing lands. Swallowing that as "the post-condition already
-    holds" is true only for a one-tuple batch — for a batch it silently drops every sibling grant, and the
-    caller is told the grant succeeded. That is how a warehouse creator lost ``owner`` on their own
-    warehouse: :func:`~catalog.api.fga_deps.seed_warehouse` batches the owner grant, the project edge and
-    (on tenant bootstrap) ``admin`` on the project — and the seed scripts had already written that last
-    tuple, so the whole batch was rejected, silently, and the next call 403'd with
-    ``can_create_namespace required``. Verified against a live OpenFGA 2026-07-26: writing [existing, new]
-    leaves only `existing` behind.
-
-    So a duplicate rejection falls back to writing the tuples ONE AT A TIME, where "already exists" really
-    does mean the post-condition holds for that tuple and its siblings still land. The fast path is
-    unchanged (one transactional write); the fallback only runs on the rejection. This is the same hazard
-    :func:`delete_tuples` was already written to avoid — the lesson simply never crossed to the write side.
+    DUPLICATE IDEMPOTENCY IS THE SERVER'S JOB: the write rides ``on_duplicate_writes=IGNORE``
+    (SDK >= 0.10.4), so a batch containing an already-present tuple lands its siblings in the SAME
+    transaction and answers 200 — while a genuinely invalid tuple still 400s. This replaced a
+    client-side recovery (classify the 400 by prose markers, then re-write the batch one tuple at a
+    time) that existed for a real hazard — an OpenFGA ``Write`` is all-or-nothing, and one duplicate
+    used to reject every sibling grant, which is how a warehouse creator once lost ``owner`` on
+    their own warehouse — but that carried its own defects: the markers enumerated message phrasings
+    (SKG-01), and the fallback turned one transactional write into N sequential round-trips. The
+    server-side conflict option is the same post-condition with none of the classification.
 
     Transient failures are retried; on outage we fail closed with ``ServiceUnavailableError`` so the caller
     does not believe a grant succeeded when it did not.
@@ -1199,43 +1183,20 @@ async def write_tuples(
 
     @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_write(batch: list[ClientTuple]) -> None:
-        await client.write(ClientWriteRequest(writes=batch))
-
-    async def _write_one_by_one() -> None:
-        for item in tuples:
-            try:
-                await _do_write([item])
-            except _FAIL_CLOSED as exc:
-                if isinstance(exc, ApiException) and _is_duplicate_write(exc):
-                    log.debug(
-                        "openfga_write_duplicate_skipped",
-                        extra={"object": item.object, "relation": item.relation},
-                    )
-                    continue
-                log.error(
-                    "openfga_write_unavailable",
-                    extra={"object": item.object, "relation": item.relation},
-                    exc_info=True,
-                )
-                raise ServiceUnavailableError("authorization service unavailable") from exc
+        # The cast papers over the SDK's own annotation, not our types: `write`'s `options` is
+        # declared `dict[str, int | str | dict[...]]` while its body reads `options["conflict"]` as
+        # a ConflictOptions via `options_to_conflict_info` (client.py:538) — the runtime contract
+        # admits what the annotation forgot. Narrowing is impossible (the value IS a ConflictOptions).
+        conflict = {"conflict": ConflictOptions(on_duplicate_writes=ClientWriteRequestOnDuplicateWrites.IGNORE)}
+        await client.write(ClientWriteRequest(writes=batch), options=cast("dict[str, Any]", conflict))
 
     try:
         await _do_write(tuples)
     except _FAIL_CLOSED as exc:
-        if isinstance(exc, ApiException) and _is_duplicate_write(exc):
-            if len(tuples) > 1:
-                # One duplicate rejected the batch; the siblings are still unwritten. Land them.
-                log.info("openfga_write_batch_duplicate_retrying_singly", extra={"tuples": len(tuples)})
-                await _write_one_by_one()
-                _audit_tuples("access_tuple_write", tuples, actor, origin)
-                return
-            log.debug("openfga_write_duplicate_skipped")
-            # A duplicate IS the post-condition holding, so it is audited like any other success —
-            # otherwise re-running a seed silently erases the provenance of tuples that are present.
-            _audit_tuples("access_tuple_write", tuples, actor, origin)
-            return
         log.error("openfga_write_unavailable", exc_info=True)
         raise ServiceUnavailableError("authorization service unavailable") from exc
+    # A duplicate IS the post-condition holding, so it is audited like any other success —
+    # otherwise re-running a seed silently erases the provenance of tuples that are present.
     _audit_tuples("access_tuple_write", tuples, actor, origin)
 
 
@@ -1296,12 +1257,21 @@ async def grant_on_create(
     )
 
 
-def _is_missing_delete(exc: ApiException) -> bool:
-    """True if a delete failed only because the tuple was already absent (idempotent revoke)."""
-    if exc.status is not None and exc.status != 400:
-        return False
-    body = (str(exc) + " " + (exc.error_message or "")).lower()
-    return any(marker in body for marker in _MISSING_DELETE_MARKERS)
+def _delete_reported_absent(exc: ApiException) -> bool:
+    """True when the SERVER said the tuple was absent — keyed on the structured ``code``, never prose.
+
+    ``.code`` derives from the parsed response body, so this classifies what OpenFGA actually
+    reported rather than substring-matching its message text (SKG-01: the prose lists enumerated
+    the phrasings someone had seen, and a wording change either swallowed a real failure or turned
+    an idempotent revoke into a 503). Probed fact this rests on, recorded because nobody will
+    re-derive it: OpenFGA does NOT validate delete tuples against the authorization model, so a
+    mis-spelled relation is indistinguishable at the API from a concurrent revoke — which is why the
+    honest response is an audit row that claims no removal, not a hard rejection.
+
+    Deliberately NOT ``on_missing_deletes=IGNORE``: this 400 is the only signal the tuple was
+    absent, and the audit split in :func:`delete_tuples` needs it.
+    """
+    return exc.status == 400 and exc.code == ErrorCode.WRITE_FAILED_DUE_TO_INVALID_INPUT
 
 
 async def delete_tuples(
@@ -1330,16 +1300,26 @@ async def delete_tuples(
     async def _delete_one(t: ClientTuple) -> None:
         await client.write(ClientWriteRequest(deletes=[t]))
 
+    removed: list[ClientTuple] = []
+    absent: list[ClientTuple] = []
     for t in tuples:
         try:
             await _delete_one(t)
+            removed.append(t)
         except _FAIL_CLOSED as exc:
-            if isinstance(exc, ApiException) and _is_missing_delete(exc):
+            if isinstance(exc, ApiException) and _delete_reported_absent(exc):
                 log.debug("openfga_delete_absent_skipped")
+                absent.append(t)
                 continue
             log.error("openfga_delete_unavailable", exc_info=True)
             raise ServiceUnavailableError("authorization service unavailable") from exc
-    _audit_tuples("access_tuple_delete", tuples, actor, origin)
+    # AUDIT WHAT THE SERVER CONFIRMED (SKG-01). One blanket row per input tuple used to claim a
+    # revoke for tuples the server said were never there — so a mis-spelled relation left the REAL
+    # grant standing while the trail said it was gone. The absent row keeps the attempt visible
+    # (an auditor must be able to tell "never attempted" from "attempted, already gone") without
+    # asserting a removal that did not happen.
+    _audit_tuples("access_tuple_delete", removed, actor, origin)
+    _audit_tuples("access_tuple_delete", absent, actor, origin, reason="tuple_absent")
 
 
 async def revoke_object_tuples(
