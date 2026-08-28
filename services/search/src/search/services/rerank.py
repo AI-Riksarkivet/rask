@@ -43,5 +43,7 @@ def rerank_by_text(
     # `or ""`: frame-joined hits can carry a null body — the reranker rejects
     # null documents, and an empty string scores neutrally instead.
     scores = get_reranker().rerank(query, [h.get(body_column) or "" for h in head])
-    head = [h for _, h in sorted(zip(scores, head, strict=False), key=lambda p: -p[0])]
+    # strict=True: `rerank` now guarantees one score per candidate (VS-14), so a length mismatch is
+    # a contract violation to surface, not a tail to silently drop.
+    head = [h for _, h in sorted(zip(scores, head, strict=True), key=lambda p: -p[0])]
     return (head + tail)[:n]

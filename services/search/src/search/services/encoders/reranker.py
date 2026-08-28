@@ -23,6 +23,10 @@ from search.services.encoders.base import DEFAULT_TIMEOUT_S, RerankResponse, VLL
 RERANK_MODEL = "Qwen/Qwen3-VL-Reranker-2B"
 
 RERANK_INSTRUCTION = "Given a search query, retrieve relevant candidates that answer the query."
+#: The score a candidate the server declined to rank receives — below any real [0, 1] relevance,
+#: so an unscored document sinks to the bottom of the rerank order instead of stealing a rank.
+_UNSCORED = -1.0
+
 _PREFIX = (
     "<|im_start|>system\n"
     "Judge whether the Document meets the requirements based on the Query "
@@ -58,7 +62,15 @@ class VLLMReranker:
         self._t.close()
 
     def rerank(self, query: str, candidates: list[str]) -> list[float]:
-        """Return one relevance score per candidate, in input order."""
+        """Return one relevance score per candidate, in input order — always ``len(candidates)`` of them.
+
+        The reply MAY be unordered, short (fewer scores than documents) or sparse (an index skipped),
+        so the answer is rebuilt BY INDEX rather than by the reply's own order: `sorted()`-then-strip
+        aligned scores to candidates only when the reply was dense and full-length, and otherwise
+        handed candidate *i* candidate *j*'s score (VS-14). A candidate the server returned no score
+        for gets `_UNSCORED` — a floor, so it ranks last rather than inheriting a neighbour's score;
+        the reranker declining to score a document is not evidence it is relevant.
+        """
         if not candidates:
             return []
         body = {
@@ -66,6 +78,10 @@ class VLLMReranker:
             "query": f"{_PREFIX}<Instruct>: {self.instruction}\n<Query>: {query}\n",
             "documents": [f"<Document>: {c}{_SUFFIX}" for c in candidates],
         }
-        results = self._t.post("/v1/rerank", body, into=RerankResponse).results  # may be unordered
-        scored = sorted((item.index, item.relevance_score) for item in results)
-        return [score for _, score in scored]
+        results = self._t.post("/v1/rerank", body, into=RerankResponse).results
+        by_index: dict[int, float] = {}
+        for item in results:
+            if not 0 <= item.index < len(candidates):
+                raise ValueError(f"rerank server returned index {item.index} out of range for {len(candidates)} candidates")
+            by_index[item.index] = item.relevance_score
+        return [by_index.get(i, _UNSCORED) for i in range(len(candidates))]
