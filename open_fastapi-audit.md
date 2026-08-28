@@ -1566,7 +1566,33 @@ chart/values.yaml:330 — `extraArgs: ["--proxy-headers", "--forwarded-allow-ips
 
 </details>
 
-<details><summary><b>The HPA scales the two most I/O-bound services on CPU utilization against a 50m request with a 1000m limit, and has no scale-down stabilization window</b> <i>(kubernetes.md + microservices.md, CONFIRMED)</i></summary>
+<details><summary><b>~~The HPA scales the two most I/O-bound services on CPU utilization against a 50m request with a 1000m limit, and has no scale-down stabilization window~~</b> <i>(kubernetes.md + microservices.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-28**, on the finding's **Minimum** — owner decision, with the Better costed rather
+> than waved at. KEDA's prometheus scaler would query
+> `http://rask-greptimedb-standalone:4000/v1/prometheus`, the same endpoint vmalert already uses, and
+> `setup_otel` already exports `http.server.*` — so the p95 path is proven, not aspirational. Declined
+> anyway: a twelfth subchart, its CRDs, and a new silent failure mode (scaler cannot reach GreptimeDB
+> → no scaling, no error) for an object no profile enables.
+>
+> **(1)** `behavior.scaleDown.stabilizationWindowSeconds: 300` (values-driven), the reference's own
+> worked value. k8s stabilises scale-UP by default and scale-DOWN not at all, so the template had
+> nothing damping the way back down. **(2)** `resources.catalog` and `resources.lineage` now exist:
+> requests 50m → 250m against an unchanged 1000m limit, so the burst headroom is untouched and only
+> the denominator changes — 20:1 → 4:1, and the 70% target stops meaning 35 millicores. **(3)** The
+> values comment now states the DECISION rather than the wiring: CPU is the documented FALLBACK, with
+> the reference's reasoning and the declined alternative recorded inline.
+>
+> **One invariant found while gating and fixed with it:** `ha.yaml`'s comment says "the Deployment's
+> replicas: becomes the HPA floor, so keep replicas <= minReplicas" and nothing checked it — a
+> Deployment above the floor is scaled down by the HPA on every `helm upgrade`, so chart and
+> autoscaler disagree forever. Now gated.
+> Pinned by `tests/unit/test_autoscaling_shape.py` (6 tests, 4 RED first), rendered with
+> `autoscaling.enabled=true` because the object does not exist otherwise.
+> **Deliberately not tested:** that the comment names CPU as the fallback. That is prose, and a test
+> asserting a sentence is the brittleness this drain keeps deleting. What is gated is the behaviour it
+> describes. Memory tiers are also untouched — the catalog's 256 MiB Arrow-IPC body cap against a
+> 512Mi limit is a real question and a different one.
 
 **Rule.** kubernetes.md: § HorizontalPodAutoscaler — "CPU is a lagging signal ... If you have RPS or p95 latency exported via OTel, autoscale on that"; § What NOT to do — "HPA on CPU for an I/O-bound API"
 

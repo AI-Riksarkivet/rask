@@ -501,6 +501,19 @@ resources:
   default:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
+  # THE TWO HPA TARGETS, and they exist because of that: an HPA's `averageUtilization` is a fraction
+  # of the REQUEST, so on the `default` tier above (50m request, 1000m limit — 20:1) a 70% target
+  # fires at 35 millicores. Any real request load clears that instantly, the HPA slams to
+  # maxReplicas, and it oscillates as the burst passes. Requests are raised, limits are NOT, so the
+  # burst headroom is unchanged and only the denominator becomes meaningful (4:1).
+  # Memory is deliberately left on the default tier: this is the autoscaling finding, and the
+  # catalog's 256 MiB Arrow-IPC body cap against a 512Mi limit is a separate question.
+  catalog:
+    requests: { cpu: 250m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  lineage:
+    requests: { cpu: 250m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
   # THE COLLECTOR, which named no tier and therefore silently ran on `default` — 50m CPU — while being
   # the sole path for every Dapr sidecar's metrics, every infra pod's logs and the whole estate's three
   # signals. Measured 2026-08-23: 45m against a 50m request, i.e. 90% of its request with ~10% headroom.
@@ -1566,10 +1579,28 @@ podDisruptionBudget:
   enabled: false
   minAvailable: 1
 autoscaling:
+  # CPU IS THE FALLBACK SIGNAL HERE, NOT THE INTENDED ONE — and that sentence is the decision this
+  # block was missing. kubernetes.md is explicit that CPU is a lagging signal for a request-driven
+  # API ("by the time CPU is high, latency is already bad") and lists "HPA on CPU for an I/O-bound
+  # API" among the things not to do. Both targets are exactly that: catalog buffers Arrow-IPC bodies
+  # and runs its S3/Lance calls in a threadpool, lineage waits on an AGE psycopg pool. They spend
+  # their time BLOCKED, which CPU cannot see.
+  #
+  # The reference's preferred shape is a Pods-type p95 target, and it was costed rather than waved
+  # at: `service_kit.setup_otel` already exports `http.server.*`, and KEDA's prometheus scaler would
+  # query `http://rask-greptimedb-standalone:4000/v1/prometheus` — the same endpoint vmalert already
+  # uses, so the query path is proven, not speculative. Declined 2026-08-28 (owner): it is a twelfth
+  # subchart, its CRDs, and a new silent failure mode (scaler cannot reach GreptimeDB → no scaling,
+  # no error) for an object no profile enables. Revisit when something actually turns this on.
   enabled: false # opt-in; needs metrics-server. Targets catalog + lineage.
   minReplicas: 2
   maxReplicas: 5
+  # Meaningful only against the pod's CPU REQUEST, never its limit — see resources.catalog/lineage,
+  # which exist because the shared `default` tier made this percentage measure 35 millicores.
   targetCPUUtilizationPercentage: 70
+  # k8s stabilises scale-up by default and scale-down not at all. Five minutes is the reference's
+  # worked value; below it a spiky I/O-bound service oscillates between min and max.
+  scaleDownStabilizationSeconds: 300
 
 # --- In-cluster S3 (RustFS) ------------------------------------------------------------------------
 # RESOLVED (docs/architecture/lance-ns-merge.md P4: "RustFS: rask's operator Tenant wins; lance-ns's

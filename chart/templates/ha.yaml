@@ -114,5 +114,13 @@ spec:
         target:
           type: Utilization
           averageUtilization: {{ $.Values.autoscaling.targetCPUUtilizationPercentage }}
+  {{/* WITHOUT THIS THE HPA CHURNS. Kubernetes stabilises scale-UP by default and scale-DOWN not at
+       all, so a burst that clears the utilization target takes the replica count to maxReplicas and
+       the pass of that burst takes it straight back — repeatedly, on an I/O-bound service whose CPU
+       is spiky by nature. kubernetes.md's own worked example carries this exact field with a
+       five-minute cooldown, and the template had no `behavior` block at all. */}}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ $.Values.autoscaling.scaleDownStabilizationSeconds }}
 {{- end }}
 {{- end }}
