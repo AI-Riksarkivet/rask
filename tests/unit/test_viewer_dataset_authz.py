@@ -74,6 +74,10 @@ class _Authz:
 
     allow: Any = True
     seen: list[dict[str, Any]] | None = None
+    #: Round trips, counted per INVOCATION — `seen` records per object, so ten entries cannot
+    #: distinguish one batch of ten from ten calls of one, which is precisely the property the
+    #: round-trip test below exists to pin.
+    calls: int = 0
 
 
 _authz = _Authz()
@@ -82,6 +86,7 @@ _authz = _Authz()
 @pytest.fixture(autouse=True)
 def _fake_batch_check(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _batch(_client: Any, *, user: str, relation: str, objects: list[str], **_kw: Any) -> dict[str, bool]:
+        _authz.calls += 1
         for obj in objects:
             if _authz.seen is not None:
                 _authz.seen.append({"user": user, "relation": relation, "obj": obj})
@@ -104,6 +109,7 @@ def _app(registry: _Registry, *, allow: Any, seen: list[dict[str, Any]] | None =
     # is the point: the properties these tests pin did not change, only the number of round trips.
     _authz.allow = allow
     _authz.seen = seen
+    _authz.calls = 0
 
     app = FastAPI()
     app.include_router(router)
@@ -286,3 +292,24 @@ def test_a_search_less_descriptor_still_serves_when_authz_is_OFF() -> None:
     client = TestClient(_app(registry, allow=True, fga_enabled=False))
 
     assert client.get("/api/datasets/vasa/descriptor").status_code == 200
+
+
+def test_ten_corpora_cost_ONE_openfga_round_trip() -> None:
+    """The batch property, pinned THROUGH THE ENDPOINT.
+
+    The test this replaces (`services/viewer/tests/test_datasets_batch_check.py`) monkeypatched
+    `ds.fga.batch_check` and then called `ds.fga.batch_check` directly — it counted calls to its own
+    mock and could never have been RED. Found by the adversarial re-audit of the closure. Here the
+    request goes through `GET /api/datasets`, so the count is of what the ROUTE does: an
+    implementation that fell back to one `check`-shaped call per corpus would score ten.
+    """
+    # Row tables are BARE names — the descriptor helper refuses a `$` in a segment; the dataset id
+    # supplies the corpus half of the object identifier.
+    registry = _Registry({f"corpus{i}": "chunks" for i in range(10)})
+    app = _app(registry, allow=True, fga_enabled=True)
+    client = TestClient(app)
+
+    body = client.get("/api/datasets").json()
+
+    assert len(body["datasets"]) == 10, f"the fixture did not exercise ten corpora: {body}"
+    assert _authz.calls == 1, f"ten corpora cost {_authz.calls} OpenFGA round trips — the batch regressed to a fan-out"

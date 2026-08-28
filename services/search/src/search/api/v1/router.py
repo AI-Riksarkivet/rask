@@ -303,7 +303,14 @@ class _AsList:
 
 
 @router.get("/search/similar")
+@limiter.shared_limit(SEARCH_LIMIT, scope=SEARCH_SCOPE)
 async def search_similar(
+    # `request` exists for slowapi, which requires it in the signature. THE SAME SCOPE as /search on
+    # purpose: this route drives the same Lance ANN fan-out from a stored seed vector (no embedder,
+    # so the GPU half is smaller — but a third unmetered door beside two metered ones is budget in
+    # rotation, which is what the shared scope exists to prevent). Found unmetered by the adversarial
+    # re-audit of the search closure, whose note claimed all three entry points were covered.
+    request: Request,
     state: StateDep,
     key: Annotated[str, Query(description="The seed row, its identity fields joined by '/'")],
     n: Annotated[int, Query(ge=1, le=200, description="How many neighbours")] = 24,

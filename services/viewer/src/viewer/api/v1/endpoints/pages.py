@@ -163,6 +163,13 @@ def _resolve(state: StateDep, table: str, token: str | None) -> str:
     if r.status_code in (401, 403):
         detail = "no bearer was sent (the caller is anonymous)" if not token else "the caller's bearer was refused"
         raise UnauthorizedError(f"the catalog rejected the credential resolving {table!r} (HTTP {r.status_code}) — {detail}")
+    if r.status_code >= 500:
+        # A 5xx RESPONSE is the same outage as a refused connection — the catalog (or a proxy in
+        # front of it) answered "I am broken", not "that table does not exist". This branch was
+        # `>= 400` and laundered it into a terminal 404; found by the adversarial re-audit, because
+        # the connection-level tests above raise before a response exists and never walk this path.
+        logger.error("catalog answered %s resolving %r", r.status_code, table)
+        raise ServiceUnavailableError(f"the catalog is failing (HTTP {r.status_code}), so {table!r} cannot be resolved right now")
     if r.status_code >= 400:
         raise NotFoundError(f"catalog does not know table {table!r} (HTTP {r.status_code})")
     location = r.json().get("location")

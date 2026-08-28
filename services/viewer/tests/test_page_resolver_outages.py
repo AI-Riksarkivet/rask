@@ -26,8 +26,9 @@ outage is what put the internals on the wire.
 The estate states the rule in its own words in `service_kit/exceptions.py`: "Keep the message STABLE;
 never interpolate a raw upstream exception into it (log that instead)."
 
-WHAT STAYS 404: the two cases that genuinely mean absent — the catalog answering a non-401/403 4xx,
-and a describe that returns no `location`.
+WHAT STAYS 404: the two cases that genuinely mean absent — the catalog answering a non-401/403 4xx
+(4xx ONLY: a 5xx response is the outage again, caught by the re-audit after this header first
+claimed the branch was already that narrow), and a describe that returns no `location`.
 """
 
 from __future__ import annotations
@@ -137,3 +138,37 @@ def test_a_genuinely_absent_table_stays_a_404(monkeypatch: pytest.MonkeyPatch, s
 
     with pytest.raises(NotFoundError):
         pages_ep._resolve(_state(), TABLE, "tok")  # noqa: SLF001
+
+
+@pytest.mark.parametrize("status", [500, 502, 503])
+def test_a_catalog_5xx_RESPONSE_is_an_outage_not_a_404(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
+    """Found by the adversarial re-audit of this file's own finding: the branch was `>= 400`.
+
+    A catalog answering HTTP 500 — or a proxy in front of it answering 502/503 — is exactly the
+    outage this file exists to classify, and it was still laundered into a terminal 404 ("catalog
+    does not know table"). The connection-level cases above never see it because they raise before a
+    response exists; only a 5xx RESPONSE walks this path. The "stays 404" parametrization below
+    covered 404 and 200-with-no-location, never a 5xx, so the residual was unpinned and invisible.
+    """
+
+    class _Response:
+        status_code = status
+
+        def json(self) -> dict:
+            return {}
+
+    class _Client:
+        def __init__(self, **_kwargs: object) -> None: ...
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *_exc: object) -> None: ...
+        def post(self, *_args: object, **_kwargs: object) -> _Response:
+            return _Response()
+
+    monkeypatch.setattr(pages_ep.httpx, "Client", _Client)
+
+    with pytest.raises(ServiceUnavailableError) as caught:
+        pages_ep._resolve(_state(), TABLE, "tok")  # noqa: SLF001
+    assert not isinstance(caught.value, NotFoundError)
+    assert TABLE in str(caught.value)
