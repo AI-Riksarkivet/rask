@@ -45,28 +45,64 @@ logger = logging.getLogger(__name__)
 #: Environment prefixes forwarded into the job — service URLs and store COORDINATES, never credentials.
 _FORWARDED_ENV_PREFIXES = ("MEDIA_", "AWS_")
 
-#: Substrings that mark a name as a CREDENTIAL, which must never ride a job submission. The Ray Jobs
-#: API echoes `runtime_env` back on `GET /api/jobs/<id>` — an unauthenticated dashboard, proxied at
-#: `/api/ray/*` and published at the edge — so anything here is readable by any caller. This is the
-#: same P0 the medallion closed on 2026-08-28 (open_python-audit MED-003); it had not crossed into
-#: ratch, where the `AWS_` prefix forwarded `AWS_SECRET_ACCESS_KEY` and `MEDIA_` forwarded the media
-#: plane's own S3 secret.
+#: The forward is FAIL-CLOSED: a `MEDIA_`/`AWS_` name rides the submission only when its SHAPE says
+#: coordinate. The Ray Jobs API echoes `runtime_env` back on `GET /api/jobs/<id>` — an
+#: unauthenticated dashboard, proxied at `/api/ray/*` and published at the edge — so anything
+#: forwarded is readable by any caller. This is the same P0 the medallion closed on 2026-08-28
+#: (open_python-audit MED-003).
 #:
-#: A DENYLIST OVER THE PREFIXES, not an allowlist of names, because the prefixes exist to carry
-#: whatever service URLs a runner needs without a code change here — an allowlist would make every
-#: new `MEDIA_*_URL` a platform edit. Matching on shape catches the names nobody has invented yet;
-#: `AWS_ACCESS_KEY_ID` deliberately does NOT match, because an access-key id identifies rather than
-#: authenticates and Lance needs it alongside the endpoint.
+#: This REPLACES a denylist (`SECRET`/`TOKEN`/`PASSWORD`/`CREDENTIAL` substrings), and the reason is
+#: the failure mode every denylist has: it enumerates the credential shapes someone thought of, and
+#: `MEDIA_API_KEY` matches none of them — measured walking straight through into the echoing API
+#: (open_ray-kernel.md move 1). The medallion's mechanism (omit the secret, source it from the pod)
+#: cannot have that hole; this is the closest ratch's wildcard forward can get to it. The property
+#: the old comment defended is kept: a new `MEDIA_FOO_URL` still needs no platform edit, because the
+#: allowlist names SHAPES, not variables. What changes is the default for a shape nobody has heard
+#: of — withheld, not shipped.
 #:
-#: Removing these breaks nothing in-cluster: the Ray pods carry no `AWS_*` at all (verified against
-#: the chart and the live head), so this forward ships no credential there. Where a credential IS in
-#: the submitter's environment — a developer's machine, a CI runner — shipping it through an echoing
-#: API is the defect. A job that needs S3 credentials takes them from the POD, as the medallion's do.
-_SECRET_NAME_MARKERS = ("SECRET", "TOKEN", "PASSWORD", "CREDENTIAL")
+#: `_ID` is on the safe list for exactly one reason the old code named: `AWS_ACCESS_KEY_ID`
+#: identifies rather than authenticates, and Lance needs it alongside the endpoint. The old markers
+#: stay as a SECOND veto so a perverse `MEDIA_SECRET_URL` is still withheld.
+#:
+#: Removing a credential breaks nothing in-cluster: the Ray pods carry no `AWS_*` at all (verified
+#: against the chart and the live head). The leak surface is a developer's machine or a CI runner —
+#: and there, a job that needs S3 credentials takes them from the POD, as the medallion's do.
+_SAFE_NAME_SUFFIXES = (
+    "_URL",
+    "_ENDPOINT",
+    "_HOST",
+    "_PORT",
+    "_REGION",
+    "_BUCKET",
+    "_MODEL",
+    "_NAME",
+    "_PATH",
+    "_ROOT",
+    "_DIR",
+    "_TABLE",
+    "_DB",
+    "_PREFIX",
+    "_ID",
+    # A prompt/instruction override is a coordinate too — `MEDIA_CAPTION_INSTRUCTION` is the one
+    # measured reader (clients/caption.py), and withholding it would silently revert a caption run
+    # to the default prompt, which reads as a model regression rather than a filtered variable.
+    "_INSTRUCTION",
+)
+_SECRET_NAME_MARKERS = ("SECRET", "TOKEN", "PASSWORD", "CREDENTIAL", "KEY", "PASSPHRASE")
+
+#: Exact names the marker veto would otherwise catch that are genuinely coordinates. `MEDIA_DB` needs
+#: no entry (it ends in a safe suffix and matches no marker) — this exists for names where a marker
+#: substring is part of an identifying, non-authenticating term.
+_FORWARD_DESPITE_MARKER = frozenset({"AWS_ACCESS_KEY_ID"})
 
 
-def _is_credential(name: str) -> bool:
-    return any(marker in name.upper() for marker in _SECRET_NAME_MARKERS)
+def _is_forwardable(name: str) -> bool:
+    upper = name.upper()
+    if upper in _FORWARD_DESPITE_MARKER:
+        return True
+    if not upper.endswith(_SAFE_NAME_SUFFIXES):
+        return False
+    return not any(marker in upper for marker in _SECRET_NAME_MARKERS)
 
 
 #: uuid5 namespace for submission ids (deterministic per (runner, token)).
@@ -181,12 +217,12 @@ def _job_runtime_env(job: RunnerJob) -> dict[str, Any]:
     """working_dir (the repo, so ``runners.*`` imports resolve) + the runner's own
     pip env + forwarded store/service env vars. pip runtime_env is the DEV bridge —
     production bakes each runner into an image (docs/TODO.md)."""
-    forwarded = {k: v for k, v in os.environ.items() if k.startswith(_FORWARDED_ENV_PREFIXES) and not _is_credential(k)}
-    dropped = sorted(k for k in os.environ if k.startswith(_FORWARDED_ENV_PREFIXES) and _is_credential(k))
+    forwarded = {k: v for k, v in os.environ.items() if k.startswith(_FORWARDED_ENV_PREFIXES) and _is_forwardable(k)}
+    dropped = sorted(k for k in os.environ if k.startswith(_FORWARDED_ENV_PREFIXES) and not _is_forwardable(k))
     if dropped:
-        # Named, not silent: an operator whose job cannot reach S3 needs to know the credential was
+        # Named, not silent: an operator whose job cannot reach S3 needs to know the variable was
         # deliberately withheld from the submission rather than lost. The value never appears.
-        logger.info("not forwarding credential-shaped env into the job submission (the Jobs API echoes it): %s", ", ".join(dropped))
+        logger.info("withholding non-coordinate env from the job submission (the Jobs API echoes it): %s", ", ".join(dropped))
     return {
         "working_dir": str(runners_root().parent),
         **runner_env(job.runner),

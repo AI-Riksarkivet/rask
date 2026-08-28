@@ -71,3 +71,40 @@ def test_the_non_secret_config_a_job_NEEDS_still_rides(job: jobs.RunnerJob, monk
     are configuration — an access-key ID identifies, it does not authenticate.
     """
     assert name in _env_vars(job, monkeypatch, {**SECRETS, **CONFIG}), f"{name} was stripped with the secrets — the job cannot run without it"
+
+
+# ── the shapes nobody had invented yet ───────────────────────────────────────────────────────────
+#
+# Found by the ratch/ray-kit review (2026-08-28, open_ray-kernel.md move 1): the denylist above was
+# my fix for ratch-003, and it has the failure mode every denylist has — it enumerates the
+# credential shapes someone thought of. `MEDIA_API_KEY` contains neither SECRET nor TOKEN nor
+# PASSWORD nor CREDENTIAL, so it walked straight through into an env the Jobs API echoes. The
+# medallion's mechanism (omit the secret entirely, source it from the pod) cannot have that hole,
+# which is what "the two seams read identically" was supposed to buy and did not.
+#
+# The forward therefore inverts to FAIL-CLOSED: a name is forwarded only when its SHAPE says
+# coordinate (`_URL`, `_ENDPOINT`, `_MODEL`, ...), and an unknown shape is withheld by default. That
+# preserves the property the original comment defends — a new `MEDIA_FOO_URL` needs no platform
+# edit — while a `MEDIA_WHATEVER_KEY` nobody anticipated is withheld rather than leaked.
+
+LEAKY_SHAPES = {
+    "MEDIA_API_KEY": "an-api-key-is-a-credential",
+    "AWS_SESSION_KEY": "so-is-a-session-key",
+    "MEDIA_VLLM_KEY": "and-a-vllm-key",
+    "MEDIA_ADMIN_PASSPHRASE": "and-a-passphrase",
+}
+
+
+@pytest.mark.parametrize("name", sorted(LEAKY_SHAPES))
+def test_a_credential_shape_the_denylist_never_heard_of_is_withheld(job: jobs.RunnerJob, monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    env_vars = _env_vars(job, monkeypatch, {**LEAKY_SHAPES, **CONFIG})
+    assert name not in env_vars, f"{name} is credential-shaped and rides the echoing Jobs API — the filter only vetoes shapes it has heard of"
+
+
+def test_every_coordinate_the_jobs_actually_read_still_travels(job: jobs.RunnerJob, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The property the original denylist was defending, kept: the measured set of names ratch and
+    the runners genuinely read — URLs, model ids, region, the access-key ID — all still forward,
+    and a new `MEDIA_*_URL` needs no edit here."""
+    env_vars = _env_vars(job, monkeypatch, {**LEAKY_SHAPES, **CONFIG, "MEDIA_BRAND_NEW_URL": "http://new:9999"})
+    for name in (*CONFIG, "MEDIA_BRAND_NEW_URL"):
+        assert name in env_vars, f"{name} is a coordinate the job needs and the fail-closed filter withheld it"

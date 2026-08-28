@@ -292,7 +292,7 @@ file, deleted on completion of that backlog (2026-08-25); the commit that made t
 **Current sites:** `/home/blackwell/Desktop/rask/packages/ratch/src/ratch/core/jobs.py:47`, `/home/blackwell/Desktop/rask/packages/ratch/src/ratch/core/jobs.py:160`, `/home/blackwell/Desktop/rask/packages/ratch/src/ratch/core/jobs.py:164`
 
 
-**FIXED since `9205f783` (2026-08-28).** The `MEDIA_`/`AWS_` forward now drops credential-SHAPED names (`_SECRET_NAME_MARKERS`) and logs which it withheld — a denylist over the prefixes, so a new `MEDIA_*_URL` still needs no platform edit.
+**FIXED since `9205f783` (2026-08-28), HARDENED same day.** The forward is now FAIL-CLOSED: a name rides the submission only when its shape says coordinate (`_SAFE_NAME_SUFFIXES`), with the credential markers kept as a second veto. The first fix was a denylist, and the ratch/ray-kit review (open_ray-kernel.md, move 1) measured its failure mode: `MEDIA_API_KEY` matches no marker and walked straight through into the echoing Jobs API. The property both versions defend is unchanged — a new `MEDIA_*_URL` needs no platform edit — but the default for a shape nobody has heard of flipped from shipped to withheld.
 
 </details>
 
