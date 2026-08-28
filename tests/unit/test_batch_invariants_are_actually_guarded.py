@@ -118,36 +118,9 @@ class TestB3TheDeployAxisIsFedByTheChart:
         assert "MEDALLION_RAY_CODE_VERSION" in self._render()
 
 
-class TestB5NoUnhonouredKnobCanBeSmuggledIntoRemoteArgs:
-    """B5's audit anticipated `max_calls` being forwarded into an `.options()`-shaped channel, where
-    Ray does not honour it on this path — an operator sets a worker-recycling knob to bound a leak,
-    gets no error, and gets no recycling. That channel DOES NOT EXIST: `max_calls` appears nowhere in
-    the repo, and `runner_ray_remote_args` takes only a runner name.
+# TestB5NoUnhonouredKnobCanBeSmuggledIntoRemoteArgs was DELETED with its subject at the
+# dissolution (2026-08-28, open_ray-kernel.md): `ratch.core.runners.runner_ray_remote_args` —
+# the runtime_env channel it pinned shut — no longer exists, which closes the hazard by
+# construction rather than by shape-pin.
 
-    So there is nothing to fix and something to keep: the reason the hazard is unreachable is that
-    this function returns exactly one key. Widening it to pass config through is what would open the
-    channel, so the shape is what gets pinned — not a rejection of a kwarg nobody passes, which would
-    be an API invented solely to refuse itself."""
 
-    def test_it_returns_runtime_env_and_nothing_else(self) -> None:
-        import inspect
-
-        from ratch.core.runners import runner_ray_remote_args
-
-        source = inspect.getsource(runner_ray_remote_args)
-        assert '{"runtime_env": runner_env(runner)}' in source, (
-            "remote args are no longer a single fixed key — anything else here reaches Ray's `.options()` channel, where an unhonoured knob fails silently"
-        )
-
-    def test_it_takes_only_the_runner(self) -> None:
-        """A second parameter is how config starts flowing into that channel."""
-        import inspect
-
-        from ratch.core.runners import runner_ray_remote_args
-
-        assert list(inspect.signature(runner_ray_remote_args).parameters) == ["runner"]
-
-    def test_isolation_off_passes_nothing_at_all(self) -> None:
-        from ratch.core.runners import runner_ray_remote_args
-
-        assert runner_ray_remote_args(None) == {}

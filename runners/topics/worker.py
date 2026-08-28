@@ -50,7 +50,10 @@ def _require(schema_names: list[str], db: Path) -> None:
     """Fail fast with an actionable message if a prerequisite column is missing."""
     missing = [c for c in ("text", "text_embedding", "atlas_x", "atlas_y") if c not in schema_names]
     if missing:
-        sys.exit(f"chunks.lance in {db} is missing {missing}. Run `ratch feature text_embedding` and `ratch feature atlas --space text` first.")
+        # The command that used to be named here (`ratch feature ...`) died with ratch's dissolution
+        # (2026-08-28); the PREREQUISITE did not — this worker still needs the embedding + atlas
+        # columns populated by whatever pipeline owns them now. Name the columns, not a dead command.
+        sys.exit(f"chunks.lance in {db} is missing {missing} — populate the text embedding and atlas projection columns before topic modelling.")
 
 
 def run(db_path: str, llm_url: str | None = None) -> int:
@@ -129,9 +132,7 @@ def _build(args: argparse.Namespace) -> int:
     )
     if not (np.isfinite(embedding_vectors).all() and np.isfinite(clusterable_vectors).all()):
         sys.exit(
-            "text_embedding or atlas_x/atlas_y contains NULL/NaN — rebuild "
-            "`ratch feature text_embedding` and `ratch feature atlas --space text` "
-            "so every chunk is populated before topic modelling."
+            "text_embedding or atlas_x/atlas_y contains NULL/NaN — rebuild those columns so every chunk is populated before topic modelling."
         )
     print(
         f"topics: {len(documents)} chunks · embed {embedding_vectors.shape} · map {clusterable_vectors.shape}",

@@ -54,17 +54,6 @@ def _assert_clean(seam: str, body: object) -> None:
         assert value not in serialized, f"{seam}: the value of {name} rides the submission body, which the Jobs API echoes to any reader"
 
 
-# ── seam 1: ratch (packages/ratch/src/ratch/core/jobs.py) ────────────────────────────────────────
-
-
-def test_the_ratch_seam_is_clean(monkeypatch: pytest.MonkeyPatch) -> None:
-    from ratch.core import jobs
-
-    for name, value in MATERIAL.items():
-        monkeypatch.setenv(name, value)
-    _assert_clean("ratch._job_runtime_env", jobs._job_runtime_env(jobs.RunnerJob(runner="dummy")))
-
-
 # ── seams 2+3: medallion stage + train (services/medallion/services/ray_submit.py) ───────────────
 
 
@@ -147,7 +136,6 @@ async def test_the_medallion_train_seam_is_clean(medallion_bodies: dict[str, Any
 
 #: Files KNOWN to build a Ray Jobs submission body, each represented by a test above.
 _REPRESENTED = {
-    "packages/ratch/src/ratch/core/jobs.py",
     "services/medallion/src/medallion/services/ray_submit.py",
     # ray-kit is the shared kernel: it SHIPS bodies callers build, and builds none itself —
     # `submit_or_reattach(client, sub_id, body)` takes the body as an argument. The callers are the

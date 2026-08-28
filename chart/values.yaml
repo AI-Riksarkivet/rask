@@ -1032,7 +1032,7 @@ medallion:
   # argument is still right, and the configuration it produced now works. It could not until
   # 2026-08-18: `ray-cluster` was built from `runners/htr`'s sealed lock, which carries torch and
   # htrflow and NO lance, so every stage job died `ModuleNotFoundError: No module named 'lance'`.
-  # That image now builds `packages/ratch` from the ROOT lock — ray + pylance + lance-ray + pyarrow at
+  # That image now builds `packages/ray-cluster-env` from the ROOT lock — ray + pylance + lance-ray + pyarrow at
   # the fleet's own versions, and no workload stack at all (verified in the built image: torch,
   # htrflow, ultralytics and cv2 all absent). The HTR workload moved to `.docker/ray-htr.dockerfile`.
   #
@@ -1694,8 +1694,8 @@ ray:
     # supplies it out-of-band (--set / values pipeline) or via externalSecrets (OpenBao/ESO).
     token: ""
   # MUST MATCH WHAT THE IMAGE SHIPS, and the lock is the source of truth for that:
-  # .docker/ray-cluster.dockerfile builds with `uv sync --package ratch` from the root uv.lock, and
-  # packages/ratch requires ray[data,default]>=2.58. This read 2.56.1 while the container ran 2.57.0 —
+  # .docker/ray-cluster.dockerfile builds with `uv sync --package ray-cluster-env` from the root uv.lock,
+  # and packages/ray-cluster-env requires ray[data,default,serve]>=2.58. This read 2.56.1 while the container ran 2.57.0 —
   # so the KubeRay operator, which uses rayVersion for its own compatibility gating (see authOptions
   # below, which needs >= 2.52.0), was reasoning about a cluster that did not exist. The drift was
   # silent until tests/unit/test_invariants.py::test_the_chart_tells_kuberay_the_ray_version_the_image_actually_ships

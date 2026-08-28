@@ -46,7 +46,12 @@ _ERROR_MESSAGE_FACET_URL = ERROR_MESSAGE_FACET_SCHEMA_URL
 #: ``OutputStatisticsOutputDatasetFacet`` has no ``service_kit.openlineage`` constant yet — the lance-ns
 #: emitters build it inline in ``medallion/schemas/events.py``. Pinned to the same published version.
 _OUTPUT_STATS_FACET_URL = "https://openlineage.io/spec/facets/1-0-2/OutputStatisticsOutputDatasetFacet.json#/$defs/OutputStatisticsOutputDatasetFacet"
-PRODUCER = "https://github.com/Borg93/lance-audio/tree/main/packages/ratch"
+# The URI identifying the EMITTING CODE in every event (spec: `producer`). It named
+# `lance-audio/.../packages/ratch` — the repo this kernel was merged FROM and a package dissolved
+# 2026-08-28 — so every event pointed provenance-readers at code that no longer exists anywhere.
+# Nothing dispatches on the string (verified: no matcher in lineage/notifications; `run_id_for`
+# does not include it), so correcting it changes no behaviour, only where a reader lands.
+PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/packages/service-kit"
 
 #: One field→field edge: (output_field, input_field, transformation_subtype).
 #: Carried columns are "IDENTITY"; derived artifacts are "TRANSFORMATION".

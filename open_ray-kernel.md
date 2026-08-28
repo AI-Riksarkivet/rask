@@ -34,6 +34,12 @@ Which halves win: **Position 1 wins fleet-side** (converge on ray-kit; delete ra
 
 ## 3. WHAT TO ACTUALLY DO
 
+> **SUPERSEDED IN PART, 2026-08-28 (same day):** the owner ruled full **DISSOLUTION** — ratch is
+> deleted, not slimmed. Moves 6–12 are thereby resolved (their subjects no longer exist; the runners
+> were severed with vendored copies per move 10's spirit) and move 13 landed as
+> `packages/ray-cluster-env`. Still standing: moves 3 (Serve-knob gate), 4 (dummy's lineage pin)
+> and 14 (finish ray-kit's fleet-side adoption).
+
 Each stands alone. Nothing below requires anything above it.
 
 1. ✅ `56719c76` — **[S] Close ratch's credential hole.** Replace the substring denylist at `core/jobs.py:47-70` with an explicit named-key allowlist (medallion's mechanism — it cannot leak), keeping the shape check as defence-in-depth.

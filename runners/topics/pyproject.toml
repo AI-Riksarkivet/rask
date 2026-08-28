@@ -6,7 +6,7 @@
 # module in ratch. At merge this becomes a Ray Serve deployment built from this
 # pyproject (one image per model service).
 [project]
-name = "ratch-model-topics"
+name = "runner-topics"
 version = "0.0.0"
 description = "Toponymy topic-modelling — an online model service ratch calls (offline compute stays in ratch)."
 requires-python = ">=3.10,<3.13"

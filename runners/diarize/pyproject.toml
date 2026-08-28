@@ -2,7 +2,7 @@
 # pyannote arrives transitively via easytranscriber today; declared first-class here
 # so the runner env is self-describing for the image this runner is baked into.
 [project]
-name = "ratch-runner-diarize"
+name = "runner-diarize"
 version = "0.0.0"
 description = "Speaker-diarization runner (pyannote) — Ray Data actor via runners/diarize/actor.py."
 requires-python = ">=3.10,<3.13"

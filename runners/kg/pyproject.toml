@@ -6,7 +6,7 @@
 # isolated env. The lighter steps (export_chunks/adapter/refine/generic_sv) run
 # in ratch's own venv (lance + `--with networkx`) — see README.
 [project]
-name = "ratch-model-kg"
+name = "runner-kg"
 version = "0.0.0"
 description = "LightRAG knowledge-graph extraction — an isolated-env batch service ratch's KG build calls."
 requires-python = ">=3.10,<3.13"

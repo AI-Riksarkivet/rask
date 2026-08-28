@@ -141,7 +141,6 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 "packages/service-kit/src/service_kit/openlineage.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "packages/service-kit/src/service_kit/dapr_publish.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "packages/service-kit/src/service_kit/control_events.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"packages/ratch/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "runners/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "scripts/ray_stage_job.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "scripts/ray_train_job.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
@@ -155,8 +154,6 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 "scripts/medallion_demo.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "scripts/model_artifact_janitor.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "tests/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501", "S101", "S105", "S106", "S107", "S108", "S113", "S603", "S607"]
-"packages/ratch/src/ratch/modalities/av/*.py" = ["S603"]
-"packages/ratch/src/ratch/cli/search.py" = ["S603"]
 "services/viewer/src/viewer/services/clips.py" = ["S603"]
 "services/viewer/src/viewer/services/audio_prep.py" = ["S603"]
 "scripts/harvest_ead.py" = ["ANN", "RET503", "B007"]
@@ -172,7 +169,7 @@ indent-style = "space"
 [tool.ruff.lint.isort]
 lines-after-imports = 2
 # `flows` added with the member (adding-a-package.md step 4). The list is STILL short by eleven —
-# annotator, catalog, controlplane, ingest, lineage, lineage_kit, maintenance, medallion, ratch,
+# annotator, catalog, controlplane, ingest, lineage, lineage_kit, maintenance, medallion,
 # search, viewer — and that gap is deliberately left for its own commit, because it is not metadata:
 # a name here changes which BLOCK ruff sorts that module into, so adding the eleven turns 1 I001 into
 # 206 across 172 files (measured: `uvx ruff check --output-format concise | grep -c I001`, one name at
@@ -220,7 +217,7 @@ exclude = [
 # the list is explicit, and adding the directory is a separate act from adding the file. Three landed
 # regression suites (the catalog's replayed-commit door, lineage's external-source authz and its
 # privileged-identity door) sat green-by-absence until 2026-08-09.
-testpaths = ["packages/lineage-kit/tests", "packages/ratch/tests", "packages/ray-kit/tests", "packages/service-kit/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/annotator/tests", "services/gateway/tests", "services/ingest/tests", "services/compute/tests", "services/controlplane/tests", "services/flows/tests", "services/maintenance/tests", "services/medallion/tests", "services/notifications/tests", "services/catalog/tests", "services/lineage/tests", "services/search/tests", "services/viewer/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
+testpaths = ["packages/lineage-kit/tests", "packages/ray-kit/tests", "packages/service-kit/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/annotator/tests", "services/gateway/tests", "services/ingest/tests", "services/compute/tests", "services/controlplane/tests", "services/flows/tests", "services/maintenance/tests", "services/medallion/tests", "services/notifications/tests", "services/catalog/tests", "services/lineage/tests", "services/search/tests", "services/viewer/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
 # NO `--cov` HERE. It ran on EVERY pytest invocation in the estate and nothing read the result: no
 # `fail_under`, no xml report, no artifact upload, no threshold in `ci.yml` or `.dagger/` — so the
 # measurement was pure cost on the merge path and on every local run. `make coverage` computes it when
@@ -256,7 +253,7 @@ branch = true
 #
 # Enumerated because coverage.py does not glob `source` — and pinned against the globs by
 # tests/unit/test_coverage_denominator.py, so a new package cannot silently fall out of the denominator.
-source = ["packages/lineage-kit/src", "packages/ratch/src", "packages/ray-kit/src", "packages/service-kit/src", "packages/storage/src", "packages/tracker/src", "packages/validate/src", "services/annotator/src", "services/catalog/src", "services/compute/src", "services/controlplane/src", "services/flows/src", "services/gateway/src", "services/ingest/src", "services/lineage/src", "services/maintenance/src", "services/medallion/src", "services/notifications/src", "services/search/src", "services/viewer/src"]
+source = ["packages/lineage-kit/src", "packages/ray-kit/src", "packages/service-kit/src", "packages/storage/src", "packages/tracker/src", "packages/validate/src", "services/annotator/src", "services/catalog/src", "services/compute/src", "services/controlplane/src", "services/flows/src", "services/gateway/src", "services/ingest/src", "services/lineage/src", "services/maintenance/src", "services/medallion/src", "services/notifications/src", "services/search/src", "services/viewer/src"]
 # `**/__init__.py` was here for empty package markers and deleted 409 statements of real
 # implementation across 69 files — including the ENTIRE gateway service, whose route table,
 # `_CLIENT_SPOOFABLE` header strip and proxy all live in `__init__.py`. Measured: the estate's front

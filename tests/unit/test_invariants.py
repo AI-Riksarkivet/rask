@@ -4748,9 +4748,10 @@ def test_the_ray_head_image_the_CHART_CONFIGURES_ships_the_tracing_hook_module()
     WHY THIS IS WORTH A TEST EVEN THOUGH IT PASSES TODAY. The chart and the dockerfile only contradict
     each other at pod start — the chart renders fine, the image builds fine, and the mismatch is
     invisible to every other gate. It is also a live hazard rather than a hypothetical one: the head
-    deployed on 2026-08-23 was built before `ray-cluster.dockerfile` switched to `uv sync --package
-    ratch`, and `python -c "import ratch"` on it returns ModuleNotFoundError. This test cannot see a
-    stale DEPLOYED image, but it does pin the contract the next build must satisfy.
+    deployed on 2026-08-23 was built before `ray-cluster.dockerfile` switched to a root-lock
+    `uv sync --package` build at all, and importing the then-platform package on it returned
+    ModuleNotFoundError. This test cannot see a stale DEPLOYED image, but it does pin the contract
+    the next build must satisfy.
 
     Deliberately NOT asserted of `ray-lance`. It bakes the same job scripts, so it looks like a head
     image, but the chart never points at it and its jobs deliberately MIRROR small pieces of service_kit

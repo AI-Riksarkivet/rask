@@ -53,8 +53,9 @@ _SETTINGS: list[tuple[str, str, str]] = [
     ("packages/service-kit", "service_kit.media.config", "Settings"),
     ("packages/lineage-kit", "lineage_kit.config", "LineageSettings"),
     ("packages/ray-kit", "ray_kit.auth", "RayAuthSettings"),
-    ("packages/ratch", "ratch.core.jobs", "JobsSettings"),
-    ("packages/ratch", "ratch.core.runners", "RunnersSettings"),
+    # ratch's two rows (JobsSettings RATCH_*, RunnersSettings) died with the package at the
+    # dissolution (2026-08-28, open_ray-kernel.md); the roster-completeness test below is what
+    # forces this list to shrink WITH the estate rather than accreting ghosts.
     ("services/lineage", "lineage.core.config", "LineageSettings"),
     ("services/medallion", "medallion.core.config", "MedallionSettings"),
     ("services/notifications", "notifications.api.settings", "IngressSettings"),

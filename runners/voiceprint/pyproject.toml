@@ -1,6 +1,6 @@
 # The `voiceprint` runner — WeSpeaker 256-d speaker embeddings per diarized turn.
 [project]
-name = "ratch-runner-voiceprint"
+name = "runner-voiceprint"
 version = "0.0.0"
 description = "Speaker-embedding runner (WeSpeaker via pyannote) — Ray Data actor via runners/voiceprint/actor.py."
 requires-python = ">=3.10,<3.13"
