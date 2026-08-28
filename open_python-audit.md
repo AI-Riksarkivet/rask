@@ -17,6 +17,10 @@ file when the backlog is drained**. `docs/` is for settled architecture only.
 restating them: the Dapr sweep (the Diagrid `DWF-DET`/`ACT`/`MGT` rule sets, actors, pub/sub) and
 `open_fastapi-audit.md` (the `fastapi` skill's 21 references, applied one lane each).
 
+That FastAPI sweep's file was **DRAINED AND DELETED on 2026-08-28** — all 55 findings fixed RED-first
+and every closure adversarially re-verified, the same lifecycle `open_dapr-audit.md` completed on
+2026-08-25. Findings this file cites from it survive as the tests and commits that closed them.
+
 The Dapr sweep's own file, `open_dapr-audit.md`, was **DRAINED AND DELETED on 2026-08-25** — all 48 of
 its findings closed in code with RED-first tests, which is what its header said to do once the backlog
 reached zero. Two of its rows are also recorded here (`FLOWS-REDOS-ON-LOOP`, `FLOWS-NODE-ESCAPE`) and

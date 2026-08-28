@@ -12,7 +12,8 @@ posture was already false; the owner ruling settled it and this module is the do
 looking rather than spending. A per-project filter (`admin`/`member` of `project:<slug>`, so a tenant
 sees only its own) is the better long-term shape and is deliberately NOT done here: it changes the
 response for existing callers, and this change is meant to close an exposure without also changing
-what an authorized caller sees. It is filed in `open_fastapi-audit.md`.
+what an authorized caller sees. (It was filed in `open_fastapi-audit.md`; that audit was drained
+and deleted 2026-08-28 with the shape deliberately declined, so this comment is now the record.)
 
 Everything mechanical — bearer → verified subject, the three-outcome checker — comes from
 `service_kit.governed.deps`, shared with viewer, flows, annotator and notifications rather than
