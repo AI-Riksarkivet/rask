@@ -272,7 +272,10 @@ def test_the_http_create_api_raises_the_sdk_exception_on_http_errors(monkeypatch
 
 
 class _TokenSettings:
-    catalog_token: str | None = None
+    # `catalog_token` USED TO BE HERE and is gone with the branch that read it. Note what its
+    # presence bought: this double carried a field the real `AnnotatorSettings` no longer has, so the
+    # test below passed against a settings shape that could not occur in production — which is how the
+    # publish path could be broken (AttributeError on every call) with this file green.
     publish_token_url: str | None = None
     publish_client_id: str | None = None
     publish_client_secret: str | None = None
@@ -281,19 +284,14 @@ class _TokenSettings:
     publish_secret_key = "lance"
 
 
-def test_a_pinned_catalog_token_wins_and_touches_nothing_else(monkeypatch: pytest.MonkeyPatch) -> None:
-    from annotator.projects import lakehouse
-
-    settings = _TokenSettings()
-    settings.catalog_token = "pinned"
-    settings.publish_token_url = "http://dex:5556/dex/token"  # present, must be IGNORED
-
-    monkeypatch.setattr(
-        "service_kit.governed.secrets.fetch_required_secrets",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("the store must not be consulted when a token is pinned")),
-    )
-
-    assert lakehouse.publish_token(settings) == "pinned"
+# `test_a_pinned_catalog_token_wins_and_touches_nothing_else` lived here and is DELETED, not adapted.
+# It asserted that a pinned `MEDIA_CATALOG_TOKEN` beats the mint — the precedence removed when the
+# confused-deputy finding deleted that field ("open_reader/open_writer fall back to the estate's
+# catalog service credential"). Two independent reasons it should not come back: a pinned estate-wide
+# credential as a publish IDENTITY makes every published row carry the platform's name instead of the
+# publisher's; and `publish_token`'s own docstring records that a hand-pinned token EXPIRED in
+# production, which is why the mint is per-publish. The behaviour it pinned is unreachable — the field
+# does not exist on the real settings class.
 
 
 def test_minting_reads_the_store_and_posts_the_password_grant(monkeypatch: pytest.MonkeyPatch) -> None:

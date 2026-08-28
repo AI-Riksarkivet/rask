@@ -71,18 +71,24 @@ def publish_token(settings: Any) -> str | None:
 
     Precedence, and the reasoning behind it:
 
-    1. ``MEDIA_CATALOG_TOKEN`` set → use it verbatim (prod may pin a token its own machinery mints).
-    2. ``MEDIA_PUBLISH_TOKEN_URL`` + ``MEDIA_PUBLISH_USERNAME`` set → mint a FRESH token from the
+    1. ``MEDIA_PUBLISH_TOKEN_URL`` + ``MEDIA_PUBLISH_USERNAME`` set → mint a FRESH token from the
        IdP via the password grant with the dedicated service account. The password comes from the
        Dapr secret store (``lance-secrets``/``lance``), fail-closed — the estate's secrets rule:
        the store is the SOLE source and no plaintext credential rides pod env. Minted per publish,
        so nothing stored can expire — the exact failure a hand-pinned token produced live.
-    3. Neither → ``None`` (an auth-off stack publishes anonymously, as before).
+    2. Otherwise → ``None`` (an auth-off stack publishes anonymously, as before).
+
+    ``MEDIA_CATALOG_TOKEN`` USED TO BE STEP 1 AND IS GONE. The field was deleted with the
+    confused-deputy finding ("open_reader/open_writer fall back to the estate's catalog service
+    credential") whose closing note wrongly claimed the credential had no other consumer — this was
+    it, and the branch raised AttributeError on every publish until an adversarial re-audit found it.
+    Restoring the field is not the fix: a pinned estate-wide credential as a publish IDENTITY means
+    every published row carries the platform's name instead of the publisher's, which is exactly what
+    that finding refused. Minting per publish is also what stops a hand-pinned token expiring, the
+    failure this path already had live.
 
     Sync and blocking (the secret fetch + token POST); the caller runs it in a thread.
     """
-    if settings.catalog_token:
-        return str(settings.catalog_token)
     if not (settings.publish_token_url and settings.publish_username):
         return None
 
