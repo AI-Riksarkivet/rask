@@ -17,11 +17,13 @@ silently 404s (the dev-micro.sh warning). The nginx `lance.lineageSidecarOnlyRou
 403-blocklist became the `lineage_sidecar_guard` middleware below.
 """
 
+import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from http import HTTPStatus
+from typing import Any, NamedTuple
 from urllib.parse import quote, unquote
 
 import httpx
@@ -29,6 +31,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -130,15 +133,23 @@ def _rewrite_location(location: str) -> str:
     return location
 
 
-Route = tuple[str, str, str, str]
-"""(public path-prefix, upstream path-prefix, dapr app-id, httpx fallback URL).
+class Route(NamedTuple):
+    """One routing row: which public prefix maps to which upstream, and how to reach it.
 
-The upstream prefix REPLACES the public one when forwarding. rask rows keep it
-identical (the fleet services mount under RASK_API_PREFIX themselves); lance rows
-rewrite — catalog/lineage serve `/v1/...`/`/runs` at root, the medallion producer
-serves `/produce`+`/train` at root, and the media trio serves
-`/api/...` internally.
-"""
+    A NamedTuple, so the four fields are named where they are read (`route.public_prefix`) instead of
+    indexed (`route[0]`), while every positional `a, b, c, d = route` unpack across this module keeps
+    working — a NamedTuple *is* a tuple.
+
+    The upstream prefix REPLACES the public one when forwarding. rask rows keep it identical (the fleet
+    services mount under RASK_API_PREFIX themselves); lance rows rewrite — catalog/lineage serve
+    `/v1/...`/`/runs` at root, the medallion producer serves `/produce`+`/train` at root, and the media
+    trio serves `/api/...` internally.
+    """
+
+    public_prefix: str
+    upstream_prefix: str
+    app_id: str
+    fallback_url: str
 
 
 def _routes() -> list[Route]:
@@ -177,34 +188,34 @@ def _routes() -> list[Route]:
     # catch-all since the R6/R20 wave (core-api/search-api/volumes-api retired):
     # an unmatched /api/* 404s at the gateway with "no upstream", which is correct.
     return [
-        ("/api/explorer/search", "/api/search", *explorer_search),
-        ("/api/explorer/annotations", "/api/annotations", *annotator),
-        ("/api/explorer", "/api", *viewer),
-        ("/api/catalog", "", *catalog),
-        ("/api/lineage", "", *lineage),
-        ("/api/produce", "/produce", *medallion),
+        Route("/api/explorer/search", "/api/search", *explorer_search),
+        Route("/api/explorer/annotations", "/api/annotations", *annotator),
+        Route("/api/explorer", "/api", *viewer),
+        Route("/api/catalog", "", *catalog),
+        Route("/api/lineage", "", *lineage),
+        Route("/api/produce", "/produce", *medallion),
         # SIBLING PREFIXES, not nested. `_pick_route` requires `path == prefix or
         # path.startswith(prefix + "/")`, so a row like "/api/ingest-iiif" could never have matched
         # the "/api/ingest" row — the next character is "-", not "/". The deprecated `/api/ingest-iiif`
         # row is GONE (A12 deleted the medallion route it pointed at, so it 502'd rather than 404'd,
         # which is the worse failure: it names a backend as broken instead of the path as absent),
         # but the ORDERING PROPERTY it demonstrated is still load-bearing and still tested.
-        ("/api/ingest", "/api", *ingest),
+        Route("/api/ingest", "/api", *ingest),
         # DEPRECATED — the medallion's IIIF head. Retires with the nine-plus-three IIIF files
         # (A12); kept for one deprecation window so the frontend can move to /api/ingest first.
-        ("/api/train", "/train", *medallion),
+        Route("/api/train", "/train", *medallion),
         # The APPROVE door for a held promotion. It is on the producer rather than on the mover whose
         # quality gate held it, because `raise_workflow_event` resolves a workflow instance through the
         # CALLING app's app-id: route and instance must share a process, and a mover is bus-only — no
         # row here, no Ingress path. Root-mounted like /produce and /train (the producer does not use
         # `make_service_app`'s prefix), so the rewrite is a literal, not `prefix`-interpolated.
-        ("/api/promotions", "/promotions", *medallion),
+        Route("/api/promotions", "/promotions", *medallion),
         # The cascade's operator surface. Routed to the PRODUCER, which authorizes and forwards to the
         # mover that hosts the instance — a mover has no row of its own because it is bus-only, and
         # `terminate_workflow` must run under the mover's app-id, so neither end can do both halves.
-        ("/api/movers", "/movers", *medallion),
-        (f"{prefix}/ray", f"{prefix}/ray", *compute),
-        (f"{prefix}/projects", f"{prefix}/projects", *controlplane),
+        Route("/api/movers", "/movers", *medallion),
+        Route(f"{prefix}/ray", f"{prefix}/ray", *compute),
+        Route(f"{prefix}/projects", f"{prefix}/projects", *controlplane),
         # PREFIX-INTERPOLATED, not the literal "/api/flows", and that is the ingest row's lesson
         # applied rather than restated: the flows service is composed by `make_service_app`, which
         # mounts every router under `settings.api_prefix` — the SAME env var `_routes` reads at the top.
@@ -213,19 +224,19 @@ def _routes() -> list[Route]:
         # dev-micro.sh's prefix this row IS "/api/flows" → "/api/flows".
         # tests/test_routing.py pins the rewrite against the flows app's own openapi, not against a
         # reading of it.
-        (f"{prefix}/flows", f"{prefix}/flows", *flows),
+        Route(f"{prefix}/flows", f"{prefix}/flows", *flows),
         # PREFIX-INTERPOLATED for the flows row's reason, not by imitation: `notifications` is composed
         # by `make_service_app` too, so its routers mount under `settings.api_prefix` — the same env var
         # read at the top of this function. A hardcoded "/api/notifications" pair would be correct only
         # while RASK_API_PREFIX happens to be "/api".
-        (f"{prefix}/notifications", f"{prefix}/notifications", *notifications),
-        ("/api/serve", "/api/serve", *compute),
+        Route(f"{prefix}/notifications", f"{prefix}/notifications", *notifications),
+        Route("/api/serve", "/api/serve", *compute),
     ]
 
 
 def _pick_route(path: str, routes: list[Route]) -> Route | None:
     for route in routes:
-        prefix = route[0]
+        prefix = route.public_prefix
         if path == prefix or path.startswith(prefix + "/"):
             return route
     return None
@@ -307,27 +318,58 @@ def _distinct_targets(routes: list[Route]) -> list[tuple[str, str]]:
     return list(seen.items())
 
 
-async def _merged_openapi(client: httpx.AsyncClient, prefix: str, targets: list[tuple[str, str]]) -> dict:
+class MergedOpenAPI(BaseModel):
+    """The unified spec `_merged_openapi` returns — a declared shape, not a bare dict.
+
+    Only the four members the merge actually populates: the fields of each upstream spec that the
+    docs page needs. Values stay `Any` because they hold whole OpenAPI path-item and schema objects,
+    which this gateway forwards verbatim rather than re-validating.
+    """
+
+    openapi: str = "3.1.0"
+    info: dict[str, Any] = Field(default_factory=lambda: {"title": "rask API (gateway)", "version": "0.1.0"})
+    paths: dict[str, Any] = Field(default_factory=dict)
+    components: dict[str, Any] = Field(default_factory=lambda: {"schemas": {}})
+
+
+async def _merged_openapi(client: httpx.AsyncClient, prefix: str, targets: list[tuple[str, str]]) -> MergedOpenAPI:
     """Fetch each backend's OpenAPI and merge into one spec so the gateway's
     /docs shows every service's endpoints. Unreachable backends are skipped."""
-    merged: dict = {
-        "openapi": "3.1.0",
-        "info": {"title": "rask API (gateway)", "version": "0.1.0"},
-        "paths": {},
-        "components": {"schemas": {}},
-    }
-    for app_id, fallback in targets:
+    merged = MergedOpenAPI()
+
+    async def _fetch(app_id: str, fallback: str) -> dict | None:
         base = _target_base(app_id, fallback)
         try:
             resp = await client.get(f"{base}{prefix}/openapi.json", timeout=10.0)
             resp.raise_for_status()
-            spec = resp.json()
+            return resp.json()
         except (httpx.HTTPError, ValueError) as exc:
             log.warning(f"openapi fetch failed for {app_id}: {exc}")
+            return None
+
+    # CONCURRENT, not a serial per-target wait. A serial loop charged every request that reached this
+    # endpoint the SUM of the per-target timeouts, so one slow-or-hanging upstream stalled the whole
+    # merge for its full 10 s — worst case N of them. Fanned out together, the wall-clock is the
+    # slowest single target. Results are consumed in `targets` order so the merge below is still
+    # deterministic (a later target's colliding key wins, as before).
+    specs = await asyncio.gather(*(_fetch(app_id, fallback) for app_id, fallback in targets))
+    schemas: dict = merged.components["schemas"]
+    for (app_id, _fallback), spec in zip(targets, specs, strict=True):
+        if spec is None:
             continue
-        merged["openapi"] = spec.get("openapi", merged["openapi"])
-        merged["paths"].update(spec.get("paths", {}))
-        merged["components"]["schemas"].update(spec.get("components", {}).get("schemas", {}))
+        merged.openapi = spec.get("openapi", merged.openapi)
+        paths = spec.get("paths", {})
+        spec_schemas = spec.get("components", {}).get("schemas", {})
+        # A silent last-writer-wins hides a real conflict: two backends serving different operations
+        # under the same path (every service's `{prefix}/health`) or a reused schema NAME. The merge
+        # policy is unchanged — the later target still wins — but a shadowed key is named so an
+        # operator reading the docs knows one backend's entry was dropped rather than absent.
+        for kind, incoming, existing in (("path", paths, merged.paths), ("schema", spec_schemas, schemas)):
+            shadowed = sorted(set(incoming) & set(existing))
+            if shadowed:
+                log.warning(f"openapi merge: {app_id} shadows {kind}(s) already merged: {shadowed}")
+        merged.paths.update(paths)
+        schemas.update(spec_schemas)
     return merged
 
 
@@ -514,7 +556,7 @@ async def proxy(path: str, request: Request) -> Response:
     # `chart/templates/ingress.yaml` publishes `/api` — so an anonymous request from the internet got
     # the merged route table, parameter names and request/response schemas of every backend the
     # gateway fronts. It is also an amplification lever: one unauthenticated GET costs the gateway a
-    # sequential fan-out to every distinct upstream at a 10 s timeout each.
+    # fan-out to every distinct upstream (concurrent, but still a 10 s per-target timeout it pays for).
     #
     # 404 rather than 403 when off, so the answer is indistinguishable from a gateway that never had
     # a docs route — the same authz-before-existence rule the promotion read follows.
@@ -522,7 +564,8 @@ async def proxy(path: str, request: Request) -> Response:
         if not _docs_enabled:
             raise HTTPException(status_code=404, detail="Not Found")
         if scope_path == f"{prefix}/openapi.json":
-            return JSONResponse(await _merged_openapi(client, prefix, _distinct_targets(request.app.state.routes)))
+            merged = await _merged_openapi(client, prefix, _distinct_targets(request.app.state.routes))
+            return JSONResponse(merged.model_dump(mode="json"))
         return get_swagger_ui_html(openapi_url=f"{prefix}/openapi.json", title="rask API (gateway)")
 
     norm_path = _normalize_path(scope_path)
