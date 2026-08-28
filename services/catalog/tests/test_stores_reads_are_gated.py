@@ -191,3 +191,40 @@ def test_every_route_the_router_guard_waves_through_has_a_reason() -> None:
         "these routes run on authentication alone with no gate and no recorded reason — any "
         "authenticated principal reaches them:\n  " + "\n  ".join(sorted(unexplained))
     )
+
+
+# ── the error ENVELOPE: rask-extension routes still speak the spec's problem dialect ─────────────
+#
+# open_python-audit `catalog-api-01` + `RV-03` — one defect, two modules: stores.py and members.py
+# imported the FLEET taxonomy (`service_kit.exceptions`) instead of `lance_namespace`, so their
+# bodies rendered as problem+json (that half was fixed by `745af135` installing `register_handlers`)
+# but carried only four keys — no `code`, no `error`, and a `type` in `about:blank#` rather than
+# `https://lance.org/problems/`. The estate's own invariant (`test_problem_bodies_carry_a_code`)
+# pins six keys for every body the catalog emits; these routes were the exceptions.
+
+
+def test_the_attach_refusal_carries_the_spec_code() -> None:
+    """Witnessed RED: this exact request answered a 4-key `about:blank#serviceunavailableerror`."""
+    response = TestClient(_app(fga_enabled=False, allow=True, subject=None), raise_server_exceptions=False).post(
+        "/v1/stores",
+        json={"name": "x", "bucket": "b", "role": "bronze", "description": "", "read_only": False},
+    )
+    assert response.status_code == 503
+    assert response.headers["content-type"].startswith("application/problem+json")
+    body = response.json()
+    assert set(body) >= {"type", "title", "status", "detail", "code", "error"}, f"the envelope omits the spec keys — got {sorted(body)}"
+    assert body["type"].startswith("https://lance.org/problems/"), f"the type is off-namespace: {body['type']}"
+
+
+def test_membership_without_authz_is_a_503_in_the_spec_envelope() -> None:
+    """RV-03's site — and the ONE deliberate status change in this closure: 409 -> 503. Membership
+    IS tuples, so authz-off is the service being UNAVAILABLE for this operation, not a conflict with
+    anything; `access.py` already answers 503 for the identical condition, and two doors giving two
+    statuses for one condition is how a client learns the wrong lesson."""
+    response = TestClient(_app(fga_enabled=False, allow=True, subject="carol"), raise_server_exceptions=False).put(
+        "/v1/projects/proj1/members",
+        json={"user": "user:bob", "relation": "member"},
+    )
+    assert response.status_code == 503, f"authz-off membership answered {response.status_code}"
+    body = response.json()
+    assert set(body) >= {"type", "title", "status", "detail", "code", "error"}, f"the envelope omits the spec keys — got {sorted(body)}"

@@ -28,13 +28,13 @@ import logging
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Path, Request, status
+from lance_namespace import ConcurrentModificationError, ServiceUnavailableError
 from pydantic import BaseModel, Field
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import SettingsDep, get_control_emitter
 from catalog.api.security import CurrentToken
 from service_kit.control_emit import emit_control
-from service_kit.exceptions import ConflictError
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
 
@@ -107,7 +107,10 @@ async def _client_or_conflict(request: Request, settings: Any) -> OpenFgaClient:
     write, and pretending otherwise would report a grant that never happened."""
     client = getattr(request.app.state, "fga", None)
     if not settings.fga_enabled or client is None:
-        raise ConflictError("authorization is not configured on this deployment — tenant membership is unavailable")
+        # 503, not the 409 this used to be: membership IS tuples, so authz-off is the service being
+        # UNAVAILABLE for the operation, not a conflict with anything — and access.py already answers
+        # 503 for the identical condition. Two doors, one status.
+        raise ServiceUnavailableError("authorization is not configured on this deployment — tenant membership is unavailable")
     return cast("OpenFgaClient", client)
 
 
@@ -191,7 +194,7 @@ async def revoke_member(project_id: ProjectId, payload: GrantRequest, request: R
         return MemberList(members=_direct_grants(existing, obj))
 
     if payload.relation in ADMINISTRATIVE and len([t for t in existing if t.object == obj and t.relation in ADMINISTRATIVE]) <= 1:
-        raise ConflictError(
+        raise ConcurrentModificationError(
             f"{user} holds the only remaining admin on this project — grant another admin first, or nobody will be able to administer or delete it"
         )
 

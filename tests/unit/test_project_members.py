@@ -22,8 +22,9 @@ from typing import Any, cast
 import pytest
 from catalog.api.v1.endpoints import members
 from catalog.core.config import Settings
+from lance_namespace import ConcurrentModificationError, ServiceUnavailableError
 
-from service_kit.exceptions import ConflictError, ForbiddenError
+from service_kit.exceptions import ForbiddenError
 from service_kit.governed.oidc import IDToken
 
 
@@ -168,7 +169,7 @@ def test_revoking_the_last_admin_is_refused_and_named(monkeypatch: pytest.Monkey
     inside the product — recoverable only by estate intervention."""
     h = _Harness([_tuple("user:alice", "admin", "project:acme")])
     h.install(monkeypatch)
-    with pytest.raises(ConflictError, match="only remaining admin"):
+    with pytest.raises(ConcurrentModificationError, match="only remaining admin"):
         _revoke(h, "alice", "admin")
     assert h.deleted == []
 
@@ -236,7 +237,7 @@ def test_authz_off_refuses_rather_than_reporting_a_grant_that_never_happened(mon
     h = _Harness()
     h.install(monkeypatch)
     body = members.GrantRequest(user="bob", relation=cast(Any, "member"))
-    with pytest.raises(ConflictError, match="not configured"):
+    with pytest.raises(ServiceUnavailableError, match="not configured"):
         asyncio.run(members.grant_member("acme", body, _request(), _settings(fga_enabled=False), _token()))
 
 

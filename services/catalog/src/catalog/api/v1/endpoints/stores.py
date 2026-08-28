@@ -21,13 +21,18 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Body
+
+# The SPEC taxonomy, not `service_kit.exceptions` — the catalog's clients dispatch on the Lance
+# numeric `code`, which only `install_problem_handlers`'s translation of lance_namespace errors
+# carries. The fleet import stood here twice (catalog-api-01, then members.py repeated it as RV-03);
+# `test_catalog_api_speaks_the_spec_taxonomy.py` now closes the class.
+from lance_namespace import ConcurrentModificationError, InvalidInputError, NamespaceAlreadyExistsError, ServiceUnavailableError
 from pydantic import TypeAdapter
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.user_state import UserStateStoreDep
-from service_kit.exceptions import ConflictError, ServiceUnavailableError, ValidationError
 from service_kit.governed.user_state import ESTATE_SUBJECT, UserStateConflict, UserStateDocument, UserStateStore, UserStateUnreadable
 from service_kit.schemas.storage import (
     GOVERNED_TIERS,
@@ -132,7 +137,7 @@ async def attach_store(
     if state is None:
         raise ServiceUnavailableError("no state store is configured, so a store cannot be attached")
     if not store.name.strip() or not store.bucket.strip():
-        raise ValidationError("both `name` and `bucket` are required")
+        raise InvalidInputError("both `name` and `bucket` are required")
 
     # READ-MODIFY-WRITE UNDER AN ETAG. This document is ESTATE-scoped — every
     # estate admin writes the same key — so the blind read-then-write it used to do lost updates: two
@@ -148,7 +153,7 @@ async def attach_store(
         existing, etag = await _attached_versioned(state)
         taken = {s.name for s in registered_stores()} | {s.name for s in existing}
         if store.name in taken:
-            raise ConflictError(f"a store named {store.name!r} is already registered")
+            raise NamespaceAlreadyExistsError(f"a store named {store.name!r} is already registered")
         try:
             await state.put(
                 subject=ESTATE_SUBJECT,
@@ -157,12 +162,18 @@ async def attach_store(
                 etag=etag,
                 concurrent=True,
             )
-        except UserStateConflict:
+        except UserStateConflict as exc:
             if attempt == 0:
                 continue
-            raise
+            # Translated, not re-raised: UserStateConflict subclasses the FLEET's ConflictError, so a
+            # bare raise here exits through register_handlers as a 4-key 409 — the seventh
+            # DomainError-shaped exit the audit never named. Precedent projects.py/warehouses.py:
+            # a lost etag race is the spec's ConcurrentModification, code 23.
+            raise ConcurrentModificationError("the attached-store registry changed under two concurrent attaches; retry") from exc
         return StoreRegistry(stores=[*registered_stores(), *existing, attached])
-    raise ServiceUnavailableError("the attached-store registry is being written concurrently — retry")
+    # Unreachable by construction (every path through the loop returns, raises, or continues at
+    # attempt 0) — kept because the function is declared `-> StoreRegistry` and ty needs it total.
+    raise ConcurrentModificationError("the attached-store registry is being written concurrently — retry")
 
 
 @router.get(
