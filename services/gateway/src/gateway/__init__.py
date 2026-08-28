@@ -534,9 +534,14 @@ async def proxy(path: str, request: Request) -> Response:
     try:
         upstream_resp = await client.send(upstream_req, stream=True)
     except httpx.RequestError as exc:
-        # Upstream unreachable (not started yet, crashed, wrong port) — surface a
-        # clean 502 rather than a 500 traceback.
-        raise HTTPException(status_code=502, detail=f"upstream {base} unreachable: {exc}") from exc
+        # Upstream unreachable (not started yet, crashed, wrong port) — surface a clean 502 rather
+        # than a 500 traceback, and NAME NO INTERNAL ADDRESS to the caller. `base` is the internal
+        # target (127.0.0.1:<port>, or a Dapr /v1.0/invoke/<app>/… URL) and `exc` repeats it; at the
+        # edge the chart publishes `/api` on, that is the exact leak `_rewrite_location` scrubs from
+        # Location headers. The caller gets the PUBLIC prefix it asked for and that the failure is
+        # upstream; the address, port and exception go to the operator's log where they belong.
+        log.error("upstream unreachable: route=%s base=%s error=%s", route_prefix, base, exc)
+        raise HTTPException(status_code=502, detail=f"upstream for {route_prefix} unreachable") from exc
 
     out_headers = {}
     for k, v in upstream_resp.headers.items():

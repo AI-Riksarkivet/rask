@@ -135,12 +135,14 @@ def test_a_service_refusal_is_not_flattened_into_the_gateways_own_unreachable_er
 
 
 def test_an_inbox_the_gateway_cannot_reach_is_a_502_naming_the_upstream_rather_than_a_404(row) -> None:
-    """The other side of that split, and the one the row's own default makes easy to misread.
+    """The other side of that split: an unreachable upstream is a 502, not a 404.
 
-    `RASK_NOTIFICATIONS_URL` defaults to `127.0.0.1:8850` — the gateway pod ITSELF when the chart
-    forgets to render the address (`chart/templates/configmap.yaml` says so in as many words). The
-    answer must name an address, because a 404 here would read as "no such route" and send the reader
-    to the route table, which is the one place that is correct.
+    A 404 here would read as "no such route" and send the reader to the route table, which is the
+    one place that is correct — so the 502 must name the PUBLIC route (`/api/notifications`) and say
+    the failure is upstream. It must NOT name the internal address/port: since
+    `GW-502-LEAKS-INTERNAL-ADDRESS`, `127.0.0.1:8850` (the row's default when the chart forgets to
+    render an address) goes to the gateway's ERROR log, not the public body — the same scrub
+    `_rewrite_location` applies to Location headers.
     """
     client, upstream = row
     upstream.unreachable = True
@@ -150,5 +152,6 @@ def test_an_inbox_the_gateway_cannot_reach_is_a_502_naming_the_upstream_rather_t
     assert response.status_code == 502
     detail = response.json()["detail"]
     assert "unreachable" in detail
-    assert "8850" in detail, f"the 502 does not say WHICH upstream: {detail!r}"
+    assert "/api/notifications" in detail, f"the 502 does not say WHICH public route failed: {detail!r}"
+    assert "8850" not in detail, f"the 502 leaks the internal port to the caller: {detail!r}"
     assert upstream.seen, "the gateway did not attempt the row at all"
