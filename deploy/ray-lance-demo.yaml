@@ -32,7 +32,12 @@ spec:
     spec:
       containers:
         - name: ray-head
-          image: ray-lance:dev
+          # THE REGISTRY REFERENCE, matching the live object. This said `ray-lance:dev`, and every
+          # `kubectl apply -f` of this file silently reverted the hand-advanced head back to a tag
+          # that was never imported — re-breaking the cascade with nothing naming this file as the
+          # cause (recorded 2026-08; the S3 endpoint line below carries the same scar). Advance the
+          # tag HERE when the image advances, never by patching the live object alone.
+          image: localhost:5000/ray-lance:main-88ccfa2c
           imagePullPolicy: IfNotPresent
           # A real Ray head: GCS on 6379, dashboard + job-submission API on 8265, client on 10001.
           command: ["ray"]
@@ -51,9 +56,20 @@ spec:
             # this file put the stale name back and broke Ray's object store.
             - { name: S3_ENDPOINT, value: "http://rask-rustfs-io:9000" }
             - { name: S3_KEY, value: "rustfsadmin" }
-            - { name: S3_SECRET, value: "rustfsadmin" }
+            # BY REFERENCE, not a literal — and these two exist because the submission body no
+            # longer carries them (open_python-audit P0: the Ray Jobs API echoes runtime_env back to
+            # any reader, so the S3 secret and the estate's service token were readable off
+            # GET /api/jobs/<id>). Jobs read both from the pod env now; the chart's RayService gets
+            # the same pair via chart/templates/rayservice.yaml. The token is optional: absent (dapr
+            # off) the job omits the header, which is the auth-off ingest's correct behaviour.
+            - name: S3_SECRET
+              valueFrom:
+                secretKeyRef: { name: rask-infra-credentials, key: rustfs-secret-key }
             - { name: S3_REGION, value: "us-east-1" }
             - { name: RAY_DEDUP_LOGS, value: "0" }
+            - name: LINEAGE_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef: { name: rask-dapr-app-token, key: token, optional: true }
           ports:
             - { name: gcs, containerPort: 6379 }
             - { name: dashboard, containerPort: 8265 }
