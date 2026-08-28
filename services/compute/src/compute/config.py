@@ -16,9 +16,20 @@ Subclasses the shared `Settings` rather than `BaseSettings` directly: this servi
 be two answers to "what is the dashboard URL".
 """
 
+from pydantic import Field
+
 from service_kit.config import Settings
 from service_kit.governed.settings import GovernedAuthSettings
 
 
 class ComputeSettings(GovernedAuthSettings, Settings):
     """The shared settings plus the estate's auth knobs. Every added field defaults OFF."""
+
+    ray_client_retry_cooldown_s: float = Field(
+        default=10.0,
+        ge=0.0,
+        description="Minimum seconds between JobSubmissionClient (re)build attempts while the Ray "
+        "dashboard is unreachable. Each attempt issues blocking version-check HTTP calls, so this "
+        "caps the reconstruction storm to one try per interval; the client still self-heals once Ray "
+        "comes up.",
+    )

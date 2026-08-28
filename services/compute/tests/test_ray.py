@@ -68,6 +68,35 @@ def test_serve_proxy_restores_trailing_slash(client: TestClient, monkeypatch: py
     assert captured["path"] == "api/serve/applications/"
 
 
+def test_serve_proxy_strips_stale_body_headers(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ray_kit.dashboard.proxy` returns the httpx-DECODED body but relays Ray's original
+    `content-encoding`/`content-length` headers, which describe the compressed body. Forwarding
+    them makes the browser re-inflate plaintext or hit a length mismatch — the proxy must drop
+    both and let Starlette recompute the length for the decoded bytes."""
+    from ray_kit import dashboard
+    from ray_kit.schemas import ProxyResponse
+
+    payload = b'{"applications": {}}'
+
+    async def fake_proxy(http, dashboard_url, path, method, query, headers, body):
+        return ProxyResponse(
+            content=payload,  # already decoded by httpx
+            status_code=200,
+            headers={
+                "content-type": "application/json",
+                "content-encoding": "gzip",  # describes the ORIGINAL compressed body, not `payload`
+                "content-length": "11",  # the compressed length, not len(payload)
+            },
+        )
+
+    monkeypatch.setattr(dashboard, "proxy", fake_proxy)
+
+    resp = client.get("/api/serve/applications/")
+    assert resp.status_code == 200
+    assert "content-encoding" not in resp.headers
+    assert resp.headers["content-length"] == str(len(payload))
+
+
 def test_get_ray_client_rebuilds_lazily_when_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """A None client (Ray not yet up at boot) is rebuilt on first use and cached."""
     from compute import dependencies
@@ -88,3 +117,27 @@ def test_get_ray_client_rebuilds_lazily_when_none(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(dependencies, "build_client", _boom)
     assert dependencies.get_ray_client(request) is sentinel  # served from cache
+
+
+def test_get_ray_client_negative_caches_while_ray_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A None result (Ray down) must not re-run build_client on every request: each construction
+    issues blocking HTTP version-check calls to the dashboard, so a burst of requests while Ray is
+    down would storm it. A cooldown collapses the burst to one attempt per interval."""
+    from compute import dependencies
+
+    app = FastAPI()
+    app.state.settings = build_settings().model_copy(update={"ray_dashboard_url": "http://ray:8265"})
+    app.state.ray_client = None
+    request = Request({"type": "http", "app": app})
+
+    calls = 0
+
+    def _counting(url: str) -> None:
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.setattr(dependencies, "build_client", _counting)
+
+    for _ in range(3):
+        assert dependencies.get_ray_client(request) is None
+    assert calls == 1  # only the first rapid request rebuilt; the cooldown suppressed the rest

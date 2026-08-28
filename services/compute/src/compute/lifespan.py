@@ -3,6 +3,7 @@ on app.state. No DB/Lance/S3/orchestrator. Tolerant of an unreachable dashboard
 (build_client returns None)."""
 
 import logging
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
@@ -28,6 +29,9 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         # RAY_AUTH_MODE=token (RASK_RAY_AUTH_TOKEN / RAY_AUTH_TOKEN); {} otherwise. The
         # proxy strips inbound Authorization so this default is what reaches Ray.
         app.state.http = httpx.AsyncClient(timeout=settings.http_timeout, headers=auth_headers())
+        # Stamp the attempt so get_ray_client's negative cache dates from boot: if Ray is down now,
+        # the first request waits out the cooldown rather than immediately restorming the dashboard.
+        app.state.ray_client_last_attempt = time.monotonic()
         app.state.ray_client = await to_thread.run_sync(build_client, settings.ray_dashboard_url)
         # THE DOOR'S OWN DEPENDENCIES. `compute.security` reads `app.state.oidc` / `app.state.fga`;
         # without this the settings are bound, the routes declare the dependency, and every request
