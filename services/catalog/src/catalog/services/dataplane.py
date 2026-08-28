@@ -603,6 +603,26 @@ def _classify_commit_error(exc: OSError) -> Exception:
 #: run finds its own earlier version instead of appending twice.
 _RUN_MARKER_PREFIX = "rask.ingest.run_id="
 
+#: Substrings that PROVE a read failed because the thing is not there — as opposed to unreachable.
+#: Reuses `_COMMIT_NO_BASE_MARKERS`' vocabulary (the sibling commit path already discriminates the
+#: same two cases) plus the dataset-level phrasing `read_table_version` matches on. Kept as a
+#: substring match rather than an exception type because the object-store layer flattens absence into
+#: `OSError` with the reason only in the message — the same reason `_classify_commit_error` matches on
+#: text. A phrase that is NOT here fails closed, which is the safe direction for a new store's wording.
+_ABSENCE_MARKERS = (*_COMMIT_NO_BASE_MARKERS, "was not found", "not found", "does not exist", "no such")
+
+
+def _is_absence(exc: BaseException) -> bool:
+    """Does this error prove the target is ABSENT (vs merely unreadable)?
+
+    `FileNotFoundError` is definitive; everything else is judged on the message, and anything
+    unrecognized is treated as unreadable — the direction that refuses rather than duplicates.
+    """
+    if isinstance(exc, FileNotFoundError):
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in _ABSENCE_MARKERS)
+
 
 def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_version: int) -> tuple[int, int] | None:
     """Did THIS run already commit? Scan versions after ``read_version`` for the run's marker.
@@ -614,14 +634,31 @@ def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_versio
 
     Bounded by construction: the scan walks versions AFTER the retry's `read_version`, which in the
     replay case is at most a handful (our own commit plus whatever landed concurrently). A version
-    whose transaction cannot be read (pre-transaction-file history, GC'd) is SKIPPED, not fatal —
-    an unreadable stranger's version must not fail a legitimate first commit.
+    whose transaction is ABSENT (pre-transaction-file history, GC'd) is SKIPPED, not fatal — an
+    absent stranger's version must not fail a legitimate first commit.
+
+    IT FAILS CLOSED, and that is the difference between absent and BROKEN. Both handlers here used to
+    be blanket `except Exception`: the open said "no dataset yet -> certainly no prior commit", which
+    is true of absence and false of a reset connection, a timeout or expired credentials; the
+    per-version skip was defended for an unreadable STRANGER and silently covered a transient failure
+    reading OUR OWN marker — the one version the scan exists to find. Either one answered "no prior
+    commit" on a store that had told us nothing, and the caller then appended the rows again with
+    nothing able to refuse it (Append never conflicts with Append).
+
+    So an error that PROVES absence returns None, and any other error RAISES: the activity retries
+    under `ACTIVITY_RETRY` and a permanent fault fails the run with a reason. A guard that cannot
+    prove the run has not committed must not assume it has not.
     """
     marker = _RUN_MARKER_PREFIX + run_id
     try:
         dataset = lance.dataset(location, storage_options=dict(so) if so else None)
-    except Exception:
-        return None  # no dataset yet -> certainly no prior commit by this run
+    except Exception as exc:
+        if not _is_absence(exc):
+            raise ServiceUnavailableError(
+                f"cannot determine whether run {run_id!r} already committed to {location!r} — the object store is unreadable, "
+                f"and proceeding would risk appending the same rows twice: {exc}"
+            ) from exc
+        return None  # genuinely no dataset yet -> certainly no prior commit by this run
     for version_info in dataset.versions():
         version = int(version_info["version"])
         if version <= read_version:
@@ -629,7 +666,12 @@ def _find_run_commit(location: str, so: StorageOptions, run_id: str, read_versio
         try:
             transaction = dataset.read_transaction(version)
             props = getattr(transaction, "transaction_properties", None) or {}
-        except Exception:
+        except Exception as exc:
+            if not _is_absence(exc):
+                raise ServiceUnavailableError(
+                    f"cannot read version {version} while checking whether run {run_id!r} already committed — "
+                    f"this may be the run's own commit, and skipping it would append the rows twice: {exc}"
+                ) from exc
             continue
         if props.get("__lance_commit_message") == marker:
             rows = lance.dataset(location, version=version, storage_options=dict(so) if so else None).count_rows()

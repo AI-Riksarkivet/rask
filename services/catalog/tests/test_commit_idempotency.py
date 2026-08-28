@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import lance
 import pyarrow as pa
@@ -153,3 +154,104 @@ def test_an_EMPTY_commit_with_NO_run_id_is_still_refused(dataset_uri: str) -> No
 
     with pytest.raises(InvalidInputError):
         dataplane.commit_appended_fragments(dataset_uri, {}, [], read_version=1)
+
+
+# ── the guard must fail CLOSED ──────────────────────────────────────────────────────────────────
+#
+# open_python-audit (E3, P1/high) — "Commit idempotency guard fails OPEN on any storage error,
+# re-enabling the duplicate-append it exists to prevent". Confirmed at HEAD by the independent
+# re-audit, which also noted the gap these tests close: eight tests existed and NONE injected a
+# raising storage layer, so the failure mode was entirely uncovered.
+#
+# TWO BLANKET HANDLERS, both pointing the same wrong way:
+#   * `lance.dataset(...)` wrapped in `except Exception: return None`, commented "no dataset yet ->
+#     certainly no prior commit by this run" — true for ABSENCE, false for a transient S3 error, a
+#     timeout, or expired credentials. All of them answered "no prior commit".
+#   * `read_transaction(version)` wrapped in `except Exception: continue`, whose docstring defends
+#     skipping a STRANGER'S unreadable version — and says nothing about the case that matters: a
+#     transient failure reading OUR OWN marker version, which skips the very evidence the scan exists
+#     to find.
+#
+# Either one turns the replay into a silent duplicate append, and nothing downstream can refuse it
+# (Append never conflicts with Append). The guard's whole purpose is to fail CLOSED: when it cannot
+# prove the run has not committed, it must raise so the activity retries — not assume innocence.
+
+
+class _RaisingDataset:
+    """A dataset whose versions can be listed but whose transactions cannot be read.
+
+    The wrapped handle is typed precisely; the `*a: Any` forwards below are NOT lazy typing but a
+    genuine dynamic boundary — `lance.dataset` is a heavily overloaded extension function, and typing
+    the pass-through as `object` makes the forward itself a type error while proving nothing about it.
+    """
+
+    def __init__(self, inner: lance.LanceDataset, boom: Exception) -> None:
+        self._inner = inner
+        self._boom = boom
+
+    def versions(self) -> list[dict]:
+        return self._inner.versions()
+
+    def read_transaction(self, _version: int) -> object:
+        raise self._boom
+
+
+def test_an_UNREADABLE_STORE_refuses_rather_than_assuming_no_prior_commit(dataset_uri: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The open door: `lance.dataset` failing meant "certainly no prior commit", so the replay
+    appended again. A store that cannot be READ has told us nothing about what is in it."""
+
+    def _boom(*_a: Any, **_kw: Any) -> object:
+        raise OSError("connection reset by peer talking to the object store")
+
+    monkeypatch.setattr(dataplane.lance, "dataset", _boom)
+
+    with pytest.raises(Exception) as caught:
+        dataplane._find_run_commit(dataset_uri, {}, "run-1", 0)
+    assert not isinstance(caught.value, AssertionError)
+    assert "run-1" in str(caught.value) or "unavailable" in str(caught.value).lower(), str(caught.value)
+
+
+def test_a_MISSING_dataset_still_reads_as_no_prior_commit(dataset_uri: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The other half, and why this is a discrimination rather than a blanket raise: a table that
+    genuinely does not exist yet HAS no prior commit, and a first commit must not be refused."""
+
+    def _absent(*_a: Any, **_kw: Any) -> object:
+        raise OSError("Dataset at path /nope/t.lance was not found")
+
+    monkeypatch.setattr(dataplane.lance, "dataset", _absent)
+
+    assert dataplane._find_run_commit(dataset_uri, {}, "run-1", 0) is None
+
+
+def test_an_UNREADABLE_TRANSACTION_refuses_rather_than_skipping_our_own_marker(dataset_uri: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`except Exception: continue` skipped ANY unreadable version — including the run's own marker
+    on a transient error, which is precisely the evidence the scan exists to find."""
+    fragments = _staged_fragments(dataset_uri, [1, 2])
+    dataplane.commit_appended_fragments(dataset_uri, {}, fragments, read_version=1, run_id="run-1")
+
+    real = dataplane.lance.dataset
+
+    def _wrap(*a: Any, **kw: Any) -> object:
+        return _RaisingDataset(real(*a, **kw), OSError("read timed out fetching the transaction file"))
+
+    monkeypatch.setattr(dataplane.lance, "dataset", _wrap)
+
+    with pytest.raises(Exception) as caught:
+        dataplane._find_run_commit(dataset_uri, {}, "run-1", 1)
+    assert not isinstance(caught.value, AssertionError)
+
+
+def test_a_GENUINELY_unreadable_STRANGER_version_is_still_skipped(dataset_uri: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The docstring's own case must survive: pre-transaction-file history and GC'd versions are
+    ABSENT, not broken, and an absent stranger must not fail a legitimate first commit."""
+    fragments = _staged_fragments(dataset_uri, [1, 2])
+    dataplane.commit_appended_fragments(dataset_uri, {}, fragments, read_version=1, run_id="other-run")
+
+    real = dataplane.lance.dataset
+
+    def _wrap(*a: Any, **kw: Any) -> object:
+        return _RaisingDataset(real(*a, **kw), FileNotFoundError("_transactions/3.txn was not found"))
+
+    monkeypatch.setattr(dataplane.lance, "dataset", _wrap)
+
+    assert dataplane._find_run_commit(dataset_uri, {}, "run-1", 1) is None
