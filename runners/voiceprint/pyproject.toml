@@ -8,13 +8,27 @@ dependencies = [
     "pyannote.audio",
     "torch==2.11.0+cu128",
     "torchaudio==2.11.0+cu128",
+    # --- arrived with the ratch dissolution (2026-08-28, open_ray-kernel.md) ---
+    # These are NOT new work for this runner: `_vendor/` now holds the table-write path, the two
+    # speaker schemas, the IVF_PQ index helper and RunnerContext, which used to be imported from
+    # ratch. They resolved before only because ratch's driver defaulted to sharing its venv with the
+    # actors (`RunnersSettings.runner_isolation = False`) — this project never declared them, so a
+    # genuinely isolated env would already have failed on `import lance`. Declared now that the code
+    # is local. Floors match the origin's (packages/ratch/pyproject.toml); both wheels are
+    # `Requires-Python >=3.10`, so they fit this runner's `<3.13` ceiling.
+    "pylance>=10.0.0",   # _vendor/dataset.py — lance.write_dataset
+    "pyarrow",           # _vendor/{dataset,schema}.py — the tables and their schemas
+    "lancedb>=0.34.0",   # _vendor/engine.py — lancedb.index.IvfPq, and the Table handles passed in
+    "pydantic>=2",       # _vendor/runners.py RunnerContext, and voiceprint.py's TurnSpan
 ]
 
 [tool.uv]
 package = false
 
-# The cu128 wheels live only on the pytorch index (local-version pins are not on
-# PyPI). ratch's runner_env() turns these urls into pip --extra-index-url options
-# for the per-stage runtime_env, so the env declaration stays entirely in-file.
+# The cu128 wheels live only on the pytorch index (local-version pins like
+# `torch==2.11.0+cu128` are not on PyPI), so the env declaration stays entirely in-file and any
+# builder of this runner's image reads the index from here. (ratch's runner_env() used to turn
+# these urls into pip --extra-index-url options for a per-stage runtime_env; that mechanism is
+# retired with ratch — the deps ship in a prebuilt image now — but the index still belongs here.)
 [[tool.uv.index]]
 url = "https://download.pytorch.org/whl/cu128"

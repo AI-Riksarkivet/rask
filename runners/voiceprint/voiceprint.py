@@ -1,8 +1,8 @@
 """In-process speaker-embedding (voiceprint) extraction → ``speaker_embeddings.lance``.
 
-Used by ``ratch embed-speaker-turns`` to embed each diarized turn's voice with
-pyannote community-1's **internal** WeSpeaker-ResNet34 encoder (256-d), loaded
-standalone via ``Model.from_pretrained(..., subfolder="embedding")``. The raw
+Embeds each diarized turn's voice with pyannote community-1's **internal**
+WeSpeaker-ResNet34 encoder (256-d), loaded standalone via
+``Model.from_pretrained(..., subfolder="embedding")``. The raw
 model outputs are *not* unit-norm; everything this module returns is
 L2-normalized so plain cosine kNN is well-defined. Like :class:`.diarize.Diarizer`,
 the HF token comes from the ambient cached credentials (``huggingface-cli login``
@@ -32,7 +32,8 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 import numpy as np
 from pydantic import BaseModel
-from ratch.modalities.av.wav import TARGET_SAMPLE_RATE, extract_wav_16k_mono
+
+from runners.voiceprint.wav import TARGET_SAMPLE_RATE, extract_wav_16k_mono
 
 
 if TYPE_CHECKING:
@@ -48,8 +49,8 @@ DEFAULT_MODEL: str = "pyannote/speaker-diarization-community-1"
 EMBEDDING_SUBFOLDER: str = "embedding"
 
 #: Below this turn duration the encoder's embeddings are unreliable (it was
-#: trained on 5.0 s chunks); ``embed-speaker-turns`` exposes it as
-#: ``--min-turn-duration``.
+#: trained on 5.0 s chunks); it is the default of the ``min_duration`` /
+#: ``min_turn_duration`` argument every embedding entry point takes.
 MIN_TURN_DURATION_S: float = 0.5
 
 #: Hard floor regardless of ``min_duration``: below ~0.1 s the fbank/ResNet
@@ -148,7 +149,7 @@ def embed_turn_slices(
         kept.append(turn)
         slices.append(wav[lo:hi])
     if not kept:
-        from ratch.model.schema import VOICE_EMBED_DIM
+        from runners.voiceprint.schema import VOICE_EMBED_DIM
 
         return [], np.zeros((0, VOICE_EMBED_DIM), dtype=np.float32)
 
@@ -266,8 +267,9 @@ def write_speaker_embeddings(
     skipped. Returns the number of rows written.
     """
     import pyarrow as pa
-    from ratch.core.dataset import append_rows, overwrite_dataset
-    from ratch.model.schema import SPEAKER_EMBEDDINGS_SCHEMA, VOICE_EMBED_DIM
+
+    from runners.voiceprint.dataset import append_rows, overwrite_dataset
+    from runners.voiceprint.schema import SPEAKER_EMBEDDINGS_SCHEMA, VOICE_EMBED_DIM
 
     n_written = 0
     first_write = create
@@ -320,7 +322,7 @@ def embed_videos(
     iterator = progress(videos) if progress is not None else videos
     for doc_id, src in iterator:
         try:
-            with tempfile.TemporaryDirectory(prefix="ratch-voice-") as tmp:
+            with tempfile.TemporaryDirectory(prefix="voiceprint-") as tmp:
                 wav = Path(tmp) / "audio_16k_mono.wav"
                 extract_wav_16k_mono(src, wav, timeout=ffmpeg_timeout)
                 kept, embeddings = encoder.embed_turns(
@@ -350,20 +352,21 @@ def build_speakers(db: lancedb.DBConnection, db_path: Path) -> tuple[int, int]:
     """
     import lance
     import pyarrow as pa
-    from ratch.core.dataset import overwrite_dataset
-    from ratch.model.schema import SPEAKERS_SCHEMA, VOICE_EMBED_DIM
+
+    from runners.voiceprint.dataset import overwrite_dataset
+    from runners.voiceprint.schema import SPEAKERS_SCHEMA, VOICE_EMBED_DIM
 
     if "speaker_embeddings" not in db.list_tables().tables:
         raise ValueError(
-            f"Table 'speaker_embeddings' not found in {db_path} — run "
-            "`ratch embed-speaker-turns` first (and `ratch merge-speaker-embeddings` "
-            "if it ran sharded)."
+            f"Table 'speaker_embeddings' not found in {db_path} — run this runner's "
+            "embedding stage first (runners/voiceprint/actor.py, or write_speaker_embeddings "
+            "directly), and merge the shards if it ran sharded."
         )
 
     ds = lance.dataset(str(db_path / "speaker_embeddings.lance"))
     tbl = ds.to_table(columns=["doc_id", "speaker_label", "duration", "embedding"])
     if tbl.num_rows == 0:
-        raise ValueError("speaker_embeddings is empty — run `ratch embed-speaker-turns` first.")
+        raise ValueError("speaker_embeddings is empty — run this runner's embedding stage first.")
 
     doc_ids = tbl["doc_id"].to_pylist()
     labels = tbl["speaker_label"].to_pylist()
@@ -423,9 +426,10 @@ def build_speakers(db: lancedb.DBConnection, db_path: Path) -> tuple[int, int]:
 def speaker_embeddings_indexes(emb_tbl: lancedb.table.Table) -> None:
     """(Re)build the canonical ``speaker_embeddings`` indexes: BTREE doc_id + vector.
 
-    Shared by ``embed-speaker-turns`` (single-run) and ``merge-speaker-embeddings``.
+    Shared by the single-run embedding path and the shard-merge path — the table is the same
+    either way, and an index built on one and not the other is the drift this exists to prevent.
     """
-    from ratch.core.engine import ensure_vector_index
+    from runners.voiceprint.engine import ensure_vector_index
 
     try:
         emb_tbl.create_scalar_index("doc_id", index_type="BTREE", replace=True)

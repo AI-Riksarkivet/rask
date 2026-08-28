@@ -1,6 +1,6 @@
 # The `diarize` runner — pyannote speaker diarization (who-spoke-when).
 # pyannote arrives transitively via easytranscriber today; declared first-class here
-# so the runner env is self-describing for the per-stage runtime_env.
+# so the runner env is self-describing for the image this runner is baked into.
 [project]
 name = "ratch-runner-diarize"
 version = "0.0.0"
@@ -10,13 +10,24 @@ dependencies = [
     "pyannote.audio",
     "torch==2.13.0",
     "torchaudio==2.11.0+cu128",
+    # The three below back the modules vendored out of ratch at its dissolution
+    # (2026-08-28, open_ray-kernel.md): `schema.py` declares the speaker_turns
+    # schema and `dataset.py` writes it (pyarrow + lance); `context.py`'s
+    # RunnerContext and `diarize.py`'s SpeakerTurn are pydantic models. All three
+    # used to arrive from the shared driver venv, undeclared — with the seal
+    # holding, this env declares everything it imports.
+    "pyarrow",
+    "pylance>=4.0",
+    "pydantic",
 ]
 
 [tool.uv]
 package = false
 
 # The cu128 wheels live only on the pytorch index (local-version pins are not on
-# PyPI). ratch's runner_env() turns these urls into pip --extra-index-url options
-# for the per-stage runtime_env, so the env declaration stays entirely in-file.
+# PyPI), so the index is declared here beside the pins: this file describes the
+# runner's environment in full, and that environment is baked into the runner's
+# own image (`runtime_env.image_uri`, the 2026-08-25 ruling) rather than resolved
+# per stage at replica start.
 [[tool.uv.index]]
 url = "https://download.pytorch.org/whl/cu128"

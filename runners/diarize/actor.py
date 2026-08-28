@@ -1,11 +1,17 @@
 """Ray Data actor factory for the diarize runner — the model side of the stage.
 
-Lives in the runner (the model's home) per the runners/ architecture: ratch's
-composition root resolves this module by convention (``Stage.runner="diarize"``
-→ ``runners.diarize.actor``) and hands ``compute_factory`` to
-``run_append_rows_stage`` → ``map_batches`` (one warm model per actor). Deps
-resolve from THIS runner's env on the workers (per-stage ``runtime_env`` at
-merge; the ``[models]`` extra on a local single-node run).
+Lives in the runner (the model's home) per the runners/ architecture: a driver
+resolves this module by the ``runners.<name>.actor`` convention and hands
+``compute_factory`` to ``map_batches`` (one warm model per actor). Deps resolve
+from THIS runner's env on the workers — its own baked image
+(``runtime_env.image_uri``), never the driver's.
+
+Everything this module needs is runner-local, and stays that way: the output
+schema (``schema.py``), the Lance write seam (``dataset.py``), the media
+resolver (``audio.py``) and the stage context (``context.py``) are vendored
+copies taken at the ratch dissolution (2026-08-28, ``open_ray-kernel.md``). The
+runner is sealed on ``requires-python = ">=3.10,<3.13"``; no platform package
+can be imported here at all.
 """
 
 from __future__ import annotations
@@ -15,14 +21,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
-from ratch.core.dataset import empty_table
-from ratch.model.schema import SPEAKER_TURNS_SCHEMA
+
+from runners.diarize.dataset import empty_table
+from runners.diarize.schema import SPEAKER_TURNS_SCHEMA
 
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from ratch.core.runners import RunnerContext
+    from runners.diarize.context import RunnerContext
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +37,7 @@ OUTPUT_SCHEMA = SPEAKER_TURNS_SCHEMA
 
 
 def compute_factory(ctx: RunnerContext) -> Callable[[pa.Table], pa.Table]:
-    from ratch.ingest.audio import resolve_source
-
+    from runners.diarize.audio import resolve_source
     from runners.diarize.diarize import Diarizer
 
     diarizer = Diarizer()  # pyannote loads once per actor

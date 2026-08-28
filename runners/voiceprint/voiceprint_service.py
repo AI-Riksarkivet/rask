@@ -14,7 +14,7 @@ that only existed because it ran in the wrong process. Here it is the runner's o
 actor options decide, like every other runner's.
 
 THE BODY IS A DECODED WAVEFORM, not the uploaded container, and that split is deliberate. ffmpeg
-transcoding is model-free — `packages/ratch/modalities/av/wav.py` calls it "an external transcoder, no
+transcoding is model-free — this runner's own `wav.py` calls it "an external transcoder, no
 inference" — so it stays with the caller, where the size, duration and finiteness guards on an
 uploader's input already run. Sending the container instead would move those guards behind a network
 hop and let a malformed upload reach the model before anything checked it.

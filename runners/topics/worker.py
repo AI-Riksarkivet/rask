@@ -1,10 +1,10 @@
-"""Isolated Toponymy topic-modelling worker for ratch (`ratch feature topics`).
+"""Isolated Toponymy topic-modelling worker — the `topics` runner's batch form.
 
 Runs in its OWN env (runners/topics/pyproject.toml). Toponymy pins
 ``transformers<5``; that constraint lives only in this runner's env and never
-enters the ratch project — the whole point of a separate runner. ratch drives
-this worker as a Ray Job through ``ratch.core.jobs.run_runner`` (entrypoint
-``python -m runners.topics.worker``), never imports it.
+enters the platform's resolution — the whole point of a sealed runner. The
+worker is driven from OUTSIDE that env, as a Ray Job over the entrypoint
+``python -m runners.topics.worker``; nothing platform-side imports it.
 
 Pipeline (all reuse of existing artifacts — nothing re-embedded, nothing
 destroyed):

@@ -18,7 +18,7 @@ with the correct wav2vec2 emissions model.
 **Never** pass a language-fine-tuned Whisper (``KBLab/kb-whisper-large``) —
 those over-predict their training language (every file comes back as `sv`).
 
-Exposed as ``ratch detect-language …`` via :mod:`ratch.cli`.
+Run as a pre-step before :mod:`transcribe`.
 """
 
 from __future__ import annotations
@@ -28,8 +28,7 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ratch.errors import RatchError
-
+from .errors import AsrError
 from .transcribe import DEFAULT_EMISSIONS_MODEL
 
 
@@ -189,7 +188,7 @@ def detect_and_sort(
         otherwise the raw code passes through.
     """
     if not audio_dir.is_dir():
-        raise RatchError(f"Audio directory not found: {audio_dir}")
+        raise AsrError(f"Audio directory not found: {audio_dir}")
 
     files = sorted(f for f in audio_dir.iterdir() if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in AUDIO_VIDEO_EXTS)
     if not files:
@@ -249,7 +248,7 @@ def detect_and_sort(
         logger.info("sorted %s file(s) into %s/<lang>/ subfolders", len(results), audio_dir)
         for lang in sorted({v[0] for v in results.values()}):
             if lang in DEFAULT_EMISSIONS_MODEL:
-                logger.info(f"  next: ratch transcribe --audio-dir {audio_dir}/{lang} --language {lang} --output-root output/{lang}")
+                logger.info(f"  next: transcribe --audio-dir {audio_dir}/{lang} --language {lang} --output-root output/{lang}")
             else:
                 logger.warning(f"  {lang}: no default wav2vec2 emissions model; pass --emissions-model yourself")
     elif dry_run:

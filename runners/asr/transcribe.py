@@ -1,10 +1,10 @@
-"""Thin wrapper around ``easytranscriber.pipelines.pipeline`` that produces the
-JSON files ``ratch ingest`` reads.
+"""Thin wrapper around ``easytranscriber.pipelines.pipeline`` that writes the
+per-file alignment JSONs a downstream ingest reads.
 
-Exposed as ``ratch transcribe …`` via :mod:`ratch.cli`. ``easytranscriber``
-(and ``easyaligner``) are core dependencies but heavy (torch + pyannote), so we
-import them lazily — keeping ``ratch --help`` and FTS-only use light — and
-surface a clear error if the environment is somehow missing them.
+``easytranscriber`` (and ``easyaligner``) are this runner's own dependencies
+but heavy (torch + pyannote), so we import them lazily — keeping a bare import
+of this module light — and surface a clear error if the sealed environment is
+somehow missing them.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from ratch.errors import RatchError
+from .errors import AsrError
 
 
 logger = logging.getLogger(__name__)
@@ -63,19 +63,19 @@ def run_transcribe(
             text_normalizer,
         )
     except ImportError as e:
-        raise RatchError(
-            f"Could not import easytranscriber/easyaligner (core dependencies).\nReinstall the project environment with:  uv sync\n(underlying error: {e})"
+        raise AsrError(
+            f"Could not import easytranscriber/easyaligner (this runner's core dependencies).\nReinstall this runner's sealed environment with:  uv sync --project runners/asr\n(underlying error: {e})"
         ) from e
 
     if not audio_dir.is_dir():
-        raise RatchError(f"Audio directory not found: {audio_dir}")
+        raise AsrError(f"Audio directory not found: {audio_dir}")
 
     emissions_model = emissions_model or DEFAULT_EMISSIONS_MODEL.get(language, "facebook/wav2vec2-base-960h")
     tokenizer = load_tokenizer(PUNKT_LANG[language]) if language in PUNKT_LANG else None
 
     audio_files = sorted(f.name for f in audio_dir.iterdir() if f.is_file() and not f.name.startswith("."))
     if not audio_files:
-        raise RatchError(f"No audio files found in {audio_dir}")
+        raise AsrError(f"No audio files found in {audio_dir}")
 
     logger.info(f"transcribing {len(audio_files)} file(s) from {audio_dir} with {model} ({language}, {backend}/{device})")
 
@@ -109,5 +109,5 @@ def run_transcribe(
 
     out_dir = output_root / "alignments"
     logger.info("done — alignment JSONs written to %s/", out_dir)
-    logger.info("  next: ratch ingest %s/*.json", out_dir)
+    logger.info("  next: ingest the alignment JSONs in %s/", out_dir)
     return out_dir

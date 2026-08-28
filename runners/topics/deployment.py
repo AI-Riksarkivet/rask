@@ -1,12 +1,13 @@
 """Ray Serve deployment for the topics model service (the merge-time online form).
 
 This is the ONLINE form. The batch form is the same :func:`worker.main` compute
-driven as a Ray Job through ``ratch.core.jobs.run_runner`` (or the sealed-env
-Make target locally). At merge this ``@serve.deployment`` serves query-time
-callers; the batch path keeps going through the jobs seam.
+run directly in this runner's sealed env, or submitted as a Ray Job. At merge
+this ``@serve.deployment`` serves query-time callers; the batch path keeps going
+through the job seam.
 
-Runs ONLY in this service's env (``ray[serve]`` + toponymy, the ``serve`` extra),
-never in ratch's — so it is excluded from ratch's type-check/lint.
+Runs ONLY in this runner's env (``ray[serve]`` + toponymy, the ``serve`` extra),
+never in the platform's — the runner is sealed, which is why ``runners/`` is
+excluded from the root type-check.
 """
 
 from __future__ import annotations

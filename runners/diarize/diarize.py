@@ -1,11 +1,10 @@
 """In-process speaker diarization → ``speaker_turns.lance``.
 
-Used by ``ratch extract-speaker-turns`` to run pyannote's
-``speaker-diarization-community-1`` pipeline over each source video and write
-its speaker turns to a separate append-only Lance table
-(:data:`ratch.model.schema.SPEAKER_TURNS_SCHEMA`). Kept separate from ``chunks``
-for the same reason ``chunk_frames`` is: one video's turns are produced as a
-unit and we never ``merge_insert`` against the wide ``chunks`` schema.
+Runs pyannote's ``speaker-diarization-community-1`` pipeline over each source
+video and writes its speaker turns to a separate append-only Lance table
+(:data:`runners.diarize.schema.SPEAKER_TURNS_SCHEMA`). Kept separate from a wide
+chunk-centric table for the same reason per-chunk frames are: one video's turns
+are produced as a unit and we never ``merge_insert`` against a wide schema.
 
 The pyannote pipeline (and its underlying torch models) load once into the
 process and the GPU; loading it per video would dominate the wall-clock. We
@@ -29,7 +28,8 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from pydantic import BaseModel
-from ratch.modalities.av.wav import extract_wav_16k_mono
+
+from runners.diarize.wav import extract_wav_16k_mono
 
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ class Diarizer:
         Transcodes ``source`` to a temp 16 kHz mono WAV, runs the pipeline, and
         deletes the WAV before returning.
         """
-        with tempfile.TemporaryDirectory(prefix="ratch-diar-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="diarize-") as tmp:
             wav = Path(tmp) / "audio_16k_mono.wav"
             extract_wav_16k_mono(source, wav, timeout=ffmpeg_timeout)
             out = self._pipe(str(wav))
@@ -128,13 +128,13 @@ def write_speaker_turns(
     is assigned per video as the ``enumerate`` index over that video's turns (which
     :meth:`Diarizer.diarize` already returns sorted by ``start``). ``create=True``
     makes the first flush create/overwrite the table (fresh DB or ``--all`` rebuild);
-    otherwise the first flush appends to the existing table. Mirrors
-    :func:`ratch.modalities.av.frames.write_chunk_frames`. Videos that produced no turns
-    are skipped (no rows written for them).
+    otherwise the first flush appends to the existing table. Videos that produced no
+    turns are skipped (no rows written for them).
     """
     import pyarrow as pa
-    from ratch.core.dataset import append_rows, overwrite_dataset
-    from ratch.model.schema import SPEAKER_TURNS_SCHEMA
+
+    from runners.diarize.dataset import append_rows, overwrite_dataset
+    from runners.diarize.schema import SPEAKER_TURNS_SCHEMA
 
     n_written = 0
     first_write = create

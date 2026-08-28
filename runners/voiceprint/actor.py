@@ -1,11 +1,13 @@
 """Ray Data actor factory for the voiceprint runner — the model side of the stage.
 
-Lives in the runner (the model's home) per the runners/ architecture: ratch's
-composition root resolves this module by convention (``Stage.runner="voiceprint"``
-→ ``runners.voiceprint.actor``) and hands ``compute_factory`` to
-``run_append_rows_stage`` → ``map_batches`` (one warm model per actor). Deps
-resolve from THIS runner's env on the workers (per-stage ``runtime_env`` at
-merge; the ``[models]`` extra on a local single-node run).
+Lives in the runner (the model's home) per the runners/ architecture: a driver resolves
+this module by the stage↔runner convention (``Stage.runner="voiceprint"`` →
+``runners.voiceprint.actor``) and hands ``compute_factory`` to ``map_batches``
+(one warm model per actor), so the two exports below — ``compute_factory`` and
+``OUTPUT_SCHEMA`` — are the whole coupling. Deps resolve from THIS runner's env
+on the workers, out of a prebuilt image (``runtime_env.image_uri``, the
+2026-08-25 baked-image ruling); ratch's ``runner_env()``, which instead pip-installed
+this pyproject's unlocked deps per stage, is retired with ratch itself.
 """
 
 from __future__ import annotations
@@ -16,14 +18,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
-from ratch.core.dataset import empty_table
-from ratch.model.schema import SPEAKER_EMBEDDINGS_SCHEMA
+
+from runners.voiceprint.dataset import empty_table
+from runners.voiceprint.schema import SPEAKER_EMBEDDINGS_SCHEMA
 
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from ratch.core.runners import RunnerContext
+    from runners.voiceprint.context import RunnerContext
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +40,11 @@ def compute_factory(ctx: RunnerContext) -> Callable[[pa.Table], pa.Table]:
     bit-identical to the engine path."""
     import lance
     import numpy as np
-    from ratch.ingest.audio import resolve_source
-    from ratch.modalities.av.wav import extract_wav_16k_mono
-    from ratch.model.schema import VOICE_EMBED_DIM
 
+    from runners.voiceprint.audio import resolve_source
+    from runners.voiceprint.schema import VOICE_EMBED_DIM
     from runners.voiceprint.voiceprint import TurnSpan, VoiceEncoder
+    from runners.voiceprint.wav import extract_wav_16k_mono
 
     encoder = VoiceEncoder()  # WeSpeaker loads once per actor
     # Voiceprint's input dependency is diarize's output — the runner knows its
