@@ -576,7 +576,7 @@ than the run. Pinned by `test_a_pattern_that_compiles_but_FAILS_TO_APPLY_is_a_no
 
 </details>
 
-<details><summary><b>catalog-api-01</b> [**PARTIAL**] — endpoints/stores.py raises service_kit.exceptions, which bypass the catalog's RFC 9457 problem handler entirely <i>(catalog-api, error-handling, effort S)</i></summary>
+<details><summary><b>catalog-api-01</b> [**FIXED**] — endpoints/stores.py raises service_kit.exceptions, which bypass the catalog's RFC 9457 problem handler entirely <i>(catalog-api, error-handling, effort S)</i></summary>
 
 **Sites:** `services/catalog/src/catalog/api/v1/endpoints/stores.py:30`, `services/catalog/src/catalog/api/v1/endpoints/stores.py:59`, `services/catalog/src/catalog/api/v1/endpoints/stores.py:98`, `services/catalog/src/catalog/api/v1/endpoints/stores.py:100`, `services/catalog/src/catalog/api/v1/endpoints/stores.py:105` *(+1 more)*
 
@@ -593,6 +593,9 @@ than the run. Pinned by `test_a_pattern_that_compiles_but_FAILS_TO_APPLY_is_a_no
 
 
 **RE-VERIFIED 2026-08-28 — PARTIAL, severity HIGH -> med.** Both headline claims are FALSE since `745af135` (2026-08-27): `catalog/main.py:283-284` installs `register_handlers` alongside `install_problem_handlers`, so these raises DO render as `application/problem+json` and the default FastAPI HTTPException handler does NOT fire. Witnessed live through the real `catalog.main.app` — `POST /v1/stores` -> 503 `application/problem+json`. What survives is envelope COMPLETENESS: the body carries only `type/title/status/detail`, missing the `code`/`error` that `tests/unit/test_problem_bodies_carry_a_code.py` pins, and its `type` sits in `about:blank#` rather than the `https://lance.org/problems/` namespace. Not high, because the stated rationale does not hold: `/v1/stores` and `/v1/members` are rask EXTENSION routes, not among the spec's 54 ops, so no generated Lance client dispatches on their `code`. Two corrections for whoever drains it: the re-verify's line numbers are each one stale, and the finding's own fix misses a SEVENTH exit — `UserStateConflict` subclasses the fleet `ConflictError` and bare-`raise`s out of `stores.py`, so rewriting the six explicit raises leaves the etag-race 409 still 4-key. Same defect as `RV-03` (members.py); land them together.
+
+
+**FIXED (2026-08-28), with `RV-03` in one commit** — the taxonomy swap (precedent mappings: already-exists code 2, invalid-input 14, concurrent-modification 23 including the seventh `UserStateConflict` exit), members' one deliberate 409->503, and the AST class gate `test_catalog_api_speaks_the_spec_taxonomy.py`.
 
 </details>
 
@@ -899,7 +902,7 @@ Sequential awaits over independent I/O, full-table reads to serve one row, and c
 
 </details>
 
-<details><summary><b>VS-04</b> [**OPEN**] — Search result-cache key omits `spec.table`, so two different searchable tables of one corpus serve each other's hits <i>(viewer-search, resources, effort S)</i></summary>
+<details><summary><b>VS-04</b> [**FIXED**] — Search result-cache key omits `spec.table`, so two different searchable tables of one corpus serve each other's hits <i>(viewer-search, resources, effort S)</i></summary>
 
 **Sites:** `services/search/src/search/services/result_cache.py:71`, `services/search/src/search/services/result_cache.py:94`, `services/search/src/search/services/result_cache.py:38`, `services/search/src/search/api/v1/router.py:231`, `services/search/src/search/services/service.py:375`
 
@@ -916,6 +919,9 @@ Sequential awaits over independent I/O, full-table reads to serve one row, and c
 
 
 **RE-VERIFIED 2026-08-28 — CONFIRMED, med (down from high), effort S.** Both halves reproduce: two specs differing only in `table` produce byte-identical cache keys, and `version_signature` consults the DEFAULT `declared.search` so writes to a non-default table never invalidate. The stale rows carry `_table` stamped from the first table, so the wrong answer is labelled correct. **ARMED, NOT FIRING** — no in-repo descriptor declares two searches, so this is insurance bought before the first one exists rather than a live outage; hence med. **Do NOT apply the finding's fix** (`"table": spec.table` into `query_hash`): it keys on the UNRESOLVED selector, splitting one question into two entries, and leaves the invalidation half open. Resolve via `search_named(spec.table)` inside `version_signature` and stamp its NAME — one place, both halves, and `?table=default` collapses onto the omitted case.
+
+
+**FIXED (2026-08-28).** `version_signature` resolves `search_named(spec.table)` and leads with the resolved NAME; `cache_key` passes the selector. Both halves in one resolution point; the audit's own `query_hash` prescription was refused as ruled at re-verification.
 
 </details>
 
@@ -1320,7 +1326,7 @@ Nothing in the audit is omitted here; the epics above are a view over this table
 
 | ID | Status | → | Sev | Cat | Eff | Finding | Sites |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `catalog-api-01` | **PARTIAL** | E4 | **HIGH** | error-handling | S | endpoints/stores.py raises service_kit.exceptions, which bypass the catalog's RFC 9457 problem handler entirely | `services/catalog/src/catalog/api/v1/endpoints/stores.py:30`, `services/catalog/src/catalog/api/v1/endpoints/stores.py:59` *(+4 more)* |
+| `catalog-api-01` | **FIXED** | E4 | **HIGH** | error-handling | S | endpoints/stores.py raises service_kit.exceptions, which bypass the catalog's RFC 9457 problem handler entirely | `services/catalog/src/catalog/api/v1/endpoints/stores.py:30`, `services/catalog/src/catalog/api/v1/endpoints/stores.py:59` *(+4 more)* |
 | `catalog-api-02` | **FIXED** | E1 | **HIGH** | security | S | GET /v1/stores and /v1/stores/tiers disclose the whole estate's buckets and hosts with no authorization gate, while the sibling POST calls that same set… | `services/catalog/src/catalog/api/v1/endpoints/stores.py:63`, `services/catalog/src/catalog/api/v1/endpoints/stores.py:116` *(+3 more)* |
 | `catalog-api-03` | **OPEN** | E7 | med | structure | L | Multi-step orchestration lives in endpoint functions instead of services/, despite the service having a services/ layer | `services/catalog/src/catalog/api/v1/endpoints/data.py:112`, `services/catalog/src/catalog/api/v1/endpoints/warehouses.py:576` *(+8 more)* |
 | `catalog-api-04` | **OPEN** | E6 | med | coupling | S | Endpoint modules import each other's private helpers, and one imports a private helper out of api/dependencies | `services/catalog/src/catalog/api/v1/endpoints/tables.py:50`, `services/catalog/src/catalog/api/v1/endpoints/stores.py:29` *(+3 more)* |
@@ -1717,7 +1723,7 @@ sites and the evidence as measured at `871b5e14`.
 | ID | Status | → | Sev | Cat | Eff | Finding | Sites |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `VS-03` | **FIXED** | E1 | **HIGH** | security | L | 25 of the viewer's 32 routes serve corpus content with no authn and no FGA gate, including every media-byte route | `services/viewer/src/viewer/api/v1/endpoints/media.py:283`, `services/viewer/src/viewer/api/v1/endpoints/media.py:161` *(+8 more)* |
-| `VS-04` | **OPEN** | E8 | **HIGH** | resources | S | Search result-cache key omits `spec.table`, so two different searchable tables of one corpus serve each other's hits | `services/search/src/search/services/result_cache.py:71`, `services/search/src/search/services/result_cache.py:94` *(+3 more)* |
+| `VS-04` | **FIXED** | E8 | **HIGH** | resources | S | Search result-cache key omits `spec.table`, so two different searchable tables of one corpus serve each other's hits | `services/search/src/search/services/result_cache.py:71`, `services/search/src/search/services/result_cache.py:94` *(+3 more)* |
 | `VS-05` | **OPEN** | E8 | **HIGH** | resources | M | `/api/page` and `/api/pages` materialize every page blob in the dataset to serve one image or one metadata page | `services/viewer/src/viewer/api/v1/endpoints/pages.py:188`, `services/viewer/src/viewer/api/v1/endpoints/pages.py:189` *(+3 more)* |
 | `VS-06` | **OPEN** | E4 | med | error-handling | M | Broad `except Exception` re-raised as `ValidationError` turns infrastructure faults into HTTP 400 client errors | `services/search/src/search/services/vector.py:57`, `services/search/src/search/services/service.py:171` *(+5 more)* |
 | `VS-07` | **PARTIAL** | E4 | med | error-handling | M | Five silent swallows in the search path hide real failures as empty results (three of the nine cited sites do log) | `services/search/src/search/services/service.py:298`, `services/search/src/search/services/frames.py:48` *(+7 more)* |
@@ -2570,6 +2576,9 @@ Treat them as leads to confirm, not as settled findings.
 **Evidence.** members.py was ADDED after the audit base (`git diff --name-status 0ea0b7c2..HEAD` shows `A services/catalog/src/catalog/api/v1/endpoints/members.py`, landed with bb3d13b8 `feat(catalog,annotator): joining or leaving a project now tells the person`). It imports the fleet taxonomy at :37 `from service_kit.exceptions import ConflictError` and raises it on two client-visible paths: :110 `raise ConflictError("authorization is not configured on this deployment — tenant membership is unavailable")` (reached from PUT and DELETE /v1/projects/{id}/members via `_client_or_conflict`), and :193-196 `raise ConflictError(f"{user} holds the only remaining admin on this project — grant another admin first, or nobody will be able to administer or delete it")`. service_kit/exceptions.py:44 `class DomainError(HTTPException)` and :80 `class ConflictError(DomainError)`; the catalog installs only three handlers (ns_errors.py:123 LanceNamespaceError, :135 RequestValidationError, :148 Exception), so both answer a bare `{"detail": ...}` with content-type application/json — no spec `code`, not application/problem+json. The last-admin refusal is the one 409 a UI MUST branch on, and a generated Lance-Namespace client dispatching on `code` gets nothing.
 
 **Fix.** Replace both with their lance_namespace equivalents — `ServiceUnavailableError` for the unconfigured-authz case (it is an availability fact, and it matches what access.py:113 already answers for the same condition) and `ConcurrentModificationError`/`InvalidInputError` for the last-admin refusal per the spec's 409 mapping — and drop the service_kit.exceptions import. Then close the class of defect rather than the instance: add the contract test catalog-api-01's fix already asks for (assert `content-type == application/problem+json` and a present `code`) and extend it over every 4xx/5xx-producing route, so the next module cannot import the wrong taxonomy silently. `grep -rn 'service_kit.exceptions' services/catalog/src/catalog/api/` returns exactly two modules today — stores.py and members.py — which makes this a two-file fix and a one-test gate.
+
+
+**FIXED (2026-08-28)** with `catalog-api-01` — same defect, one commit; see that finding's closure.
 
 </details>
 
