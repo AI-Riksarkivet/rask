@@ -556,7 +556,7 @@ than the run. Pinned by `test_a_pattern_that_compiles_but_FAILS_TO_APPLY_is_a_no
 
 </details>
 
-<details><summary><b>SKG-01</b> [**PARTIAL**] — Idempotency of tuple writes/deletes is decided by substring-matching the OpenFGA error body, so a genuinely rejected write or revoke is swallowed… <i>(service-kit-governed, error-handling, effort M)</i></summary>
+<details><summary><b>SKG-01</b> [**FIXED**] — Idempotency of tuple writes/deletes is decided by substring-matching the OpenFGA error body, so a genuinely rejected write or revoke is swallowed… <i>(service-kit-governed, error-handling, effort M)</i></summary>
 
 **Sites:** `packages/service-kit/src/service_kit/governed/fga.py:105`, `packages/service-kit/src/service_kit/governed/fga.py:109`, `packages/service-kit/src/service_kit/governed/fga.py:977`, `packages/service-kit/src/service_kit/governed/fga.py:1150`, `packages/service-kit/src/service_kit/governed/fga.py:1079` *(+1 more)*
 
@@ -573,6 +573,9 @@ than the run. Pinned by `test_a_pattern_that_compiles_but_FAILS_TO_APPLY_is_a_no
 
 
 **RE-VERIFIED 2026-08-28 — PARTIAL, severity HIGH -> med.** Both named failure modes are FALSIFIED against a live OpenFGA. (1) Write side: a tuple naming an undefined relation/type or violating a type restriction returns `validation_error` with '... not found', which matches NO marker, so it raises `ServiceUnavailableError` rather than being swallowed — 'an object with no owner while grant_on_create returns success' does not reproduce. (2) The claimed `"does not exist"` collision does not occur: the validation text is "relation 'x' not found", and every 400 class a deletes-only request can produce was enumerated. What IS real: prose-matching a server error body at all, and — the consequence the finding never names — a revoke the server says was never there is AUDITED AS A REVOKE. The fix is to delete the marker list and let the SDK's `ConflictOptions(on_duplicate_writes=IGNORE)` own duplicate idempotency, which also makes the one-at-a-time fallback dead code.
+
+
+**FIXED (2026-08-28).** Write path: duplicate idempotency moved to the server (`on_duplicate_writes=IGNORE`, SDK floor 0.10.4) — the marker lists, `_is_duplicate_write` and the one-by-one fallback are deleted. Delete path: classifier keys on the structured `ErrorCode.WRITE_FAILED_DUE_TO_INVALID_INPUT` (`_delete_reported_absent`), and the audit records only what the server CONFIRMED — an absent tuple's row carries `reason="tuple_absent"`, closing the consequence the finding never named (a mis-spelled relation's revoke audited as performed while the real grant stood).
 
 </details>
 
@@ -1975,7 +1978,7 @@ sites and the evidence as measured at `871b5e14`.
 
 | ID | Status | → | Sev | Cat | Eff | Finding | Sites |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `SKG-01` | **PARTIAL** | E4 | **HIGH** | error-handling | M | Idempotency of tuple writes/deletes is decided by substring-matching the OpenFGA error body, so a genuinely rejected write or revoke is swallowed AND audited… | `packages/service-kit/src/service_kit/governed/fga.py:105`, `packages/service-kit/src/service_kit/governed/fga.py:109` *(+4 more)* |
+| `SKG-01` | **FIXED** | E4 | **HIGH** | error-handling | M | Idempotency of tuple writes/deletes is decided by substring-matching the OpenFGA error body, so a genuinely rejected write or revoke is swallowed AND audited… | `packages/service-kit/src/service_kit/governed/fga.py:105`, `packages/service-kit/src/service_kit/governed/fga.py:109` *(+4 more)* |
 | `SKG-02` | **OPEN** | E1 | med | fga | S | Partial batch failure in write_tuples/delete_tuples skips the audit trail entirely for the tuples that DID land | `packages/service-kit/src/service_kit/governed/fga.py:1058`, `packages/service-kit/src/service_kit/governed/fga.py:1084` *(+2 more)* |
 | `SKG-03` | **OPEN** | E1 | med | fga | M | expand_tree reports every repeated object#relation as `cycle: True`, so an ordinary concentric diamond is mislabelled a loop and its subtree is dropped | `packages/service-kit/src/service_kit/governed/fga.py:725`, `packages/service-kit/src/service_kit/governed/fga.py:727` *(+1 more)* |
 | `SKG-04` | **OPEN** | E4 | med | resilience | M | Two silent-truncation paths surface only to the log; the return value is indistinguishable from a complete answer | `packages/service-kit/src/service_kit/governed/fga.py:547`, `packages/service-kit/src/service_kit/governed/fga.py:905` *(+1 more)* |
