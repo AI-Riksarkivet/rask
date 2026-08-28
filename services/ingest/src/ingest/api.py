@@ -24,7 +24,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, Field
 
@@ -435,7 +435,9 @@ async def list_ingests(
     request: Request,
     store: Annotated[RunStore, Depends(get_store)],
     settings: AuthSettingsDep,
-    limit: int = 50,
+    # DECLARED, not clamped. `store.recent(min(max(limit, 0), 200))` below applied the real
+    # ceiling three frames away, so the schema advertised an unbounded integer.
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
     dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
     dapr_caller_app_id: Annotated[str | None, Header()] = None,

@@ -1771,7 +1771,23 @@ services/ingest/src/ingest/workflow.py:1137 `span.set_attribute("lance.ingest.ru
 
 </details>
 
-<details><summary><b>`GET /v1/model` truncates the listing at `limit` with no cursor, no `total` and no `capped` flag — the 101st model is invisible and unreachable</b> <i>(pagination.md, ADJUSTED)</i></summary>
+<details><summary><b>~~`GET /v1/model` truncates the listing at `limit` with no cursor, no `total` and no `capped` flag — the 101st model is invisible and unreachable~~</b> <i>(pagination.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-28**, on the Fix's first option and with both of the finding's self-corrections kept.
+> "Unreachable" is false — `limit` accepts 1000, so its own 101-150 case was always reachable — and the
+> deterministic name-sorted truncation is a RECORDED decision whose reason (one dataset open per listed
+> model) is why the ceiling exists. That ceiling stays.
+>
+> What was missing is the envelope, and it is fixed with the helper that already ships here rather than
+> a second one: `_paginate` — the stateless keyset the table listing uses, cursor = the previous page's
+> last name — now serves both. It moved to `catalog/api/pagination.py` so there is ONE implementation;
+> a test asserts the two listings share the same function object, because two that merely agree today
+> can drift tomorrow. `page_token` is on the signature and on `ModelsListResponse`, and `None` means
+> COMPLETE — the distinction a caller could not previously draw between a small estate and a cut answer.
+> The names are `sorted(set(...))` at the route now: `_paginate`'s cursor is only stable over a total
+> order, and the docstring's "name-sorted" promise was previously made by `registry.list_models`, which
+> this route cannot enforce.
+> Pinned by `services/catalog/tests/test_models_listing_is_pageable.py` (6 tests, 6 RED first).
 
 **Rule.** pagination.md: 'Return `pages`, `has_next`, `has_prev` in the envelope; clients don't compute them' — and the `Page[Item]` envelope section. A slice that reports neither a total nor a continuation is truncation, not pagination.
 
@@ -1791,7 +1807,22 @@ services/catalog/src/catalog/api/v1/endpoints/models.py:86 — `    limit: Annot
 
 </details>
 
-<details><summary><b>The estate's only offset-paginated route has no MAX_OFFSET guard and runs an unconditional `count_rows()` on a Lance table</b> <i>(pagination.md, ADJUSTED)</i></summary>
+<details><summary><b>~~The estate's only offset-paginated route has no MAX_OFFSET guard and runs an unconditional `count_rows()` on a Lance table~~</b> <i>(pagination.md, ADJUSTED)</i></summary>
+
+> **CLOSED 2026-08-28.** `/api/documents` now takes `service_kit.pagination.PaginationDep`, which
+> applies the reference's `get_pagination_guarded` shape: `MAX_OFFSET = 10_000`, refused with a message
+> naming keyset so the caller has a way forward. A DEPENDENCY, not a body check — `page: Query(ge=1)`
+> bounds the page NUMBER and therefore bounds nothing, `?page=1000000` derived an offset of 99,999,900
+> and was served, and the refusal has to happen before the body to be cheap.
+>
+> **The `count_rows()` half is deliberately NOT implemented**, per this finding's own verifier: an
+> unfiltered Lance count is answered from fragment metadata rather than a table scan, so it does not
+> carry the `SELECT COUNT(*)` cost the reference warns about, and "pins a threadpool worker for a full
+> scan" is asserted rather than shown. Making `total` null on every page but the first would degrade the
+> envelope for an unproven saving.
+> Pinned by `services/viewer/tests/test_documents_page_depth.py`, driven over HTTP because the guard
+> lives in the dependency and a direct call to the handler would never reach it (5 tests, 1 RED first —
+> the others are the guards that catch a fix which refuses everything, or drops the `le=100` ceiling).
 
 **Rule.** pagination.md § 'Approximate counts + MAX_OFFSET guard' — `MAX_OFFSET = 10_000` and `get_pagination_guarded`; plus the anti-patterns 'Offsetting into the millions' and '`SELECT COUNT(*)` on every list call against a 10M-row table'.
 
@@ -1811,7 +1842,37 @@ services/viewer/src/viewer/api/v1/endpoints/system.py:151-154 — `def documents
 
 </details>
 
-<details><summary><b>No shared `PaginationParams` dependency or `Page[Item]` envelope: eight page-parameter vocabularies, seven ceilings, and six routes whose real bound is invisible in OpenAPI</b> <i>(pagination.md, CONFIRMED)</i></summary>
+<details><summary><b>~~No shared `PaginationParams` dependency or `Page[Item]` envelope: eight page-parameter vocabularies, seven ceilings, and six routes whose real bound is invisible in OpenAPI~~</b> <i>(pagination.md, CONFIRMED)</i></summary>
+
+> **CLOSED 2026-08-28**, in the Fix's own order.
+>
+> **The seam:** `packages/service-kit/src/service_kit/pagination.py` — `PaginationParams` (offset
+> derived, not restated), `MAX_OFFSET` + `guard_offset`, `PaginationDep`, and the `Page[Item]` /
+> `build_page` envelope. **Scoped to OFFSET on purpose:** the reference says to pick the strategy per
+> endpoint, and this estate genuinely runs all three — notifications pages by cursor, and the catalog's
+> `page_token` is the Lance Namespace spec's wire contract, which the finding says explicitly not to
+> retrofit. One model cannot serve those without lying about one. A `KeysetParams` sibling belongs there
+> the day a second cursor route wants to share one.
+>
+> **(1) The six body-clamped routes now declare their real ceilings**, which is the half that actually
+> failed: `min(max(limit, 0), 200)` three call frames away meant OpenAPI advertised an unbounded integer,
+> and that is exactly how the genuinely unbounded ones went unnoticed. **(2) The unbounded ones are
+> bounded** — and there were FOUR, not three: `list_all_tables`, `list_table_branches`,
+> `list_table_indices`, `list_table_versions`. All four are spec list ops, so this was checked rather
+> than assumed: the spec pages them with `page_token`, so a server answering fewer rows and handing back
+> a token is spec-correct, and an over-limit request is refused by `install_problem_handlers` with the
+> spec `code` (INVALID_INPUT) a generated client dispatches on — verified by reading which handler
+> actually wins on the catalog app, since this drain changed that registration order. **(3)** The
+> envelope has a real consumer rather than sitting unused: `/api/documents` returns `Page[Item]`, with a
+> deprecated `docs` mirror for one release because the web pods roll separately from the viewer and
+> `annotator`'s `DataSelection.svelte` reads `docsPage.docs`.
+>
+> `viewer/voice.py`'s `_MAX_N` became `MAX_N` and is imported by the route: one number, named once —
+> private-and-enforced-only-in-the-service is precisely how the schema came to disagree with the
+> enforcement.
+> Pinned by `tests/unit/test_pagination_bounds_are_declared.py` (25 rows, 8 RED first), which walks every
+> route's AST and refuses a paging parameter whose bound is not in the signature, plus
+> `packages/service-kit/tests/test_pagination_seam.py` (5 tests).
 
 **Rule.** pagination.md § '`PaginationParams` — reusable dep': 'One `BaseModel` + one factory dep, used across every list endpoint'; and § 'Paginated response envelope (generic, PEP 695)': `class Page[Item](BaseModel)`.
 

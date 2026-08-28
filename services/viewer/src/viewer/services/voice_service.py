@@ -59,7 +59,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 #: Hard cap on the result count — a turn→chunk join runs per hit.
-_MAX_N = 100
+#: Public because the ROUTE declares it now: one number, named once. It used to be private and
+#: applied only here, which is exactly why the schema could disagree with the enforcement.
+MAX_N = 100
 
 #: Hard cap on an uploaded snippet's size — decode + embed run in-process.
 _MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -76,7 +78,7 @@ _UPLOAD_FFMPEG_TIMEOUT_S = 60.0
 # from the old search constants because media_api may not import the search
 # group. Ignored by Lance when the column has no IVF index.
 _VECTOR_NPROBES = 20
-_VECTOR_MAX_NPROBES = 0
+_VECTORMAX_NPROBES = 0
 _VECTOR_REFINE_FACTOR = 3
 
 # The voice tables' own column names are the voice/speakers capability's
@@ -284,7 +286,7 @@ def _search_turns(
             emb_tbl.search(vec, vector_column_name=embedding_column)
             .distance_type("cosine")
             .minimum_nprobes(_VECTOR_NPROBES)
-            .maximum_nprobes(_VECTOR_MAX_NPROBES)
+            .maximum_nprobes(_VECTORMAX_NPROBES)
             .refine_factor(_VECTOR_REFINE_FACTOR)
             .select([*_TURN_HIT_COLUMNS, "_distance"])
             .limit(n)
@@ -414,7 +416,7 @@ def rank_similar_turns(
     uploaded-snippet embedding) funnels through here, so hits keep one shape —
     including ``speaker_cluster``, joined from the speakers table when present.
     """
-    n = max(1, min(n, _MAX_N))
+    n = max(1, min(n, MAX_N))
     emb_tbl: Any = handle.db.open_table(bindings.embeddings_table)
     turn_hits = _search_turns(emb_tbl, bindings.embedding_column, vec, n=n, exclude_doc_id=exclude_doc_id)
 

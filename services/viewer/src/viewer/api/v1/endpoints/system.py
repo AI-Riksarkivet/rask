@@ -9,15 +9,17 @@ on the documents table.
 """
 
 import logging
-from typing import Annotated, Any
+from typing import Any
 
 import httpx
-from fastapi import APIRouter, Query
+from fastapi import APIRouter
+from pydantic import computed_field
 
 from service_kit.lancekit.introspect import ColumnInfo
 from service_kit.lancekit.registry import table_dataset
 from service_kit.media.deps import DatasetParam, StateDep
 from service_kit.media.state import dataset_handle
+from service_kit.pagination import Page, PaginationDep, build_page
 from viewer.api.v1.endpoints.chunks import alignments_binding
 from viewer.schemas.system import ColumnKind, DbFacts, FilterColumn, HealthResponse, VllmPing
 
@@ -147,20 +149,40 @@ def columns(state: StateDep, dataset: DatasetParam = None) -> list[FilterColumn]
     return out
 
 
+class DocumentsPage(Page[dict[str, Any]]):
+    """The shared envelope plus the key this route used to send.
+
+    `docs` is DEPRECATED and mirrors `items`. It stays for one release because a rename is a wire
+    change and the web pods roll separately from this service — `annotator`'s `DataSelection.svelte`
+    reads `docsPage.docs`, so an un-rolled pod talking to a new viewer would render an empty gallery.
+    Remove it once the zones are known to be past this version.
+    """
+
+    @computed_field
+    @property
+    def docs(self) -> list[dict[str, Any]]:
+        return self.items
+
+
 @router.get("/documents")
 def documents(
     state: StateDep,
-    page: Annotated[int, Query(ge=1)] = 1,
-    per_page: Annotated[int, Query(ge=1, le=100)] = 24,
+    # THE ESTATE'S SHARED OFFSET PARAMS, and the reason they are a dependency rather than two
+    # `Query(...)` arguments: `page: Query(ge=1)` bounds the page NUMBER and therefore bounds nothing
+    # — `?page=1000000` derived an offset of 99,999,900 and was served. The guard has to run before
+    # the body, which is the only place refusing is cheap. Wire names are unchanged (`page`,
+    # `per_page`) and so is the 100 ceiling.
+    pagination: PaginationDep,
     dataset: DatasetParam = None,
-) -> dict[str, Any]:
+) -> DocumentsPage:
     """Documents gallery: the declared doc-level display fields, paged."""
+    per_page = pagination.page_size
     handle = dataset_handle(state, dataset)
     declared = handle.descriptor.declared
     binding = declared.document
     info = handle.descriptor.tables.get(binding.table) if binding is not None else None
     if binding is None or info is None:
-        return {"total": 0, "page": 1, "docs": []}
+        return DocumentsPage.model_validate(build_page([], total=0, params=pagination).model_dump())
     wanted = [
         declared.identity.doc_key,
         *[m.field for m in declared.display.metadata],
@@ -168,7 +190,10 @@ def documents(
     ]
     columns = [c for c in dict.fromkeys(wanted) if info.column(c) is not None]
     ds = table_dataset(handle, binding.table)
+    # `count_rows()` STAYS unconditional. The audit proposed `total if page == 1 else None` and its own
+    # verifier withdrew the cost model: an unfiltered Lance count is answered from fragment metadata,
+    # not a table scan. Making `total` null on every later page would degrade the envelope for an
+    # unproven saving.
     total = ds.count_rows()
-    offset = max(0, (page - 1) * per_page)
-    tbl = ds.to_table(columns=columns, limit=per_page, offset=offset)
-    return {"total": total, "page": page, "docs": tbl.to_pylist()}
+    tbl = ds.to_table(columns=columns, limit=per_page, offset=pagination.offset)
+    return DocumentsPage.model_validate(build_page(tbl.to_pylist(), total=total, params=pagination).model_dump())

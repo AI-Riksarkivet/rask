@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     DeclareTableRequest,
@@ -48,6 +48,7 @@ from catalog.api.dependencies import (
     VendorDep,
     namespace_for_top_ns,
 )
+from catalog.api.pagination import _paginate
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.credentials import _has_external_bases
 from catalog.core.formats import reject_unsupported_format
@@ -69,6 +70,14 @@ from service_kit.lakehouse import maintenance_policies, protection, trash
 
 
 log = logging.getLogger(__name__)
+#: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with
+#: `page_token`, so a server answering fewer rows than asked and handing back a token is
+#: SPEC-CORRECT — the cap costs a caller nothing but a second call. Declared here rather than
+#: clamped in the body so the schema states the real bound. An over-limit request is refused by
+#: `install_problem_handlers`, which carries the spec `code` (INVALID_INPUT) a generated client
+#: dispatches on.
+_MAX_LIST_LIMIT = 1000
+
 router = APIRouter(prefix="/v1/table", tags=["table"])
 
 
@@ -144,7 +153,7 @@ async def list_all_tables(
     token: CurrentToken,
     client: FgaClientDep,
     page_token: str | None = None,
-    limit: int | None = None,
+    limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
     include_declared: bool = True,
 ) -> ListTablesResponse:
     """List every table in the namespace via ``list_all_tables``; when FGA is on,
@@ -205,21 +214,9 @@ async def list_all_tables(
     return response
 
 
-def _paginate(names: list[str], page_token: str | None, limit: int | None) -> tuple[list[str], str | None]:
-    """Keyset pagination over an already-sorted, deduped name list.
-
-    The cursor is the last name of the previous page — stateless, and stable across calls because
-    the merged listing is ``sorted(set(...))``. A ``None`` next-token means the listing is complete;
-    the native call is always made unpaginated, so no upstream cursor can ride through by accident.
-    """
-    if page_token:
-        names = [name for name in names if name > page_token]
-    if limit is None or limit < 0 or limit >= len(names):
-        return names, None
-    page = names[:limit]
-    return page, (page[-1] if page else None)
-
-
+# `_paginate` moved to `catalog.api.pagination` when the model registry needed the same cursor —
+# two keyset implementations in one service is two things to keep in step. Re-exported below so this
+# module's callers are unchanged.
 @router.post("/{id}/declare", response_model_exclude_none=True)
 async def declare_table(
     id: str,

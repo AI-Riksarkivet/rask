@@ -17,7 +17,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Query, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from service_kit.exceptions import ServiceUnavailableError, ValidationError
@@ -25,6 +25,7 @@ from service_kit.media.deps import StateDep
 from service_kit.media.state import AppState, dataset_handle
 from viewer.schemas.voice import VoiceIdentityResponse, VoiceSimilarResponse, VoiceStatusResponse
 from viewer.services import voice_service
+from viewer.services.voice_service import MAX_N
 
 
 if TYPE_CHECKING:
@@ -84,7 +85,9 @@ def voice_similar(
     turn_id: int | None = None,
     speaker: str | None = None,
     t: float | None = None,
-    n: int = 20,
+    # DECLARED, not clamped: `voice_service` applies `max(1, min(n, _MAX_N))`, so the schema
+    # advertised an unbounded integer for a vector-search fan-out.
+    n: Annotated[int, Query(ge=1, le=MAX_N)] = 20,
     exclude_same_doc: bool = True,
     dataset: str | None = None,
 ) -> VoiceSimilarResponse:
@@ -124,7 +127,9 @@ def voice_identity(state: StateDep, doc_id: str, speaker: str, dataset: str | No
 async def voice_similar_upload(
     state: StateDep,
     file: Annotated[UploadFile, File()],
-    n: int = 20,
+    # DECLARED, not clamped: `voice_service` applies `max(1, min(n, _MAX_N))`, so the schema
+    # advertised an unbounded integer for a vector-search fan-out.
+    n: Annotated[int, Query(ge=1, le=MAX_N)] = 20,
     dataset: str | None = None,
 ) -> VoiceSimilarResponse:
     """Voice-ranked hits for an uploaded snippet (any container ffmpeg decodes).

@@ -217,6 +217,10 @@ def test_list_models_filters_to_readable_and_reports_versions(models_client: tup
         "models": [{"model": "demo", "latest_version": 2, "blessed_version": 1}],
         # New: the caller can now tell a small estate from a truncated authorization listing.
         "authorization_truncated": False,
+        # The listing is a PAGE now (open_fastapi-audit: it sliced at `limit` and said nothing).
+        # `None` is the answer that matters here — it means the listing is COMPLETE, which is what a
+        # caller could not previously tell from a truncated one.
+        "page_token": None,
     }
     assert captured == [{"user": "alice", "relation": "can_get_metadata", "object_type": "table"}]
 
@@ -226,7 +230,7 @@ def test_list_models_is_empty_for_a_caller_with_no_grants(models_client: tuple[T
     _fake_list_objects([], monkeypatch)
     resp = client.get("/v1/model", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
-    assert resp.json() == {"models": [], "authorization_truncated": False}
+    assert resp.json() == {"models": [], "authorization_truncated": False, "page_token": None}
 
 
 def test_list_models_requires_authentication(models_client: tuple[TestClient, str]) -> None:

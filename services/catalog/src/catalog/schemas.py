@@ -608,6 +608,10 @@ class ModelSummary(BaseModel):
 
 class ModelsListResponse(BaseModel):
     models: list[ModelSummary]
+    #: Continue the listing after the last model on this page. `None` means the listing is COMPLETE —
+    #: which is the half that was missing: the route sliced at `limit` and said nothing, so a caller
+    #: could not tell a short estate from a cut one.
+    page_token: str | None = None
     #: True when the caller's authorization listing hit OpenFGA's server cap, so this page was filtered
     #: against an INCOMPLETE set of entitlements and may be short. A first-party model, so the flag is a
     #: real field here; the spec-shaped listings carry the same key in their `context` map instead.

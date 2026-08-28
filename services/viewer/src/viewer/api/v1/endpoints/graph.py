@@ -22,11 +22,11 @@ from __future__ import annotations
 import logging
 import re
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import lance
 import lance_graph as lg
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict
 
 from service_kit.lancekit import store
@@ -460,7 +460,14 @@ def get_entity(entity_id: str, state: StateDep, dataset: str | None = None) -> G
 
 
 @router.get("/subgraph")
-def get_subgraph(state: StateDep, entity_id: str | None = None, limit: int = 150, dataset: str | None = None) -> SubgraphResponse:
+def get_subgraph(
+    state: StateDep,
+    entity_id: str | None = None,
+    # DECLARED, not clamped: `max(1, min(limit, _MAX_LIMIT))` below is the real bound and the
+    # schema never said so.
+    limit: Annotated[int, Query(ge=1, le=_MAX_LIMIT)] = 150,
+    dataset: str | None = None,
+) -> SubgraphResponse:
     """Nodes + edges for the force-layout view.
 
     No ``entity_id`` → overview (top ``limit`` entities by mention count + every

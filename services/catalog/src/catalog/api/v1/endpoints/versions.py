@@ -42,6 +42,14 @@ from service_kit.governed import fga
 # these delegate directly and return real results instead of the marshalling-bug 501 they surfaced before.
 log = logging.getLogger(__name__)
 
+#: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with
+#: `page_token`, so a server answering fewer rows than asked and handing back a token is
+#: SPEC-CORRECT — the cap costs a caller nothing but a second call. Declared here rather than
+#: clamped in the body so the schema states the real bound. An over-limit request is refused by
+#: `install_problem_handlers`, which carries the spec `code` (INVALID_INPUT) a generated client
+#: dispatches on.
+_MAX_LIST_LIMIT = 1000
+
 router = APIRouter(prefix="/v1/table", tags=["version"])
 
 
@@ -187,7 +195,7 @@ def list_table_versions(
     ns: NamespaceDep,
     settings: SettingsDep,
     page_token: str | None = None,
-    limit: int | None = None,
+    limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
     descending: bool | None = None,
     branch: str | None = None,
 ) -> ListTableVersionsResponse:
