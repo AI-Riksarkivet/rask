@@ -33,21 +33,26 @@ def _env_first(names: tuple[str, ...]) -> str | None:
     return None
 
 
-def derive_hcp_creds() -> None:
-    """Opt-in HCP credential bridge; a no-op unless HCP_USERNAME/PASSWORD are set.
+def derive_hcp_creds() -> dict[str, str] | None:
+    """Opt-in HCP credential bridge; returns `{access_key, secret_key}` or None.
 
-    The current HCP dev backend issues S3 keys as access_key = base64(username),
-    secret_key = md5(password) hex. Never overrides already-set AWS_* keys, so
-    MinIO/rustfs/AWS (keys set directly) are untouched. Legacy — drop once off HCP.
+    Returns the derived pair when HCP_USERNAME/PASSWORD are set and no AWS_* key
+    already wins (so MinIO/rustfs/AWS with keys set directly are untouched), else
+    None. Pure — never mutates the process environment, so one process can address
+    more than one backend. The current HCP dev backend issues S3 keys as
+    access_key = base64(username), secret_key = md5(password) hex. `s3_client`
+    applies this per client; callers need not invoke it. Legacy — drop once off HCP.
     """
     user = os.getenv("HCP_USERNAME")
     pwd = os.getenv("HCP_PASSWORD")
     if not (user and pwd):
-        return
-    if not os.getenv("AWS_ACCESS_KEY_ID"):
-        os.environ["AWS_ACCESS_KEY_ID"] = base64.b64encode(user.encode()).decode()
-    if not os.getenv("AWS_SECRET_ACCESS_KEY"):
-        os.environ["AWS_SECRET_ACCESS_KEY"] = hashlib.md5(pwd.encode()).hexdigest()  # noqa: S324
+        return None
+    if os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_SECRET_ACCESS_KEY"):
+        return None
+    return {
+        "access_key": base64.b64encode(user.encode()).decode(),
+        "secret_key": hashlib.md5(pwd.encode()).hexdigest(),  # noqa: S324
+    }
 
 
 def s3_client(
@@ -90,6 +95,10 @@ def s3_client(
     if access_key and secret_key:
         kwargs["aws_access_key_id"] = access_key
         kwargs["aws_secret_access_key"] = secret_key
+    elif creds := derive_hcp_creds():
+        # HCP bridge applied to THIS client only — no process-global env mutation.
+        kwargs["aws_access_key_id"] = creds["access_key"]
+        kwargs["aws_secret_access_key"] = creds["secret_key"]
     skip_verify = insecure if insecure is not None else (_env_first(_INSECURE_ENVS) or "").lower() in ("1", "true", "yes")
     if ca := _env_first(_CA_BUNDLE_ENVS):
         kwargs["verify"] = ca
@@ -98,6 +107,4 @@ def s3_client(
 
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         kwargs["verify"] = False
-    client = boto3.client("s3", **kwargs)
-    client.meta.events.unregister("needs-retry.s3")
-    return client
+    return boto3.client("s3", **kwargs)

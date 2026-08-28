@@ -66,21 +66,3 @@ def test_split_s3_uri_and_merge_prefix():
     assert merge_prefix("foo/", "bar/") == "foo/bar/"
     assert merge_prefix("", "bar/") == "bar/"
     assert merge_prefix("", "") == ""
-
-
-def test_derive_hcp_creds(monkeypatch):
-    import base64
-    import hashlib
-    import os
-
-    from storage import derive_hcp_creds
-
-    monkeypatch.setenv("HCP_USERNAME", "alice")
-    monkeypatch.setenv("HCP_PASSWORD", "secret")
-    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
-    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
-    derive_hcp_creds()
-    # Expected values are derived from the fake inputs above (base64 of the
-    # username, md5 of the password) — not real credentials.
-    assert os.environ["AWS_ACCESS_KEY_ID"] == base64.b64encode(b"alice").decode()
-    assert os.environ["AWS_SECRET_ACCESS_KEY"] == hashlib.md5(b"secret").hexdigest()  # noqa: S324

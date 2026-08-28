@@ -4283,8 +4283,6 @@ version = "0.1.0"
 source = { editable = "packages/storage" }
 dependencies = [
     { name = "boto3" },
-    { name = "httpx" },
-    { name = "python-dotenv" },
 ]
 
 [package.dev-dependencies]
@@ -4293,11 +4291,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "boto3", specifier = ">=1.35" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-]
+requires-dist = [{ name = "boto3", specifier = ">=1.35" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "boto3-stubs", extras = ["s3"], specifier = ">=1.34" }]
