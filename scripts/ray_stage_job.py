@@ -136,6 +136,40 @@ def _stamp_stage(table: pa.Table, stage: str, lineage: str = "") -> pa.Table:
     return stamp_stage(table, stage=stage, lineage=lineage)
 
 
+#: How many rows the media lane holds in the driver at once.
+#:
+#: The MEDIA branch cannot go through lance_ray (its write strips blob typing), so the round-trip
+#: happens on the driver — but it used to happen ALL AT ONCE: one `to_table()` over every blob
+#: payload, a second full copy as Python bytes from `to_pylist()`, and two more as the thumbnail and
+#: embedding lists. Peak RSS scaled with the dataset, so the cascade had an OOM ceiling nothing
+#: announced (ray-project's own `patterns/generators.rst`: yield in chunks rather than materialise).
+#: Bounded, the driver holds ~4x one batch of payloads; at the media lane's ~1.8 MB page images 128
+#: rows is a few hundred MB. `RASK_STAGE_MEDIA_BATCH_ROWS` tunes it for other payload sizes.
+MEDIA_BATCH_ROWS = int(os.environ.get("RASK_STAGE_MEDIA_BATCH_ROWS", "128"))
+
+
+def _derivable_blob_column(ds: Any, blob_cols: list[str]) -> str | None:
+    """Which blob column (if any) gets thumbnail + embedding — decided ONCE, before the stream.
+
+    The unbatched form could decide this per run because it held every payload; a streamed one
+    cannot decide per batch, because the derived columns are part of the SCHEMA and a later batch
+    that disagreed with the first would fail the append. So the probe scans forward for the first
+    non-null payload — the same "first non-null decides" contract as before, and the same
+    first-match-wins rule as `derivers._DERIVERS` — and the answer governs every batch.
+
+    A column of entirely null payloads yields None, which is the honest answer: there is nothing to
+    decide from, and null artifacts on a null payload are what the unbatched form produced anyway.
+    """
+    for name in blob_cols:
+        scanner = ds.scanner(columns=[name], blob_handling="all_binary", batch_size=MEDIA_BATCH_ROWS)
+        for batch in scanner.to_batches():
+            probe = next((p for p in batch.column(name).to_pylist() if p is not None), None)
+            if probe is None:
+                continue
+            return name if media.is_image(probe) else None
+    return None
+
+
 def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: str, lineage: str = "") -> None:
     """The MEDIA path: pylance-native blob round-trip + inline image derivation, then a 2.2 stable-id write.
 
@@ -151,32 +185,66 @@ def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: s
     docs/architecture/lance-blob-v2-findings.md), so the previous ``to_table()`` + positional
     ``read_blobs`` pair failed the whole stage on ONE un-harvested page. A null payload now carries
     forward as a null blob with null artifacts.
+
+    STREAMED, in ``MEDIA_BATCH_ROWS`` slices. The scan, the derivation and the write are one pass per
+    batch, so what the driver holds is bounded by the batch rather than by the run. The FIRST write
+    overwrites and the rest append: that keeps the create-time-only ``enable_stable_row_ids``
+    contract exactly as before, and it is what stops a rerun of the same stage from doubling the
+    table instead of replacing it.
     """
     ds = lance.dataset(from_uri, storage_options=so)
     blob_cols = blob_field_names(ds.schema)
+    carried = [f.name for f in ds.schema if f.name not in ("stage", _LINEAGE_COLUMN)]
+    derive_from = _derivable_blob_column(ds, blob_cols)
+
     # with_row_id so the head can mint source_rowid from the SAME aligned scan (a carried source_rowid is a
     # plain column already in this read); mirrors compute._carry_forward's blob path.
-    aligned = ds.scanner(
-        columns=[f.name for f in ds.schema if f.name not in ("stage", _LINEAGE_COLUMN)],
-        blob_handling="all_binary",
-        with_row_id=True,
-    ).to_table()
-    rows = aligned.num_rows
+    scanner = ds.scanner(columns=carried, blob_handling="all_binary", with_row_id=True, batch_size=MEDIA_BATCH_ROWS)
 
+    written = 0
+    for batch in scanner.to_batches():
+        out = _media_batch(pa.Table.from_batches([batch]), blob_cols, derive_from, stage=stage, lineage=lineage)
+        # Same overwrite contract as the in-process compute.transform_stage: enable_stable_row_ids is
+        # create-time-only, so a first write creates the target with stable ids and later runs overwrite in
+        # place keeping them. A legacy no-stable-id target is migrated once (the tabular path's reset); the
+        # media lane's silver dataset is always created BY this contract, so no reset is needed here.
+        lance.write_dataset(
+            out,
+            to_uri,
+            mode="overwrite" if written == 0 else "append",
+            storage_options=so,
+            data_storage_version="2.2",
+            enable_stable_row_ids=True,
+        )
+        written += out.num_rows
+
+    if written == 0:
+        # An empty source still has to produce the target — an absent dataset is not the same answer
+        # as an empty one, and the tier's readers open it either way.
+        empty = _media_batch(
+            ds.scanner(columns=carried, blob_handling="all_binary", with_row_id=True, limit=0).to_table(), blob_cols, derive_from, stage=stage, lineage=lineage
+        )
+        lance.write_dataset(empty, to_uri, mode="overwrite", storage_options=so, data_storage_version="2.2", enable_stable_row_ids=True)
+
+
+def _media_batch(aligned: pa.Table, blob_cols: list[str], derive_from: str | None, *, stage: str, lineage: str) -> pa.Table:
+    """One slice: re-wrap its blobs, stamp its provenance, derive its artifacts.
+
+    Every batch takes the same branches and therefore produces the same schema, which is what lets
+    the caller append them into one dataset.
+    """
+    rows = aligned.num_rows
     columns: dict = {}
     fields: list[pa.Field] = []
-    first_payloads: dict[str, list[bytes | None]] = {}
-    for f in ds.schema:
-        if f.name in ("stage", _LINEAGE_COLUMN):
-            continue  # re-stamped below — each names THIS run/tier, never the upstream's
-        if f.name in blob_cols:
-            payloads = aligned.column(f.name).to_pylist()
-            first_payloads[f.name] = payloads
-            fields.append(blob_field(f.name))
-            columns[f.name] = blob_array(payloads)
+    for name in aligned.schema.names:
+        if name == "_rowid":
+            continue
+        if name in blob_cols:
+            fields.append(blob_field(name))
+            columns[name] = blob_array(aligned.column(name).to_pylist())
         else:
-            fields.append(aligned.schema.field(f.name))
-            columns[f.name] = aligned.column(f.name)
+            fields.append(aligned.schema.field(name))
+            columns[name] = aligned.column(name)
     # Root provenance (mirror compute._carry_source_rowid): carry source_rowid if the upstream has it, else
     # mint it from the aligned _rowid at the head. _rowid is never persisted.
     if "source_rowid" not in columns:
@@ -189,33 +257,19 @@ def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: s
         columns[_LINEAGE_COLUMN] = _lineage_array(lineage, rows)
     out = pa.table(columns, schema=pa.schema(fields))
 
-    # Derive from the first IMAGE blob column (the media lane has exactly one: `payload`). Row-wise, image
-    # payloads only — a payload past the header probe that fails full decode raises, FAILing the run; a
-    # NULL payload (absent bytes, not bad bytes) keeps its row with null artifacts.
-    for payloads in first_payloads.values():
-        probe = next((p for p in payloads if p is not None), None)
-        if probe is not None and media.is_image(probe):
-            thumbnails = [None if p is None else media.derive_thumbnail(p) for p in payloads]
-            embeddings = [None if p is None else media.derive_embedding(p) for p in payloads]
-            out = out.append_column(pa.field("thumbnail", pa.large_binary()), pa.array(thumbnails, pa.large_binary()))
-            out = out.append_column(
-                pa.field("embedding", pa.list_(pa.float32(), media.EMBEDDING_DIMS)),
-                pa.array(embeddings, type=pa.list_(pa.float32(), media.EMBEDDING_DIMS)),
-            )
-            break  # one media column per stage (matches derivers._DERIVERS' first-match contract)
-
-    # Same overwrite contract as the in-process compute.transform_stage: enable_stable_row_ids is
-    # create-time-only, so a first write creates the target with stable ids and later runs overwrite in
-    # place keeping them. A legacy no-stable-id target is migrated once (the tabular path's reset); the
-    # media lane's silver dataset is always created BY this contract, so no reset is needed here.
-    lance.write_dataset(
-        out,
-        to_uri,
-        mode="overwrite",
-        storage_options=so,
-        data_storage_version="2.2",
-        enable_stable_row_ids=True,
-    )
+    # Row-wise, image payloads only — a payload past the header probe that fails full decode raises,
+    # FAILing the run; a NULL payload (absent bytes, not bad bytes) keeps its row with null artifacts.
+    if derive_from is not None:
+        payloads = aligned.column(derive_from).to_pylist()
+        out = out.append_column(
+            pa.field("thumbnail", pa.large_binary()),
+            pa.array([None if p is None else media.derive_thumbnail(p) for p in payloads], pa.large_binary()),
+        )
+        out = out.append_column(
+            pa.field("embedding", pa.list_(pa.float32(), media.EMBEDDING_DIMS)),
+            pa.array([None if p is None else media.derive_embedding(p) for p in payloads], type=pa.list_(pa.float32(), media.EMBEDDING_DIMS)),
+        )
+    return out
 
 
 # --- trace continuity across the Ray boundary (prod-readiness P3) ---------------------------------------

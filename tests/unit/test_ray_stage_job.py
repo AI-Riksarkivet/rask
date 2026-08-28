@@ -176,3 +176,119 @@ def test_the_script_declares_no_local_deriver_copy() -> None:
 
     for gone in ("_derive_thumbnail", "_derive_embedding", "_is_image", "_open_guarded", "_is_blob_field"):
         assert not hasattr(job, gone), f"{gone} is back — B14 asks for one implementation, not two"
+
+
+# ── the media lane streams, rather than holding the whole dataset ────────────────────────────────
+#
+# Found by the Ray design-patterns audit (2026-08-28) against ray-project's own
+# `doc/source/ray-core/patterns/generators.rst`, whose rule is to yield results in chunks rather
+# than materialise them all. `_media_transform` did the opposite in the production cascade's MEDIA
+# branch: `scanner(blob_handling="all_binary").to_table()` pulled every blob payload into ONE Arrow
+# table, `.to_pylist()` made a second full copy as Python bytes, and the thumbnail and embedding
+# lists made two more — so peak RSS scaled with the dataset and the media cascade had a hard OOM
+# ceiling that nothing announced. It also contradicted the discipline `ratch/core/driver.py`
+# documents and enforces two directories away ("heavy blobs never transit Ray Data blocks").
+#
+# The tabular branch of this same script already streams through lance_ray. Only the media branch
+# was all-at-once, and its comments explain why it is driver-side (lance_ray strips blob typing) but
+# never why it is unbatched.
+
+
+def _bronze_media(tmp_path: Path, png_bytes: bytes, rows: int) -> str:
+    import lance
+
+    src = str(tmp_path / "bronze_stream")
+    table = pa.table(
+        {"id": pa.array(list(range(rows)), pa.int64()), "payload": blob_array([png_bytes] * rows)},
+        schema=pa.schema([pa.field("id", pa.int64()), blob_field("payload")]),
+    )
+    lance.write_dataset(table, src, data_storage_version="2.2", enable_stable_row_ids=True)
+    return src
+
+
+def test_the_media_transform_never_holds_the_whole_dataset(tmp_path: Path, png_bytes: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The property the pattern is about: what the driver holds is bounded by the BATCH, not the run.
+
+    Measured at the write, because every intermediate copy is derived from the same slice — a write
+    of N rows means N rows' payloads, pylists, thumbnails and embeddings were all live at once.
+    """
+    import lance
+
+    src = _bronze_media(tmp_path, png_bytes, rows=7)
+    monkeypatch.setattr(job, "MEDIA_BATCH_ROWS", 2)
+
+    widths: list[int] = []
+    real_write = lance.write_dataset
+
+    def spy(data, uri, **kwargs):  # noqa: ANN001, ANN202
+        widths.append(data.num_rows)
+        return real_write(data, uri, **kwargs)
+
+    monkeypatch.setattr(job.lance, "write_dataset", spy)
+    job._media_transform(src, str(tmp_path / "silver_stream"), {}, stage="silver-media")
+
+    assert max(widths) <= 2, f"the driver materialised {max(widths)} rows at once with a batch of 2 — it is not streaming"
+    assert sum(widths) == 7, f"rows were lost or duplicated across batches: {widths}"
+
+
+def test_streaming_produces_exactly_what_one_shot_did(tmp_path: Path, png_bytes: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A smaller peak is worthless if the output changed. Same rows, same order, same artifacts,
+    same stable ids — and the derived columns present on EVERY row, not only the first batch's."""
+    import lance
+
+    src = _bronze_media(tmp_path, png_bytes, rows=5)
+    src_rowids = lance.dataset(src).to_table(with_row_id=True).column("_rowid").to_pylist()
+
+    monkeypatch.setattr(job, "MEDIA_BATCH_ROWS", 2)
+    dst = str(tmp_path / "silver_many_batches")
+    job._media_transform(src, dst, {}, stage="silver-media", lineage='{"run": "r1"}')
+
+    out = lance.dataset(dst)
+    assert out.count_rows() == 5 and out.has_stable_row_ids
+    assert blobs.blob_field_names(out.schema) == ["payload"], "blob-v2 typing was demoted by the append path"
+    got = out.to_table(columns=["id", "source_rowid", "stage", "thumbnail", "embedding"])
+    assert got.column("id").to_pylist() == [0, 1, 2, 3, 4], "the append path reordered rows"
+    assert got.column("source_rowid").to_pylist() == src_rowids
+    assert set(got.column("stage").to_pylist()) == {"silver-media"}
+    assert all(t is not None for t in got.column("thumbnail").to_pylist()), "a later batch skipped derivation"
+    assert all(e is not None for e in got.column("embedding").to_pylist())
+
+
+def test_a_rerun_overwrites_rather_than_appending_to_the_previous_run(tmp_path: Path, png_bytes: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sharpest hazard the batched write introduces: the FIRST batch must overwrite and the rest
+    append, or a second run of the same stage doubles the table instead of replacing it."""
+    import lance
+
+    src = _bronze_media(tmp_path, png_bytes, rows=5)
+    monkeypatch.setattr(job, "MEDIA_BATCH_ROWS", 2)
+    dst = str(tmp_path / "silver_rerun")
+
+    job._media_transform(src, dst, {}, stage="silver-media")
+    job._media_transform(src, dst, {}, stage="silver-media")
+
+    assert lance.dataset(dst).count_rows() == 5, "the rerun appended to the previous run's rows"
+
+
+def test_an_empty_source_still_creates_the_target(tmp_path: Path, png_bytes: bytes) -> None:
+    """Zero batches means zero writes, which would have left the target ABSENT — and an absent
+    dataset is not the same answer as an empty one to the tier's readers. The unbatched form got
+    this for free (one write of a zero-row table); the streamed one has to mean it."""
+    import lance
+
+    src = str(tmp_path / "bronze_empty")
+    lance.write_dataset(
+        pa.table(
+            {"id": pa.array([], pa.int64()), "payload": blob_array([])},
+            schema=pa.schema([pa.field("id", pa.int64()), blob_field("payload")]),
+        ),
+        src,
+        data_storage_version="2.2",
+        enable_stable_row_ids=True,
+    )
+
+    dst = str(tmp_path / "silver_empty")
+    job._media_transform(src, dst, {}, stage="silver-media")
+
+    out = lance.dataset(dst)
+    assert out.count_rows() == 0 and out.has_stable_row_ids
+    assert "stage" in out.schema.names and "source_rowid" in out.schema.names
