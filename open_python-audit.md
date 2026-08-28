@@ -928,7 +928,7 @@ Sequential awaits over independent I/O, full-table reads to serve one row, and c
 
 </details>
 
-<details><summary><b>VS-05</b> [**OPEN**] — `/api/page` and `/api/pages` materialize every page blob in the dataset to serve one image or one metadata page <i>(viewer-search, resources, effort M)</i></summary>
+<details><summary><b>VS-05</b> [**FIXED**] — `/api/page` and `/api/pages` materialize every page blob in the dataset to serve one image or one metadata page <i>(viewer-search, resources, effort M)</i></summary>
 
 **Sites:** `services/viewer/src/viewer/api/v1/endpoints/pages.py:188`, `services/viewer/src/viewer/api/v1/endpoints/pages.py:189`, `services/viewer/src/viewer/api/v1/endpoints/pages.py:192`, `services/viewer/src/viewer/api/v1/endpoints/pages.py:156`, `services/viewer/src/viewer/api/v1/endpoints/pages.py:158`
 
@@ -946,9 +946,12 @@ Sequential awaits over independent I/O, full-table reads to serve one row, and c
 
 **RE-VERIFIED 2026-08-28 — CONFIRMED, high, effort M; UNDERSTATED on the listing route.** Serving one page reads every payload in the dataset: per-request cost is O(total corpus bytes) whichever page is asked for. The listing is worse than 'identical' — `limit` is capped at 500 at the API boundary and never pushed into the scan, so memory is bounded by the DATASET, not the request: a 10k-page bronze volume at ~1 MB each materialises ~10 GB to return 100 metadata rows. That is an OOM on a `can_get_metadata` route. The route's own docstring already forbids it ('A listing that inlined them would move hundreds of megabytes to render a contact sheet') — it describes the response body while the implementation does it server-side. **The finding's literal fix does not compile**: `read_aligned_table` has no `filter=`. The estate's own answer is in the same service — `blobs.py:150-152` blesses the take-path for single-row serving.
 
+
+**FIXED (2026-08-28).** The byte route resolves `id -> stable _rowid -> take_blobs(ids=[rowid])` (the blessed take-path, `eq()` as the quoting boundary); the listing pushes its bound into the read and projects no payload (RED: 2 MB read to serve a 256 KB page; 2 MB of payload read by a metadata listing). Landed through the full loop: workflow implement -> adversarial REJECT (the rewrite broke tests/unit's authz fixture, leaving the route-governance gate non-executing — the separate-testpath trap re-proven) -> repair (the fixture now serves a REAL tiny blob-v2 dataset through the real read path; the streaming test spies the branch instead of the body).
+
 </details>
 
-<details><summary><b>ingest-flow-03</b> [**OPEN**] — discover_staged's exact-cover search is super-linear in the run's whole unit universe and recurses once per fragment — it cannot finish the… <i>(ingest-flow, resources, effort L)</i></summary>
+<details><summary><b>ingest-flow-03</b> [**FIXED**] — discover_staged's exact-cover search is super-linear in the run's whole unit universe and recurses once per fragment — it cannot finish the… <i>(ingest-flow, resources, effort L)</i></summary>
 
 **Sites:** `services/ingest/src/ingest/staging.py:191`, `services/ingest/src/ingest/staging.py:192`, `services/ingest/src/ingest/staging.py:249`, `services/ingest/src/ingest/staging.py:258`, `services/ingest/src/ingest/runtime.py:331`
 
@@ -965,6 +968,9 @@ Sequential awaits over independent I/O, full-table reads to serve one row, and c
 
 
 **RE-VERIFIED 2026-08-28 — CONFIRMED, high, effort M.** Measured, not read: 200 disjoint fragments cover in 11.86s, 600 in 76s, and 250 fragments raise `RecursionError` at `setrecursionlimit(150)`. All of it runs AFTER every byte is fetched, written and acked off the queue, so the run is unrecoverable — and a node-budget exhaustion reports as `StagingOverlapError`, i.e. 'your fragments conflict', which is false. **Do NOT apply the finding's own remedy** (a per-chunk staging root): the JetStream subject is per-run with competing consumers, so overlapping fragments land under different chunk prefixes and a per-chunk cover would commit both — reintroducing the duplication `4ff260e5` closed. The fix is an indexed iterative solver with a discriminated result so 'gave up' stops rendering as 'conflict'.
+
+
+**FIXED (2026-08-28).** Rewritten by a workflow agent and adversarially verified by a second (RED re-proved from a clean checkout: 95.3s and RecursionError, both inside the solver). Owner index + unit propagation (the clean disjoint case never enters a search: 95.3s -> 0.06s on 25,600 units) + an explicit-stack search over the ambiguous core only; `_SEARCH_WORK_LIMIT` (primitive steps) replaces the node budget; exhaustion raises the new `StagingCoverAbandoned`, DISTINGUISHABLE from a genuine overlap — the false-corruption verdict was the sharpest harm. The audit's own per-chunk-root remedy was REFUSED as ruled (competing consumers would commit overlapping fragments twice). Correctness pinned against a brute-force oracle, 300 fuzz cases both directions.
 
 </details>
 
@@ -1450,7 +1456,7 @@ sites and the evidence as measured at `871b5e14`.
 | ID | Status | → | Sev | Cat | Eff | Finding | Sites |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `ingest-flow-02` | **FIXED** | E3 | **HIGH** | resilience | S | Three of four NATS connect sites have no timeout, against the file's own measured evidence that a connect to a dead broker never returns | `services/ingest/src/ingest/runtime.py:192`, `services/ingest/src/ingest/runtime.py:232` *(+2 more)* |
-| `ingest-flow-03` | **OPEN** | E8 | **HIGH** | resources | L | discover_staged's exact-cover search is super-linear in the run's whole unit universe and recurses once per fragment — it cannot finish the million-unit run… | `services/ingest/src/ingest/staging.py:191`, `services/ingest/src/ingest/staging.py:192` *(+3 more)* |
+| `ingest-flow-03` | **FIXED** | E8 | **HIGH** | resources | L | discover_staged's exact-cover search is super-linear in the run's whole unit universe and recurses once per fragment — it cannot finish the million-unit run… | `services/ingest/src/ingest/staging.py:191`, `services/ingest/src/ingest/staging.py:192` *(+3 more)* |
 | `ingest-flow-04` | **PARTIAL** | E3 | **HIGH** | dapr-events | M | The run-deadline path abandons its child workflows and then purges the queue underneath them | `services/ingest/src/ingest/workflow.py:295`, `services/ingest/src/ingest/workflow.py:296` *(+3 more)* |
 | `ingest-flow-05` | **OPEN** | E3 | med | resilience | S | Transient fetch failures nak with no delay and max_deliver exhaustion is never detected — the DLQ the module docstring promises is unreachable for the common… | `services/ingest/src/ingest/worker.py:279`, `services/ingest/src/ingest/worker.py:272` *(+2 more)* |
 | `ingest-flow-06` | **PARTIAL** | E3 | med | error-handling | S | park_poison publishes unguarded — one bad unit fails the whole run when the DLQ stream is absent | `services/ingest/src/ingest/worker.py:275`, `services/ingest/src/ingest/worker.py:376` *(+2 more)* |
@@ -1727,7 +1733,7 @@ sites and the evidence as measured at `871b5e14`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `VS-03` | **FIXED** | E1 | **HIGH** | security | L | 25 of the viewer's 32 routes serve corpus content with no authn and no FGA gate, including every media-byte route | `services/viewer/src/viewer/api/v1/endpoints/media.py:283`, `services/viewer/src/viewer/api/v1/endpoints/media.py:161` *(+8 more)* |
 | `VS-04` | **FIXED** | E8 | **HIGH** | resources | S | Search result-cache key omits `spec.table`, so two different searchable tables of one corpus serve each other's hits | `services/search/src/search/services/result_cache.py:71`, `services/search/src/search/services/result_cache.py:94` *(+3 more)* |
-| `VS-05` | **OPEN** | E8 | **HIGH** | resources | M | `/api/page` and `/api/pages` materialize every page blob in the dataset to serve one image or one metadata page | `services/viewer/src/viewer/api/v1/endpoints/pages.py:188`, `services/viewer/src/viewer/api/v1/endpoints/pages.py:189` *(+3 more)* |
+| `VS-05` | **FIXED** | E8 | **HIGH** | resources | M | `/api/page` and `/api/pages` materialize every page blob in the dataset to serve one image or one metadata page | `services/viewer/src/viewer/api/v1/endpoints/pages.py:188`, `services/viewer/src/viewer/api/v1/endpoints/pages.py:189` *(+3 more)* |
 | `VS-06` | **OPEN** | E4 | med | error-handling | M | Broad `except Exception` re-raised as `ValidationError` turns infrastructure faults into HTTP 400 client errors | `services/search/src/search/services/vector.py:57`, `services/search/src/search/services/service.py:171` *(+5 more)* |
 | `VS-07` | **PARTIAL** | E4 | med | error-handling | M | Five silent swallows in the search path hide real failures as empty results (three of the nine cited sites do log) | `services/search/src/search/services/service.py:298`, `services/search/src/search/services/frames.py:48` *(+7 more)* |
 | `VS-08` | **OPEN** | E8 | med | resources | M | The Cypher engine cache is a module-level mutable global holding hundreds of MB, and its lock serializes every graph request across all datasets | `services/viewer/src/viewer/api/v1/endpoints/graph.py:191`, `services/viewer/src/viewer/api/v1/endpoints/graph.py:192` *(+2 more)* |
